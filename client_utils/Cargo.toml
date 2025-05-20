@@ -1,0 +1,23 @@
+[package]
+name = "plaza_client_utils"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+
+authors = ["Your Name <you@example.com>"]
+description = "Client-side utilities for applications using the Plaza server framework, focusing on prediction, reconciliation, and smoothing."
+repository = "https://github.com/excsn/plaza"
+readme = "README.md"
+keywords = ["gamedev", "networking", "multiplayer", "prediction", "reconciliation"]
+categories = ["game-development", "network-programming"]
+
+[dependencies]
+thiserror = { workspace = true }
+tracing = "^0"
+
+[dev-dependencies]
+# For writing unit tests for this crate's utilities.
+uuid = { version = "1", features = ["v4"] } # Example for IDs in tests
+serde = { version = "1.0", features = ["derive"] } # If test structs need serde
+# tokio = { version = "1", features = ["macros", "rt-multi-thread"] } # If tests involve async (not initially)
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] } # For running tests with logs

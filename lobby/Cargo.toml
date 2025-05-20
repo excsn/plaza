@@ -1,0 +1,26 @@
+[package]
+name = "plaza_lobby"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+
+description = "Components for building single-server lobby and room management systems with Plaza."
+authors = ["Your Name <you@example.com>"]
+repository = "https://github.com/excsn/plaza"
+readme = "README.md"
+
+[dependencies]
+plaza = { version = "0.1.0", path = "../core" } # Dependency on plaza-core
+
+async-trait = { workspace = true }
+serde = { workspace = true }
+uuid = { version = "1", features = ["v4", "serde"] } # For RoomId
+tokio = { version = "1", features = ["sync", "rt"] } # For Mutex, mpsc, spawn
+tracing = "0.1"
+parking_lot = "0.12"
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# For examples or tests within this crate
+# tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+# tracing-subscriber = { version = "0.3", features = ["env-filter"] }

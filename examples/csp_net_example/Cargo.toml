@@ -1,0 +1,19 @@
+[package]
+name = "plaza_csp_net_example"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+plaza = { path = "../../core" }
+plaza_client_utils= { path = "../../client_utils" } # If it's a local path dependency
+
+tokio = { version = "1", features = ["full"] } # For server, client, and MPSC "network"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0" # For serializing Ops over MPSC "network"
+uuid = { version = "1", features = ["v4", "serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+rand = "0.8" # For small random server-side deviations
+
+# For a simple graphical client (optional, can start with console)
+# macroquad = "0.4"

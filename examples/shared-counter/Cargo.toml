@@ -1,0 +1,15 @@
+[package]
+name = "plaza-example-shared-counter"
+version = "0.1.0"
+edition = "2021"
+publish = false # It's an example
+
+[dependencies]
+plaza = { path = "../../core" } # Depends on our core library
+tokio = { workspace = true }
+uuid = { workspace = true } # For the example's ID type
+serde = { workspace = true } # For the example's Op type
+async-trait = { workspace = true } # If example traits are async
+thiserror = { workspace = true } # If example defines custom errors
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

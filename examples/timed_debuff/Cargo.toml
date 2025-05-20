@@ -1,0 +1,20 @@
+[package]
+name = "plaza_example_timed_debuff"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+plaza = { path = "../../core" }
+
+async-trait = { workspace = true } # If example traits are async
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+parking_lot = "0.12" # Add this
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# For this example, we'll show the scheduler directly in StateLogic for simplicity,
+# rather than in GameState to avoid serde complexities with FnMut.
+# This means CooldownLogic won't be Default/Clone easily.
+# Or, we wrap scheduler in Arc<Mutex<...>> within StateLogic.

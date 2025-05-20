@@ -1,0 +1,174 @@
+// examples/timed_debuff/src/logic.rs
+use crate::types::{DebuffSnapshotPayload, DebuffType, GameOp, GameState, PlayerId, PlayerState};
+use async_trait::async_trait;
+use parking_lot::Mutex; // Import Mutex
+use plaza::{
+  agent::Agent,
+  common::scheduler::{
+    tick_callback_scheduler::{TickCallbackScheduler, TickScheduledAction},
+    ScheduledEventId,
+  },
+  error::StateLogicError,
+  session::{MessageTarget, TargetedOp},
+  state_logic::{LogicInput, StateLogic},
+};
+use std::sync::Arc; // Keep Arc for potential future use, though not strictly needed if scheduler is in StateLogic
+use tracing::{debug, info, warn};
+
+#[derive(Debug)]
+pub struct DebuffLogic {
+  // Use parking_lot::Mutex for Sync-compatible interior mutability
+  scheduler: Mutex<TickCallbackScheduler<GameState, GameOp, PlayerId>>,
+}
+
+impl DebuffLogic {
+  pub fn new() -> Self {
+    Self {
+      scheduler: Mutex::new(TickCallbackScheduler::new()),
+    }
+  }
+}
+
+#[async_trait]
+impl StateLogic<GameOp, PlayerId, GameState> for DebuffLogic {
+  async fn process_input(
+    &self, // &self is fine now
+    state: &mut GameState,
+    input: LogicInput<GameOp, PlayerId>,
+  ) -> Result<Vec<TargetedOp<GameOp, PlayerId>>, StateLogicError> {
+    let mut ops_to_broadcast: Vec<TargetedOp<GameOp, PlayerId>> = Vec::new();
+
+    match input {
+      LogicInput::AgentOps { source, ops } => {
+        let agent_id_of_op_source = source.id().cloned();
+        for op in ops {
+          match op {
+            GameOp::JoinGame { player_id, name } => {
+              if !state.players.contains_key(&player_id) {
+                info!(player_id = %player_id, %name, "Player joined game");
+                state.players.insert(
+                  player_id,
+                  PlayerState {
+                    id: player_id,
+                    name,
+                    ..Default::default()
+                  },
+                );
+              }
+            }
+            GameOp::ApplyDebuff {
+              caster_id,
+              target_id,
+              debuff,
+              duration_ticks,
+            } => {
+              if duration_ticks == 0 {
+                continue;
+              }
+
+              if let Some(target_player) = state.players.get_mut(&target_id) {
+                info!(target_id = %target_id, ?debuff, duration = duration_ticks, tick = state.current_tick, "Applying debuff");
+
+                target_player.active_debuffs.insert(debuff);
+                // (Refresh logic omitted for brevity, assume it's handled or not needed)
+
+                match debuff {
+                  DebuffType::Slow => target_player.attributes.speed_modifier = 0.5,
+                  DebuffType::Silence => target_player.attributes.can_cast_spells = false,
+                  DebuffType::DamageOverTime => {}
+                }
+                ops_to_broadcast.push(TargetedOp {
+                  from_agent: caster_id.map_or_else(Agent::system, |_| source.clone()),
+                  target: MessageTarget::All,
+                  ops: vec![GameOp::DebuffApplied {
+                    target_id,
+                    debuff,
+                    duration_ticks,
+                  }],
+                });
+                ops_to_broadcast.push(TargetedOp {
+                  from_agent: Agent::system(),
+                  target: MessageTarget::Agent(target_id),
+                  ops: vec![GameOp::PlayerStateUpdate {
+                    player_id: target_id,
+                    new_health: target_player.health,
+                    new_attributes: target_player.attributes.clone(),
+                  }],
+                });
+
+                let action: TickScheduledAction<GameState, GameOp, PlayerId> = Box::new(
+                  move |s: &mut GameState, ops_q: &mut Vec<TargetedOp<GameOp, PlayerId>>| {
+                    if let Some(player_state) = s.players.get_mut(&target_id) {
+                      if player_state.active_debuffs.remove(&debuff) {
+                        info!(target_id = %target_id, ?debuff, tick = s.current_tick, "Debuff expired and removed by callback");
+                        match debuff {
+                          DebuffType::Slow => player_state.attributes.speed_modifier = 1.0,
+                          DebuffType::Silence => player_state.attributes.can_cast_spells = true,
+                          DebuffType::DamageOverTime => {}
+                        }
+                        ops_q.push(TargetedOp {
+                          from_agent: Agent::system(),
+                          target: MessageTarget::All,
+                          ops: vec![GameOp::DebuffExpired { target_id, debuff }],
+                        });
+                        ops_q.push(TargetedOp {
+                          from_agent: Agent::system(),
+                          target: MessageTarget::Agent(target_id),
+                          ops: vec![GameOp::PlayerStateUpdate {
+                            player_id: target_id,
+                            new_health: player_state.health,
+                            new_attributes: player_state.attributes.clone(),
+                          }],
+                        });
+                      }
+                    }
+                  },
+                );
+
+                // Lock the scheduler to get mutable access
+                let mut scheduler = self.scheduler.lock();
+                scheduler.schedule_after_ticks(state.current_tick, duration_ticks, action);
+                // MutexGuard for scheduler is dropped here, releasing the lock.
+              } else {
+                warn!(target_id = %target_id, "ApplyDebuff op for non-existent player.");
+              }
+            }
+            _ => {}
+          }
+        }
+      }
+      LogicInput::TimeStep { delta_time: _ } => {
+        state.current_tick += 1;
+
+        // Lock the scheduler to get mutable access for ticking
+        let mut scheduler = self.scheduler.lock();
+        scheduler.tick(state.current_tick, state, &mut ops_to_broadcast);
+        // MutexGuard for scheduler is dropped here.
+
+        for player_id_key in state.players.keys().cloned().collect::<Vec<_>>() {
+          // Avoid borrowing issues
+          if let Some(player) = state.players.get_mut(&player_id_key) {
+            if player.active_debuffs.contains(&DebuffType::DamageOverTime) {
+              player.health = player.health.saturating_sub(1);
+              debug!(player_id = %player.id, new_health = player.health, "DOT tick applied");
+              if player.health == 0 {
+                // Handle player death
+              }
+              ops_to_broadcast.push(TargetedOp {
+                from_agent: Agent::system(),
+                target: MessageTarget::Agent(player.id),
+                ops: vec![GameOp::PlayerStateUpdate {
+                  player_id: player.id,
+                  new_health: player.health,
+                  new_attributes: player.attributes.clone(),
+                }],
+              });
+            }
+          }
+        }
+      }
+    }
+    state.version += 1;
+    Ok(ops_to_broadcast)
+  }
+}

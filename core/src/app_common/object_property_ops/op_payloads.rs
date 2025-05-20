@@ -1,0 +1,69 @@
+// plaza::app_common::object_property_ops::op_payloads.rs
+use crate::agent::AgentId; // If ops need to reference who made the change
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap; // For initial_properties
+use std::fmt::Debug;
+use std::hash::Hash; // For ObjectId and PropertyKey
+
+/// Payload for an Op to create a new object with initial properties.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(bound = "
+    ObjectId: Serialize + for<'de2> Deserialize<'de2>,
+    PropertyKey: Serialize + for<'de2> Deserialize<'de2> + Eq + Hash,
+    PropertyValue: Serialize + for<'de2> Deserialize<'de2>
+")]
+pub struct CreateObjectPayload<ObjectId, PropertyKey, PropertyValue>
+where
+    ObjectId: Clone + Debug + Eq + Hash,
+    PropertyKey: Clone + Debug + Eq + Hash,
+    PropertyValue: Clone + Debug,
+{
+    pub object_id: ObjectId, // Usually client-generated for optimistic updates, or server-assigned
+    pub initial_properties: HashMap<PropertyKey, PropertyValue>,
+    // pub object_type: Option<String>, // Optional: type discriminator
+}
+
+/// Payload for an Op to delete an existing object.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(bound = "ObjectId: Serialize + for<'de2> Deserialize<'de2>")]
+pub struct DeleteObjectPayload<ObjectId: Clone + Debug + Eq + Hash> {
+    pub object_id: ObjectId,
+}
+
+/// Payload for an Op to set or update a specific property of an object.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(bound = "
+    ObjectId: Serialize + for<'de2> Deserialize<'de2>,
+    PropertyKey: Serialize + for<'de2> Deserialize<'de2> + Eq + Hash,
+    PropertyValue: Serialize + for<'de2> Deserialize<'de2>
+")]
+pub struct SetObjectPropertyPayload<ObjectId, PropertyKey, PropertyValue>
+where
+    ObjectId: Clone + Debug + Eq + Hash,
+    PropertyKey: Clone + Debug + Eq + Hash,
+    PropertyValue: Clone + Debug,
+{
+    pub object_id: ObjectId,
+    pub property_key: PropertyKey,
+    pub value: PropertyValue,
+}
+
+/// Payload for an Op to delete a specific property from an object.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(bound = "
+    ObjectId: Serialize + for<'de2> Deserialize<'de2>,
+    PropertyKey: Serialize + for<'de2> Deserialize<'de2> + Eq + Hash
+")]
+pub struct DeleteObjectPropertyPayload<ObjectId, PropertyKey>
+where
+    ObjectId: Clone + Debug + Eq + Hash,
+    PropertyKey: Clone + Debug + Eq + Hash,
+{
+    pub object_id: ObjectId,
+    pub property_key: PropertyKey,
+}
+
+// Notice/Event Payloads (Server -> Client)
+// e.g., ObjectCreatedNoticePayload, PropertySetNoticePayload, etc.
+// These would typically mirror the request payloads but include the agent_id
+// who performed the action, or be simplified echos.

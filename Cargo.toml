@@ -1,0 +1,24 @@
+[workspace]
+members = [
+  "core",
+  "lobby",
+  "session",
+  "client_utils",
+  "examples/ability_cooldowns",
+  "examples/csp_net_example",
+  "examples/pong",
+  "examples/shared-counter",
+  "examples/timed_debuff",
+  "examples/typing_indicator",
+  "examples/whack_a_mole",
+]
+resolver = "2"
+
+[workspace.dependencies]
+tokio = { version = "^1", features = ["full"] }
+serde = { version = "^1", features = ["derive"] }
+async-trait = "^0.1"
+uuid = { version = "^1", features = ["v4", "serde"] }
+thiserror = "^2.0"
+tracing = "^0.1"
+tracing-subscriber = { version = "^0.3", features = ["env-filter"] }

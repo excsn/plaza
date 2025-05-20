@@ -1,0 +1,17 @@
+[package]
+name = "plaza_example_ability_cooldowns"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+plaza = { path = "../../core" } # Adjust path to your Plaza core library
+
+async-trait = { workspace = true } # If example traits are async
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Add other dependencies if needed, like for a simple session
+imara-diff = "0.1" # For potentially showing state diffs in logs (optional)

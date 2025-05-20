@@ -1,0 +1,24 @@
+[package]
+name = "plaza_example_pong"
+version = "0.1.0"
+edition = "2021"
+publish = false # This is an example
+
+[dependencies]
+plaza = { path = "../../core" } # Assuming 'core' is the Plaza library crate
+
+async-trait = { workspace = true }
+actix = "^0.13"
+actix-web = "^4"
+actix-ws = "^0.3" # Using this specific crate for WebSockets
+
+futures-util = "^0"
+tokio = { version = "^1", features = ["full"] }
+serde = { version = "^1.0", features = ["derive"] }
+serde_json = "^1.0"
+uuid = { version = "^1", features = ["v4", "serde"] } # For unique Player IDs
+tracing = "^0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# async-trait is a dependency of plaza, so not explicitly needed here for its traits
+rand = "0.8" # For ball start direction, etc.
+parking_lot = "0.12" # For Mutex/RwLock, often preferred over std::sync in async

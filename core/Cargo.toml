@@ -1,0 +1,23 @@
+[package]
+name = "plaza"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+
+description = "Foundational components for real-time, shared-state multiplayer & collaboration."
+authors = ["Your Name <you@example.com>"]
+repository = "https://github.com/excsn/plaza"
+
+[dependencies]
+serde = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tokio = { version = "^1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tracing = { workspace = true }
+uuid = { version = "^1", features = ["serde", "v4"] }
+
+[dev-dependencies]
+
+[features]
+default = []
+# websocket = ["tokio"]

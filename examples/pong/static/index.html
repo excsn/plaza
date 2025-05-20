@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Plaza Pong</title>
+    <style>
+        body { margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #333; }
+        canvas { border: 1px solid #fff; background-color: #000; }
+    </style>
+</head>
+<body>
+    <canvas id="pongCanvas"></canvas>
+    <script>
+        const canvas = document.getElementById('pongCanvas');
+        const ctx = canvas.getContext('2d');
+
+        const SCREEN_WIDTH = 800;
+        const SCREEN_HEIGHT = 600;
+        canvas.width = SCREEN_WIDTH;
+        canvas.height = SCREEN_HEIGHT;
+
+        let ws;
+        let myPlayerId = null;
+        let mySide = null; // 'Left' or 'Right'
+        let gameState = null;
+
+        function connect() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const host = window.location.host;
+            ws = new WebSocket(`${protocol}//${host}/ws`);
+
+            ws.onopen = () => {
+                console.log('Connected to Pong server');
+                // Send ReadyToPlay if game expects it after connection
+            };
+
+            ws.onmessage = (event) => {
+                if (event.data === "hb_ping") {
+                    // console.log("HB ping received");
+                    ws.send("hb_pong");
+                    return;
+                }
+                // console.log('Message from server: ', event.data);
+                try {
+                    const message = JSON.parse(event.data);
+                    handleServerMessage(message);
+                } catch (e) {
+                    console.error('Error parsing message from server:', e, event.data);
+                }
+            };
+
+            ws.onclose = () => {
+                console.log('Disconnected from Pong server');
+                myPlayerId = null;
+                mySide = null;
+                gameState = null;
+                // Optionally, try to reconnect
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket Error: ', error);
+            };
+        }
+
+        function handleServerMessage(message) {
+            if (message.Ops) { // Assuming SessionMessage::Ops
+                message.Ops.ops.forEach(op => {
+                    // console.log("Received Op:", op);
+                    if (op.AssignPlayer) {
+                        myPlayerId = op.AssignPlayer.player_id;
+                        mySide = op.AssignPlayer.side;
+                        console.log(`Assigned as ${mySide} player: ${myPlayerId}`);
+                    } else if (op.GameUpdate) {
+                        gameState = op.GameUpdate;
+                        draw();
+                    } else if (op.ScoreUpdate) {
+                        if (gameState && gameState.scores) {
+                            gameState.scores[op.ScoreUpdate.player_id] = op.ScoreUpdate.new_score;
+                        }
+                        console.log(`Score Update: Player ${op.ScoreUpdate.player_id} now has ${op.ScoreUpdate.new_score}`);
+                        // Might also get a full GameUpdate shortly after, or just update score display
+                        draw();
+                    } else if (op.PhaseChange) {
+                        if (gameState) gameState.phase = op.PhaseChange;
+                        console.log("Game phase changed to:", op.PhaseChange);
+                        if (op.PhaseChange === "Paused" || op.PhaseChange === "Starting") {
+                            // Send ReadyToPlay after a short delay or on user action
+                            setTimeout(() => sendReadyToPlay(), 500);
+                        }
+                        draw();
+                    }
+                });
+            } else if (message.StateData) { // Assuming SessionMessage::StateData (Snapshot)
+                console.log("Received Snapshot:", message.StateData.data);
+                gameState = message.StateData.data.payload; // Assuming payload is PongGameState
+                 if (gameState && myPlayerId) { // Try to determine side if not already set
+                    if (gameState.player1_id === myPlayerId) mySide = "Left";
+                    else if (gameState.player2_id === myPlayerId) mySide = "Right";
+                }
+                sendReadyToPlay(); // After getting snapshot, signal readiness
+                draw();
+            }
+        }
+
+        function sendPaddleMove(targetY) {
+            if (ws && ws.readyState === WebSocket.OPEN && myPlayerId && gameState && gameState.phase === "Playing") {
+                const op = { MovePaddle: { target_y: targetY } };
+                // console.log("Sending paddle move:", op);
+                ws.send(JSON.stringify(op));
+            }
+        }
+        
+        function sendReadyToPlay() {
+            if (ws && ws.readyState === WebSocket.OPEN && myPlayerId) {
+                 const op = { ReadyToPlay: null }; // Or ReadyToPlay: {}
+                 console.log("Sending ReadyToPlay");
+                 ws.send(JSON.stringify(op));
+            }
+        }
+
+        // --- Drawing ---
+        function drawPaddle(paddle) {
+            if (!paddle) return;
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(paddle.x, paddle.y - paddle.height / 2, paddle.width, paddle.height);
+        }
+
+        function drawBall(ball) {
+            if (!ball) return;
+            ctx.beginPath();
+            ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+            ctx.fillStyle = '#fff';
+            ctx.fill();
+            ctx.closePath();
+        }
+
+        function drawScores() {
+            if (!gameState || !gameState.scores) return;
+            ctx.font = '30px Arial';
+            ctx.fillStyle = '#fff';
+            if (gameState.player1_id && gameState.scores[gameState.player1_id] !== undefined) {
+                ctx.fillText(gameState.scores[gameState.player1_id], SCREEN_WIDTH / 4, 50);
+            }
+            if (gameState.player2_id && gameState.scores[gameState.player2_id] !== undefined) {
+                ctx.fillText(gameState.scores[gameState.player2_id], (SCREEN_WIDTH * 3) / 4, 50);
+            }
+        }
+        
+        function drawPhase() {
+            if (!gameState || !gameState.phase) return;
+            ctx.font = '24px Arial';
+            ctx.fillStyle = '#aaa';
+            let text = "";
+            switch(gameState.phase) {
+                case "WaitingForPlayers": text = "Waiting for opponent..."; break;
+                case "Starting": text = "Get Ready!"; break;
+                case "Paused": text = "Paused"; break;
+                case "GameOver":
+                    let winner = "N/A";
+                    if (gameState.scores[gameState.player1_id] >= 5) winner = "Player 1"; // Needs better ID to name mapping
+                    else if (gameState.scores[gameState.player2_id] >= 5) winner = "Player 2";
+                    text = `Game Over! ${winner} wins!`;
+                    break;
+            }
+            if (text) {
+                 const textWidth = ctx.measureText(text).width;
+                 ctx.fillText(text, (SCREEN_WIDTH - textWidth) / 2, SCREEN_HEIGHT / 2 - 30);
+            }
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear canvas
+
+            if (!gameState) {
+                ctx.font = '20px Arial';
+                ctx.fillStyle = '#fff';
+                ctx.fillText('Connecting...', SCREEN_WIDTH / 2 - 50, SCREEN_HEIGHT / 2);
+                return;
+            }
+            
+            // Draw paddles
+            if (gameState.paddles) {
+                 for (const playerId in gameState.paddles) {
+                    drawPaddle(gameState.paddles[playerId]);
+                 }
+            }
+
+
+            // Draw ball
+            if (gameState.ball) {
+                drawBall(gameState.ball);
+            }
+
+            // Draw scores
+            drawScores();
+            drawPhase();
+        }
+
+        // --- Input Handling ---
+        canvas.addEventListener('mousemove', (event) => {
+            if (mySide && gameState && gameState.paddles && gameState.paddles[myPlayerId]) {
+                const rect = canvas.getBoundingClientRect();
+                const mouseY = event.clientY - rect.top;
+                sendPaddleMove(mouseY);
+            }
+        });
+        
+        // Initial connection
+        connect();
+        draw(); // Initial draw (e.g., "Connecting...")
+    </script>
+</body>
+</html>
