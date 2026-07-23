@@ -13,7 +13,63 @@ use plaza_client_utils::{ease_in_quad, ErrorSmoother};
 use plaza_client_utils::ack::AckWindow;
 use plaza_server_utils::relevance::SetDigest;
 
-use crate::sim::types::{coin_pull, repulsor_pulse, step_coin, Coin, CoinId, Crowd, Upgrade, Wallet, COIN_FLIGHT_MS, COIN_PICKUP_RADIUS, step_enemy, Controls, Enemy, EnemyKind, Handle, LeaveReason, Packet, PlayerId, Projectile, RemoteMode, Vec2, SIM_DT};
+use crate::sim::types::{coin_pull, difficulty, enemy_speed_scale, repulsor_pulse, step_coin, Coin, CoinId, Crowd, Upgrade, Wallet, COIN_FLIGHT_MS, COIN_PICKUP_RADIUS, step_enemy, Controls, Enemy, EnemyKind, Handle, LeaveReason, Packet, PlayerId, Projectile, RemoteMode, Vec2, PLAYER_MAX_HEALTH, SIM_DT};
+
+/// A fading damage number floating up from where a shot landed.
+#[derive(Clone, Copy, Debug)]
+pub struct DamagePopup {
+  pub pos: Vec2,
+  pub amount: u8,
+  pub age: f32,
+}
+
+/// How long a damage number lingers.
+const POPUP_SECS: f32 = 0.7;
+/// How fast it drifts upward, world units per second.
+const POPUP_RISE: f32 = 90.0;
+
+impl DamagePopup {
+  /// Where to draw it now: risen from where the hit landed.
+  pub fn world_pos(&self) -> Vec2 {
+    Vec2::new(self.pos.x, self.pos.y - POPUP_RISE * self.age)
+  }
+  /// Fades to nothing over its life.
+  pub fn alpha(&self) -> f32 {
+    (1.0 - self.age / POPUP_SECS).clamp(0.0, 1.0)
+  }
+}
+
+/// A brief flash: a small spark where a shot lands, or a bigger burst where an
+/// enemy dies. Purely presentation, and purely client-side: the client already
+/// learns of hits (`Packet::hits`) and deaths (`LeaveReason::Died`), so nothing
+/// new crosses the wire for the world to visibly react.
+#[derive(Clone, Copy, Debug)]
+pub struct Burst {
+  pub pos: Vec2,
+  pub age: f32,
+  /// A death explosion rather than a hit spark: bigger and longer.
+  pub big: bool,
+}
+
+const SPARK_SECS: f32 = 0.16;
+const BOOM_SECS: f32 = 0.40;
+/// A ceiling so an area pulse that kills hundreds at once spreads a scatter of
+/// explosions rather than hundreds of overlapping rings.
+const MAX_BURSTS: usize = 120;
+
+impl Burst {
+  fn life(&self) -> f32 {
+    if self.big { BOOM_SECS } else { SPARK_SECS }
+  }
+  pub fn alpha(&self) -> f32 {
+    (1.0 - self.age / self.life()).clamp(0.0, 1.0)
+  }
+  /// Grows outward over its life.
+  pub fn radius(&self) -> f32 {
+    let t = (self.age / self.life()).clamp(0.0, 1.0);
+    if self.big { 6.0 + t * 26.0 } else { 2.0 + t * 6.0 }
+  }
+}
 
 const SMOOTH_SECS: f32 = 0.25;
 
@@ -83,6 +139,9 @@ pub struct Client {
   /// A real client would ask for a full resync; here it is counted, because the
   /// point is that the divergence is *visible at all*.
   pub digest_mismatches: u64,
+  /// Frames the wire dropped, detected as gaps in the sequence number. The direct
+  /// cause of a digest mismatch: a lost frame is a hole recovery must re-derive.
+  pub frames_lost: u64,
   /// Which packets have arrived. Twelve bytes back up the wire, and the whole
   /// input to the server's recovery: it needs to know which of its deltas the
   /// client is actually holding, and nothing else.
@@ -152,6 +211,15 @@ pub struct Client {
   /// arrived, but which state the client is in.
   applied_seq: Option<u64>,
 
+  /// Every player's health and respawn shield, from the last packet.
+  pub player_health: Vec<u8>,
+  pub player_invuln: Vec<bool>,
+  /// Floating damage numbers from recent shots.
+  pub popups: Vec<DamagePopup>,
+  /// Hit sparks and death explosions.
+  pub bursts: Vec<Burst>,
+  /// The highest difficulty tier announced, so a step-up is announced once.
+  last_difficulty_tier: u32,
 }
 
 impl Client {
@@ -165,6 +233,7 @@ impl Client {
       stale_refs: 0,
       deaths_seen: 0,
       digest_mismatches: 0,
+      frames_lost: 0,
       acks: AckWindow::new(),
       crowds: Vec::new(),
       coins: Vec::new(),
@@ -179,7 +248,11 @@ impl Client {
       pending_buys: Vec::new(),
       wrong_rule_packets: 0,
       applied_seq: None,
-
+      player_health: vec![PLAYER_MAX_HEALTH as u8; player_count],
+      player_invuln: vec![false; player_count],
+      popups: Vec::new(),
+      bursts: Vec::new(),
+      last_difficulty_tier: 1,
     }
   }
 
@@ -289,6 +362,11 @@ impl Client {
     self.enemies.len()
   }
 
+  /// The difficulty multiplier this client believes, from its clock estimate.
+  pub fn difficulty(&self) -> f32 {
+    difficulty(self.est_server_ms)
+  }
+
   /// Every player position as last known, for drawing peers.
   pub fn players(&self) -> &[Vec2] {
     &self.players
@@ -317,6 +395,14 @@ impl Client {
     // idempotent and applying a superset is harmless. Discarding instead starves
     // the client, and measurably: an earlier version of this did, and at 25% loss
     // the mirror emptied out while every agreement check read perfect.
+    // A gap in the sequence is a dropped frame: every frame is numbered, the link
+    // is ordered, so a jump of more than one means the wire lost the ones in
+    // between. This is the direct measure of whether frames are being dropped.
+    if let Some(prev) = self.applied_seq
+      && packet.seq > prev + 1
+    {
+      self.frames_lost += packet.seq - prev - 1;
+    }
     self.applied_seq = Some(packet.seq);
     self.acks.observe(packet.seq);
     self.now_ms = recv_ms;
@@ -330,6 +416,17 @@ impl Client {
     }
     self.projectiles = packet.projectiles.clone();
     self.crowds.clone_from(&packet.crowds);
+    if !packet.player_health.is_empty() {
+      self.player_health.clone_from(&packet.player_health);
+    }
+    if !packet.player_invuln.is_empty() {
+      self.player_invuln.clone_from(&packet.player_invuln);
+    }
+    for &(pos, amount) in &packet.hits {
+      self.popups.push(DamagePopup { pos, amount, age: 0.0 });
+      // A bright spark right at the hit, so the enemy there lights up.
+      self.bursts.push(Burst { pos, age: 0.0, big: false });
+    }
     // Where each coin was *before* this packet overwrites the list, so a claim can
     // launch its flight from where the player last saw it rather than from
     // nowhere. The server has already removed a claimed coin, so by the time the
@@ -456,7 +553,8 @@ impl Client {
     }
 
     for (handle, reason) in &packet.left {
-      if *reason == LeaveReason::Died {
+      let died = *reason == LeaveReason::Died;
+      if died {
         self.deaths_seen += 1;
       }
       let key = handle.key(generational);
@@ -467,7 +565,12 @@ impl Client {
         Some(existing) if generational && existing.generation != handle.generation => {
           self.stale_refs += 1;
         }
-        Some(_) => {
+        Some(existing) => {
+          // A death gets an explosion where the client last had the enemy.
+          if died {
+            let pos = existing.sim.pos;
+            self.bursts.push(Burst { pos, age: 0.0, big: true });
+          }
           self.enemies.remove(&key);
         }
         None => {}
@@ -531,9 +634,10 @@ impl Client {
           kind: entity.kind,
           health: entity.sim.health,
         };
+        let speed_scale = enemy_speed_scale(self.est_server_ms);
         let steps = ((age_ms as f32 / 1000.0) / SIM_DT) as u32;
         for _ in 0..steps.min(600) {
-          step_enemy(&mut projected, aim, repels[entity.sim.target as usize % repels.len()], SIM_DT);
+          step_enemy(&mut projected, aim, repels[entity.sim.target as usize % repels.len()], speed_scale, SIM_DT);
         }
         let seen = entity.smoother.sample(&entity.sim.pos, lerp);
         entity.sim.pos = projected.pos;
@@ -560,9 +664,10 @@ impl Client {
     if controls.mode == RemoteMode::Simulate {
       let players = self.players.clone();
       let repels = self.repel_flags();
+      let speed_scale = enemy_speed_scale(self.est_server_ms);
       for entity in self.enemies.values_mut() {
         let target = entity.sim.target as usize % players.len();
-        step_enemy(&mut entity.sim, players[target], repels[target], dt);
+        step_enemy(&mut entity.sim, players[target], repels[target], speed_scale, dt);
       }
     }
 
@@ -600,6 +705,30 @@ impl Client {
       notice.1 += dt;
     }
     self.notices.retain(|(_, age)| *age < NOTICE_SECS);
+
+    // Damage numbers rise and fade; sparks and explosions expand and fade.
+    for popup in &mut self.popups {
+      popup.age += dt;
+    }
+    self.popups.retain(|p| p.age < POPUP_SECS);
+    for burst in &mut self.bursts {
+      burst.age += dt;
+    }
+    self.bursts.retain(|b| b.alpha() > 0.0);
+    // A pulse can queue hundreds of deaths at once; keep the newest so the field
+    // is a scatter of explosions rather than one solid flash.
+    if self.bursts.len() > MAX_BURSTS {
+      let excess = self.bursts.len() - MAX_BURSTS;
+      self.bursts.drain(0..excess);
+    }
+
+    // Announce a difficulty step-up once, derived from the shared clock, so a
+    // client whose clock is off announces it at a slightly different moment.
+    let tier = difficulty(self.est_server_ms).floor() as u32;
+    if tier > self.last_difficulty_tier {
+      self.last_difficulty_tier = tier;
+      self.notices.push((format!("difficulty up  (x{tier})  enemies faster, hits harder"), 0.0));
+    }
     for entity in self.enemies.values_mut() {
       entity.smoother.advance(dt);
     }

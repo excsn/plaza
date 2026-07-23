@@ -29,7 +29,7 @@ Nearly every type here is generic over the same four, so it is worth naming them
 | `ID` | Your identifier | anything satisfying `AgentId` |
 | `SnapshotPayload` | What a client is sent | `Clone + Debug + Send + Sync + 'static`, plus serde |
 
-`AgentId` is blanket-implemented for every `Clone + Debug + Eq + Hash + Send + Sync + Serialize + Deserialize + 'static` type, so `Uuid` and `u64` qualify with no work. `Agent<ID>` wraps an ID and distinguishes `Human`, `Bot`, and `System`.
+`AgentId` is blanket-implemented for every `Clone + Debug + Eq + Hash + Send + Sync + Serialize + Deserialize + 'static` type, so `Uuid` and `u64` qualify with no work. `Agent<ID>` wraps an ID and distinguishes `Human`, `Bot`, and `System`. These, along with `SessionMessage` and `SnapshotData`, are defined in the runtime-free [`plaza_wire`](../wire/) and re-exported here, so a browser client (which cannot depend on core) names the same envelope types the server does; the `plaza::` paths below work regardless.
 
 ## A complete program
 

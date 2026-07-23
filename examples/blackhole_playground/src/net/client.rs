@@ -240,13 +240,13 @@ impl NetClient {
           self.status = Status::Playing;
         }
         Op::Frame(packet) => {
-          // A joiner's estimate of "now on the server" starts here: one sample
-          // per packet, fitted for offset and drift rather than trusted raw.
-          // A frame is also a clock sample, and a far more frequent one than
-          // ping. Its stamp is one way old, so the same correction applies.
-          let one_way = self.rtt.one_way_ms().unwrap_or(0.0) as f64;
-          let offset = (packet.server_time_ms as f64 + one_way) - now_ms as f64;
-          self.clock.observe(now_ms as f64, offset);
+          // Clock sync is driven by pongs alone, not by frames. A frame's offset
+          // is only right if the one-way estimate matches the delay the frame
+          // actually took, and on a *host* (which talks to its own arena) those
+          // disagree: pongs come straight back while the impairment link holds
+          // frames, so a frame sample claims an offset a whole latency off and the
+          // estimate wobbles every ping interval. Pongs are correct on a host
+          // (direct) and a remote (delayed like the frames).
           if let Some(me) = self.me
             && let Some(hole) = packet.holes.iter().find(|(id, _)| *id == me)
           {

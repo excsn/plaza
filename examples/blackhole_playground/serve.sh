@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Build the playground to wasm and serve it, handling every bit of ceremony:
-# installs the wasm target if missing, builds, copies the artifact next to the
-# page, optionally shrinks it, and starts a static server.
+# Build the browser client to wasm and host it. Unlike a plain static server, the
+# host binary serves the page, the wasm, *and* the WebSocket arena on one port, so
+# a joiner gets a single URL and there is a real server to connect to. That is the
+# whole point of the listen-server shape.
 #
 # Usage: ./serve.sh [port]   (default 8080)
 set -euo pipefail
@@ -16,11 +17,13 @@ if ! rustup target list --installed 2>/dev/null | grep -q '^wasm32-unknown-unkno
   rustup target add wasm32-unknown-unknown
 fi
 
-# 2. Build the release wasm.
-echo "==> building (release wasm)"
-( cd "$root" && cargo build -p blackhole_playground --target wasm32-unknown-unknown --release )
+# 2. Build the browser client. `--no-default-features --features web` is required:
+#    the default set pulls in the native socket (tungstenite) and the actix server,
+#    and neither compiles to wasm. `web` is the browser client alone.
+echo "==> building browser client (release wasm)"
+( cd "$root" && cargo build -p blackhole_playground --target wasm32-unknown-unknown --release --no-default-features --features web )
 
-# 3. Place the artifact next to index.html.
+# 3. Place the artifact next to index.html. It is gitignored: a build product.
 cp "$root/target/wasm32-unknown-unknown/release/blackhole_playground.wasm" "$here/static/blackhole_playground.wasm"
 
 # 4. Shrink it if binaryen is available (optional; skipped silently otherwise).
@@ -29,19 +32,10 @@ if command -v wasm-opt >/dev/null 2>&1; then
   wasm-opt -Oz "$here/static/blackhole_playground.wasm" -o "$here/static/blackhole_playground.wasm"
 fi
 
-# 5. Serve the static directory.
+# 5. Host it. One process serves the page, the wasm, and /ws, and prints the local
+#    and LAN URLs. actix serves .wasm with the right MIME type itself, so there is
+#    no static-server ceremony to get wrong.
 echo
-echo "==> serving http://localhost:$port   (Ctrl-C to stop)"
-cd "$here/static"
-if command -v basic-http-server >/dev/null 2>&1; then
-  exec basic-http-server -a "127.0.0.1:$port" .
-else
-  # Force the wasm MIME type: some Python installs serve .wasm as
-  # application/octet-stream, which browsers refuse to stream-compile.
-  exec python3 -c "
-import http.server, socketserver, sys
-handler = http.server.SimpleHTTPRequestHandler
-handler.extensions_map['.wasm'] = 'application/wasm'
-socketserver.TCPServer(('127.0.0.1', int(sys.argv[1])), handler).serve_forever()
-" "$port"
-fi
+echo "==> hosting on port $port   (Ctrl-C to stop)"
+exec cargo run -p blackhole_playground --release --manifest-path "$root/Cargo.toml" -- \
+  --role headless --bind "0.0.0.0:$port" --serve "$here/static"

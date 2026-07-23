@@ -1,4 +1,4 @@
-# Plaza: Server-Authoritative Shared State for Real-Time Rust Games & Apps
+# Plaza: Server-Authoritative Shared State for Real-Time Games & Apps
 
 [![crates.io](https://img.shields.io/crates/v/plaza.svg)](https://crates.io/crates/plaza) [![License: MPL-2.0](https://img.shields.io/badge/License-MPL%202.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
 
@@ -46,6 +46,9 @@ Please refer to **[`core/README.md`](core/README.md)** for installation, the fou
 | [`card_table`](examples/card_table/) | Turns, rounds, and phases, with hidden information: each player sees only their own cards. |
 | [`csp_net_example`](examples/csp_net_example/) | Client-side prediction and server reconciliation over a simulated network. |
 | [`netcode_playground`](examples/netcode_playground/) | The same, made interactive in the browser: drag the box, crank the latency, toggle each mechanism off to see it break. Also interpolation and lag compensation. See its [README](examples/netcode_playground/README.md). |
+| [`rollback_playground`](examples/rollback_playground/) | The other netcode family: peer-to-peer deterministic rollback, two peers predicting each other's inputs. See its [README](examples/rollback_playground/README.md). |
+| [`horde_playground`](examples/horde_playground/) | Scale, as a real listen-server: thousands of enemies, per-player relevance, host or join over a socket or deploy headless. See its [README](examples/horde_playground/README.md). |
+| [`blackhole_playground`](examples/blackhole_playground/) | Sending a *field* instead of its consequences, also a listen-server with four roles (headless / observer / host / client). See its [README](examples/blackhole_playground/README.md). |
 
 ```sh
 cargo run -p plaza-example-shared-counter

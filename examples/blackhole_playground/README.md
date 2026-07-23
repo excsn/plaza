@@ -8,12 +8,27 @@ It is deliberately the **hard** case. The [`horde_playground`](../horde_playgrou
 
 ## Running it
 
+**The host is the server.** A native run hosts by default and its own player is just another client on a real socket, which is what keeps every omniscient readout it shows legitimate: it genuinely owns both sides. One `--role` argument decides what a process is, because the combinations are not independent and a flag soup would let you ask for contradictions.
+
 ```sh
-./run-native.sh          # or: cargo run -p blackhole_playground --release
-./serve.sh               # browser (wasm), then open http://localhost:8080
+./run-native.sh                                                  # --role host: play, and serve joiners
+./run-native.sh -- --role observer                               # watch and drive the settings, no hole of your own
+./run-native.sh -- --role client --connect ws://<host>:8080/ws   # join someone else's arena
+./serve.sh                                                       # build the browser client and host it; open the printed URL
 ```
 
-**WASD / arrows** to move, **space** to dash.
+| `--role` | server | window | your own hole |
+|---|---|---|---|
+| `headless` | yes | no | no | the windowless deployable, and what `serve.sh` runs |
+| `observer` | yes | yes | no | full control panel, watching; a free camera (drag / WASD / wheel, `C` recenters) |
+| `host` | yes | yes | yes | plays and serves. **The default** |
+| `client` | no | yes | yes | join only. The only role a browser can take |
+
+A host prints a local URL and a LAN URL; open either in a browser to join, or send the LAN one to a friend. The browser client connects back to whoever served it (over `wss://` if the page was secure), so a `--role headless` deploy behind a TLS terminator works the same way. The impairment sliders (latency, jitter) now act on the **real** per-connection link, so a host can show a joiner what 200 ms feels like while its own view stays crisp.
+
+**WASD / arrows** to move, **space** to dash; on a phone, touch and drag anywhere to steer.
+
+The pure single-process teaching build, with no networking compiled in at all, is still here and is where the measurements below come from: `cargo run -p blackhole_playground --no-default-features --features native,client`.
 
 Black holes pull *each other*, not just the pellets, so contact is sticky: drift too close and the attraction closes the rest of the distance for you and keeps it closed. Holes never pass through each other. They press, like two marshmallows being squeezed: whatever overlap the pull would have created is measured as *pressure* and then undone, leaving them exactly tangent. **Both** drain the whole time they are pressed, harder the harder the press, so dashing into someone bites more than drifting into them, and because draining shrinks their radii they stay in contact while getting smaller. Squeeze a rival to zero and they are **gone**; that is what merging is, and the survivor simply has the space to itself. Eliminated players return after a few seconds. You cannot walk out of a grapple, the pull at contact is tuned above walking speed, so a dash outruns it briefly and the pull starts eating the gap back at once. Breaking away usually takes a few.
 
@@ -104,9 +119,12 @@ Depends on `plaza_client_utils` (for the deterministic `net_sim` link) and `plaz
 
 The simulation is headless and is where the tests live (`cargo test -p blackhole_playground`). `cargo run --release -p blackhole_playground --example report` prints the tables above.
 
+**The networked layer wraps that headless sim without changing it** ([src/net/](src/net/)). The server side is `plaza` core (`StateController`, `StateLogic`, `TickDriver`) over `plaza_session` (`ActixWsPlazaSession`); the arena buffers each seat's input and drains it on the tick, exactly the shape the offline `advance_seats` already had. The client side is `plaza_client_utils` (`PredictedPlayer` for your own hole, `ClockSyncEstimator`, `RttEstimator`) over a new `plaza_ws::Socket`. Cargo features name what you want to build rather than the crates behind them: `client`, `server` (not available on `web`), `native`, `web`, `websocket`. The host keeps every control and readout because it is the server and a client in one process, publishing a `HostView` of the truth each send round for its own omniscient half.
+
 ## Notes
 
-- Excluded from `default-members`, so a bare `cargo build` / `test` skips macroquad's dependency tree.
+- Excluded from `default-members`, so a bare `cargo build` / `test` skips macroquad's dependency tree. Building for wasm needs `--no-default-features --features web`, because the default set includes the native socket and the actix server, neither of which targets the browser; `serve.sh` does this.
+- The compiled `static/*.wasm` is a build artifact and is gitignored. Run `serve.sh` (or the `cargo build --target wasm32-unknown-unknown --features web` it wraps) to produce it before serving a fresh checkout.
 - A physics engine (Rapier and friends) would be the wrong tool here: pellets are non-colliding point masses in a force field, so rigid bodies, contacts, and joints go unused, and the gravity loop is still yours to write. The interesting consequence is the other way round, a heavy simulation makes client-side re-integration expensive and cross-platform determinism fragile, which pushes a game away from this technique and toward streaming state with interpolation.
 
 A frame counter sits bottom right: with these entity counts, telling a client-side stall apart from a network effect matters.

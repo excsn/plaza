@@ -44,6 +44,8 @@ Returned by `StateLogic::process_input` when an input cannot be applied: `Invali
 
 ## 3. Agents
 
+`AgentId`, `Agent`, `SessionMessage`, and `SnapshotData` are **defined in [`plaza_wire`](../wire/) and re-exported here**, so a wasm client (which cannot depend on core) and a server name the same types. The paths below (`plaza::AgentId`, `plaza::Agent`, ...) resolve exactly as documented.
+
 ### Trait `AgentId`
 
 ```rust,ignore

@@ -66,8 +66,8 @@ The connection registry plus the notification channels a `StateController` consu
 *   **`register(&self, agent: Agent<ID>, to_client_tx) -> ConnectionId`**: records a connected client and announces the join.
 *   **`deregister(&self, conn_id: ConnectionId)`**: removes it and announces the departure.
 *   **`forward_incoming(&self, from: Agent<ID>, serialized_ops: Vec<Vec<u8>>)`**: publishes a client's raw bytes toward the controller. Non-blocking; drops under load rather than stalling a connection task.
-*   **`broadcast(&self, target: &MessageTarget<ID>, msg: SerializedSessionMessage<ID>) -> Result<(), SessionLayerError>`**
-*   **`take_raw_incoming(&self) -> mpsc::BoundedAsyncReceiver<SerializedSessionMessage<ID>>`**
+*   **`broadcast(&self, target: &MessageTarget<ID>, frame: OutboundFrame) -> Result<(), SessionLayerError>`**: fans one already-encoded frame out to the matching connections. It takes bytes, not a message, because a `SessionMessage` is encoded **once** by [`encode_message`](#struct-transportsessionop-id-snapshotpayload-c-wirecodec) and the same frame is cloned to every recipient.
+*   **`take_raw_incoming(&self) -> mpsc::BoundedAsyncReceiver<SerializedSessionMessage<ID>>`**: the inbound stream, whose payloads are still encoded bytes for the deserialize bridge to decode.
 *   **`take_presence(&self) -> SessionReceiver<PresenceEvent<ID>>`**
 *   **`connection_count(&self) -> usize`**
 
@@ -80,7 +80,7 @@ A complete `Session` implementation over any byte transport. Both shipped adapte
 *   **`new(transport: &'static str, codec: C, capacity: usize) -> Arc<Self>`**: also spawns the deserialize bridge task.
 *   **`manager(&self) -> &Arc<ConnectionManager<ID>>`**
 *   **`codec(&self) -> &C`**
-*   **`encode_message(&self, msg) -> Result<SerializedSessionMessage<ID>, SessionLayerError>`**
+*   **`encode_message(&self, msg: SessionMessage<Op, ID, SnapshotPayload>) -> Result<OutboundFrame, SessionLayerError>`**: encodes a whole message to one frame in a single pass (`codec.encode(&msg)`). Hand the frame to [`broadcast`](#struct-connectionmanagerid-agentid); it is cloned per recipient rather than re-encoded.
 *   Implements `Session`. `agent_join` returns `PlazaError::NotImplemented`: joins are transport-implicit, happening when a client connects and the adapter calls `register`.
 
 ### Function `target_matches`
@@ -91,9 +91,13 @@ pub fn target_matches<ID: AgentId>(target: &MessageTarget<ID>, agent: &Agent<ID>
 
 The single implementation of the targeting rules. Agents without an ID (the system agent) are never a delivery target.
 
+### Type Alias `OutboundFrame`
+
+`Vec<u8>`: one fully-encoded downstream message, ready to write to a socket. What [`encode_message`](#struct-transportsessionop-id-snapshotpayload-c-wirecodec) produces and [`broadcast`](#struct-connectionmanagerid-agentid) fans out.
+
 ### Type Alias `SerializedSessionMessage<ID>`
 
-`SessionMessage<Vec<u8>, ID, Vec<u8>>`: a message whose payloads are still encoded bytes.
+`SessionMessage<Vec<u8>, ID, Vec<u8>>`: a message whose payloads are still encoded bytes. It survives on the **inbound** path only, where the deserialize bridge decodes a client's raw ops before handing them to the controller; the outbound path encodes once to an [`OutboundFrame`](#type-alias-outboundframe) and never builds one of these.
 
 ### Constants
 
@@ -122,7 +126,7 @@ async fn ws_route(
 }
 ```
 
-Text and binary frames are both accepted; pings are answered automatically, and the connection deregisters itself when the pump exits.
+Inbound, text and binary frames are both accepted. Outbound, the frame type follows the codec: [`WireCodec::is_text()`](../wire/API_REFERENCE.md#method-is_text) decides, so a `JsonCodec` sends **text** frames a browser or `websocat` can read, and a binary codec sends binary. Pings are answered automatically, and the connection deregisters itself when the pump exits.
 
 ## 6. Module `tcp` (feature `tcp`)
 

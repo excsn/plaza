@@ -76,7 +76,7 @@ pub fn draw_ui(world: &World, controls: &mut Controls) -> bool {
       ui.label(format!("alive: {} enemies, {} killed total", world.alive_enemies(), world.kills()));
       ui.label(format!("last area pulse killed: {} at once", world.last_nova_kills()));
       ui.label(format!("stale handle references: {}", world.stale_refs()));
-      warn_line(ui, format!("mirror digest mismatches: {}", world.digest_mismatches()), world.digest_mismatches() > 0);
+      warn_line(ui, format!("mirror digest mismatches: {}   frames lost: {}", world.digest_mismatches(), world.frames_lost()), world.digest_mismatches() > 0);
       let phantoms = world.phantom_entities(0, controls);
       warn_line(ui, format!("entities held that are dead on the server: {phantoms}"), phantoms > 0);
       if controls.crowd_lod_theta > 0.0 {
@@ -100,6 +100,9 @@ pub fn draw_ui(world: &World, controls: &mut Controls) -> bool {
       }
       ui.separator();
       ui.label(format!("render error: {:.0} px mean, {:.0} px worst", world.mean_render_error(controls), world.max_render_error(controls)));
+
+      ui.separator();
+      ui.label(format!("difficulty: x{:.1}   your health: {}   deaths: {}", world.difficulty(), world.player_health(0), world.player_deaths(0)));
 
       ui.separator();
       ui.label(egui::RichText::new("try it").weak());
@@ -154,8 +157,9 @@ pub fn draw_net_ui(client: &horde_playground::net::client::NetClient, url: &str,
         Some(rtt) => ui.label(format!("round trip: {rtt:.0} ms")),
         None => ui.label("round trip: measuring"),
       };
-      ui.label(format!("frames applied: {}", client.frames_seen));
+      ui.label(format!("frames applied: {}   lost: {}", client.frames_seen, client.sim.frames_lost));
       ui.label(format!("enemies held: {}", client.sim.known_entities()));
+      ui.label(format!("difficulty: x{:.1}   your health: {}", client.sim.difficulty(), client.my_health()));
       ui.label(format!("coins: {}   pickups taken back: {}", client.sim.believed_balance, client.sim.denied_claims));
       if let Some(policy) = client.policy {
         ui.separator();
@@ -202,7 +206,7 @@ pub fn draw_host_ui(view: &horde_playground::net::arena::HostView, client: &hord
       ui.label(format!("alive: {} enemies, {} killed total", view.alive, view.kills));
       ui.label(format!("last area pulse killed: {} at once", view.nova_kills_last));
       ui.label(format!("stale handle references: {}", client.sim.stale_refs));
-      warn_line(ui, format!("mirror digest mismatches: {}", client.sim.digest_mismatches), client.sim.digest_mismatches > 0);
+      warn_line(ui, format!("mirror digest mismatches: {}   frames lost: {}", client.sim.digest_mismatches, client.sim.frames_lost), client.sim.digest_mismatches > 0);
       warn_line(ui, format!("entities held that are dead on the server: {phantoms}"), phantoms > 0);
       if controls.crowd_lod_theta > 0.0 {
         ui.label(format!("distant world: {} crowd summaries for {:.1} KiB/s", client.sim.crowds.len(), view.crowd_bytes_per_sec() / 1024.0));
@@ -222,6 +226,8 @@ pub fn draw_host_ui(view: &horde_playground::net::arena::HostView, client: &hord
       }
       ui.separator();
       ui.label(format!("render error: {mean_err:.0} px mean, {worst_err:.0} px worst"));
+      let deaths = me.and_then(|m| view.player_deaths.get(m)).copied().unwrap_or(0);
+      ui.label(format!("difficulty: x{:.1}   your health: {}   deaths: {}", view.difficulty, client.my_health(), deaths));
       match client.rtt_ms() {
         Some(rtt) => ui.label(format!("your round trip: {rtt:.0} ms")),
         None => ui.label("your round trip: measuring"),
@@ -254,6 +260,7 @@ pub fn draw_observer_ui(view: &horde_playground::net::arena::HostView, controls:
       ui.label(format!("churn: {:.1} spawns / {:.1} despawns per packet", view.mean_spawns_per_packet(), view.mean_despawns_per_packet()));
       ui.label(format!("alive: {} enemies, {} killed total", view.alive, view.kills));
       ui.label(format!("last area pulse killed: {} at once", view.nova_kills_last));
+      ui.label(format!("difficulty: x{:.1}   total player deaths: {}", view.difficulty, view.player_deaths.iter().sum::<u64>()));
       if controls.coins {
         ui.label(format!("coins expired uncollected: {}   purchases refused: {}", view.coins_expired, view.denied_purchases));
       }

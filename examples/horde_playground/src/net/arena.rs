@@ -56,6 +56,10 @@ pub struct HostView {
   pub coins: Vec<Coin>,
   pub wallets: Vec<Wallet>,
   pub coins_claimed: Vec<u32>,
+  pub player_health: Vec<u8>,
+  pub player_invuln: Vec<bool>,
+  pub player_deaths: Vec<u64>,
+  pub difficulty: f32,
 
   pub alive: usize,
   pub kills: u64,
@@ -127,14 +131,26 @@ impl HostView {
 /// before they are released, so the host's latency and jitter sliders act on a
 /// real link instead of a simulation. Kept `Clone` because the arena state must
 /// be, and `LatencyLink` is not.
+///
+/// It never **reorders**. A WebSocket is TCP: frames arrive in the order they
+/// were sent, and jitter shows up as bursty delay, not shuffling. Letting a
+/// jittered frame overtake an earlier one would be modelling a UDP link this
+/// transport is not, and it would desync the delta-relevance stream, whose
+/// recovery is built for loss and not for reordering, lighting up digest
+/// mismatches no real ordered transport produces.
 #[derive(Clone, Debug, Default)]
 struct Downlink {
   queue: Vec<(u64, Packet)>,
+  /// The delivery time of the last frame queued. A new frame's jittered time is
+  /// clamped to at least this, so jitter can delay it past its predecessor but
+  /// never ahead of it.
+  last_deliver_ms: u64,
 }
 
 impl Downlink {
   fn send(&mut self, now_ms: u64, packet: Packet, latency_ms: u64, jitter_ms: u64, rng: &mut Rng) {
-    let deliver_at = now_ms + latency_ms + rng.up_to(jitter_ms);
+    let deliver_at = (now_ms + latency_ms + rng.up_to(jitter_ms)).max(self.last_deliver_ms);
+    self.last_deliver_ms = deliver_at;
     self.queue.push((deliver_at, packet));
   }
 
@@ -283,6 +299,10 @@ impl Arena {
       coins: self.sim.coins.clone(),
       wallets: self.sim.wallets.clone(),
       coins_claimed: self.sim.coins_claimed.clone(),
+      player_health: (0..self.sim.players.len()).map(|p| self.sim.player_health(p)).collect(),
+      player_invuln: (0..self.sim.players.len()).map(|p| self.sim.is_player_invuln(p)).collect(),
+      player_deaths: self.sim.player_deaths.clone(),
+      difficulty: self.sim.difficulty(),
       alive: self.sim.alive_count(),
       kills: self.sim.kills,
       nova_kills_last: self.sim.nova_kills_last,
@@ -573,5 +593,96 @@ mod tests {
     assert_eq!(state.sim.denied_purchases, 0);
     step(&logic, &mut state, LogicInput::AgentOps { source: Agent::new_human(1u64, "p1"), ops: vec![Op::Buy(Upgrade::Repulsor)] });
     assert_eq!(state.sim.denied_purchases, 1, "an empty wallet's purchase is refused by the server");
+  }
+
+  #[test]
+  fn a_networked_client_mirror_stays_in_sync_through_the_arena() {
+    // Reproduces the digest-mismatch report by driving the real ArenaLogic and a
+    // real client through the frame/ack loop, without a socket: extract each
+    // Frame the arena emits, apply it, feed the client's ack back as an Op.
+    let controls = Controls { enemy_count: 300, ..Controls::default() };
+    let (cs, _view) = slots(controls);
+    let logic = ArenaLogic::new(cs, None);
+    let mut state = Arena::new(controls);
+    step(&logic, &mut state, LogicInput::AgentJoined { agent: Agent::new_human(1u64, "p1") });
+    // The first joiner takes the top free seat.
+    let seat = state.seat_of(&1).unwrap();
+    let mut client = crate::sim::client::Client::new(seat as PlayerId, 4);
+
+    let mut recv = 0u64;
+    let mut pending_ack: Option<Op> = None;
+    for _ in 0..1200u64 {
+      // The ack from the previous frame arrives before this tick's frame is built.
+      if let Some(ack) = pending_ack.take() {
+        step(&logic, &mut state, LogicInput::AgentOps { source: Agent::new_human(1u64, "p1"), ops: vec![ack] });
+      }
+      let out = step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
+      recv += 16;
+      for op in &out.ops {
+        if let Some(Op::Frame(packet)) = op.ops.first() {
+          client.on_packet(packet, recv, &controls);
+          if let Some((newest, mask)) = client.acks.encode() {
+            pending_ack = Some(Op::Ack { newest, mask });
+          }
+        }
+      }
+    }
+    assert_eq!(client.digest_mismatches, 0, "the client mirror disagreed with the server digest {} times", client.digest_mismatches);
+  }
+
+  #[cfg(feature = "websocket")]
+  #[test]
+  fn every_frame_survives_the_json_wire() {
+    // The client drops any frame it cannot deserialize, so a frame that fails to
+    // parse is a silent hole in the delta stream: the mirror diverges and the
+    // digest ticks until recovery re-derives it. serde_json writes NaN/Infinity
+    // as `null`, which then fails to parse back into f32, so a single bad float
+    // anywhere in a packet loses the whole frame. Run the server long enough to
+    // ramp difficulty and churn the field, and round-trip every frame.
+    let controls = Controls { enemy_count: 400, sync_hz: 30, ..Controls::default() };
+    let mut server = crate::sim::server::Server::new(controls.enemy_count, 4, controls.spread_players);
+    let mut checked = 0u32;
+    for i in 0..(60 * 60) {
+      let t = i as f32 * 0.05;
+      for (_, packet) in server.advance(16, Vec2::new(t.cos(), t.sin()), &controls) {
+        let msg: plaza_wire::SessionMessage<Op, u64, ()> =
+          plaza_wire::SessionMessage::Ops { from: Agent::system(), ops: vec![Op::Frame(Box::new(packet.clone()))] };
+        let bytes = serde_json::to_vec(&msg).expect("encode");
+        let back = serde_json::from_slice::<plaza_wire::SessionMessage<Op, u64, ()>>(&bytes);
+        assert!(back.is_ok(), "a frame failed to deserialize: {:?}", back.err());
+        if let Ok(plaza_wire::SessionMessage::Ops { ops, .. }) = back
+          && let Some(Op::Frame(p2)) = ops.first()
+        {
+          assert_eq!(p2.visible_digest, packet.visible_digest, "digest survived the wire");
+        }
+        checked += 1;
+      }
+    }
+    assert!(checked > 100, "actually exercised the wire: {checked} frames");
+  }
+
+  #[test]
+  fn the_impairment_link_delays_but_never_reorders() {
+    // A WebSocket is ordered, so jitter must delay the stream, not shuffle it.
+    // Reordering the delta-relevance stream would desync the client mirror and
+    // register digest mismatches no ordered transport produces. Send frames with
+    // huge jitter and confirm they still come out in send order.
+    let mut link = Downlink::default();
+    let mut rng = Rng::new(1);
+    for seq in 0u64..12 {
+      let packet = Packet { seq, ..Default::default() };
+      // 16ms apart, latency 40, jitter 300: without the fix this shuffles badly.
+      link.send(seq * 16, packet, 40, 300, &mut rng);
+    }
+    let mut delivered = Vec::new();
+    for tick in 0..200u64 {
+      for packet in link.drain_due(tick * 16) {
+        delivered.push(packet.seq);
+      }
+    }
+    assert_eq!(delivered.len(), 12, "every frame arrives");
+    let mut sorted = delivered.clone();
+    sorted.sort_unstable();
+    assert_eq!(delivered, sorted, "and in send order, never reordered: {delivered:?}");
   }
 }

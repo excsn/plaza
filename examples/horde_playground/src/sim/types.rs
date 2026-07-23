@@ -34,6 +34,43 @@ pub const NOVA_DAMAGE: u8 = 3;
 /// New enemies arrive in waves, just outside somebody's view.
 pub const WAVE_INTERVAL_MS: u64 = 500;
 
+// The player as a target rather than an invulnerable camera.
+/// Full health. Kept small and integer so it rides the wire as one byte per
+/// player and a bar is easy to read.
+pub const PLAYER_MAX_HEALTH: f32 = 100.0;
+/// How close an enemy has to be to a player to be doing damage.
+pub const PLAYER_CONTACT_RADIUS: f32 = 22.0;
+/// Damage from a single hit, before difficulty scaling. Damage is discrete, not a
+/// continuous drain: touching an enemy costs one hit, and then a brief window of
+/// invulnerability before the next, so a whole pile lands one hit per window
+/// rather than one per tick and cannot destroy you in a single instant.
+pub const CONTACT_HIT_DAMAGE: f32 = 9.0;
+/// The invulnerability a hit buys, long enough that a swarm cannot chain.
+pub const HIT_INVULN_MS: u64 = 600;
+/// The longer invulnerability a respawn buys, enough to walk out of the pile that
+/// got you. Drawn as a shield; the brief hit window is not.
+pub const PLAYER_INVULN_MS: u64 = 2000;
+
+/// The survivor-style difficulty ramp, as a multiplier that grows with elapsed
+/// time. Deliberately scaled in **minutes**, so the short headless tests and the
+/// bandwidth case study, which run for seconds, see it at ~1.0 and are unchanged.
+///
+/// Derived from the clock, like [`repulsor_pulse`], so both the server and every
+/// client compute the same value against their own estimate of server time. It is
+/// therefore a third consumer of clock sync: a client whose clock is off ramps to
+/// a slightly different difficulty and its enemies move at a subtly wrong speed.
+pub fn difficulty(now_ms: u64) -> f32 {
+  let minutes = now_ms as f32 / 60_000.0;
+  (1.0 + minutes * 0.6).min(8.0)
+}
+
+/// How much faster enemies move at the current difficulty. Gentler than the
+/// damage ramp, because speed is the most *felt* difficulty and a small change
+/// reads as a large one.
+pub fn enemy_speed_scale(now_ms: u64) -> f32 {
+  1.0 + (difficulty(now_ms) - 1.0) * 0.10
+}
+
 /// A dense entity index, the slot an entity occupies.
 pub type EntityIndex = u32;
 pub type PlayerId = u8;
@@ -148,11 +185,12 @@ pub struct Projectile {
 /// **The shared behaviour rule.** Both the authoritative server and every client
 /// run exactly this, which is what lets a client simulate an enemy forward in the
 /// *present* instead of rendering it interpolated in the past.
-pub fn step_enemy(enemy: &mut Enemy, target_pos: Vec2, repel_radius: Option<f32>, dt: f32) {
+pub fn step_enemy(enemy: &mut Enemy, target_pos: Vec2, repel_radius: Option<f32>, speed_scale: f32, dt: f32) {
   let (dx, dy) = (target_pos.x - enemy.pos.x, target_pos.y - enemy.pos.y);
   let len = (dx * dx + dy * dy).sqrt();
   if len > 1.0 {
-    let speed = enemy.kind.speed();
+    // Scaled by the difficulty ramp, which both sides evaluate against the clock.
+    let speed = enemy.kind.speed() * speed_scale;
     // A repulsor *pulses*. Enemies inside the pulse are pushed out, weakly, and
     // only for as long as it lasts.
     //
@@ -433,6 +471,20 @@ pub struct Packet {
   /// able to tell "you lost that one" from "you never saw it", and an absence
   /// says neither.
   pub claims: Vec<(PlayerId, CoinId)>,
+  /// Every player's health, `0..=PLAYER_MAX_HEALTH`, indexed by `PlayerId`. Sent
+  /// to everyone so a client can draw a bar over a peer as well as itself. One
+  /// byte each; the player count is tiny.
+  pub player_health: Vec<u8>,
+  /// Which players are briefly invulnerable after a respawn, for the shield.
+  pub player_invuln: Vec<bool>,
+  /// Weapon hits near this player since the last packet: where, and how much
+  /// damage, so a client can float a fading number like a bullet-heaven does.
+  ///
+  /// Sent outright, and only for shots (not the mass nova), for the same reason
+  /// coins and projectiles are: they are few and near, and unlike enemy *health*
+  /// (which is never streamed for thousands of entities) a hit is a discrete
+  /// event the client cannot infer from a position sample.
+  pub hits: Vec<(Vec2, u8)>,
 }
 
 /// One player's currency and what they have bought, as the server sees it.
@@ -542,6 +594,11 @@ impl Packet {
       + self.wallets.len() * 3
       + self.claims.len() * (1 + ID_BYTES)
       + self.denied_buys.len()
+      // A health byte per player, and the invuln flags packed to a bitmask.
+      + self.player_health.len()
+      + self.player_invuln.len().div_ceil(8)
+      // A quantized position and a damage byte per hit.
+      + self.hits.len() * (POS_BYTES + 1)
       + 8 // the digest
       + 2 // the sequence number, delta coded
   }

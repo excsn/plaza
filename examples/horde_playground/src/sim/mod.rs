@@ -12,5 +12,5 @@ pub mod types;
 pub mod world;
 
 pub use protocol::{Op, ServerPolicy};
-pub use types::{Controls, Enemy, EnemyKind, EntityIndex, Handle, PlayerId, Projectile, RemoteMode, Upgrade, Vec2, ARENA_H, ARENA_W, NOVA_RADIUS, VIEW_RADIUS};
+pub use types::{Controls, Enemy, EnemyKind, EntityIndex, Handle, PlayerId, Projectile, RemoteMode, Upgrade, Vec2, ARENA_H, ARENA_W, NOVA_RADIUS, PLAYER_MAX_HEALTH, VIEW_RADIUS};
 pub use world::World;

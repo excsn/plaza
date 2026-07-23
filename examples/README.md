@@ -14,8 +14,8 @@ One crate each, smallest first. Run any of them with `cargo run -p <crate>` (the
 | [`csp_net_example`](csp_net_example/) | Client-side prediction and server reconciliation over a simulated network (headless). | `plaza_csp_net_example` |
 | [`netcode_playground`](netcode_playground/) | The same made interactive in the browser, plus interpolation and lag compensation. See its [README](netcode_playground/README.md). | `netcode_playground` |
 | [`rollback_playground`](rollback_playground/) | The other netcode family: peer-to-peer deterministic rollback, two peers predicting each other's inputs in the browser. See its [README](rollback_playground/README.md). | `rollback_playground` |
-| [`horde_playground`](horde_playground/) | Scale: thousands of enemies, four players, per-player relevance and a 1 Hz send rate. See its [README](horde_playground/README.md). | `horde_playground` |
-| [`blackhole_playground`](blackhole_playground/) | Sending a *field* instead of its consequences: thousands of pellets moved by a handful of black holes. See its [README](blackhole_playground/README.md). | `blackhole_playground` |
+| [`horde_playground`](horde_playground/) | Scale: thousands of enemies, four players, per-player relevance and a low send rate. A real **listen-server**: host, join over a socket, or deploy headless. See its [README](horde_playground/README.md). | `horde_playground` |
+| [`blackhole_playground`](blackhole_playground/) | Sending a *field* instead of its consequences: thousands of pellets moved by a handful of black holes. Also a **listen-server** with the same four roles. See its [README](blackhole_playground/README.md). | `blackhole_playground` |
 
 For example:
 
@@ -24,3 +24,5 @@ cargo run -p plaza-example-shared-counter
 ```
 
 The four playgrounds (`netcode`, `rollback`, `horde`, `blackhole`) pull in a large graphics dependency, so they are excluded from the default workspace build; a bare `cargo build`/`test` skips them. Run each via its own `run-native.sh` or `serve.sh`.
+
+`horde` and `blackhole` are genuine multiplayer over a real socket (built on `plaza`, `plaza_session`, and `plaza_ws`), not scripted single-player. `./run-native.sh` hosts and plays by default; a `--role` argument switches between `headless` (deploy), `observer` (watch), `host`, and `client` (join). Their `static/*.wasm` are gitignored build artifacts, so run `serve.sh` to produce and host the browser client on a fresh checkout. The other two (`netcode`, `rollback`) remain single-process browser demos.

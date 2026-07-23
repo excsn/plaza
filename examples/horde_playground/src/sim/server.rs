@@ -14,8 +14,8 @@ use plaza_server_utils::aggregate::{AggregateTree, WeightedPoint};
 use plaza_server_utils::relevance::{GridQuantizer, SetDigest, SpatialGrid, VisibilitySet};
 
 use crate::sim::types::{
-  coin_pull, repulsor_pulse, step_coin, step_enemy, Coin, CoinId, Controls, Crowd, Enemy, EnemyKind, EntityIndex, Handle, LeaveReason, Packet, PlayerId, Projectile, Sample, Spawn, Upgrade, Vec2, Wallet, COIN_PICKUP_RADIUS, COIN_DROP_IN, COIN_TTL_MS, ARENA_H, ARENA_W, CELL_SIZE, FIRE_INTERVAL_MS, HIT_RADIUS, NOVA_INTERVAL_MS,
-  NOVA_DAMAGE, NOVA_RADIUS, PLAYER_SPEED, PROJECTILE_SPEED, PROJECTILE_TTL, SIM_DT, VIEW_RADIUS, WAVE_INTERVAL_MS,
+  coin_pull, difficulty, enemy_speed_scale, repulsor_pulse, step_coin, step_enemy, Coin, CoinId, Controls, Crowd, Enemy, EnemyKind, EntityIndex, Handle, LeaveReason, Packet, PlayerId, Projectile, Sample, Spawn, Upgrade, Vec2, Wallet, COIN_PICKUP_RADIUS, COIN_DROP_IN, COIN_TTL_MS, ARENA_H, ARENA_W, CELL_SIZE, CONTACT_HIT_DAMAGE, FIRE_INTERVAL_MS, HIT_INVULN_MS, HIT_RADIUS, NOVA_INTERVAL_MS,
+  NOVA_DAMAGE, NOVA_RADIUS, PLAYER_CONTACT_RADIUS, PLAYER_INVULN_MS, PLAYER_MAX_HEALTH, PLAYER_SPEED, PROJECTILE_SPEED, PROJECTILE_TTL, SIM_DT, VIEW_RADIUS, WAVE_INTERVAL_MS,
 };
 
 const RETARGET_INTERVAL_MS: u64 = 1000;
@@ -133,6 +133,21 @@ pub struct Server {
   /// visible set. The cost of recovery, and the number that says whether the
   /// history window is long enough.
   pub full_resends: Vec<u64>,
+
+  /// Each player's health as a float so fractional per-step contact damage
+  /// accumulates; it goes out quantized to a byte. Zero means a death is being
+  /// resolved this step.
+  player_health: Vec<f32>,
+  /// When each player can next take damage: pushed forward briefly by every hit
+  /// and longer by a respawn. Gameplay immunity, not sent on the wire.
+  player_invuln_until_ms: Vec<u64>,
+  /// When each player's respawn *shield* ends. The subset of immunity worth
+  /// drawing, so a hit's brief window does not flicker a shield on.
+  player_shield_until_ms: Vec<u64>,
+  /// Times each player has been overrun, for the scoreboard.
+  pub player_deaths: Vec<u64>,
+  /// Weapon hits since the last send, `(where, damage)`, for floating numbers.
+  hits_since_send: Vec<(Vec2, u8)>,
 }
 
 /// How many sent states to remember per client. A packet older than this is past
@@ -200,6 +215,11 @@ impl Server {
       denials_since_send: vec![Vec::new(); player_count],
       unacked: vec![0; player_count],
       full_resends: vec![0; player_count],
+      player_health: vec![PLAYER_MAX_HEALTH; player_count],
+      player_invuln_until_ms: vec![0; player_count],
+      player_shield_until_ms: vec![0; player_count],
+      player_deaths: vec![0; player_count],
+      hits_since_send: Vec::new(),
     }
   }
 
@@ -224,6 +244,21 @@ impl Server {
 
   pub fn alive_count(&self) -> usize {
     self.slots.iter().filter(|s| s.alive).count()
+  }
+
+  /// A player's health, quantized the way the packet carries it.
+  pub fn player_health(&self, p: usize) -> u8 {
+    self.player_health[p].round().clamp(0.0, PLAYER_MAX_HEALTH) as u8
+  }
+
+  /// Whether a player is in its post-respawn shield (the drawn kind).
+  pub fn is_player_invuln(&self, p: usize) -> bool {
+    self.clock_ms < self.player_shield_until_ms[p]
+  }
+
+  /// The current difficulty multiplier, for a readout.
+  pub fn difficulty(&self) -> f32 {
+    difficulty(self.clock_ms)
   }
 
   /// Every live enemy with its handle, for rendering the ground truth.
@@ -306,16 +341,49 @@ impl Server {
       pos.x = (pos.x + dx * PLAYER_SPEED * SIM_DT).clamp(0.0, ARENA_W);
       pos.y = (pos.y + dy * PLAYER_SPEED * SIM_DT).clamp(0.0, ARENA_H);
     }
+    let speed_scale = enemy_speed_scale(self.clock_ms);
     for slot in self.slots.iter_mut().filter(|s| s.alive) {
       let t_idx = slot.enemy.target as usize % self.players.len();
       let repel = self.wallets[t_idx].has(Upgrade::Repulsor).then(|| repulsor_pulse(self.clock_ms)).flatten();
-      step_enemy(&mut slot.enemy, self.players[t_idx], repel, SIM_DT);
+      step_enemy(&mut slot.enemy, self.players[t_idx], repel, speed_scale, SIM_DT);
     }
+    self.resolve_contact_damage();
     if controls.combat {
       self.step_projectiles();
     }
     if controls.coins {
       self.step_coins();
+    }
+  }
+
+  /// Touching an enemy costs one discrete hit, harder as the difficulty ramps,
+  /// and then a brief invulnerability so a whole pile lands one hit per window
+  /// rather than one per tick. Being reduced to zero refills health and grants a
+  /// longer shield in place: a continuous sandbox, not a game over. In place
+  /// rather than teleporting, so the player's position (and the enemy dynamics
+  /// every proximity readout measures) stays continuous; the shield is what lets
+  /// you walk out of the pile that got you.
+  fn resolve_contact_damage(&mut self) {
+    let now = self.clock_ms;
+    let hit_damage = difficulty(now) * CONTACT_HIT_DAMAGE;
+    for p in 0..self.players.len() {
+      if now < self.player_invuln_until_ms[p] {
+        continue;
+      }
+      let eye = self.players[p];
+      let touched = self.slots.iter().filter(|s| s.alive).any(|s| s.enemy.pos.dist(eye) <= PLAYER_CONTACT_RADIUS + s.enemy.kind.radius());
+      if !touched {
+        continue;
+      }
+      self.player_health[p] -= hit_damage;
+      if self.player_health[p] <= 0.0 {
+        self.player_deaths[p] += 1;
+        self.player_health[p] = PLAYER_MAX_HEALTH;
+        self.player_invuln_until_ms[p] = now + PLAYER_INVULN_MS;
+        self.player_shield_until_ms[p] = now + PLAYER_INVULN_MS;
+      } else {
+        self.player_invuln_until_ms[p] = now + HIT_INVULN_MS;
+      }
     }
   }
 
@@ -405,10 +473,12 @@ impl Server {
       }
     }
     // Damage after the scan so indices stay stable during it. A shot spends
-    // itself on contact whether or not it was the killing blow.
+    // itself on contact whether or not it was the killing blow. Each hit is also
+    // recorded as a floating-number event, at the enemy it landed on.
     let mut spent: Vec<usize> = Vec::new();
     for (pi, target) in hits {
       spent.push(pi);
+      self.hits_since_send.push((self.slots[target as usize].enemy.pos, 1));
       self.damage(target, 1);
     }
     spent.sort_unstable();
@@ -610,6 +680,10 @@ impl Server {
     }
 
     let player_list: Vec<(PlayerId, Vec2)> = self.players.iter().enumerate().map(|(p, pos)| (p as PlayerId, *pos)).collect();
+    // Everyone's health and shield, indexed by player id. Small, and sent to all
+    // so a client draws a bar over a peer as well as itself.
+    let health_list: Vec<u8> = self.player_health.iter().map(|h| h.round().clamp(0.0, PLAYER_MAX_HEALTH) as u8).collect();
+    let invuln_list: Vec<bool> = self.player_shield_until_ms.iter().map(|&t| self.clock_ms < t).collect();
     let mut out = Vec::with_capacity(self.players.len());
 
     let seq = self.next_seq;
@@ -700,6 +774,8 @@ impl Server {
         seq,
         baseline_seq,
         players: player_list.clone(),
+        player_health: health_list.clone(),
+        player_invuln: invuln_list.clone(),
         ..Default::default()
       };
 
@@ -852,8 +928,9 @@ impl Server {
         packet.denied_buys = std::mem::take(&mut self.denials_since_send[p]);
       }
 
-      // Shots close enough to matter.
+      // Shots close enough to matter, and the hits near this player.
       packet.projectiles = self.projectiles.iter().filter(|pr| pr.pos.dist(eye) <= VIEW_RADIUS * 1.2).copied().collect();
+      packet.hits = self.hits_since_send.iter().filter(|(pos, _)| pos.dist(eye) <= VIEW_RADIUS * 1.2).copied().collect();
 
       // Summarise what the client must hold once it applies this packet. Keyed by
       // index *and* generation, so agreeing on membership is not enough: both
@@ -883,6 +960,7 @@ impl Server {
     }
     self.deaths_since_send.clear();
     self.claims_since_send.clear();
+    self.hits_since_send.clear();
     out
   }
 }
@@ -909,5 +987,53 @@ fn player_drift(p: usize, t: f32, spread: bool) -> (f32, f32) {
     ((t * 0.5 + phase).cos(), (t * 0.4 + phase).sin())
   } else {
     ((t * 0.5).cos() + 0.05 * phase.cos(), (t * 0.4).sin() + 0.05 * phase.sin())
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn a_player_pressed_by_enemies_takes_hits_and_is_eventually_overrun() {
+    let mut server = Server::new(200, 4, false);
+    // Pin every enemy onto player 0 and point it at them, so the pile presses.
+    let p0 = server.players[0];
+    for slot in server.slots.iter_mut() {
+      slot.enemy.pos = p0;
+      slot.enemy.target = 0;
+    }
+    let controls = Controls::default();
+    // Stand still in the pile for fifteen seconds.
+    for _ in 0..(15 * 60) {
+      server.advance(16, Vec2::new(0.0, 0.0), &controls);
+    }
+    assert!(server.player_deaths[0] > 0, "a player standing in the horde is overrun");
+  }
+
+  #[test]
+  fn a_hit_buys_a_brief_invulnerability_so_a_pile_cannot_chain() {
+    // One tick of contact should cost exactly one hit, not one per enemy per
+    // tick: the i-frame is what stops a swarm deleting you in an instant.
+    let mut server = Server::new(50, 1, false);
+    let p0 = server.players[0];
+    for slot in server.slots.iter_mut() {
+      slot.enemy.pos = p0;
+      slot.enemy.target = 0;
+    }
+    let before = server.player_health(0);
+    // A single simulation step (advance runs the fixed-step loop once for 16ms).
+    server.advance(16, Vec2::new(0.0, 0.0), &Controls::default());
+    let dropped = before - server.player_health(0);
+    assert!(dropped > 0, "contact hurt");
+    assert!(dropped <= (CONTACT_HIT_DAMAGE.ceil() as u8) + 1, "but only one hit's worth, not one per enemy: {dropped}");
+  }
+
+  #[test]
+  fn difficulty_ramps_with_time_and_is_capped() {
+    assert!((difficulty(0) - 1.0).abs() < 1e-6, "starts at 1x");
+    assert!(difficulty(120_000) > difficulty(30_000), "harder as minutes pass");
+    assert!(difficulty(3_600_000) <= 8.0, "but bounded");
+    assert!(enemy_speed_scale(600_000) > 1.0, "and enemies speed up with it");
   }
 }

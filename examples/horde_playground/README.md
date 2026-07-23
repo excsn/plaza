@@ -4,16 +4,31 @@ The many-entity case: thousands of enemies, four players standing in different p
 
 Where [`netcode_playground`](../netcode_playground/) shows one player's mechanisms up close and [`rollback_playground`](../rollback_playground/) shows the peer-to-peer family, this one is about **scale**: what you send, to whom, how often, and how a client draws things it is barely told about.
 
-You drive your player with **WASD / arrows**; the weapons aim and fire themselves, Vampire Survivors style. Every 4.5 seconds each player emits an **area pulse** that wipes every enemy within 190 units at once (an expanding ring marks it), and reinforcements keep arriving into the slots the dead freed. With four players pulsing together into a converged horde, a single tick can kill several hundred, which is exactly the mass-despawn burst measured below.
+You drive your player with **WASD / arrows** (or, on a phone, touch and drag anywhere for a floating joystick); the weapons aim and fire themselves, Vampire Survivors style. Every 4.5 seconds each player emits an **area pulse** that wipes every enemy within 190 units at once (an expanding ring marks it), and reinforcements keep arriving into the slots the dead freed.
+
+You are a target, not an invulnerable camera. Enemies pressed against you deal a discrete hit (a red flash, a health bar over your head, and a floating damage number where your shots land), then a brief invulnerability so a whole pile cannot delete you in one instant. Being reduced to zero refills your health and gives a longer shield in place, and a **difficulty** multiplier ramps over the minutes, speeding enemies up and hitting harder, with a notice announced at each step. The difficulty is derived from the clock the same way the repulsor pulse is, so it is a third consumer of clock sync: a client whose clock is off ramps at a slightly different moment and its enemies move at a subtly wrong speed. The health, the shield, and the hit events cross the wire (a few bytes); enemy *health* never does, because a client only needs the outcome, not thousands of running totals. With four players pulsing together into a converged horde, a single tick can kill several hundred, which is exactly the mass-despawn burst measured below.
 
 ## Running it
 
+**The host is the server.** A native run hosts by default and its own player is just another client on a real socket, which is what keeps every omniscient readout it shows legitimate. One `--role` argument decides what a process is:
+
 ```sh
-./run-native.sh          # or: cargo run -p horde_playground --release
-./serve.sh               # browser (wasm), then open http://localhost:8080
+./run-native.sh                                                  # --role host: play, and serve joiners
+./run-native.sh -- --role observer                               # watch and drive the settings, no player of your own
+./run-native.sh -- --role client --connect ws://<host>:8080/ws   # join someone else's arena
+./serve.sh                                                       # build the browser client and host it; open the printed URL
 ```
 
-`serve.sh` handles the whole ceremony: installs the wasm target if missing, builds, copies the artifact next to the page, shrinks it with `wasm-opt` if present, and serves.
+| `--role` | server | window | your own player |
+|---|---|---|---|
+| `headless` | yes | no | no | the windowless deployable, and what `serve.sh` runs |
+| `observer` | yes | yes | no | full control panel, watching; a free camera (drag / WASD / wheel, `C` recenters) |
+| `host` | yes | yes | yes | plays and serves. **The default** |
+| `client` | no | yes | yes | join only. The only role a browser can take |
+
+A host prints a local URL and a LAN URL; open either in a browser to join, or send the LAN one to a friend. The browser client connects back to whoever served it (over `wss://` if the page was secure), so a `--role headless` deploy behind a TLS terminator works the same way. `serve.sh` builds the wasm and hosts it in one step. Four players share the arena; joiners fill the seats and bots drive whatever is empty.
+
+The pure single-process teaching build, with no networking compiled in at all, is still here and is where the measurements below come from: `cargo run -p horde_playground --no-default-features --features native,client`.
 
 ## What you are looking at
 
@@ -24,12 +39,13 @@ The **minimap** shows the whole arena with every enemy the server is simulating.
 | Control | What it shows |
 |---|---|
 | **per-player relevance** | turn it off and watch bandwidth explode: every player is sent every entity |
-| **server send rate** | drop it to 1 Hz, the rate a shipped horde co-op actually uses, and see which drawing mode survives |
+| **server send rate** | defaults to 16 Hz; drop it to 1 Hz, the rate a shipped horde co-op actually uses, and see which drawing mode survives |
 | **how remotes are drawn** | simulate (run the AI rule locally), dead reckon (last velocity), or interpolate (render in the past) |
 | **players spread / clustered** | clustered players make the horde converge on one spot, raising local density |
 | **ease corrections** | smoothing, with the caveat measured below |
 | **weapons, deaths, and waves** | combat off leaves a pure movement horde, for isolating the networking |
 | **generational entity handles** | a handle names a slot *and* its occupant; off, a reference to a dead entity would land on whoever recycled its slot |
+| **send input only on change** | your upstream. Off is an input every tick (loss-robust); on transmits only when your direction changes plus a keepalive, which the local player being unforced makes safe |
 
 Press `R` to re-baseline the readouts after changing something. A frame counter sits bottom right: with these entity counts, telling a client-side stall apart from a network effect matters.
 
@@ -154,7 +170,7 @@ Three measurement placements had to be fixed before any of this read correctly, 
 
 ## How it is built
 
-Depends on `plaza_server_utils` and `plaza_client_utils` only, no server framework, because everything here is the pure netcode layer.
+The headless sim (`src/sim/`) is the pure netcode layer and depends on `plaza_server_utils` and `plaza_client_utils` only. It is unchanged by the networking, so every measurement above still holds.
 
 - **Server** ([src/sim/server.rs](src/sim/server.rs)): owns every enemy and simulates them at 60 Hz, then sends at `sync_hz`. Relevance is [`SpatialGrid`](../../server_utils/src/relevance.rs) rebuilt each send tick plus a [`VisibilitySet`](../../server_utils/src/relevance.rs) per player, whose diff is the spawn/despawn stream. Enemy *targets* are sent only when they change: the intent, not the output it produces.
 - **Client** ([src/sim/client.rs](src/sim/client.rs)): holds only what it was sent, and draws it by one of the three strategies. In simulate mode it runs the same `step_enemy` rule the server runs, and forward-projects each arriving sample by its own age before correcting, so the correction targets *now* rather than where the enemy was a trip ago. Corrections ease through `ErrorSmoother`.
@@ -162,7 +178,9 @@ Depends on `plaza_server_utils` and `plaza_client_utils` only, no server framewo
 
 The simulation is headless and is where the tests live (`cargo test -p horde_playground`); the renderer only reads its results.
 
+**The networked layer wraps that sim without touching it** ([src/net/](src/net/)). The server side is `plaza` core (`StateController`, `StateLogic`, `TickDriver`) over `plaza_session`; the arena seats joiners, buffers each seat's movement, and routes the entity-stream acknowledgement and the one purchase request straight to the authoritative server, so the whole loss-recovery and currency machinery now runs over a real socket. The client side is a `plaza_ws::Socket` plus clock/RTT estimation; the local player is predicted by plain velocity integration (it is unforced, so that is exact), which is what makes "send on change" safe. Cargo features name what you want to build: `client`, `server` (not on `web`), `native`, `web`, `websocket`.
+
 ## Notes
 
-- Excluded from `default-members`, so a bare `cargo build` / `test` skips macroquad's dependency tree. `cargo <cmd> --workspace` includes it.
-- The client loop here is hand-rolled on purpose. It is the consumer that should shape a `client_utils` bundle for behaviour-simulated remotes, rather than the bundle being guessed at first.
+- Excluded from `default-members`, so a bare `cargo build` / `test` skips macroquad's dependency tree. `cargo <cmd> --workspace` includes it. Building for wasm needs `--no-default-features --features web`, because the default set pulls in the native socket and the actix server; `serve.sh` does this.
+- The compiled `static/*.wasm` is a build artifact and is gitignored. Run `serve.sh` before serving a fresh checkout.

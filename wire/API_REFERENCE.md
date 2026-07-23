@@ -2,9 +2,9 @@
 
 ## 1. Introduction & Core Concepts
 
-`plaza_wire` holds the encoding contract shared by a Plaza server and any client that speaks to it: one trait and one implementation, with no async dependencies.
+`plaza_wire` holds the runtime-free vocabulary shared by a Plaza server and any client that speaks to it: the message [`envelope`](#4-module-envelope) and identity types, the [`WireCodec`](#trait-wirecodec) trait and a JSON implementation, and the netcode [`payloads`](#5-module-payloads). No async dependencies.
 
-It is separate from `plaza_session` so that both ends of a connection can agree on a format without the client inheriting the server's runtime. A wasm or browser-targeted client depends on this crate alone; a server gets the same items re-exported from `plaza_session`, as `plaza_session::WireCodec` and `plaza_session::codec::WireCodec`.
+It is separate from `plaza_session` so that both ends of a connection can agree on the protocol without the client inheriting the server's runtime. A wasm or browser-targeted client depends on this crate alone; a server gets the same items re-exported from `plaza` core (`plaza::Agent`, `plaza::SessionMessage`) and from `plaza_session` (`plaza_session::WireCodec`).
 
 Everything a transport sends or receives passes through a codec, so choosing a format is a one-line change that touches no transport code.
 
@@ -21,6 +21,7 @@ pub trait WireCodec: Clone + Send + Sync + 'static {
   fn name(&self) -> &'static str;
   fn encode<T: Serialize>(&self, value: &T) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>;
   fn decode<T: DeserializeOwned>(&self, bytes: &[u8]) -> Result<T, Box<dyn std::error::Error + Send + Sync>>;
+  fn is_text(&self) -> bool { false }
 }
 ```
 
@@ -40,6 +41,10 @@ Serializes any `Serialize` value to bytes. Called once per outbound message per 
 
 Deserializes bytes into any `DeserializeOwned` type. Called once per inbound frame. A malformed frame must return `Err` rather than panic: the transports treat a decode failure as a per-message problem and keep the connection open.
 
+#### Method `is_text`
+
+Whether this codec's output is UTF-8 text rather than binary. Defaults to `false`, which is right for any compact binary format; [`JsonCodec`](#struct-jsoncodec) overrides it to `true`. A WebSocket transport reads it to decide between a text frame and a binary frame, so a JSON protocol arrives as a readable text frame a browser or `websocat` can show.
+
 ### Struct `JsonCodec`
 
 ```rust
@@ -53,7 +58,53 @@ Human-readable JSON via `serde_json`. `name()` returns `"json"`. Being a unit st
 
 This is the default codec on every transport in `plaza_session`, chosen because a protocol you can read in a browser console or poke with `websocat` is worth more during development than a compact one. Switch to a binary format when the protocol stabilises.
 
-## 4. Module `payloads`
+## 4. Module `envelope`
+
+The message that wraps every exchange, and the identity types it carries. These live here rather than in `plaza` core because **a browser client cannot depend on core** (core pulls tokio and does not target `wasm32-unknown-unknown`), so a wasm client that must name the type it sends needs it in a runtime-free crate. `plaza` core re-exports all of it, so server code still writes `plaza::Agent`, `plaza::SessionMessage`, and so on.
+
+### Trait `AgentId`
+
+```rust
+pub trait AgentId: Clone + Debug + Eq + Hash + Send + Sync + Serialize + for<'de> Deserialize<'de> + 'static {}
+impl<T> AgentId for T where T: /* the same bounds */ {}
+```
+
+The identifier bound, blanket-implemented, so a plain `u64` or a `Uuid` qualifies with no work of your own.
+
+### Enum `Agent<ID: AgentId>`
+
+```rust
+pub enum Agent<ID: AgentId> {
+  Human { id: ID, name: String },
+  Bot   { id: ID, name: String },
+  System,
+}
+```
+
+Who a message is from. Constructors `Agent::new_human(id, name)`, `Agent::new_bot(id, name)`, `Agent::system()`. Accessors: `id() -> Option<&ID>`, `id_cloned() -> Option<ID>` (`None` for `System`), `label() -> String` (the name, or `"SYSTEM"`), `is_system() -> bool`.
+
+### Enum `SessionMessage<Op, ID: AgentId, SnapshotPayload>`
+
+```rust
+pub enum SessionMessage<Op, ID: AgentId, SnapshotPayload> {
+  Ops       { from: Agent<ID>, ops: Vec<Op> },
+  StateData { from: Agent<ID>, data: SnapshotData<SnapshotPayload> },
+}
+```
+
+Everything the two ends exchange downstream. It is encoded **once, as a whole**: `codec.encode(&msg)`. An earlier design encoded each `Op` to bytes and then encoded the envelope around those byte arrays, which under JSON put `ops: [[123,34,...]]` on the wire, unreadable to anything but Rust and decoded twice on receipt. Inbound is deliberately asymmetric: a client sends a bare `Op`, never an envelope, and the transport attaches the `Agent` from the connection, because who a message is from is the server's fact and not the client's claim.
+
+### Struct `SnapshotData<SnapshotPayload>`
+
+```rust
+pub struct SnapshotData<SnapshotPayload> { pub payload: SnapshotPayload }
+```
+
+The per-recipient state a `SnapshotProvider` produces, carried by `SessionMessage::StateData`.
+
+Note what is **not** here: `MessageTarget`, `PresenceEvent`, and `TargetedOp` stay in `plaza` core. They are server-side routing and stream plumbing, they are not `Serialize`, and no client ever sees one. This crate is the wire vocabulary, not everything the server happens to name.
+
+## 5. Module `payloads`
 
 The netcode vocabulary both ends of a connection exchange. Pure serde, generic over your application types, no math dependency. Re-exported by `plaza` core under `game_common::reconciliation::op_payloads`.
 
@@ -63,7 +114,7 @@ The netcode vocabulary both ends of a connection exchange. Pure serde, generic o
 *   **`TimestampedClientAction<ActionData, ClientTimeType>`**: client to server. `client_action_time`, `action_data`. The timestamp lets the server rewind to when the client acted, for lag compensation.
 *   **`Ping` / `Pong`**: either direction. `origin_time_ms`. A `Ping` is echoed back as a `Pong` carrying the same `origin_time_ms`; the sender computes `rtt = now - origin_time_ms`. Pair with `plaza_client_utils::RttEstimator` to smooth the samples.
 
-## 5. Feature Flags
+## 6. Feature Flags
 
 | Feature | Default | Effect |
 |---|---|---|

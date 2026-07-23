@@ -25,6 +25,93 @@ const C_SHOT: Color = Color::new(1.0, 0.95, 0.5, 0.95);
 const C_CROWD: Color = Color::new(0.55, 0.45, 0.95, 0.5);
 const C_COIN: Color = Color::new(1.0, 0.85, 0.25, 1.0);
 
+use horde_playground::sim::client::{Burst, DamagePopup};
+use horde_playground::sim::PLAYER_MAX_HEALTH;
+
+/// A health bar over a player at screen `(x, y)`. Green to red as it empties, or
+/// blue while the respawn shield is up.
+fn draw_health_bar(x: f32, y: f32, health: u8, invuln: bool) {
+  let (w, h) = (36.0, 4.0);
+  let top = y - 22.0;
+  let left = x - w * 0.5;
+  let frac = (health as f32 / PLAYER_MAX_HEALTH).clamp(0.0, 1.0);
+  draw_rectangle(left, top, w, h, Color::new(0.0, 0.0, 0.0, 0.6));
+  let fill = if invuln {
+    Color::new(0.5, 0.8, 1.0, 0.95)
+  } else {
+    Color::new((1.0 - frac) * 0.9 + 0.15, frac * 0.85 + 0.1, 0.3, 0.95)
+  };
+  draw_rectangle(left, top, w * frac, h, fill);
+  draw_rectangle_lines(left, top, w, h, 1.0, Color::new(1.0, 1.0, 1.0, 0.25));
+}
+
+/// The respawn shield ring around a player.
+fn draw_shield(x: f32, y: f32, radius: f32) {
+  draw_circle_lines(x, y, radius, 2.0, Color::new(0.5, 0.85, 1.0, 0.8));
+  draw_circle(x, y, radius, Color::new(0.5, 0.85, 1.0, 0.10));
+}
+
+/// Hit sparks and death explosions. A spark is a bright white flash over the
+/// enemy it landed on; a death is an orange ring blowing outward.
+fn draw_bursts(bursts: &[Burst], cam: &Camera) {
+  for b in bursts {
+    let (x, y) = cam.at(b.pos);
+    let r = b.radius() * cam.scale.max(0.35);
+    let a = b.alpha();
+    if b.big {
+      draw_circle_lines(x, y, r, 2.5, Color::new(1.0, 0.6, 0.2, a));
+      draw_circle(x, y, r * 0.7, Color::new(1.0, 0.5, 0.15, a * 0.35));
+    } else {
+      draw_circle(x, y, r, Color::new(1.0, 1.0, 0.9, a * 0.9));
+    }
+  }
+}
+
+/// Floating damage numbers, rising and fading from where each shot landed.
+fn draw_popups(popups: &[DamagePopup], cam: &Camera) {
+  for p in popups {
+    let (x, y) = cam.at(p.world_pos());
+    let text = format!("{}", p.amount);
+    draw_text(&text, x, y, 20.0, Color::new(1.0, 0.95, 0.55, p.alpha()));
+  }
+}
+
+/// A red flash around the screen edge when you take a hit. Only the networked
+/// client view has the hit-flash timer that drives it.
+#[cfg(all(feature = "client", feature = "websocket"))]
+fn draw_hit_vignette(age: Option<f32>) {
+  let Some(age) = age else { return };
+  let k = (1.0 - age / 0.35).clamp(0.0, 1.0);
+  let (sw, sh) = (screen_width(), screen_height());
+  let band = 64.0;
+  let col = Color::new(0.9, 0.12, 0.12, 0.34 * k);
+  draw_rectangle(0.0, 0.0, sw, band, col);
+  draw_rectangle(0.0, sh - band, sw, band, col);
+  draw_rectangle(0.0, 0.0, band, sh, col);
+  draw_rectangle(sw - band, 0.0, band, sh, col);
+}
+
+/// The coin banner and the fading notice stack (upgrades, and difficulty
+/// step-ups). Shared by the offline and networked views.
+fn draw_notice_stack(notices: &[(String, f32)], banner: Option<&str>, sw: f32) {
+  if let Some(text) = banner {
+    let dims = measure_text(text, None, 22, 1.0);
+    draw_text(text, sw * 0.5 - dims.width * 0.5, 34.0, 22.0, C_COIN);
+  }
+  for (i, (text, age)) in notices.iter().enumerate() {
+    let alpha = (1.0 - (age - 2.0).max(0.0)).clamp(0.0, 1.0);
+    let color = if text.contains("refused") {
+      Color::new(1.0, 0.5, 0.4, alpha)
+    } else if text.contains("difficulty") {
+      Color::new(1.0, 0.75, 0.4, alpha)
+    } else {
+      Color::new(0.7, 0.95, 1.0, alpha)
+    };
+    let dims = measure_text(text, None, 24, 1.0);
+    draw_text(text, sw * 0.5 - dims.width * 0.5, 72.0 + i as f32 * 26.0, 24.0, color);
+  }
+}
+
 /// Follows one player, mapping world coordinates onto the screen.
 pub struct Camera {
   center: SimVec2,
@@ -149,10 +236,22 @@ pub fn draw_world(world: &World, controls: &Controls, cam: &Camera) {
       draw_circle(x, y, 7.0, C_PEER);
       let label = format!("P{i}");
       draw_text(&label, x + 9.0, y + 4.0, 16.0, C_PEER);
+      if world.player_invuln(i) {
+        draw_shield(x, y, 16.0);
+      }
+      draw_health_bar(x, y, world.player_health(i), world.player_invuln(i));
     }
   }
 
   draw_circle(cx, cy, 8.0, C_YOU);
+  if world.player_invuln(0) {
+    draw_shield(cx, cy, 16.0);
+  }
+  draw_health_bar(cx, cy, world.player_health(0), world.player_invuln(0));
+
+  // Hit sparks, death explosions, and floating damage numbers from your shots.
+  draw_bursts(world.client_bursts(0), cam);
+  draw_popups(world.client_popups(0), cam);
 }
 
 /// The whole arena, small, showing everything the server simulates and how
@@ -230,30 +329,18 @@ fn draw_coins(world: &World, controls: &Controls, cam: &Camera) {
 /// going down while enemy behaviour quietly changes is indistinguishable from a
 /// bug, which is exactly how it read before this.
 pub fn draw_notices(world: &World, controls: &Controls, cam: &Camera) {
-  if !controls.coins {
-    return;
-  }
-  let owned: Vec<&str> = world.wallet(0).upgrades.iter().map(|u| u.label()).collect();
-  let (believed, _) = world.balance(0);
-  let banner = if owned.is_empty() {
-    format!("{believed} coins")
-  } else {
-    format!("{believed} coins    {}", owned.join(" + "))
-  };
-  let dims = measure_text(&banner, None, 22, 1.0);
-  draw_text(&banner, cam.sw * 0.5 - dims.width * 0.5, 34.0, 22.0, C_COIN);
-
-  for (i, (text, age)) in world.notices(0).iter().enumerate() {
-    // Fade out over the last second, so a burst of them still reads in order.
-    let alpha = (1.0 - (age - 2.0).max(0.0)).clamp(0.0, 1.0);
-    let color = if text.contains("refused") {
-      Color::new(1.0, 0.5, 0.4, alpha)
+  // The coin banner only when coins exist; the notice stack always, so a
+  // difficulty step-up announces itself even with coins off.
+  let banner = controls.coins.then(|| {
+    let owned: Vec<&str> = world.wallet(0).upgrades.iter().map(|u| u.label()).collect();
+    let (believed, _) = world.balance(0);
+    if owned.is_empty() {
+      format!("{believed} coins")
     } else {
-      Color::new(0.7, 0.95, 1.0, alpha)
-    };
-    let dims = measure_text(text, None, 24, 1.0);
-    draw_text(text, cam.sw * 0.5 - dims.width * 0.5, 72.0 + i as f32 * 26.0, 24.0, color);
-  }
+      format!("{believed} coins    {}", owned.join(" + "))
+    }
+  });
+  draw_notice_stack(world.notices(0), banner.as_deref(), cam.sw);
 }
 
 /// A small legend under the minimap.
@@ -372,6 +459,34 @@ pub fn draw_client_world(client: &horde_playground::net::client::NetClient, cont
     players[m] = you;
   }
   draw_players(&players, me, you, you, cam);
+
+  // Hit sparks, death explosions, damage numbers, health bars, and the shield.
+  draw_bursts(&client.sim.bursts, cam);
+  draw_popups(&client.sim.popups, cam);
+  for (i, p) in players.iter().enumerate() {
+    if p.dist(you) > VIEW_RADIUS * 1.3 && me != Some(i) {
+      continue;
+    }
+    let (x, y) = cam.at(*p);
+    let health = client.sim.player_health.get(i).copied().unwrap_or(0);
+    let invuln = client.sim.player_invuln.get(i).copied().unwrap_or(false);
+    if invuln {
+      draw_shield(x, y, 16.0);
+    }
+    draw_health_bar(x, y, health, invuln);
+  }
+
+  // The red flash on taking a hit, and the coin/difficulty notice stack.
+  draw_hit_vignette(client.hit_flash_age());
+  let banner = controls.coins.then(|| {
+    let owned: Vec<&str> = client.sim.wallets.get(me.unwrap_or(0)).map(|w| w.upgrades.iter().map(|u| u.label()).collect()).unwrap_or_default();
+    if owned.is_empty() {
+      format!("{} coins", client.sim.believed_balance)
+    } else {
+      format!("{} coins    {}", client.sim.believed_balance, owned.join(" + "))
+    }
+  });
+  draw_notice_stack(&client.sim.notices, banner.as_deref(), cam.sw);
 }
 
 /// The host's omniscient view: the client's believed slice drawn over the
@@ -425,9 +540,15 @@ pub fn draw_observer_world(view: &horde_playground::net::arena::HostView, contro
       }
     }
   }
-  for p in &view.players {
+  for (i, p) in view.players.iter().enumerate() {
     let (x, y) = cam.at(*p);
     draw_circle(x, y, 7.0, C_PEER);
+    let health = view.player_health.get(i).copied().unwrap_or(0);
+    let invuln = view.player_invuln.get(i).copied().unwrap_or(false);
+    if invuln {
+      draw_shield(x, y, 16.0);
+    }
+    draw_health_bar(x, y, health, invuln);
   }
 }
 

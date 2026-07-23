@@ -61,6 +61,8 @@ const LOCAL_CORRECT_PX: f32 = 24.0;
 const NOVA_BURST: usize = 10;
 /// How long the pulse ring is drawn for after the burst.
 const NOVA_FLASH_SECS: f32 = 0.45;
+/// How long the red damage flash is drawn for after a hit.
+const HIT_FLASH_SECS: f32 = 0.35;
 
 pub struct NetClient {
   socket: Box<dyn Socket>,
@@ -88,6 +90,10 @@ pub struct NetClient {
   now_ms: u64,
   /// Seconds of area-pulse flash left to draw, refreshed on a death burst.
   nova_flash_secs: f32,
+  /// Your own health last frame, to catch the moment it drops.
+  prev_health: u8,
+  /// Seconds of red damage flash left to draw, refreshed when you take a hit.
+  hit_flash_secs: f32,
 }
 
 impl NetClient {
@@ -113,7 +119,19 @@ impl NetClient {
       frames_seen: 0,
       now_ms: 0,
       nova_flash_secs: 0.0,
+      prev_health: crate::sim::types::PLAYER_MAX_HEALTH as u8,
+      hit_flash_secs: 0.0,
     })
+  }
+
+  /// Your own health, `0..=PLAYER_MAX_HEALTH`, or full before a seat is known.
+  pub fn my_health(&self) -> u8 {
+    self.me.and_then(|m| self.sim.player_health.get(m as usize)).copied().unwrap_or(crate::sim::types::PLAYER_MAX_HEALTH as u8)
+  }
+
+  /// How long ago you last took a hit, while the red flash is worth drawing.
+  pub fn hit_flash_age(&self) -> Option<f32> {
+    (self.hit_flash_secs > 0.0).then_some(HIT_FLASH_SECS - self.hit_flash_secs)
   }
 
   /// Where to draw your own player: the prediction, eased through recent
@@ -230,8 +248,14 @@ impl NetClient {
             self.nova_flash_secs = NOVA_FLASH_SECS;
           }
           let one_way = self.rtt.one_way_ms().unwrap_or(0.0) as f64;
-          let offset = (packet.server_time_ms as f64 + one_way) - now_ms as f64;
-          self.clock.observe(now_ms as f64, offset);
+          // Clock sync is driven by pongs alone, not by frames. A frame's offset
+          // is only right if the one-way estimate matches the delay the frame
+          // actually took, and on a *host* those disagree: pongs come straight
+          // back (RTT ~0) while the impairment link holds frames, so a frame
+          // sample claims an offset 80 ms off. Mixing the two made the estimate
+          // wobble every ping interval and jerk the enemy projection backward.
+          // Pongs are correct on a host (direct) and a remote (delayed like the
+          // frames), so they are the honest source.
           // Reconcile the local player. Its authoritative position is a one-way
           // delay old, so advance it by that with the held direction to estimate
           // where the server has it *now*, and only pull the prediction toward it
@@ -258,6 +282,12 @@ impl NetClient {
           // Feed the predicted local position back in, so the coin and repulsor
           // rules the sim runs read where you are, not where the packet put you.
           self.sim.set_local_pos(self.my_position());
+          // A drop in your own health is a hit worth flashing.
+          let health = self.my_health();
+          if health < self.prev_health {
+            self.hit_flash_secs = HIT_FLASH_SECS;
+          }
+          self.prev_health = health;
           self.frames_seen += 1;
           applied_frame = true;
         }
@@ -283,6 +313,9 @@ impl NetClient {
     self.sim.set_local_pos(self.my_position());
     if self.nova_flash_secs > 0.0 {
       self.nova_flash_secs = (self.nova_flash_secs - dt_ms as f32 / 1000.0).max(0.0);
+    }
+    if self.hit_flash_secs > 0.0 {
+      self.hit_flash_secs = (self.hit_flash_secs - dt_ms as f32 / 1000.0).max(0.0);
     }
     if self.socket.state() == State::Closed && !matches!(self.status, Status::Gone(_)) {
       self.status = Status::Gone("connection lost".to_owned());

@@ -432,12 +432,44 @@ impl World {
     self.clients.iter().map(|c| c.digest_mismatches).sum()
   }
 
+  pub fn frames_lost(&self) -> u64 {
+    self.clients.iter().map(|c| c.frames_lost).sum()
+  }
+
   pub fn deaths_seen(&self, player: usize) -> u64 {
     self.clients[player].deaths_seen
   }
 
   pub fn players(&self) -> &[Vec2] {
     &self.server.players
+  }
+
+  /// A player's health, its respawn shield, and its death count, and the current
+  /// difficulty ramp, for the health bar and the readouts.
+  pub fn player_health(&self, player: usize) -> u8 {
+    self.server.player_health(player)
+  }
+
+  pub fn player_invuln(&self, player: usize) -> bool {
+    self.server.is_player_invuln(player)
+  }
+
+  pub fn player_deaths(&self, player: usize) -> u64 {
+    self.server.player_deaths[player]
+  }
+
+  pub fn difficulty(&self) -> f32 {
+    self.server.difficulty()
+  }
+
+  /// The floating damage numbers this client is drawing.
+  pub fn client_popups(&self, player: usize) -> &[crate::sim::client::DamagePopup] {
+    &self.clients[player].popups
+  }
+
+  /// The hit sparks and death explosions this client is drawing.
+  pub fn client_bursts(&self, player: usize) -> &[crate::sim::client::Burst] {
+    &self.clients[player].bursts
   }
 
   /// What one client would draw, for the renderer.
