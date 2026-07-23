@@ -1,140 +1,204 @@
-# Plaza Core (`plaza-core`)
+# `plaza`
 
-**License:** Mozilla Public License 2.0 (MPL-2.0)
-**Status:** Experimental
+**License:** Mozilla Public License 2.0 (MPL-2.0) · **Status:** Experimental
 
-`plaza-core` provides the foundational traits, structs, and architectural patterns for building server-side, real-time, shared-state applications. It enables developers to create robust, operation-driven backends by managing state, logic, and client interactions in a decoupled and testable manner.
+The controller loop and the traits you implement around it. This is the crate you start with; [`plaza_session`](../session/), [`plaza_lobby`](../lobby/), and [`plaza_client_utils`](../client_utils/) build on top. `plaza` itself depends on no other crate in the workspace.
 
-This crate is the heart of the Plaza ecosystem.
+For the concepts and why they are shaped this way, see the [workspace README](../README.md). For the full public surface, see [API_REFERENCE.md](API_REFERENCE.md).
 
-## Core Abstractions
+## Install
 
-`plaza-core` is built around several key abstractions that you, as an application developer, will implement or utilize:
+```toml
+[dependencies]
+plaza = "0.1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+```
 
-1.  **`StateType` (Your Application's State):**
-    *   This is a struct or enum defined by your application that holds the shared, authoritative state. Examples: `PongGameState`, `CollaborativeDocumentState`.
-    *   It must be `Clone + Debug + Default + Send + Sync + 'static`.
+`plaza` has no feature flags. It needs a Tokio runtime, `async-trait` for the traits you implement, and `serde` on any type that crosses a network.
 
-2.  **`Op` (Operations):**
-    *   An enum defined by your application representing all possible actions that can modify your `StateType`.
-    *   Examples: `MovePlayerOp { direction: Vec2 }`, `SubmitChatMessageOp { text: String }`.
-    *   Must be `Clone + Debug + Send + 'static + Serialize + for<'de> Deserialize<'de>`.
+## The four type parameters
 
-3.  **`AgentId` Trait and `Agent<ID>` Enum:**
-    *   `ID: AgentId` is your application's chosen type for uniquely identifying connected clients or system actors (e.g., `uuid::Uuid`, `u64`).
-    *   `Agent<ID>` wraps this `ID` and distinguishes between human users, bots, or the system itself.
-    *   `AgentId` requires `Clone + Debug + Eq + Hash + Send + Sync + Serialize + for<'de> Deserialize<'de> + 'static`.
+Nearly every type here is generic over the same four, so it is worth naming them once:
 
-4.  **`StateLogic<Op, ID, StateType>` Trait:**
-    *   The **heart of your application's rules and behavior**. You implement this trait.
-    *   Its primary method, `process_input(state: &mut StateType, input: LogicInput<Op, ID>) -> Result<Vec<TargetedOp<Op, ID>>, StateLogicError>`, is called by the `StateController`.
-    *   `LogicInput` can be client operations, time steps, or agent join/leave events.
-    *   It mutates the `StateType` and returns a list of `TargetedOp`s to be sent to clients.
+| Parameter | What it is | Bounds |
+|---|---|---|
+| `StateType` | Your shared state | `Clone + Debug + Send + Sync + 'static` |
+| `Op` | Your operations | `Clone + Debug + Send + Sync + 'static`, plus serde to cross a network |
+| `ID` | Your identifier | anything satisfying `AgentId` |
+| `SnapshotPayload` | What a client is sent | `Clone + Debug + Send + Sync + 'static`, plus serde |
 
-5.  **`Session<Op, ID, SnapshotPayload>` Trait:**
-    *   An abstraction over the network transport layer (e.g., WebSockets, TCP).
-    *   You'll use a pre-built session implementation (like one from a future `plaza-session` crate) or implement this trait for your custom transport.
-    *   Handles receiving serialized `Op`s from clients and sending serialized `Op`s or `SnapshotPayload`s to clients.
-    *   Provides broadcast channels for `StateController` to subscribe to incoming messages, agent joins, and agent leaves.
+`AgentId` is blanket-implemented for every `Clone + Debug + Eq + Hash + Send + Sync + Serialize + Deserialize + 'static` type, so `Uuid` and `u64` qualify with no work. `Agent<ID>` wraps an ID and distinguishes `Human`, `Bot`, and `System`.
 
-6.  **`SnapshotProvider<ID, StateType, SnapshotPayload>` Trait:**
-    *   You implement this to define how a snapshot of your `StateType` is created.
-    *   The `SnapshotPayload` is a serializable representation of your state (or relevant parts) sent to new or reconnecting clients.
-    *   `SnapshotPayload` must be `Clone + Debug + Send + 'static + Serialize + for<'de> Deserialize<'de>`.
+## A complete program
 
-7.  **`StateController<Op, ID, StateType, S: Session, SP: SnapshotProvider, QueryResponse>`:**
-    *   The central orchestrator provided by `plaza-core`.
-    *   Manages a single instance of your `StateType`.
-    *   Owns your `StateLogic`, `Session` adapter, and `SnapshotProvider`.
-    *   Runs an internal loop that:
-        *   Listens for incoming messages/events from the `Session`.
-        *   Receives external commands (e.g., to process a time step, submit system ops, handle disconnections).
-        *   Passes these as `LogicInput` to your `StateLogic`.
-        *   Takes the `TargetedOp`s returned by `StateLogic` and uses the `Session` to send them to the appropriate clients.
-        *   Handles snapshotting for new agents.
-    *   You create it using `StateControllerBuilder`.
+```rust,ignore
+use plaza::{
+  agent::Agent,
+  controller::{query_state, StateControllerBuilder},
+  session::{InProcessSession, SessionMessage, TargetedOp},
+  snapshot::{SnapshotContext, SnapshotData, SnapshotError, SnapshotProvider},
+  state_logic::{LogicInput, LogicOutput, StateLogic, StateLogicError},
+};
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
-8.  **`TargetedOp<Op, ID>` and `MessageTarget<ID>`:**
-    *   Structs used by `StateLogic` to specify which `Op`s should be sent to which client(s) (`Agent(ID)`, `All`, `AllExcept(ID)`, etc.).
+type UserId = u64;
 
-## Common Utility Modules
+#[derive(Clone, Debug, Default)]
+struct CounterState { value: i64 }
 
-`plaza-core` also provides foundational "common" components (patterns and utilities) in its `common` module, such as:
+#[derive(Clone, Debug, Serialize, Deserialize)]
+enum CounterOp { Increment(i64), Changed(i64) }
 
-*   **`common::scheduler`:** `TickEventScheduler`, `TimeEventScheduler`, `TickCallbackScheduler`, `TimeCallbackScheduler` for managing timed logic.
-*   **`common::fsm`:** A generic `StateMachine` for managing entities or systems with distinct states.
-*   **`common::participants`:** A `ParticipantTracker` for basic management of connected agents.
-*   **(And future `game_common` and `app_common` for more specialized patterns like reconciliation support, flow control, presence, locking, etc.)**
+// The rules. The only place state is mutated.
+#[derive(Debug, Default)]
+struct CounterLogic;
 
-## Getting Started with `plaza-core`
+#[async_trait]
+impl StateLogic<CounterOp, UserId, CounterState> for CounterLogic {
+  async fn process_input(
+    &self,
+    state: &mut CounterState,
+    input: LogicInput<CounterOp, UserId>,
+  ) -> Result<LogicOutput<CounterOp, UserId>, StateLogicError> {
+    let mut ops = Vec::new();
 
-1.  **Add `plaza-core` to your `Cargo.toml`:**
-    ```toml
-    [dependencies]
-    plaza-core = "0.1.0" # Or your specific version/path
-    # ... other dependencies like tokio, serde, uuid ...
-    ```
+    if let LogicInput::AgentOps { ops: incoming, .. } = input {
+      for op in incoming {
+        if let CounterOp::Increment(by) = op {
+          state.value += by;
+          ops.push(TargetedOp::new_system_all(vec![CounterOp::Changed(state.value)]));
+        }
+      }
+    }
 
-2.  **Define Your Core Types:**
-    *   Your `StateType` struct/enum.
-    *   Your `Op` enum.
-    *   Your `PlayerId` type (e.g., `type PlayerId = uuid::Uuid;`).
-    *   Your `SnapshotPayload` struct/enum.
-    *   (Optional) Your `QueryRequest` / `QueryResponse` types if using the controller's query mechanism.
+    Ok(ops.into())
+  }
+}
 
-3.  **Implement the Core Traits:**
-    *   `impl StateLogic<MyOp, MyPlayerId, MyStateType> for MyGameLogic { ... }`
-    *   `impl SnapshotProvider<MyPlayerId, MyStateType, MySnapshotPayload> for MySnapshotter { ... }`
+// What a joining client is sent.
+#[derive(Debug, Default)]
+struct CounterSnapshotter;
 
-4.  **Choose or Implement a `Session`:**
-    *   For initial development or testing, you can create a dummy in-process session using Tokio MPSC/broadcast channels (see examples).
-    *   For production, you'd use a session adapter for your chosen network transport (e.g., a future `plaza-session-actix-ws`).
+#[async_trait]
+impl SnapshotProvider<UserId, CounterState, i64> for CounterSnapshotter {
+  async fn create_snapshot_data(
+    &self,
+    state: &CounterState,
+    _target: Option<&Agent<UserId>>,
+    _context: Option<SnapshotContext>,
+  ) -> Result<SnapshotData<i64>, SnapshotError<UserId>> {
+    Ok(SnapshotData { payload: state.value })
+  }
+}
 
-5.  **Build and Run the `StateController`:**
-    ```rust
-    use plaza_core::controller::StateControllerBuilder;
-    use std::sync::Arc;
-    use std::time::Duration;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+  let session = InProcessSession::<CounterOp, UserId, i64>::new();
 
-    // async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    //     let initial_state = MyStateType::default();
-    //     let logic = Arc::new(MyGameLogic::default());
-    //     let session_adapter = Arc::new(MySessionImpl::new(/* ... */));
-    //     let snapshot_provider = Arc::new(MySnapshotter::default());
-    //
-    //     let (command_tx, controller) = StateControllerBuilder::new()
-    //         .op_handler(logic)
-    //         .initial_state(initial_state)
-    //         .session(session_adapter)
-    //         .snapshot_provider(snapshot_provider)
-    //         .command_buffer(128) // Size of the internal command channel
-    //         .tick_interval(Duration::from_millis(50)) // Optional: for automatic TimeStep inputs
-    //         .build()
-    //         .expect("Failed to build StateController");
-    //
-    //     // Run the controller in its own task
-    //     tokio::spawn(async move {
-    //         if let Err(e) = controller.run().await {
-    //             eprintln!("StateController exited with error: {}", e);
-    //         }
-    //     });
-    //
-    //     // Now your application can interact with the controller via `command_tx`
-    //     // (e.g., from your network layer receiving client connections and ops)
-    //     // and by setting up the Session to forward client messages.
-    //     // ...
-    //     Ok(())
-    // }
-    ```
+  let (tx, controller) = StateControllerBuilder::new(
+    Arc::new(CounterLogic),
+    session.clone(),
+    Arc::new(CounterSnapshotter),
+    CounterState::default(),
+  )
+  .command_buffer(64)
+  .build();
 
-## Examples
+  tokio::spawn(controller.run());
 
-Refer to the `examples/` directory in the Plaza repository for working demonstrations, including:
-*   `shared-counter`: A very basic example.
-*   `ability_cooldowns`, `timed_debuff`, `typing_indicator`: Showcasing schedulers.
-*   `pong`: A more complete game example (work-in-progress for session adapter).
-*   `csp_net_example`: Demonstrates server-side setup for client-side prediction.
+  // Connecting yields an inbox; the join snapshot arrives on it.
+  let alice = Agent::new_human(1u64, "Alice");
+  let (_conn_id, inbox) = session.connect(alice.clone()).await?;
+
+  session.client_send(alice, vec![CounterOp::Increment(5)]).await;
+
+  while let Ok(msg) = inbox.recv().await {
+    match msg {
+      SessionMessage::StateData { data, .. } => println!("snapshot: {}", data.payload),
+      SessionMessage::Ops { ops, .. } => println!("ops: {ops:?}"),
+    }
+    if query_state(&tx).await?.value == 5 {
+      break;
+    }
+  }
+
+  Ok(())
+}
+```
+
+`examples/shared-counter` is this program, runnable:
+
+```sh
+cargo run -p plaza-example-shared-counter
+```
+
+## Driving time
+
+The controller does not advance time on its own: something has to send it `ProcessTimeStep`. For a fixed rate, that is `TickDriver`:
+
+```rust,ignore
+tokio::spawn(TickDriver::from_hz(60).run(tx.clone()));               // a live server
+TickDriver::new(Duration::from_millis(16)).run_for(tx, 100).await;   // bounded, for tests
+TickDriver::run_virtual(&tx, Duration::from_secs(1), 5).await;       // 5s of game time, at once
+```
+
+`delta_time` is measured elapsed time, so logic that integrates over it stays correct when a tick runs late.
+
+## Per-recipient views
+
+`create_snapshot_data` receives the agent a snapshot is *for*, and the controller calls it once per recipient. Returning a different payload per agent is the normal path, not a special case:
+
+```rust,ignore
+let me = target.and_then(|a| a.id());
+Ok(SnapshotData { payload: GameView {
+  my_hand: me.and_then(|id| state.hands.get(id)).cloned().unwrap_or_default(),
+  opponent_hand_sizes: state.hands.iter()
+    .filter(|(id, _)| Some(*id) != me)
+    .map(|(id, h)| (id.clone(), h.len()))
+    .collect(),
+}})
+```
+
+When a change alters what players may see, logic can push fresh views rather than waiting to be asked:
+
+```rust,ignore
+Ok(LogicOutput::ops(ops).and_snapshot(SnapshotRequest::to(state.seated_players())))
+```
+
+## Shutting down
+
+`run` returns the final state, and commands already queued when `Shutdown` arrives are processed first, so a closing broadcast submitted beforehand is guaranteed to go out:
+
+```rust,ignore
+tx.send(ControllerCommand::SubmitSystemOps { /* "server closing" */ }).await?;
+tx.send(ControllerCommand::Shutdown).await?;
+let final_state = handle.await??;   // persist it, or don't
+```
+
+## Optional modules
+
+None of this is required; take what fits. Each is a trait plus at most a ready-made implementation, so anything provided can be swapped.
+
+- **`common::scheduler`**: fires events or runs callbacks on a tick (`u64`) or game-time (`Duration`) axis. `TickEventScheduler`, `TimeEventScheduler`, and the callback equivalents.
+- **`common::reconnect`**: `ReconnectTracker`, bookkeeping for disconnect grace periods. Holds no timers; you drive it and decide what expiry means.
+- **`common::fsm`**: `StateMachine`, with `OpsQueue` as the minimal context.
+- **`common::participants`**: `ParticipantTracker`.
+- **`common::math`**: plain `Vec2`/`Vec3`/`Quat` for op payloads.
+- **`game_common::reconciliation`**: the server half of client-side prediction. Input sequence tracking, delayed input buffers, and a rewind buffer for lag compensation.
+- **`game_common::flow_control`**: turns and rounds, with `RoundRobinTurnManager` and `SequentialRoundManager`.
+- **`game_common::scorekeeping`**: `Scorekeeper` and a `HashMap` implementation.
+- **`app_common`**: op payload shapes for collaborative apps: locking, presence, ordered collections, object/property CRUD.
+
+## Transports
+
+`InProcessSession` ships here for tests and local play: each client gets its own inbox, and message targeting is resolved server-side exactly as a real transport would. For WebSockets or TCP, add [`plaza_session`](../session/).
+
+Implementing `Session` yourself is four async methods and two stream accessors. Presence is one ordered stream (`PresenceEvent::{Joined, Left}`), deliberately: separate channels let a leave overtake a join, which breaks reconnection.
 
 ## Status
 
-`plaza-core` is **experimental**. APIs are subject to change. Contributions and feedback are highly welcome!
+Experimental. The API changes.

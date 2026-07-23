@@ -1,10 +1,9 @@
 //! Provides a server-side utility to track the last processed input sequence number for each client.
 //! This is essential for enabling client-side prediction and server reconciliation.
 
-use crate::agent::AgentId; // Assuming path from plaza_core root
+use crate::agent::AgentId;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::hash::Hash; // For ID as HashMap key
 
 /// Tracks the last processed input sequence number for each client.
 ///
@@ -44,11 +43,8 @@ impl<ID: AgentId> ClientInputTracker<ID> {
   /// It's generally assumed that the `StateLogic` processes inputs for a given client
   /// in their sequence order.
   pub fn record_processed_input(&mut self, client_id: ID, input_seq_num: u64) {
-    // Consider only updating if input_seq_num is greater than current,
-    // or if the game logic guarantees inputs are processed in order for a client.
-    // For now, simple overwrite:
-    self.last_processed_input_seq.insert(client_id, input_seq_num);
     tracing::trace!(agent_id = ?client_id, seq = input_seq_num, "Recorded processed input sequence");
+    self.last_processed_input_seq.insert(client_id, input_seq_num);
   }
 
   /// Retrieves the last processed input sequence number for the given `client_id`.
@@ -72,7 +68,6 @@ impl<ID: AgentId> ClientInputTracker<ID> {
   }
 }
 
-// --- Unit Tests (Example) ---
 #[cfg(test)]
 mod tests {
   use super::*;

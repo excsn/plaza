@@ -1,7 +1,6 @@
-// examples/whack_a_mole/src/snapshot.rs
-use crate::types::{MoleGameState, MoleOp, MoleSnapshotPayload, PlayerId};
+use crate::types::{MoleGameState, MoleSnapshotPayload, PlayerId};
 use async_trait::async_trait;
-use plaza_core::{
+use plaza::{
   agent::Agent,
   snapshot::{SnapshotContext, SnapshotData, SnapshotError, SnapshotProvider},
 };

@@ -18,5 +18,4 @@ pub type ClientTimeMs = u64;
 // If we find other very common, simple types needed across modules, they can be added here.
 // For example, if dealing with 2D/3D coordinates frequently and not wanting to pull in a full
 // math library as a direct dependency of plaza_client_utils itself, simple Vec2/Vec3 structs
-// could be defined here (though it's often better to make utilities generic over such types
 // and let the application provide them from its chosen math library).

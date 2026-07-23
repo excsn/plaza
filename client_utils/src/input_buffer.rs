@@ -28,7 +28,6 @@ where
   pub op: Op,
   /// The client's predicted state *before* this input `op` was applied locally.
   pub state_before_op_predicted: PredictedStateSnapshot,
-  // pub client_timestamp_ms: Option<ClientTimeMs>, // Optional: when this input was generated locally
 }
 
 /// A circular buffer storing a history of client inputs sent to the server,
@@ -140,7 +139,7 @@ where
       .position(|bi| bi.sequence_number > last_acknowledged_sequence_number);
 
     if let Some(idx) = start_index {
-      self.inputs.range(idx..) // Use range to get a slice, then iter
+      self.inputs.range(idx..)
     } else {
       self.inputs.range(0..0) // Return an empty iterator if all are acknowledged or buffer is empty
     }
@@ -178,11 +177,9 @@ where
   }
 }
 
-// --- Unit Tests ---
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::types::SequenceNumber; // Ensure this is accessible
 
   #[derive(Debug, Clone, PartialEq)]
   struct TestOp(u64); // Simple op for testing

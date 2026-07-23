@@ -1,5 +1,5 @@
 // plaza::app_common::locking::op_payloads.rs
-use crate::agent::AgentId; // Adjust path
+use crate::agent::AgentId;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::hash::Hash; // For ResourceId if used as a key
@@ -11,8 +11,6 @@ use std::hash::Hash; // For ResourceId if used as a key
 pub struct RequestLockPayload<R: Clone + Debug + Eq + Hash> {
   // Functional bounds for R
   pub resource_id: R,
-  // pub lock_type: Option<LockType>, // Optional: e.g., ReadLock, WriteLock. For simplicity, assume exclusive write lock.
-  // pub requested_duration: Option<Duration>, // Optional: for timed locks
 }
 
 /// Payload for an Op where a client requests to release a lock they hold.
@@ -27,12 +25,10 @@ pub struct ReleaseLockPayload<R: Clone + Debug + Eq + Hash> {
 #[serde(bound = "
     R: Serialize + for<'de2> Deserialize<'de2>,
     ID: AgentId
-")] // AgentId covers ID's serde
+")]
 pub struct LockAcquiredNoticePayload<R: Clone + Debug + Eq + Hash, ID: AgentId> {
   pub resource_id: R,
   pub by_agent_id: ID,
-  // pub lock_type: LockType,
-  // pub granted_duration: Option<Duration>,
 }
 
 /// Payload for an Op (Server -> Client) notifying that a lock request was denied.
@@ -40,7 +36,6 @@ pub struct LockAcquiredNoticePayload<R: Clone + Debug + Eq + Hash, ID: AgentId> 
 #[serde(bound = "R: Serialize + for<'de2> Deserialize<'de2>")]
 pub struct LockDeniedNoticePayload<R: Clone + Debug + Eq + Hash> {
   pub resource_id: R,
-  // pub for_agent_id: ID, // The agent who was denied
   pub reason: String, // e.g., "Resource already locked by another user."
 }
 
@@ -48,8 +43,8 @@ pub struct LockDeniedNoticePayload<R: Clone + Debug + Eq + Hash> {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(bound = "
     R: Serialize + for<'de2> Deserialize<'de2>,
-    ID: AgentId 
-")] // AgentId covers ID's serde
+    ID: AgentId
+")]
 pub struct LockReleasedNoticePayload<R: Clone + Debug + Eq + Hash, ID: AgentId> {
   pub resource_id: R,
   pub by_agent_id: Option<ID>, // Who released it (None if system/timeout released it)

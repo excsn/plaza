@@ -1,208 +1,125 @@
+//! A typing indicator that clears itself after a period of silence.
+//!
+//! Each keystroke reschedules a timeout on a game-time scheduler; when the
+//! timeout finally fires, the user flips back to Idle. Game time is advanced
+//! virtually so the example doesn't wait out the real timeout.
+
 mod logic;
+mod snapshot;
 mod types;
 
 use crate::{
   logic::TypingLogic,
-  types::{AppOp, AppState, TypingIndicatorSnapshotPayload, TypingState, UserId},
+  snapshot::TypingSnapshotter,
+  types::{AppOp, AppState, TypingIndicatorSnapshotPayload, TypingState, UserId, TYPING_TIMEOUT_DURATION},
 };
 use plaza::{
   agent::Agent,
-  agent::AgentId as PlazaAgentId,
-  controller::{ControllerCommand, StateControllerBuilder},
-  error::{PlazaError, SnapshotError as PlazaSnapshotError},
-  session::{ConnectionId as PlazaConnectionId, MessageTarget, Session, SessionMessage, TargetedOp},
-  snapshot::{SnapshotContext, SnapshotData, SnapshotProvider},
-  state_logic::LogicInput,
+  controller::{query_state, CommandSender, ControllerCommand, StateControllerBuilder},
+  session::InProcessSession,
+  tick_driver::TickDriver,
 };
 
-use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn, Level};
-use tracing_subscriber::EnvFilter;
+use tracing::{error, info, warn, Level};
 use uuid::Uuid;
 
-// --- Dummy Session & SnapshotProvider ---
-#[derive(Debug)]
-struct DummySession;
-#[async_trait]
-impl Session<AppOp, UserId, TypingIndicatorSnapshotPayload> for DummySession {
-  async fn agent_join(&self, _a: Agent<UserId>) -> Result<PlazaConnectionId, PlazaError<UserId>> {
-    Ok(0)
-  }
-  async fn agent_leave(&self, _p: &UserId, _c: PlazaConnectionId) -> Result<(), PlazaError<UserId>> {
-    Ok(())
-  }
-  async fn send_message(
-    &self,
-    t: MessageTarget<UserId>,
-    m: SessionMessage<AppOp, UserId, TypingIndicatorSnapshotPayload>,
-  ) -> Result<(), PlazaError<UserId>> {
-    info!("[DummySession] Sending to {:?}: Ops: {:?}", t, m.ops_summary());
-    Ok(())
-  }
-  fn subscribe_to_incoming_messages(
-    &self,
-  ) -> tokio::sync::broadcast::Receiver<SessionMessage<AppOp, UserId, TypingIndicatorSnapshotPayload>> {
-    let (tx, rx) = tokio::sync::broadcast::channel(1);
-    let _ = tx.send(SessionMessage::Ops {
-      from: Agent::system(),
-      ops: vec![],
-    });
-    rx
-  }
-  fn on_agent_joined(&self) -> tokio::sync::broadcast::Receiver<Agent<UserId>> {
-    let (tx, rx) = tokio::sync::broadcast::channel(1);
-    let _ = tx.send(Agent::system());
-    rx
-  }
-  fn on_agent_left(&self) -> tokio::sync::broadcast::Receiver<UserId> {
-    let (tx, rx) = tokio::sync::broadcast::channel(1);
-    let _ = tx.send(Uuid::nil());
-    rx
-  }
-}
-trait OpsSummary {
-  fn ops_summary(&self) -> String;
-}
-impl<Op: std::fmt::Debug, ID: PlazaAgentId, Snap> OpsSummary for SessionMessage<Op, ID, Snap> {
-  fn ops_summary(&self) -> String {
-    if let SessionMessage::Ops { ops, .. } = self {
-      format!("{:?}", ops.iter().take(3).collect::<Vec<_>>())
-    } else {
-      "Non-Ops".to_string()
-    }
-  }
-}
-#[derive(Debug)]
-struct DummySnapshotProvider;
-#[async_trait]
-impl SnapshotProvider<UserId, AppState, TypingIndicatorSnapshotPayload> for DummySnapshotProvider {
-  async fn create_snapshot_data(
-    &self,
-    s: &AppState,
-    _a: Option<&Agent<UserId>>,
-    _c: Option<SnapshotContext>,
-  ) -> Result<SnapshotData<TypingIndicatorSnapshotPayload>, PlazaSnapshotError<UserId>> {
-    Ok(SnapshotData { payload: s.clone() })
-  }
-}
+const ONE_SECOND: Duration = Duration::from_secs(1);
+
+type TypingCommandTx = CommandSender<AppOp, UserId, AppState>;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-  tracing_subscriber::fmt().with_max_level(Level::DEBUG).init();
-  info!("Plaza Typing Indicator Example - Starting");
+  tracing_subscriber::fmt().with_max_level(Level::INFO).init();
+  info!(
+    "Plaza Typing Indicator Example - Starting (timeout {:?})",
+    TYPING_TIMEOUT_DURATION
+  );
 
-  let initial_state = AppState::default();
-  let app_logic = Arc::new(TypingLogic::default());
-  let session = Arc::new(DummySession);
-  let snapshot_provider = Arc::new(DummySnapshotProvider);
-
-  let (controller_tx, controller) = StateControllerBuilder::new()
-    .op_handler(app_logic)
-    .initial_state(initial_state)
-    .session(session)
-    .snapshot_provider(snapshot_provider)
-    .command_buffer(64)
-    .build()
-    .expect("Failed to build StateController");
+  let session = InProcessSession::<AppOp, UserId, TypingIndicatorSnapshotPayload>::new();
+  let (controller_tx, controller) = StateControllerBuilder::new(
+    Arc::new(TypingLogic::default()),
+    session.clone(),
+    Arc::new(TypingSnapshotter::default()),
+    AppState::default(),
+  )
+  .command_buffer(64)
+  .build();
 
   tokio::spawn(async move {
-    info!("StateController task starting...");
     if let Err(e) = controller.run().await {
       error!("StateController exited with error: {}", e);
     }
-    info!("StateController task finished.");
   });
 
   let user1_id = Uuid::new_v4();
-  let user1_agent = Agent::new_human(user1_id, "User1".to_string());
+  let user1 = Agent::new_human(user1_id, "User1".to_string());
 
-  // User1 joins
   controller_tx
     .send(ControllerCommand::SubmitAgentOps {
-      agent: user1_agent.clone(),
+      agent: user1.clone(),
       ops: vec![AppOp::UserJoined {
         user_id: user1_id,
         name: "User1".to_string(),
       }],
     })
     .await?;
-  tokio::time::sleep(Duration::from_millis(10)).await;
 
-  // User1 starts typing
   info!("--- User1 starts typing ---");
-  controller_tx
-    .send(ControllerCommand::SubmitAgentOps {
-      agent: user1_agent.clone(),
-      ops: vec![AppOp::UserIsTyping { user_id: user1_id }],
-    })
-    .await?;
-  tokio::time::sleep(Duration::from_millis(10)).await;
+  send_typing(&controller_tx, &user1, user1_id).await?;
 
-  // Simulate time passing (less than timeout)
-  info!("--- Advancing time (1 second) ---");
-  controller_tx
-    .send(ControllerCommand::ProcessTimeStep {
-      delta_time: Duration::from_secs(1),
-    })
-    .await?;
-  tokio::time::sleep(Duration::from_millis(10)).await;
+  // Not long enough to time out.
+  info!("--- Advancing 1 second ---");
+  TickDriver::run_virtual(&controller_tx, ONE_SECOND, 1).await;
+  report_status(&controller_tx, user1_id, "after 1s").await?;
 
-  // User1 types again (resets timeout)
-  info!("--- User1 types again ---");
-  controller_tx
-    .send(ControllerCommand::SubmitAgentOps {
-      agent: user1_agent.clone(),
-      ops: vec![AppOp::UserIsTyping { user_id: user1_id }],
-    })
-    .await?;
-  tokio::time::sleep(Duration::from_millis(10)).await;
+  // Typing again pushes the timeout back.
+  info!("--- User1 types again, resetting the timeout ---");
+  send_typing(&controller_tx, &user1, user1_id).await?;
+  TickDriver::run_virtual(&controller_tx, ONE_SECOND, 1).await;
+  report_status(&controller_tx, user1_id, "1s after retyping").await?;
 
-  // Simulate time passing (more than timeout)
-  info!("--- Advancing time (4 seconds) ---");
-  for _ in 0..4 {
-    controller_tx
-      .send(ControllerCommand::ProcessTimeStep {
-        delta_time: Duration::from_secs(1),
-      })
-      .await?;
-    tokio::time::sleep(Duration::from_millis(10)).await; // Allow processing each second
-    let (resp_tx_tick, resp_rx_tick) = tokio::sync::oneshot::channel();
-    controller_tx
-      .send(ControllerCommand::QueryCurrentState {
-        response_tx: resp_tx_tick,
-      })
-      .await?;
-    let current_s = resp_rx_tick.await?;
-    debug!(
-      "Current app time: {:?}, User1 status: {:?}",
-      current_s.current_game_time,
-      current_s.users_presence.get(&user1_id).map(|p| p.status)
-    );
-  }
+  info!("--- Advancing 4 seconds, past the timeout ---");
+  TickDriver::run_virtual(&controller_tx, ONE_SECOND, 4).await;
 
-  tokio::time::sleep(Duration::from_millis(100)).await;
-
-  let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-  controller_tx
-    .send(ControllerCommand::QueryCurrentState { response_tx: resp_tx })
-    .await?;
-  let final_state = resp_rx.await?;
-  info!("Final AppState.current_game_time: {:?}", final_state.current_game_time);
-  if let Some(u1_presence) = final_state.users_presence.get(&user1_id) {
-    info!(
-      "User1 final status: {:?}, Last Event ID: {:?}",
-      u1_presence.status, u1_presence.last_typing_timeout_event_id
-    );
-    if u1_presence.status == TypingState::Typing {
-      warn!("Error: User1 should be Idle after timeout!");
+  let final_state = query_state(&controller_tx).await?;
+  info!("Final app time: {:?}", final_state.current_game_time);
+  if let Some(presence) = final_state.users_presence.get(&user1_id) {
+    info!("User1 final status: {:?}", presence.status);
+    if presence.status == TypingState::Typing {
+      warn!("Error: User1 should be Idle after the timeout!");
     } else {
       info!("Correct: User1 is Idle.");
     }
   }
 
+  controller_tx.send(ControllerCommand::Shutdown).await?;
   info!("Typing Indicator Example Finished.");
+  Ok(())
+}
+
+async fn send_typing(
+  tx: &TypingCommandTx,
+  agent: &Agent<UserId>,
+  user_id: UserId,
+) -> Result<(), Box<dyn std::error::Error>> {
+  tx.send(ControllerCommand::SubmitAgentOps {
+    agent: agent.clone(),
+    ops: vec![AppOp::UserIsTyping { user_id }],
+  })
+  .await?;
+  Ok(())
+}
+
+
+async fn report_status(tx: &TypingCommandTx, user_id: UserId, label: &str) -> Result<(), Box<dyn std::error::Error>> {
+  let state = query_state(tx).await?;
+  info!(
+    "[{}] app time {:?}, User1 status: {:?}",
+    label,
+    state.current_game_time,
+    state.users_presence.get(&user_id).map(|p| p.status)
+  );
   Ok(())
 }

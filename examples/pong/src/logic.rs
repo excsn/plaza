@@ -1,14 +1,13 @@
-// examples/pong/src/logic.rs
 use crate::types::{
-  Ball, GamePhase, Paddle, PlayerId, PlayerSide, PongGameState, PongOp, BALL_RADIUS, MAX_SCORE, PADDLE_HEIGHT,
-  PADDLE_SPEED, PADDLE_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH,
+  GamePhase, Paddle, PlayerId, PlayerSide, PongGameState, PongOp, BALL_RADIUS, MAX_SCORE, PADDLE_HEIGHT, PADDLE_SPEED,
+  SCREEN_HEIGHT, SCREEN_WIDTH,
 };
 use async_trait::async_trait;
 use plaza::{
   agent::Agent,
   error::StateLogicError,
   session::{MessageTarget, TargetedOp},
-  state_logic::{LogicInput, StateLogic},
+  state_logic::{LogicInput, LogicOutput, StateLogic},
 };
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -22,19 +21,18 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
     &self,
     current_state: &mut PongGameState,
     input: LogicInput<PongOp, PlayerId>,
-  ) -> Result<Vec<TargetedOp<PongOp, PlayerId>>, StateLogicError> {
+  ) -> Result<LogicOutput<PongOp, PlayerId>, StateLogicError> {
     let mut ops_to_broadcast: Vec<TargetedOp<PongOp, PlayerId>> = Vec::new();
 
-    // Calculate delta_time based on last_update_time stored in state
     // This ensures physics updates are consistent even if controller's TimeStep is jittery
     // or if ops are processed between TimeSteps.
     let now = std::time::Instant::now();
     let delta_time_for_physics = match current_state.last_update_time {
-      Some(last_update) => now.saturating_duration_since(last_update), // Use saturating_duration_since
-      None => Duration::from_secs(0),                                  // First update, no delta
+      Some(last_update) => now.saturating_duration_since(last_update),
+      None => Duration::from_secs(0),
     };
     let dt_secs = delta_time_for_physics.as_secs_f32();
-    current_state.last_update_time = Some(now); // Update for next cycle
+    current_state.last_update_time = Some(now);
 
     match input {
       LogicInput::AgentOps { source, ops } => {
@@ -42,7 +40,7 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
           Some(id) => *id,
           None => {
             warn!("Ops received from System or agent without ID. Ignoring player-specific ops.");
-            return Ok(vec![]);
+            return Ok(LogicOutput::none());
           }
         };
 
@@ -56,9 +54,6 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
                 if let Some(paddle) = current_state.paddles.get_mut(&player_id) {
                   paddle.y = target_y.clamp(PADDLE_HEIGHT / 2.0, SCREEN_HEIGHT - PADDLE_HEIGHT / 2.0);
                   debug!(player_id = %player_id, new_y = paddle.y, "Paddle moved by agent op");
-                  // Paddle positions are sent with GameUpdate on timestep typically,
-                  // but we can send an immediate update if desired for responsiveness.
-                  // For now, rely on periodic GameUpdate.
                 } else {
                   warn!(player_id = %player_id, "MovePaddle op for non-existent paddle.");
                 }
@@ -67,23 +62,19 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
             PongOp::ReadyToPlay => {
               info!(player_id = %player_id, current_phase = ?current_state.phase, "Player sent ReadyToPlay");
               if current_state.phase == GamePhase::Paused || current_state.phase == GamePhase::Starting {
-                // In a real game, you might track individual player readiness.
-                // For simplicity, any ReadyToPlay in Paused/Starting moves to Playing.
                 current_state.phase = GamePhase::Playing;
                 current_state.ball.reset();
-                current_state.last_update_time = Some(std::time::Instant::now()); // Reset timer for physics
+                current_state.last_update_time = Some(std::time::Instant::now());
                 info!("Game phase changed to Playing due to ReadyToPlay op.");
                 ops_to_broadcast.push(TargetedOp {
                   from_agent: Agent::system(),
                   target: MessageTarget::All,
                   ops: vec![PongOp::PhaseChange(GamePhase::Playing)],
                 });
-                // A GameUpdate will follow shortly from the TimeStep logic
               } else if current_state.phase == GamePhase::GameOver {
-                // Optional: Allow ReadyToPlay to restart a game after GameOver
                 info!("Game restarting from GameOver due to ReadyToPlay op.");
-                current_state.phase = GamePhase::WaitingForPlayers; // Go back to waiting
-                current_state.scores.clear(); // Reset scores
+                current_state.phase = GamePhase::WaitingForPlayers;
+                current_state.scores.clear();
                 if let Some(p1) = current_state.player1_id {
                   current_state.scores.insert(p1, 0);
                 }
@@ -99,7 +90,6 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
                 });
               }
             }
-            // Server-side ops are not expected directly from clients via AgentOps
             PongOp::AssignPlayer { .. }
             | PongOp::GameUpdate(_)
             | PongOp::ScoreUpdate { .. }
@@ -110,13 +100,10 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
         }
       }
       LogicInput::TimeStep { delta_time: _ } => {
-        // Use our internally calculated dt_secs
         if current_state.phase == GamePhase::Playing {
-          // --- Ball Movement ---
           current_state.ball.x += current_state.ball.vx * dt_secs;
           current_state.ball.y += current_state.ball.vy * dt_secs;
 
-          // --- Ball Collision with Walls (Top/Bottom) ---
           if current_state.ball.y - BALL_RADIUS <= 0.0 {
             current_state.ball.y = BALL_RADIUS;
             current_state.ball.vy *= -1.0;
@@ -125,20 +112,18 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
             current_state.ball.vy *= -1.0;
           }
 
-          // --- Ball Collision with Paddles ---
-          let ball = &mut current_state.ball; // Mutable borrow for modification
+          let ball = &mut current_state.ball;
           let mut collided_with_paddle_this_step = false;
 
-          // Check player 1 (left)
           if let Some(p1_id) = current_state.player1_id {
             if let Some(paddle1) = current_state.paddles.get(&p1_id) {
-              if ball.vx < 0.0 && // Ball moving left
+              if ball.vx < 0.0 &&
                                ball.x - ball.radius < paddle1.x + paddle1.width && // Ball's left edge past paddle's right
                                ball.x + ball.radius > paddle1.x && // Ball's right edge past paddle's left
                                ball.y + ball.radius > paddle1.y - paddle1.height / 2.0 &&
                                ball.y - ball.radius < paddle1.y + paddle1.height / 2.0
               {
-                ball.x = paddle1.x + paddle1.width + ball.radius; // Correct position
+                ball.x = paddle1.x + paddle1.width + ball.radius;
                 ball.vx *= -1.05; // Reverse and speed up slightly
                 let hit_factor = (ball.y - paddle1.y) / (paddle1.height / 2.0);
                 ball.vy += hit_factor * PADDLE_SPEED * 0.5; // More influence
@@ -152,22 +137,20 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
             }
           }
 
-          // Check player 2 (right) - only if no collision with P1 yet
           if !collided_with_paddle_this_step {
             if let Some(p2_id) = current_state.player2_id {
               if let Some(paddle2) = current_state.paddles.get(&p2_id) {
-                if ball.vx > 0.0 && // Ball moving right
+                if ball.vx > 0.0 &&
                                    ball.x + ball.radius > paddle2.x && // Ball's right edge past paddle's left
                                    ball.x - ball.radius < paddle2.x + paddle2.width && // Ball's left edge past paddle's right
                                    ball.y + ball.radius > paddle2.y - paddle2.height / 2.0 &&
                                    ball.y - ball.radius < paddle2.y + paddle2.height / 2.0
                 {
-                  ball.x = paddle2.x - ball.radius; // Correct position
+                  ball.x = paddle2.x - ball.radius;
                   ball.vx *= -1.05; // Reverse and speed up slightly
                   let hit_factor = (ball.y - paddle2.y) / (paddle2.height / 2.0);
                   ball.vy += hit_factor * PADDLE_SPEED * 0.5; // More influence
                   ball.vy = ball.vy.clamp(-PADDLE_SPEED * 1.2, PADDLE_SPEED * 1.2);
-                  collided_with_paddle_this_step = true;
                   debug!(
                     "Ball collided with right paddle (P2). New vx: {}, vy: {}",
                     ball.vx, ball.vy
@@ -177,7 +160,6 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
             }
           }
 
-          // --- Ball Out of Bounds (Score) ---
           let mut scored_this_frame: Option<PlayerId> = None; // Player who gets the point
           if ball.x + ball.radius < 0.0 {
             // Ball went off left edge
@@ -248,7 +230,6 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
         // No specific logic for GamePhase::Starting, Paused, GameOver in TimeStep,
         // they transition based on AgentOps or scoring.
 
-        // --- Periodic Game State Update ---
         current_state.version += 1;
         ops_to_broadcast.push(TargetedOp {
           from_agent: Agent::system(),
@@ -256,7 +237,77 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
           ops: vec![PongOp::GameUpdate(Box::new(current_state.clone()))],
         });
       }
+      LogicInput::AgentJoined { agent } => {
+        let Some(player_id) = agent.id_cloned() else {
+          return Ok(ops_to_broadcast.into());
+        };
+
+        // Seat the player on the first free side; extra connections spectate.
+        let side = if current_state.player1_id.is_none() {
+          current_state.player1_id = Some(player_id);
+          Some(PlayerSide::Left)
+        } else if current_state.player2_id.is_none() && current_state.player1_id != Some(player_id) {
+          current_state.player2_id = Some(player_id);
+          Some(PlayerSide::Right)
+        } else {
+          None
+        };
+
+        let Some(side) = side else {
+          info!(agent = %agent.label(), "Game is full; joining as spectator.");
+          ops_to_broadcast.push(TargetedOp::new_system_to(
+            player_id,
+            vec![PongOp::GameUpdate(Box::new(current_state.clone()))],
+          ));
+          return Ok(ops_to_broadcast.into());
+        };
+
+        current_state.paddles.insert(player_id, Paddle::new(player_id, side));
+        current_state.scores.insert(player_id, 0);
+        info!(agent = %agent.label(), ?side, "Player seated.");
+
+        ops_to_broadcast.push(TargetedOp::new_system_to(
+          player_id,
+          vec![PongOp::AssignPlayer { player_id, side }],
+        ));
+
+        // With both seats filled the rally can begin.
+        if current_state.player1_id.is_some() && current_state.player2_id.is_some() {
+          current_state.phase = GamePhase::Playing;
+          info!("Both players present; starting play.");
+          ops_to_broadcast.push(TargetedOp::new_system_all(vec![PongOp::PhaseChange(GamePhase::Playing)]));
+        }
+
+        current_state.version += 1;
+        ops_to_broadcast.push(TargetedOp::new_system_all(vec![PongOp::GameUpdate(Box::new(
+          current_state.clone(),
+        ))]));
+      }
+      LogicInput::AgentLeft { agent_id } => {
+        current_state.paddles.remove(&agent_id);
+        current_state.scores.remove(&agent_id);
+        if current_state.player1_id == Some(agent_id) {
+          current_state.player1_id = None;
+        }
+        if current_state.player2_id == Some(agent_id) {
+          current_state.player2_id = None;
+        }
+
+        // A rally needs two players; pause until someone takes the empty seat.
+        if current_state.phase == GamePhase::Playing {
+          current_state.phase = GamePhase::WaitingForPlayers;
+          ops_to_broadcast.push(TargetedOp::new_system_all(vec![PongOp::PhaseChange(
+            GamePhase::WaitingForPlayers,
+          )]));
+        }
+
+        info!(?agent_id, "Player left; seat freed.");
+        current_state.version += 1;
+        ops_to_broadcast.push(TargetedOp::new_system_all(vec![PongOp::GameUpdate(Box::new(
+          current_state.clone(),
+        ))]));
+      }
     }
-    Ok(ops_to_broadcast)
+    Ok(ops_to_broadcast.into())
   }
 }

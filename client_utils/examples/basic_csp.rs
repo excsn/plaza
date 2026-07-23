@@ -5,11 +5,10 @@
 //! It runs entirely locally, without actual networking.
 
 use plaza_client_utils::{
-  input_buffer::{BufferedInput, ClientInputBuffer},
+  input_buffer::ClientInputBuffer,
   prediction::PredictedEntity,
   types::SequenceNumber,
 };
-use std::time::Duration;
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 

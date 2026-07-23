@@ -6,11 +6,9 @@
 //! that periodically triggers the processing of inputs from this buffer.
 
 use crate::agent::AgentId;
-use crate::common::reconciliation::op_payloads::SequencedClientInput; // Assuming this path
+use super::op_payloads::SequencedClientInput;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Debug;
-use std::hash::Hash; // For ID as HashMap key
-use std::time::Duration; // For server_received_timestamp if using wall time
 
 /// Represents an input received from a client, stored with its server-side arrival time.
 ///
@@ -18,7 +16,7 @@ use std::time::Duration; // For server_received_timestamp if using wall time
 /// - `ServerTime`: The type representing server time when the input was received/queued.
 #[derive(Debug, Clone)]
 pub struct BufferedInput<InputData: Clone + Debug, ServerTime: Copy + Debug> {
-  pub client_input: SequencedClientInput<InputData>, // Contains original client sequence_number
+  pub client_input: SequencedClientInput<InputData>,
   pub server_received_time: ServerTime,
 }
 
@@ -64,7 +62,6 @@ impl<ID: AgentId, InputData: Clone + Debug, ServerTime: Copy + Debug + PartialOr
   /// - `server_received_time`: The current server time when this input is being added to the buffer.
   pub fn add_input(&mut self, client_id: ID, input: SequencedClientInput<InputData>, server_received_time: ServerTime) {
     let client_queue = self.inputs_by_client.entry(client_id).or_insert_with(VecDeque::new);
-    // Optional: Check if input.sequence_number is newer than last in queue for this client.
     // This helps handle out-of-order packets from a single client if the transport allows it
     // and they arrive at the buffer out of sequence. For simplicity, just push.
     client_queue.push_back(BufferedInput {
@@ -91,7 +88,7 @@ impl<ID: AgentId, InputData: Clone + Debug, ServerTime: Copy + Debug + PartialOr
   pub fn drain_delayed_inputs(
     &mut self,
     current_server_time: ServerTime,
-    processing_delay: ServerTime, // Assuming ServerTime can represent a duration/delay
+    processing_delay: ServerTime,
   ) -> Vec<(ID, SequencedClientInput<InputData>)>
   where
     ServerTime: std::ops::Sub<Output = ServerTime>, // For current_server_time - processing_delay
@@ -104,7 +101,7 @@ impl<ID: AgentId, InputData: Clone + Debug, ServerTime: Copy + Debug + PartialOr
       while let Some(buffered_input) = client_queue.front() {
         if buffered_input.server_received_time <= cutoff_time {
           // This input is old enough to be processed. Remove it from queue.
-          let input_to_process = client_queue.pop_front().unwrap(); // Safe due to front()
+          let input_to_process = client_queue.pop_front().unwrap();
           processable_inputs.push((client_id.clone(), input_to_process.client_input));
         } else {
           // Oldest input for this client is not yet old enough.
@@ -135,11 +132,11 @@ impl<ID: AgentId, InputData: Clone + Debug, ServerTime: Copy + Debug + PartialOr
   }
 }
 
-// --- Unit Tests (Example) ---
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::common::reconciliation::op_payloads::SequencedClientInput;
+  use crate::game_common::reconciliation::op_payloads::SequencedClientInput;
+  use serde::{Deserialize, Serialize};
   use std::time::Duration;
   use uuid::Uuid;
 

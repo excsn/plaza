@@ -1,9 +1,7 @@
-use plaza::agent::AgentId;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-// --- Constants ---
 pub const SCREEN_WIDTH: f32 = 800.0;
 pub const SCREEN_HEIGHT: f32 = 600.0;
 pub const PADDLE_WIDTH: f32 = 15.0;
@@ -14,13 +12,10 @@ pub const BALL_INITIAL_SPEED_X: f32 = 250.0;
 pub const BALL_INITIAL_SPEED_Y: f32 = 250.0;
 pub const MAX_SCORE: u32 = 5;
 
-// --- Agent ID ---
 // Using Uuid for player identification.
 // AgentId trait is already `Clone + Debug + Eq + Hash + Send + Sync + 'static`.
-// Uuid with 'v4' and 'serde' features fits these if needed for serialization.
 pub type PlayerId = Uuid;
 
-// --- Game State Enums ---
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum GamePhase {
   WaitingForPlayers, // Game waiting for two players to connect
@@ -30,7 +25,6 @@ pub enum GamePhase {
   GameOver,          // One player has reached MAX_SCORE
 }
 
-// --- Game Data Structures ---
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Paddle {
   pub player_id: PlayerId,
@@ -103,11 +97,11 @@ impl Ball {
 pub struct PongGameState {
   pub game_id: Uuid, // To identify this specific game instance
   pub phase: GamePhase,
-  pub paddles: HashMap<PlayerId, Paddle>, // Max 2 players
+  pub paddles: HashMap<PlayerId, Paddle>,
   pub ball: Ball,
   pub scores: HashMap<PlayerId, u32>,
-  pub player1_id: Option<PlayerId>, // Player on the left
-  pub player2_id: Option<PlayerId>, // Player on the right
+  pub player1_id: Option<PlayerId>,
+  pub player2_id: Option<PlayerId>,
   #[serde(skip)] // Don't send this over network, used for server-side logic
   pub last_update_time: Option<std::time::Instant>,
   pub version: u64, // For state versioning, useful for delta updates or client prediction
@@ -129,14 +123,12 @@ impl Default for PongGameState {
   }
 }
 
-// --- Player Assignment ---
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PlayerSide {
   Left,  // Player 1
   Right, // Player 2
 }
 
-// --- Operations (Client to Server & Server to Client/Internal) ---
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum PongOp {
   // Client to Server
@@ -160,6 +152,5 @@ pub enum PongOp {
   // Could have more granular ops like BallPosition, PaddlePosition if state is large
 }
 
-// --- Snapshot Payload ---
 // For Pong, the full game state is a reasonable snapshot.
 pub type PongSnapshotPayload = PongGameState;

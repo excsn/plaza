@@ -1,22 +1,27 @@
-//! Plaza Session: Provides implementations of the `plaza_core::session::Session`
-//! trait for various network transports. Enable features like "actix_ws", "tcp", or "udp".
+//! Plaza Session: `plaza::session::Session` implementations for real network
+//! transports.
+//!
+//! Both transports share one connection manager, targeting implementation, and
+//! serialization path (see [`manager`]); the per-transport modules are just
+//! socket pumps. The wire format is pluggable via [`codec::WireCodec`]:
+//! JSON by default, but an application can supply MessagePack or bincode.
+//!
+//! Enable the `actix_ws` and/or `tcp` features to select transports.
 
-// Re-export core types often needed when working with sessions, if desired.
-// However, it might be cleaner to have users import them from plaza_core directly.
-// pub use plaza_core::agent::{Agent, AgentId};
-// pub use plaza_core::error::PlazaError;
-// pub use plaza_core::session::{ConnectionId, MessageTarget, Session, SessionMessage};
-// pub use plaza_core::snapshot::SnapshotData;
+pub mod codec;
+pub mod error;
+pub mod manager;
 
-pub mod error; // Errors specific to this session crate or its implementations
+pub use codec::{JsonCodec, WireCodec};
+pub use error::SessionLayerError;
+pub use manager::{ConnectionManager, TransportSession};
 
-// Conditionally compile and expose modules based on features
 #[cfg(feature = "actix_ws")]
-pub mod actix_ws_session;
+pub mod actix_ws;
 #[cfg(feature = "actix_ws")]
-pub use actix_ws_session::ActixWsPlazaSession; // Re-export the main struct
+pub use actix_ws::ActixWsPlazaSession;
 
 #[cfg(feature = "tcp")]
-pub mod tcp_session;
+pub mod tcp;
 #[cfg(feature = "tcp")]
-pub use tcp_session::TcpPlazaSession;
+pub use tcp::TcpPlazaSession;

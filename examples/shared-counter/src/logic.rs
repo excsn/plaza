@@ -1,11 +1,9 @@
-// examples/shared-counter/src/logic.rs
 use crate::types::{CounterId, CounterOp, CounterStateData};
 use async_trait::async_trait;
 use plaza::{
-  agent::Agent,
   error::StateLogicError,
   session::{MessageTarget, TargetedOp},
-  state_logic::{LogicInput, StateLogic},
+  state_logic::{LogicInput, LogicOutput, StateLogic},
 };
 use tracing::debug;
 
@@ -18,7 +16,7 @@ impl StateLogic<CounterOp, CounterId, CounterStateData> for CounterLogic {
     &self,
     current_state: &mut CounterStateData,
     input: LogicInput<CounterOp, CounterId>,
-  ) -> Result<Vec<TargetedOp<CounterOp, CounterId>>, StateLogicError> {
+  ) -> Result<LogicOutput<CounterOp, CounterId>, StateLogicError> {
     let mut ops_to_broadcast: Vec<TargetedOp<CounterOp, CounterId>> = Vec::new();
 
     match input {
@@ -50,7 +48,13 @@ impl StateLogic<CounterOp, CounterId, CounterStateData> for CounterLogic {
         // Counter is not time-driven, so a TimeStep input does nothing here.
         debug!(?delta_time, "TimeStep received for CounterLogic, no action taken.");
       }
+      LogicInput::AgentJoined { agent } => {
+        debug!(agent = %agent.label(), "Agent joined; counter state needs no per-agent setup.");
+      }
+      LogicInput::AgentLeft { agent_id } => {
+        debug!(?agent_id, "Agent left; counter state needs no cleanup.");
+      }
     }
-    Ok(ops_to_broadcast)
+    Ok(ops_to_broadcast.into())
   }
 }

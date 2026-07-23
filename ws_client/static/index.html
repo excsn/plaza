@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>plaza_ws echo spike</title>
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #0f1216; overflow: hidden; }
+    canvas#glcanvas { display: block; width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+  <canvas id="glcanvas" tabindex="1"></canvas>
+  <!-- Order matters: the bundle defines miniquad_add_plugin, the plugin registers
+       against it, and load() instantiates once both are in place. -->
+  <script src="mq_js_bundle.js"></script>
+  <script src="plaza_ws.js"></script>
+  <script>load("echo_web.wasm");</script>
+</body>
+</html>

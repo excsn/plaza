@@ -117,7 +117,7 @@ fn main() {
 
     if let Some(ref extrap_base) = extrapolation_base_opt {
       // The convert_ms_to_time_delta function for this example: u64 ms -> f32 seconds
-      let convert_to_f32_secs = |ms: u64| (ms as f32 / 1000.0);
+      let convert_to_f32_secs = |ms: u64| ms as f32 / 1000.0;
 
       if let Some(extrapolated_state) = extrap_base.get_extrapolated_state(
         client_current_time_ms, // Client's current render time

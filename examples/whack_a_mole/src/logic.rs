@@ -1,16 +1,16 @@
-// examples/whack_a_mole/src/logic.rs
 use crate::types::{
   MoleGameEvent, MoleGameState, MoleOp, PlayerId, PlayerSessionInfo, MAX_MOLE_SLOTS, MOLE_SPAWN_INTERVAL_TICKS,
   MOLE_VISIBLE_DURATION_TICKS,
 };
 use async_trait::async_trait;
-use plaza_core::{
+use plaza::{
   agent::Agent,
   session::{MessageTarget, TargetedOp},
-  state_logic::{LogicInput, StateLogic, StateLogicError},
+  state_logic::{LogicInput, LogicOutput, StateLogic, StateLogicError},
 };
 use rand::Rng;
 use std::collections::HashMap;
+use std::fmt::Debug;
 use tracing::{debug, info, warn};
 
 #[derive(Debug, Default)]
@@ -22,7 +22,7 @@ impl StateLogic<MoleOp, PlayerId, MoleGameState> for MoleLogic {
     &self,
     state: &mut MoleGameState,
     input: LogicInput<MoleOp, PlayerId>,
-  ) -> Result<Vec<TargetedOp<MoleOp, PlayerId>>, StateLogicError> {
+  ) -> Result<LogicOutput<MoleOp, PlayerId>, StateLogicError> {
     let mut ops_to_broadcast: Vec<TargetedOp<MoleOp, PlayerId>> = Vec::new();
 
     match input {
@@ -31,7 +31,7 @@ impl StateLogic<MoleOp, PlayerId, MoleGameState> for MoleLogic {
           Some(id) => *id,
           None => {
             warn!("MoleLogic: Ops from non-player agent {:?}, ignoring whack.", source);
-            return Ok(ops_to_broadcast);
+            return Ok(ops_to_broadcast.into());
           }
         };
 
@@ -49,7 +49,7 @@ impl StateLogic<MoleOp, PlayerId, MoleGameState> for MoleLogic {
               debug!(player_id = %player_id, whack_slot = slot, current_mole = ?state.current_mole_slot, "Processing Whack op");
               if state.current_mole_slot == Some(slot) {
                 // Successful whack!
-                let player_info = state.player_info.get_mut(&player_id).unwrap(); // Should exist
+                let player_info = state.player_info.get_mut(&player_id).unwrap();
                 player_info.score += 1;
                 info!(player_id = %player_id, new_score = player_info.score, "Player scored!");
 
@@ -75,11 +75,10 @@ impl StateLogic<MoleOp, PlayerId, MoleGameState> for MoleLogic {
                 ));
 
                 // Cancel pending HideMoleRequest if any (more robust: use event IDs for cancel)
-                // For simplicity, just reschedule spawn. Old hide events for this mole are now moot.
                 state
                   .scheduler
-                  .cancel_all_matching(|event| matches!(event, MoleGameEvent::HideMoleRequest)); // Example of a custom cancel
-                state.scheduler.schedule_after_ticks(
+                  .cancel_matching(|event| matches!(event, MoleGameEvent::HideMoleRequest));
+                state.scheduler.schedule_after(
                   state.current_tick,
                   MOLE_SPAWN_INTERVAL_TICKS,
                   MoleGameEvent::SpawnMoleRequest,
@@ -87,10 +86,7 @@ impl StateLogic<MoleOp, PlayerId, MoleGameState> for MoleLogic {
                 debug!("Mole whacked, hidden. Next spawn scheduled.");
               } else {
                 debug!(player_id = %player_id, "Player missed or whacked empty slot.");
-                // Optionally, penalize misses:
-                // let player_info = state.player_info.get_mut(&player_id).unwrap();
                 // player_info.score = player_info.score.saturating_sub(1);
-                // ops_to_broadcast.push(TargetedOp::new_system_all(vec![MoleOp::ScoreUpdate...]));
               }
             }
             _ => warn!("MoleLogic: Received unexpected client Op: {:?}", op),
@@ -133,7 +129,7 @@ impl StateLogic<MoleOp, PlayerId, MoleGameState> for MoleLogic {
               ));
 
               // Schedule it to hide after a duration
-              state.scheduler.schedule_after_ticks(
+              state.scheduler.schedule_after(
                 state.current_tick,
                 MOLE_VISIBLE_DURATION_TICKS,
                 MoleGameEvent::HideMoleRequest,
@@ -145,7 +141,6 @@ impl StateLogic<MoleOp, PlayerId, MoleGameState> for MoleLogic {
                 // And check if it's the *same* mole that was scheduled to hide (by comparing spawn tick)
                 // For this simple scheduler, we don't have IDs on scheduled Hide requests tied to specific spawns.
                 // So, if a mole was whacked and a new one spawned quickly, an old Hide event might hide the new one.
-                // A more robust system would use ScheduledEventId to cancel specific Hide events.
                 // For now, simple hide:
                 info!(
                   slot = state.current_mole_slot.unwrap(),
@@ -162,7 +157,7 @@ impl StateLogic<MoleOp, PlayerId, MoleGameState> for MoleLogic {
                   }],
                 ));
                 // Schedule the next spawn cycle
-                state.scheduler.schedule_after_ticks(
+                state.scheduler.schedule_after(
                   state.current_tick,
                   MOLE_SPAWN_INTERVAL_TICKS,
                   MoleGameEvent::SpawnMoleRequest,
@@ -173,11 +168,11 @@ impl StateLogic<MoleOp, PlayerId, MoleGameState> for MoleLogic {
                 // This needs care to avoid duplicate spawn schedules.
                 // If the current logic always reschedules spawn on whack/hide, this might be redundant.
                 // Let's ensure spawn is always on a cycle:
-                if state
+                if !state
                   .scheduler
-                  .is_empty_of_type(|event| matches!(event, MoleGameEvent::SpawnMoleRequest))
+                  .any_pending(|event| matches!(event, MoleGameEvent::SpawnMoleRequest))
                 {
-                  state.scheduler.schedule_after_ticks(
+                  state.scheduler.schedule_after(
                     state.current_tick,
                     MOLE_SPAWN_INTERVAL_TICKS,
                     MoleGameEvent::SpawnMoleRequest,
@@ -204,7 +199,7 @@ impl StateLogic<MoleOp, PlayerId, MoleGameState> for MoleLogic {
           ));
         }
       }
-      LogicInput::AgentJoinedPlaza { agent } => {
+      LogicInput::AgentJoined { agent } => {
         if let Some(player_id) = agent.id_cloned() {
           if !state.player_info.contains_key(&player_id) {
             info!(player_id = %player_id, name = %agent.label(), "Player joined game state.");
@@ -228,7 +223,7 @@ impl StateLogic<MoleOp, PlayerId, MoleGameState> for MoleLogic {
           }
         }
       }
-      LogicInput::AgentLeftPlaza { agent_id } => {
+      LogicInput::AgentLeft { agent_id } => {
         if state.player_info.remove(&agent_id).is_some() {
           info!(player_id = %agent_id, "Player left game state.");
           ops_to_broadcast.push(TargetedOp::new(
@@ -240,31 +235,7 @@ impl StateLogic<MoleOp, PlayerId, MoleGameState> for MoleLogic {
       }
     }
     state.version += 1;
-    Ok(ops_to_broadcast)
+    Ok(ops_to_broadcast.into())
   }
 }
 
-// Helper for TickEventScheduler in MoleGameState to allow cancelling specific event types
-// This is a bit of a hack; ideally scheduler provides this or uses event IDs.
-trait EventTypeMatcher<E> {
-  fn cancel_all_matching(&mut self, predicate: impl Fn(&E) -> bool) -> usize;
-  fn is_empty_of_type(&self, predicate: impl Fn(&E) -> bool) -> bool;
-}
-
-impl<E: Clone + Debug + Send + 'static> EventTypeMatcher<E> for TickEventScheduler<E> {
-  fn cancel_all_matching(&mut self, predicate: impl Fn(&E) -> bool) -> usize {
-    // TickEventScheduler's cancel takes ScheduledEventId.
-    // To cancel by type, we'd need to iterate its internal items or store IDs.
-    // This is a placeholder for a more robust cancel_by_predicate if scheduler supported it.
-    // For now, this won't work as intended without modifying TickEventScheduler.
-    // Let's assume we'd iterate and collect IDs then cancel.
-    // This is a known limitation of the simple scheduler if not using event IDs for cancellation.
-    warn!("cancel_all_matching for TickEventScheduler is a conceptual placeholder.");
-    0 // Return number of cancelled events
-  }
-  fn is_empty_of_type(&self, predicate: impl Fn(&E) -> bool) -> bool {
-    // Similar to above, needs access to scheduler internals or a dedicated method.
-    warn!("is_empty_of_type for TickEventScheduler is a conceptual placeholder.");
-    self.is_empty() // Fallback
-  }
-}

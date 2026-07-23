@@ -5,9 +5,8 @@ use plaza::{
   // TimeEventScheduler is in AppState
   error::StateLogicError,
   session::{MessageTarget, TargetedOp},
-  state_logic::{LogicInput, StateLogic},
+  state_logic::{LogicInput, LogicOutput, StateLogic},
 };
-use std::time::Duration;
 use tracing::{debug, info, warn};
 
 #[derive(Debug, Default)] // Logic is stateless, scheduler is in AppState
@@ -19,7 +18,7 @@ impl StateLogic<AppOp, UserId, AppState> for TypingLogic {
     &self,
     state: &mut AppState,
     input: LogicInput<AppOp, UserId>,
-  ) -> Result<Vec<TargetedOp<AppOp, UserId>>, StateLogicError> {
+  ) -> Result<LogicOutput<AppOp, UserId>, StateLogicError> {
     let mut ops_to_broadcast: Vec<TargetedOp<AppOp, UserId>> = Vec::new();
 
     match input {
@@ -94,7 +93,7 @@ impl StateLogic<AppOp, UserId, AppState> for TypingLogic {
                 }
 
                 // Schedule new timeout event
-                let new_event_id = state.scheduler.schedule_after_duration(
+                let new_event_id = state.scheduler.schedule_after(
                   state.current_game_time, // Use current_game_time from AppState
                   TYPING_TIMEOUT_DURATION,
                   ScheduledAppEvent::UserTypingTimeout { user_id },
@@ -158,8 +157,14 @@ impl StateLogic<AppOp, UserId, AppState> for TypingLogic {
           }
         }
       }
+      LogicInput::AgentJoined { agent } => {
+        tracing::debug!(agent = %agent.label(), "Agent joined session.");
+      }
+      LogicInput::AgentLeft { agent_id } => {
+        tracing::debug!(?agent_id, "Agent left session.");
+      }
     }
     state.version += 1;
-    Ok(ops_to_broadcast)
+    Ok(ops_to_broadcast.into())
   }
 }

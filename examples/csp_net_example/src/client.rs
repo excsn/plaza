@@ -6,23 +6,21 @@
 use crate::common_types::{BoxState, CspSnapshotPayload, GameOp, MoveInput, PlayerId, ServerTick, Vec2};
 use plaza_client_utils::{
   input_buffer::ClientInputBuffer,
-  interpolation::{Interpolatable, ServerSnapshot, SnapshotBuffer, ToF32}, // Added ToF32
+  interpolation::{Interpolatable, SnapshotBuffer}, // Added ToF32
   prediction::PredictedEntity,
   types::{ClientTimeMs, SequenceNumber},
 };
-use plaza_core::{
+use plaza::{
   agent::Agent, // For constructing the Agent struct
-  common::reconciliation::op_payloads::{RemoteEntitySnapshot, SequencedClientInput}, // For constructing Ops
+  game_common::reconciliation::op_payloads::SequencedClientInput, // For constructing Ops
   session::SessionMessage, // For wrapping Ops to send via MPSC "network"
 };
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
-use tokio::sync::{broadcast, mpsc, oneshot};
+use fibre::mpsc;
 use tracing::{debug, error, info, warn};
-use uuid::Uuid;
 
-// --- Client Configuration ---
 const CLIENT_TICK_RATE_HZ: u64 = 60; // Client tries to run its logic loop at this rate
 const CLIENT_TICK_INTERVAL: Duration = Duration::from_millis(1000 / CLIENT_TICK_RATE_HZ);
 const INPUT_SEND_INTERVAL_TICKS: u64 = 2; // Send input packet every 2 client ticks (~30hz)
@@ -30,23 +28,22 @@ const CLIENT_INPUT_BUFFER_SIZE: usize = 128;
 const REMOTE_SNAPSHOT_BUFFER_SIZE: usize = 10;
 const INTERPOLATION_DELAY_MS: u64 = 100; // Render remote entities 100ms in the past
 
-// --- Client State ---
 struct ClientApp {
   client_name: String,
   my_player_id: Option<PlayerId>,
   server_tick_on_join_ack: ServerTick, // Server tick when SC_JoinAck was received
 
   // For CSP of own entity
-  predicted_box: Option<PredictedEntity<BoxState, GameOp>>, // Op is PlayerInput variant of GameOp
-  input_buffer: ClientInputBuffer<GameOp, BoxState>,        // Stores *GameOp::PlayerInput*
+  predicted_box: Option<PredictedEntity<BoxState, MoveInput>>,
+  input_buffer: ClientInputBuffer<MoveInput, BoxState>,
   next_input_seq: SequenceNumber,
 
   // For remote entities
   remote_boxes: HashMap<PlayerId, RemoteClientBox>,
 
   // Simulated network
-  to_server_tx: mpsc::Sender<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>, // Client -> Server
-  from_server_rx: mpsc::Receiver<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>, // Server -> Client
+  to_server_tx: mpsc::BoundedAsyncSender<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>, // Client -> Server
+  from_server_rx: mpsc::BoundedAsyncReceiver<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>, // Server -> Client
 
   // Local timing
   last_input_send_tick: u64,
@@ -59,20 +56,13 @@ struct RemoteClientBox {
   snapshot_buffer: SnapshotBuffer<ServerTick, BoxState>, // ServerTick is the Timestamp
 }
 
-// Make BoxState Interpolatable using ServerTick as Timestamp
-// ServerTick (u64) needs ToF32 for SnapshotBuffer's t calculation
-impl ToF32 for ServerTick {
-  // ServerTick is u64
-  fn to_f32(self) -> Option<f32> {
-    Some(self as f32)
-  }
-}
+// ServerTick is u64, for which plaza_client_utils already provides `ToF32`,
+// so SnapshotBuffer's interpolation factor works out of the box.
 
 impl Interpolatable<ServerTick> for BoxState {
   fn interpolate(&self, other: &Self, t: f32, _time_a: ServerTick, _time_b: ServerTick) -> Self {
     BoxState {
       position: self.position.interpolate(&other.position, t, _time_a, _time_b),
-      // Velocity can also be interpolated if desired, or take from 'before' or 'after'
       velocity: self.velocity.interpolate(&other.velocity, t, _time_a, _time_b),
     }
   }
@@ -81,9 +71,8 @@ impl Interpolatable<ServerTick> for BoxState {
 impl ClientApp {
   async fn new(
     client_name: String,
-    // These channels are established by the main launcher when "connecting"
-    to_server_tx: mpsc::Sender<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>,
-    from_server_rx: mpsc::Receiver<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>,
+    to_server_tx: mpsc::BoundedAsyncSender<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>,
+    from_server_rx: mpsc::BoundedAsyncReceiver<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>,
   ) -> Self {
     Self {
       client_name,
@@ -103,7 +92,7 @@ impl ClientApp {
 
   // Client-side simulation logic for applying a MoveInput to BoxState
   fn apply_move_to_box_state(state: &mut BoxState, input: &MoveInput) {
-    let mut move_vec = input_to_velocity_vector(input); // Get normalized direction
+    let move_vec = input_to_velocity_vector(input); // Get normalized direction
 
     // Client predicts movement based on its own tick interval
     let effective_speed = super::server::MAX_PLAYER_SPEED / CLIENT_TICK_RATE_HZ as f32; // Use same speed constants
@@ -111,13 +100,11 @@ impl ClientApp {
     state.position.x += move_vec.x * effective_speed;
     state.position.y += move_vec.y * effective_speed;
 
-    // Client can also predict velocity change if applicable
     state.velocity = Vec2 {
       x: move_vec.x * super::server::MAX_PLAYER_SPEED,
       y: move_vec.y * super::server::MAX_PLAYER_SPEED,
     };
 
-    // Client might also do its own bounds clamping prediction if desired
     state.position.x = state
       .position
       .x
@@ -125,49 +112,16 @@ impl ClientApp {
     state.position.y = state
       .position
       .y
-      .clamp(super::erver_runner::WORLD_BOUNDS_Y.0, super::server::WORLD_BOUNDS_Y.1);
+      .clamp(super::server::WORLD_BOUNDS_Y.0, super::server::WORLD_BOUNDS_Y.1);
   }
 
-  // Helper to convert MoveInput to a scaled/normalized velocity vector for prediction
-  // This is part of the client's interpretation of its raw inputs
-  fn game_op_from_move_input(input: &MoveInput) -> GameOp {
-    // The `apply_op_to_state` in `PredictedEntity` takes the full `GameOp`.
-    // The `ClientInputBuffer` also stores the full `GameOp`.
-    // The actual data processed by `apply_move_to_box_state` is `MoveInput`.
-    // So, the `Op` type for `PredictedEntity` should be `MoveInput` if that's what simulation uses.
-    // Or, `apply_op_fn` for `PredictedEntity` needs to expect `GameOp` and extract `MoveInput`.
-    // Let's make PredictedEntity<BoxState, MoveInput> and ClientInputBuffer<MoveInput, BoxState>.
-    // And the GameOp::CS_PlayerInput carries SequencedClientInput<MoveInput>.
-    // This means when we call predicted_entity.apply_local_input_and_predict, the 'op' arg is MoveInput.
-
-    // This function is not strictly needed if `apply_op_fn` takes `&GameOp` and matches.
-    // For clarity:
-    // Let PredictedEntity be generic over the *specific input type* it predicts, not the whole GameOp enum.
-    // So, PredictedEntity<BoxState, MoveInput>
-    // ClientInputBuffer<MoveInput, BoxState>
-    // Then, when we get a GameOp::CS_PlayerInput(SequencedClientInput { input_data, .. }),
-    // we pass `input_data` (which is MoveInput) to predicted_entity.
-
-    // This function is not used if the GameOp is directly what the client buffer stores
-    // and what the prediction logic uses.
-    // If PlayerInput was more complex, GameOp itself might be the "Op" for PredictedEntity.
-    // For this example, let's assume PredictedEntity<BoxState, MoveInput>
-    // So, `apply_local_input_and_predict` will take a `&MoveInput`.
-    unimplemented!("This helper might not be needed if PredictedEntity uses MoveInput directly.");
-  }
 
   async fn run_loop(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut tick_timer = tokio::time::interval(CLIENT_TICK_INTERVAL);
     let start_time = Instant::now();
 
-    // 1. Send Join Request
     info!("[{}] Sending Join Request", self.client_name);
     let join_op = GameOp::CS_RequestJoin;
-    // For MPSC simulation, the server's session needs the agent info for the join.
-    // The client needs to know its ID after join ack.
-    // For now, client doesn't know its ID until SC_JoinAck.
-    // The DummyServerSession will create an Agent on CS_RequestJoin.
-    // This is a bit simplified for MPSC. In real WS, connection itself implies an agent.
     let temp_dummy_id_for_sending = PlayerId::new_v4(); // Server will assign real one or use this
     let agent_for_sending = Agent::new_human(temp_dummy_id_for_sending, self.client_name.clone());
 
@@ -185,7 +139,6 @@ impl ClientApp {
               self.client_tick_counter += 1;
               self.client_current_time_ms = start_time.elapsed().as_millis() as ClientTimeMs;
 
-              // --- A. Handle Local Input & Predict (for own box) ---
               if self.my_player_id.is_some() && self.predicted_box.is_some() {
                   // Simulate some input every few ticks
                   if self.client_tick_counter % 5 == 0 { // Generate input less frequently
@@ -223,44 +176,34 @@ impl ClientApp {
                   }
               }
 
-              // --- B. Update Remote Entity Interpolation & Render ---
               for (id, remote_box) in self.remote_boxes.iter_mut() {
                         let estimated_current_server_tick = self.server_tick_on_join_ack.saturating_add(
-                            (self.client_current_time_ms / super::server::SERVER_TICK_INTERVAL_MS) // Assuming SERVER_TICK_INTERVAL_MS is from server_runner
+                            self.client_current_time_ms / super::server::SERVER_TICK_INTERVAL_MS
                         );
                         let target_interp_server_tick = estimated_current_server_tick.saturating_sub(
                             INTERPOLATION_DELAY_MS / super::server::SERVER_TICK_INTERVAL_MS
                         );
 
-                        // get_interpolated_state handles clamping and single-snapshot cases.
-                        // It returns None only if the buffer is truly empty.
                         if let Some(interp_state) = remote_box.snapshot_buffer.get_interpolated_state(target_interp_server_tick) {
                             remote_box.current_display_state = interp_state;
                         } else {
-                            // This means buffer is empty. current_display_state remains as is or could be set to a default "unknown" state.
-                            // For simplicity, we just don't update it if buffer is empty.
+                            // Buffer empty: keep showing the last known state.
                             tracing::trace!("[{}] Remote box {}: Snapshot buffer empty, cannot get interpolated state.", self.client_name, id);
                         }
                     }
 
-              // --- C. "Render" ---
               self.render_state();
           }
 
-          // --- D. Receive Messages from Server ---
-          Some(server_msg_package) = self.from_server_rx.recv() => {
-              // info!("[{}] Received from server: {:?}", self.client_name, server_msg_package);
+          Ok(server_msg_package) = self.from_server_rx.recv() => {
               match server_msg_package {
                   SessionMessage::Ops { from: _, ops } => {
                       for op in ops {
                           self.handle_server_op(op);
                       }
                   }
-                  SessionMessage::StateData { from: _, data } => {
-                      // This example server sends initial state via SC_JoinAck op, not full snapshot this way.
-                      // If it did send snapshot for resync:
-                      // let snapshot_payload: CspSnapshotPayload = serde_json::from_slice(&data.payload).unwrap();
-                      // self.handle_full_snapshot(snapshot_payload);
+                  SessionMessage::StateData { from: _, data: _ } => {
+                      // This server sends initial state as an SC_JoinAck op instead.
                       warn!("[{}] Received StateData, not handled in this simple client.", self.client_name);
                   }
               }
@@ -291,15 +234,10 @@ impl ClientApp {
         self.my_player_id = Some(your_id);
         self.server_tick_on_join_ack = server_tick;
         self.client_current_time_ms = 0; // Reset client perception of time relative to server join tick.
-                                         // Or better, try to sync client_current_time_ms with server_tick.
-                                         // For now, server_tick from JoinAck is our baseline.
 
         for (id, box_state) in initial_boxes {
           if Some(id) == self.my_player_id {
             self.predicted_box = Some(PredictedEntity::<BoxState, MoveInput>::new(box_state));
-            // Note: PredictedEntity generic over MoveInput, not GameOp.
-            // This requires apply_local_input_and_predict to take MoveInput.
-            // And ClientInputBuffer<MoveInput, BoxState>. Let's adjust.
           } else {
             let mut sb = SnapshotBuffer::new(REMOTE_SNAPSHOT_BUFFER_SIZE);
             sb.add_snapshot(server_tick, box_state); // Prime with initial state
@@ -493,9 +431,8 @@ fn input_to_velocity_vector(input: &MoveInput) -> Vec2 {
 pub async fn run_client(
   client_name: String,
   // These are the "network" channels for this specific client.
-  // In a real app, these would be set up by the WebSocket/TCP connection logic.
-  to_server_tx: mpsc::Sender<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>,
-  from_server_rx: mpsc::Receiver<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>,
+  to_server_tx: mpsc::BoundedAsyncSender<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>,
+  from_server_rx: mpsc::BoundedAsyncReceiver<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
   info!("[{}] Client task starting.", client_name);
   let mut app = ClientApp::new(client_name.clone(), to_server_tx, from_server_rx).await;

@@ -1,44 +1,56 @@
-# Plaza: A Foundation for Real-Time Shared State
+# Plaza: Server-Authoritative Shared State for Real-Time Rust Games & Apps
 
-**License:** Mozilla Public License 2.0 (MPL-2.0)
-**Status:** Experimental
+[![crates.io](https://img.shields.io/crates/v/plaza.svg)](https://crates.io/crates/plaza) [![License: MPL-2.0](https://img.shields.io/badge/License-MPL%202.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
 
-Plaza is a server-side foundation for building real-time, multi-user applications where shared state is central. It provides a structured approach to managing concurrent interactions and state synchronization.
+**Plaza** is a foundation for applications where many people change one piece of state at once: multiplayer games, collaborative editors, shared whiteboards.
 
-## Core Idea
+One controller owns the state and is the only thing that mutates it, applying one operation at a time, so your rules need no locks and there is never a question of which version is real.
 
-Plaza revolves around a **server-authoritative state model** where all changes are driven by discrete **operations (Ops)**. This ensures consistency and provides a clear history of state evolution. An application defines its own:
+Every change is an operation: a value, not a write. That makes it something you can validate, reject, broadcast, log, replay, or predict on the client before the server confirms it.
 
-1.  **Shared State (`StateType`):** The data your application manages.
-2.  **Operations (`Op`):** The actions that can modify the state.
-3.  **Logic (`StateLogic`):** The rules dictating how Ops transform the StateType.
+Each client's snapshot is built *for that client*, so a card game showing every player their own hand and only the count of everyone else's is the ordinary case rather than something bolted on.
 
-A central **Controller** orchestrates these components, processing Ops from connected users (via a **Session** abstraction) and managing **Snapshots** for efficient state synchronization.
+***Building blocks, not a framework. Take what fits.***
 
-## Philosophy
+## Project Status: Experimental ⚠️
 
-*   **Foundational & Unopinionated:** Plaza offers core building blocks, not a restrictive framework. You build *with* Plaza, not *in* Plaza.
-*   **Decoupled by Design:** Encourages separation of state, logic, and networking.
-*   **Focus on Server-Side:** Provides tools for the backend of your real-time application.
+The API changes, and breaking changes land without ceremony while the shape settles. It has no production users yet.
 
-## Potential Building Blocks
+Where a decision belongs to your application (how long a disconnected player keeps their seat, how state is versioned, what a player may see), Plaza provides the bookkeeping and leaves the decision to you. Anything it does provide can be swapped for your own.
 
-Beyond its core, the Plaza ecosystem aims to explore and provide optional, reusable components and patterns, such as:
+## Structure
 
-*   **Time Management:** Schedulers for timed events and game ticks.
-*   **State Organization:** Finite State Machines (FSMs) for managing complex states.
-*   **Multi-Instance Support (e.g., Lobbies/Rooms):** Standardized data payloads and example architectures for managing multiple concurrent game sessions or collaborative workspaces on a single server.
-*   **Networking Patterns:** Server-side utilities to support client-side prediction, reconciliation, and lag compensation techniques.
-*   **Reusable Session Adapters:** Implementations for common network transports (e.g., WebSockets).
+*   `core/`: The main `plaza` library, the controller loop and the traits you implement. See [`core/README.md`](core/README.md) for installation, usage, and a complete program.
+*   `session/`: Real transports: actix-web WebSockets and length-delimited TCP, with a pluggable wire format. See [`session/README.md`](session/README.md).
+*   `lobby/`: Rooms on a single server: create, list, join, reap. See [`lobby/README.md`](lobby/README.md).
+*   `client_utils/`: The client side: prediction, reconciliation, interpolation, correction smoothing. No server dependencies, so it suits wasm and engine plugins. See [`client_utils/README.md`](client_utils/README.md).
+*   `server_utils/`: The pure server-side counterpart: historical state rewind for lag compensation. Also zero-dependency and wasm-safe, and shares `client_utils`'s interpolation traits. See [`server_utils/README.md`](server_utils/README.md).
+*   `wire/`: The `WireCodec` trait shared by a server and its clients, kept runtime-free. See [`wire/README.md`](wire/README.md).
 
-## Target Applications
+Each crate carries an `API_REFERENCE.md` documenting its full public surface.
 
-Plaza is being explored for applications like:
+## Getting Started
 
-*   Multiplayer games (turn-based, simple real-time).
-*   Real-time collaborative tools (shared editors, whiteboards).
-*   Any system requiring synchronized shared state among multiple users.
+Please refer to **[`core/README.md`](core/README.md)** for installation, the four type parameters everything is generic over, and a complete runnable program.
 
-## Current Status & Contributing
+## Examples
 
-Plaza is currently **experimental**. Its APIs and internal architecture are subject to change. We welcome discussion, feedback, and contributions as we explore its capabilities and refine its design. The primary implementation is in Rust, but the core concepts are language-agnostic.
+| Example | Shows |
+|---|---|
+| [`shared-counter`](examples/shared-counter/) | The smallest complete application. |
+| [`pong`](examples/pong/) | Real WebSockets, 60Hz simulation. Two browser tabs to play. |
+| [`whack_a_mole`](examples/whack_a_mole/) | A scheduler-driven game loop with scoring. |
+| [`ability_cooldowns`](examples/ability_cooldowns/) | Scheduled events that expire. |
+| [`timed_debuff`](examples/timed_debuff/) | A callback scheduler undoing an effect on a timer. |
+| [`typing_indicator`](examples/typing_indicator/) | Game-time timeouts that reset on activity. |
+| [`card_table`](examples/card_table/) | Turns, rounds, and phases, with hidden information: each player sees only their own cards. |
+| [`csp_net_example`](examples/csp_net_example/) | Client-side prediction and server reconciliation over a simulated network. |
+| [`netcode_playground`](examples/netcode_playground/) | The same, made interactive in the browser: drag the box, crank the latency, toggle each mechanism off to see it break. Also interpolation and lag compensation. See its [README](examples/netcode_playground/README.md). |
+
+```sh
+cargo run -p plaza-example-shared-counter
+```
+
+## License
+
+`plaza` is licensed under the Mozilla Public License Version 2.0 (MPL-2.0). You are free to use, modify, and distribute it under the terms of the MPL-2.0, which requires that modifications to MPL-licensed files be made available under the same license.

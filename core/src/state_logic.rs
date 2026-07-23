@@ -1,51 +1,129 @@
-// plaza/src/state_logic.rs
 use crate::agent::{Agent, AgentId};
-use crate::error::StateLogicError; // Assuming you might want to return a specific error type
-use crate::session::TargetedOp; // We'll define this in session.rs soon
+use crate::session::TargetedOp;
+use crate::snapshot::SnapshotContext;
 use async_trait::async_trait;
-use std::fmt::Debug;
 use std::time::Duration;
 
-/// Represents the different kinds of inputs that can drive state changes.
-#[derive(Debug, Clone)] // Op and ID must be Clone + Debug
+pub use crate::error::StateLogicError;
+
+/// What drives a state change.
+#[derive(Debug, Clone)]
 pub enum LogicInput<Op, ID: AgentId> {
   /// Operations initiated by a specific agent.
   AgentOps { source: Agent<ID>, ops: Vec<Op> },
-  /// An indication that a discrete step in time has occurred.
+  /// A discrete step in time.
   TimeStep { delta_time: Duration },
-  // Potentially other system-level inputs in the future:
-  // SystemSignal { name: String, data: serde_json::Value },
+  /// An agent joined, so it can be registered in state. The controller sends the
+  /// joiner a snapshot immediately after this returns.
+  AgentJoined { agent: Agent<ID> },
+  /// An agent left, so it can be cleaned up.
+  AgentLeft { agent_id: ID },
 }
 
-/// Trait for the application's core state manipulation logic.
+/// Asks the controller to re-send state to specific agents.
 ///
-/// This is where the rules of your application/game reside. It defines how
-/// `StateType` is mutated in response to operations (`Op`) or time progression.
+/// Each recipient's snapshot is built for that recipient, so this is how a game
+/// pushes a changed view: a new hand dealt, a phase that reveals information.
+#[derive(Debug, Clone)]
+pub struct SnapshotRequest<ID: AgentId> {
+  pub recipients: Vec<Agent<ID>>,
+  pub context: Option<SnapshotContext>,
+}
+
+impl<ID: AgentId> SnapshotRequest<ID> {
+  /// Re-snapshots these agents with the default (full) context.
+  pub fn to(recipients: Vec<Agent<ID>>) -> Self {
+    Self {
+      recipients,
+      context: None,
+    }
+  }
+
+  /// Re-snapshots these agents under a named perspective.
+  pub fn with_context(recipients: Vec<Agent<ID>>, context: SnapshotContext) -> Self {
+    Self {
+      recipients,
+      context: Some(context),
+    }
+  }
+}
+
+/// What processing an input produced: ops to broadcast, and optionally state to
+/// re-send.
+///
+/// `Vec<TargetedOp>` converts into this, so logic that only broadcasts ops ends
+/// with `Ok(ops.into())`.
+#[derive(Debug)]
+pub struct LogicOutput<Op, ID: AgentId> {
+  /// Operations to send to clients.
+  pub ops: Vec<TargetedOp<Op, ID>>,
+  /// Agents whose whole view changed and should be re-snapshotted.
+  ///
+  /// Applied after `ops`, so clients see the ops that explain the change before
+  /// the state that reflects it.
+  pub snapshots: Vec<SnapshotRequest<ID>>,
+}
+
+impl<Op, ID: AgentId> LogicOutput<Op, ID> {
+  /// No ops, no snapshots.
+  pub fn none() -> Self {
+    Self {
+      ops: Vec::new(),
+      snapshots: Vec::new(),
+    }
+  }
+
+  /// Just broadcast these ops.
+  pub fn ops(ops: Vec<TargetedOp<Op, ID>>) -> Self {
+    Self {
+      ops,
+      snapshots: Vec::new(),
+    }
+  }
+
+  /// Also re-snapshot these agents, each getting a view built for them.
+  pub fn and_snapshot(mut self, request: SnapshotRequest<ID>) -> Self {
+    self.snapshots.push(request);
+    self
+  }
+}
+
+impl<Op, ID: AgentId> Default for LogicOutput<Op, ID> {
+  fn default() -> Self {
+    Self::none()
+  }
+}
+
+impl<Op, ID: AgentId> From<Vec<TargetedOp<Op, ID>>> for LogicOutput<Op, ID> {
+  fn from(ops: Vec<TargetedOp<Op, ID>>) -> Self {
+    Self::ops(ops)
+  }
+}
+
+/// The rules of your application: how `Op`s change `StateType`.
+///
+/// The only place state is mutated. The controller calls this one input at a
+/// time from a single task, so no locking is needed inside.
 #[async_trait]
 pub trait StateLogic<Op, ID: AgentId, StateType>: Send + Sync + 'static {
-  // It's Send + Sync + 'static because the StateController will hold it,
-  // potentially an Arc<SL>, and operate in an async context.
-
-  /// Processes a given input, mutates the state, and returns operations to be broadcast.
-  /// This single method is the entry point for all state changes managed by Plaza.
+  /// Applies `input` to `current_state` and reports what should follow.
   ///
-  /// # Arguments
-  /// * `current_state`: A mutable reference to the application's shared state data.
-  ///                    Implementations will modify this directly.
-  /// * `input`: The stimulus for this processing cycle, either agent-initiated operations
-  ///            or a time step.
+  /// Return ops to broadcast, plus snapshot requests when a change alters what
+  /// players may see:
   ///
-  /// # Returns
-  /// A `Result` containing either:
-  /// * `Ok(Vec<TargetedOp<Op, ID>>)`: A vector of operations that should be
-  ///   broadcast to clients as a result of processing this input. An empty vector
-  ///   means the input was processed successfully but no operations need to be broadcast.
-  /// * `Err(StateLogicError)`: An error indicating that the input could not be processed
-  ///   successfully (e.g., invalid operation, precondition failed). The `StateController`
-  ///   will typically log this error and may choose to notify the originating agent if applicable.
+  /// ```ignore
+  /// // Ops only.
+  /// Ok(ops.into())
+  ///
+  /// // A new round: tell everyone, then give each player their own new hand.
+  /// Ok(LogicOutput::ops(ops).and_snapshot(SnapshotRequest::to(state.players())))
+  /// ```
+  ///
+  /// `Err` means the input could not be applied; the controller logs it and
+  /// carries on, so a rejected op does not stop the loop.
   async fn process_input(
-    &self, // Takes &self so implementations can have their own configuration/dependencies
+    &self,
     current_state: &mut StateType,
     input: LogicInput<Op, ID>,
-  ) -> Result<Vec<TargetedOp<Op, ID>>, StateLogicError>;
+  ) -> Result<LogicOutput<Op, ID>, StateLogicError>;
 }

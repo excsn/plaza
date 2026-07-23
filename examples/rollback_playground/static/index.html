@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Plaza Rollback Playground</title>
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+    /* Fill the viewport; macroquad sizes its drawing buffer to the canvas. */
+    canvas#glcanvas { display: block; width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+  <!-- macroquad renders into this canvas; the id is required by the loader. -->
+  <canvas id="glcanvas" tabindex="1"></canvas>
+  <!-- Vendored macroquad/miniquad JS loader; defines load(). -->
+  <script src="mq_js_bundle.js"></script>
+  <script>load("rollback_playground.wasm");</script>
+</body>
+</html>

@@ -1,15 +1,12 @@
-// plaza-lobby/src/op_payloads.rs
 use super::types::{GameMode, RoomId};
-use plaza::agent::AgentId; // Path to AgentId from plaza_core
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
-use std::time::Duration; // Use local RoomId, GameMode
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-// CustomGameSettings needs to be defined by the application using these payloads
+
 pub struct RoomSettings<CustomGameSettings>
 where
-  CustomGameSettings: Clone + Debug + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
+  CustomGameSettings: Clone + Debug,
 {
   pub name: Option<String>, // Optional, can be auto-generated if None
   pub game_mode: GameMode,
@@ -22,7 +19,7 @@ where
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RoomMetadata<CustomGameSettings>
 where
-  CustomGameSettings: Clone + Debug + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
+  CustomGameSettings: Clone + Debug,
 {
   pub room_id: RoomId,
   pub name: String,
@@ -31,17 +28,14 @@ where
   pub max_players: u32,
   pub has_password: bool, // So client knows to prompt if needed
   pub custom_game_settings_summary: CustomGameSettings, // Or a summarized version
-                          // pub created_at: i64, // Unix timestamp
-                          // pub host_id: Option<SomeAgentIdType>, // If applicable
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CreateRoomRequestPayload<CustomGameSettings>
 where
-  CustomGameSettings: Clone + Debug + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
+  CustomGameSettings: Clone + Debug,
 {
   pub settings: RoomSettings<CustomGameSettings>,
-  // pub requested_by_agent_id: LobbyAgentID, // Sent by a specific agent
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -49,15 +43,11 @@ pub struct RoomFilters {
   pub game_mode: Option<GameMode>,
   pub exclude_full: Option<bool>, // true to exclude, None or false to include
   pub exclude_private_if_no_password_known: Option<bool>,
-  // pub min_player_slots_available: Option<u32>,
-  // pub region_filter: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ListRoomsRequestPayload {
   pub filters: Option<RoomFilters>,
-  // pub page_size: Option<u32>,
-  // pub page_token: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -71,7 +61,7 @@ pub struct JoinRoomRequestPayload {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RoomCreatedNoticePayload<CustomGameSettings>
 where
-  CustomGameSettings: Clone + Debug + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
+  CustomGameSettings: Clone + Debug,
 {
   pub metadata: RoomMetadata<CustomGameSettings>,
 }
@@ -79,10 +69,9 @@ where
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RoomListResponsePayload<CustomGameSettings>
 where
-  CustomGameSettings: Clone + Debug + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
+  CustomGameSettings: Clone + Debug,
 {
   pub rooms: Vec<RoomMetadata<CustomGameSettings>>,
-  // pub next_page_token: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -106,7 +95,7 @@ pub struct RoomClosedNoticePayload {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RoomMetadataUpdatedNoticePayload<CustomGameSettings>
 where
-  CustomGameSettings: Clone + Debug + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
+  CustomGameSettings: Clone + Debug,
 {
   pub updated_metadata: RoomMetadata<CustomGameSettings>,
 }

@@ -1,0 +1,13 @@
+[package]
+name = "plaza_example_card_table"
+version = "0.1.0"
+edition = { workspace = true }
+publish = false # It's an example
+
+[dependencies]
+plaza = { path = "../../core" }
+tokio = { workspace = true }
+serde = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

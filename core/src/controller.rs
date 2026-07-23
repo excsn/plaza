@@ -1,21 +1,24 @@
-// plaza/src/controller.rs
 use crate::agent::{Agent, AgentId};
-use crate::error::{PlazaError, SessionError, SnapshotError, StateLogicError};
-use crate::session::{ConnectionId, MessageTarget, Session, SessionMessage};
-use crate::snapshot::{SnapshotContext, SnapshotData, SnapshotProvider};
+use crate::error::PlazaError;
+use crate::session::{MessageTarget, PresenceEvent, Session, SessionMessage};
+use crate::snapshot::{SnapshotContext, SnapshotProvider};
 use crate::state_logic::{LogicInput, StateLogic};
 
 use std::fmt::Debug;
 use std::marker::PhantomData;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::sync::mpsc;
-use tokio::sync::oneshot;
+use fibre::mpsc;
+use fibre::oneshot;
 use tracing::{debug, error, info, instrument, warn};
 
-/// Commands that can be sent to the `StateController` actor.
+/// Commands accepted by the `StateController` actor.
+///
+/// Agent joins and leaves arrive two ways: pushed here by an owner (the lobby
+/// does this when a player disconnects), or observed directly from the
+/// `Session`'s notification channels. Both funnel into the same handling.
 #[derive(Debug)]
-pub enum ControllerCommand<Op, ID: AgentId, StateType, QueryResponse> {
-  // ... (ControllerCommand enum remains the same)
+pub enum ControllerCommand<Op, ID: AgentId, StateType> {
   SubmitAgentOps {
     agent: Agent<ID>,
     ops: Vec<Op>,
@@ -28,373 +31,218 @@ pub enum ControllerCommand<Op, ID: AgentId, StateType, QueryResponse> {
     delta_time: std::time::Duration,
   },
   HandleAgentJoined {
-    // These might be less used if controller relies on session events
     agent: Agent<ID>,
   },
   HandleAgentLeft {
-    // These might be less used
     agent_id: ID,
   },
   QueryCurrentState {
     response_tx: oneshot::Sender<StateType>,
   },
-  QueryCustom {
-    query_tag: String,
-    response_tx: oneshot::Sender<Result<QueryResponse, PlazaError<ID>>>,
+  /// Re-sends state to specific agents, each getting a snapshot built for them.
+  ///
+  /// Joining already triggers this for the joiner; use this for everything after:
+  /// a client asking to resync, a phase change that alters what players may see,
+  /// or a spectator switching views.
+  ///
+  /// Recipients are explicit because the roster lives in your state, not in the
+  /// controller: pass whoever should be updated:
+  ///
+  /// ```ignore
+  /// tx.send(ControllerCommand::SendSnapshots {
+  ///   recipients: game.seated_players(),
+  ///   context: Some(SnapshotContext::ForPerspective("player".into())),
+  /// }).await?;
+  /// ```
+  SendSnapshots {
+    recipients: Vec<Agent<ID>>,
+    context: Option<SnapshotContext>,
   },
   Shutdown,
 }
 
-// --- Builder Typestate Pattern ---
-
-/// Initial state of the builder. No core types or components are defined yet.
-#[derive(Debug)]
-pub struct StateControllerBuilder<QueryResponse = ()>
+/// Assembles a [`StateController`] from its four components.
+///
+/// All components are required, so they are constructor arguments and
+/// [`build`](Self::build) cannot fail:
+///
+/// ```ignore
+/// let (tx, controller) = StateControllerBuilder::new(logic, session, snapshotter, initial_state)
+///   .command_buffer(64)
+///   .build();
+/// tokio::spawn(controller.run());
+/// ```
+pub struct StateControllerBuilder<Op, ID, StateType, SnapshotPayload, SL, Sess, SP>
 where
-  QueryResponse: Debug + Send + 'static,
-{
-  buffer_size: usize,
-  _qr_phantom: PhantomData<QueryResponse>,
-}
-
-impl Default for StateControllerBuilder<()> {
-  fn default() -> Self {
-    StateControllerBuilder::<()>::new()
-  }
-}
-
-impl StateControllerBuilder<()> {
-  /// Starts building a `StateController`.
-  pub fn new() -> Self {
-    Self {
-      buffer_size: 32,
-      _qr_phantom: PhantomData,
-    }
-  }
-}
-
-impl<QR> StateControllerBuilder<QR>
-where
-  QR: Debug + Send + 'static,
-{
-  /// Sets the command buffer size for the controller's MPSC channel.
-  pub fn command_buffer(mut self, size: usize) -> Self {
-    self.buffer_size = size;
-    self
-  }
-
-  /// Sets the type for custom query responses.
-  pub fn with_query_response_type<NewQR: Debug + Send + 'static>(self) -> StateControllerBuilder<NewQR> {
-    StateControllerBuilder {
-      buffer_size: self.buffer_size,
-      _qr_phantom: PhantomData,
-    }
-  }
-
-  /// Sets the operation handler (`StateLogic` implementation).
-  /// This step defines the `Op`, `ID`, and `StateType` for the controller.
-  pub fn op_handler<Op, ID, StateType, SL>(self, op_handler: Arc<SL>) -> BuilderWithLogic<Op, ID, StateType, SL, QR>
-  where
-    ID: AgentId + 'static,
-    Op: Debug + Clone + Send + 'static, // Sync will be added where SL/Sess/SP requires it.
-    StateType: Clone + Send + Sync + 'static, // StateType must be Sync.
-    SL: StateLogic<Op, ID, StateType> + Send + Sync + 'static,
-  {
-    BuilderWithLogic {
-      op_handler,
-      initial_state: None, // Initial state not set yet
-      buffer_size: self.buffer_size,
-      _qr_phantom: self._qr_phantom,
-      _phantom_op_id_state: PhantomData,
-    }
-  }
-}
-
-/// Builder state after the `StateLogic` (op_handler) has been provided.
-/// `Op`, `ID`, and `StateType` are now defined.
-#[derive(Debug)]
-pub struct BuilderWithLogic<Op, ID, StateType, SL, QueryResponse>
-where
-  ID: AgentId + 'static,
-  Op: Debug + Clone + Send + 'static,
-  StateType: Clone + Send + Sync + 'static,
-  SL: StateLogic<Op, ID, StateType> + Send + Sync + 'static,
-  QueryResponse: Debug + Send + 'static,
-{
-  op_handler: Arc<SL>,
-  initial_state: Option<StateType>,
-  buffer_size: usize,
-  _qr_phantom: PhantomData<QueryResponse>,
-  _phantom_op_id_state: PhantomData<(Op, ID)>, // StateType captured by initial_state field
-}
-
-impl<Op, ID, StateType, SL, QR> BuilderWithLogic<Op, ID, StateType, SL, QR>
-where
-  ID: AgentId + 'static,
-  Op: Debug + Clone + Send + 'static, // Traits for specific components will add Sync if needed
-  StateType: Clone + Send + Sync + 'static, // StateType must be Sync for controller.
-  SL: StateLogic<Op, ID, StateType> + Send + Sync + 'static,
-  QR: Debug + Send + 'static,
-{
-  /// Sets the initial state for the controller.
-  /// `StateType` must match the one defined by the `StateLogic` implementation.
-  pub fn initial_state(mut self, state: StateType) -> Self {
-    self.initial_state = Some(state);
-    self
-  }
-
-  /// Sets the command buffer size.
-  pub fn command_buffer(mut self, size: usize) -> Self {
-    self.buffer_size = size;
-    self
-  }
-
-  /// Sets the type for custom query responses.
-  pub fn with_query_response_type<NewQR: Debug + Send + 'static>(
-    self,
-  ) -> BuilderWithLogic<Op, ID, StateType, SL, NewQR> {
-    BuilderWithLogic {
-      op_handler: self.op_handler,
-      initial_state: self.initial_state,
-      buffer_size: self.buffer_size,
-      _qr_phantom: PhantomData,
-      _phantom_op_id_state: self._phantom_op_id_state,
-    }
-  }
-
-  /// Sets the session manager (`Session` implementation).
-  /// This step defines `SnapshotPayload`. `Op` and `ID` must match those from `StateLogic`.
-  pub fn session<SnapshotPayload, Sess>(
-    self,
-    session: Arc<Sess>,
-  ) -> BuilderWithLogicAndSession<Op, ID, StateType, SnapshotPayload, SL, Sess, QR>
-  where
-    SnapshotPayload: Debug + Clone + Send + 'static, // Sync added by SP
-    // `Sess` uses the `Op` and `ID` established by `SL`.
-    Sess: Session<Op, ID, SnapshotPayload> + Send + Sync + 'static,
-  {
-    BuilderWithLogicAndSession {
-      op_handler: self.op_handler,
-      initial_state: self.initial_state,
-      session,
-      buffer_size: self.buffer_size,
-      _qr_phantom: self._qr_phantom,
-      _phantom_snapshot_payload: PhantomData,
-    }
-  }
-}
-
-/// Builder state after `StateLogic` and `Session` have been provided.
-/// `SnapshotPayload` is now also defined.
-#[derive(Debug)]
-pub struct BuilderWithLogicAndSession<Op, ID, StateType, SnapshotPayload, SL, Sess, QueryResponse>
-where
-  ID: AgentId + 'static,
-  Op: Debug + Clone + Send + 'static,
-  StateType: Clone + Send + Sync + 'static,
-  SnapshotPayload: Debug + Clone + Send + 'static,
-  SL: StateLogic<Op, ID, StateType> + Send + Sync + 'static,
-  Sess: Session<Op, ID, SnapshotPayload> + Send + Sync + 'static,
-  QueryResponse: Debug + Send + 'static,
-{
-  op_handler: Arc<SL>,
-  initial_state: Option<StateType>,
-  session: Arc<Sess>,
-  buffer_size: usize,
-  _qr_phantom: PhantomData<QueryResponse>,
-  _phantom_snapshot_payload: PhantomData<(Op, ID, SnapshotPayload)>,
-}
-
-impl<Op, ID, StateType, SnapshotPayload, SL, Sess, QR>
-  BuilderWithLogicAndSession<Op, ID, StateType, SnapshotPayload, SL, Sess, QR>
-where
-  ID: AgentId + Debug + Clone + Send + Sync + 'static, // Full bounds from original
-  Op: Debug + Clone + Send + Sync + 'static,           // Full bounds from original
-  StateType: Clone + Debug + Send + Sync + 'static,    // Full bounds from original
-  SnapshotPayload: Debug + Clone + Send + Sync + 'static, // Full bounds from original
-  SL: StateLogic<Op, ID, StateType> + Send + Sync + 'static,
-  Sess: Session<Op, ID, SnapshotPayload> + Send + Sync + 'static,
-  QR: Debug + Send + 'static,
-{
-  // `initial_state` could be set here again if desired, or only in BuilderWithLogic.
-  // Forcing it earlier ensures StateType is set before SP might need it.
-
-  /// Sets the command buffer size.
-  pub fn command_buffer(mut self, size: usize) -> Self {
-    self.buffer_size = size;
-    self
-  }
-
-  /// Sets the type for custom query responses.
-  pub fn with_query_response_type<NewQR: Debug + Send + 'static>(
-    self,
-  ) -> BuilderWithLogicAndSession<Op, ID, StateType, SnapshotPayload, SL, Sess, NewQR> {
-    BuilderWithLogicAndSession {
-      op_handler: self.op_handler,
-      initial_state: self.initial_state,
-      session: self.session,
-      buffer_size: self.buffer_size,
-      _qr_phantom: PhantomData,
-      _phantom_snapshot_payload: self._phantom_snapshot_payload,
-    }
-  }
-
-  /// Sets the snapshot provider (`SnapshotProvider` implementation).
-  /// `ID`, `StateType`, and `SnapshotPayload` must match established types.
-  pub fn snapshot_provider<SP>(
-    self,
-    snapshot_provider: Arc<SP>,
-  ) -> FinalBuilder<Op, ID, StateType, SnapshotPayload, SL, Sess, SP, QR>
-  where
-    // `SP` uses `ID`, `StateType`, `SnapshotPayload` established earlier.
-    SP: SnapshotProvider<ID, StateType, SnapshotPayload> + Send + Sync + 'static,
-  {
-    FinalBuilder {
-      op_handler: self.op_handler,
-      initial_state: self.initial_state, // Carried over
-      session: self.session,
-      snapshot_provider,
-      buffer_size: self.buffer_size,
-      _qr_phantom: PhantomData,
-    }
-  }
-}
-
-/// Final builder state where all components are provided. Ready to build.
-#[derive(Debug)]
-pub struct FinalBuilder<Op, ID, StateType, SnapshotPayload, SL, Sess, SP, QueryResponse>
-where
-  ID: AgentId + Debug + Clone + Send + Sync + 'static,
+  ID: AgentId,
   Op: Debug + Clone + Send + Sync + 'static,
   StateType: Clone + Debug + Send + Sync + 'static,
   SnapshotPayload: Debug + Clone + Send + Sync + 'static,
-  SL: StateLogic<Op, ID, StateType> + Send + Sync + 'static,
-  Sess: Session<Op, ID, SnapshotPayload> + Send + Sync + 'static,
-  SP: SnapshotProvider<ID, StateType, SnapshotPayload> + Send + Sync + 'static,
-  QueryResponse: Debug + Send + 'static,
+  SL: StateLogic<Op, ID, StateType>,
+  Sess: Session<Op, ID, SnapshotPayload>,
+  SP: SnapshotProvider<ID, StateType, SnapshotPayload>,
 {
   op_handler: Arc<SL>,
-  initial_state: Option<StateType>,
   session: Arc<Sess>,
   snapshot_provider: Arc<SP>,
+  initial_state: StateType,
   buffer_size: usize,
-  _qr_phantom: PhantomData<(Op, ID, SnapshotPayload, QueryResponse)>,
+  join_context: Option<SnapshotContext>,
+  _phantom: PhantomData<fn() -> (Op, ID, SnapshotPayload)>,
 }
 
-impl<Op, ID, StateType, SnapshotPayload, SL, Sess, SP, QR>
-  FinalBuilder<Op, ID, StateType, SnapshotPayload, SL, Sess, SP, QR>
+impl<Op, ID, StateType, SnapshotPayload, SL, Sess, SP>
+  StateControllerBuilder<Op, ID, StateType, SnapshotPayload, SL, Sess, SP>
 where
-  ID: AgentId + Debug + Clone + Send + Sync + 'static,
+  ID: AgentId,
   Op: Debug + Clone + Send + Sync + 'static,
   StateType: Clone + Debug + Send + Sync + 'static,
   SnapshotPayload: Debug + Clone + Send + Sync + 'static,
-  SL: StateLogic<Op, ID, StateType> + Send + Sync + 'static,
-  Sess: Session<Op, ID, SnapshotPayload> + Send + Sync + 'static,
-  SP: SnapshotProvider<ID, StateType, SnapshotPayload> + Send + Sync + 'static,
-  QR: Debug + Send + 'static,
+  SL: StateLogic<Op, ID, StateType>,
+  Sess: Session<Op, ID, SnapshotPayload>,
+  SP: SnapshotProvider<ID, StateType, SnapshotPayload>,
 {
-  // `initial_state` must have been set before this stage or now.
-  // If it wasn't set in BuilderWithLogic, this method would be essential here.
-  // Forcing it in BuilderWithLogic ensures it's available for SP.
-  // If initial_state is *required*, then it shouldn't be Option here.
+  /// Starts a builder with everything a controller needs.
+  pub fn new(op_handler: Arc<SL>, session: Arc<Sess>, snapshot_provider: Arc<SP>, initial_state: StateType) -> Self {
+    Self {
+      op_handler,
+      session,
+      snapshot_provider,
+      initial_state,
+      buffer_size: DEFAULT_COMMAND_BUFFER,
+      join_context: Some(SnapshotContext::Full),
+      _phantom: PhantomData,
+    }
+  }
 
-  /// Sets the command buffer size.
+  /// Sets the [`SnapshotContext`] used for the snapshot a joining agent receives.
+  ///
+  /// Defaults to `Full`. Set a perspective here when clients should join into a
+  /// named view rather than the whole state:
+  ///
+  /// ```ignore
+  /// .snapshot_context_on_join(Some(SnapshotContext::ForPerspective("player".into())))
+  /// ```
+  pub fn snapshot_context_on_join(mut self, context: Option<SnapshotContext>) -> Self {
+    self.join_context = context;
+    self
+  }
+
+  /// Sets the command channel depth (default [`DEFAULT_COMMAND_BUFFER`]).
   pub fn command_buffer(mut self, size: usize) -> Self {
     self.buffer_size = size;
     self
   }
 
-  /// (Optional) Sets the initial state if not already set.
-  /// Typically set earlier via `BuilderWithLogic::initial_state`.
-  pub fn initial_state(mut self, state: StateType) -> Self {
-    self.initial_state = Some(state);
-    self
-  }
-
-  /// Sets the type for custom query responses.
-  pub fn with_query_response_type<NewQR: Debug + Send + 'static>(
-    self,
-  ) -> FinalBuilder<Op, ID, StateType, SnapshotPayload, SL, Sess, SP, NewQR> {
-    FinalBuilder {
-      op_handler: self.op_handler,
-      initial_state: self.initial_state,
-      session: self.session,
-      snapshot_provider: self.snapshot_provider,
-      buffer_size: self.buffer_size,
-      _qr_phantom: PhantomData,
-    }
-  }
-
-  /// Builds the `StateController` and its command sender.
-  /// Requires `initial_state` to have been set.
+  /// Builds the controller and the sender used to command it.
   pub fn build(
     self,
-  ) -> Result<
-    (
-      mpsc::Sender<ControllerCommand<Op, ID, StateType, QR>>,
-      StateController<Op, ID, StateType, SnapshotPayload, QR, SL, Sess, SP>,
-    ),
-    String, // TODO: Dedicated BuilderError enum
-  > {
-    let initial_state = self
-      .initial_state
-      .ok_or_else(|| "Builder error: Initial state not set".to_string())?;
-
-    Ok(StateController::new(
-      // StateController::new is now pub(crate)
-      initial_state,
+  ) -> (
+    CommandSender<Op, ID, StateType>,
+    StateController<Op, ID, StateType, SnapshotPayload, SL, Sess, SP>,
+  ) {
+    StateController::new(
+      self.initial_state,
       self.op_handler,
       self.session,
       self.snapshot_provider,
       self.buffer_size,
-    ))
+      self.join_context,
+    )
   }
 }
 
-/// The `StateController` orchestrates the interaction between `StateLogic`, `Session`,
-/// and `SnapshotProvider` to manage the shared application state.
-/// It runs as an actor, processing commands sequentially from an MPSC channel.
-pub struct StateController<Op, ID, StateType, SnapshotPayload, QueryResponse, SL, Sess, SP>
+/// Default depth of the controller's command channel.
+pub const DEFAULT_COMMAND_BUFFER: usize = 32;
+
+/// The handle used to command a running [`StateController`].
+///
+/// Cloneable: every clone feeds the same controller, so a tick driver, a lobby,
+/// and request handlers can all hold one.
+pub type CommandSender<Op, ID, StateType> = mpsc::BoundedAsyncSender<ControllerCommand<Op, ID, StateType>>;
+
+/// Reasons a [`query_state`] call could not be answered.
+#[derive(Debug, thiserror::Error)]
+pub enum QueryError {
+  #[error("the controller is no longer running")]
+  ControllerGone,
+}
+
+/// Asks a running controller for a copy of its current state.
+///
+/// Wraps the request/response channel dance, so callers don't have to build a
+/// oneshot themselves:
+///
+/// ```ignore
+/// let state = query_state(&tx).await?;
+/// ```
+pub async fn query_state<Op, ID, StateType>(tx: &CommandSender<Op, ID, StateType>) -> Result<StateType, QueryError>
 where
-  ID: AgentId + 'static, // Removed Debug, Clone, Send, Sync from struct def bounds; they are on FinalBuilder
-  Op: Debug + Clone + Send + 'static,
-  StateType: Clone + Send + Sync + 'static,
-  SnapshotPayload: Debug + Clone + Send + 'static,
-  QueryResponse: Debug + Send + 'static,
-  SL: StateLogic<Op, ID, StateType> + Send + Sync + 'static,
-  Sess: Session<Op, ID, SnapshotPayload> + Send + Sync + 'static,
-  SP: SnapshotProvider<ID, StateType, SnapshotPayload> + Send + Sync + 'static,
+  Op: Send + 'static,
+  ID: AgentId,
+  StateType: Send + 'static,
+{
+  let (response_tx, response_rx) = oneshot::oneshot();
+  tx.send(ControllerCommand::QueryCurrentState { response_tx })
+    .await
+    .map_err(|_| QueryError::ControllerGone)?;
+  response_rx.recv().await.map_err(|_| QueryError::ControllerGone)
+}
+
+static NEXT_CONTROLLER_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Orchestrates `StateLogic`, `Session`, and `SnapshotProvider` to manage
+/// shared application state.
+///
+/// Runs as a single-task actor: it owns the state outright and mutates it only
+/// from its own loop, so no locking is needed anywhere in this crate.
+pub struct StateController<Op, ID, StateType, SnapshotPayload, SL, Sess, SP>
+where
+  ID: AgentId,
+  Op: Debug + Clone + Send + Sync + 'static,
+  StateType: Clone + Debug + Send + Sync + 'static,
+  SnapshotPayload: Debug + Clone + Send + Sync + 'static,
+  SL: StateLogic<Op, ID, StateType>,
+  Sess: Session<Op, ID, SnapshotPayload>,
+  SP: SnapshotProvider<ID, StateType, SnapshotPayload>,
 {
   state_data: StateType,
   op_handler: Arc<SL>,
   session: Arc<Sess>,
   snapshot_provider: Arc<SP>,
-  command_rx: mpsc::Receiver<ControllerCommand<Op, ID, StateType, QueryResponse>>,
-  _phantom_snapshot_payload: PhantomData<SnapshotPayload>, // Keep if SnapshotPayload isn't used directly in struct fields
+  command_rx: mpsc::BoundedAsyncReceiver<ControllerCommand<Op, ID, StateType>>,
+  /// Context for the snapshot a joining agent receives.
+  join_context: Option<SnapshotContext>,
+  // Taken at construction, not in `run`: a client connecting between `build()`
+  // and the task's first poll would otherwise be missed and never get a
+  // snapshot. `Option` lets `run` own them while leaving `self` usable.
+  session_presence_rx: Option<mpsc::BoundedAsyncReceiver<PresenceEvent<ID>>>,
+  session_incoming_rx: Option<mpsc::BoundedAsyncReceiver<SessionMessage<Op, ID, SnapshotPayload>>>,
 }
 
-impl<Op, ID, StateType, SnapshotPayload, QueryResponse, SL, Sess, SP>
-  StateController<Op, ID, StateType, SnapshotPayload, QueryResponse, SL, Sess, SP>
+impl<Op, ID, StateType, SnapshotPayload, SL, Sess, SP>
+  StateController<Op, ID, StateType, SnapshotPayload, SL, Sess, SP>
 where
-  ID: AgentId + Debug + Clone + Send + Sync + 'static, // Add full bounds for impl methods
+  ID: AgentId,
   Op: Debug + Clone + Send + Sync + 'static,
   StateType: Clone + Debug + Send + Sync + 'static,
   SnapshotPayload: Debug + Clone + Send + Sync + 'static,
-  QueryResponse: Debug + Send + 'static,
-  SL: StateLogic<Op, ID, StateType> + Send + Sync + 'static,
-  Sess: Session<Op, ID, SnapshotPayload> + Send + Sync + 'static,
-  SP: SnapshotProvider<ID, StateType, SnapshotPayload> + Send + Sync + 'static,
+  SL: StateLogic<Op, ID, StateType>,
+  Sess: Session<Op, ID, SnapshotPayload>,
+  SP: SnapshotProvider<ID, StateType, SnapshotPayload>,
 {
-  #[allow(clippy::too_many_arguments)]
   pub(crate) fn new(
-    // Changed to pub(crate)
     initial_state: StateType,
     op_handler: Arc<SL>,
     session: Arc<Sess>,
     snapshot_provider: Arc<SP>,
     buffer_size: usize,
-  ) -> (mpsc::Sender<ControllerCommand<Op, ID, StateType, QueryResponse>>, Self) {
-    let (command_tx, command_rx) = mpsc::channel(buffer_size);
+    join_context: Option<SnapshotContext>,
+  ) -> (CommandSender<Op, ID, StateType>, Self) {
+    let (command_tx, command_rx) = mpsc::bounded_async(buffer_size);
+
+    let session_presence_rx = session.on_presence_change();
+    let session_incoming_rx = session.subscribe_to_incoming_messages();
 
     let controller = Self {
       state_data: initial_state,
@@ -402,74 +250,61 @@ where
       session,
       snapshot_provider,
       command_rx,
-      _phantom_snapshot_payload: PhantomData,
+      join_context,
+      session_presence_rx: Some(session_presence_rx),
+      session_incoming_rx: Some(session_incoming_rx),
     };
     (command_tx, controller)
   }
 
-  /// Runs the main actor loop for the `StateController`.
-  // ... (run method and other impl methods remain largely the same)
-  #[instrument(name="StateController", skip_all, fields(controller_id = %uuid::Uuid::new_v4()))]
-  pub async fn run(mut self) -> Result<(), PlazaError<ID>> {
+  /// Runs the actor loop, returning the final state when it stops.
+  ///
+  /// Stops on [`Shutdown`](ControllerCommand::Shutdown) or when its channels
+  /// close. Commands already queued when `Shutdown` arrives are processed first,
+  /// so a caller can broadcast a closing message and know it went out:
+  ///
+  /// ```ignore
+  /// tx.send(ControllerCommand::SubmitSystemOps { .. }).await?;  // "server closing"
+  /// tx.send(ControllerCommand::Shutdown).await?;
+  /// let final_state = handle.await??;                           // persist it, or not
+  /// ```
+  ///
+  /// Returning the state rather than persisting it keeps plaza out of your
+  /// storage decisions.
+  #[instrument(name = "StateController", skip_all, fields(controller_id = NEXT_CONTROLLER_ID.fetch_add(1, Ordering::Relaxed)))]
+  pub async fn run(mut self) -> Result<StateType, PlazaError<ID>> {
     info!("StateController actor started.");
 
-    // If subscribing to session events within the run loop:
-    let mut session_join_rx = self.session.on_agent_joined();
-    let mut session_leave_rx = self.session.on_agent_left();
-    let mut session_incoming_ops_rx = self.session.subscribe_to_incoming_messages();
+    // Subscribed at construction, so nothing sent before now was missed. Moved
+    // out here so the loop body keeps full `&mut self` access.
+    let session_presence_rx = self.session_presence_rx.take().expect("run called once");
+    let session_incoming_ops_rx = self.session_incoming_rx.take().expect("run called once");
 
     loop {
       tokio::select! {
-        // biased; // Process commands with higher priority if needed
 
         // Listen for commands sent to the controller
-        Some(command) = self.command_rx.recv() => {
+        Ok(command) = self.command_rx.recv() => {
           debug!(?command, "Received command");
-          match command {
-            ControllerCommand::SubmitAgentOps { agent, ops } => {
-                let input = LogicInput::AgentOps { source: agent, ops };
-                self.handle_logic_input(input).await;
-            }
-            ControllerCommand::SubmitSystemOps { source_description, ops } => {
-                info!(source=%source_description, "Processing system ops");
-                let input = LogicInput::AgentOps { source: Agent::system(), ops }; // System ops use Agent::System
-                self.handle_logic_input(input).await;
-            }
-            ControllerCommand::ProcessTimeStep { delta_time } => {
-                let input = LogicInput::TimeStep { delta_time };
-                self.handle_logic_input(input).await;
-            }
-            ControllerCommand::HandleAgentJoined { agent } => {
-                self.handle_agent_joined_event(&agent).await;
-            }
-            ControllerCommand::HandleAgentLeft { agent_id } => {
-                self.handle_agent_left_event(&agent_id).await;
-            }
-            ControllerCommand::QueryCurrentState { response_tx } => {
-                // Ignore error if receiver dropped; it's not critical for controller
-                let _ = response_tx.send(self.state_data.clone());
-            }
-            ControllerCommand::QueryCustom { query_tag, response_tx } => {
-                warn!(%query_tag, "Custom query received but not implemented in controller.");
-                let _ = response_tx.send(Err(PlazaError::NotImplemented(format!("Custom query: {}", query_tag))));
-            }
-            ControllerCommand::Shutdown => {
-                info!("Shutdown command received. StateController stopping.");
-                break; // Exit the loop
-            }
+          if !self.handle_command(command).await {
+            self.drain_pending_commands().await;
+            info!("StateController stopped.");
+            return Ok(self.state_data);
           }
         }
 
-        // Listen for agents joining the session directly
-        Ok(agent_joined) = session_join_rx.recv() => {
-          debug!(agent_id = ?agent_joined.id(), agent_label = %agent_joined.label(), "Agent joined session (event)");
-          self.handle_agent_joined_event(&agent_joined).await;
-        }
-
-        // Listen for agents leaving the session directly
-        Ok(agent_left_id) = session_leave_rx.recv() => {
-          debug!(?agent_left_id, "Agent left session (event)");
-          self.handle_agent_left_event(&agent_left_id).await;
+        // Arrivals and departures, in the order the session saw them.
+        Ok(presence) = session_presence_rx.recv() => {
+          match presence {
+            PresenceEvent::Joined(agent) => {
+              debug!(agent_id = ?agent.id(), agent_label = %agent.label(), "Agent joined session");
+              self.handle_agent_joined_event(&agent).await;
+            }
+            PresenceEvent::Left(agent_id) => {
+              debug!(?agent_id, "Agent left session");
+              self.handle_agent_left_event(&agent_id).await;
+            }
+          }
         }
 
         // Listen for incoming ops from the session directly
@@ -487,11 +322,68 @@ where
         }
         else => {
           info!("Controller's command or session event channel closed. Shutting down.");
-          break; // Exit loop if a channel closes
+          return Ok(self.state_data);
         }
       }
     }
-    Ok(())
+  }
+
+  /// Handles one command. Returns whether the loop should keep running.
+  async fn handle_command(&mut self, command: ControllerCommand<Op, ID, StateType>) -> bool {
+    match command {
+      ControllerCommand::SubmitAgentOps { agent, ops } => {
+        let input = LogicInput::AgentOps { source: agent, ops };
+        self.handle_logic_input(input).await;
+      }
+      ControllerCommand::SubmitSystemOps { source_description, ops } => {
+        info!(source = %source_description, "Processing system ops");
+        let input = LogicInput::AgentOps {
+          source: Agent::system(),
+          ops,
+        };
+        self.handle_logic_input(input).await;
+      }
+      ControllerCommand::ProcessTimeStep { delta_time } => {
+        self.handle_logic_input(LogicInput::TimeStep { delta_time }).await;
+      }
+      ControllerCommand::HandleAgentJoined { agent } => {
+        self.handle_agent_joined_event(&agent).await;
+      }
+      ControllerCommand::HandleAgentLeft { agent_id } => {
+        self.handle_agent_left_event(&agent_id).await;
+      }
+      ControllerCommand::SendSnapshots { recipients, context } => {
+        self.send_snapshots(&recipients, context).await;
+      }
+      ControllerCommand::QueryCurrentState { response_tx } => {
+        // A dropped receiver just means the asker gave up.
+        let _ = response_tx.send(self.state_data.clone());
+      }
+      ControllerCommand::Shutdown => {
+        info!("Shutdown received; draining queued commands.");
+        return false;
+      }
+    }
+    true
+  }
+
+  /// Processes commands already queued behind `Shutdown`, so work a caller
+  /// submitted before asking to stop is not silently discarded.
+  ///
+  /// Only drains what is already buffered, a producer still sending will not
+  /// keep the controller alive.
+  async fn drain_pending_commands(&mut self) {
+    let mut drained = 0usize;
+    while let Ok(command) = self.command_rx.try_recv() {
+      // A second Shutdown in the queue is redundant; stop draining.
+      if !self.handle_command(command).await {
+        break;
+      }
+      drained += 1;
+    }
+    if drained > 0 {
+      debug!(drained, "Processed commands queued before shutdown.");
+    }
   }
 
   #[instrument(skip(self, input), fields(input_type = std::any::type_name_of_val(&input)))]
@@ -499,18 +391,14 @@ where
     let source_agent_for_log = match &input {
       LogicInput::AgentOps { source, .. } => source.label(),
       LogicInput::TimeStep { .. } => "TimeStep".to_string(),
+      LogicInput::AgentJoined { agent } => format!("AgentJoined({})", agent.label()),
+      LogicInput::AgentLeft { agent_id } => format!("AgentLeft({:?})", agent_id),
     };
     debug!(source = %source_agent_for_log, "Processing logic input");
 
     match self.op_handler.process_input(&mut self.state_data, input).await {
-      Ok(targeted_ops) => {
-        if !targeted_ops.is_empty() {
-          debug!(
-            num_targeted_ops = targeted_ops.len(),
-            "Broadcasting ops from logic input"
-          );
-        }
-        for targeted_op in targeted_ops {
+      Ok(output) => {
+        for targeted_op in output.ops {
           let msg = SessionMessage::Ops {
             from: targeted_op.from_agent.clone(),
             ops: targeted_op.ops,
@@ -518,6 +406,12 @@ where
           if let Err(e) = self.session.send_message(targeted_op.target, msg).await {
             error!(error = %e, "Failed to send message via session");
           }
+        }
+
+        // After the ops, so a client sees what happened before the state that
+        // reflects it.
+        for request in output.snapshots {
+          self.send_snapshots(&request.recipients, request.context).await;
         }
       }
       Err(e) => {
@@ -527,33 +421,54 @@ where
   }
 
   #[instrument(skip(self, agent_info), fields(agent_id = ?agent_info.id(), agent_label = %agent_info.label()))]
-  async fn handle_agent_joined_event(&self, agent_info: &Agent<ID>) {
+  async fn handle_agent_joined_event(&mut self, agent_info: &Agent<ID>) {
     info!("Handling agent join event");
-    let context = Some(SnapshotContext::Full);
 
-    match self
-      .snapshot_provider
-      .create_snapshot_data(&self.state_data, Some(agent_info), context)
-      .await
-    {
-      Ok(snapshot_data) => {
-        debug!("Snapshot created, sending to new agent.");
-        let msg = SessionMessage::StateData {
-          from: Agent::system(),
-          data: snapshot_data,
-        };
-        if let Some(target_id) = agent_info.id_cloned() {
-          if let Err(e) = self.session.send_message(MessageTarget::Agent(target_id), msg).await {
-            error!(error = %e, "Failed to send snapshot to joined agent");
-          } else {
-            info!("Snapshot sent to joined agent.");
-          }
-        } else {
-          warn!("Agent joined without an ID (System agent?). Cannot send snapshot.");
+    // Let the application's StateLogic register the agent (and broadcast any
+    // resulting ops) before the snapshot is taken, so the snapshot includes them.
+    self
+      .handle_logic_input(LogicInput::AgentJoined {
+        agent: agent_info.clone(),
+      })
+      .await;
+
+    self
+      .send_snapshots(std::slice::from_ref(agent_info), self.join_context.clone())
+      .await;
+  }
+
+  /// Sends each recipient a snapshot built for that recipient.
+  ///
+  /// The provider is called once per agent, so a `SnapshotProvider` that filters
+  /// on `target_agent` gives every player a different view of the same state.
+  /// One agent's failure is logged and skipped rather than aborting the rest.
+  async fn send_snapshots(&self, recipients: &[Agent<ID>], context: Option<SnapshotContext>) {
+    for agent in recipients {
+      let Some(target_id) = agent.id_cloned() else {
+        warn!(agent = %agent.label(), "Cannot snapshot an agent without an ID; skipping.");
+        continue;
+      };
+
+      let snapshot_data = match self
+        .snapshot_provider
+        .create_snapshot_data(&self.state_data, Some(agent), context.clone())
+        .await
+      {
+        Ok(data) => data,
+        Err(e) => {
+          error!(error = %e, agent = %agent.label(), "Failed to create snapshot; skipping agent.");
+          continue;
         }
-      }
-      Err(e) => {
-        error!(error = %e, "Failed to create snapshot for joined agent");
+      };
+
+      let msg = SessionMessage::StateData {
+        from: Agent::system(),
+        data: snapshot_data,
+      };
+      if let Err(e) = self.session.send_message(MessageTarget::Agent(target_id), msg).await {
+        error!(error = %e, agent = %agent.label(), "Failed to send snapshot.");
+      } else {
+        debug!(agent = %agent.label(), "Snapshot sent.");
       }
     }
   }
@@ -561,9 +476,10 @@ where
   #[instrument(skip(self, agent_id), fields(leaving_agent_id = ?agent_id))]
   async fn handle_agent_left_event(&mut self, agent_id: &ID) {
     info!("Handling agent left event");
-    debug!(
-      "Agent {:?} left. Application specific cleanup might be needed via StateLogic.",
-      agent_id
-    );
+    self
+      .handle_logic_input(LogicInput::AgentLeft {
+        agent_id: agent_id.clone(),
+      })
+      .await;
   }
 }

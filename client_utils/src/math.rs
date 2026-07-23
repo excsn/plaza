@@ -7,12 +7,11 @@
 //! Applications are encouraged to use their own preferred math libraries and implement
 //! the necessary traits (`Interpolatable`, `Extrapolatable`) for their chosen types.
 
-use crate::extrapolation::Extrapolatable; // To implement it for our math types
-use crate::interpolation::Interpolatable; // To implement it for our math types
+use crate::extrapolation::Extrapolatable;
+use crate::interpolation::Interpolatable;
 use std::fmt::Debug;
 use std::ops::{Add, Div, Mul, Sub};
 
-// --- Vec2 ---
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Vec2 {
@@ -86,7 +85,6 @@ impl Div<f32> for Vec2 {
   }
 }
 
-// --- Vec3 ---
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Vec3 {
@@ -165,7 +163,6 @@ impl Div<f32> for Vec3 {
   }
 }
 
-// --- Quat (Quaternion for rotations) ---
 // Basic implementation for slerp example. A real quaternion would have more methods.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Quat {
@@ -248,12 +245,8 @@ impl Quat {
     }
   }
 
-  // Simplified integration of angular velocity (assumes angular_velocity is axis-angle scaled by dt)
-  // For a proper implementation, angular_velocity would be an axis (Vec3) and rotation speed (f32),
-  // then convert to a delta quaternion.
-  // This example assumes `angular_velocity_delta_quat` is already a small rotation quaternion.
+  /// Hamilton product: composes two rotations.
   pub fn multiply(self, rhs: Self) -> Self {
-    // Hamilton product
     Quat {
       w: self.w * rhs.w - self.x * rhs.x - self.y * rhs.y - self.z * rhs.z,
       x: self.w * rhs.x + self.x * rhs.w + self.y * rhs.z - self.z * rhs.y,
@@ -263,15 +256,13 @@ impl Quat {
   }
 }
 
-// --- Implement Interpolatable for these basic types ---
-// Assuming Timestamp is some u64 or Duration that can provide f32 via ToF32
 
 impl<Timestamp> Interpolatable<Timestamp> for f32
 where
   Timestamp: Copy + Debug + PartialOrd + Sub<Output = Timestamp> + crate::interpolation::ToF32,
 {
   fn interpolate(&self, other: &Self, t: f32, _time_a: Timestamp, _time_b: Timestamp) -> Self {
-    self + (other - self) * t // Standard lerp
+    self + (other - self) * t
   }
 }
 
@@ -309,9 +300,7 @@ where
   }
 }
 
-// --- Implement Extrapolatable for these basic types ---
 // Velocity types will be Vec2 for Vec2 position, Vec3 for Vec3 position.
-// Angular velocity for Quat might be a Vec3 (axis * angle_rad_per_sec) or another Quat representing delta.
 
 // Example: Extrapolating Vec3 position with Vec3 linear velocity
 // TimeDelta is assumed to be f32 seconds here for simplicity.
@@ -325,9 +314,7 @@ impl Extrapolatable<Vec3, f32> for Vec3 {
 // This is more complex. A common way is to treat angular_velocity as an axis-angle vector
 // (axis is direction, magnitude is radians per second). Convert this to a delta quaternion
 // for the delta_time_secs, then multiply the current rotation by this delta.
-// For simplicity, let's assume VelocityType for Quat is a pre-calculated delta rotation for that tick.
 // Or that angular_velocity is represented as another Quat (a small rotation).
-// A simpler (but less physically accurate for large steps) angular velocity could be Euler angle rates.
 
 // This is a very simplified angular extrapolation, assuming Velocity is a delta Quat for that step.
 // A proper Extrapolatable for Quat would take an angular velocity vector (Vec3) and dt.
@@ -335,17 +322,13 @@ impl Extrapolatable<Quat, f32> for Quat {
   // TimeDelta = f32 seconds
   fn extrapolate_with_velocity(&self, angular_velocity_as_delta_quat_per_sec: &Quat, delta_time_secs: f32) -> Self {
     // This is not standard. Usually angular velocity is a Vec3 (axis-angle).
-    // Let's assume angular_velocity_as_delta_quat_per_sec is actually an axis * angle representation
     // scaled such that multiplying by delta_time_secs gives the rotation for that period.
     // This is a placeholder for a more robust implementation.
     // For true extrapolation:
-    // 1. Represent angular velocity as Vec3 (axis * radians/sec).
-    // 2. Create a delta_rotation quaternion from (angular_velocity * delta_time_secs).
     // 3. new_rotation = old_rotation * delta_rotation.
 
     // Simplified: if angular_velocity_as_delta_quat_per_sec IS the delta rotation for 1s.
     // This would mean it's not a velocity but a per-second rotation.
-    // Let's make it a pure delta quat for the step for this example.
     // So, if VelocityType for Quat IS the delta_quat for this specific delta_time.
     // This is not ideal for the Extrapolatable trait signature.
 
@@ -367,23 +350,15 @@ impl Extrapolatable<Quat, f32> for Quat {
   }
 }
 // Better Extrapolatable for Quat with Vec3 angular velocity:
-// impl Extrapolatable<Vec3, f32> for Quat {
-//     fn extrapolate_with_velocity(&self, angular_velocity_rad_per_sec: &Vec3, delta_time_secs: f32) -> Self {
-//         let angle = angular_velocity_rad_per_sec.length() * delta_time_secs;
 //         if angle.abs() < f32::EPSILON {
 //             return *self;
-//         }
-//         let axis = angular_velocity_rad_per_sec.normalize();
-//         let delta_rotation = Quat::from_axis_angle(axis, angle); // Requires from_axis_angle
 //         (*self * delta_rotation).normalize()
-//     }
-// }
 // (Requires Quat::from_axis_angle which isn't in our minimal Quat)
 
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::interpolation::ToF32;
+  
   use crate::types::ClientTimeMs; // u64 // For tests
 
   #[test]
@@ -418,7 +393,7 @@ mod tests {
   #[test]
   fn vec3_interpolate() {
     let v_a = Vec3::new(0.0, 10.0, 20.0);
-    let v_b = Vec3::new(10.0, 20.0, 20.0); // z is same
+    let v_b = Vec3::new(10.0, 20.0, 20.0);
     let time_a: ClientTimeMs = 0;
     let time_b: ClientTimeMs = 100;
 

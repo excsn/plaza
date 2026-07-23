@@ -1,0 +1,523 @@
+//! Drawing the horde. Reads `sim` results only; owns no state.
+//!
+//! Two views, and the contrast between them is the whole demonstration:
+//!
+//! - The **main view** follows your player and draws what your client actually
+//!   received: only the enemies inside its relevance radius, drawn where the
+//!   client thinks they are, over faint ground truth so the error is visible.
+//! - The **minimap** shows the whole arena with every enemy the server is
+//!   simulating, and a circle around what you are actually being sent. The dots
+//!   outside that circle are the bandwidth relevance is saving you.
+
+use macroquad::prelude::*;
+use horde_playground::sim::{Controls, EnemyKind, Vec2 as SimVec2, World, ARENA_H, ARENA_W, NOVA_RADIUS, VIEW_RADIUS};
+
+const C_YOU: Color = SKYBLUE;
+const C_PEER: Color = Color::new(0.5, 0.8, 1.0, 0.9);
+const C_KNOWN: Color = ORANGE;
+const C_TRUTH: Color = Color::new(1.0, 0.6, 0.2, 0.35);
+const C_VIEW: Color = Color::new(0.4, 0.9, 0.5, 0.55);
+const C_GRID: Color = Color::new(1.0, 1.0, 1.0, 0.05);
+const C_RUNNER: Color = Color::new(1.0, 0.45, 0.75, 1.0);
+const C_BRUTE: Color = Color::new(0.85, 0.35, 0.25, 1.0);
+const C_SHOT: Color = Color::new(1.0, 0.95, 0.5, 0.95);
+/// A distant crowd the client knows only as a headcount.
+const C_CROWD: Color = Color::new(0.55, 0.45, 0.95, 0.5);
+const C_COIN: Color = Color::new(1.0, 0.85, 0.25, 1.0);
+
+/// Follows one player, mapping world coordinates onto the screen.
+pub struct Camera {
+  center: SimVec2,
+  scale: f32,
+  sw: f32,
+  sh: f32,
+}
+
+impl Camera {
+  /// Frames the player's neighbourhood: the relevance radius fills most of the
+  /// shorter screen axis, with room to see entities entering and leaving.
+  pub fn follow(center: SimVec2) -> Self {
+    Self::viewport(center, 1.0)
+  }
+
+  /// A free camera: any centre, any zoom. `zoom` multiplies the default scale, so
+  /// 1.0 is what a player sees. This is what lets an observer roam a map far
+  /// bigger than one screen.
+  pub fn viewport(center: SimVec2, zoom: f32) -> Self {
+    let (sw, sh) = (screen_width(), screen_height());
+    let scale = (sw.min(sh) * 0.5) / (VIEW_RADIUS * 1.35) * zoom;
+    Self { center, scale, sw, sh }
+  }
+
+  /// World units per screen pixel at the default zoom, for turning a mouse drag
+  /// into a pan. Only the observer's free camera needs it.
+  #[cfg(feature = "server")]
+  pub fn base_scale() -> f32 {
+    (screen_width().min(screen_height()) * 0.5) / (VIEW_RADIUS * 1.35)
+  }
+
+  fn at(&self, p: SimVec2) -> (f32, f32) {
+    ((p.x - self.center.x) * self.scale + self.sw * 0.5, (p.y - self.center.y) * self.scale + self.sh * 0.5)
+  }
+}
+
+pub fn draw_world(world: &World, controls: &Controls, cam: &Camera) {
+  draw_coins(world, controls, cam);
+  // The relevance grid, faintly, so the bucketing is visible.
+  let cell = horde_playground::sim::VIEW_RADIUS * 0.61; // ~CELL_SIZE
+  let start_x = ((cam.center.x - VIEW_RADIUS * 2.0) / cell).floor() * cell;
+  let start_y = ((cam.center.y - VIEW_RADIUS * 2.0) / cell).floor() * cell;
+  for i in 0..9 {
+    let gx = start_x + i as f32 * cell;
+    let gy = start_y + i as f32 * cell;
+    let (x, _) = cam.at(SimVec2::new(gx, 0.0));
+    let (_, y) = cam.at(SimVec2::new(0.0, gy));
+    draw_line(x, 0.0, x, cam.sh, 1.0, C_GRID);
+    draw_line(0.0, y, cam.sw, y, 1.0, C_GRID);
+  }
+
+  let you = world.players()[0];
+
+  // What the server really has, faint: the error between this and the solid
+  // dots is what the drawing strategy costs.
+  for (_, pos) in world.truth() {
+    if pos.dist(you) <= VIEW_RADIUS * 1.3 {
+      let (x, y) = cam.at(pos);
+      draw_circle(x, y, 3.0, C_TRUTH);
+    }
+  }
+
+  // What your client actually knows and draws. Kind came with the spawn, so
+  // size and colour cost nothing per update.
+  for (_, pos, kind) in world.client_render(0, controls) {
+    let (x, y) = cam.at(pos);
+    let color = match kind {
+      EnemyKind::Swarm => C_KNOWN,
+      EnemyKind::Runner => C_RUNNER,
+      EnemyKind::Brute => C_BRUTE,
+    };
+    draw_circle(x, y, kind.radius() * cam.scale.max(0.35), color);
+  }
+
+  // Shots in flight, as this client knows them.
+  for proj in world.client_projectiles(0) {
+    let (x, y) = cam.at(proj.pos);
+    draw_circle(x, y, 2.5, C_SHOT);
+  }
+
+  // The area pulse, while it is fresh. Without this the mass elimination it
+  // causes is indistinguishable from entities silently disappearing.
+  if let Some(age) = world.nova_flash_age() {
+    let progress = (age / 0.45).clamp(0.0, 1.0);
+    let alpha = 1.0 - progress;
+    let ring = Color::new(0.6, 0.95, 1.0, alpha * 0.9);
+    for player in world.players() {
+      if player.dist(you) <= VIEW_RADIUS * 2.0 {
+        let (px, py) = cam.at(*player);
+        draw_circle_lines(px, py, NOVA_RADIUS * progress * cam.scale, 3.0, ring);
+        draw_circle(px, py, NOVA_RADIUS * progress * cam.scale, Color::new(0.5, 0.9, 1.0, alpha * 0.12));
+      }
+    }
+  }
+
+  // The repulsor pulse, drawn from what your client believes rather than from the
+  // server, so an optimistic purchase visibly fires a pulse the server is not
+  // firing. The ring is the actual radius the rule is using this pulse, which
+  // differs each time, so the effect explains itself rather than looking random.
+  if controls.coins {
+    for (i, player) in world.players().iter().enumerate() {
+      if let Some(radius) = world.repulsor_pulse_for(0, i)
+        && player.dist(you) <= VIEW_RADIUS * 2.0
+      {
+        let (px, py) = cam.at(*player);
+        let r = radius * cam.scale;
+        draw_circle(px, py, r, Color::new(0.55, 0.45, 0.95, 0.14));
+        draw_circle_lines(px, py, r, 2.5, Color::new(0.7, 0.6, 1.0, 0.85));
+        draw_circle_lines(px, py, r * 0.72, 1.5, Color::new(0.7, 0.6, 1.0, 0.4));
+      }
+    }
+  }
+
+  // The relevance boundary.
+  let (cx, cy) = cam.at(you);
+  draw_circle_lines(cx, cy, VIEW_RADIUS * cam.scale, 2.0, C_VIEW);
+
+  // Other players, if they are near enough to see.
+  for (i, p) in world.players().iter().enumerate().skip(1) {
+    if p.dist(you) <= VIEW_RADIUS * 1.3 {
+      let (x, y) = cam.at(*p);
+      draw_circle(x, y, 7.0, C_PEER);
+      let label = format!("P{i}");
+      draw_text(&label, x + 9.0, y + 4.0, 16.0, C_PEER);
+    }
+  }
+
+  draw_circle(cx, cy, 8.0, C_YOU);
+}
+
+/// The whole arena, small, showing everything the server simulates and how
+/// little of it you are sent.
+pub fn draw_minimap(world: &World, controls: &Controls, cam: &Camera) {
+  let size = (cam.sw.min(cam.sh) * 0.26).max(140.0);
+  let pad = 12.0;
+  let ox = cam.sw - size - pad;
+  let oy = pad;
+  let s = size / ARENA_W.max(ARENA_H);
+
+  draw_rectangle(ox, oy, size, size, Color::new(0.0, 0.0, 0.0, 0.55));
+  draw_rectangle_lines(ox, oy, size, size, 1.5, DARKGRAY);
+
+  // With crowd LOD on, this map is drawn from what *your client* holds: the
+  // entities it was sent individually, plus a blob per distant crowd summary.
+  // With it off the client knows nothing past its radius, so the only way to draw
+  // the arena at all is to borrow the server's copy, which no real client has.
+  // That is the comparison worth seeing, so the label changes with it.
+  let lod = controls.crowd_lod_theta > 0.0;
+  if lod {
+    for (_, pos, _) in world.client_render(0, controls) {
+      draw_rectangle(ox + pos.x * s, oy + pos.y * s, 1.0, 1.0, C_KNOWN);
+    }
+    for crowd in world.crowds(0) {
+      // Area with headcount, so a big cluster reads as a big crowd.
+      let r = (crowd.count as f32).sqrt() * 0.9 * s.max(0.04) * 12.0;
+      draw_circle(ox + crowd.pos.x * s, oy + crowd.pos.y * s, r.clamp(1.5, size * 0.18), C_CROWD);
+    }
+  } else {
+    for (_, pos) in world.truth() {
+      draw_rectangle(ox + pos.x * s, oy + pos.y * s, 1.0, 1.0, C_TRUTH);
+    }
+  }
+  for (i, p) in world.players().iter().enumerate() {
+    let color = if i == 0 { C_YOU } else { C_PEER };
+    draw_circle(ox + p.x * s, oy + p.y * s, 2.5, color);
+  }
+  // Your relevance radius: only what falls inside is sent to you.
+  let you = world.players()[0];
+  draw_circle_lines(ox + you.x * s, oy + you.y * s, VIEW_RADIUS * s, 1.5, C_VIEW);
+
+  let caption = if lod { "whole arena (your client's own knowledge)" } else { "whole arena (server truth, borrowed)" };
+  draw_text(caption, ox, oy + size + 14.0, 15.0, GRAY);
+}
+
+/// Currency on the ground, as *this client* sees it.
+///
+/// Drawn from the client's own list rather than the server's, so a coin the
+/// client has optimistically claimed disappears immediately and reappears if the
+/// server awards it to somebody else. That reappearance is the correction that
+/// cannot be smoothed, and it is meant to be visible.
+fn draw_coins(world: &World, controls: &Controls, cam: &Camera) {
+  if !controls.coins {
+    return;
+  }
+  for coin in world.client_coins(0) {
+    let (x, y) = cam.at(coin.pos);
+    draw_circle(x, y, 5.0, C_COIN);
+    draw_circle_lines(x, y, 5.0, 1.0, Color::new(0.5, 0.4, 0.1, 0.9));
+  }
+  // Coins on their way to whoever won them. Drawn smaller and brighter so a
+  // collection reads as an arrival rather than as a coin that simply vanished,
+  // and so a flight cut short by a losing prediction is visible as one.
+  for pos in world.coin_flights(0) {
+    let (x, y) = cam.at(pos);
+    draw_circle(x, y, 3.5, Color::new(1.0, 0.95, 0.6, 0.95));
+  }
+}
+
+/// Announcements, and a persistent line of what you own.
+///
+/// Both exist because nothing else in the game says an upgrade happened. The
+/// wallet changing is the only signal the protocol carries, and a number quietly
+/// going down while enemy behaviour quietly changes is indistinguishable from a
+/// bug, which is exactly how it read before this.
+pub fn draw_notices(world: &World, controls: &Controls, cam: &Camera) {
+  if !controls.coins {
+    return;
+  }
+  let owned: Vec<&str> = world.wallet(0).upgrades.iter().map(|u| u.label()).collect();
+  let (believed, _) = world.balance(0);
+  let banner = if owned.is_empty() {
+    format!("{believed} coins")
+  } else {
+    format!("{believed} coins    {}", owned.join(" + "))
+  };
+  let dims = measure_text(&banner, None, 22, 1.0);
+  draw_text(&banner, cam.sw * 0.5 - dims.width * 0.5, 34.0, 22.0, C_COIN);
+
+  for (i, (text, age)) in world.notices(0).iter().enumerate() {
+    // Fade out over the last second, so a burst of them still reads in order.
+    let alpha = (1.0 - (age - 2.0).max(0.0)).clamp(0.0, 1.0);
+    let color = if text.contains("refused") {
+      Color::new(1.0, 0.5, 0.4, alpha)
+    } else {
+      Color::new(0.7, 0.95, 1.0, alpha)
+    };
+    let dims = measure_text(text, None, 24, 1.0);
+    draw_text(text, cam.sw * 0.5 - dims.width * 0.5, 72.0 + i as f32 * 26.0, 24.0, color);
+  }
+}
+
+/// A small legend under the minimap.
+pub fn draw_legend(cam: &Camera) {
+  let items = [("you", C_YOU), ("swarm", C_KNOWN), ("runner (fast)", C_RUNNER), ("brute (tough)", C_BRUTE), ("server truth", C_TRUTH), ("shots", C_SHOT)];
+  let x0 = 14.0;
+  let base = cam.sh - 14.0 - (items.len() as f32 - 1.0) * 20.0;
+  for (i, (label, color)) in items.iter().enumerate() {
+    let y = base + i as f32 * 20.0;
+    draw_circle(x0, y - 4.0, 5.0, *color);
+    draw_text(label, x0 + 14.0, y, 17.0, LIGHTGRAY);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Networked views. Shared drawing primitives, then one entry point per role.
+// ---------------------------------------------------------------------------
+
+#[cfg(any(all(feature = "client", feature = "websocket"), feature = "server"))]
+fn enemy_color(kind: EnemyKind) -> Color {
+  match kind {
+    EnemyKind::Swarm => C_KNOWN,
+    EnemyKind::Runner => C_RUNNER,
+    EnemyKind::Brute => C_BRUTE,
+  }
+}
+
+/// The nova ring, drawn at every player near the eye while the pulse is fresh.
+#[cfg(any(all(feature = "client", feature = "websocket"), feature = "server"))]
+fn draw_nova(age: Option<f32>, players: &[SimVec2], eye: SimVec2, cam: &Camera) {
+  let Some(age) = age else { return };
+  let progress = (age / 0.45).clamp(0.0, 1.0);
+  let alpha = 1.0 - progress;
+  let ring = Color::new(0.6, 0.95, 1.0, alpha * 0.9);
+  for player in players {
+    if player.dist(eye) <= VIEW_RADIUS * 2.0 {
+      let (px, py) = cam.at(*player);
+      draw_circle_lines(px, py, NOVA_RADIUS * progress * cam.scale, 3.0, ring);
+      draw_circle(px, py, NOVA_RADIUS * progress * cam.scale, Color::new(0.5, 0.9, 1.0, alpha * 0.12));
+    }
+  }
+}
+
+/// One player's repulsor pulse ring, if it is firing.
+#[cfg(any(all(feature = "client", feature = "websocket"), feature = "server"))]
+fn draw_repulsor(radius: f32, at: SimVec2, cam: &Camera) {
+  let (px, py) = cam.at(at);
+  let r = radius * cam.scale;
+  draw_circle(px, py, r, Color::new(0.55, 0.45, 0.95, 0.14));
+  draw_circle_lines(px, py, r, 2.5, Color::new(0.7, 0.6, 1.0, 0.85));
+  draw_circle_lines(px, py, r * 0.72, 1.5, Color::new(0.7, 0.6, 1.0, 0.4));
+}
+
+/// Peers near the eye, and your own marker.
+#[cfg(all(feature = "client", feature = "websocket"))]
+fn draw_players(players: &[SimVec2], me: Option<usize>, eye: SimVec2, you: SimVec2, cam: &Camera) {
+  for (i, p) in players.iter().enumerate() {
+    if me == Some(i) {
+      continue;
+    }
+    if p.dist(eye) <= VIEW_RADIUS * 1.3 {
+      let (x, y) = cam.at(*p);
+      draw_circle(x, y, 7.0, C_PEER);
+      let label = format!("P{i}");
+      draw_text(&label, x + 9.0, y + 4.0, 16.0, C_PEER);
+    }
+  }
+  let (cx, cy) = cam.at(you);
+  draw_circle_lines(cx, cy, VIEW_RADIUS * cam.scale, 2.0, C_VIEW);
+  draw_circle(cx, cy, 8.0, C_YOU);
+}
+
+/// What a networked client actually knows and draws: its own relevant slice, no
+/// truth overlay, its own predicted position.
+#[cfg(all(feature = "client", feature = "websocket"))]
+pub fn draw_client_world(client: &horde_playground::net::client::NetClient, controls: &Controls, cam: &Camera) {
+  let you = client.my_position();
+  let me = client.me.map(|m| m as usize);
+
+  if controls.coins {
+    for coin in &client.sim.coins {
+      let (x, y) = cam.at(coin.pos);
+      draw_circle(x, y, 5.0, C_COIN);
+      draw_circle_lines(x, y, 5.0, 1.0, Color::new(0.5, 0.4, 0.1, 0.9));
+    }
+    for pos in client.sim.flight_positions() {
+      let (x, y) = cam.at(pos);
+      draw_circle(x, y, 3.5, Color::new(1.0, 0.95, 0.6, 0.95));
+    }
+  }
+
+  for (_, pos, kind) in client.sim.render(controls) {
+    let (x, y) = cam.at(pos);
+    draw_circle(x, y, kind.radius() * cam.scale.max(0.35), enemy_color(kind));
+  }
+  for proj in &client.sim.projectiles {
+    let (x, y) = cam.at(proj.pos);
+    draw_circle(x, y, 2.5, C_SHOT);
+  }
+
+  draw_nova(client.nova_flash_age(), client.sim.players(), you, cam);
+  if controls.coins {
+    for (i, player) in client.sim.players().iter().enumerate() {
+      if let Some(radius) = client.sim.repel_radius(i)
+        && player.dist(you) <= VIEW_RADIUS * 2.0
+      {
+        draw_repulsor(radius, *player, cam);
+      }
+    }
+  }
+
+  let mut players = client.sim.players().to_vec();
+  if let Some(m) = me
+    && m < players.len()
+  {
+    players[m] = you;
+  }
+  draw_players(&players, me, you, you, cam);
+}
+
+/// The host's omniscient view: the client's believed slice drawn over the
+/// authoritative truth, exactly as the offline playground drew it.
+#[cfg(all(feature = "server", feature = "client", feature = "websocket"))]
+pub fn draw_host_world(view: &horde_playground::net::arena::HostView, client: &horde_playground::net::client::NetClient, controls: &Controls, cam: &Camera) {
+  let you = client.my_position();
+  // The server's truth, faint. The gap to the solid believed dots is the error.
+  for (_, pos, _) in &view.truth {
+    if pos.dist(you) <= VIEW_RADIUS * 1.3 {
+      let (x, y) = cam.at(*pos);
+      draw_circle(x, y, 3.0, C_TRUTH);
+    }
+  }
+  draw_client_world(client, controls, cam);
+}
+
+/// An observer's view: the authoritative truth, and nothing believed.
+#[cfg(feature = "server")]
+pub fn draw_observer_world(view: &horde_playground::net::arena::HostView, controls: &Controls, cam: &Camera) {
+  use horde_playground::sim::types::repulsor_pulse;
+  use horde_playground::sim::Upgrade;
+  if controls.coins {
+    for coin in &view.coins {
+      let (x, y) = cam.at(coin.pos);
+      draw_circle(x, y, 5.0, C_COIN);
+      draw_circle_lines(x, y, 5.0, 1.0, Color::new(0.5, 0.4, 0.1, 0.9));
+    }
+  }
+  for (_, pos, kind) in &view.truth {
+    if pos.dist(cam.center) <= VIEW_RADIUS * 2.2 {
+      let (x, y) = cam.at(*pos);
+      draw_circle(x, y, kind.radius() * cam.scale.max(0.35), enemy_color(*kind));
+    }
+  }
+  for proj in &view.projectiles {
+    let (x, y) = cam.at(proj.pos);
+    draw_circle(x, y, 2.5, C_SHOT);
+  }
+  draw_nova(view.nova_flash_age(), &view.players, cam.center, cam);
+  // The repulsor from the authoritative wallets and the server clock: no belief
+  // involved, so the observer sees exactly what the world is doing.
+  if controls.coins {
+    let pulse = repulsor_pulse(view.server_now_ms);
+    for (i, player) in view.players.iter().enumerate() {
+      let owns = view.wallets.get(i).is_some_and(|w| w.upgrades.contains(&Upgrade::Repulsor));
+      if owns
+        && let Some(radius) = pulse
+      {
+        draw_repulsor(radius, *player, cam);
+      }
+    }
+  }
+  for p in &view.players {
+    let (x, y) = cam.at(*p);
+    draw_circle(x, y, 7.0, C_PEER);
+  }
+}
+
+/// The whole arena from the *client's own* knowledge (with LOD) or borrowed truth.
+#[cfg(all(feature = "client", feature = "websocket"))]
+pub fn draw_client_minimap(client: &horde_playground::net::client::NetClient, controls: &Controls, cam: &Camera) {
+  let (ox, oy, size, s) = minimap_frame(cam);
+  let lod = controls.crowd_lod_theta > 0.0;
+  if lod {
+    for (_, pos, _) in client.sim.render(controls) {
+      draw_rectangle(ox + pos.x * s, oy + pos.y * s, 1.0, 1.0, C_KNOWN);
+    }
+    for crowd in &client.sim.crowds {
+      let r = (crowd.count as f32).sqrt() * 0.9 * s.max(0.04) * 12.0;
+      draw_circle(ox + crowd.pos.x * s, oy + crowd.pos.y * s, r.clamp(1.5, size * 0.18), C_CROWD);
+    }
+  } else {
+    // Culling alone: a real client knows nothing past its radius, so the map can
+    // only show what it holds. That emptiness is the honest picture.
+    for (_, pos, _) in client.sim.render(controls) {
+      draw_rectangle(ox + pos.x * s, oy + pos.y * s, 1.0, 1.0, C_KNOWN);
+    }
+  }
+  let you = client.my_position();
+  let me = client.me.map(|m| m as usize);
+  for (i, p) in client.sim.players().iter().enumerate() {
+    let at = if me == Some(i) { you } else { *p };
+    draw_circle(ox + at.x * s, oy + at.y * s, 2.5, if me == Some(i) { C_YOU } else { C_PEER });
+  }
+  draw_circle_lines(ox + you.x * s, oy + you.y * s, VIEW_RADIUS * s, 1.5, C_VIEW);
+  let caption = if lod { "whole arena (your client's own knowledge)" } else { "whole arena (only what is relevant to you)" };
+  draw_text(caption, ox, oy + size + 14.0, 15.0, GRAY);
+}
+
+/// The host's minimap: the same as a client's, but it may draw the server truth
+/// it legitimately holds behind the client's own knowledge.
+#[cfg(all(feature = "server", feature = "client", feature = "websocket"))]
+pub fn draw_host_minimap(view: &horde_playground::net::arena::HostView, client: &horde_playground::net::client::NetClient, controls: &Controls, cam: &Camera) {
+  let (ox, oy, size, s) = minimap_frame(cam);
+  for (_, pos, _) in &view.truth {
+    draw_rectangle(ox + pos.x * s, oy + pos.y * s, 1.0, 1.0, C_TRUTH);
+  }
+  for (_, pos, _) in client.sim.render(controls) {
+    draw_rectangle(ox + pos.x * s, oy + pos.y * s, 1.0, 1.0, C_KNOWN);
+  }
+  let you = client.my_position();
+  let me = client.me.map(|m| m as usize);
+  for (i, p) in view.players.iter().enumerate() {
+    let at = if me == Some(i) { you } else { *p };
+    draw_circle(ox + at.x * s, oy + at.y * s, 2.5, if me == Some(i) { C_YOU } else { C_PEER });
+  }
+  draw_circle_lines(ox + you.x * s, oy + you.y * s, VIEW_RADIUS * s, 1.5, C_VIEW);
+  draw_text("whole arena (server truth + your knowledge)", ox, oy + size + 14.0, 15.0, GRAY);
+}
+
+/// The observer's minimap: pure truth.
+#[cfg(feature = "server")]
+pub fn draw_observer_minimap(view: &horde_playground::net::arena::HostView, cam: &Camera) {
+  let (ox, oy, size, s) = minimap_frame(cam);
+  for (_, pos, _) in &view.truth {
+    draw_rectangle(ox + pos.x * s, oy + pos.y * s, 1.0, 1.0, C_TRUTH);
+  }
+  for (i, p) in view.players.iter().enumerate() {
+    draw_circle(ox + p.x * s, oy + p.y * s, 2.5, if i == 0 { C_YOU } else { C_PEER });
+  }
+  draw_text("whole arena (server truth)", ox, oy + size + 14.0, 15.0, GRAY);
+}
+
+/// The minimap box geometry: origin, size, and world-to-map scale.
+#[cfg(all(feature = "client", feature = "websocket"))]
+fn minimap_frame(cam: &Camera) -> (f32, f32, f32, f32) {
+  let size = (cam.sw.min(cam.sh) * 0.26).max(140.0);
+  let pad = 12.0;
+  let ox = cam.sw - size - pad;
+  let oy = pad;
+  let s = size / ARENA_W.max(ARENA_H);
+  draw_rectangle(ox, oy, size, size, Color::new(0.0, 0.0, 0.0, 0.55));
+  draw_rectangle_lines(ox, oy, size, size, 1.5, DARKGRAY);
+  (ox, oy, size, s)
+}
+
+/// The minimap box geometry for the observer (a server build may lack a client).
+#[cfg(all(feature = "server", not(all(feature = "client", feature = "websocket"))))]
+fn minimap_frame(cam: &Camera) -> (f32, f32, f32, f32) {
+  let size = (cam.sw.min(cam.sh) * 0.26).max(140.0);
+  let pad = 12.0;
+  let ox = cam.sw - size - pad;
+  let oy = pad;
+  let s = size / ARENA_W.max(ARENA_H);
+  draw_rectangle(ox, oy, size, size, Color::new(0.0, 0.0, 0.0, 0.55));
+  draw_rectangle_lines(ox, oy, size, size, 1.5, DARKGRAY);
+  (ox, oy, size, s)
+}

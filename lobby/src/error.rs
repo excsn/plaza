@@ -1,7 +1,7 @@
 use super::types::RoomId;
 use thiserror::Error;
 
-#[derive(Error, Debug, Clone)] // Clone if needed
+#[derive(Error, Debug, Clone)]
 pub enum LobbyError {
   #[error("Room with ID {0} not found.")]
   RoomNotFound(RoomId),

@@ -1,88 +1,142 @@
-# Plaza Client Utilities (`plaza-client-utils`)
+# `plaza_client_utils`
 
-**License:** Mozilla Public License 2.0 (MPL-2.0)
-**Status:** Experimental
+**License:** Mozilla Public License 2.0 (MPL-2.0) · **Status:** Experimental
 
-`plaza-client-utils` is a Rust crate offering utilities to help client applications implement common advanced networking patterns when interacting with a server (especially one built with `plaza-core` or similar principles). It focuses on enhancing user experience by managing client-side prediction, server reconciliation, and smooth rendering of remote entities.
+The client half of real-time networking: making a server's authoritative updates feel immediate and smooth. Client-side prediction, server reconciliation, interpolation, and extrapolation. Plus the other netcode family, peer-to-peer deterministic [rollback](#rollback-netcode).
 
-This crate provides pure Rust logic and is unopinionated about your specific game engine or rendering library.
+The server half lives in [`plaza`](../core/) under `game_common::reconciliation`. Full surface in [API_REFERENCE.md](API_REFERENCE.md).
 
-## Core Features & Patterns Supported
+## Install
 
-1.  **Client-Side Prediction (CSP) & Server Reconciliation:**
-    *   **Goal:** Provide immediate feedback for player actions by simulating them locally, then correcting (reconciling) with authoritative state from the server.
-    *   **Components:**
-        *   `ClientInputBuffer`: Stores a history of inputs sent to the server, along with the client's predicted state *before* each input was applied.
-        *   `PredictedEntity`: Manages the lifecycle of a client-controlled entity. It applies local inputs for instant prediction and handles the reconciliation process when authoritative server state arrives, replaying unacknowledged inputs to derive a corrected predicted state.
-    *   **Server Support Assumed:** Your server should send back authoritative state updates that include the sequence number of the last client input it processed for that state. (`plaza-core`'s `game_common::reconciliation` module provides server-side helpers for this).
+```toml
+[dependencies]
+plaza_client_utils = "0.1"
+```
 
-2.  **Remote Entity State Interpolation:**
-    *   **Goal:** Smoothly render remote entities (those controlled by other players or the server) even when server updates are discrete and arrive with network jitter.
-    *   **Components:**
-        *   `Interpolatable<Timestamp>` Trait: Implemented by your client's entity state type to define how to interpolate between two state instances.
-        *   `ServerSnapshot<Timestamp, StateType>`: A wrapper for state updates received from the server, tagged with the server's authoritative timestamp.
-        *   `SnapshotBuffer<Timestamp, StateType>`: Stores a short history of `ServerSnapshot`s for a remote entity and provides methods to get an interpolated state for any given render time (within its buffered window).
-    *   **Server Support Assumed:** Your server should send regular state updates for remote entities, each tagged with a server timestamp. (`plaza-core`'s `game_common::reconciliation::op_payloads::RemoteEntitySnapshot` is a suggested payload).
+**No workspace dependencies.** This crate pulls in `thiserror` and `tracing` and nothing else, deliberately, so wasm builds and game-engine plugins do not drag in a server's async runtime. It is pure logic: no transport, no serialization, no engine coupling. You feed it what you receive and read back what to render.
 
-3.  **Remote Entity State Extrapolation (Basic):**
-    *   **Goal:** Predict a remote entity's state for a very short duration beyond the last known server update, using its last known velocity, to further mask latency.
-    *   **Components:**
-        *   `Extrapolatable<VelocityType, TimeDelta>` Trait: Implemented by your client's entity state type to define how to project its state forward.
-        *   `ExtrapolationBase<StateType, VelocityType, ServerTimestamp>`: Stores the last authoritative state and velocity for an entity and provides a method to get an extrapolated state.
-    *   **Server Support Assumed:** Your server should include velocity information in its state updates for remote entities.
+You do not need a Plaza server to use it. Anything speaking a sequence-numbered-input protocol works.
 
-4.  **Basic Math Types (Optional):**
-    *   The `math` module provides simple `Vec2`, `Vec3`, and `Quat` structs with `Interpolatable` and `Extrapolatable` implementations if you don't want to bring in a larger math library for these utilities. You are encouraged to use your own math library and implement the traits for its types.
+## Two ways in
 
-## Philosophy
+**The drop-in bundles.** Most clients wire the primitives the same way, so two types package the whole job:
 
-*   **Client-Side Logic:** Focuses purely on algorithms and data structures for the client.
-*   **Generic & Unopinionated:** Designed to work with your application's `StateType`, `Op` types, and chosen rendering/game engine.
-*   **Complements Server Authority:** Assumes a server-authoritative model where the client predicts optimistically but always reconciles with server truth.
-*   **Transport Agnostic:** These utilities operate on deserialized game state and input types; they don't handle network transport themselves. You integrate them with your client's networking layer (WebSockets, WebRTC, `renet`, etc.).
+- `PredictedPlayer` is your controlled entity: feed it inputs and server packets, read a render position back. Predict, reconcile, and smooth, wired.
+- `RemoteView` is an entity you do not control: `push` snapshots, `render` a state. Interpolation, extrapolation, and the starvation handling in between, wired.
 
-## Getting Started
+**Or the primitives underneath**, if you want finer control. The bundles are built from them and nothing more:
 
-1.  **Add `plaza-client-utils` to your client application's `Cargo.toml`:**
-    ```toml
-    [dependencies]
-    plaza-client-utils = "0.1.0" # Or your specific version/path
-    # ... your game engine, networking library, etc. ...
-    ```
+| Problem | Piece |
+|---|---|
+| Local input should feel instant, but the server decides | `PredictedEntity` + `ClientInputBuffer` |
+| Other players' updates arrive discretely and jittery | `SnapshotBuffer` (+ `InterpolationClock` for the render target) |
+| Updates stop arriving for a moment | `ExtrapolationBase` |
+| A correction snaps the local entity to a new spot | `ErrorSmoother` |
+| The render clock drifts as latency changes | `InterpolationClock::resync` (position) or `observe_rate` (playback-rate glide) |
+| Measuring round-trip latency to the other end | `RttEstimator` (with `plaza_wire`'s `Ping`/`Pong`) |
+| Tracking clock offset **and drift** against a server | `ClockSyncEstimator` (least-squares offset + skew) |
+| Optimally smoothing one noisy signal (jitter, latency) | `ScalarKalman` (a 1D Kalman filter) |
+| Telling the other side what arrived, in twelve bytes, however bad the link | `ack::AckWindow` (a sliding-window bitmask) |
+| Coasting a *turning* entity through a long gap, not off its tangent | `trajectory::TrajectoryPredictor` (a damped quadratic fit) |
 
-2.  **Define Your Client's State and Input Types:**
-    *   `MyPlayerState`: The struct representing your player-controlled entity's state. Must be `Clone + Debug`. If using interpolation/extrapolation, it (or a render-specific version) should implement `Interpolatable`/`Extrapolatable`.
-    *   `MyClientOp`: The type representing inputs your client generates and sends to the server (e.g., `MoveInput { dx, dy }`). Must be `Clone + Debug`.
+Each is usable on its own. The [`netcode_playground`](../examples/netcode_playground/) example wires the whole picture together interactively, through the bundles.
 
-3.  **Client-Side Prediction & Reconciliation Setup:**
-    *   Create an instance of `ClientInputBuffer<MyClientOp, MyPlayerState>`.
-    *   Create an instance of `PredictedEntity<MyPlayerState, MyClientOp>`.
-    *   Implement your client-side simulation logic: `fn apply_op_to_state(state: &mut MyPlayerState, op: &MyClientOp) { ... }`.
-    *   **On Local Input:**
-        1.  Generate your `MyClientOp` and a `SequenceNumber`.
-        2.  Call `predicted_entity.apply_local_input_and_predict(&op, seq_num, &mut input_buffer, &apply_op_to_state_fn)`.
-        3.  Send the `op` and `seq_num` to the server (e.g., wrapped in `plaza_core::game_common::reconciliation::op_payloads::SequencedClientInput`).
-    *   **On Receiving Authoritative State from Server** (e.g., `plaza_core::game_common::reconciliation::op_payloads::AuthoritativeStateUpdate`):
-        1.  Call `predicted_entity.reconcile_with_server_state(server_state, server_ack_seq, &mut input_buffer, &apply_op_to_state_fn)`.
-    *   **Render** using `predicted_entity.current_predicted_state`.
+## Rollback netcode
 
-4.  **Remote Entity Interpolation Setup:**
-    *   For each remote entity, create a `SnapshotBuffer<ServerTimestampType, MyRemoteEntityState>`.
-    *   Ensure `MyRemoteEntityState` implements `Interpolatable<ServerTimestampType>`.
-    *   **On Receiving Remote Entity Snapshot from Server** (e.g., `plaza_core::game_common::reconciliation::op_payloads::RemoteEntitySnapshot`):
-        1.  Call `snapshot_buffer.add_snapshot(server_timestamp, remote_state)`.
-    *   **In Your Render Loop:**
-        1.  Calculate your `target_render_time_on_server_timeline`.
-        2.  Call `snapshot_buffer.get_interpolated_state(target_time)` to get the state to render.
+The pieces above serve the *server-authoritative* model. The `rollback` module serves the other family, *peer-to-peer deterministic lockstep*: there is no server, peers run the **same deterministic simulation** and exchange only inputs. A peer cannot wait for a remote input and stay responsive, so it **predicts** the missing one (repeat the last), simulates ahead, and **rolls back** to re-simulate when the real input arrives and disagrees. Determinism is what makes the re-simulation match the other peer.
 
-## Examples
+| Problem | Piece |
+|---|---|
+| Save whole-world states to restore on a misprediction | `rollback::StateHistory` |
+| Know one player's inputs, predict the frames you do not have | `rollback::InputTimeline` |
+| Run the whole predict / detect / rollback / re-simulate loop | `rollback::RollbackSession` |
 
-Refer to the `examples/` directory within the `plaza-client-utils` crate for demonstrations:
-*   `basic_csp.rs`: Shows `ClientInputBuffer` and `PredictedEntity` in a local simulation.
-*   `interpolation_demo.rs`: Shows `SnapshotBuffer` and `Interpolatable` for smoothing.
-*   `extrapolation_demo.rs`: Shows basic extrapolation.
-*   (Future) `full_csp_net_example_client`: A client for a full client-server example, demonstrating integration of these utilities with (simulated) networking.
+`RollbackSession` is the drop-in bundle here, the rollback counterpart to `PredictedPlayer`: you supply a deterministic `fn(&State, &[Input]) -> State` and it does the rest. The [`rollback_playground`](../examples/rollback_playground/) example runs two peers over a simulated wire and shows they stay identical.
+
+## Building a netcode client
+
+The recommended shape, in order:
+
+```rust,ignore
+// Your controlled entity.
+let mut me = PredictedPlayer::new(start, PlayerConfig::default(), apply_move, lerp_pos);
+// One per remote entity, plus a clock for the shared render target.
+let mut remotes: HashMap<Id, RemoteView<State, Velocity>> = HashMap::new();
+let mut clock = InterpolationClock::new(interpolation_delay_ms);
+
+// On local input: predict now, send the numbered input.
+let seq = me.input(mv);
+send(SequencedClientInput { sequence_number: seq, input_data: mv });
+
+// On a packet: reconcile yourself, push remotes, advance the clock.
+me.reconcile(update.authoritative_player_state, update.last_processed_input_seq);
+clock.observe(snapshot.server_time);
+remotes.entry(id).or_insert_with(|| RemoteView::new(12, 500)).push(snapshot.server_time, state, velocity);
+
+// Each frame: advance and draw.
+me.advance(frame_dt_secs);
+draw(&me.render());
+for (_, view) in &remotes {
+  if let Some(s) = view.render(clock.target(), RenderOpts::default()) { draw(&s); }
+}
+```
+
+`apply_move` is the shared simulation step, the same rule the server applies; `lerp_pos` blends two states for correction smoothing. See [`netcode_playground`](../examples/netcode_playground/) for a complete, running version.
+
+## Which clock drives what
+
+Every piece here takes a `dt` or timestamps and is deliberately clock-agnostic: *you* choose which clock feeds each one. That split matters, and it is how a local pause works.
+
+- **Wall-clock time** drives anything about the network: `InterpolationClock`, `RttEstimator`, and the `ErrorSmoother`'s ease. Network delay is real and does not stop, so these keep running on real seconds.
+- **Game time** drives the simulation: `apply` and prediction. To pause locally (a menu, a cutscene), feed `dt = 0` to the game step while still feeding real `dt` to interpolation and RTT.
+
+In an authoritative multiplayer game you cannot truly pause the shared world, the server keeps ticking, so a "pause" is a local overlay over a world that moves on. The clock-agnostic design is what lets you build that: freeze the simulation without freezing the netcode.
+
+## The prediction loop
+
+```rust,ignore
+// Act now; record for replay.
+predicted.apply_local_input_and_predict(&op, seq, &mut inputs, apply_move);
+send_to_server(SequencedClientInput { sequence_number: seq, input_data: op });
+seq += 1;
+
+// The server replies: snap to truth, replay what it had not yet seen.
+predicted.reconcile_with_server_state(
+  update.authoritative_player_state,
+  update.last_processed_input_seq,
+  &mut inputs,
+  apply_move,
+);
+```
+
+`apply_move` is the shared simulation step, the same rule the server applies. Both sides must agree, or prediction fights the server every frame. A misprediction corrects itself on the next reconciliation; that is the design, not a failure.
+
+## Smoothing remote entities
+
+Remote players arrive as discrete snapshots. Render slightly in the past and interpolate between the two that bracket that moment:
+
+```rust,ignore
+remote.add_snapshot(snapshot.server_time, snapshot.into_state());
+let render_time = estimated_server_time.saturating_sub(INTERPOLATION_DELAY);
+if let Some(state) = remote.get_interpolated_state(render_time) {
+  draw(state);
+}
+```
+
+Pick a delay slightly larger than your typical gap between snapshots, one to two server ticks. Too small and the buffer runs dry; too large and remote entities visibly lag.
+
+## Acknowledgement and second-order dead reckoning
+
+Two later additions, both with a measured regime narrower than they first appear. Both are documented at length in [API_REFERENCE.md](API_REFERENCE.md); the summary of what measurement said:
+
+**`ack::AckWindow`** is a sequence number plus a bitmask of the 64 before it: one fixed-size record of exactly what arrived, so a sender can resend only the gaps. Fixed size is the point, a link losing half its packets reports in the same twelve bytes as a perfect one. Measured in [`rollback_playground`](../examples/rollback_playground/), swapping blind input redundancy for ack-driven redundancy cut bandwidth 28% on a clean link and *raised* it 45% at 50% loss, crossing over around 12%. The finding worth carrying is the one that was not obvious: blind redundancy makes a fixed number of attempts and then gives up, while ack-driven retries until acknowledged, so at 55% loss it converged where blind did not. The two policies are bounded effort against bounded outcome, not cheap against expensive. Its own limit is the history window, not the attempt count.
+
+**`trajectory::TrajectoryPredictor`** fits a damped quadratic through the last three samples of one scalar, so a turning entity coasted through a gap follows its curve instead of leaving on the tangent. Scalar deliberately, matching `ScalarKalman`: run one per axis rather than forcing a vector-space bound on every consumer. In isolation it cuts the error over a 100 ms gap on a circular path by 45%. In [`netcode_playground`](../examples/netcode_playground/) it does **nothing at all** at a normal server rate, and that negative result is the more useful half: the correction goes as the gap squared, and an adaptive buffer keeps the render target within a few milliseconds of the newest snapshot, so there is no gap to improve. It starts paying below about 10 Hz (7% at 5 Hz). Reach for it when your snapshot interval is long, not because it is the better algorithm.
+
+## Math types
+
+`Vec2`, `Vec3`, and `Quat` ship so the crate is usable standalone. If you already have `glam` or `nalgebra`, implement `Interpolatable` and `Extrapolatable` for your own types instead: every buffer here is generic over them.
 
 ## Status
 
-`plaza-client-utils` is **experimental**. APIs are subject to change. Contributions and feedback are welcome!
+Experimental. The API changes.

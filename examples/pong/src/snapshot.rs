@@ -29,7 +29,6 @@ impl SnapshotProvider<PlayerId, PongGameState, PongSnapshotPayload> for PongSnap
 
         // For Pong, the snapshot payload is a direct clone of the current game state.
         // No special handling for target_agent or context is implemented in this simple version.
-        // A more advanced system might filter data based on the target_agent (e.g., fog of war)
         // or provide delta snapshots based on the context.
 
         let snapshot_payload = full_state.clone();

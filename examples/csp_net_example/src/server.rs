@@ -12,19 +12,23 @@ use crate::common_types::{
   Vec2,
 };
 use plaza::{
-  agent::{Agent, AgentId as PlazaAgentIdTrait}, // Import the trait
+  agent::Agent, // Import the trait
   game_common::reconciliation::{
     client_input_tracker::ClientInputTracker,
     op_payloads::{AuthoritativeStateUpdate, RemoteEntitySnapshot, SequencedClientInput},
   },
-  controller::{ControllerCommand, StateController, StateControllerBuilder},
+  controller::{CommandSender, ControllerCommand, StateControllerBuilder},
   error::PlazaError,
-  session::{ConnectionId as PlazaConnectionId, MessageTarget, Session, SessionMessage},
+  session::{
+    ConnectionId as PlazaConnectionId, MessageTarget, PresenceEvent, Session, SessionMessage, SessionReceiver,
+    SessionSender, TargetedOp,
+  },
   snapshot::{SnapshotContext, SnapshotData, SnapshotError as PlazaSnapshotError, SnapshotProvider},
-  state_logic::{LogicInput, StateLogic},
+  state_logic::{LogicInput, LogicOutput, StateLogic, StateLogicError},
 };
 
 use async_trait::async_trait;
+use fibre::mpsc;
 use rand::Rng; // For simulating slight server-side deviations
 use std::{
   collections::HashMap,
@@ -32,10 +36,17 @@ use std::{
   sync::{Arc, Mutex as StdMutex}, // Using StdMutex for simplicity in DummySession's shared state
   time::Duration,
 };
-use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, error, info, warn};
 
-// --- Server StateType ---
+/// Hands out a single-consumer stream once.
+fn take_once<T: Send + 'static>(slot: &Arc<StdMutex<Option<T>>>, name: &str) -> T {
+  slot
+    .lock()
+    .unwrap()
+    .take()
+    .unwrap_or_else(|| panic!("the {name} stream was already taken; it has a single consumer"))
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ServerGameState {
   pub boxes: HashMap<PlayerId, BoxState>,
@@ -44,16 +55,13 @@ pub struct ServerGameState {
   pub version: u64,
 }
 
-// --- Server StateLogic ---
 #[derive(Debug, Default)]
 pub struct ServerLogic {
-  // Could hold configuration, e.g., server tick rate, if needed
-  // For this example, it's stateless.
 }
 
-pub const SERVER_TICK_RATE_HZ: u64 = 20; // e.g., 20 ticks per second
+pub const SERVER_TICK_RATE_HZ: u64 = 20;
 pub const SERVER_TICK_INTERVAL_MS: u64 = 1000 / SERVER_TICK_RATE_HZ;
-pub const MAX_PLAYER_SPEED: f32 = 200.0; // units per second
+pub const MAX_PLAYER_SPEED: f32 = 200.0;
 pub const WORLD_BOUNDS_X: (f32, f32) = (-300.0, 300.0);
 pub const WORLD_BOUNDS_Y: (f32, f32) = (-200.0, 200.0);
 
@@ -63,7 +71,7 @@ impl StateLogic<GameOp, PlayerId, ServerGameState> for ServerLogic {
     &self,
     state: &mut ServerGameState,
     input: LogicInput<GameOp, PlayerId>,
-  ) -> Result<Vec<TargetedOp<GameOp, PlayerId>>, StateLogicError> {
+  ) -> Result<LogicOutput<GameOp, PlayerId>, StateLogicError> {
     let mut ops_to_broadcast: Vec<TargetedOp<GameOp, PlayerId>> = Vec::new();
 
     match input {
@@ -72,19 +80,14 @@ impl StateLogic<GameOp, PlayerId, ServerGameState> for ServerLogic {
           Some(id) => *id,
           None => {
             warn!("Received AgentOps from System or agent without ID. Ignoring.");
-            return Ok(ops_to_broadcast);
+            return Ok(ops_to_broadcast.into());
           }
         };
 
         for op in ops {
           match op {
             GameOp::CS_RequestJoin => {
-              // This Op is more for the DummySession to signal a new client.
-              // Actual player addition might happen via a SystemOp from Session.
-              // Or, StateLogic handles it here if appropriate for the game.
-              // For this example, let's assume player is added on session join
-              // and this op isn't directly processed by StateLogic in this way.
-              // The DummyServerSession's agent_join will trigger snapshot etc.
+              // Players are added by the session's join flow, not by this op.
               info!(player_id = %source_player_id, "Received CS_RequestJoin (handled by session join flow).");
             }
             GameOp::CS_PlayerInput(SequencedClientInput {
@@ -92,12 +95,10 @@ impl StateLogic<GameOp, PlayerId, ServerGameState> for ServerLogic {
               input_data,
             }) => {
               if let Some(player_box_state) = state.boxes.get_mut(&source_player_id) {
-                // 1. Record that we've processed this input sequence
                 state
                   .input_tracker
                   .record_processed_input(source_player_id, sequence_number);
 
-                // 2. Apply input to authoritative state
                 let MoveInput { dx, dy } = input_data;
                 let mut move_vec = Vec2 { x: dx, y: dy };
 
@@ -132,7 +133,6 @@ impl StateLogic<GameOp, PlayerId, ServerGameState> for ServerLogic {
                     "Processed player input."
                 );
 
-                // 3. Prepare authoritative state update for this player
                 let auth_update = AuthoritativeStateUpdate {
                   last_processed_input_seq: sequence_number,
                   authoritative_player_state: *player_box_state, // BoxState is Copy
@@ -147,7 +147,6 @@ impl StateLogic<GameOp, PlayerId, ServerGameState> for ServerLogic {
                 warn!(player_id = %source_player_id, "Received input for unknown player box.");
               }
             }
-            // Server -> Client ops should not be received here
             _ => warn!("StateLogic: Received unexpected Op type from client: {:?}", op),
           }
         }
@@ -157,7 +156,6 @@ impl StateLogic<GameOp, PlayerId, ServerGameState> for ServerLogic {
         state.current_server_tick += 1;
         // info!("Server Tick: {}", state.current_server_tick); // Can be verbose
 
-        // In a more complex game, AI, physics, scheduled events would be processed here.
 
         // Periodically broadcast remote entity snapshots to all clients
         if state.current_server_tick % 1 == 0 {
@@ -194,8 +192,7 @@ impl StateLogic<GameOp, PlayerId, ServerGameState> for ServerLogic {
           }
         }
       }
-      LogicInput::AgentJoinedPlaza { agent } => {
-        // This variant would be sent by StateController if it auto-handles session joins
+      LogicInput::AgentJoined { agent } => {
         // by creating a System Op. This is a good place to add the player.
         if let Some(player_id) = agent.id_cloned() {
           if !state.boxes.contains_key(&player_id) {
@@ -227,7 +224,7 @@ impl StateLogic<GameOp, PlayerId, ServerGameState> for ServerLogic {
           }
         }
       }
-      LogicInput::AgentLeftPlaza { agent_id } => {
+      LogicInput::AgentLeft { agent_id } => {
         if state.boxes.remove(&agent_id).is_some() {
           state.input_tracker.on_client_disconnect(&agent_id);
           info!(player_id = %agent_id, "Player box removed from game state.");
@@ -240,25 +237,21 @@ impl StateLogic<GameOp, PlayerId, ServerGameState> for ServerLogic {
       }
     }
     state.version += 1;
-    Ok(ops_to_broadcast)
+    Ok(ops_to_broadcast.into())
   }
 }
 
-// --- Dummy Session using MPSC for simulated network ---
 // ClientConnections will store a way to send messages back to each "client task"
-type ClientTx = mpsc::Sender<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>;
+type ClientTx = mpsc::BoundedAsyncSender<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>;
 
 #[derive(Debug, Clone)]
 struct DummyServerSession {
-  // Sender for new "client connections" (client_tx, agent_info)
-  // The run_server function will hold the Receiver for this.
-  new_client_handler_tx: mpsc::Sender<(Agent<PlayerId>, ClientTx)>,
-
   // For messages from clients to StateController (via Session trait)
-  incoming_messages_tx: broadcast::Sender<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>,
+  incoming_messages_tx: SessionSender<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>,
+  incoming_messages_rx: Arc<StdMutex<Option<SessionReceiver<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>>>>,
   // For StateController to know about joins/leaves
-  agent_joined_tx: broadcast::Sender<Agent<PlayerId>>,
-  agent_left_tx: broadcast::Sender<PlayerId>,
+  presence_tx: SessionSender<PresenceEvent<PlayerId>>,
+  presence_rx: Arc<StdMutex<Option<SessionReceiver<PresenceEvent<PlayerId>>>>>,
 
   // Store Senders to connected clients (simulates server sending to specific sockets)
   // Key: ConnectionId (assigned by this session)
@@ -268,39 +261,39 @@ struct DummyServerSession {
 }
 
 impl DummyServerSession {
-  fn new(new_client_handler_tx: mpsc::Sender<(Agent<PlayerId>, ClientTx)>) -> Self {
-    let (incoming_tx, _) = broadcast::channel(128);
-    let (joined_tx, _) = broadcast::channel(32);
-    let (left_tx, _) = broadcast::channel(32);
+  fn new() -> Self {
+    let (incoming_tx, incoming_rx) = mpsc::bounded_async(128);
+    let (presence_tx, presence_rx) = mpsc::bounded_async(32);
     Self {
-      new_client_handler_tx,
       incoming_messages_tx: incoming_tx,
-      agent_joined_tx: joined_tx,
-      agent_left_tx: left_tx,
+      incoming_messages_rx: Arc::new(StdMutex::new(Some(incoming_rx))),
+      presence_tx,
+      presence_rx: Arc::new(StdMutex::new(Some(presence_rx))),
       clients: Arc::new(StdMutex::new(HashMap::new())),
       next_conn_id: Arc::new(StdMutex::new(1)),
     }
   }
-}
 
-#[async_trait]
-impl Session<GameOp, PlayerId, CspSnapshotPayload> for DummyServerSession {
-  async fn agent_join(&self, agent: Agent<PlayerId>) -> Result<PlazaConnectionId, PlazaError<PlayerId>> {
+  /// Registers a new simulated connection and hands back the client's end of it.
+  ///
+  /// This is the "network" for this example: the returned receiver is what the
+  /// client task reads server messages from.
+  fn connect(
+    &self,
+    agent: Agent<PlayerId>,
+  ) -> Result<
+    (
+      PlazaConnectionId,
+      mpsc::BoundedAsyncReceiver<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>,
+    ),
+    PlazaError<PlayerId>,
+  > {
     let player_id = agent
       .id()
       .cloned()
       .ok_or_else(|| PlazaError::InvalidArgument("Agent must have an ID to join".to_string()))?;
 
-    // Simulate client connecting: client creates its own MPSC for receiving server messages
-    let (to_client_tx, _to_client_rx_held_by_client_task) = mpsc::channel(64);
-
-    // Pass the agent info and the means to send to this client to the main server loop
-    // so it can spawn a "client handler task" for this "connection".
-    self
-      .new_client_handler_tx
-      .send((agent.clone(), to_client_tx.clone()))
-      .await
-      .map_err(|e| PlazaError::Internal(format!("Failed to send new client to handler: {}", e)))?;
+    let (to_client_tx, from_server_rx) = mpsc::bounded_async(64);
 
     let conn_id = {
       let mut id_guard = self.next_conn_id.lock().unwrap();
@@ -310,20 +303,32 @@ impl Session<GameOp, PlayerId, CspSnapshotPayload> for DummyServerSession {
     };
 
     self.clients.lock().unwrap().insert(conn_id, (player_id, to_client_tx));
+    info!(player_id = %player_id, conn_id = %conn_id, "DummySession: client connected.");
 
-    info!(player_id = %player_id, conn_id = %conn_id, "DummySession: Agent trying to join, passed to handler.");
-
-    // StateController will pick this up and trigger snapshot, etc.
-    if self.agent_joined_tx.send(agent).is_err() {
+    // StateController picks this up and sends the joining agent a snapshot.
+    if self.presence_tx.try_send(PresenceEvent::Joined(agent)).is_err() {
       warn!("DummySession: No subscribers for agent_joined (StateController might not be ready).");
     }
+    Ok((conn_id, from_server_rx))
+  }
+
+  /// The channel clients push their ops into, bridged to the controller.
+  fn incoming_sender(&self) -> SessionSender<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>> {
+    self.incoming_messages_tx.clone()
+  }
+}
+
+#[async_trait]
+impl Session<GameOp, PlayerId, CspSnapshotPayload> for DummyServerSession {
+  async fn agent_join(&self, agent: Agent<PlayerId>) -> Result<PlazaConnectionId, PlazaError<PlayerId>> {
+    let (conn_id, _from_server_rx) = self.connect(agent)?;
     Ok(conn_id)
   }
 
   async fn agent_leave(&self, player_id: &PlayerId, conn_id: PlazaConnectionId) -> Result<(), PlazaError<PlayerId>> {
     if self.clients.lock().unwrap().remove(&conn_id).is_some() {
       info!(player_id = %player_id, conn_id = %conn_id, "DummySession: Agent left, removed from clients map.");
-      if self.agent_left_tx.send(*player_id).is_err() {
+      if self.presence_tx.try_send(PresenceEvent::Left(*player_id)).is_err() {
         warn!(player_id = %player_id, "DummySession: No subscribers for agent_left.");
       }
     } else {
@@ -340,13 +345,13 @@ impl Session<GameOp, PlayerId, CspSnapshotPayload> for DummyServerSession {
     let clients_guard = self.clients.lock().unwrap();
     let mut sent_to_any = false;
 
-    let targeted_players: Vec<PlayerId> = match target {
-      MessageTarget::Agent(id) => vec![id],
-      MessageTarget::Agents(ids) => ids,
+    let targeted_players: Vec<PlayerId> = match &target {
+      MessageTarget::Agent(id) => vec![*id],
+      MessageTarget::Agents(ids) => ids.clone(),
       MessageTarget::All => clients_guard.values().map(|(pid, _)| pid.clone()).collect(),
       MessageTarget::AllExcept(ex_id) => clients_guard
         .values()
-        .filter_map(|(pid, _)| if *pid != ex_id { Some(pid.clone()) } else { None })
+        .filter_map(|(pid, _)| if pid != ex_id { Some(*pid) } else { None })
         .collect(),
       MessageTarget::AllExceptThese(ex_ids) => clients_guard
         .values()
@@ -365,10 +370,9 @@ impl Session<GameOp, PlayerId, CspSnapshotPayload> for DummyServerSession {
         debug!(target_player_id = %client_player_id, conn_id = %conn_id, "DummySession: Sending message.");
         if client_tx.try_send(msg.clone()).is_err() {
           // Clone msg for each send
-          // Client task might have ended, its receiver is dropped.
-          // This session should probably clean up this client.
-          warn!(conn_id = %conn_id, player_id = %client_player_id, "DummySession: Failed to send message to client, channel closed or full.");
-          // TODO: Add mechanism to signal back to main server loop to remove this client
+          // The client is left in the map: this example never reaps dead
+          // connections, unlike `plaza_session`, which deregisters on pump exit.
+          warn!(conn_id = %conn_id, player_id = %client_player_id, "DummySession: send failed; channel closed or full.");
         } else {
           sent_to_any = true;
         }
@@ -383,20 +387,14 @@ impl Session<GameOp, PlayerId, CspSnapshotPayload> for DummyServerSession {
     Ok(())
   }
 
-  fn subscribe_to_incoming_messages(
-    &self,
-  ) -> broadcast::Receiver<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>> {
-    self.incoming_messages_tx.subscribe()
+  fn subscribe_to_incoming_messages(&self) -> SessionReceiver<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>> {
+    take_once(&self.incoming_messages_rx, "incoming messages")
   }
-  fn on_agent_joined(&self) -> broadcast::Receiver<Agent<PlayerId>> {
-    self.agent_joined_tx.subscribe()
-  }
-  fn on_agent_left(&self) -> broadcast::Receiver<PlayerId> {
-    self.agent_left_tx.subscribe()
+  fn on_presence_change(&self) -> SessionReceiver<PresenceEvent<PlayerId>> {
+    take_once(&self.presence_rx, "presence")
   }
 }
 
-// --- Dummy SnapshotProvider ---
 #[derive(Debug, Default)]
 struct DummySnapshotProvider;
 
@@ -410,42 +408,81 @@ impl SnapshotProvider<PlayerId, ServerGameState, CspSnapshotPayload> for DummySn
   ) -> Result<SnapshotData<CspSnapshotPayload>, PlazaSnapshotError<PlayerId>> {
     info!("Creating snapshot for target: {:?}", target_agent.and_then(|a| a.id()));
     // The payload itself doesn't need last_processed_input_seq if StateController adds it.
-    // Or, we add it here if the SnapshotData struct supports it.
-    // For now, CspSnapshotPayload is just the shared state.
     // The AuthoritativeStateUpdate op is responsible for player-specific ack.
-    // A more advanced snapshot could embed this.
     let payload = CspSnapshotPayload {
-      boxes: state.boxes.clone(),
+      boxes: state.boxes.iter().map(|(id, s)| (*id, *s)).collect(),
       server_tick: state.current_server_tick,
     };
     Ok(SnapshotData { payload })
   }
 }
 
-// --- Main Server Runner ---
-pub async fn run_server() -> Result<(), PlazaError<PlayerId>> {
+/// A running server: owns the controller task and hands out client connections.
+pub struct ServerHandle {
+  session: Arc<DummyServerSession>,
+  controller_tx: CommandSender<GameOp, PlayerId, ServerGameState>,
+  controller_handle: tokio::task::JoinHandle<()>,
+  tick_handle: tokio::task::JoinHandle<()>,
+}
+
+impl ServerHandle {
+  /// Connects a new simulated client, returning the channels it talks over.
+  ///
+  /// The returned sender is the client's uplink (its ops reach the controller);
+  /// the receiver is its downlink (snapshots and broadcast ops from the server).
+  pub fn connect_client(
+    &self,
+    agent: Agent<PlayerId>,
+  ) -> Result<
+    (
+      mpsc::BoundedAsyncSender<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>,
+      mpsc::BoundedAsyncReceiver<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>,
+    ),
+    PlazaError<PlayerId>,
+  > {
+    let (_conn_id, from_server_rx) = self.session.connect(agent)?;
+
+    // Bridge this client's uplink mpsc into the session's incoming broadcast,
+    // which is what the StateController subscribes to.
+    let (to_server_tx, to_server_rx) = mpsc::bounded_async(64);
+    let incoming_tx = self.session.incoming_sender();
+    tokio::spawn(async move {
+      while let Ok(msg) = to_server_rx.recv().await {
+        if incoming_tx.send(msg).await.is_err() {
+          break;
+        }
+      }
+    });
+
+    Ok((to_server_tx, from_server_rx))
+  }
+
+  /// Signals the controller to stop and waits for the server tasks to wind down.
+  pub async fn shutdown(self) -> Result<(), PlazaError<PlayerId>> {
+    let _ = self.controller_tx.send(ControllerCommand::Shutdown).await;
+    self.tick_handle.abort();
+    self
+      .controller_handle
+      .await
+      .map_err(|e| PlazaError::Internal(format!("Controller task panicked: {}", e)))
+  }
+}
+
+/// Starts the authoritative server: the StateController plus a fixed-rate tick loop.
+pub async fn start_server() -> Result<ServerHandle, PlazaError<PlayerId>> {
   info!("CSP Example Server starting up...");
 
-  // MPSC channel for the main server loop to receive "new client" connections
-  // from the DummyServerSession.
-  // Each item is (Agent<PlayerId>, Sender_to_Client_Task)
-  let (new_client_tx_for_session, mut new_client_rx_for_server) = mpsc::channel::<(Agent<PlayerId>, ClientTx)>(32);
+  let session = Arc::new(DummyServerSession::new());
 
-  let initial_state = ServerGameState::default();
-  let server_logic = Arc::new(ServerLogic::default());
-  let session_adapter = Arc::new(DummyServerSession::new(new_client_tx_for_session));
-  let snapshot_provider = Arc::new(DummySnapshotProvider::default());
+  let (controller_tx, controller) = StateControllerBuilder::new(
+    Arc::new(ServerLogic::default()),
+    session.clone(),
+    Arc::new(DummySnapshotProvider::default()),
+    ServerGameState::default(),
+  )
+  .command_buffer(128)
+  .build();
 
-  let (controller_tx, controller) = StateControllerBuilder::new()
-    .op_handler(server_logic)
-    .initial_state(initial_state)
-    .session(session_adapter.clone()) // Clone Arc for controller
-    .snapshot_provider(snapshot_provider)
-    .command_buffer(128)
-    .build()
-    .expect("Failed to build StateController");
-
-  // Spawn the StateController task
   let controller_handle = tokio::spawn(async move {
     info!("StateController task running...");
     if let Err(e) = controller.run().await {
@@ -454,58 +491,30 @@ pub async fn run_server() -> Result<(), PlazaError<PlayerId>> {
     info!("StateController task finished.");
   });
 
-  // Task to simulate clients connecting and sending/receiving data via MPSC channels.
-  // This task also handles the server-side of the MPSC "network".
-  let server_network_task = tokio::spawn(async move {
-    // This map stores senders to client tasks, so server can send to them.
-    // It's populated by DummyServerSession's agent_join.
-    // The actual client sender is inside session_adapter.clients.
-    // This loop is for handling "new connections" and "incoming data from clients".
-
-    // We need a way for client tasks (simulated elsewhere) to send ops *to the server*.
-    // The DummyServerSession.incoming_messages_tx is for StateController to subscribe to.
-    // The client tasks need a Sender to this broadcast channel.
-    let incoming_ops_tx_for_clients = session_adapter.incoming_messages_tx.clone();
-
+  // Fixed-rate server tick: this is what advances simulation and emits
+  // authoritative state updates back to clients.
+  let tick_tx = controller_tx.clone();
+  let tick_handle = tokio::spawn(async move {
+    let mut ticker = tokio::time::interval(Duration::from_millis(SERVER_TICK_INTERVAL_MS));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
-      tokio::select! {
-          // Accept new "client connections"
-          Some((agent_info, _to_client_tx)) = new_client_rx_for_server.recv() => {
-              let player_id = agent_info.id().cloned().unwrap_or_default();
-              info!(player_id = %player_id, name = %agent_info.label(), "Server main loop: Accepted new 'client connection'.");
-              // The DummyServerSession's agent_join already added this client to its internal map
-              // and notified the StateController via on_agent_joined.
-              // The StateController will then trigger a snapshot for this new agent.
-              // Nothing more to do in this loop for the join itself, session handles it.
-          }
-          // In a real server, this task would also manage TCP listeners or WebSocket upgrades,
-          // and then for each connection, spawn a task that reads from the socket and
-          // sends ops to `incoming_ops_tx_for_clients` (or rather, a SessionMessage).
-          // For this MPSC example, client tasks will send directly to this broadcast channel.
-          // This loop doesn't need to do much more once the session adapter is set up.
-          // The StateController handles everything else.
-          // We just keep it alive. If we wanted to simulate random client disconnects server-side:
-          // tokio::time::sleep(Duration::from_secs(10)).await;
-          // if let Some(conn_id_to_drop) = get_random_conn_id_from_session(&session_adapter) {
-          //    session_adapter.agent_leave(player_id_for_conn_id, conn_id_to_drop).await.ok();
-          // }
+      ticker.tick().await;
+      if tick_tx
+        .send(ControllerCommand::ProcessTimeStep {
+          delta_time: Duration::from_millis(SERVER_TICK_INTERVAL_MS),
+        })
+        .await
+        .is_err()
+      {
+        break;
       }
     }
-    // To make this example self-contained without actual network:
-    // The client_runner.rs will directly get a `Sender` to `incoming_ops_tx_for_clients`
-    // and a `Receiver` for messages from the server for its specific connection.
-    // The server `DummySession::send_message` uses its `clients` map for this.
   });
 
-  // Simulate server running for a period or until explicitly stopped
-  // For this example, we might just let it run and expect client tasks to drive interaction.
-  // The server ticks based on `ControllerCommand::ProcessTimeStep`.
-  // Client tasks in client_runner.rs will send these.
-
-  // Wait for the controller to finish (e.g., if shutdown command is sent)
-  let controller_result = controller_handle
-    .await
-    .map_err(|e| PlazaError::Internal(format!("Controller task panicked: {}", e)))?;
-  server_network_task.abort(); // Stop network task if controller stops
-  controller_result
+  Ok(ServerHandle {
+    session,
+    controller_tx,
+    controller_handle,
+    tick_handle,
+  })
 }

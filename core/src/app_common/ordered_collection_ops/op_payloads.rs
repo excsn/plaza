@@ -1,5 +1,4 @@
 // plaza::app_common::ordered_collection_ops::op_payloads.rs
-use crate::agent::AgentId; // If ops need to reference who made the change explicitly
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::hash::Hash; // For CollectionKey and ItemId
@@ -84,4 +83,3 @@ where
 // These would mirror the structure of the request payloads but might include more context,
 // like the agent_id who performed the action, if not already part of the TargetedOp.
 // For example: ItemWasInsertedPayload, ItemWasRemovedPayload, etc.
-// For simplicity, StateLogic might just broadcast the state change or the original Op (if idempotent).

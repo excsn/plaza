@@ -1,0 +1,416 @@
+//! Coverage for `InMemoryLobbyManager`: room creation, join authorization,
+//! password checks, filtering, reaping, and the two concurrency bugs this crate
+//! has already produced.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use plaza::agent::Agent;
+use plaza::controller::StateControllerBuilder;
+use plaza::error::SnapshotError;
+use plaza::session::InProcessSession;
+use plaza::snapshot::{SnapshotContext, SnapshotData, SnapshotProvider};
+use plaza::state_logic::{LogicInput, LogicOutput, StateLogic, StateLogicError};
+use plaza_lobby::{
+  InMemoryLobbyManager, InProcessRoomHandle, JoinRoomRequestPayload, LobbyError, RoomFactory, RoomFilters, RoomHandle,
+  RoomId, RoomSettings,
+};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+type PlayerId = Uuid;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum GameOp {
+  Noop,
+}
+
+#[derive(Debug, Clone, Default)]
+struct GameState {
+  ticks: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct GameSettings {
+  difficulty: u8,
+}
+
+#[derive(Debug, Default)]
+struct GameLogic;
+
+#[async_trait]
+impl StateLogic<GameOp, PlayerId, GameState> for GameLogic {
+  async fn process_input(
+    &self,
+    state: &mut GameState,
+    input: LogicInput<GameOp, PlayerId>,
+  ) -> Result<LogicOutput<GameOp, PlayerId>, StateLogicError> {
+    if let LogicInput::TimeStep { .. } = input {
+      state.ticks += 1;
+    }
+    Ok(LogicOutput::none())
+  }
+}
+
+#[derive(Debug, Default)]
+struct GameSnapshotter;
+
+#[async_trait]
+impl SnapshotProvider<PlayerId, GameState, GameState> for GameSnapshotter {
+  async fn create_snapshot_data(
+    &self,
+    state: &GameState,
+    _target: Option<&Agent<PlayerId>>,
+    _context: Option<SnapshotContext>,
+  ) -> Result<SnapshotData<GameState>, SnapshotError<PlayerId>> {
+    Ok(SnapshotData { payload: state.clone() })
+  }
+}
+
+/// Spawns real controllers, so handles behave the way production ones do.
+#[derive(Debug, Default)]
+struct TestRoomFactory {
+  /// When set, `spawn_room` fails: exercising the error path.
+  fail: bool,
+}
+
+#[async_trait]
+impl RoomFactory for TestRoomFactory {
+  type CustomGameSettings = GameSettings;
+  type GameOp = GameOp;
+  type GameID = PlayerId;
+  type GameStateType = GameState;
+
+  async fn spawn_room(
+    &self,
+    room_id: RoomId,
+    settings: &RoomSettings<GameSettings>,
+  ) -> Result<InProcessRoomHandle<GameOp, PlayerId, GameState, GameSettings>, LobbyError> {
+    if self.fail {
+      return Err(LobbyError::RoomSpawnFailed("factory told to fail".into()));
+    }
+
+    let session = InProcessSession::<GameOp, PlayerId, GameState>::new();
+    let (command_tx, controller) = StateControllerBuilder::new(
+      Arc::new(GameLogic),
+      session,
+      Arc::new(GameSnapshotter),
+      GameState::default(),
+    )
+    .build();
+    let handle = tokio::spawn(controller.run());
+
+    let metadata = plaza_lobby::RoomMetadata {
+      room_id,
+      name: settings.name.clone().unwrap_or_else(|| "room".into()),
+      game_mode: settings.game_mode.clone(),
+      current_players: 0,
+      max_players: settings.max_players,
+      has_password: settings.password_hash.is_some(),
+      custom_game_settings_summary: settings.custom_game_settings.clone(),
+    };
+
+    Ok(InProcessRoomHandle::new(
+      room_id,
+      metadata,
+      command_tx,
+      handle,
+      format!("ws://test/game/{room_id}"),
+      settings.password_hash.clone(),
+    ))
+  }
+}
+
+fn settings(max_players: u32, password: Option<&str>) -> RoomSettings<GameSettings> {
+  RoomSettings {
+    name: Some("test room".into()),
+    game_mode: "deathmatch".into(),
+    max_players,
+    is_private: password.is_some(),
+    password_hash: password.map(str::to_string),
+    custom_game_settings: GameSettings::default(),
+  }
+}
+
+fn manager() -> InMemoryLobbyManager<TestRoomFactory> {
+  InMemoryLobbyManager::new(Arc::new(TestRoomFactory::default()))
+}
+
+fn player() -> (PlayerId, Agent<PlayerId>) {
+  let id = Uuid::new_v4();
+  (id, Agent::new_human(id, "player"))
+}
+
+#[tokio::test]
+async fn creating_a_room_returns_its_metadata_and_lists_it() {
+  let lobby = manager();
+  let (id, _) = player();
+
+  let metadata = lobby
+    .handle_create_room_request(&id, settings(4, None))
+    .await
+    .expect("spawn");
+
+  assert_eq!(metadata.max_players, 4);
+  assert!(!metadata.has_password);
+  assert_eq!(lobby.list_rooms(None).len(), 1);
+}
+
+#[tokio::test]
+async fn a_failing_factory_surfaces_its_error() {
+  let lobby = InMemoryLobbyManager::new(Arc::new(TestRoomFactory { fail: true }));
+  let (id, _) = player();
+
+  let result = lobby.handle_create_room_request(&id, settings(4, None)).await;
+  assert!(matches!(result, Err(LobbyError::RoomSpawnFailed(_))));
+  assert!(lobby.list_rooms(None).is_empty(), "a failed spawn leaves no room");
+}
+
+/// Regression: `room.rs` once locked the same `parking_lot` mutex twice in one
+/// expression, which deadlocked on the first join. A hang here means it is back.
+#[tokio::test]
+async fn joining_a_room_does_not_deadlock() {
+  let lobby = manager();
+  let (id, agent) = player();
+  let metadata = lobby
+    .handle_create_room_request(&id, settings(4, None))
+    .await
+    .expect("spawn");
+
+  let outcome = tokio::time::timeout(
+    Duration::from_secs(5),
+    lobby.handle_join_room_request(
+      &id,
+      agent,
+      &JoinRoomRequestPayload {
+        room_id: metadata.room_id,
+        password_attempt: None,
+      },
+    ),
+  )
+  .await
+  .expect("join must not hang")
+  .expect("join should succeed");
+
+  assert!(outcome.success);
+  assert_eq!(outcome.room_session_endpoint.as_deref(), Some(&*format!("ws://test/game/{}", metadata.room_id)));
+}
+
+#[tokio::test]
+async fn joining_an_unknown_room_is_rejected() {
+  let lobby = manager();
+  let (id, agent) = player();
+
+  let result = lobby
+    .handle_join_room_request(
+      &id,
+      agent,
+      &JoinRoomRequestPayload {
+        room_id: Uuid::new_v4(),
+        password_attempt: None,
+      },
+    )
+    .await;
+
+  assert!(matches!(result, Err(LobbyError::RoomNotFound(_))));
+}
+
+#[tokio::test]
+async fn a_private_room_requires_the_right_password() {
+  let lobby = manager();
+  let (id, agent) = player();
+  let metadata = lobby
+    .handle_create_room_request(&id, settings(4, Some("hunter2")))
+    .await
+    .expect("spawn");
+  assert!(metadata.has_password);
+
+  let attempt = |password: Option<&str>| JoinRoomRequestPayload {
+    room_id: metadata.room_id,
+    password_attempt: password.map(str::to_string),
+  };
+
+  assert!(
+    lobby
+      .handle_join_room_request(&id, agent.clone(), &attempt(None))
+      .await
+      .is_err(),
+    "missing password"
+  );
+  assert!(
+    lobby
+      .handle_join_room_request(&id, agent.clone(), &attempt(Some("wrong")))
+      .await
+      .is_err(),
+    "wrong password"
+  );
+  assert!(
+    lobby
+      .handle_join_room_request(&id, agent, &attempt(Some("hunter2")))
+      .await
+      .is_ok(),
+    "correct password"
+  );
+}
+
+#[tokio::test]
+async fn a_custom_verifier_replaces_the_default_comparison() {
+  // Stands in for argon2: the stored "hash" is the attempt reversed.
+  let lobby = InMemoryLobbyManager::new(Arc::new(TestRoomFactory::default()))
+    .with_password_verifier(Arc::new(|attempt, stored| attempt.chars().rev().collect::<String>() == stored));
+
+  let (id, agent) = player();
+  let metadata = lobby
+    .handle_create_room_request(&id, settings(4, Some("2retnuh")))
+    .await
+    .expect("spawn");
+
+  let outcome = lobby
+    .handle_join_room_request(
+      &id,
+      agent,
+      &JoinRoomRequestPayload {
+        room_id: metadata.room_id,
+        password_attempt: Some("hunter2".into()),
+      },
+    )
+    .await;
+
+  assert!(outcome.is_ok(), "the custom verifier decided, not string equality");
+}
+
+#[tokio::test]
+async fn a_full_room_refuses_new_players() {
+  let lobby = manager();
+  let (id, agent) = player();
+  let metadata = lobby
+    .handle_create_room_request(&id, settings(1, None))
+    .await
+    .expect("spawn");
+
+  // The room's own session owns the player count; simulate it filling up.
+  lobby
+    .room(&metadata.room_id)
+    .expect("room exists")
+    .update_player_count_in_metadata(1);
+
+  let result = lobby
+    .handle_join_room_request(
+      &id,
+      agent,
+      &JoinRoomRequestPayload {
+        room_id: metadata.room_id,
+        password_attempt: None,
+      },
+    )
+    .await;
+
+  assert!(matches!(result, Err(LobbyError::JoinRoomFailed(_))));
+}
+
+#[tokio::test]
+async fn filters_narrow_the_room_list() {
+  let lobby = manager();
+  let (id, _) = player();
+
+  let mut deathmatch = settings(4, None);
+  deathmatch.game_mode = "deathmatch".into();
+  lobby.handle_create_room_request(&id, deathmatch).await.expect("spawn");
+
+  let mut ctf = settings(4, None);
+  ctf.game_mode = "capture-the-flag".into();
+  lobby.handle_create_room_request(&id, ctf).await.expect("spawn");
+
+  let private = settings(4, Some("secret"));
+  lobby.handle_create_room_request(&id, private).await.expect("spawn");
+
+  assert_eq!(lobby.list_rooms(None).len(), 3, "no filter lists everything");
+
+  let by_mode = lobby.list_rooms(Some(&RoomFilters {
+    game_mode: Some("capture-the-flag".into()),
+    ..Default::default()
+  }));
+  assert_eq!(by_mode.len(), 1);
+
+  let public_only = lobby.list_rooms(Some(&RoomFilters {
+    exclude_private_if_no_password_known: Some(true),
+    ..Default::default()
+  }));
+  assert_eq!(public_only.len(), 2, "the private room is hidden");
+}
+
+/// Regression: `is_finished` once used `try_lock` and treated contention as
+/// "finished", which reaped rooms whose players were still in them.
+#[tokio::test]
+async fn a_live_room_is_not_reaped() {
+  let lobby = manager();
+  let (id, _) = player();
+  lobby
+    .handle_create_room_request(&id, settings(4, None))
+    .await
+    .expect("spawn");
+
+  lobby.reap_finished_rooms().await;
+  assert_eq!(lobby.list_rooms(None).len(), 1, "a running room must survive reaping");
+}
+
+#[tokio::test]
+async fn a_finished_room_is_reaped() {
+  let lobby = manager();
+  let (id, _) = player();
+  let metadata = lobby
+    .handle_create_room_request(&id, settings(4, None))
+    .await
+    .expect("spawn");
+
+  lobby.room(&metadata.room_id).expect("room exists").request_shutdown().await;
+  // Give the controller task a moment to actually finish.
+  tokio::time::timeout(Duration::from_secs(5), async {
+    loop {
+      lobby.reap_finished_rooms().await;
+      if lobby.list_rooms(None).is_empty() {
+        return;
+      }
+      tokio::task::yield_now().await;
+    }
+  })
+  .await
+  .expect("a stopped room should be reaped");
+}
+
+#[tokio::test]
+async fn a_player_leaving_the_lobby_is_forwarded_to_their_room() {
+  let lobby = manager();
+  let (id, agent) = player();
+  let metadata = lobby
+    .handle_create_room_request(&id, settings(4, None))
+    .await
+    .expect("spawn");
+
+  lobby
+    .handle_join_room_request(
+      &id,
+      agent,
+      &JoinRoomRequestPayload {
+        room_id: metadata.room_id,
+        password_attempt: None,
+      },
+    )
+    .await
+    .expect("join");
+
+  // Must not hang: this path once held a lock across an await.
+  tokio::time::timeout(Duration::from_secs(5), lobby.handle_player_leaving_lobby(&id))
+    .await
+    .expect("leaving must not hang");
+}
+
+#[tokio::test]
+async fn a_player_who_never_joined_a_room_leaves_cleanly() {
+  let lobby = manager();
+  let (id, _) = player();
+  tokio::time::timeout(Duration::from_secs(5), lobby.handle_player_leaving_lobby(&id))
+    .await
+    .expect("leaving must not hang");
+}

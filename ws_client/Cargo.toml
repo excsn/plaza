@@ -1,0 +1,38 @@
+[package]
+name = "plaza_ws"
+version = "0.1.0"
+edition = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
+description = "One client-side WebSocket interface across desktop, browser, and in-process, for frame-loop applications."
+readme = "README.md"
+keywords = ["websocket", "gamedev", "wasm", "networking", "client"]
+categories = ["network-programming", "game-development", "wasm"]
+
+[features]
+default = ["loopback"]
+loopback = []
+native = ["dep:tungstenite"]
+miniquad = []
+
+[dependencies]
+tungstenite = { version = "^0.24", optional = true, features = ["rustls-tls-webpki-roots"] }
+
+[dev-dependencies]
+# Only for the browser echo spike, which has to run under macroquad's loader
+# because that loader is the whole thing being tested. Dev-only, so nothing
+# downstream inherits it.
+macroquad = "=0.4.15"
+
+[[example]]
+name = "echo"
+required-features = ["native"]
+
+[[example]]
+name = "echo_server"
+required-features = ["native"]
+
+[[example]]
+name = "echo_web"
+required-features = ["miniquad"]

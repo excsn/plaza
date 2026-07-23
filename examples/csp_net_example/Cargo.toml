@@ -1,7 +1,7 @@
 [package]
 name = "plaza_csp_net_example"
 version = "0.1.0"
-edition = "2021"
+edition = { workspace = true }
 
 [dependencies]
 plaza = { path = "../../core" }
@@ -14,6 +14,8 @@ uuid = { version = "1", features = ["v4", "serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 rand = "0.8" # For small random server-side deviations
+async-trait = "0.1"
+fibre = { workspace = true }
 
 # For a simple graphical client (optional, can start with console)
 # macroquad = "0.4"

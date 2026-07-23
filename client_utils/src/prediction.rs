@@ -1,10 +1,10 @@
 //! Utilities for managing client-side predicted state and performing server reconciliation.
 
-use crate::input_buffer::{BufferedInput, ClientInputBuffer};
+use crate::input_buffer::ClientInputBuffer;
 use crate::types::SequenceNumber;
 use std::fmt::Debug;
 use std::marker::PhantomData; // Import PhantomData
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, trace};
 
 /// Represents an entity whose state is being predicted on the client-side.
 #[derive(Debug)] // Manual Clone will be provided
@@ -12,7 +12,7 @@ pub struct PredictedEntity<StateType, Op> {
   pub current_predicted_state: StateType,
   pub last_authoritative_state: StateType,
   pub last_server_acknowledged_input_seq: SequenceNumber,
-  _op_marker: PhantomData<Op>, // Use PhantomData to mark 'Op' as logically used
+  _op_marker: PhantomData<Op>,
 }
 
 // Manual Clone implementation for PredictedEntity
@@ -98,7 +98,11 @@ where
       );
     }
     if replayed_count > 0 {
-      info!(
+      // Debug, not info: reconciliation replaying a few inputs is what this type
+      // does every frame it is driven, so at info it is one line per frame per
+      // predicted player. The no-op branch below was already debug; this matches
+      // it.
+      debug!(
         "Reconciliation: Replayed {} unacknowledged inputs. Final predicted state: {:?}",
         replayed_count, self.current_predicted_state
       );
@@ -108,13 +112,12 @@ where
   }
 }
 
-// --- Unit Tests ---
 // (Tests remain the same, they will use the turbofish syntax for ::new)
 #[cfg(test)]
 mod tests {
   use super::*;
   use crate::input_buffer::ClientInputBuffer;
-  use crate::types::SequenceNumber; // Ensure this is accessible
+  use crate::types::SequenceNumber;
 
   #[derive(Debug, Clone, PartialEq)]
   struct TestPlayerState {
@@ -125,7 +128,6 @@ mod tests {
   #[derive(Debug, Clone, PartialEq)]
   enum TestPlayerOp {
     Move { dx: i32, dy: i32 },
-    Stop,
   }
 
   // Client-side simulation logic for tests
@@ -135,16 +137,13 @@ mod tests {
         state.x += dx;
         state.y += dy;
       }
-      TestPlayerOp::Stop => {
-        // No change in position for stop, maybe sets a flag in a real game
-      }
     }
   }
 
   #[test]
   fn test_entity_initialization() {
     let initial_state = TestPlayerState { x: 0, y: 0 };
-    let entity = PredictedEntity::<TestPlayerState, TestPlayerOp>::new(initial_state.clone()); // Turbofish for Op
+    let entity = PredictedEntity::<TestPlayerState, TestPlayerOp>::new(initial_state.clone());
     assert_eq!(entity.current_predicted_state, initial_state);
     assert_eq!(entity.last_authoritative_state, initial_state);
     assert_eq!(entity.last_server_acknowledged_input_seq, 0);

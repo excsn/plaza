@@ -1,4 +1,3 @@
-// examples/shared-counter/src/snapshot.rs
 use crate::types::{CounterId, CounterSnapshotPayload, CounterStateData};
 use async_trait::async_trait;
 use plaza::{

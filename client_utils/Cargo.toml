@@ -1,15 +1,20 @@
 [package]
 name = "plaza_client_utils"
 version = "0.1.0"
-edition = "2021"
-license = "MPL-2.0"
+edition = { workspace = true }
+license = { workspace = true }
 
-authors = ["Your Name <you@example.com>"]
-description = "Client-side utilities for applications using the Plaza server framework, focusing on prediction, reconciliation, and smoothing."
-repository = "https://github.com/excsn/plaza"
+authors = { workspace = true }
+description = "Client-side prediction, server reconciliation, and entity smoothing for real-time applications. No server dependencies."
+repository = { workspace = true }
 readme = "README.md"
 keywords = ["gamedev", "networking", "multiplayer", "prediction", "reconciliation"]
 categories = ["game-development", "network-programming"]
+
+[features]
+# An opt-in deterministic network simulator (latency, jitter, loss) for testing
+# and demonstrating netcode. Not part of the core client API.
+net-sim = []
 
 [dependencies]
 thiserror = { workspace = true }

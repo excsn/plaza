@@ -1,23 +1,15 @@
 [package]
 name = "plaza_example_whack_a_mole"
 version = "0.1.0"
-edition = "2021"
+edition = { workspace = true }
 
 [dependencies]
-plaza_core = { path = "../../core" } # Or just plaza = "..."
-# If using actix-ws session adapter from plaza-session crate:
-# plaza-session = { path = "../../session", features = ["actix_ws"] }
+plaza = { path = "../../core" }
 
-actix-web = "4"
-actix-web-actors = "4" # For the old WebsocketContext style, or use actix-ws crate if we adapt
-actix = "0.13" # For actor system if using actix-web-actors or our own actor based session
-tokio = { version = "1", features = ["full"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-uuid = { version = "1", features = ["v4", "serde"] }
+async-trait = "0.1"
 rand = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
-async-trait = "0.1" # For StateLogic, Session, SnapshotProvider impls
-parking_lot = "0.12"
+uuid = { version = "1", features = ["v4", "serde"] }

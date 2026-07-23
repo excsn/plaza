@@ -1,37 +1,54 @@
-// plaza-lobby/src/manager.rs
 use crate::error::LobbyError;
 use crate::factory::RoomFactory;
-use crate::op_payloads::*; // All request/notice payloads
+use crate::op_payloads::*;
 use crate::room::{InProcessRoomHandle, RoomHandle};
 use crate::types::RoomId;
-use async_trait::async_trait;
 use parking_lot::Mutex;
-use plaza::agent::{Agent, AgentId};
+use plaza::agent::Agent;
 use std::collections::HashMap;
-use std::marker::PhantomData;
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
-/// Manages a collection of `InProcessRoomHandle`s for a single-server lobby.
-/// It uses a `RoomFactory` provided by the application to spawn new game rooms.
-#[derive(Debug)]
+type RoomArc<F> = Arc<
+  InProcessRoomHandle<
+    <F as RoomFactory>::GameOp,
+    <F as RoomFactory>::GameID,
+    <F as RoomFactory>::GameStateType,
+    <F as RoomFactory>::CustomGameSettings,
+  >,
+>;
+
+/// Compares a submitted password against a room's stored hash.
+///
+/// The default is a plain string comparison, which is only appropriate when
+/// "passwords" are low-stakes room codes. For real secrets, supply a verifier
+/// backed by argon2 or bcrypt via
+/// [`with_password_verifier`](InMemoryLobbyManager::with_password_verifier).
+pub type PasswordVerifier = Arc<dyn Fn(&str, &str) -> bool + Send + Sync>;
+
+/// Manages `InProcessRoomHandle`s for a single-server lobby, spawning rooms
+/// through an application-supplied [`RoomFactory`].
 pub struct InMemoryLobbyManager<F>
 where
   F: RoomFactory,
 {
-  rooms: Arc<
-    Mutex<
-      HashMap<
-        RoomId,
-        Arc<InProcessRoomHandle<F::GameOp, F::GameID, F::GameStateType, F::GameQueryResponse, F::CustomGameSettings>>,
-      >,
-    >,
-  >,
+  rooms: Arc<Mutex<HashMap<RoomId, RoomArc<F>>>>,
   room_factory: Arc<F>,
-  // Tracks which room a lobby player is currently associated with.
-  // This is simplified; a player could be in lobby AND a room, or just one.
-  // This map helps direct "player left lobby" notifications to the correct room.
-  player_to_room_map: Arc<Mutex<HashMap<F::GameID, RoomId>>>, // Assuming LobbyID and GameID can be same type F::GameID
+  /// Which room each lobby player is currently assigned to, so departures can
+  /// be routed to the right room.
+  player_to_room_map: Arc<Mutex<HashMap<F::GameID, RoomId>>>,
+  password_verifier: PasswordVerifier,
+}
+
+impl<F> std::fmt::Debug for InMemoryLobbyManager<F>
+where
+  F: RoomFactory,
+{
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("InMemoryLobbyManager")
+      .field("rooms", &self.rooms.lock().len())
+      .finish()
+  }
 }
 
 impl<F> InMemoryLobbyManager<F>
@@ -43,85 +60,87 @@ where
       rooms: Arc::new(Mutex::new(HashMap::new())),
       room_factory,
       player_to_room_map: Arc::new(Mutex::new(HashMap::new())),
+      password_verifier: Arc::new(|attempt, stored| attempt == stored),
     }
+  }
+
+  /// Replaces the default plain-comparison password check.
+  ///
+  /// The verifier receives `(attempt, stored_hash)` and returns whether they match.
+  pub fn with_password_verifier(mut self, verifier: PasswordVerifier) -> Self {
+    self.password_verifier = verifier;
+    self
   }
 
   pub async fn handle_create_room_request(
     &self,
-    _requester_id: &F::GameID, // Assuming LobbyID is same as GameID for simplicity here
+    _requester_id: &F::GameID,
     settings: RoomSettings<F::CustomGameSettings>,
   ) -> Result<RoomMetadata<F::CustomGameSettings>, LobbyError> {
-    let room_id = RoomId::new_v4(); // Generate new room ID
+    let room_id = RoomId::new_v4();
     info!(
       "Attempting to spawn room {} with settings: {:?}",
       room_id, settings.game_mode
     );
 
-    // Spawn the room using the factory
     match self.room_factory.spawn_room(room_id, &settings).await {
       Ok(room_handle) => {
-        let metadata = room_handle.metadata(); // Get initial metadata
+        let metadata = room_handle.metadata();
         info!(
           "Room {} spawned successfully. Endpoint: {}",
           room_id,
           room_handle.session_endpoint_info()
         );
         self.rooms.lock().insert(room_id, Arc::new(room_handle));
-        self.player_to_room_map.lock().remove(_requester_id); // Clear any old room association
         Ok(metadata)
       }
       Err(e) => {
         error!("Failed to spawn room {}: {}", room_id, e);
-        Err(LobbyError::RoomSpawnFailed(e))
+        Err(e)
       }
     }
   }
 
   pub async fn handle_join_room_request(
     &self,
-    player_lobby_agent_id: &F::GameID,   // ID of player in lobby
-    player_game_agent: Agent<F::GameID>, // Full agent info for the game room
+    player_lobby_agent_id: &F::GameID,
+    player_game_agent: Agent<F::GameID>,
     payload: &JoinRoomRequestPayload,
   ) -> Result<JoinRoomOutcomePayload, LobbyError> {
     let room_id = payload.room_id;
-    let rooms_guard = self.rooms.lock();
-    let room_arc = match rooms_guard.get(&room_id) {
-      Some(r_arc) => Arc::clone(r_arc),
-      None => return Err(LobbyError::RoomNotFound(room_id)),
-    };
-    drop(rooms_guard); // Release lock on the HashMap
 
-    // Now interact with the specific room handle
-    // The room_handle itself might have internal mutexes if its state is shared/mutable.
-    // For InProcessRoomHandle, its metadata is Arc<Mutex<...>>.
-    let room_handle = &*room_arc; // Deref Arc to get &InProcessRoomHandle
-
-    // Check password if room is private
-    let metadata = room_handle.metadata(); // This clones from Arc<Mutex<Metadata>>
-    if metadata.has_password {
-      if payload.password_attempt.is_none() {
-        return Err(LobbyError::JoinRoomFailed("Password required.".to_string()));
+    // Clone the handle out and release the map lock before doing any work on it.
+    let room_arc = {
+      let rooms = self.rooms.lock();
+      match rooms.get(&room_id) {
+        Some(handle) => Arc::clone(handle),
+        None => return Err(LobbyError::RoomNotFound(room_id)),
       }
-      // In a real scenario, compare hashed passwords.
-      // For example: if !verify_password(&payload.password_attempt.unwrap(), &room_settings.password_hash.unwrap()) ...
-      // This example does not store/check passwords on RoomHandle/Metadata for simplicity.
-      // Assume this check happens here based on `settings` used to create room.
-      // This part needs RoomSettings to be accessible or password check logic elsewhere.
-      // Let's assume for now password check is trivial or not implemented here.
-      warn!("Password check not fully implemented in this example JoinRoom handler.");
+    };
+
+    let metadata = room_arc.metadata();
+
+    if metadata.has_password {
+      let attempt = payload
+        .password_attempt
+        .as_deref()
+        .ok_or_else(|| LobbyError::JoinRoomFailed("Password required.".to_string()))?;
+      let stored = room_arc
+        .password_hash()
+        .ok_or_else(|| LobbyError::JoinRoomFailed("Room is private but has no password set.".to_string()))?;
+
+      if !(self.password_verifier)(attempt, &stored) {
+        warn!(room = %room_id, "Rejected join: incorrect password.");
+        return Err(LobbyError::JoinRoomFailed("Incorrect password.".to_string()));
+      }
     }
 
     if metadata.current_players >= metadata.max_players {
       return Err(LobbyError::JoinRoomFailed("Room is full.".to_string()));
     }
 
-    // The `accept_authorized_player` on RoomHandle might just be a signal.
-    // The real "join" happens when client connects to room's session.
-    match room_handle.accept_authorized_player(player_game_agent).await {
-      Ok(_) => {
-        // String from accept_authorized_player might be a game_token
-        // Successfully authorized to try joining the room's session.
-        // Update player's current room in the lobby's tracking.
+    match room_arc.accept_authorized_player(player_game_agent).await {
+      Ok(()) => {
         self
           .player_to_room_map
           .lock()
@@ -130,90 +149,100 @@ where
           "Player {:?} authorized for room {}. Endpoint: {}",
           player_lobby_agent_id,
           room_id,
-          room_handle.session_endpoint_info()
+          room_arc.session_endpoint_info()
         );
         Ok(JoinRoomOutcomePayload {
           room_id,
           success: true,
           reason_if_fail: None,
-          room_session_endpoint: Some(room_handle.session_endpoint_info()),
-          player_game_token: None, // Or generate/pass a token if needed
+          room_session_endpoint: Some(room_arc.session_endpoint_info()),
+          player_game_token: None,
         })
       }
-      Err(reason) => {
+      Err(e) => {
         error!(
           "Room {} denied player {:?} join attempt: {}",
-          room_id, player_lobby_agent_id, reason
+          room_id, player_lobby_agent_id, e
         );
-        Err(LobbyError::JoinRoomFailed(reason))
+        Err(e)
       }
     }
   }
 
+  /// The handle for one room, if it exists.
+  ///
+  /// The way to reach a specific room: send it a `ControllerCommand`, read its
+  /// metadata, or update its player count as clients connect and disconnect.
+  pub fn room(&self, room_id: &RoomId) -> Option<RoomArc<F>> {
+    self.rooms.lock().get(room_id).map(Arc::clone)
+  }
+
+  /// Every live room handle.
+  pub fn rooms(&self) -> Vec<RoomArc<F>> {
+    self.rooms.lock().values().map(Arc::clone).collect()
+  }
+
   pub fn list_rooms(&self, filters: Option<&RoomFilters>) -> Vec<RoomMetadata<F::CustomGameSettings>> {
-    let rooms_guard = self.rooms.lock();
-    rooms_guard
+    self
+      .rooms
+      .lock()
       .values()
-      .map(|room_handle_arc| room_handle_arc.metadata()) // Clones metadata
-      .filter(|metadata| {
-        if let Some(f) = filters {
-          let mut passes = true;
-          if let Some(ref mode) = f.game_mode {
-            passes &= &metadata.game_mode == mode;
-          }
-          if f.exclude_full.unwrap_or(false) {
-            passes &= metadata.current_players < metadata.max_players;
-          }
-          // ... other filters ...
-          passes
-        } else {
-          true // No filters, include all
+      .map(|room_handle| room_handle.metadata())
+      .filter(|metadata| match filters {
+        None => true,
+        Some(f) => {
+          let mode_ok = f.game_mode.as_ref().is_none_or(|mode| &metadata.game_mode == mode);
+          let space_ok = !f.exclude_full.unwrap_or(false) || metadata.current_players < metadata.max_players;
+          let private_ok = !f.exclude_private_if_no_password_known.unwrap_or(false) || !metadata.has_password;
+          mode_ok && space_ok && private_ok
         }
       })
       .collect()
   }
 
+  /// Removes rooms whose controller task has ended.
   pub async fn reap_finished_rooms(&self) {
-    let mut rooms_guard = self.rooms.lock();
-    let mut reaped_ids = Vec::new();
-    for (id, room_handle_arc) in rooms_guard.iter() {
-      if room_handle_arc.is_finished() {
-        info!("Reaping finished room: {}", id);
-        // Ensure shutdown is requested if not already handled by room itself
-        room_handle_arc.request_shutdown().await;
-        reaped_ids.push(*id);
-      }
-    }
-    for id in reaped_ids {
-      rooms_guard.remove(&id);
-      // Also clean up player_to_room_map for players in this room
-      let mut p2r_map = self.player_to_room_map.lock();
-      p2r_map.retain(|_player_id, room_id_val| room_id_val != &id);
+    // Collect finished rooms under the lock, then release it before awaiting:
+    // holding a parking_lot guard across an await would block every other
+    // lobby operation for the duration.
+    let finished: Vec<(RoomId, RoomArc<F>)> = {
+      let rooms = self.rooms.lock();
+      rooms
+        .iter()
+        .filter(|(_, handle)| handle.is_finished())
+        .map(|(id, handle)| (*id, Arc::clone(handle)))
+        .collect()
+    };
+
+    for (id, handle) in finished {
+      info!("Reaping finished room: {}", id);
+      handle.request_shutdown().await;
+      self.rooms.lock().remove(&id);
+      self.player_to_room_map.lock().retain(|_player, room| room != &id);
     }
   }
 
   pub async fn handle_player_leaving_lobby(&self, player_id: &F::GameID) {
-    let mut p2r_map = self.player_to_room_map.lock();
-    if let Some(room_id) = p2r_map.remove(player_id) {
-      drop(p2r_map); // Release lock before accessing rooms map potentially
-      info!(
-        "Player {:?} left lobby, was associated with room {}. Notifying room.",
-        player_id, room_id
-      );
-      let rooms_guard = self.rooms.lock();
-      if let Some(room_handle_arc) = rooms_guard.get(&room_id) {
-        room_handle_arc.notify_player_departed(player_id).await;
-      } else {
-        warn!(
-          "Player {:?} left lobby, but their associated room {} was not found.",
-          player_id, room_id
-        );
+    let room_id = match self.player_to_room_map.lock().remove(player_id) {
+      Some(room_id) => room_id,
+      None => {
+        info!("Player {:?} left lobby; was not in any active room.", player_id);
+        return;
       }
-    } else {
-      info!(
-        "Player {:?} left lobby, was not associated with any active room.",
-        player_id
-      );
+    };
+
+    info!(
+      "Player {:?} left lobby, was in room {}. Notifying room.",
+      player_id, room_id
+    );
+
+    let room_arc = self.rooms.lock().get(&room_id).map(Arc::clone);
+    match room_arc {
+      Some(handle) => handle.notify_player_departed(player_id).await,
+      None => warn!(
+        "Player {:?} left lobby, but their room {} was not found.",
+        player_id, room_id
+      ),
     }
   }
 }

@@ -5,11 +5,8 @@
 //! It typically relies on the last known state and velocities.
 
 use std::fmt::Debug;
-use std::ops::Sub; // For calculating time deltas
-                   // Assuming ClientTimeMs and ServerTimestamp types might be u64 or similar
-use crate::types::{ClientTimeMs, SequenceNumber}; // SequenceNumber might not be directly used here
-                                                  // but ClientTimeMs is relevant.
-                                                  // Let's use a generic ServerTimestamp for flexibility.
+ // For calculating time deltas
+use crate::types::ClientTimeMs;
 
 /// Trait for types whose state can be extrapolated forward given a velocity and a time delta.
 ///
@@ -90,8 +87,8 @@ where
   ) -> Option<StateType>
   where
     StateType: Extrapolatable<VelocityType, TimeDelta>,
-    VelocityType: Debug,     // From Extrapolatable bound already
-    TimeDelta: Copy + Debug, // From Extrapolatable bound already
+    VelocityType: Debug,
+    TimeDelta: Copy + Debug,
   {
     if target_client_render_time_ms < self.client_receipt_time_ms {
       // Target render time is in the past relative to when we received this base state.
@@ -135,7 +132,6 @@ where
   }
 }
 
-// --- Unit Tests ---
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -149,7 +145,7 @@ mod tests {
 
   #[derive(Debug, Clone, PartialEq)]
   struct TestExtrapVelocity {
-    speed: f32, // units per second
+    speed: f32,
   }
 
   impl Extrapolatable<TestExtrapVelocity, Duration> for TestExtrapState {

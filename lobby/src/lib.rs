@@ -1,5 +1,9 @@
-//! Plaza Lobby: Components for building single-server lobby and room management
-//! systems on top of Plaza Core.
+//! Plaza Lobby: components for building single-server lobby and room
+//! management on top of Plaza Core.
+//!
+//! Implement [`RoomFactory`] for your game, hand it to an
+//! [`InMemoryLobbyManager`], and the manager handles room creation, listing,
+//! join authorization, and reaping finished rooms.
 
 pub mod error;
 pub mod factory;
@@ -8,17 +12,9 @@ pub mod op_payloads;
 pub mod room;
 pub mod types;
 
-// Re-export key items for easier use
 pub use error::LobbyError;
 pub use factory::RoomFactory;
-pub use manager::InMemoryLobbyManager;
-pub use op_payloads::*; // Re-export all payload structs
+pub use manager::{InMemoryLobbyManager, PasswordVerifier};
+pub use op_payloads::*;
 pub use room::{InProcessRoomHandle, RoomHandle};
 pub use types::{GameMode, RoomId};
-
-// Re-export core types needed by this crate's public API if not easily accessible
-// This helps users of plaza-lobby not always need to also import plaza_core directly for these.
-// However, it's often cleaner for users to import from plaza_core when they use plaza_core types.
-// For now, let's assume users will import Agent, ControllerCommand etc. from plaza_core.
-// use plaza_core::agent;
-// use plaza_core::controller;

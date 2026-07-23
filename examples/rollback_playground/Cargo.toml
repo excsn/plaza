@@ -1,0 +1,22 @@
+[package]
+name = "rollback_playground"
+version = "0.1.0"
+edition = { workspace = true }
+publish = false # It's an example
+
+# Rollback is client-only: two peers run the same deterministic sim and exchange
+# inputs. No server, so only client_utils (plus its net-sim link for the demo).
+[dependencies]
+plaza_client_utils = { path = "../../client_utils", features = ["net-sim"] }
+
+# egui-macroquad is a bridge crate pinned to matching macroquad/egui versions.
+macroquad = "=0.4.15"
+egui-macroquad = "=0.17.3"
+
+[lib]
+name = "rollback_playground"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rollback_playground"
+path = "src/main.rs"

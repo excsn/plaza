@@ -5,16 +5,13 @@ use std::fmt::Debug;
 use std::hash::Hash;
 // use std::time::{Duration, Instant}; // If locks are timed
 
-#[derive(Debug, Clone)] // If ID is Clone
+#[derive(Debug, Clone)]
 pub struct LockInfo<ID: AgentId> {
   pub owner_id: ID,
-  // pub acquired_at: Instant, // If timed locks
-  // pub duration: Option<Duration>,
-  // pub lock_type: LockType,
 }
 
 /// A simple manager for advisory resource locks.
-#[derive(Debug, Clone)] // If ID is Clone
+#[derive(Debug, Clone)]
 pub struct LockManager<R: Eq + Hash + Clone, ID: AgentId> {
   locks: HashMap<R, LockInfo<ID>>,
 }
@@ -39,7 +36,6 @@ impl<R: Eq + Hash + Clone + Debug, ID: AgentId> LockManager<R, ID> {
     if let Some(lock_info) = self.locks.get(resource_id) {
       if lock_info.owner_id == requester_id {
         // Already locked by the same user, treat as success or refresh lock
-        // For now, let's say it's fine, they still "have" the lock.
         return None;
       } else {
         return Some(lock_info.owner_id.clone()); // Locked by someone else

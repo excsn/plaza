@@ -1,5 +1,4 @@
 // plaza::app_common::object_property_ops::op_payloads.rs
-use crate::agent::AgentId; // If ops need to reference who made the change
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap; // For initial_properties
 use std::fmt::Debug;
@@ -20,7 +19,6 @@ where
 {
     pub object_id: ObjectId, // Usually client-generated for optimistic updates, or server-assigned
     pub initial_properties: HashMap<PropertyKey, PropertyValue>,
-    // pub object_type: Option<String>, // Optional: type discriminator
 }
 
 /// Payload for an Op to delete an existing object.

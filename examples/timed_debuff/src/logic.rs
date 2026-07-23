@@ -1,18 +1,14 @@
-// examples/timed_debuff/src/logic.rs
-use crate::types::{DebuffSnapshotPayload, DebuffType, GameOp, GameState, PlayerId, PlayerState};
+use crate::types::{DebuffType, GameOp, GameState, PlayerId, PlayerState};
 use async_trait::async_trait;
 use parking_lot::Mutex; // Import Mutex
 use plaza::{
   agent::Agent,
-  common::scheduler::{
-    tick_callback_scheduler::{TickCallbackScheduler, TickScheduledAction},
-    ScheduledEventId,
-  },
+  common::scheduler::{ScheduledAction, TickCallbackScheduler},
   error::StateLogicError,
   session::{MessageTarget, TargetedOp},
-  state_logic::{LogicInput, StateLogic},
+  state_logic::{LogicInput, LogicOutput, StateLogic},
 };
-use std::sync::Arc; // Keep Arc for potential future use, though not strictly needed if scheduler is in StateLogic
+
 use tracing::{debug, info, warn};
 
 #[derive(Debug)]
@@ -35,12 +31,12 @@ impl StateLogic<GameOp, PlayerId, GameState> for DebuffLogic {
     &self, // &self is fine now
     state: &mut GameState,
     input: LogicInput<GameOp, PlayerId>,
-  ) -> Result<Vec<TargetedOp<GameOp, PlayerId>>, StateLogicError> {
+  ) -> Result<LogicOutput<GameOp, PlayerId>, StateLogicError> {
     let mut ops_to_broadcast: Vec<TargetedOp<GameOp, PlayerId>> = Vec::new();
 
     match input {
       LogicInput::AgentOps { source, ops } => {
-        let agent_id_of_op_source = source.id().cloned();
+        let _agent_id_of_op_source = source.id().cloned();
         for op in ops {
           match op {
             GameOp::JoinGame { player_id, name } => {
@@ -96,7 +92,7 @@ impl StateLogic<GameOp, PlayerId, GameState> for DebuffLogic {
                   }],
                 });
 
-                let action: TickScheduledAction<GameState, GameOp, PlayerId> = Box::new(
+                let action: ScheduledAction<GameState, GameOp, PlayerId> = Box::new(
                   move |s: &mut GameState, ops_q: &mut Vec<TargetedOp<GameOp, PlayerId>>| {
                     if let Some(player_state) = s.players.get_mut(&target_id) {
                       if player_state.active_debuffs.remove(&debuff) {
@@ -127,7 +123,7 @@ impl StateLogic<GameOp, PlayerId, GameState> for DebuffLogic {
 
                 // Lock the scheduler to get mutable access
                 let mut scheduler = self.scheduler.lock();
-                scheduler.schedule_after_ticks(state.current_tick, duration_ticks, action);
+                scheduler.schedule_after(state.current_tick, duration_ticks, action);
                 // MutexGuard for scheduler is dropped here, releasing the lock.
               } else {
                 warn!(target_id = %target_id, "ApplyDebuff op for non-existent player.");
@@ -167,8 +163,14 @@ impl StateLogic<GameOp, PlayerId, GameState> for DebuffLogic {
           }
         }
       }
+      LogicInput::AgentJoined { agent } => {
+        tracing::debug!(agent = %agent.label(), "Agent joined session.");
+      }
+      LogicInput::AgentLeft { agent_id } => {
+        tracing::debug!(?agent_id, "Agent left session.");
+      }
     }
     state.version += 1;
-    Ok(ops_to_broadcast)
+    Ok(ops_to_broadcast.into())
   }
 }

@@ -1,4 +1,4 @@
-use crate::agent::AgentId; // Assuming AgentId is defined
+use crate::agent::AgentId;
 use std::fmt::Debug;
 use thiserror::Error;
 
@@ -39,7 +39,6 @@ pub enum StateLogicError {
 
 #[derive(Error, Debug, Clone)]
 pub enum SnapshotError<ID: AgentId> {
-  // ID might be needed if error is agent-specific
   #[error("Failed to create snapshot: {0}")]
   CreationFailed(String),
   #[error("Snapshot context invalid for agent {id:?}: {reason}")]
@@ -80,11 +79,14 @@ pub enum PlazaError<ID: AgentId> {
   #[error("Configuration error: {0}")]
   Configuration(String),
 
+  #[error("Invalid argument: {0}")]
+  InvalidArgument(String),
+
   #[error("Resource not found for ID: {id:?}")]
   NotFoundById { id: ID }, // More specific than a generic string
 
   #[error("An I/O error occurred")]
-  Io(#[from] std::io::Error), // Example of wrapping standard errors
+  Io(#[from] std::io::Error),
 
   #[error("An internal error occurred: {0}")]
   Internal(String),

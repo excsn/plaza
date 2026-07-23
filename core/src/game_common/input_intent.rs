@@ -1,4 +1,4 @@
-use crate::agent::AgentId; // Adjust path
+use crate::agent::AgentId;
 use std::fmt::Debug;
 
 /// Associates a game-specific `Intent` with the `AgentId` of the player who generated it.

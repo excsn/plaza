@@ -1,29 +1,25 @@
 use crate::agent::{Agent, AgentId};
 use std::collections::HashMap;
-use std::fmt::Debug; // Adjust path as needed
+use std::fmt::Debug;
 
-// Data associated with each participant. Must be defined by the application.
-// It needs to be Clone for get_participant_data_cloned and if tracker is cloned.
-// Send + 'static are good general bounds.
-// Debug for logging.
-// Serialize/Deserialize if the tracker's state needs to be saved/sent.
-// For this generic component, let's keep bounds minimal and let app add serde if needed for Data.
+/// Marker for whatever an application attaches to each participant.
+///
+/// Bounds are deliberately minimal: add `Serialize` on your own type if the
+/// tracker's contents need to be persisted or sent.
 pub trait ParticipantAppSpecificData: Clone + Debug + Send + 'static {}
 impl<T: Clone + Debug + Send + 'static> ParticipantAppSpecificData for T {}
 
-#[derive(Debug, Clone)] // If Data is Clone
+#[derive(Debug, Clone)]
 pub struct ParticipantInfo<ID: AgentId, Data: ParticipantAppSpecificData> {
-  pub agent: Agent<ID>, // Store the full Agent for convenience (e.g., getting name)
-  pub app_data: Data,   // Application-specific data
-                        // pub joined_at_tick: u64, // Example metadata the tracker could manage
-                        // pub last_seen_tick: u64,
+  /// The whole `Agent`, not just its id, so callers can reach its label.
+  pub agent: Agent<ID>,
+  pub app_data: Data,
 }
 
 /// Manages a collection of active participants and their associated data.
-#[derive(Debug, Clone)] // If Data is Clone
+#[derive(Debug, Clone)]
 pub struct ParticipantTracker<ID: AgentId, Data: ParticipantAppSpecificData> {
   participants: HashMap<ID, ParticipantInfo<ID, Data>>,
-  // If order of joining matters, could use IndexMap or Vec + HashMap
 }
 
 impl<ID: AgentId, Data: ParticipantAppSpecificData> Default for ParticipantTracker<ID, Data> {

@@ -2,10 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
-// --- Agent ID ---
 pub type PlayerId = Uuid;
 
-// --- Debuff Types ---
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub enum DebuffType {
   Slow,
@@ -13,7 +11,6 @@ pub enum DebuffType {
   DamageOverTime,
 }
 
-// --- Game State ---
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct PlayerAttributes {
   pub speed_modifier: f32, // e.g., 1.0 is normal, 0.5 is 50% slow
@@ -52,7 +49,6 @@ pub struct GameState {
   // Scheduler will be owned by DebuffLogic for this example to simplify GameState serde/clone.
 }
 
-// --- Operations ---
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum GameOp {
   JoinGame {
@@ -82,5 +78,4 @@ pub enum GameOp {
   }, // Example
 }
 
-// --- Snapshot Payload ---
 pub type DebuffSnapshotPayload = GameState;

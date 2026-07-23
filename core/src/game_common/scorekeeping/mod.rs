@@ -1,7 +1,7 @@
 pub mod local;
 pub mod ops;
 
-use crate::agent::AgentId; // Adjust path
+use crate::agent::AgentId;
 use std::fmt::Debug;
 
 pub trait Scorekeeper<ID: AgentId, ScoreType>
@@ -46,6 +46,4 @@ where
   /// Gets all scores, perhaps for display or snapshotting.
   /// The return type can vary; a Vec of tuples is common for leaderboards.
   fn get_all_scores_sorted(&self) -> Vec<(ID, ScoreType)>; // Example for leaderboard
-                                                           // Could also be get_raw_scores() -> &HashMap<ID, ScoreType>
-                                                           // if the impl uses a HashMap.
 }

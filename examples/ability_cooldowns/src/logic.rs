@@ -1,7 +1,6 @@
 use crate::types::{
   get_ability_cooldown_duration,
   Ability,
-  CooldownSnapshotPayload, // Added CooldownSnapshotPayload for completeness
   GameOp,
   GameState,
   PlayerId,
@@ -11,19 +10,17 @@ use crate::types::{
 use async_trait::async_trait;
 use plaza::{
   agent::Agent,
-  // TickEventScheduler is now part of GameState, so we don't import it directly here for use,
-  // but good to know its path for context: plaza::common::scheduler::tick_scheduler::TickEventScheduler,
   error::StateLogicError,
   session::{MessageTarget, TargetedOp},
-  state_logic::{LogicInput, StateLogic},
+  state_logic::{LogicInput, LogicOutput, StateLogic},
 };
 use std::collections::HashMap;
 use tracing::{debug, info, warn};
 
-#[derive(Debug, Default)] // CooldownLogic can be Default if it's stateless
-pub struct CooldownLogic; // Became stateless as scheduler is in GameState
+/// Stateless: the cooldown scheduler lives in `GameState`.
+#[derive(Debug, Default)]
+pub struct CooldownLogic;
 
-// No longer need CooldownLogic::new() if it's Default and stateless.
 
 #[async_trait]
 impl StateLogic<GameOp, PlayerId, GameState> for CooldownLogic {
@@ -31,7 +28,7 @@ impl StateLogic<GameOp, PlayerId, GameState> for CooldownLogic {
     &self,
     state: &mut GameState, // GameState now contains the scheduler
     input: LogicInput<GameOp, PlayerId>,
-  ) -> Result<Vec<TargetedOp<GameOp, PlayerId>>, StateLogicError> {
+  ) -> Result<LogicOutput<GameOp, PlayerId>, StateLogicError> {
     let mut ops_to_broadcast: Vec<TargetedOp<GameOp, PlayerId>> = Vec::new();
 
     match input {
@@ -50,12 +47,6 @@ impl StateLogic<GameOp, PlayerId, GameState> for CooldownLogic {
                   health: 100,
                 };
                 state.players.insert(player_id, new_player);
-                // Optionally broadcast:
-                // ops_to_broadcast.push(TargetedOp {
-                //     from_agent: Agent::system(),
-                //     target: MessageTarget::AllExcept(player_id), // Notify others
-                //     ops: vec![GameOp::InternalPlayerJoined { player_data: new_player_state_clone }]
-                // });
               } else {
                 warn!(player_id = %player_id, "Player attempted to join again.");
               }
@@ -73,7 +64,6 @@ impl StateLogic<GameOp, PlayerId, GameState> for CooldownLogic {
                 continue;
               }
 
-              // --- Check cooldown for the acting player first ---
               let can_use_ability = state.players.get(&player_id).map_or(false, |p| {
                 p.ability_cooldowns
                   .get(&ability)
@@ -90,7 +80,6 @@ impl StateLogic<GameOp, PlayerId, GameState> for CooldownLogic {
                 continue; // Skip to next op
               }
 
-              // --- Ability can be used, now handle effects ---
               info!(player_id = %player_id, ?ability, ?target_id, tick = state.current_tick, "Player will use ability");
               let mut ability_applied_and_cooldown_needed = true;
 
@@ -100,23 +89,12 @@ impl StateLogic<GameOp, PlayerId, GameState> for CooldownLogic {
                     if tid == player_id {
                       warn!(player_id = %player_id, "Player tried to fireball self.");
                       ability_applied_and_cooldown_needed = false;
+                    } else if let Some(target_player) = state.players.get_mut(&tid) {
+                      target_player.health = target_player.health.saturating_sub(25);
+                      info!(target_id=%tid, new_health=target_player.health, "Fireball hit!");
                     } else {
-                      // Temporarily store if target was damaged to avoid holding mutable borrow for long
-                      let mut target_damaged_details: Option<(PlayerId, u32)> = None;
-
-                      if let Some(target_player) = state.players.get_mut(&tid) {
-                        target_player.health = target_player.health.saturating_sub(25);
-                        info!(target_id=%tid, new_health=target_player.health, "Fireball hit!");
-                        target_damaged_details = Some((tid, target_player.health));
-                      } else {
-                        warn!(player_id=%player_id, "Fireball target {} not found.", tid);
-                        ability_applied_and_cooldown_needed = false;
-                      }
-                      // target_player borrow ends here
-
-                      if ability_applied_and_cooldown_needed {
-                        // Ops can be pushed here if they only need info from target_damaged_details
-                      }
+                      warn!(player_id=%player_id, "Fireball target {} not found.", tid);
+                      ability_applied_and_cooldown_needed = false;
                     }
                   } else {
                     warn!(player_id=%player_id, "Fireball used without a target.");
@@ -130,7 +108,6 @@ impl StateLogic<GameOp, PlayerId, GameState> for CooldownLogic {
                     player_to_heal.health = (player_to_heal.health + 30).min(100);
                     info!(player_id=%player_id, new_health=player_to_heal.health, "Player healed!");
                   } else {
-                    // Should not happen if cooldown check passed based on this player_id
                     ability_applied_and_cooldown_needed = false;
                   }
                 }
@@ -141,15 +118,12 @@ impl StateLogic<GameOp, PlayerId, GameState> for CooldownLogic {
               }
 
               if ability_applied_and_cooldown_needed {
-                // --- Now, apply cooldown to the original player ---
-                // This re-borrows `state.players` mutably, but the previous mutable borrows
-                // (like for `target_player` or `player_to_heal`) should have ended.
                 if let Some(player_for_cooldown) = state.players.get_mut(&player_id) {
                   let cooldown_duration_ticks = get_ability_cooldown_duration(ability);
                   let cooldown_end_tick = state.current_tick + cooldown_duration_ticks;
                   player_for_cooldown.ability_cooldowns.insert(ability, cooldown_end_tick);
 
-                  let event_id = state.scheduler.schedule_at_tick(
+                  let event_id = state.scheduler.schedule_at(
                     cooldown_end_tick,
                     ScheduledGameEvent::AbilityCooldownReady { player_id, ability },
                   );
@@ -184,7 +158,6 @@ impl StateLogic<GameOp, PlayerId, GameState> for CooldownLogic {
         state.current_tick += 1;
         // info!("Game tick: {}", state.current_tick); // Can be very verbose
 
-        // --- Process scheduled events ---
         let due_events = state.scheduler.tick(state.current_tick);
         for event in due_events {
           info!(tick = state.current_tick, ?event, "Processing scheduled event");
@@ -207,7 +180,6 @@ impl StateLogic<GameOp, PlayerId, GameState> for CooldownLogic {
                   player.ability_cooldowns.remove(&ability);
                   info!(player_id = %player_id, ?ability, tick = state.current_tick, "Ability cooldown officially finished & cleared from map.");
 
-                  // --- Send op to client to update UI ---
                   ops_to_broadcast.push(TargetedOp {
                     from_agent: Agent::system(), // System is notifying
                     target: MessageTarget::Agent(player_id),
@@ -221,8 +193,14 @@ impl StateLogic<GameOp, PlayerId, GameState> for CooldownLogic {
           }
         }
       }
+      LogicInput::AgentJoined { agent } => {
+        tracing::debug!(agent = %agent.label(), "Agent joined session.");
+      }
+      LogicInput::AgentLeft { agent_id } => {
+        tracing::debug!(?agent_id, "Agent left session.");
+      }
     }
     state.version += 1;
-    Ok(ops_to_broadcast)
+    Ok(ops_to_broadcast.into())
   }
 }

@@ -1,4 +1,4 @@
-use super::Scorekeeper; // Assuming trait is in traits.rs
+use super::Scorekeeper;
 use crate::agent::AgentId;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -51,12 +51,12 @@ where
 
   fn decrement_score(&mut self, player_id: &ID, delta: ScoreType) -> ScoreType {
     let entry = self.scores.entry(player_id.clone()).or_insert_with(Default::default);
-    *entry -= delta; // Assuming ScoreType handles potential underflow or is unsigned with checks
+    *entry -= delta;
     *entry
   }
 
   fn get_score(&self, player_id: &ID) -> Option<ScoreType> {
-    self.scores.get(player_id).copied() // Use copied() because ScoreType is Copy
+    self.scores.get(player_id).copied()
   }
 
   fn reset_player_score(&mut self, player_id: &ID) -> Option<ScoreType> {
@@ -72,8 +72,6 @@ where
       *score_val = ScoreType::default();
     }
     // Or simply: self.scores.clear(); and let them be re-added with default on next increment.
-    // Clearing might be better if not all players with scores should remain tracked with a 0 score.
-    // For now, resetting existing players.
   }
 
   fn get_all_scores_sorted(&self) -> Vec<(ID, ScoreType)> {
@@ -84,7 +82,7 @@ where
         .partial_cmp(&a.1)
         .unwrap_or(std::cmp::Ordering::Equal)
         .then_with(|| a.0.cmp(&b.0))
-    }); // Assuming ID is Ord for tie-breaking
+    });
     sorted_scores
   }
 }

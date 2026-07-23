@@ -7,7 +7,7 @@
 //! It runs entirely locally without actual networking.
 
 use plaza_client_utils::{
-  interpolation::{Interpolatable, ServerSnapshot, SnapshotBuffer, ToF32}, // Import ToF32
+  interpolation::{Interpolatable, SnapshotBuffer}, // Import ToF32
   types::ClientTimeMs,                                                    // Using this as our Timestamp for simplicity
 };
 use std::{thread, time::Duration};
