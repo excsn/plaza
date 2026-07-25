@@ -13,10 +13,15 @@ categories = ["network-programming", "game-development", "wasm"]
 [features]
 default = ["loopback"]
 loopback = []
+# `SendJson`, for applications whose wire format is JSON. Off by default because
+# the transport itself has no opinion about what rides on it.
+json = ["dep:serde", "dep:serde_json"]
 native = ["dep:tungstenite"]
 miniquad = []
 
 [dependencies]
+serde = { version = "^1", optional = true }
+serde_json = { version = "^1", optional = true }
 tungstenite = { version = "^0.24", optional = true, features = ["rustls-tls-webpki-roots"] }
 
 [dev-dependencies]

@@ -10,6 +10,7 @@
 
 pub mod codec;
 pub mod error;
+pub mod host;
 pub mod manager;
 
 pub use codec::{JsonCodec, WireCodec};

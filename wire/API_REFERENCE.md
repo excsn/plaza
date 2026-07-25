@@ -114,8 +114,33 @@ The netcode vocabulary both ends of a connection exchange. Pure serde, generic o
 *   **`TimestampedClientAction<ActionData, ClientTimeType>`**: client to server. `client_action_time`, `action_data`. The timestamp lets the server rewind to when the client acted, for lag compensation.
 *   **`Ping` / `Pong`**: either direction. `origin_time_ms`. A `Ping` is echoed back as a `Pong` carrying the same `origin_time_ms`; the sender computes `rtt = now - origin_time_ms`. Pair with `plaza_client_utils::RttEstimator` to smooth the samples.
 
-## 6. Feature Flags
+## 6. Module `build` (feature `build`)
+
+A protocol version derived at build time from the source files that define your messages, so it cannot drift out of date the way a manual constant does. Used from a `build.rs`, which is why it is behind its own feature: nothing at runtime needs it.
+
+*   **`emit(sources: &[P])`**: hash the sources and publish the result two ways, so a crate uses whichever suits it. `$OUT_DIR/wire_protocol.rs` defines `pub const WIRE_PROTOCOL: u32` and is meant to be `include!`d (preferred: already a number, no parsing to reach a `const`), and `cargo:rustc-env=WIRE_PROTOCOL` is there for a crate that would rather use `env!` and parse it itself. It also emits `cargo:rerun-if-changed` per source, so the version tracks edits without a clean build.
+*   **`version_of(sources: &[P]) -> u32`** / **`version_of_sources(iter) -> u32`**: the hash itself, if you would rather place it yourself.
+
+```rust,ignore
+// build.rs
+fn main() {
+  plaza_wire::build::emit(&["src/sim/protocol.rs", "src/sim/types.rs"]);
+}
+
+// src/sim/protocol.rs
+pub const PROTOCOL: u32 = WIRE_PROTOCOL;
+include!(concat!(env!("OUT_DIR"), "/wire_protocol.rs"));
+```
+
+**The failure it prevents is a deployment one that reads as a netcode bug.** A browser client is a build product and does not rebuild when the server does, so a page from before a wire change is the normal state of affairs rather than an exotic one. Without a version the page loads, the game appears to run, and only the messages whose shape changed are rejected. With one, a client announces what it was built against on connect and a server speaking a different version can reply "reload" instead of flooding its log with per-message decode warnings.
+
+**A version that has to be bumped by hand is skipped precisely during the change that needed it**, which is the entire reason this is derived rather than declared. Two limits, both stated rather than papered over. It cannot rescue a client older than the handshake itself, which is the bootstrapping floor every protocol version has. And it changes when those files change at all, comments included, so it errs toward asking for a reload that was not strictly needed. That is the right direction to be wrong in: the cost is a page load, and the opposite mistake is the silent half-working session the whole mechanism exists to prevent.
+
+Pairs with [`plaza_session::host::Host`](../session/API_REFERENCE.md), which covers the other half (a page cannot quote a new version if the browser served it from cache).
+
+## 7. Feature Flags
 
 | Feature | Default | Effect |
 |---|---|---|
 | `json` | yes | Compiles [`JsonCodec`](#struct-jsoncodec) and enables the `serde_json` dependency. With `default-features = false` the crate is the trait and payloads plus `serde` alone. |
+| `build` | no | Compiles [`build`](#6-module-build-feature-build), for use from a `build.rs`. Put it under `[build-dependencies]`, not `[dependencies]`. |

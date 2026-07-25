@@ -16,8 +16,9 @@
 
 | Feature | Default | Enables |
 |---|---|---|
-| `actix_ws` | yes | [`ActixWsPlazaSession`](#struct-actixwsplazasession): actix-web WebSockets. |
-| `tcp` | yes | [`TcpPlazaSession`](#struct-tcpplazasession): length-delimited TCP. |
+| `actix_ws` | yes | [`ActixWsPlazaSession`](#struct-actixwsplazasessionop-id-snapshotpayload-c-jsoncodec): actix-web WebSockets. |
+| `tcp` | yes | [`TcpPlazaSession`](#struct-tcpplazasessionop-id-snapshotpayload-c-jsoncodec): length-delimited TCP. |
+| `actix_host` | no | [`host::Host`](#7-module-host-feature-actix_host): the listen-server HTTP layer. Implies `actix_ws`. |
 
 [`manager`](#4-module-manager), [`codec`](#3-module-codec), and [`error`](#2-error-handling) compile unconditionally.
 
@@ -149,7 +150,33 @@ pub type AgentFactory<ID> = Arc<dyn Fn(SocketAddr) -> Agent<ID> + Send + Sync>;
 
 Builds the `Agent` for each accepted connection. For reconnection support, derive a stable ID here rather than generating a fresh one per connection.
 
-## 7. Writing Another Transport
+## 7. Module `host` (feature `actix_host`)
+
+The HTTP half of a listen server: bind a port, serve a browser client from it, and put the WebSocket route on the same origin so the page connects back to whoever served it. It owns what is the same in every such application and easy to get subtly wrong; the application supplies its own routes, so none of this knows anything about the state being shared.
+
+### Struct `Host`
+
+*   **`new(bind: impl Into<String>)`**: the bind address.
+*   **`serve_dir(Option<String>)`**: the static directory. Preflighted at startup rather than per request, because a missing bundle should fail where you can see it.
+*   **`cache_bust(asset)`**: stamp this asset's modification time into the dynamically served `index.html`, read per request.
+*   **`ws_path(path)`**: what the banner prints. **`announce(bool)`**: whether to print it.
+*   **`run(|cfg| { .. })`**: register your routes and serve. Signal handling is left to the process.
+
+**Why the cache busting is not optional.** A browser client is a build product that does **not** rebuild when the server does, so a page built before a wire change still loads, still appears to run, and only the messages whose shape changed are rejected. That reads as a netcode bug and is a deployment one; it cost two rounds of diagnosis. Two halves are needed together: the stamp, and `no-cache` on static assets, because a cached page would keep quoting the old stamp, which is the trap that makes cache busting look like it does not work. The third half is [`plaza_wire::build`](../wire/API_REFERENCE.md), which gives a client a protocol version to announce so it can be told to reload.
+
+**Signals stay with the process** deliberately. Actix catching Ctrl-C for a graceful shutdown while a game window keeps running is why a windowed host could not be killed, and why the controller then sprayed queue-full errors into dead links.
+
+### Function `lan_address() -> Option<String>`
+
+A local address somebody else could actually reach. No dependency and no packets: connecting a UDP socket only picks a route, so the kernel fills in the source address it would use. "It is running" and "here is what to send your friend" are different pieces of information and only one of them is useful.
+
+### Function `init_logging()`
+
+Turns on a console subscriber, once. `plaza` and `plaza_session` are instrumented throughout, but `tracing` is silent without a subscriber, and a server that logs nothing is indistinguishable from a server that is not running. A convenience for binaries: it is a no-op after the first call and after any other global subscriber is installed, and `RUST_LOG` overrides the default. A library, or an application with its own subscriber, should not call it.
+
+**What is deliberately not here.** Deciding what a process *is* (headless, observer, host, joiner) and parsing that off a command line. The browser client needs the same vocabulary and a wasm bundle must not inherit an HTTP server to learn the name of its own role, and argument parsing is an opinion every real application already has. That lives in `examples/playground_common/` as shared scaffolding rather than in a library crate.
+
+## 8. Writing Another Transport
 
 1.  Create a `TransportSession::new(name, codec, capacity)` and keep the `Arc`.
 2.  Per connection: make an `mpsc::bounded_async` outbound queue, call `manager.register(agent, tx)`, and run a pump that

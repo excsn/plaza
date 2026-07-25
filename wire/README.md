@@ -101,8 +101,35 @@ impl WireCodec for MsgPackCodec {
 
 Pass it where a transport takes a codec, for example `TcpPlazaSession::bind_with_codec` or `ActixWsPlazaSession::with_codec`.
 
+## A protocol version nobody has to maintain
+
+A wire format only agrees if both ends were built from the same definition of it, and the ends are separate builds. A browser client especially: it is a build product and does **not** rebuild when the server does, so a page from before a wire change is the normal state of affairs. Without a version the failure is silent in the worst way, because the page loads, the game appears to run, and only the messages whose shape changed are rejected, which reads as a netcode bug and is a deployment one.
+
+`plaza_wire::build` derives the version by hashing the sources that define your messages, from a `build.rs`:
+
+```toml
+[build-dependencies]
+plaza_wire = { version = "0.1", default-features = false, features = ["build"] }
+```
+
+```rust,ignore
+// build.rs
+fn main() {
+  plaza_wire::build::emit(&["src/sim/protocol.rs", "src/sim/types.rs"]);
+}
+
+// src/sim/protocol.rs
+pub const PROTOCOL: u32 = WIRE_PROTOCOL;
+include!(concat!(env!("OUT_DIR"), "/wire_protocol.rs"));
+```
+
+A client then announces `PROTOCOL` on connect and a server speaking a different one can reply "reload" rather than flooding its log with per-message decode warnings. **A version that has to be bumped by hand is skipped precisely during the change that needed it**, which is why this is derived rather than declared. It errs toward asking for a reload that was not strictly needed, since it changes when those files change at all, comments included: the cost is a page load, and the opposite mistake is a silent half-working session. It cannot rescue a client older than the handshake itself, which is the bootstrapping floor every protocol version has.
+
+The other half of that failure is caching, and it lives in [`plaza_session::host::Host`](../session/): a browser serving the page from cache cannot quote a new version however well you derived it.
+
 ## Features
 
 | Feature | Default | Effect |
 |---|---|---|
 | `json` | yes | Provides `JsonCodec` and pulls in `serde_json`. Disable to take the trait alone. |
+| `build` | no | The build-script half above. Belongs in `[build-dependencies]`, not `[dependencies]`. |

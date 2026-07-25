@@ -10,9 +10,17 @@
 //!
 //! [`JsonCodec`] is behind the default `json` feature. Turn it off
 //! (`default-features = false`) to take the trait and payloads by themselves.
+//!
+//! [`build`] is behind the non-default `build` feature and is meant for a
+//! `build.rs` rather than for the running program: it derives a wire format
+//! version by hashing the source that defines it, so a client built against an
+//! older format can be told to reload instead of half working.
 
 pub mod envelope;
 pub mod payloads;
+
+#[cfg(feature = "build")]
+pub mod build;
 
 pub use envelope::{Agent, AgentId, SessionMessage, SnapshotData};
 

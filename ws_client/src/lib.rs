@@ -160,6 +160,37 @@ pub trait Socket {
   }
 }
 
+/// Sending a value as JSON text, so call sites are not full of
+/// `serde_json::to_string`.
+///
+/// An extension trait rather than a method on [`Socket`], because a generic
+/// method cannot be called through a trait object, and holding the socket as
+/// `Box<dyn Socket>` is exactly what an application does when the transport is
+/// chosen by feature flag. Implemented for every socket, sized or not.
+///
+/// Text rather than binary, deliberately. A WebSocket text frame arrives in a
+/// browser as a string that `JSON.parse` accepts directly, while a binary frame
+/// arrives as a `Blob` or `ArrayBuffer` that a JS client has to decode itself,
+/// having first remembered to set `binaryType`.
+///
+/// Send a **bare message, never an envelope**. A server attaches who a message
+/// came from, because identity is the server's fact and not the client's claim,
+/// and a client that could name itself could name somebody else.
+#[cfg(feature = "json")]
+pub trait SendJson {
+  fn send_json<T: serde::Serialize>(&self, value: &T) -> Result<(), WsError>;
+}
+
+#[cfg(feature = "json")]
+impl<S: Socket + ?Sized> SendJson for S {
+  fn send_json<T: serde::Serialize>(&self, value: &T) -> Result<(), WsError> {
+    match serde_json::to_string(value) {
+      Ok(text) => self.send_text(&text),
+      Err(e) => Err(WsError::Send(e.to_string())),
+    }
+  }
+}
+
 /// Connects using whichever real transport this build has.
 ///
 /// Present only when exactly one real backend is enabled, so that a build cannot

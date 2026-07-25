@@ -31,6 +31,8 @@ for event in events.drain(..) {
 
 Everything an application can decide for itself is left to it: reconnection policy, backoff, heartbeats, its own message framing. This is a pipe.
 
+`SendJson` (feature `json`) adds `send_json` by blanket impl over `Socket`, as an **extension trait** rather than a trait method. That is not stylistic: a generic method cannot be called through a trait object, and `Box<dyn Socket>` is exactly what an application holds when its transport is chosen by feature flag.
+
 ## Backends
 
 | feature | where | underneath | dependencies |
@@ -38,6 +40,8 @@ Everything an application can decide for itself is left to it: reconnection poli
 | `loopback` | anywhere | in-process channels | none |
 | `native` | desktop | `tungstenite` on a worker thread | `tungstenite` |
 | `miniquad` | browser, under macroquad | our own JS plugin | none |
+
+`connect` is present only when exactly one real backend is enabled, so a build cannot silently pick a transport its author did not intend; with several, name the one you mean.
 
 They compose. A listen-server that also plays enables `native` **and** `loopback` and talks to both through the same trait.
 
