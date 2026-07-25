@@ -57,6 +57,14 @@ let session = TcpPlazaSession::<Op, PlayerId, Snapshot>::bind(
 
 Binding happens before the accept loop starts, so a port already in use surfaces as an error rather than killing a detached task.
 
+## Measured latency per connection
+
+The WebSocket adapter times its own ping frames, so `session.agent_rtt(&id)` gives you a measured round trip and a sample count with **nothing added to your protocol**. Fast probes for the first second, then upkeep.
+
+Two things worth knowing. The server times its own probe rather than trusting a reported number, which is what makes it usable for anything that gates entry: a client can only make itself look worse. And `min_rtt` is the one to compare against a budget, because jitter only adds delay, so the smallest sample is the honest estimate of the link.
+
+What you do with it is yours. `horde_playground` uses it to refuse connections that cannot meet its input schedule, which it previously discovered by seating them and then silently dropping every input they sent.
+
 ## Wire format
 
 Everything is encoded through `WireCodec`. `JsonCodec` is the default: readable from a browser console or `websocat`. Supply your own for MessagePack or bincode:

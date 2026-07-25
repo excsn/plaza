@@ -70,6 +70,9 @@ The connection registry plus the notification channels a `StateController` consu
 *   **`broadcast(&self, target: &MessageTarget<ID>, frame: OutboundFrame) -> Result<(), SessionLayerError>`**: fans one already-encoded frame out to the matching connections. It takes bytes, not a message, because a `SessionMessage` is encoded **once** by [`encode_message`](#struct-transportsessionop-id-snapshotpayload-c-wirecodec) and the same frame is cloned to every recipient.
 *   **`take_raw_incoming(&self) -> mpsc::BoundedAsyncReceiver<SerializedSessionMessage<ID>>`**: the inbound stream, whose payloads are still encoded bytes for the deserialize bridge to decode.
 *   **`take_presence(&self) -> SessionReceiver<PresenceEvent<ID>>`**
+*   **`agent_rtt(&self, id: &ID) -> Option<(Duration, u64)>`**: the measured round trip for an agent and how many samples it rests on. Keyed by agent because that is what an application holds: it knows who joined, not which socket they arrived on, and a reconnecting player is a new connection but the same agent.
+*   **`rtt(conn_id)`** / **`min_rtt(conn_id)`** / **`rtt_samples(conn_id)`**: the same, per connection.
+*   **`record_rtt(conn_id, Duration)`**: what a transport calls when it has timed one.
 *   **`connection_count(&self) -> usize`**
 
 The `take_*` methods hand out single-consumer streams; calling one twice panics.
@@ -175,6 +178,16 @@ A local address somebody else could actually reach. No dependency and no packets
 Turns on a console subscriber, once. `plaza` and `plaza_session` are instrumented throughout, but `tracing` is silent without a subscriber, and a server that logs nothing is indistinguishable from a server that is not running. A convenience for binaries: it is a no-op after the first call and after any other global subscriber is installed, and `RUST_LOG` overrides the default. A library, or an application with its own subscriber, should not call it.
 
 **What is deliberately not here.** Deciding what a process *is* (headless, observer, host, joiner) and parsing that off a command line. The browser client needs the same vocabulary and a wasm bundle must not inherit an HTTP server to learn the name of its own role, and argument parsing is an opinion every real application already has. That lives in `examples/playground_common/` as shared scaffolding rather than in a library crate.
+
+### Measured latency, and why the transport owns it
+
+The WebSocket adapter times its **own ping frame**, so a consumer gets a per-connection latency without adding anything to its application protocol. Probes go out fast for the first eight and then settle to upkeep, because a caller deciding whether a connection can meet a schedule wants several samples in the first second and nothing much after that.
+
+**The server timing its own probe is the only version worth having**, and it matters wherever the number gates something. A client reporting its own latency can understate it; timing the probe is spoof-proof in the direction that counts, since a client can delay its reply and only make itself look worse.
+
+Prefer **`min_rtt`** when comparing against a budget. Jitter only ever adds delay, so the smallest sample is the honest estimate of the link, where a mean flatters a connection that is usually fine and occasionally awful.
+
+This is deliberately measurement only. What to do with it, admit, refuse, route to a different room, size a schedule, is policy, and it belongs to whoever owns the rule the latency has to satisfy.
 
 ## 8. Module `stats`
 

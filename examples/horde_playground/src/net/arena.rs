@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use parking_lot::Mutex;
@@ -34,41 +35,22 @@ pub type PlayerKey = u64;
 /// bots drive whatever is empty.
 const PLAYER_COUNT: usize = MAX_PLAYERS;
 
-/// How many probes an admission takes, and how far apart. Eight over a second:
-/// enough that one jittery reply cannot decide the outcome, short enough that the
-/// wait screen does not read as a hang.
+/// How many round trips the transport must have measured before a decision.
+/// One sample on a jittery link decides nothing, and the transport probes fast
+/// at first, so this is about a second.
 /// The arena's step, in ms, for turning the late window into a time budget.
 const SIM_STEP_MS: u64 = (crate::sim::types::SIM_DT * 1000.0) as u64;
 
-const ADMIT_PROBES: u32 = 8;
-const ADMIT_PROBE_INTERVAL_MS: u64 = 125;
+/// How many round trips the transport must have measured before a decision.
+/// One sample on a jittery link decides nothing, and the transport probes fast
+/// at first, so this is about a second.
+const ADMIT_SAMPLES: u64 = 8;
 
-/// One connection being measured before it is offered a seat.
-///
-/// Measured by the *server*, timing its own probe, because a client reporting its
-/// own latency could understate it and this is the check that gates entry.
+/// One connection waiting on the transport's measurements before it is offered a
+/// seat. It holds nothing: the samples live in the transport, which is what took
+/// them.
 #[derive(Clone, Debug, Default)]
-struct Admission {
-  sent: u32,
-  next_probe_ms: u64,
-  /// One-way estimates, in ms.
-  samples: Vec<u64>,
-}
-
-impl Admission {
-  /// Mean one-way plus twice the mean deviation, which is the quantity that has
-  /// to fit the schedule: the mean must fit the playout depth and the spread must
-  /// fit the window that tolerates late inputs.
-  fn estimate_ms(&self) -> u64 {
-    if self.samples.is_empty() {
-      return 0;
-    }
-    let n = self.samples.len() as f64;
-    let mean = self.samples.iter().sum::<u64>() as f64 / n;
-    let deviation = self.samples.iter().map(|s| (*s as f64 - mean).abs()).sum::<f64>() / n;
-    (mean + 2.0 * deviation).round() as u64
-  }
-}
+struct Admission;
 
 /// The seed for the impairment jitter. Fixed, so a host that drags the jitter
 /// slider gets the same distribution every run.
@@ -339,14 +321,36 @@ impl Arena {
 /// The stateless half plaza acts through. Carries the shared control slot the
 /// host's panel writes and the arena reads, and the optional view the arena
 /// publishes for a windowed host to draw.
+/// Where the arena gets a connection's measured latency from.
+///
+/// The **transport** measures it, by timing its own WebSocket ping, so no
+/// application message is involved and a client cannot understate it. This is
+/// just the arena's way of asking, and it is a closure rather than a session
+/// handle so the logic stays testable without a socket.
+///
+/// Returns the minimum round trip seen and how many samples it rests on.
+pub type LatencySource = Arc<dyn Fn(&PlayerKey) -> Option<(Duration, u64)> + Send + Sync>;
+
 pub struct ArenaLogic {
   controls: Arc<Mutex<Controls>>,
   view: Option<Arc<Mutex<HostView>>>,
+  latency: Option<LatencySource>,
 }
 
 impl ArenaLogic {
   pub fn new(controls: Arc<Mutex<Controls>>, view: Option<Arc<Mutex<HostView>>>) -> Self {
-    Self { controls, view }
+    Self {
+      controls,
+      view,
+      latency: None,
+    }
+  }
+
+  /// Supplies the transport's measurements, without which nothing is ever
+  /// admitted: an arena that cannot measure a connection must not guess at it.
+  pub fn with_latency(mut self, latency: LatencySource) -> Self {
+    self.latency = Some(latency);
+    self
   }
 }
 
@@ -361,15 +365,7 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         // Measured before seated. A connection that cannot meet the input
         // schedule used to be welcomed and then have every input silently
         // rejected, which reads as a broken game rather than a refused one.
-        let now = state.sim.now_ms();
-        state.admitting.insert(
-          key,
-          Admission {
-            sent: 0,
-            next_probe_ms: now,
-            samples: Vec::new(),
-          },
-        );
+        state.admitting.insert(key, Admission);
         Ok(LogicOutput::none())
       }
 
@@ -382,21 +378,6 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         let Some(key) = source.id_cloned() else {
           return Ok(LogicOutput::none());
         };
-        // An admission reply arrives from a connection that has no seat yet, and
-        // is the one thing that has to be read before there is one. Everything
-        // else needs a seat and returns below.
-        if state.admitting.contains_key(&key) {
-          let now = state.sim.now_ms();
-          for op in ops {
-            if let Op::ProbeAck { origin_ms } = op {
-              let rtt = now.saturating_sub(origin_ms);
-              if let Some(a) = state.admitting.get_mut(&key) {
-                a.samples.push(rtt / 2);
-              }
-            }
-          }
-          return Ok(LogicOutput::none());
-        }
         let Some(seat) = state.seat_of(&key) else {
           return Ok(LogicOutput::none());
         };
@@ -454,8 +435,6 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
               replies.push(TargetedOp::new_system_to(key, vec![Op::Outdated { server: PROTOCOL, client: protocol }]));
             }
             Op::Hello { .. } => {}
-            // A seated client has already been measured; a stray echo is noise.
-            Op::ProbeAck { .. } => {}
             // Server-to-client variants coming up mean a confused or hostile
             // client; not an error worth failing the tick over.
             _ => {}
@@ -471,20 +450,25 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         let live = *self.controls.lock();
         let mut welcomes = Vec::new();
 
-        // Admission: probe whoever is being measured, and decide the ones that
-        // have enough samples. Runs before seating so a decision made this tick
-        // takes its seat this tick.
-        let now = state.sim.now_ms();
+        // Admission: ask the transport what it has measured, and decide whoever
+        // it has measured enough of. Runs before seating so a decision made this
+        // tick takes its seat this tick.
+        //
+        // The arena sends no probes of its own. The transport times its own
+        // WebSocket ping, so this costs the wire format nothing and a client
+        // cannot report a latency it does not have.
         let budget = state.admission_budget_ms();
         let mut decided: Vec<(PlayerKey, u64)> = Vec::new();
-        for (key, a) in state.admitting.iter_mut() {
-          if a.sent < ADMIT_PROBES && now >= a.next_probe_ms {
-            a.sent += 1;
-            a.next_probe_ms = now + ADMIT_PROBE_INTERVAL_MS;
-            welcomes.push(TargetedOp::new_system_to(*key, vec![Op::Probe { origin_ms: now }]));
-          }
-          if a.sent >= ADMIT_PROBES && a.samples.len() as u32 >= ADMIT_PROBES {
-            decided.push((*key, a.estimate_ms()));
+        for key in state.admitting.keys().copied().collect::<Vec<_>>() {
+          let Some(source) = self.latency.as_ref() else {
+            // Nothing is measuring, so nothing is admitted. An arena that cannot
+            // measure a connection must not guess that it is fine.
+            continue;
+          };
+          if let Some((min_rtt, samples)) = source(&key)
+            && samples >= ADMIT_SAMPLES
+          {
+            decided.push((key, min_rtt.as_millis() as u64 / 2));
           }
         }
         for (key, estimate) in decided {
@@ -635,32 +619,25 @@ mod tests {
     Controls { enemy_count: 200, sync_hz: 60, latency_ms: 0, jitter_ms: 0, ..Controls::default() }
   }
 
+  /// A stand-in for the transport's measurements, which is the only thing the
+  /// arena ever sees. The real one times a WebSocket ping; a test just states
+  /// what the link is.
+  fn link(one_way_ms: u64, samples: u64) -> LatencySource {
+    Arc::new(move |_| Some((Duration::from_millis(one_way_ms * 2), samples)))
+  }
+
   /// Joins and completes admission, which is now two steps rather than one.
   ///
   /// Every test below used to seat a player with a single `AgentJoined`. The
-  /// server measures first now, so a test that only joins gets a connection
-  /// still being probed and no seat, which is exactly the behaviour the
-  /// admission tests assert and exactly the wrong starting point for everything
-  /// else.
+  /// server waits for the transport to measure the connection now, so a test
+  /// that only joins gets one still being probed and no seat.
   fn admit(logic: &ArenaLogic, state: &mut Arena, agent: &Agent<PlayerKey>) {
     step(logic, state, LogicInput::AgentJoined { agent: agent.clone() });
-    for _ in 0..160u64 {
+    for _ in 0..8u64 {
       if agent.id_cloned().is_some_and(|k| state.seat_of(&k).is_some()) {
         return;
       }
-      let out = step(logic, state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
-      let acks: Vec<Op> = out
-        .ops
-        .iter()
-        .filter_map(|o| match o.ops.first() {
-          // A 10 ms one-way link: the echo returns 20 ms after the probe left.
-          Some(Op::Probe { origin_ms }) => Some(Op::ProbeAck { origin_ms: origin_ms.saturating_sub(20) }),
-          _ => None,
-        })
-        .collect();
-      if !acks.is_empty() {
-        step(logic, state, LogicInput::AgentOps { source: agent.clone(), ops: acks });
-      }
+      step(logic, state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
     }
   }
 
@@ -669,75 +646,62 @@ mod tests {
     // It used to be welcomed and then have every input silently rejected: an
     // input named for `press + playout` lands past the accepting window once the
     // one-way delay exceeds the budget, so the player could not move and nothing
-    // said why. Measured by the server and refused instead.
+    // said why. Measured by the transport and refused instead.
     let controls = small();
     let (cs, _view) = slots(controls);
-    let logic = ArenaLogic::new(cs, None);
     let mut state = Arena::new(controls);
     let budget = state.admission_budget_ms();
+    let logic = ArenaLogic::new(cs, None).with_latency(link(budget + 100, ADMIT_SAMPLES));
     let agent = Agent::new_human(1u64, "p1");
 
     step(&logic, &mut state, LogicInput::AgentJoined { agent: agent.clone() });
     assert!(state.seat_of(&1).is_none(), "no seat is handed out before the connection is measured");
 
-    // Answer every probe the way a link far outside the budget would: the reply
-    // gets back two one-way delays after the probe left, which is what the server
-    // times. Backdating the echo is how that is expressed against a fake clock.
-    let one_way = budget + 100;
-    let mut refused: Option<(u32, u32)> = None;
-    for _ in 0..200u64 {
+    let mut refused = None;
+    for _ in 0..8u64 {
       let out = step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
-      let mut acks = Vec::new();
       for op in &out.ops {
-        match op.ops.first() {
-          Some(Op::Probe { origin_ms }) => acks.push(Op::ProbeAck { origin_ms: origin_ms.saturating_sub(2 * one_way) }),
-          Some(Op::Refused { measured_ms, allowed_ms }) => refused = Some((*measured_ms, *allowed_ms)),
-          _ => {}
+        if let Some(Op::Refused { measured_ms, allowed_ms }) = op.ops.first() {
+          refused = Some((*measured_ms, *allowed_ms));
         }
-      }
-      if !acks.is_empty() {
-        step(&logic, &mut state, LogicInput::AgentOps { source: agent.clone(), ops: acks });
       }
     }
 
     let (measured, allowed) = refused.expect("a link outside the budget is refused rather than seated");
-    assert!(measured as u64 >= one_way, "the refusal states what was measured: {measured} ms");
+    assert!(measured as u64 > budget, "the refusal states what was measured: {measured} ms against {allowed}");
     assert_eq!(allowed as u64, budget, "and what the arena allows, derived from the schedule rather than declared");
     assert!(state.seat_of(&1).is_none(), "and it still holds no seat");
   }
 
   #[test]
   fn a_healthy_connection_is_measured_and_then_seated() {
-    // The other half: admission must not become a wall. A link inside the budget
-    // is probed, passes, and gets its seat.
+    // The other half: admission must not become a wall.
+    let controls = small();
+    let (cs, _view) = slots(controls);
+    let logic = ArenaLogic::new(cs, None).with_latency(link(10, ADMIT_SAMPLES));
+    let mut state = Arena::new(controls);
+    admit(&logic, &mut state, &Agent::new_human(1u64, "p1"));
+    assert!(state.seat_of(&1).is_some(), "a link inside the budget is seated once it has been measured");
+  }
+
+  #[test]
+  fn an_arena_that_cannot_measure_admits_nobody() {
+    // Failing closed, deliberately. Without a transport measurement the arena
+    // has no basis to say a connection can meet the schedule, and guessing that
+    // it can is how the silent exclusion happened in the first place.
     let controls = small();
     let (cs, _view) = slots(controls);
     let logic = ArenaLogic::new(cs, None);
     let mut state = Arena::new(controls);
-    let agent = Agent::new_human(1u64, "p1");
-    step(&logic, &mut state, LogicInput::AgentJoined { agent: agent.clone() });
-
-    for _ in 0..200u64 {
-      let out = step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
-      let mut acks = Vec::new();
-      for op in &out.ops {
-        if let Some(Op::Probe { origin_ms }) = op.ops.first() {
-          // A 10 ms one-way link: the echo returns 20 ms after it left.
-          acks.push(Op::ProbeAck { origin_ms: origin_ms.saturating_sub(20) });
-        }
-      }
-      if !acks.is_empty() {
-        step(&logic, &mut state, LogicInput::AgentOps { source: agent.clone(), ops: acks });
-      }
-    }
-    assert!(state.seat_of(&1).is_some(), "a link inside the budget is seated once it has been measured");
+    admit(&logic, &mut state, &Agent::new_human(1u64, "p1"));
+    assert!(state.seat_of(&1).is_none(), "no measurement, no seat");
   }
 
   #[test]
   fn the_host_view_fills_in_and_frames_reach_the_player() {
     let controls = small();
     let (cs, view) = slots(controls);
-    let logic = ArenaLogic::new(cs, Some(view.clone()));
+    let logic = ArenaLogic::new(cs, Some(view.clone())).with_latency(link(10, ADMIT_SAMPLES));
     let mut state = Arena::new(controls);
 
     let agent = Agent::new_human(1u64, "p1");
@@ -760,7 +724,7 @@ mod tests {
   fn latency_holds_frames_back_without_dropping_them() {
     let controls = Controls { latency_ms: 200, ..small() };
     let (cs, view) = slots(controls);
-    let logic = ArenaLogic::new(cs, Some(view));
+    let logic = ArenaLogic::new(cs, Some(view)).with_latency(link(10, ADMIT_SAMPLES));
     let mut state = Arena::new(controls);
     admit(&logic, &mut state, &Agent::new_human(1u64, "p1"));
 
@@ -785,7 +749,7 @@ mod tests {
     fn delivered(loss: f32) -> usize {
       let controls = Controls { loss_pct: loss, latency_ms: 0, jitter_ms: 0, ..small() };
       let (cs, _view) = slots(controls);
-      let logic = ArenaLogic::new(cs, None);
+      let logic = ArenaLogic::new(cs, None).with_latency(link(10, ADMIT_SAMPLES));
       let mut state = Arena::new(controls);
       admit(&logic, &mut state, &Agent::new_human(1u64, "p1"));
       let mut frames = 0;
@@ -812,7 +776,7 @@ mod tests {
     fn accepted(loss: f32) -> u64 {
       let controls = Controls { loss_pct: loss, latency_ms: 0, jitter_ms: 0, ..small() };
       let (cs, _view) = slots(controls);
-      let logic = ArenaLogic::new(cs, None);
+      let logic = ArenaLogic::new(cs, None).with_latency(link(10, ADMIT_SAMPLES));
       let mut state = Arena::new(controls);
       let agent = Agent::new_human(1u64, "p1");
       admit(&logic, &mut state, &agent);
@@ -838,7 +802,7 @@ mod tests {
   fn changing_the_enemy_count_rebuilds_and_rewelcomes() {
     let controls = small();
     let (cs, _view) = slots(controls);
-    let logic = ArenaLogic::new(cs.clone(), None);
+    let logic = ArenaLogic::new(cs.clone(), None).with_latency(link(10, ADMIT_SAMPLES));
     let mut state = Arena::new(controls);
     admit(&logic, &mut state, &Agent::new_human(1u64, "p1"));
     // Let the clock run first, so the preservation across the rebuild is testable.
@@ -863,7 +827,7 @@ mod tests {
     // request is refused there, which is the only place that count can move.
     let controls = small();
     let (cs, _view) = slots(controls);
-    let logic = ArenaLogic::new(cs, None);
+    let logic = ArenaLogic::new(cs, None).with_latency(link(10, ADMIT_SAMPLES));
     let mut state = Arena::new(controls);
     admit(&logic, &mut state, &Agent::new_human(1u64, "p1"));
 
@@ -882,7 +846,7 @@ mod tests {
     // later becomes newly relevant, hundreds of frames short of the truth.
     let controls = Controls { enemy_count: 300, ..Controls::default() };
     let (cs, _view) = slots(controls);
-    let logic = ArenaLogic::new(cs, None);
+    let logic = ArenaLogic::new(cs, None).with_latency(link(10, ADMIT_SAMPLES));
     let mut state = Arena::new(controls);
     // Warm the arena well past a full baseline's worth of frames with nobody in
     // seat 0, so its `prev_vis` fills up before the client arrives.
@@ -932,7 +896,7 @@ mod tests {
     // Frame the arena emits, apply it, feed the client's ack back as an Op.
     let controls = Controls { enemy_count: 300, ..Controls::default() };
     let (cs, _view) = slots(controls);
-    let logic = ArenaLogic::new(cs, None);
+    let logic = ArenaLogic::new(cs, None).with_latency(link(10, ADMIT_SAMPLES));
     let mut state = Arena::new(controls);
     admit(&logic, &mut state, &Agent::new_human(1u64, "p1"));
     // The first joiner takes the top free seat.
@@ -970,7 +934,7 @@ mod tests {
   fn ghost_and_underruns(jitter_ms: u64, render_delay_ms: u64) -> (usize, u64) {
     let controls = Controls { enemy_count: 300, jitter_ms, render_delay_ms, ..Controls::default() };
     let (cs, _view) = slots(controls);
-    let logic = ArenaLogic::new(cs, None);
+    let logic = ArenaLogic::new(cs, None).with_latency(link(10, ADMIT_SAMPLES));
     let mut state = Arena::new(controls);
     admit(&logic, &mut state, &Agent::new_human(1u64, "p1"));
     let seat = state.seat_of(&1).unwrap();
@@ -1033,7 +997,7 @@ mod tests {
     // acknowledged digest can catch the disagreement and force a clean rebuild.
     let controls = Controls { enemy_count: 300, ..Controls::default() };
     let (cs, _view) = slots(controls);
-    let logic = ArenaLogic::new(cs, None);
+    let logic = ArenaLogic::new(cs, None).with_latency(link(10, ADMIT_SAMPLES));
     let mut state = Arena::new(controls);
     admit(&logic, &mut state, &Agent::new_human(1u64, "p1"));
     let seat = state.seat_of(&1).unwrap();

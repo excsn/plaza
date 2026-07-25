@@ -310,18 +310,9 @@ impl NetClient {
         // Nothing needs it: the local player is drawn from the played-out stream
         // like every other entity, so there is no prediction to retire against.
         Op::InputAck { .. } => {}
-        // The server is timing us. Echo it straight back: it wants its own
-        // round trip, not our opinion of it.
-        Op::Probe { origin_ms } => {
-          let _ = self.socket.send_json(&Op::ProbeAck { origin_ms });
-          if matches!(self.status, Status::Connecting | Status::Waiting) {
-            self.status = Status::Measuring;
-          }
-        }
         Op::Refused { measured_ms, allowed_ms } => {
           self.status = Status::Refused { measured_ms, allowed_ms };
         }
-        Op::ProbeAck { .. } => {}
         Op::Pong { origin_ms, server_ms } => {
           self.rtt.observe_pong(origin_ms, now_ms);
           let one_way = self.rtt.one_way_ms().unwrap_or(0.0) as f64;

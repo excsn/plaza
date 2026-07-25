@@ -76,15 +76,6 @@ pub enum Op {
   Ping { origin_ms: u64 },
   /// The first thing a client says: which wire format it was built against.
   Hello { protocol: u32 },
-  /// Reply to [`Op::Probe`], echoing its stamp so the *server* can time the round
-  /// trip itself.
-  ///
-  /// The client already measures its own latency with [`Op::Ping`], and that
-  /// number cannot be used to decide admission: a client reporting its own ping
-  /// can understate it. Timing its own probe is the only version the server can
-  /// rely on, and it is spoof-proof in the direction that matters, since a client
-  /// can only make itself look *worse*.
-  ProbeAck { origin_ms: u64 },
 
   // ---- server to client ----
   /// Sent once on join: which player is yours, and the settings a client cannot
@@ -107,9 +98,6 @@ pub enum Op {
   Players(PlayerFrame),
   /// The newest movement input this player's state accounts for.
   InputAck { seq: u64 },
-  /// Admission probe, sent before a seat is granted. Echo it back as
-  /// [`Op::ProbeAck`].
-  Probe { origin_ms: u64 },
   /// This connection cannot meet the arena's input schedule, so it was not
   /// seated.
   ///

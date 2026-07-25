@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -53,6 +54,16 @@ pub type OutboundFrame = Vec<u8>;
 struct ClientHandle<ID: AgentId> {
   agent: Agent<ID>,
   to_client_tx: mpsc::BoundedAsyncSender<OutboundFrame>,
+  /// Round trip to this client, in microseconds, `0` before the first sample.
+  ///
+  /// Atomics rather than a lock, so a connection task recording a sample needs
+  /// only the read guard the send path already takes.
+  rtt_us: AtomicU64,
+  /// The smallest seen. Jitter only ever *adds* delay, so the minimum is the
+  /// best estimate of the true one, and it is the number to compare a schedule
+  /// against: a mean flatters a link that is usually fine and occasionally awful.
+  min_rtt_us: AtomicU64,
+  samples: AtomicU64,
 }
 
 /// Hands out a single-consumer stream, or panics if it was already taken.
@@ -138,6 +149,9 @@ impl<ID: AgentId> ConnectionManager<ID> {
       ClientHandle {
         agent: agent.clone(),
         to_client_tx,
+        rtt_us: AtomicU64::new(0),
+        min_rtt_us: AtomicU64::new(0),
+        samples: AtomicU64::new(0),
       },
     );
     debug!(transport = self.transport, conn_id, agent = %agent.label(), "Connection registered.");
@@ -238,6 +252,76 @@ impl<ID: AgentId> ConnectionManager<ID> {
   /// consumer: the controller.
   pub fn take_presence(&self) -> SessionReceiver<PresenceEvent<ID>> {
     take_stream(&self.presence_rx, "presence")
+  }
+
+  /// Records one round trip for a connection, measured by the transport.
+  ///
+  /// **The server timing its own probe, never a number the client reported.**
+  /// A client can understate its own latency, and anything that gates entry or
+  /// sizes a schedule has to be measured rather than claimed. Timing the probe
+  /// is spoof-proof in the direction that matters: a client can delay its reply
+  /// and only make itself look worse.
+  pub fn record_rtt(&self, conn_id: ConnectionId, rtt: Duration) {
+    let us = rtt.as_micros() as u64;
+    let connections = self.connections.read();
+    let Some(handle) = connections.get(&conn_id) else {
+      return;
+    };
+    handle.samples.fetch_add(1, Ordering::Relaxed);
+    // A plain exponential average, deliberately not `RttEstimator`: that lives in
+    // the client crate and this is a server transport, so borrowing it would put
+    // a client dependency in the connection path for eight lines of arithmetic.
+    let previous = handle.rtt_us.load(Ordering::Relaxed);
+    let smoothed = if previous == 0 { us } else { previous - previous / 8 + us / 8 };
+    handle.rtt_us.store(smoothed, Ordering::Relaxed);
+    let min = handle.min_rtt_us.load(Ordering::Relaxed);
+    if min == 0 || us < min {
+      handle.min_rtt_us.store(us, Ordering::Relaxed);
+    }
+  }
+
+  /// The smoothed round trip to a connection, once it has been measured.
+  pub fn rtt(&self, conn_id: ConnectionId) -> Option<Duration> {
+    self.sample(conn_id, |h| h.rtt_us.load(Ordering::Relaxed))
+  }
+
+  /// The smallest round trip seen, which is the honest estimate of the link's
+  /// true latency. Prefer it when deciding whether a connection fits a schedule.
+  pub fn min_rtt(&self, conn_id: ConnectionId) -> Option<Duration> {
+    self.sample(conn_id, |h| h.min_rtt_us.load(Ordering::Relaxed))
+  }
+
+  /// How many round trips have been measured, so a caller can wait for enough of
+  /// them before deciding anything. One sample on a jittery link decides nothing.
+  pub fn rtt_samples(&self, conn_id: ConnectionId) -> u64 {
+    self
+      .connections
+      .read()
+      .get(&conn_id)
+      .map(|h| h.samples.load(Ordering::Relaxed))
+      .unwrap_or(0)
+  }
+
+  /// The measured round trip for an *agent*, and how many samples it rests on.
+  ///
+  /// Keyed by agent rather than connection because that is what an application
+  /// holds: it knows who joined, not which socket they arrived on, and the same
+  /// player reconnecting is a new connection but the same agent.
+  ///
+  /// Returns the **minimum** seen. Jitter only ever adds delay, so the smallest
+  /// sample is the honest estimate of the link, where a mean flatters a
+  /// connection that is usually fine and occasionally awful.
+  pub fn agent_rtt(&self, id: &ID) -> Option<(Duration, u64)> {
+    let connections = self.connections.read();
+    let handle = connections.values().find(|h| h.agent.id() == Some(id))?;
+    let us = handle.min_rtt_us.load(Ordering::Relaxed);
+    (us > 0).then(|| (Duration::from_micros(us), handle.samples.load(Ordering::Relaxed)))
+  }
+
+  fn sample(&self, conn_id: ConnectionId, read: impl Fn(&ClientHandle<ID>) -> u64) -> Option<Duration> {
+    let connections = self.connections.read();
+    let us = read(connections.get(&conn_id)?);
+    (us > 0).then(|| Duration::from_micros(us))
   }
 
   pub fn connection_count(&self) -> usize {

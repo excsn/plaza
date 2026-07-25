@@ -65,7 +65,14 @@ pub async fn serve(
   let session: Arc<ArenaSession> = ActixWsPlazaSession::new();
 
   let initial = *controls.lock();
-  let logic = ArenaLogic::new(controls, view);
+  // The arena asks the transport what it measured. It sends no probes of its own:
+  // the WebSocket ping already exists, so admission costs this game's wire format
+  // nothing, and a client cannot report a latency it does not have.
+  let measured = {
+    let session = session.clone();
+    Arc::new(move |key: &crate::net::arena::PlayerKey| session.agent_rtt(key)) as crate::net::arena::LatencySource
+  };
+  let logic = ArenaLogic::new(controls, view).with_latency(measured);
   let mut builder = StateControllerBuilder::new(Arc::new(logic), session.clone(), Arc::new(NoSnapshots), Arena::new(initial))
     // No snapshot on join. The world goes out as `Op::Frame` on the tick after
     // a player is seated, which is at most one send interval away.

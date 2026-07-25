@@ -23,6 +23,12 @@ use tracing::{debug, error, warn};
 use crate::codec::{JsonCodec, WireCodec};
 use crate::manager::{ConnectionManager, OutboundFrame, TransportSession, DEFAULT_BROADCAST_CAPACITY, DEFAULT_CLIENT_QUEUE_CAPACITY};
 
+/// How many probes go out at the fast rate before settling into upkeep. Enough
+/// that a caller can decide something inside the first second or so.
+const RTT_FAST_PINGS: u32 = 8;
+const RTT_FAST_INTERVAL: std::time::Duration = std::time::Duration::from_millis(125);
+const RTT_IDLE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
 const TRANSPORT: &str = "actix_ws";
 
 /// Maximum size of a reassembled (continuation) WebSocket frame.
@@ -43,6 +49,28 @@ where
   ID: AgentId,
   SnapshotPayload: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static,
 {
+  /// The measured round trip to one connection, and how many samples it rests on.
+  ///
+  /// Measured by this transport timing its own WebSocket ping, so it costs the
+  /// application no protocol and cannot be overstated by the client. `min` is the
+  /// one to compare a schedule against: jitter only ever adds delay, so the
+  /// smallest sample is the honest estimate of the link, where a mean flatters a
+  /// connection that is usually fine and occasionally awful.
+  pub fn connection_rtt(&self, conn_id: plaza::session::ConnectionId) -> Option<(std::time::Duration, std::time::Duration, u64)> {
+    let manager = self.inner.manager();
+    let smoothed = manager.rtt(conn_id)?;
+    let min = manager.min_rtt(conn_id)?;
+    Some((smoothed, min, manager.rtt_samples(conn_id)))
+  }
+
+  /// The measured round trip for an agent, and how many samples it rests on.
+  ///
+  /// What an application actually wants: it knows who joined, not which socket
+  /// they arrived on. See [`ConnectionManager::agent_rtt`](crate::manager::ConnectionManager::agent_rtt).
+  pub fn agent_rtt(&self, id: &ID) -> Option<(std::time::Duration, u64)> {
+    self.inner.manager().agent_rtt(id)
+  }
+
   /// The live counters this transport writes into: what it carried, and what it
   /// dropped rather than stalling for. See [`TransportStats`](crate::stats::TransportStats).
   pub fn stats(&self) -> std::sync::Arc<crate::stats::TransportStats> {
@@ -111,6 +139,13 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
   // recipient's task just writes bytes.
   let send_as_text = codec.is_text();
 
+  // One outstanding ping at a time, so the reply needs no correlation id: the
+  // pong that arrives belongs to the ping that is still open, and a lost one just
+  // costs a sample.
+  let mut ping_sent_at: Option<std::time::Instant> = None;
+  let mut pings_sent: u32 = 0;
+  let mut next_ping = tokio::time::Instant::now() + RTT_FAST_INTERVAL;
+
   let close_reason = loop {
     tokio::select! {
       // Server -> client.
@@ -137,6 +172,22 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
         }
       }
 
+      // The transport times its own round trip, using the WebSocket's own ping
+      // frame. No application message is involved, so every consumer gets a
+      // measured latency per connection without adding anything to its protocol.
+      //
+      // Fast at first, then sparse: a caller deciding whether a connection can
+      // meet a schedule wants several samples in the first second, and after that
+      // this is upkeep. One sample decides nothing on a jittery link.
+      _ = tokio::time::sleep_until(next_ping) => {
+        pings_sent += 1;
+        next_ping = tokio::time::Instant::now() + if pings_sent < RTT_FAST_PINGS { RTT_FAST_INTERVAL } else { RTT_IDLE_INTERVAL };
+        if ws_session.ping(b"").await.is_err() {
+          break None;
+        }
+        ping_sent_at = Some(std::time::Instant::now());
+      }
+
       // Client -> server.
       incoming = msg_stream.next() => {
         match incoming {
@@ -151,7 +202,11 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
               break None;
             }
           }
-          Some(Ok(AggregatedMessage::Pong(_))) => {}
+          Some(Ok(AggregatedMessage::Pong(_))) => {
+            if let Some(sent) = ping_sent_at.take() {
+              manager.record_rtt(conn_id, sent.elapsed());
+            }
+          }
           Some(Ok(AggregatedMessage::Close(reason))) => {
             debug!(transport = TRANSPORT, conn_id, ?reason, "Client closed the connection.");
             break reason;
