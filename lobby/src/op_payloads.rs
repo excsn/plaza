@@ -27,6 +27,17 @@ where
   pub current_players: u32,
   pub max_players: u32,
   pub has_password: bool, // So client knows to prompt if needed
+  /// The worst one-way delay this room can carry, if it has a limit.
+  ///
+  /// Stated by the room rather than assumed by the lobby, because it is a
+  /// property of that room's simulation. A game that schedules inputs ahead can
+  /// only accept a connection whose delay fits inside the schedule; past that,
+  /// every input a player sends lands outside the accepting window and is
+  /// dropped, so they are seated and then cannot play.
+  ///
+  /// `None` means no limit, which is the right default for a game that applies
+  /// input on arrival and therefore has nothing to miss.
+  pub max_one_way_ms: Option<u32>,
   pub custom_game_settings_summary: CustomGameSettings, // Or a summarized version
 }
 
@@ -43,6 +54,13 @@ pub struct RoomFilters {
   pub game_mode: Option<GameMode>,
   pub exclude_full: Option<bool>, // true to exclude, None or false to include
   pub exclude_private_if_no_password_known: Option<bool>,
+  /// Hide rooms this connection could not play in, given its measured one-way
+  /// delay in milliseconds.
+  ///
+  /// The useful half of a latency limit: a player with a slow link is shown the
+  /// rooms they can actually play rather than the ones they will be refused
+  /// from. Refusal is what is left when nothing fits.
+  pub playable_at_one_way_ms: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -52,6 +70,13 @@ pub struct ListRoomsRequestPayload {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct JoinRoomRequestPayload {
+  /// This connection's measured one-way delay, if the caller has one.
+  ///
+  /// Supplied by whoever owns the socket, because the lobby does not, and it
+  /// must be a number the **server** measured rather than one the client sent:
+  /// a client can understate its own latency and this decides entry.
+  /// `plaza_session` exposes it as `agent_rtt`.
+  pub measured_one_way_ms: Option<u32>,
   pub room_id: RoomId,
   pub password_attempt: Option<String>, // Client sends plaintext attempt
 }

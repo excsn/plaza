@@ -76,3 +76,24 @@ Single server. Rooms are in-process tasks, and nothing here coordinates across m
 ## Status
 
 Experimental. The API changes.
+
+## Latency admission, and why it lives here
+
+A game that schedules inputs ahead can only carry a connection whose delay fits inside the schedule. Past that, every input a player sends lands outside the accepting window and is dropped, so they are seated and then cannot play, which reads as a broken game rather than an unsuitable connection.
+
+A room states its limit as `RoomMetadata::max_one_way_ms`, because the limit is a property of that room's simulation and nothing above it can know the number. `None` means no limit, which is right for a game that applies input on arrival and therefore has nothing to miss.
+
+**The measurement is supplied by the caller, not taken here.** The lobby owns no socket, and the number has to be one the *server* measured rather than one the client reported: a client can understate its own latency, and this decides entry. [`plaza_session`](../session/) exposes it as `agent_rtt`, timed from its own WebSocket ping.
+
+```rust,ignore
+let (rtt, samples) = session.agent_rtt(&id).unwrap_or_default();
+lobby.handle_join_room_request(&id, agent, &JoinRoomRequestPayload {
+  room_id,
+  password_attempt: None,
+  measured_one_way_ms: (samples >= 8).then(|| rtt.as_millis() as u32 / 2),
+}).await
+```
+
+**Refusal is the degenerate case.** The reason this belongs to a lobby rather than to a room is that a room can only say yes or no, while a lobby can say *where*: `rooms_playable_at(one_way_ms)` returns the rooms a connection could actually play in, tightest schedule first, so a fast link is not sent to the room built for slow ones and made to pay its delay. A room with no limit sorts last, since it takes anybody and is therefore the fallback. `RoomFilters::playable_at_one_way_ms` does the same for a room list, so a player is shown what they can play rather than what they will be turned away from.
+
+When nothing fits, `LobbyError::UnsuitableConnection` carries both numbers, so a client can state the case instead of just declining.

@@ -122,6 +122,20 @@ Serde-serializable message shapes for a client-facing lobby protocol. They are d
 *   **`RoomMetadataUpdatedNoticePayload<CustomGameSettings>`**: `updated_metadata`.
 *   **`RoomClosedNoticePayload`**: `room_id`, `reason`.
 
+## 5b. Latency admission and routing
+
+A room states what its simulation can carry; the caller supplies what the server measured; the lobby matches.
+
+*   **`RoomMetadata::max_one_way_ms: Option<u32>`**: the worst one-way delay this room can take. Stated by the room, because it is a property of that room's schedule and nothing above it can know the number. `None` is no limit, which is correct for a game that applies input on arrival.
+*   **`JoinRoomRequestPayload::measured_one_way_ms: Option<u32>`**: what the server measured for this connection. Supplied by the caller because **the lobby owns no socket**, and it must be a server measurement rather than a client's claim: a client can understate its own latency and this gates entry. `plaza_session::agent_rtt` is the source.
+*   **`LobbyError::UnsuitableConnection { measured_ms, allowed_ms }`**: its own variant rather than a string, because it is the one refusal a client can act on and both numbers belong in it.
+*   **`rooms_playable_at(one_way_ms) -> Vec<RoomMetadata<_>>`**: the rooms this connection could actually play in, tightest schedule first so a fast link is not sent to the room built for slow ones. A room with no limit sorts last: it takes anybody, so it is the fallback rather than the first choice.
+*   **`RoomFilters::playable_at_one_way_ms`**: the same, applied to a room listing.
+
+**Why the decision is here rather than in the room.** A room can only say yes or no. A lobby can say *where*, which is the useful thing to do about a slow connection: route it to a room whose schedule is deep enough instead of turning it away. Refusal is what is left when nothing fits, not the primary behaviour.
+
+**Why the measurement is not here.** Measuring needs the socket, deciding needs the rule, and routing needs the set of rooms. Those are three layers and they belong to the transport, the room, and the lobby respectively. Collapsing any two of them puts a number in a place that cannot check it.
+
 ## 6. Putting It Together
 
 ```rust,ignore

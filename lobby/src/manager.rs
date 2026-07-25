@@ -139,6 +139,21 @@ where
       return Err(LobbyError::JoinRoomFailed("Room is full.".to_string()));
     }
 
+    // Checked here rather than by the room, because the lobby is the only place
+    // that can do the useful thing about it: send this player somewhere they can
+    // actually play. A room can only refuse.
+    //
+    // The measurement is supplied by the caller rather than taken here. The
+    // lobby owns no socket, and the number has to be one the *server* measured
+    // rather than one the client reported, or it decides nothing: a client can
+    // understate its own latency and this gates entry.
+    if let (Some(allowed), Some(measured)) = (metadata.max_one_way_ms, payload.measured_one_way_ms)
+      && measured > allowed
+    {
+      warn!(room = %room_id, measured, allowed, "Rejected join: connection cannot meet this room's schedule.");
+      return Err(LobbyError::UnsuitableConnection { measured_ms: measured, allowed_ms: allowed });
+    }
+
     match room_arc.accept_authorized_player(player_game_agent).await {
       Ok(()) => {
         self
@@ -194,10 +209,37 @@ where
           let mode_ok = f.game_mode.as_ref().is_none_or(|mode| &metadata.game_mode == mode);
           let space_ok = !f.exclude_full.unwrap_or(false) || metadata.current_players < metadata.max_players;
           let private_ok = !f.exclude_private_if_no_password_known.unwrap_or(false) || !metadata.has_password;
-          mode_ok && space_ok && private_ok
+          let latency_ok = f
+            .playable_at_one_way_ms
+            .is_none_or(|measured| metadata.max_one_way_ms.is_none_or(|allowed| measured <= allowed));
+          mode_ok && space_ok && private_ok && latency_ok
         }
       })
       .collect()
+  }
+
+  /// The rooms this connection could actually play in, best fit first.
+  ///
+  /// The reason latency admission belongs to a lobby rather than to a room. A
+  /// room can only say yes or no; a lobby can say *where*. A player on a slow
+  /// link is routed to a room whose schedule is deep enough for them instead of
+  /// being turned away, and refusal is what is left when nothing fits.
+  ///
+  /// Ordered by how tight a fit each room is, so a fast connection is not sent
+  /// to the room built for slow ones and made to pay its schedule.
+  pub fn rooms_playable_at(&self, one_way_ms: u32) -> Vec<RoomMetadata<F::CustomGameSettings>> {
+    let mut rooms: Vec<_> = self
+      .rooms
+      .lock()
+      .values()
+      .map(|handle| handle.metadata())
+      .filter(|m| m.current_players < m.max_players)
+      .filter(|m| m.max_one_way_ms.is_none_or(|allowed| one_way_ms <= allowed))
+      .collect();
+    // A room with no limit sorts last: it will take anybody, so it is the
+    // fallback rather than the first choice.
+    rooms.sort_by_key(|m| m.max_one_way_ms.unwrap_or(u32::MAX));
+    rooms
   }
 
   /// Removes rooms whose controller task has ended.

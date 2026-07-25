@@ -34,6 +34,9 @@ struct GameState {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct GameSettings {
   difficulty: u8,
+  /// What this room's schedule can carry, so the tests can build rooms that
+  /// differ in the one thing latency routing sorts on.
+  max_one_way_ms: Option<u32>,
 }
 
 #[derive(Debug, Default)]
@@ -108,6 +111,7 @@ impl RoomFactory for TestRoomFactory {
       current_players: 0,
       max_players: settings.max_players,
       has_password: settings.password_hash.is_some(),
+      max_one_way_ms: settings.custom_game_settings.max_one_way_ms,
       custom_game_settings_summary: settings.custom_game_settings.clone(),
     };
 
@@ -120,6 +124,13 @@ impl RoomFactory for TestRoomFactory {
       settings.password_hash.clone(),
     ))
   }
+}
+
+/// A room that will only take connections inside `max_one_way_ms`.
+fn settings_with_budget(max_players: u32, budget_ms: Option<u32>) -> RoomSettings<GameSettings> {
+  let mut s = settings(max_players, None);
+  s.custom_game_settings.max_one_way_ms = budget_ms;
+  s
 }
 
 fn settings(max_players: u32, password: Option<&str>) -> RoomSettings<GameSettings> {
@@ -186,6 +197,7 @@ async fn joining_a_room_does_not_deadlock() {
       &JoinRoomRequestPayload {
         room_id: metadata.room_id,
         password_attempt: None,
+        measured_one_way_ms: None,
       },
     ),
   )
@@ -209,6 +221,7 @@ async fn joining_an_unknown_room_is_rejected() {
       &JoinRoomRequestPayload {
         room_id: Uuid::new_v4(),
         password_attempt: None,
+        measured_one_way_ms: None,
       },
     )
     .await;
@@ -229,6 +242,7 @@ async fn a_private_room_requires_the_right_password() {
   let attempt = |password: Option<&str>| JoinRoomRequestPayload {
     room_id: metadata.room_id,
     password_attempt: password.map(str::to_string),
+    measured_one_way_ms: None,
   };
 
   assert!(
@@ -273,6 +287,7 @@ async fn a_custom_verifier_replaces_the_default_comparison() {
       &JoinRoomRequestPayload {
         room_id: metadata.room_id,
         password_attempt: Some("hunter2".into()),
+        measured_one_way_ms: None,
       },
     )
     .await;
@@ -302,6 +317,7 @@ async fn a_full_room_refuses_new_players() {
       &JoinRoomRequestPayload {
         room_id: metadata.room_id,
         password_attempt: None,
+        measured_one_way_ms: None,
       },
     )
     .await;
@@ -395,6 +411,7 @@ async fn a_player_leaving_the_lobby_is_forwarded_to_their_room() {
       &JoinRoomRequestPayload {
         room_id: metadata.room_id,
         password_attempt: None,
+        measured_one_way_ms: None,
       },
     )
     .await
@@ -413,4 +430,93 @@ async fn a_player_who_never_joined_a_room_leaves_cleanly() {
   tokio::time::timeout(Duration::from_secs(5), lobby.handle_player_leaving_lobby(&id))
     .await
     .expect("leaving must not hang");
+}
+
+#[tokio::test]
+async fn a_connection_too_slow_for_a_room_is_refused_with_both_numbers() {
+  // The refusal a client can act on. A room that schedules inputs ahead can only
+  // carry a connection whose delay fits the schedule; past that the player is
+  // seated and then silently loses every input, which reads as a broken game.
+  // Refused here instead, and with the measurement attached rather than a string.
+  let lobby = manager();
+  let (owner, _) = player();
+  let created = lobby
+    .handle_create_room_request(&owner, settings_with_budget(4, Some(80)))
+    .await
+    .expect("room created");
+
+  let (id, agent) = player();
+  let outcome = lobby
+    .handle_join_room_request(
+      &id,
+      agent,
+      &JoinRoomRequestPayload {
+        room_id: created.room_id,
+        password_attempt: None,
+        measured_one_way_ms: Some(250),
+      },
+    )
+    .await;
+
+  match outcome {
+    Err(LobbyError::UnsuitableConnection { measured_ms, allowed_ms }) => {
+      assert_eq!((measured_ms, allowed_ms), (250, 80), "the refusal carries what was measured and what is allowed");
+    }
+    other => panic!("expected a latency refusal, got {other:?}"),
+  }
+}
+
+#[tokio::test]
+async fn a_room_with_no_budget_takes_anybody() {
+  // The default has to stay open. A game that applies input on arrival has no
+  // schedule to miss, so it states no limit and a latency check must not invent
+  // one for it.
+  let lobby = manager();
+  let (owner, owner_agent) = player();
+  let created = lobby
+    .handle_create_room_request(&owner, settings_with_budget(4, None))
+    .await
+    .expect("room created");
+
+  let (id, agent) = player();
+  let outcome = lobby
+    .handle_join_room_request(
+      &id,
+      agent,
+      &JoinRoomRequestPayload {
+        room_id: created.room_id,
+        password_attempt: None,
+        measured_one_way_ms: Some(4000),
+      },
+    )
+    .await
+    .expect("a room with no limit accepts any connection");
+  assert!(outcome.success);
+}
+
+#[tokio::test]
+async fn a_slow_connection_is_routed_rather_than_turned_away() {
+  // Why this belongs to a lobby rather than to a room. A room can only say yes
+  // or no; a lobby can say *where*. Given rooms with different schedules, a slow
+  // link gets the one built for it instead of a door slam, and refusal is what
+  // is left when nothing fits.
+  let lobby = manager();
+  for budget in [Some(50u32), Some(300), None] {
+    let (owner, owner_agent) = player();
+    lobby
+      .handle_create_room_request(&owner, settings_with_budget(4, budget))
+      .await
+      .expect("room created");
+  }
+
+  let fast = lobby.rooms_playable_at(20);
+  assert_eq!(fast.len(), 3, "a fast link can play anywhere");
+  assert_eq!(fast[0].max_one_way_ms, Some(50), "and is offered the tightest room first, not the one built for slow links");
+
+  let slow = lobby.rooms_playable_at(200);
+  assert_eq!(slow.len(), 2, "a slow link loses the tightest room and keeps the rest");
+  assert_eq!(slow[0].max_one_way_ms, Some(300));
+  assert_eq!(slow.last().unwrap().max_one_way_ms, None, "the unlimited room sorts last: it takes anybody, so it is the fallback");
+
+  assert!(lobby.rooms_playable_at(5000).len() == 1, "past every stated budget only the unlimited room is left");
 }
