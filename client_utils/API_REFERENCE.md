@@ -19,13 +19,17 @@ It addresses these problems, usable independently:
 
 All but the last serve the *server-authoritative* model (an authority decides, a client predicts its own entity and is reconciled). The last serves the other family, *peer-to-peer deterministic lockstep* (rollback), covered in [section 3b](#3b-rollback-netcode-deterministic-lockstep).
 
-### Two rules worth knowing before you predict anything
+### Four principles worth knowing before you predict or render anything
 
-Neither is enforceable by a type, and between them they account for every prediction bug found while building the playground examples ([examples/LEARNINGS.md](../examples/LEARNINGS.md) is the evidence). They *prevent* bugs, where everything else in this crate only recovers from them.
+None is enforceable by a type, and between them they account for every netcode bug found while building the playground examples ([examples/LEARNINGS.md](../examples/LEARNINGS.md) is the evidence). They *prevent* bugs, where everything else in this crate only recovers from them. The first two are about simulation, the last two about rendering.
 
 **A shared rule must be shared code, not code written twice.** The `apply` you hand a predictor is meant to *be* the server's step function, not a client approximation of it. Anything the server does that your copy leaves out arrives as a permanent correction: it looks like network jitter, it is largest exactly when it is most visible, and it is expensive to find later. If your client's rule needs the world to run (gravity, wind, a moving platform), that is what the context parameter is for; being unable to pass the world in is exactly what pushes people into writing the second, lesser rule, so it is a deficiency in the API rather than a reason to fork the rule.
 
 **Prediction is presentation; shared rules consume authoritative state.** Feeding a locally predicted position into a rule that *both* sides run creates a second, divergent world, and every packet then fights the local one. Prediction drives the camera and the local player's own marker; the rules both sides run read the authoritative state, even though it is older. This is counterintuitive, because using the freshest local data looks like an improvement.
+
+**One instant per frame.** A client that renders in the past picks a single instant T for the whole frame, and everything is evaluated at T: not only where entities are drawn, but everything a behaviour rule reads while producing the frame, aim targets and chase context included. An entity simulated to T while reading a target from the newest packet is two timelines in one scene, and the seam between them is a bug whether or not it is visible yet. [`InterpolationClock`](#struct-interpolationclockt) supplies T; the discipline of feeding every read from it is the application's.
+
+**The timeline comes from declaration, not arrival.** Transport facts, round trips and jitter and arrival times, may size buffers and admit or refuse connections. They never decide which moment is on screen or when an input executes; those are declared numbers the server chooses and publishes. A render clock steered by packet arrival hides bad links instead of reporting them, lets every client pick a different "now", and quietly makes ping an input to the game.
 
 ### Which predictor
 

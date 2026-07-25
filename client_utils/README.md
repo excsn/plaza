@@ -59,15 +59,19 @@ Replaying inputs against a server of the second kind double counts, and it gets 
 
 Both share the same lifecycle vocabulary, so they read as one family: `set_active` (the server is holding this entity still, so stop integrating into it), `teleport` (a discontinuity, which must not be eased), a prediction context (`set_context`, for a rule that needs the world to run), and a `Correction` returned from `reconcile` for `CorrectionMonitor` to measure.
 
-## Two rules worth knowing before you predict anything
+## Four principles worth knowing before you predict or render anything
 
-Neither is enforceable by a type, and between them they account for every prediction bug found while building the playground examples. They prevent bugs, where everything else here only recovers from them.
+None is enforceable by a type, and between them they account for every netcode bug found while building the playground examples. They prevent bugs, where everything else here only recovers from them. The first two are about simulation, the last two about rendering.
 
 **A shared rule must be shared code, not code written twice.** The `apply` you hand a predictor is meant to *be* the server's step function, not a client approximation of it. Anything the server does that your copy leaves out arrives as a permanent correction: it looks like network jitter, it is largest exactly when it is most visible, and it is expensive to find later. If your rule needs the world to run (gravity, wind, a moving platform), that is what the context parameter is for; being unable to pass the world in is what pushes people into writing the second, lesser rule.
 
 **Prediction is presentation; shared rules consume authoritative state.** Feeding a locally predicted position into a rule that *both* sides run creates a second, divergent world, and every packet then fights the local one. Prediction drives the camera and the local player's own marker. The rules both sides run read the authoritative state, even though it is older.
 
-Both are drawn from measurement rather than taste: see [examples/LEARNINGS.md](../examples/LEARNINGS.md).
+**One instant per frame.** A client that renders in the past picks a single instant T for the whole frame, and everything is evaluated at T: not only where entities are drawn, but everything a behaviour rule reads while producing the frame, aim targets and chase context included. An entity simulated to T while reading a target from the newest packet is two timelines in one scene, and the seam between them is a bug whether or not it is visible yet.
+
+**The timeline comes from declaration, not arrival.** Transport facts, round trips and jitter and arrival times, may size buffers and admit or refuse connections. They never decide which moment is on screen or when an input executes; those are declared numbers the server chooses and publishes. A render clock steered by packet arrival hides bad links instead of reporting them, lets every client pick a different "now", and quietly makes ping an input to the game.
+
+All four are drawn from measurement rather than taste: see [examples/LEARNINGS.md](../examples/LEARNINGS.md).
 
 ## Rollback netcode
 

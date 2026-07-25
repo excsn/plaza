@@ -37,11 +37,13 @@
 //!   `StateHistory`, `InputTimeline`, and the `RollbackSession` bundle predict a
 //!   missing remote input and roll back to re-simulate when the guess is disproved.
 //!
-//! # Two rules worth knowing before you predict anything
+//! # Four principles worth knowing before you predict or render anything
 //!
-//! Neither is enforceable by a type, and between them they account for every
-//! prediction bug found while building the playground examples. They prevent
+//! None is enforceable by a type, and between them they account for every
+//! netcode bug found while building the playground examples. They prevent
 //! bugs, where everything else in this crate only recovers from them.
+//! The first two are about simulation, the last two about rendering, and the
+//! examples' `LEARNINGS.md` records what each one cost to learn.
 //!
 //! **1. A shared rule must be shared code, not code written twice.** The `apply`
 //! you hand [`PredictedPlayer`] or [`HeldInputPredictor`] is meant to *be* the
@@ -64,6 +66,23 @@
 //! rules both sides run read the authoritative state, even though it is older.
 //! This is counterintuitive, because using the freshest local data looks like an
 //! improvement.
+//!
+//! **3. One instant per frame.** A client that renders in the past picks a
+//! single instant T for the whole frame, and everything is evaluated at T: not
+//! only where entities are drawn, but everything a behaviour rule reads while
+//! producing the frame, aim targets and chase context included. An entity
+//! simulated to T while reading a target from the newest packet is two
+//! timelines in one scene, and the seam between them is a bug whether or not
+//! it is visible yet. [`interpolation::InterpolationClock`] supplies T; the
+//! discipline of feeding *every* read from it is yours.
+//!
+//! **4. The timeline comes from declaration, not arrival.** Transport facts,
+//! round trips and jitter and arrival times, may size buffers and admit or
+//! refuse connections. They never decide which moment is on screen or when an
+//! input executes; those are declared numbers the server chooses and
+//! publishes. A render clock steered by packet arrival hides bad links instead
+//! of reporting them, lets every client pick a different "now", and quietly
+//! makes ping an input to the game.
 //!
 //! # Which predictor
 //!

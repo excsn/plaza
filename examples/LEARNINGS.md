@@ -8,6 +8,18 @@ The principles come first because they are free. No primitive prevents the bugs 
 
 ## Principles
 
+### The four everything else is an instance of
+
+Every detailed principle below is one of these caught at a specific site, and every bug in the catalogue is a violation of exactly one. They are short on purpose: a violation is easiest to spot against a list you can hold in your head, and each of these was learned by paying for it.
+
+1. **Reproducibility.** The same inputs at the same ticks produce the same state everywhere. Concretely: an input is keyed to a tick derived from the shared clock, never from its arrival time; inputs execute in tick order; and the rule that consumes them is one function both sides call, not two implementations of the same idea. The test is a recording: it must replay to what every player saw, including their own screen.
+
+2. **One instant per frame.** The client picks a single instant T and *everything* in the frame is evaluated at T: not only where entities are drawn, but everything a behaviour rule reads while producing the frame, aim targets and chase context and force fields included. An entity standing at T while reading a target from the newest packet is two timelines in one scene, and the seam between them is a bug whether or not it is visible yet.
+
+3. **Simulation never reads presentation.** Smoothed, blended, faded or predicted state is output only. The moment a rule both sides run consumes it, there is a second divergent world and every packet fights the local one. The dependency points one way: presentation reads simulation, never back.
+
+4. **The timeline comes from declaration, not arrival.** Transport facts (round trips, jitter, arrival times) may size buffers and admit or refuse connections. They never decide which instant is drawn or when an input executes; those are declared numbers, chosen and published by the server. The moment arrival time leaks into the timeline, principle 1 dies silently, and a mechanism that adapts to a fault has destroyed the evidence of it.
+
 ### A shared rule must be shared code, not code written twice
 
 This is the strongest correlation in either example, and it is close to a controlled experiment because both examples contain both outcomes.
