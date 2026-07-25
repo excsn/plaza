@@ -17,6 +17,8 @@ One crate each, smallest first. Run any of them with `cargo run -p <crate>` (the
 | [`horde_playground`](horde_playground/) | Scale: thousands of enemies, four players, per-player relevance and a low send rate. A real **listen-server**: host, join over a socket, or deploy headless. See its [README](horde_playground/README.md). | `horde_playground` |
 | [`blackhole_playground`](blackhole_playground/) | Sending a *field* instead of its consequences: thousands of pellets moved by a handful of black holes. Also a **listen-server** with the same four roles. See its [README](blackhole_playground/README.md). | `blackhole_playground` |
 
+Turning the last two into real listen-servers surfaced a run of bugs whose causes were consistently not where the symptoms pointed. [LEARNINGS.md](LEARNINGS.md) is the record: the principles that prevent whole classes of bug, what broke and which reasonable theories were wrong, how each was actually found, what all of it changed in plaza itself, and what is deliberately left unpredicted so nobody "fixes" it.
+
 For example:
 
 ```sh
@@ -26,3 +28,7 @@ cargo run -p plaza-example-shared-counter
 The four playgrounds (`netcode`, `rollback`, `horde`, `blackhole`) pull in a large graphics dependency, so they are excluded from the default workspace build; a bare `cargo build`/`test` skips them. Run each via its own `run-native.sh` or `serve.sh`.
 
 `horde` and `blackhole` are genuine multiplayer over a real socket (built on `plaza`, `plaza_session`, and `plaza_ws`), not scripted single-player. `./run-native.sh` hosts and plays by default; a `--role` argument switches between `headless` (deploy), `observer` (watch), `host`, and `client` (join). Their `static/*.wasm` are gitignored build artifacts, so run `serve.sh` to produce and host the browser client on a fresh checkout. The other two (`netcode`, `rollback`) remain single-process browser demos.
+
+Both keep a **single-process teaching build** with no networking compiled in (`--no-default-features --features native,client`), which is where most of the measurements in their READMEs come from and which is the fastest way to isolate a fault: a counter that reads zero there and non-zero over a socket has removed a very large search space for free.
+
+[`playground_common/`](playground_common/) holds what those two share and the library deliberately does not: the four roles and their argument parsing. It could not live in `plaza_session`, because the browser client needs the same vocabulary and a wasm bundle must not inherit an HTTP server to learn the name of its own role, and it is not published, because argument parsing is an opinion every real application already has. Deduplication tells you code should have one home; it does not tell you that home is the library.

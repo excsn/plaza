@@ -8,14 +8,14 @@ An application supplies four things; `plaza` runs the loop around them.
 
 *   **`StateType`**: the shared state. Any `Clone + Debug + Send + Sync + 'static` type.
 *   **`Op`**: the discrete actions that change it. `Clone + Debug + Send + Sync + 'static`, and `Serialize`/`Deserialize` if it crosses a network.
-*   **[`StateLogic`](#stateloginc)**: the rules. The only place state is mutated.
-*   **[`SnapshotProvider`](#snapshotprovider)**: what a client is sent, built per recipient.
+*   **[`StateLogic`](#trait-statelogic)**: the rules. The only place state is mutated.
+*   **[`SnapshotProvider`](#trait-snapshotprovider)**: what a client is sent, built per recipient.
 
-**Single-actor model.** A [`StateController`](#statecontroller) owns the state and mutates it only from its own task, processing one input at a time. Application logic therefore needs no locking. Nothing in this crate spawns a task except [`TickDriver`](#tickdriver) and the caller's own `controller.run()`.
+**Single-actor model.** A [`StateController`](#struct-statecontrollerop-id-statetype-snapshotpayload-sl-sess-sp) owns the state and mutates it only from its own task, processing one input at a time. Application logic therefore needs no locking. Nothing in this crate spawns a task except [`TickDriver`](#struct-tickdriver) and the caller's own `controller.run()`.
 
-**Identity.** `ID` is the application's identifier type. Anything satisfying [`AgentId`](#agentid) qualifies through a blanket impl, so it is rarely implemented by hand. [`Agent<ID>`](#agent) wraps it and distinguishes humans, bots, and the system.
+**Identity.** `ID` is the application's identifier type. Anything satisfying [`AgentId`](#trait-agentid) qualifies through a blanket impl, so it is rarely implemented by hand. [`Agent<ID>`](#enum-agentid-agentid) wraps it and distinguishes humans, bots, and the system.
 
-**Transport is a trait.** [`Session`](#session) abstracts the network. [`InProcessSession`](#inprocesssession) ships here for tests and local play; the `plaza_session` crate provides WebSocket and TCP implementations.
+**Transport is a trait.** [`Session`](#trait-session) abstracts the network. [`InProcessSession`](#struct-inprocesssessionop-id-agentid-snapshotpayload) ships here for tests and local play; the `plaza_session` crate provides WebSocket and TCP implementations.
 
 ## 2. Error Handling
 
@@ -40,7 +40,7 @@ Returned by `StateLogic::process_input` when an input cannot be applied: `Invali
 
 ### Enum `QueryError`
 
-`ControllerGone`: the only way [`query_state`](#query_state) can fail.
+`ControllerGone`: the only way [`query_state`](#function-query_state) can fail.
 
 ## 3. Agents
 

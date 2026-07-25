@@ -7,8 +7,8 @@
 The division of labour:
 
 *   **You implement [`RoomFactory`](#trait-roomfactory)**: how a room of your game is built. Plaza cannot know what your game needs, so spawning the controller is yours.
-*   **The crate provides [`InMemoryLobbyManager`](#struct-inmemorylobbymanager)**: the registry and the join/list/reap flows around your factory.
-*   **Rooms are reached through [`RoomHandle`](#trait-roomhandle)**: the lobby talks to a room only through `plaza`'s `ControllerCommand` channel, so it needs no knowledge of your game's types beyond the associated types you declare.
+*   **The crate provides [`InMemoryLobbyManager`](#struct-inmemorylobbymanagerf-roomfactory)**: the registry and the join/list/reap flows around your factory.
+*   **Rooms are reached through [`RoomHandle`](#trait-roomhandlegameagentid-agentid-customroomsettings)**: the lobby talks to a room only through `plaza`'s `ControllerCommand` channel, so it needs no knowledge of your game's types beyond the associated types you declare.
 
 **Authorization, not connection.** A successful join means the lobby has *authorized* a player and returns the endpoint to connect to. The gameplay join happens when that client connects to the room's own transport and the room's `Session` fires its presence event. The lobby never proxies gameplay traffic.
 
