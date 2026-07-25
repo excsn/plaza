@@ -22,6 +22,11 @@ Its only dependency is `plaza_client_utils`, for the shared `Interpolatable` and
 | A client aims at where a target *was* (it renders remotes in the past), so hits must be judged then, not now | `HistoricalStateBuffer` |
 | A world has more entities than fit on the wire, and players in different places, so each client needs only what is near it | `relevance` (`SpatialGrid`, `VisibilitySet`, Morton keys) |
 | Some of those entities are simulation *inputs*, so dropping the distant ones changes the answer, but sending them all does not scale | `aggregate` (`AggregateTree`) |
+| Streaming that set as *entered* and *left* assumes every packet arrives, and one that does not is lost for good | `delta` (`DeltaBaseline`) |
+| A bounded number of seats, where a fresh occupant must not inherit the last one's accumulated state | `seats` (`SeatTable`, `Seating`) |
+| A claim about bandwidth should be a number on screen, not an assertion in a README | `meter` (`RateMeter`) |
+
+`SetDigest`, `SlotKey`, `SlotAllocator` and `DeltaMirror` are re-exported from [`plaza_client_utils`](../client_utils/) rather than defined here. Both sides of a delta stream have to agree about them exactly, and a browser client needs them and must not inherit a server to get them.
 
 ## Lag compensation in one paragraph
 
@@ -83,6 +88,19 @@ for summary in &out {
 Nothing in the module knows what a weight is. It is mass for a gravity field in `blackhole_playground`, and a headcount in `horde_playground`, where one tree over 3000 enemies gives each player twelve stand-ins covering 98% of the world outside their view radius for about 3% more bandwidth (relevance culling gives none of it, at any bandwidth). It is equally a cluster's threat for target selection, or an accumulated noise level.
 
 Those two consumers also settle how to pick `theta`, and the answer is that there is no single right value. The field version has a hard ceiling near `1.0`, past which it is worse than culling; the crowd version is comfortable at `1.5`. The difference is what consumes the summaries: a *simulation* compounds the approximation into error, a *drawing* does not. **How coarse an approximation may be is a property of the consumer.** The only requirement is that the quantity be additive and that a distant group be adequately described by its weighted centroid.
+
+## Streaming that set reliably (the half most people get wrong)
+
+`VisibilitySet::diff` gives you *entered* and *left*, and the obvious next step is to send those and let each client keep a mirror. That is cheap and it has a failure built into it: the server diffs against **what it last sent**, which silently assumes every packet arrives. One dropped packet leaves the client permanently missing whatever it carried, and nothing in the stream ever mentions it again. Measured in [`horde_playground`](../examples/horde_playground/) at 25% loss: 188 corpses a client can never be told about, and render error at 44.7 px.
+
+`delta::DeltaBaseline` diffs against **what the client acknowledged** instead, with `AckWindow` on the return path. Corpses fall to single digits and render error to 9.2 px for about 19% more bandwidth. It owns the per-subscriber baselines, the acknowledgement frontier, the staleness rebuild and the digest drift check, and it never learns what a key means. Four details in it are load-bearing, and three were wrong in the first working version:
+
+- **The baseline is the newest *contiguous* acknowledgement, not the newest bit set.** Receiving packet N+1 after losing N does not put a client in the state N+1 implies. Taking the newest set bit made recovery statistically indistinguishable from no recovery.
+- **The keys carry generations.** A retraction re-derived after a slot was recycled names the slot's *current* occupant, so the client's lookup misses and the entity it actually holds is never mentioned again. Loss recovery is exactly what makes generations load-bearing, because re-deriving widens the window between naming an entity and reading the name.
+- **The two halves of the diff need baselines built by opposite operations.** What to *send* must assume the least the client holds: the acknowledged state **intersected** with everything sent since. What to *retract* must assume the most: the acknowledged state **unioned** with everything announced since, because an entity that entered and left inside the gap appears in neither the baseline nor the current set. Getting one right and leaving the other raw trades one silent failure for its mirror image.
+- **Cold start is a decision.** Recovery diffs against the acknowledged state, and there is no acknowledged state before the first acknowledgement, so the naive fallback is silently the very behaviour the mode exists to replace.
+
+`RecoveryPolicy::Naive` keeps the broken behaviour available, because the failure is worth being able to demonstrate. The client's half is `plaza_client_utils::DeltaMirror`.
 
 ## Relationship to `plaza`
 

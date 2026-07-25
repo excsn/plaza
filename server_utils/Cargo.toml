@@ -5,7 +5,7 @@ edition = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
 repository = { workspace = true }
-description = "Server-side building blocks for real-time netcode: historical state rewind for lag compensation. Zero-dependency and wasm-compatible."
+description = "Server-side building blocks for real-time netcode: relevance streaming, delta baselines, lag-compensation rewind, aggregation, and seat allocation. No async runtime, so it builds for wasm."
 readme = "README.md"
 keywords = ["gamedev", "networking", "multiplayer", "lag-compensation", "server"]
 categories = ["game-development", "network-programming"]
