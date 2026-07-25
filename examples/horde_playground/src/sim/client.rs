@@ -1247,6 +1247,26 @@ impl Client {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::sim::types::{ARENA_H, ARENA_W, MAX_PLAYERS};
+
+  #[test]
+  fn a_client_with_no_packets_yet_looks_at_the_middle_of_the_arena() {
+    // What a camera follows before the first frame, and it regressed silently
+    // once: deleting the local prediction removed a predictor seeded at the
+    // centre and left a zeroed array behind it. The arena is measured from a
+    // corner, so the origin is a view of the outside of the world.
+    for player_count in [1, MAX_PLAYERS] {
+      let client = Client::new(0, player_count);
+      assert!(client.render_at().is_none(), "nothing has started the timeline yet");
+      for (p, pos) in client.players().iter().enumerate() {
+        assert_eq!(
+          (pos.x, pos.y),
+          (ARENA_W * 0.5, ARENA_H * 0.5),
+          "player {p} of {player_count} starts at the centre, not the corner"
+        );
+      }
+    }
+  }
 
   fn flight(from: Vec2) -> CoinFlight {
     CoinFlight {

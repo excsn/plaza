@@ -23,7 +23,7 @@ use plaza_ws::{CloseReason, Event, SendJson, Socket, State};
 
 use crate::sim::client::Client as SimClient;
 use crate::sim::protocol::{Op, ServerPolicy, PROTOCOL};
-use crate::sim::types::{Controls, LeaveReason, PlayerId, Vec2, SIM_DT};
+use crate::sim::types::{Controls, LeaveReason, PlayerId, Vec2, ARENA_H, ARENA_W, SIM_DT};
 
 /// The server's simulation step, which is the unit its ticks are counted in.
 const SIM_STEP_MS: u64 = (SIM_DT * 1000.0) as u64;
@@ -144,7 +144,18 @@ impl NetClient {
       .render_at()
       .map(|at| self.sim.render_players(at))
       .and_then(|drawn| drawn.get(me).copied())
-      .unwrap_or_else(|| self.sim.players().get(me).copied().unwrap_or_default())
+      // Never `unwrap_or_default`: the arena is measured from a corner, so the
+      // origin is a view of the outside of it, and a camera that lands there
+      // before the first packet opens on the wrong world. This path is not
+      // reachable today, and it is the one that regressed last time.
+      .unwrap_or_else(|| {
+        self
+          .sim
+          .players()
+          .get(me)
+          .copied()
+          .unwrap_or_else(|| Vec2::new(ARENA_W * 0.5, ARENA_H * 0.5))
+      })
   }
 
   /// Whether there is a world worth drawing yet.
