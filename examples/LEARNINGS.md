@@ -17,7 +17,7 @@ This is the strongest correlation in either example, and it is close to a contro
 | horde enemies | `step_enemy` in `sim/types.rs`, called by server, client and world | none |
 | black hole pellets | `step_pellet` in `sim/types.rs`, called by both sides | none |
 | black hole **hole** | server ran `step` plus `attract_holes` plus collision separation; the client had its own `apply_move` | three, found separately: the unpredicted pull, the frozen dead hole, the unpredicted dash |
-| horde **local player** | server integrates a held direction; the client hand-rolled velocity integration | two: a threshold-snap sawtooth, and enemies lunging at a predicted position |
+| horde **local player** | server integrates a held direction; the client hand-rolled velocity integration | three: a threshold-snap sawtooth, enemies lunging at a predicted position, and reversal stiffness. No longer predicted at all |
 
 Every entity whose simulation step was one function both sides call was correct and stayed correct while the game changed around it. Every entity whose step was written twice drifted, silently, and each drift cost days to find because the symptom (a jerk, a jump) was far from the cause (a force the client did not model).
 
@@ -59,13 +59,27 @@ On a host, round trip probes return directly while frames pass through the outbo
 
 ### The server owns time, and a client names it rather than asserting it
 
-Applying an input on arrival makes ping an input to the game: a 20 ms player's press lands on the next tick and a 200 ms player's lands nine ticks later, so anything decided by who was where first is decided by connection quality. Buffering inputs and executing them at the moment they were *pressed*, plus a fixed playout delay, puts everyone on the same footing as long as the delay covers their latency. It is not free: it is added to how long the world takes to react to you, and prediction hides that for your own movement and cannot hide it for anything the server adjudicates.
+Applying an input on arrival makes ping an input to the game: a 20 ms player's press lands on the next tick and a 200 ms player's lands nine ticks later, so anything decided by who was where first is decided by connection quality. Buffering inputs and executing them at the moment they were *pressed*, plus a fixed playout delay, puts everyone on the same footing as long as the delay covers their latency. It is not free: it is added to how long the world takes to react to you. Prediction was expected to hide that for your own movement and cannot, which is a separate principle below.
 
 **A tick, not a timestamp**, and the difference is authority. A timestamp is the client naming a moment, which the server then has to judge plausible; judging it needs a shared clock, a shared clock is an estimate, and the estimate's error is the slack a liar hides in. A tick is the client naming *the server's own unit of time*, which is either still open or is not. Both sides compute it from one rule, so two players who pressed at the same instant name the same tick however far apart their pings are, and a 120 Hz client and a 30 Hz one are on equal footing because neither is naming its own frames.
 
 **Reject, do not clamp.** Outside the accepting window an input is dropped. Clamping a wild tick into range executes an input the client never asked for at that moment, which is worse than dropping it and is indistinguishable from a working system from the outside. Sequence numbers cover the other half, which is replaying an input that was legitimate when it was sent.
 
 **Both bounds are settings, because they are genre decisions.** Tight lateness is what a competitive shooter wants: a closed tick stays closed, and a player who cannot reach the window loses inputs and rubber-bands. Loose forgives a jittery link at the cost of letting a slightly stale input take effect, and widening it is also exactly what a lag switch wants, so it should be sized from what honest links actually measure rather than picked. The earliness bound has to cover the playout depth, since that is how far ahead an honest client aims.
+
+### A scheduled server and a predicted local player cannot both be right
+
+Prediction hides your own latency by applying your input at once, on the understanding that the server is about to do the same. Against a server that executes inputs **on a schedule**, it isn't: your input runs at `press + playout_delay`, and until then the prediction is simulating a world the authority is not in.
+
+The disagreement does not heal. Measured with the correction switched off, at zero latency, a single reversal banks a permanent **44 px** offset. The *velocity* error is temporary, since both sides end up holding the same direction, but the displacement it already integrated has no restoring force. Something has to give it back, and giving it back is the correction being dragged against the direction you are steering, which is what a hand reads as stiffness.
+
+Three fixes were measured and all were worse than the fourth: predicting the schedule costs the same lag honestly, aiming at your own delay restores the ping advantage the schedule existed to remove, and replaying only makes the correction exact rather than absent.
+
+**The fourth is to stop predicting.** If the client already draws the world at a delayed instant, the local player can be drawn there too, from the played-out stream, like every other entity. Prediction and authority cannot disagree when there is no prediction. The cost is `playout_delay + render_delay` of input lag, and it is not new: both delays were already being paid, one in authority and one in rendering, and the client was drawing something else in between.
+
+The general form, and it is this project's first principle from a new angle: **prediction is only sound when it predicts the same thing the authority will do, including *when*.** A predictor that has the rule right and the timing wrong is not an approximation of the server, it is a different world.
+
+Worth noting what it buys beyond the fix: a recording replays to exactly what every player saw, *including their own screen*. A predicted local player can never give you that.
 
 ### Transport variance and the timeline are different things, and one must not move the other
 
@@ -321,7 +335,7 @@ Worth stating so nobody "fixes" these:
 
 - **Black hole, collision separation between holes.** Predicting it requires predicting the other holes' motion, which means running the whole field forward rather than one entity. Left as a correction, and it is the residual visible during close grapples.
 - **Black hole, the dash, when the toggle is off.** Kept selectable specifically so the cost of not predicting an ability is demonstrable rather than described.
-- **Horde, the local player's forces.** There are none: the player is unforced, so velocity integration is exact and no replay is needed.
+- **Horde, the local player, entirely.** Nothing about it is predicted any more. It is drawn from the played-out stream at the same instant as everything else, because against a scheduled server a prediction is a second world rather than a head start. Black hole still predicts its own hole, and correctly: its server applies input on arrival, so there is no schedule to disagree with.
 - **Both, remote players.** They are interpolated or simulated under the shared rule, not predicted, because there are no local inputs to predict from.
 
 ## What the host legitimately sees that a joiner does not

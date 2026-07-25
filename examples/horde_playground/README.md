@@ -94,6 +94,7 @@ The **minimap** shows the whole arena with every enemy the server is simulating.
 | **crowd level of detail** | the opening angle for summarising the world outside your view radius, instead of knowing nothing about it |
 | **players spread / clustered** | clustered players make the horde converge on one spot, raising local density |
 | **ease corrections** | smoothing, with the caveat measured below |
+| **input playout delay** | how long the server holds an input before executing it, which is what makes a contested pickup independent of ping |
 | **render delay** | how far behind the server clock every client shows the world. One number for the whole session; too small and the underrun counter climbs |
 | **send unresolved frames** | the server's permission, and what makes a ghost possible at all |
 | **draw the ghost** | the client's half. Where each entity is *going* to be; the gap to the solid marker is the playout delay, not an error |
@@ -154,6 +155,20 @@ Putting peers on a delayed timeline exposed that they were the only thing on it.
 That in turn exposed which entities can actually *be* on a delayed timeline. **An entity can join one only if the client can reconstruct its state at an arbitrary past instant.** A peer can, because `RemoteView` keeps a snapshot buffer. A projectile could not: the client held only the newest list and replaced it wholesale each packet, so once the server stopped listing a shot there was nothing left to draw it from, and any shot fired and destroyed inside the render delay had never existed at the target. At a 4 Hz player rate that was **every** shot: none were drawn at all.
 
 For a shot the reconstruction is nearly free, and it is what the wire now carries. A `ProjectileSpawn` is an origin, a velocity and the time it was fired, sent **once** as an event; the client flies it locally and can evaluate it at any instant exactly. Shots drawn per frame went from 0.2, 0.1 and **0.0** at 30, 16 and 4 Hz to essentially rate-independent. It is also cheaper, one message instead of an entry in every packet for the whole flight, and it is the same move as everything else that has worked here: **send the input to the behaviour, not the behaviour's output.** The *held* count still rises with the delay, because a shot fired after the instant being rendered is queued until the timeline reaches it, which is the buffer working rather than a loss.
+
+## Nothing about your own player is predicted either
+
+The obvious exception to one timeline was the local player, drawn predicted at *now* while the world around it was drawn at T. That is the same seam as the three clocks, kept for the usual reason: prediction is how you hide latency on your own input.
+
+It does not survive contact with a **scheduled** server. Your input executes at the tick you named, `press + playout_delay`, and a prediction that applies it immediately is simulating a different world for that whole window. Measured with the correction switched off entirely, at zero latency, a single reversal banks a permanent **44 px** offset, because the velocity disagreement heals when the schedule catches up and the displacement it already integrated does not. Something has to give that back, and the giving back is what you feel as stiffness on every change of direction.
+
+So the local player is now drawn from the played-out stream at `RenderAt`, like everything else. There is no prediction, therefore no correction, therefore no stiffness: the mechanism is gone rather than tuned. `HeldInputPredictor`, the correction monitor, and the reconcile path are all deleted from the client, and the renderer lost its special cases (your repulsor ring used to be pinned to the predicted marker while peers' rings sat on their authoritative positions).
+
+**What it costs is one number, and the panel prints it:** `playout_delay + render_delay`, 250 ms at the defaults. That is not new latency. The server already refused to turn you for 100 ms and the world was already drawn 150 ms back; the client was drawing something else in the meantime and then being dragged off it. Both delays now have sliders, next to each other, with the sum stated, because each was justified separately and nobody had costed the total against the hand.
+
+**What it buys, beyond the fix:** a recording replays to exactly what every player saw, *including their own screen*. A predicted local player can never give you that, because what you saw was never what happened.
+
+`cargo run --release -p horde_playground --example reversal` is the measurement, including the strategies that were tried and rejected.
 
 ## The server owns time
 

@@ -63,8 +63,25 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls) {
     ui.radio_value(&mut controls.mode, RemoteMode::DeadReckon, "dead reckon (last velocity)");
     ui.radio_value(&mut controls.mode, RemoteMode::Interpolate, "interpolate (render in the past)");
     ui.checkbox(&mut controls.smooth, "ease corrections");
+    // The two delays that make up your input lag, next to each other and with
+    // their sum stated, because each was justified on its own and nobody had
+    // costed the total against the hand.
+    ui.add(egui::Slider::new(&mut controls.playout_delay_ms, 0..=400).text("input playout delay ms"))
+      .on_hover_text("How long the server holds an input before executing it. This is what makes a contested pickup independent of ping: every input executes at press time plus this, so a 20 ms player and a 200 ms player are on the same footing. It has to cover the worst connected player's one-way delay, or their inputs arrive after the tick they named and are rejected outright.");
+    ui.checkbox(&mut controls.input_playout, "use the playout buffer")
+      .on_hover_text("Off is apply-on-arrival, which is what ping-independence costs you: whoever is closer to the server reaches the coin first.");
     ui.add(egui::Slider::new(&mut controls.render_delay_ms, 0..=600).text("render delay ms"))
       .on_hover_text("How far behind the server clock every client shows the world. A property of the timeline, not of anybody's link, so the same instant is on every screen. It has to cover one-way latency + jitter + a send interval: the newest sample a client holds is already a trip old, so a delay short of that leaves nothing to interpolate between and peers snap to the raw sample. Too short and the underrun counter climbs.");
+    ui.label(
+      egui::RichText::new(format!(
+        "your input appears after {} ms  (playout {} + render {})",
+        controls.playout_delay_ms + controls.render_delay_ms,
+        controls.playout_delay_ms,
+        controls.render_delay_ms
+      ))
+      .weak(),
+    )
+    .on_hover_text("Nothing about your own player is predicted: it is drawn from the played-out stream at the same instant as everything else, so there is no correction to fight and a recording replays to exactly what you saw. The price is this number, and it is the sum of two delays that were each chosen for a different reason.");
     ui.checkbox(&mut controls.allow_ghost, "server: send unresolved frames (allows a ghost)")
       .on_hover_text("The permission a ghost needs, and a server setting rather than a client one, the way a shipped game exposes it: a client cannot draw a future it was not sent. Currently declared rather than enforced, so an honest client obeys it and a cheat client would not. Real enforcement means not sending past the render instant at all, which needs the server to hold frames rather than delay them; delaying was tried and measurably does nothing, because the client's clock shifts with the stream.");
     ui.add_enabled(controls.allow_ghost, egui::Checkbox::new(&mut controls.show_ghost, "draw the ghost"))
@@ -268,12 +285,6 @@ pub fn draw_host_ui(
         ui.label(format!("last area pulse killed: {} at once", view.nova_kills_last));
         ui.label(format!("stale handle references: {}", client.sim.stale_refs()));
         warn_line(ui, format!("mirror digest mismatches: {}   frames lost: {}", client.sim.digest_mismatches(), client.sim.frames_lost()), client.sim.digest_mismatches() > 0);
-        let (_, abnormal) = client.monitor.counts();
-        warn_line(
-        ui,
-        format!("player corrections: {:.1}px typical, {abnormal} abnormal, {:.0}px worst", client.monitor.norm(), client.monitor.peak()),
-        abnormal > 0,
-        );
         warn_line(ui, format!("entities held that are dead on the server: {phantoms}"), phantoms > 0);
         if controls.crowd_lod_theta > 0.0 {
         ui.label(format!("distant world: {} crowd summaries for {:.1} KiB/s", client.sim.crowds.len(), view.crowd_bytes_per_sec() / 1024.0));

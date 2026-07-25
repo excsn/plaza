@@ -18,12 +18,12 @@
 //!   read from server state a joiner does not have.
 
 use plaza_client_utils::clock_sync::ClockSyncEstimator;
-use plaza_client_utils::{CorrectionMonitor, HeldInputConfig, HeldInputPredictor, InputCoalescer, RttEstimator};
+use plaza_client_utils::{InputCoalescer, RttEstimator};
 use plaza_ws::{CloseReason, Event, SendJson, Socket, State};
 
 use crate::sim::client::Client as SimClient;
 use crate::sim::protocol::{Op, ServerPolicy, PROTOCOL};
-use crate::sim::types::{step_player, Controls, LeaveReason, PlayerId, Vec2, ARENA_H, ARENA_W, SIM_DT};
+use crate::sim::types::{Controls, LeaveReason, PlayerId, Vec2, SIM_DT};
 
 /// The server's simulation step, which is the unit its ticks are counted in.
 const SIM_STEP_MS: u64 = (SIM_DT * 1000.0) as u64;
@@ -38,34 +38,11 @@ pub enum Status {
   Gone(String),
 }
 
-/// The prediction rule, which is literally the server's own [`step_player`]
-/// rather than a client copy of it. The context is `()` because a player is
-/// unforced: nothing but its own input moves it.
-fn integrate(pos: &mut Vec2, dir: &Vec2, dt: f32, _ctx: &()) {
-  step_player(pos, *dir, dt);
-}
-
-fn lerp_pos(a: &Vec2, b: &Vec2, t: f32) -> Vec2 {
-  Vec2::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
-}
-
 const PING_INTERVAL_MS: u64 = 1000;
 /// When coalescing, resend the held input at least this often, so a dropped
 /// direction change cannot strand the player gliding until the next keypress.
 /// See [`InputCoalescer`], which is where that reasoning now lives.
 const INPUT_KEEPALIVE_MS: u64 = 120;
-/// A disagreement past this much, in a single packet, is a real discontinuity
-/// (the first spawn, a respawn, a teleport) rather than drift, and is snapped
-/// outright. Ordinary drift is eased continuously instead, see `CORRECT_BLEND`.
-const LOCAL_CORRECT_PX: f32 = 24.0;
-/// Fraction of the remaining gap to the server the local prediction closes each
-/// packet. The prediction is close to exact for an unforced player, so what is
-/// left is a slow drift from clock and one-way-estimate noise; easing a fixed
-/// share of it every packet keeps the marker within a pixel or two of the server
-/// without ever accumulating into the visible snap a hard threshold produced.
-const CORRECT_BLEND: f32 = 0.25;
-/// A gap larger than this is not drift to ease but a discontinuity to snap.
-const TELEPORT_PX: f32 = 200.0;
 /// How many `Died` retractions in one packet read as an area pulse rather than
 /// ordinary attrition. A nova clears a whole radius at once; single shots do not.
 const NOVA_BURST: usize = 10;
@@ -83,13 +60,6 @@ pub struct NetClient {
   pub policy: Option<ServerPolicy>,
 
   /// Your own player.
-  ///
-  /// The server holds your direction and integrates it every tick rather than
-  /// consuming one input per step, which is what makes this the continuous model
-  /// and why replaying inputs would double count. It is also what lets the input
-  /// be coalesced: what is transmitted is a bandwidth decision, what is
-  /// integrated is a simulation one.
-  local: HeldInputPredictor<Vec2, Vec2>,
   input_seq: u64,
   /// When to actually transmit, as opposed to when to integrate. The two are
   /// deliberately different: the prediction advances every tick whatever the wire
@@ -108,10 +78,6 @@ pub struct NetClient {
   prev_health: u8,
   /// Seconds of red damage flash left to draw, refreshed when you take a hit.
   hit_flash_secs: f32,
-  /// What the local prediction is costing, measured against a running norm
-  /// rather than a fixed pixel count so it stays meaningful as the send rate and
-  /// latency change.
-  pub monitor: CorrectionMonitor,
 }
 
 impl NetClient {
@@ -123,15 +89,6 @@ impl NetClient {
       status: Status::Connecting,
       me: None,
       policy: None,
-      local: HeldInputPredictor::new(
-        Vec2::new(ARENA_W * 0.5, ARENA_H * 0.5),
-        HeldInputConfig { blend: CORRECT_BLEND },
-        integrate,
-        lerp_pos,
-      )
-      // Beyond this the player did not travel there: a spawn or a respawn. Snap
-      // it, because easing would slide the marker across the whole arena.
-      .with_teleport(|a: &Vec2, b: &Vec2| a.dist(*b), TELEPORT_PX),
       input_seq: 0,
       send_policy: InputCoalescer::new(INPUT_KEEPALIVE_MS),
       rtt: RttEstimator::new(0.15),
@@ -143,7 +100,6 @@ impl NetClient {
       nova_flash_secs: 0.0,
       prev_health: crate::sim::types::PLAYER_MAX_HEALTH as u8,
       hit_flash_secs: 0.0,
-      monitor: CorrectionMonitor::new().with_floor(LOCAL_CORRECT_PX),
     })
   }
 
@@ -159,8 +115,29 @@ impl NetClient {
 
   /// Where to draw your own player: the prediction, eased through recent
   /// corrections.
+  /// Where to draw your own player: **on the same timeline as everything else**.
+  ///
+  /// Not predicted. The client renders the world at one instant, and exempting
+  /// the local player from it is the seam every other fix in this example
+  /// removed: your marker would sit a render delay ahead of the enemies it is
+  /// standing among, so your shots left from somewhere you were not.
+  ///
+  /// Drawing it from the played-out stream instead means there is nothing to
+  /// correct, so the reversal stiffness has no mechanism left rather than a
+  /// better cure: prediction and authority cannot disagree when there is no
+  /// prediction. It also makes a recording replay to exactly what you saw, which
+  /// a predicted local player can never do.
+  ///
+  /// What it costs is stated where it is chosen: see
+  /// [`Controls::playout_delay_ms`](crate::sim::types::Controls::playout_delay_ms).
   pub fn my_position(&self) -> Vec2 {
-    self.local.render()
+    let me = self.me.unwrap_or(0) as usize;
+    self
+      .sim
+      .render_at()
+      .map(|at| self.sim.render_players(at))
+      .and_then(|drawn| drawn.get(me).copied())
+      .unwrap_or_else(|| self.sim.players().get(me).copied().unwrap_or_default())
   }
 
   pub fn rtt_ms(&self) -> Option<f32> {
@@ -178,14 +155,10 @@ impl NetClient {
 
   /// Advances the local prediction and transmits the intent, either every tick or
   /// only on change, per `controls.coalesce_input`.
-  pub fn send_input(&mut self, dir: Vec2, dt: f32, controls: &Controls) {
+  pub fn send_input(&mut self, dir: Vec2, controls: &Controls) {
     if !self.is_playing() {
       return;
     }
-    // Predict locally every tick regardless of what is transmitted, so movement
-    // is smooth even when the wire stays quiet.
-    self.local.hold(dir);
-    self.local.advance(dt);
     self.input_seq += 1;
 
     self.send_policy.set_enabled(controls.coalesce_input);
@@ -291,7 +264,6 @@ impl NetClient {
           if deaths >= NOVA_BURST {
             self.nova_flash_secs = NOVA_FLASH_SECS;
           }
-          let one_way = self.rtt.one_way_ms().unwrap_or(0.0) as f64;
           // Clock sync is driven by pongs alone, not by frames. A frame's offset
           // is only right if the one-way estimate matches the delay the frame
           // actually took, and on a *host* those disagree: pongs come straight
@@ -305,35 +277,6 @@ impl NetClient {
           // where the server has it *now*, and only pull the prediction toward it
           // when they genuinely disagree, which for an unforced player means a lost
           // input under the coalesced policy rather than routine noise.
-          if let Some(me) = self.me
-            && let Some((_, pos)) = packet.players.iter().find(|(id, _)| *id == me)
-          {
-            // The predictor projects the authoritative position forward by its own
-            // age under the held direction, then eases toward it: drift is
-            // absorbed continuously rather than accumulating into the visible
-            // snap a hard threshold used to produce. A gap past `TELEPORT_PX` is
-            // a discontinuity and snaps instead, which the predictor decides.
-            let correction = self.local.reconcile(*pos, (one_way / 1000.0) as f32);
-            let moved = correction.seen.dist(correction.settled);
-            if self.monitor.record(moved) && controls.debug_digest {
-              // Which way the correction went, relative to where the player is
-              // steering. A forward correction is the surprising one: it means
-              // the server got further than the prediction did.
-              let delta = Vec2::new(correction.settled.x - correction.seen.x, correction.settled.y - correction.seen.y);
-              let held = *self.local.held();
-              let forward = delta.x * held.x + delta.y * held.y;
-              eprintln!(
-                "player correction seq={} moved={:.1}px (norm {:.1}px) {} one_way={:.1}ms held=({:.2},{:.2})",
-                packet.seq,
-                moved,
-                self.monitor.norm(),
-                if forward > 0.0 { "FORWARD" } else if forward < 0.0 { "back" } else { "lateral" },
-                one_way,
-                held.x,
-                held.y,
-              );
-            }
-          }
           // Hand the sim server time, not local time. It computes a packet's age
           // as `recv - server_time` to project a sample into the present, and that
           // is only meaningful if the two clocks agree; over a real wire they do
@@ -359,8 +302,8 @@ impl NetClient {
           self.frames_seen += 1;
           applied_frame = true;
         }
-        // The server still acknowledges movement, but a velocity-predicted local
-        // player has no per-input replay to retire, so nothing needs it.
+        // Nothing needs it: the local player is drawn from the played-out stream
+        // like every other entity, so there is no prediction to retire against.
         Op::InputAck { .. } => {}
         Op::Pong { origin_ms, server_ms } => {
           self.rtt.observe_pong(origin_ms, now_ms);

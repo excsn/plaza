@@ -259,7 +259,7 @@ async fn networked(
     }
     for step_ms in timestep.advance(dt_ms) {
       if plays {
-        client.send_input(input, step_ms as f32 / 1000.0, &controls_now);
+        client.send_input(input, &controls_now);
       }
       client.tick(step_ms, &controls_now);
     }

@@ -477,27 +477,19 @@ pub fn draw_client_world(client: &horde_playground::net::client::NetClient, cont
   let drawn = at.map(|at| client.sim.render_players(at)).unwrap_or_else(|| client.sim.players().to_vec());
   draw_nova(client.nova_flash_age(), &drawn, you, cam);
   if controls.coins {
+    // No special case for your own ring any more. Every player, including you,
+    // is drawn at the same render instant, so a ring pinned to its owner cannot
+    // lag the marker it belongs to.
     for (i, player) in drawn.iter().enumerate() {
-      // Your own repulsor emanates from where you are *now*, the predicted marker,
-      // not the authoritative position a packet last placed you at. That position
-      // only moves when a frame lands, so pinning the ring to it stutters it
-      // against a marker that glides every frame, at any send rate. Peers are
-      // drawn at their authoritative position, so their rings belong there.
-      let center = if Some(i) == me { you } else { *player };
       if let Some(radius) = client.sim.repel_radius(i)
-        && center.dist(you) <= VIEW_RADIUS * 2.0
+        && player.dist(you) <= VIEW_RADIUS * 2.0
       {
-        draw_repulsor(radius, center, cam);
+        draw_repulsor(radius, *player, cam);
       }
     }
   }
 
-  let mut players = drawn;
-  if let Some(m) = me
-    && m < players.len()
-  {
-    players[m] = you;
-  }
+  let players = drawn;
   draw_players(&players, me, you, you, cam);
 
   // Hit sparks, death explosions, damage numbers, health bars, and the shield.
