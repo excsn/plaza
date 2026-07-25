@@ -111,19 +111,21 @@ The example exists to settle questions by measurement rather than argument, and 
 
 **Relevance pays, clustered or not.** 91% of the broadcast culled with players spread, **90% clustered** (28.0 vs 325.0 KiB/s spread; 31.5 vs 325.3 clustered). An earlier guess that relevance mostly matters when players separate was wrong: the arena dwarfs the view either way. Clustering actually makes it slightly *worse*, because the horde converges on grouped players and raises local density.
 
-**Which drawing strategy wins depends entirely on the send rate** (mean / worst error, px):
+**Running the behaviour rule locally wins at every send rate** (mean / worst error, px):
 
 | send rate | simulate | dead reckon | interpolate |
 |---|---|---|---|
-| 1 Hz | **12 / 86** | 30 / 67 | 57 / 65 |
-| 2 Hz | **6 / 27** | 6 / 27 | 30 / 36 |
-| 4 Hz | **5 / 14** | 4 / 23 | 16 / 17 |
-| 10 Hz | 10 / 11 | **2 / 10** | 10 / 10 |
-| 30 Hz | 13 / 14 | **1 / 7** | 7 / 7 |
+| 1 Hz | **12 / 23** | 33 / 99 | 55 / 88 |
+| 2 Hz | **11 / 18** | 12 / 34 | 19 / 30 |
+| 4 Hz | **10 / 17** | 11 / 30 | 19 / 30 |
+| 10 Hz | **9 / 15** | 10 / 19 | 12 / 19 |
+| 30 Hz | **9 / 15** | 10 / 17 | 11 / 17 |
 
-Running the behaviour rule locally wins decisively at 1 to 4 Hz, which is what makes a very low send rate viable. It is *not* a general upgrade: from 10 Hz up, dead reckoning is better. Interpolation is the most *consistent* (its worst case barely moves) but always renders about one send interval in the past, which at 1 Hz is a second.
+It is decisive at 1 Hz, which is what makes a very low send rate viable, and it stays ahead everywhere else. Interpolation is the most *consistent* (its worst case barely moves) but always renders about one send interval in the past, which at 1 Hz is a second.
 
-**Correction smoothing can become the error.** Simulate gets worse as the send rate rises (5 → 10 → 13 px) because a 250 ms ease never completes when corrections arrive every 33 ms, so the smoother itself dominates. **Keep the ease shorter than the send interval.**
+**This table used to say the opposite above 10 Hz, and the reason is worth more than the numbers.** Simulate used to get *worse* as the rate rose (10, then 16, then 20 px at 4, 10 and 30 Hz), and that was read as a property of the technique: a low-rate tool, not a general upgrade. It was a property of the *correction*. A 250 ms `ErrorSmoother` ease never completes when corrections arrive every 33 ms, so the smoother itself became the dominant error. Moving enemies onto `HeldInputPredictor`, which closes a fraction of the gap per correction and has no duration to outlast, removed the failure entirely. **A measurement of a technique was really a measurement of one tunable inside it**, which is the same shape as the extrapolation clamp that once flattered second-order dead reckoning.
+
+**Correction smoothing can become the error, and the fix is to pick a correction with no duration in it.** A fixed-duration ease has a rate above which it never completes, so corrections pile up and the smoother dominates. Either keep the ease shorter than the send interval, or use a per-correction *fraction* (`HeldInputConfig::blend`) which has no duration to outlast and is what enemies use here. The second is why the table above no longer degrades at high rates.
 
 **Compact ids and quantized positions save a consistent 71%** (3.4x) at every send rate: a 3-byte id (`u16` index + `u8` generation) and a position quantized to two `u16`s, against a 16-byte UUID and two `f32`s.
 

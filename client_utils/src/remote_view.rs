@@ -54,6 +54,17 @@ impl Default for RenderOpts {
   }
 }
 
+/// # If you know the entity's rule, none of these three is what you want
+///
+/// This type answers "where was it", from samples alone. An entity whose
+/// behaviour you can run locally is better served by
+/// [`HeldInputPredictor`](crate::HeldInputPredictor), which draws it in the
+/// *present* rather than a send interval in the past: hold its intent, put the
+/// world its rule reads in the context, and correct from the samples as they
+/// arrive. Measured over 3000 enemies, that is 43 px of mean error better than
+/// interpolating at a 1 Hz send rate.
+
+
 /// A remote entity's client-side view: a snapshot buffer plus the render-time
 /// decision (interpolate / extrapolate / hold).
 ///

@@ -11,9 +11,9 @@
 use std::collections::HashMap;
 
 use plaza_client_utils::mirror::{Agreement, DeltaMirror};
-use plaza_client_utils::{ease_in_quad, AckWindow, ErrorSmoother, InterpolationClock, RemoteView, RenderOpts, SlotKey};
+use plaza_client_utils::{ease_in_quad, AckWindow, HeldInputConfig, HeldInputPredictor, InterpolationClock, RemoteView, RenderOpts, SlotKey};
 
-use crate::sim::types::{PlayerFrame, coin_pull, difficulty, enemy_speed_scale, repulsor_pulse, step_coin, Coin, CoinId, Crowd, Upgrade, Wallet, COIN_FLIGHT_MS, COIN_PICKUP_RADIUS, step_enemy, Controls, Enemy, EnemyKind, Handle, LeaveReason, Packet, PlayerId, Projectile, RemoteMode, Vec2, PLAYER_MAX_HEALTH, SIM_DT};
+use crate::sim::types::{PlayerFrame, coin_pull, difficulty, enemy_speed_scale, repulsor_pulse, step_coin, Coin, CoinId, Crowd, Upgrade, Wallet, COIN_FLIGHT_MS, COIN_PICKUP_RADIUS, step_enemy, Controls, Enemy, EnemyKind, Handle, LeaveReason, Packet, PlayerId, Projectile, RemoteMode, Vec2, PLAYER_MAX_HEALTH};
 
 /// A fading damage number floating up from where a shot landed.
 #[derive(Clone, Copy, Debug)]
@@ -71,17 +71,52 @@ impl Burst {
   }
 }
 
-const SMOOTH_SECS: f32 = 0.25;
+
+/// How much of the remaining gap to the server an enemy closes per correction.
+/// Continuous, so there is no ease duration to outlast the send interval, which
+/// is the failure the old `ErrorSmoother` path had at high rates.
+const CORRECT_BLEND: f32 = 0.35;
+
+/// Only the position is corrected. Target, kind and health are discrete facts the
+/// server states outright, and blending them would invent values between.
+fn lerp_enemy(a: &Enemy, b: &Enemy, t: f32) -> Enemy {
+  Enemy { pos: lerp(&a.pos, &b.pos, t), ..*b }
+}
 
 fn lerp(a: &Vec2, b: &Vec2, t: f32) -> Vec2 {
   Vec2::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
 }
 
+/// The world an enemy's rule reads. Shared by every enemy in a tick, so it is
+/// built once and handed round behind an `Arc` rather than cloned per entity.
+#[derive(Clone, Debug, Default)]
+struct EnemyCtx {
+  players: Vec<Vec2>,
+  repels: Vec<Option<f32>>,
+  speed_scale: f32,
+}
+
+/// One enemy, simulated locally under the server's own rule and corrected by the
+/// sparse samples that arrive.
+///
+/// The `Input` is the enemy's **target**, which is exactly what the wire carries:
+/// the intent, sent only when it changes, not the position it produces.
+type EnemySim = HeldInputPredictor<Enemy, PlayerId, std::sync::Arc<EnemyCtx>>;
+
+/// The shared rule, in the shape a predictor wants. `step_enemy` itself is
+/// untouched and is still what the server calls.
+fn advance_enemy(enemy: &mut Enemy, target: &PlayerId, dt: f32, ctx: &std::sync::Arc<EnemyCtx>) {
+  if ctx.players.is_empty() {
+    return;
+  }
+  let t = *target as usize % ctx.players.len();
+  step_enemy(enemy, ctx.players[t], ctx.repels[t], ctx.speed_scale, dt);
+}
+
 struct RemoteEnemy {
   /// Kind came in the spawn and never changes, so it is never re-sent.
   kind: EnemyKind,
-  sim: Enemy,
-  smoother: ErrorSmoother<Vec2>,
+  sim: EnemySim,
   last_pos: Vec2,
   last_ms: u64,
   prev_pos: Vec2,
@@ -544,6 +579,19 @@ impl Client {
     self.underruns
   }
 
+  /// The world every enemy's rule reads this tick, built once.
+  ///
+  /// The rule is a *shared* one, so it must read the authoritative player
+  /// positions rather than the local prediction: feeding the prediction in makes
+  /// enemies chase a point the server is not, and every packet snaps them back.
+  fn enemy_ctx(&self) -> std::sync::Arc<EnemyCtx> {
+    std::sync::Arc::new(EnemyCtx {
+      players: self.players.clone(),
+      repels: self.repel_flags(),
+      speed_scale: enemy_speed_scale(self.est_server_ms),
+    })
+  }
+
   /// The instant this frame should be drawn at, once the stream has started.
   ///
   /// The only way to get a [`RenderAt`], and therefore the only way to draw
@@ -913,7 +961,7 @@ impl Client {
       // generation names an occupant it no longer holds, and counts it: with
       // generations off the key matches and the wrong entity is deleted, which is
       // the whole demonstration.
-      let pos = died.then(|| self.enemies.get(handle.into()).map(|e| e.sim.pos)).flatten();
+      let pos = died.then(|| self.enemies.get(handle.into()).map(|e| e.sim.logical().pos)).flatten();
       if self.enemies.remove(handle.into()).is_some()
         && let Some(pos) = pos
       {
@@ -926,14 +974,22 @@ impl Client {
         spawn.handle.into(),
         RemoteEnemy {
           kind: spawn.kind,
-          sim: Enemy {
-            pos: spawn.pos,
-            target: spawn.target,
-            kind: spawn.kind,
-            // Health is the server's business; a client only learns of death.
-            health: spawn.kind.max_health(),
+          sim: {
+            let mut sim = HeldInputPredictor::new(
+              Enemy {
+                pos: spawn.pos,
+                target: spawn.target,
+                kind: spawn.kind,
+                // Health is the server's business; a client only learns of death.
+                health: spawn.kind.max_health(),
+              },
+              HeldInputConfig { blend: if controls.smooth { CORRECT_BLEND } else { 1.0 } },
+              advance_enemy,
+              lerp_enemy,
+            );
+            sim.hold(spawn.target);
+            sim
           },
-          smoother: ErrorSmoother::new(if controls.smooth { SMOOTH_SECS } else { 0.0 }),
           last_pos: spawn.pos,
           last_ms: recv_ms,
           prev_pos: spawn.pos,
@@ -955,8 +1011,8 @@ impl Client {
     // clock; that is the join transient and it lasts one render delay.
     let render_now = self.render_clock.target().unwrap_or(recv_ms);
     let age_ms = render_now.saturating_sub(packet.server_time_ms);
-    let players = self.players.clone();
-    let repels: Vec<Option<f32>> = self.repel_flags();
+    // Built once for the whole packet, before the loop borrows the mirror.
+    let ctx = self.enemy_ctx();
 
     for sample in &packet.samples {
       // A sample for an occupant this mirror no longer holds is refused and
@@ -965,7 +1021,7 @@ impl Client {
         continue;
       };
       if let Some(t) = sample.target {
-        entity.sim.target = t;
+        entity.sim.hold(t);
       }
 
       entity.prev_pos = entity.last_pos;
@@ -974,23 +1030,13 @@ impl Client {
       entity.last_ms = packet.server_time_ms;
 
       if controls.mode == RemoteMode::Simulate {
-        // The sample describes the past. Advance it forward by its own age with
-        // the shared rule before correcting, so the correction targets *now*.
-        let aim = players[entity.sim.target as usize % players.len()];
-        let mut projected = Enemy {
-          pos: sample.pos,
-          target: entity.sim.target,
-          kind: entity.kind,
-          health: entity.sim.health,
-        };
-        let speed_scale = enemy_speed_scale(self.est_server_ms);
-        let steps = ((age_ms as f32 / 1000.0) / SIM_DT) as u32;
-        for _ in 0..steps.min(600) {
-          step_enemy(&mut projected, aim, repels[entity.sim.target as usize % repels.len()], speed_scale, SIM_DT);
-        }
-        let seen = entity.smoother.sample(&entity.sim.pos, lerp);
-        entity.sim.pos = projected.pos;
-        entity.smoother.begin_from(seen);
+        // The sample describes an instant slightly before the one being drawn, so
+        // it is advanced by its own age under the same rule before the correction
+        // eases toward it. `project` inside `reconcile` is that advance.
+        entity.sim.set_context(ctx.clone());
+        let mut settled = *entity.sim.logical();
+        settled.pos = sample.pos;
+        entity.sim.reconcile(settled, age_ms as f32 / 1000.0);
       }
     }
 
@@ -1050,12 +1096,12 @@ impl Client {
     let applied = self.apply_due(controls);
 
     if controls.mode == RemoteMode::Simulate {
-      let players = self.players.clone();
-      let repels = self.repel_flags();
-      let speed_scale = enemy_speed_scale(self.est_server_ms);
+      // Built once and shared: the rule reads the same world for every enemy, so
+      // the per-entity cost is one `Arc` clone rather than a copy of the world.
+      let ctx = self.enemy_ctx();
       for entity in self.enemies.values_mut() {
-        let target = entity.sim.target as usize % players.len();
-        step_enemy(&mut entity.sim, players[target], repels[target], speed_scale, dt);
+        entity.sim.set_context(ctx.clone());
+        entity.sim.advance(dt);
       }
     }
 
@@ -1117,9 +1163,6 @@ impl Client {
       self.last_difficulty_tier = tier;
       self.notices.push((format!("difficulty up  (x{tier})  enemies faster, hits harder"), 0.0));
     }
-    for entity in self.enemies.values_mut() {
-      entity.smoother.advance(dt);
-    }
     // Expiry only. The server owns when a shot ends: it stops listing one that
     // hit something, and the list is replaced wholesale by each packet as it is
     // played out.
@@ -1169,7 +1212,7 @@ impl Client {
       .iter()
       .map(|(key, e)| {
         let pos = match controls.mode {
-          RemoteMode::Simulate => e.smoother.sample(&e.sim.pos, lerp),
+          RemoteMode::Simulate => e.sim.render().pos,
           RemoteMode::DeadReckon => {
             let span = e.last_ms.saturating_sub(e.prev_ms) as f32 / 1000.0;
             let ahead = at.server_time_ms().saturating_sub(e.last_ms) as f32 / 1000.0;

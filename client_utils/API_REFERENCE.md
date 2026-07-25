@@ -38,6 +38,24 @@ The two local-player bundles differ by how the **server** consumes input, not by
 
 Replaying inputs against a server of the second kind double counts, and gets worse the more you economise on bandwidth, because one coalesced input can cover a long stretch of simulation.
 
+**`HeldInputPredictor` is not only for the entity you control**, which is the least obvious thing in this crate. It runs a rule locally and corrects from sparse authoritative samples, and nothing in it cares whether the "held input" came from a keyboard. For an entity whose behaviour you know, hold its *intent* (an enemy's target, a vehicle's waypoint), put the world it reads in `Ctx`, and it becomes a locally simulated remote. That is the fourth option in the table below, and it is the one `RemoteView` cannot express.
+
+
+### Drawing an entity you do not control
+
+Four options, and the choice is a property of **the entity**, not of the game. Different entities in one scene legitimately sit on different rows.
+
+| you know | draw it by | piece |
+|---|---|---|
+| its rule, and the inputs the rule reads | running that rule locally, corrected by samples | [`HeldInputPredictor`](#struct-heldinputpredictorstate-input-ctx) |
+| nothing but its past positions | interpolating between two real samples, in the past | [`RemoteView`](#struct-remoteviewstate-velocity) with `interpolate` |
+| its positions, and that its motion is constrained | dead reckoning along the last velocity, briefly | `RemoteView` with `extrapolate` |
+| none of the above | holding the newest sample | `RemoteView`, both off |
+
+Take the highest row you have the data for. Measured over 3000 enemies in `horde_playground`, running the rule beats interpolating by 43 px of mean error at 1 Hz and still leads at 30 Hz, because an interpolated entity is always a send interval in the past and at 1 Hz that is a second.
+
+The rows are not interchangeable at the bottom either. Dead reckoning a **player** is guessing at a human's intention, which nothing on the wire carries, so it overshoots every direction change; it is for entities with inertia and a turning limit.
+
 ### The prediction loop
 
 1.  The player acts. Apply it locally at once and record it with its sequence number, so the screen responds without waiting for a round trip.
@@ -98,7 +116,9 @@ Your controlled entity when the server **holds an input and integrates it every 
 *   **`reconcile(&mut self, authoritative, age_secs) -> Correction<State>`**: project the sample forward by its own age (the server's state is one one-way delay old), then ease toward it.
 *   **`render()`**, **`logical()`**, **`set_active`**, **`is_active`**, **`teleport`**, **`set_context`**, **`context`**: as above.
 
-**`HeldInputConfig`**: `blend` (the fraction of the remaining error absorbed per reconciliation), `smoothing_secs`, `easing`.
+**`HeldInputConfig`**: `blend` alone, the fraction of the remaining gap closed on each `reconcile`. `1.0` snaps, `0.0` is pure dead reckoning and drifts without bound.
+
+**A fraction rather than a duration, and that is the design.** A fixed-duration ease has a correction rate above which it never finishes, so corrections pile up and the smoother becomes the dominant error. Measured in `horde_playground`, that made locally simulated enemies get *worse* as the send rate rose (10, 16, then 20 px at 4, 10 and 30 Hz) and was mistaken for a limit of the technique; on `blend` the same entities sit at 9 to 10 px at every rate. Use `ErrorSmoother` when you need the logical state left exact and only the *drawing* eased, which is what `PredictedPlayer` requires because replay depends on it.
 
 **The easing is the point, not a nicety.** Correcting only once the error passes a threshold and then closing the whole gap produces a metronomic sawtooth: holding one direction gave a small jump forward roughly every four hundred milliseconds, at every latency including zero, which a player feels as a rhythmic tug. Continuous easing absorbs the same drift invisibly, so this primitive makes it the default.
 
