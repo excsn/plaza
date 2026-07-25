@@ -186,6 +186,11 @@ pub fn draw_net_ui(client: &horde_playground::net::client::NetClient, url: &str,
       ui.label(format!("arena: {url}"));
       let (text, color) = match &client.status {
         Status::Connecting => ("connecting...".to_owned(), egui::Color32::GRAY),
+        Status::Measuring => ("checking your connection...".to_owned(), egui::Color32::from_rgb(150, 190, 230)),
+        Status::Refused { measured_ms, allowed_ms } => (
+          format!("ping too high: {measured_ms} ms, this arena allows {allowed_ms} ms"),
+          egui::Color32::from_rgb(230, 90, 90),
+        ),
         Status::Waiting => ("connected, waiting for a seat".to_owned(), egui::Color32::YELLOW),
         Status::Playing => (format!("playing as P{}", client.me.unwrap_or(0)), egui::Color32::from_rgb(80, 220, 110)),
         Status::NoSeat => ("the arena is full".to_owned(), egui::Color32::from_rgb(230, 160, 90)),

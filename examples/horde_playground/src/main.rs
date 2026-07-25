@@ -291,10 +291,31 @@ async fn networked(
     }
     render::draw_legend(&cam);
 
-    if let Status::Gone(reason) = &client.status {
-      let text = format!("disconnected: {reason}");
-      let dims = measure_text(&text, None, 26, 1.0);
-      draw_text(&text, screen_width() * 0.5 - dims.width * 0.5, screen_height() * 0.5, 26.0, RED);
+    // Whatever is keeping you out of the game, said on screen rather than only in
+    // the panel. Being measured and being refused both used to look like nothing
+    // happening.
+    let centred = |lines: &[(String, f32, Color)]| {
+      let mut y = screen_height() * 0.5 - lines.len() as f32 * 16.0;
+      for (text, size, color) in lines {
+        let dims = measure_text(text, None, *size as u16, 1.0);
+        draw_text(text, screen_width() * 0.5 - dims.width * 0.5, y, *size, *color);
+        y += size + 12.0;
+      }
+    };
+    match &client.status {
+      Status::Gone(reason) => centred(&[(format!("disconnected: {reason}"), 26.0, RED)]),
+      Status::Connecting => centred(&[("connecting...".to_owned(), 26.0, GRAY)]),
+      Status::Measuring => centred(&[
+        ("checking your connection".to_owned(), 28.0, Color::new(0.6, 0.75, 0.9, 1.0)),
+        ("this arena schedules every input, so it has to know yours arrives in time".to_owned(), 18.0, GRAY),
+      ]),
+      Status::Refused { measured_ms, allowed_ms } => centred(&[
+        ("your ping is too high for this arena".to_owned(), 28.0, Color::new(0.9, 0.4, 0.35, 1.0)),
+        (format!("measured {measured_ms} ms one way, this arena allows {allowed_ms} ms"), 20.0, GRAY),
+        ("inputs are scheduled ahead, so a slower link would lose them entirely".to_owned(), 18.0, GRAY),
+      ]),
+      Status::NoSeat => centred(&[("the arena is full".to_owned(), 26.0, ORANGE)]),
+      Status::Waiting | Status::Playing => {}
     }
 
     next_frame().await;

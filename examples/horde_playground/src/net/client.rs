@@ -32,9 +32,14 @@ const SIM_STEP_MS: u64 = (SIM_DT * 1000.0) as u64;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Status {
   Connecting,
+  /// Connected, and the server is timing this connection before offering a seat.
+  Measuring,
   Waiting,
   Playing,
   NoSeat,
+  /// The server measured this connection and it cannot meet the input schedule.
+  /// Both numbers so the client can say why rather than just decline.
+  Refused { measured_ms: u32, allowed_ms: u32 },
   Gone(String),
 }
 
@@ -305,6 +310,18 @@ impl NetClient {
         // Nothing needs it: the local player is drawn from the played-out stream
         // like every other entity, so there is no prediction to retire against.
         Op::InputAck { .. } => {}
+        // The server is timing us. Echo it straight back: it wants its own
+        // round trip, not our opinion of it.
+        Op::Probe { origin_ms } => {
+          let _ = self.socket.send_json(&Op::ProbeAck { origin_ms });
+          if matches!(self.status, Status::Connecting | Status::Waiting) {
+            self.status = Status::Measuring;
+          }
+        }
+        Op::Refused { measured_ms, allowed_ms } => {
+          self.status = Status::Refused { measured_ms, allowed_ms };
+        }
+        Op::ProbeAck { .. } => {}
         Op::Pong { origin_ms, server_ms } => {
           self.rtt.observe_pong(origin_ms, now_ms);
           let one_way = self.rtt.one_way_ms().unwrap_or(0.0) as f64;

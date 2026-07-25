@@ -170,6 +170,24 @@ So the local player is now drawn from the played-out stream at `RenderAt`, like 
 
 `cargo run --release -p horde_playground --example reversal` is the measurement, including the strategies that were tried and rejected.
 
+## Admission: measured at the door, not seated and then silently broken
+
+The schedule has a ceiling, and it used to be enforced by accident. An input is named for `press + playout_delay` and rejected once it lands more than `input_max_late_ticks` past it, so above about **164 ms one way (330 ms round trip)** every input a player sent was dropped. They were welcomed, given a seat, and could not move, with nothing on screen to say why.
+
+So the server measures before it seats. On connect it sends eight probes over a second, times its own round trips, and admits on `mean + 2 x deviation <= playout_delay + late_window`. The mean has to fit the schedule and the spread has to fit the tolerance, which is the honest reading of what the arena can carry: **the late window is the jitter allowance**, so admission asks whether your jitter fits in the window that already exists rather than inventing a second number.
+
+Three details are deliberate:
+
+- **The budget is derived, never declared.** It is exactly the condition that would break a player, so it moves with the sliders instead of drifting out of step with them and admitting people who then cannot play.
+- **The server times its own probe.** A client reporting its own ping could understate it, and this is the check that gates entry. Timing the probe is spoof-proof in the direction that matters: a client can only make itself look *worse*.
+- **No seat is held while measuring**, or a slow joiner parks one for a second and a full arena refuses somebody who would have got in.
+
+There is no exemption for the host. Its loopback ping is near zero so it passes on merit, which is the point: a host that admitted itself by special case would stop being just another client on a real socket, and that is what makes its omniscient readouts trustworthy.
+
+The client shows "checking your connection" while it runs and, if refused, what was measured against what the arena allows. A refusal is a statement, not a silence.
+
+**Admission is a snapshot**, so it says nothing about a connection that degrades later. That case still shows up as rejected inputs on the server's counters.
+
 ## The server owns time
 
 Inputs used to be applied on arrival, which quietly makes ping an input to the game. A 20 ms player's press lands on the next tick and a 200 ms player's lands nine ticks later, so any outcome decided by who was where first is decided by connection quality. The panel's **playout delay** switches between the two.

@@ -95,6 +95,16 @@ Fixing T at `server_now - declared_delay` makes the delay a chosen number and tu
 
 Two consequences worth knowing before adopting it. The declared delay must cover `one_way + jitter + one send interval`, because the newest sample a client holds is already a trip old, and the old design hid that term by steering its clock to the packet's timestamp rather than to server-now. And it becomes a fairness property: one timeline means everyone waits for the slowest player, exactly as the input playout buffer does in the other direction.
 
+### A limit that is enforced by accident excludes people silently
+
+Horde's input schedule always had a ceiling: past `playout_delay + late_window` of one-way delay, every input a player sends lands outside the accepting window and is dropped. Nothing declared that, nothing measured it, and nothing told anybody. A player above the line was welcomed, seated, and simply could not move.
+
+The failure mode is the point. An accidental limit does not refuse you, it admits you and then breaks, which reads as a broken game rather than an unsuitable connection. And it was invisible from inside: the server counted rejections, the client counted nothing, and the screen showed a player who would not respond.
+
+Two things fix it and they are different. **Derive the limit from the thing that actually enforces it** rather than restating it as a constant, so it cannot drift out of step. And **check it at the door**, with the server timing its own probes, because a client reporting its own latency can understate it and this is the check that decides entry.
+
+Worth noting which direction the spoofing runs. Server-measured admission can only be gamed by making yourself look worse. The alternative that was considered, raising the schedule depth to suit the slowest player, can be gamed by claiming a bad connection to slow the whole arena, which is why it lost.
+
 ### An entity can join a delayed timeline only if its state is reconstructable at an arbitrary past instant
 
 Rendering remote state in the past is right, and it is a property of the whole scene rather than of one entity. Horde had three clocks in one picture (enemies at now, peers in the past, projectiles elsewhere) and every seam between them was a visible bug. Unifying them meant queueing packets on receipt and applying them when the render clock reaches them, so a frame is one consistent instant, and making any other instant inexpressible with a token type rather than merely discouraged.
