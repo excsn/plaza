@@ -28,6 +28,7 @@ use tracing::{debug, trace, warn};
 
 use crate::codec::WireCodec;
 use crate::error::SessionLayerError;
+use crate::stats::TransportStats;
 
 /// Default capacity for the notification channels the controller consumes.
 pub const DEFAULT_BROADCAST_CAPACITY: usize = 256;
@@ -97,6 +98,7 @@ pub struct ConnectionManager<ID: AgentId> {
   raw_incoming_rx: RwLock<Option<mpsc::BoundedAsyncReceiver<SerializedSessionMessage<ID>>>>,
   presence_tx: SessionSender<PresenceEvent<ID>>,
   presence_rx: RwLock<Option<SessionReceiver<PresenceEvent<ID>>>>,
+  stats: Arc<TransportStats>,
 }
 
 impl<ID: AgentId> Debug for ClientHandle<ID> {
@@ -106,6 +108,11 @@ impl<ID: AgentId> Debug for ClientHandle<ID> {
 }
 
 impl<ID: AgentId> ConnectionManager<ID> {
+  /// The live counters this manager writes into. See [`TransportStats`].
+  pub fn stats(&self) -> Arc<TransportStats> {
+    Arc::clone(&self.stats)
+  }
+
   pub fn new(transport: &'static str, capacity: usize) -> Self {
     let (raw_incoming_tx, raw_incoming_rx) = mpsc::bounded_async(capacity);
     let (presence_tx, presence_rx) = mpsc::bounded_async(capacity);
@@ -117,6 +124,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
       raw_incoming_rx: RwLock::new(Some(raw_incoming_rx)),
       presence_tx,
       presence_rx: RwLock::new(Some(presence_rx)),
+      stats: TransportStats::new(),
     }
   }
 
@@ -137,6 +145,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
     // try_send, not send: this is a sync path on a connection task, and a
     // controller that has not started yet must not stall the accept loop.
     if self.presence_tx.try_send(PresenceEvent::Joined(agent)).is_err() {
+      self.stats.record_presence_dropped();
       warn!(
         transport = self.transport,
         conn_id, "Join notification dropped: no controller listening, or its queue is full."
@@ -153,6 +162,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
         debug!(transport = self.transport, conn_id, agent = %handle.agent.label(), "Connection deregistered.");
         if let Some(id) = handle.agent.id_cloned() {
           if self.presence_tx.try_send(PresenceEvent::Left(id)).is_err() {
+            self.stats.record_presence_dropped();
             warn!(transport = self.transport, conn_id, "Leave notification dropped.");
           }
         }
@@ -179,10 +189,13 @@ impl<ID: AgentId> ConnectionManager<ID> {
       })
       .is_err()
     {
+      self.stats.record_inbound(true);
       warn!(
         transport = self.transport,
         "Inbound ops dropped: controller queue full or closed."
       );
+    } else {
+      self.stats.record_inbound(false);
     }
   }
 
@@ -191,15 +204,20 @@ impl<ID: AgentId> ConnectionManager<ID> {
     let connections = self.connections.read();
     let mut full: Option<ConnectionId> = None;
 
+    let (mut sent, mut dropped) = (0u64, 0u64);
     for (conn_id, handle) in connections.iter() {
       if !target_matches(target, &handle.agent) {
         continue;
       }
       // try_send, not send: a wedged client must never stall the controller.
       if handle.to_client_tx.try_send(frame.clone()).is_err() {
+        dropped += 1;
         full.get_or_insert(*conn_id);
+      } else {
+        sent += 1;
       }
     }
+    self.stats.record_outbound(sent, dropped);
 
     match full {
       Some(conn_id) => Err(SessionLayerError::ClientSendFailed {

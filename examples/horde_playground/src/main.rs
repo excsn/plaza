@@ -61,7 +61,7 @@ fn main() {
       let controls = std::sync::Arc::new(parking_lot::Mutex::new(Controls::default()));
       let result = tokio::runtime::Runtime::new()
         .expect("tokio runtime")
-        .block_on(horde_playground::net::host::serve(&options.bind, controls, None, options.static_dir.clone()));
+        .block_on(horde_playground::net::host::serve(&options.bind, controls, None, options.static_dir.clone(), None));
       if let Err(e) = result {
         eprintln!("server stopped: {e}");
         std::process::exit(1);
@@ -95,17 +95,25 @@ async fn frame_loop(options: role::Options) {
   let view: Option<std::sync::Arc<parking_lot::Mutex<horde_playground::net::arena::HostView>>> =
     options.role.runs_a_server().then(|| std::sync::Arc::new(parking_lot::Mutex::new(horde_playground::net::arena::HostView::default())));
 
+  // The frame counter bottom-right measures the *renderer*. When this stutters
+  // at 3000 enemies it cannot say whether the arena is behind or the client is,
+  // which is the question these answer.
+  #[cfg(feature = "server")]
+  let server_stats: Option<std::sync::Arc<plaza::stats::ControllerStats>> =
+    options.role.runs_a_server().then(plaza::stats::ControllerStats::new);
+
   #[cfg(feature = "server")]
   if options.role.runs_a_server() {
     let bind = options.bind.clone();
     let static_dir = options.static_dir.clone();
     let controls = controls.clone();
     let view = view.clone();
+    let stats = server_stats.clone();
     std::thread::Builder::new()
       .name("arena".to_owned())
       .spawn(move || {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-        if let Err(e) = runtime.block_on(horde_playground::net::host::serve(&bind, controls, view, static_dir)) {
+        if let Err(e) = runtime.block_on(horde_playground::net::host::serve(&bind, controls, view, static_dir, stats)) {
           eprintln!("arena stopped: {e}");
         }
       })
@@ -125,6 +133,9 @@ async fn frame_loop(options: role::Options) {
     let host = view;
     #[cfg(not(feature = "server"))]
     let host = ();
+    #[cfg(feature = "server")]
+    networked(options, controls, host, server_stats).await;
+    #[cfg(not(feature = "server"))]
     networked(options, controls, host).await;
     return;
   }
@@ -188,7 +199,12 @@ async fn wait_for_arena() {
 }
 
 #[cfg(all(feature = "client", feature = "websocket"))]
-async fn networked(options: role::Options, controls: std::sync::Arc<parking_lot::Mutex<Controls>>, host: HostHandle) {
+async fn networked(
+  options: role::Options,
+  controls: std::sync::Arc<parking_lot::Mutex<Controls>>,
+  host: HostHandle,
+  #[cfg(feature = "server")] server_stats: Option<std::sync::Arc<plaza::stats::ControllerStats>>,
+) {
   use horde_playground::net::client::{NetClient, Status};
 
   #[cfg(not(feature = "server"))]
@@ -259,7 +275,7 @@ async fn networked(options: role::Options, controls: std::sync::Arc<parking_lot:
       render::draw_host_minimap(&view, &client, &controls_now, &cam);
       draw_perf(&mut fps);
       let mut edited = controls_now;
-      ui::draw_host_ui(&view, &client, &mut edited);
+      ui::draw_host_ui(&view, &client, &mut edited, server_stats.as_deref());
       *controls.lock() = edited;
       drew_host = true;
     }

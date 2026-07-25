@@ -176,7 +176,21 @@ Turns on a console subscriber, once. `plaza` and `plaza_session` are instrumente
 
 **What is deliberately not here.** Deciding what a process *is* (headless, observer, host, joiner) and parsing that off a command line. The browser client needs the same vocabulary and a wasm bundle must not inherit an HTTP server to learn the name of its own role, and argument parsing is an opinion every real application already has. That lives in `examples/playground_common/` as shared scaffolding rather than in a library crate.
 
-## 8. Writing Another Transport
+## 8. Module `stats`
+
+### Struct `TransportStats`
+
+Live counters for one transport, from `ActixWsPlazaSession::stats` or `ConnectionManager::stats`.
+
+*   **`inbound()`** / **`inbound_dropped()`**, **`outbound()`** / **`outbound_dropped()`**, **`presence_dropped()`**.
+
+Every fan-out here uses `try_send` by design: a wedged client must not stall the controller. That policy is right and it had a hole, because the drop was announced only with `warn!`, which a human reads afterwards and a server cannot read at all. Nothing about the policy changed; the events are now countable, so an application can shed load deliberately instead of degrading quietly.
+
+**Totals are kept beside the drops** because a drop count alone cannot tell "nothing is being dropped" from "nothing is being sent".
+
+**The three are separate on purpose.** An outbound drop is usually benign for a stream of absolute state, since the next frame supersedes it. An inbound drop is ops a client already sent and believes arrived, and nothing upstream will retry, so it is lost player input. A presence drop is a correctness failure from a single occurrence: a lost join leaves the controller with a client it never heard of, a lost leave leaves it holding a seat forever. One health number would hide the third behind the first.
+
+## 9. Writing Another Transport
 
 1.  Create a `TransportSession::new(name, codec, capacity)` and keep the `Arc`.
 2.  Per connection: make an `mpsc::bounded_async` outbound queue, call `manager.register(agent, tx)`, and run a pump that

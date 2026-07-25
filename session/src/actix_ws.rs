@@ -43,6 +43,12 @@ where
   ID: AgentId,
   SnapshotPayload: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static,
 {
+  /// The live counters this transport writes into: what it carried, and what it
+  /// dropped rather than stalling for. See [`TransportStats`](crate::stats::TransportStats).
+  pub fn stats(&self) -> std::sync::Arc<crate::stats::TransportStats> {
+    self.inner.manager().stats()
+  }
+
   /// Creates a session that speaks JSON, the usual choice for browser clients.
   pub fn new() -> Arc<Self> {
     Self::with_codec(JsonCodec)

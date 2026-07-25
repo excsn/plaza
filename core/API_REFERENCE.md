@@ -243,7 +243,26 @@ Sends `ProcessTimeStep` at a fixed rate; the controller does not advance time on
 *   **`async run_for<..>(self, tx, max_ticks: u64)`**: bounded, for demos and tests.
 *   **`async run_virtual<..>(tx: &CommandSender<..>, delta_time: Duration, steps: u64) -> u64`** Advances game time without waiting on real time: fast-forwarding past a timeout in a test. Returns steps delivered.
 
-## 8. Module `common`: reusable infrastructure
+## 8. Observability (module `stats`)
+
+### Struct `ControllerStats`
+
+Live counters for one running controller, obtained from
+[`StateControllerBuilder::stats`](#struct-statecontrollerbuilderop-id-statetype-snapshotpayload-sl-sess-sp) before `build`
+(or `with_stats` to supply one you already hold), and from `StateController::stats` after.
+
+*   **`ticks()`**, **`commands()`**, **`ops()`**, **`joins()`**, **`leaves()`**, **`snapshots()`**.
+*   **`mean_tick()`** / **`worst_tick()`**: how long a `ProcessTimeStep` took, against which your tick interval says whether the simulation keeps up with itself. Both are kept because one slow tick in a thousand is invisible in a mean and is exactly the hitch a player notices.
+*   **`busy()`**: total time handling commands, against wall time the non-idle fraction.
+*   **`queue_depth()`** / **`deepest_queue()`**: how many commands were waiting when the last was taken. A depth sitting near the buffer size is a producer outrunning the loop, which is the state before commands are dropped.
+
+**Shared memory rather than a command, and that is the whole design.** The obvious alternative is a `ControllerCommand::QueryStats`, which travels the same queue it reports on: answered slowly by a busy controller and not at all by a wedged one, so the reading goes blank exactly when it becomes interesting. **You cannot ask a stalled thing how stalled it is.** Reads are relaxed atomics, so they never wait on the controller and can happen mid-tick from another thread. The same reasoning rules out a callback, which would run application code inside the loop, the deadlock this crate already refuses in `StateLogic`.
+
+**Not a metrics framework**: no registry, labels, histograms or exporter, because shipping one picks a scheme every application then works around. And it holds only what nothing else can reach, so connection counts stay with the transport and how long *your* logic took stays measurable inside your own `StateLogic`. Two numbers for one fact eventually disagree.
+
+A reading is a **sample**, not a transaction: two fields read in succession may straddle a tick boundary, which matters if you compute a ratio from them.
+
+## 9. Module `common`: reusable infrastructure
 
 ### `common::scheduler`
 
@@ -285,7 +304,7 @@ Repeating schedules skip ahead past `now` after a stall rather than replaying ev
 
 Serde-friendly PODs for op payloads: `Vec2`, `Vec3`, `Quat` (with `Quat::IDENTITY`, and `Default` returning identity rather than zeroes). Applications with real math needs should use their own types: every payload is generic over them.
 
-## 9. Module `game_common`: game patterns
+## 10. Module `game_common`: game patterns
 
 ### `game_common::reconciliation`
 
@@ -325,7 +344,7 @@ All three types are `Clone` and hold no timers, channels, or boxed closures, so 
 
 *   **Struct `PlayerIntent<ID, Intent>`**: `new`.
 
-## 10. Module `app_common`: collaboration payloads
+## 11. Module `app_common`: collaboration payloads
 
 Op shapes for non-game applications. These are payload definitions, not engines; the application still writes the logic.
 
@@ -334,6 +353,6 @@ Op shapes for non-game applications. These are payload definitions, not engines;
 *   **`ordered_collection_ops`**: `InsertListItemPayload`, `RemoveListItemPayload`, `MoveListItemPayload`, `UpdateListItemPayload`.
 *   **`object_property_ops`**: `CreateObjectPayload`, `DeleteObjectPayload`, `SetObjectPropertyPayload`, `DeleteObjectPropertyPayload`.
 
-## 11. Crate Re-exports
+## 12. Crate Re-exports
 
 For convenience, the crate root re-exports: `Agent`, `AgentId`, `CommandSender`, `ControllerCommand`, `StateController`, `StateControllerBuilder`, `query_state`, `PlazaError`, `InProcessSession`, `MessageTarget`, `Session`, `SessionMessage`, `TargetedOp`, `SnapshotData`, `SnapshotProvider`, `LogicInput`, `StateLogic`, `TickDriver`.

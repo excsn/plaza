@@ -26,7 +26,9 @@ type ArenaSession = ActixWsPlazaSession<Op, PlayerKey, ()>;
 /// The tick rate the simulation is advanced at. Distinct from the *send* rate,
 /// which is `Controls::sync_hz` and is usually far lower: simulating often and
 /// sending rarely is the whole reason this example exists.
-const TICK_HZ: u32 = 60;
+/// The arena's simulation rate. Public so a readout can say what the tick budget
+/// *is* rather than hard-coding a second copy of it.
+pub const TICK_HZ: u32 = 60;
 
 /// The browser client artifact, the one asset that must never be served stale.
 const WASM_FILE: &str = "horde_playground.wasm";
@@ -51,19 +53,30 @@ async fn ws_route(req: HttpRequest, stream: web::Payload, wiring: web::Data<Wiri
 /// with and nothing ever writes it. `view` is where the arena publishes its
 /// omniscient state for a windowed host to read, and `None` for a headless one
 /// that has no screen to draw it on.
-pub async fn serve(bind: &str, controls: Arc<Mutex<Controls>>, view: Option<Arc<Mutex<HostView>>>, static_dir: Option<String>) -> std::io::Result<()> {
+pub async fn serve(
+  bind: &str,
+  controls: Arc<Mutex<Controls>>,
+  view: Option<Arc<Mutex<HostView>>>,
+  static_dir: Option<String>,
+  stats: Option<Arc<plaza::stats::ControllerStats>>,
+) -> std::io::Result<()> {
   init_logging();
 
   let session: Arc<ArenaSession> = ActixWsPlazaSession::new();
 
   let initial = *controls.lock();
   let logic = ArenaLogic::new(controls, view);
-  let (commands, controller) = StateControllerBuilder::new(Arc::new(logic), session.clone(), Arc::new(NoSnapshots), Arena::new(initial))
+  let mut builder = StateControllerBuilder::new(Arc::new(logic), session.clone(), Arc::new(NoSnapshots), Arena::new(initial))
     // No snapshot on join. The world goes out as `Op::Frame` on the tick after
     // a player is seated, which is at most one send interval away.
     .snapshot_context_on_join(None)
-    .command_buffer(256)
-    .build();
+    .command_buffer(256);
+  // Handed in rather than taken out, because the window is already running by
+  // the time this task starts and needs the handle before then.
+  if let Some(stats) = stats {
+    builder = builder.with_stats(stats);
+  }
+  let (commands, controller) = builder.build();
 
   tokio::spawn(controller.run());
   tokio::spawn(TickDriver::from_hz(TICK_HZ).run(commands.clone()));

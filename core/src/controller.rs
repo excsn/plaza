@@ -1,6 +1,7 @@
 use crate::agent::{Agent, AgentId};
 use crate::error::PlazaError;
 use crate::session::{MessageTarget, PresenceEvent, Session, SessionMessage};
+use crate::stats::ControllerStats;
 use crate::snapshot::{SnapshotContext, SnapshotProvider};
 use crate::state_logic::{LogicInput, StateLogic};
 
@@ -88,6 +89,7 @@ where
   initial_state: StateType,
   buffer_size: usize,
   join_context: Option<SnapshotContext>,
+  stats: Arc<ControllerStats>,
   _phantom: PhantomData<fn() -> (Op, ID, SnapshotPayload)>,
 }
 
@@ -111,6 +113,7 @@ where
       initial_state,
       buffer_size: DEFAULT_COMMAND_BUFFER,
       join_context: Some(SnapshotContext::Full),
+      stats: ControllerStats::new(),
       _phantom: PhantomData,
     }
   }
@@ -135,6 +138,25 @@ where
   }
 
   /// Builds the controller and the sender used to command it.
+  /// Writes counters into one the application already holds, instead of the
+  /// fresh one built by default.
+  ///
+  /// For a process that wants a single reading across several controllers, or
+  /// one that has to hold the handle before the controller is constructed.
+  pub fn with_stats(mut self, stats: Arc<ControllerStats>) -> Self {
+    self.stats = stats;
+    self
+  }
+
+  /// The live counters this controller will write into.
+  ///
+  /// Take it before `build` and keep the `Arc`: it is readable at any moment
+  /// from any thread, including while the controller is mid-tick, which a
+  /// command-based query could not manage. See [`ControllerStats`].
+  pub fn stats(&self) -> Arc<ControllerStats> {
+    Arc::clone(&self.stats)
+  }
+
   pub fn build(
     self,
   ) -> (
@@ -148,6 +170,7 @@ where
       self.snapshot_provider,
       self.buffer_size,
       self.join_context,
+      self.stats,
     )
   }
 }
@@ -218,6 +241,7 @@ where
   // snapshot. `Option` lets `run` own them while leaving `self` usable.
   session_presence_rx: Option<mpsc::BoundedAsyncReceiver<PresenceEvent<ID>>>,
   session_incoming_rx: Option<mpsc::BoundedAsyncReceiver<SessionMessage<Op, ID, SnapshotPayload>>>,
+  stats: Arc<ControllerStats>,
 }
 
 impl<Op, ID, StateType, SnapshotPayload, SL, Sess, SP>
@@ -231,6 +255,11 @@ where
   Sess: Session<Op, ID, SnapshotPayload>,
   SP: SnapshotProvider<ID, StateType, SnapshotPayload>,
 {
+  /// The live counters this controller writes into. See [`ControllerStats`].
+  pub fn stats(&self) -> Arc<ControllerStats> {
+    Arc::clone(&self.stats)
+  }
+
   pub(crate) fn new(
     initial_state: StateType,
     op_handler: Arc<SL>,
@@ -238,6 +267,7 @@ where
     snapshot_provider: Arc<SP>,
     buffer_size: usize,
     join_context: Option<SnapshotContext>,
+    stats: Arc<ControllerStats>,
   ) -> (CommandSender<Op, ID, StateType>, Self) {
     let (command_tx, command_rx) = mpsc::bounded_async(buffer_size);
 
@@ -253,6 +283,7 @@ where
       join_context,
       session_presence_rx: Some(session_presence_rx),
       session_incoming_rx: Some(session_incoming_rx),
+      stats,
     };
     (command_tx, controller)
   }
@@ -286,7 +317,25 @@ where
         // Listen for commands sent to the controller
         Ok(command) = self.command_rx.recv() => {
           debug!(?command, "Received command");
-          if !self.handle_command(command).await {
+          // Sampled here rather than continuously: this is what the loop saw when
+          // it took the command, which is the number that says whether a producer
+          // is outrunning it.
+          self.stats.record_queue_depth(self.command_rx.len());
+          let started = std::time::Instant::now();
+          let tick = matches!(command, ControllerCommand::ProcessTimeStep { .. });
+          let ops = match &command {
+            ControllerCommand::SubmitAgentOps { ops, .. } => ops.len(),
+            ControllerCommand::SubmitSystemOps { ops, .. } => ops.len(),
+            _ => 0,
+          };
+          let keep_running = self.handle_command(command).await;
+          let elapsed = started.elapsed();
+          self.stats.record_command(elapsed);
+          self.stats.record_ops(ops);
+          if tick {
+            self.stats.record_tick(elapsed);
+          }
+          if !keep_running {
             self.drain_pending_commands().await;
             info!("StateController stopped.");
             return Ok(self.state_data);
@@ -422,6 +471,7 @@ where
 
   #[instrument(skip(self, agent_info), fields(agent_id = ?agent_info.id(), agent_label = %agent_info.label()))]
   async fn handle_agent_joined_event(&mut self, agent_info: &Agent<ID>) {
+    self.stats.record_join();
     info!("Handling agent join event");
 
     // Let the application's StateLogic register the agent (and broadcast any
@@ -468,6 +518,7 @@ where
       if let Err(e) = self.session.send_message(MessageTarget::Agent(target_id), msg).await {
         error!(error = %e, agent = %agent.label(), "Failed to send snapshot.");
       } else {
+        self.stats.record_snapshot();
         debug!(agent = %agent.label(), "Snapshot sent.");
       }
     }
@@ -475,6 +526,7 @@ where
 
   #[instrument(skip(self, agent_id), fields(leaving_agent_id = ?agent_id))]
   async fn handle_agent_left_event(&mut self, agent_id: &ID) {
+    self.stats.record_leave();
     info!("Handling agent left event");
     self
       .handle_logic_input(LogicInput::AgentLeft {

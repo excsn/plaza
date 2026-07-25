@@ -43,6 +43,7 @@ pub mod game_common;
 pub mod session;
 pub mod snapshot;
 pub mod state_logic;
+pub mod stats;
 pub mod tick_driver;
 
 pub use agent::{Agent, AgentId};

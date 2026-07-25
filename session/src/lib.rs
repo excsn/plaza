@@ -12,6 +12,7 @@ pub mod codec;
 pub mod error;
 pub mod host;
 pub mod manager;
+pub mod stats;
 
 pub use codec::{JsonCodec, WireCodec};
 pub use error::SessionLayerError;

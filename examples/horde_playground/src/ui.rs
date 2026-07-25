@@ -206,7 +206,12 @@ pub fn draw_net_ui(client: &horde_playground::net::client::NetClient, url: &str,
 /// The host's panel: every offline control, live, and every offline readout,
 /// rebuilt from the truth the arena publishes plus the host's own believed state.
 #[cfg(all(feature = "server", feature = "client", feature = "websocket"))]
-pub fn draw_host_ui(view: &horde_playground::net::arena::HostView, client: &horde_playground::net::client::NetClient, controls: &mut Controls) {
+pub fn draw_host_ui(
+  view: &horde_playground::net::arena::HostView,
+  client: &horde_playground::net::client::NetClient,
+  controls: &mut Controls,
+  server: Option<&plaza::stats::ControllerStats>,
+) {
   let me = client.me.map(|m| m as usize);
   let (mean_err, worst_err) = render_error(view, client, controls);
   let (phantoms, missing) = phantom_and_missing(view, client, controls);
@@ -216,6 +221,25 @@ pub fn draw_host_ui(view: &horde_playground::net::arena::HostView, client: &hord
     ctx.set_pixels_per_point(1.35);
     egui::Window::new("horde (host)").default_pos((16.0, 16.0)).show(ctx, |ui| {
       draw_controls(ui, controls);
+
+      // What the frame counter cannot tell you. It measures this window's
+      // renderer, so a stutter at 3000 enemies is ambiguous between a client
+      // that cannot draw and an arena that cannot keep up. These are the
+      // arena's own numbers, read straight out of the running controller.
+      if let Some(s) = server {
+        ui.separator();
+        ui.label(egui::RichText::new("the arena itself").strong());
+        let mean = s.mean_tick().as_secs_f64() * 1000.0;
+        let worst = s.worst_tick().as_secs_f64() * 1000.0;
+        let budget = 1000.0 / horde_playground::net::host::TICK_HZ as f64;
+        warn_line(ui, format!("server tick: {mean:.1} ms mean, {worst:.1} ms worst (budget {budget:.1} ms)"), mean > budget);
+        warn_line(
+          ui,
+          format!("command queue: {} now, {} deepest", s.queue_depth(), s.deepest_queue()),
+          s.deepest_queue() >= 200,
+        );
+        ui.label(format!("ticks {}   ops {}   snapshots {}", s.ticks(), s.ops(), s.snapshots()));
+      }
 
       ui.separator();
       ui.label(egui::RichText::new("readouts").strong());
