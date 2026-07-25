@@ -105,6 +105,16 @@ Two things fix it and they are different. **Derive the limit from the thing that
 
 Worth noting which direction the spoofing runs. Server-measured admission can only be gamed by making yourself look worse. The alternative that was considered, raising the schedule depth to suit the slowest player, can be gamed by claiming a bad connection to slow the whole arena, which is why it lost.
 
+### Rendering in the past means there is a moment when there is nothing to render
+
+A client whose whole scene is drawn at `server_now - delay` has nothing at all until its timeline has started and a frame has been played out of it, which is one render delay after the first packet at the earliest. Drawing anyway does not produce an empty screen, it produces a **wrong** one: entities at the origin, a camera on the corner of the arena, and then everything arriving at once when the first frame lands.
+
+Every game that renders in the past holds a screen over that gap and fades in. It is not a cosmetic nicety; it is the only honest thing to show, because the alternative is a picture of a world that does not exist yet.
+
+Two details worth having. The fade is **one full-screen overlay** rather than an alpha threaded through every draw call, so it masks uniformly and cannot be forgotten by whoever adds the next entity type. And it goes over the world but **under the panel**, since a readout that faded with the world would be hiding the numbers that say why the world is not there.
+
+The related trap, found by looking: whatever a camera follows before the first packet needs a **sensible default**, not `Default::default()`. Horde's fallback was the origin, which in a world measured from one corner is a view of the outside of it. That regressed silently when the local player stopped being predicted, because the predictor had been seeded at the arena centre and the array that replaced it was zeroed.
+
 ### An entity can join a delayed timeline only if its state is reconstructable at an arbitrary past instant
 
 Rendering remote state in the past is right, and it is a property of the whole scene rather than of one entity. Horde had three clocks in one picture (enemies at now, peers in the past, projectiles elsewhere) and every seam between them was a visible bug. Unifying them meant queueing packets on receipt and applying them when the render clock reaches them, so a frame is one consistent instant, and making any other instant inexpressible with a token type rather than merely discouraged.

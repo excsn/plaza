@@ -135,6 +135,31 @@ impl Camera {
   }
 }
 
+/// How long the world takes to fade in once there is one.
+///
+/// Networked only: the offline build owns both sides, so its world exists from
+/// the first frame and there is no transient to mask.
+#[cfg(all(feature = "client", feature = "websocket"))]
+const FADE_IN_SECS: f32 = 0.45;
+
+/// Masks the join transient, which is not a cosmetic problem.
+///
+/// A client that is told a *field* and integrates from it has nothing at all
+/// before the first packet, so the alternative to a fade is showing a world that
+/// is wrong rather than merely empty. One overlay rather than an alpha threaded
+/// through every draw call: it masks uniformly and cannot be forgotten by
+/// whoever adds the next thing to draw.
+#[cfg(all(feature = "client", feature = "websocket"))]
+pub fn draw_fade_in(ready_secs: Option<f32>) {
+  let alpha = match ready_secs {
+    None => 1.0,
+    Some(secs) => (1.0 - secs / FADE_IN_SECS).clamp(0.0, 1.0),
+  };
+  if alpha > 0.0 {
+    draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.0, 0.0, 0.0, alpha));
+  }
+}
+
 /// A hole: the faint accretion disk (where the pull starts and pellets are still
 /// escapable) and the dark core (where they are swallowed).
 fn draw_hole(hole: &BlackHole, color: Color, cam: &Camera, label: Option<&str>) {

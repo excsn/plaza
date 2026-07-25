@@ -48,6 +48,12 @@ A host gates its own overlay on the same permission, so it can see what it did t
 
 **It is declared, not enforced**, which is stated here rather than glossed: an honest client obeys the flag and a cheat client would not. Real enforcement means never sending past a client's render instant, and the obvious implementation, delaying the send, was tried and measurably does nothing. The client's playout clock is derived from the stream, so delaying the whole stream shifts the clock with it and the buffer depth comes out unchanged, to the millisecond. Enforcement means withholding against the declared timeline, which is now well defined but not built.
 
+## The first frames, when there is nothing to draw
+
+Drawing the whole scene at `server_now - render_delay` means there is nothing to draw until the timeline has started and a frame has been played out of it. So the world **fades in** once there is one, and until then the screen says what it is waiting for: connecting, then checking your connection, then the fade.
+
+Without it the first second is not an empty world but a wrong one, and the arena is 3000 units square measured from a corner, so a camera with no player to follow points at the outside of it. Both playgrounds do this now; the offline builds do not need it, because they own both sides and their world exists from the first frame.
+
 ## One timeline, declared by the server
 
 The render delay is **a property of the world, not of anybody's link**. Every client shows `server_now - render_delay_ms`, the same instant on every screen.

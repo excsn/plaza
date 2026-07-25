@@ -229,6 +229,16 @@ impl NetClient {
     self.local.render()
   }
 
+  /// Whether there is a world worth drawing yet.
+  ///
+  /// This client integrates pellets from a field it is *told*, so before the
+  /// first packet it has no field, no rivals, and nothing to integrate. Drawing
+  /// then is not an empty screen but a wrong one: a lone hole in a void, and
+  /// then a universe arriving at once.
+  pub fn ready(&self) -> bool {
+    !self.sim.holes.is_empty()
+  }
+
   pub fn rtt_ms(&self) -> Option<f32> {
     self.rtt.rtt_ms()
   }

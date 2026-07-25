@@ -371,7 +371,10 @@ impl Client {
     Self {
       id,
       enemies: DeltaMirror::new(),
-      players: vec![Vec2::default(); player_count],
+      // The middle of the arena, not its corner. This is what a camera follows
+      // before the first frame arrives, and the origin of a world measured from
+      // one corner is a view of the outside of it.
+      players: vec![Vec2::new(crate::sim::types::ARENA_W * 0.5, crate::sim::types::ARENA_H * 0.5); player_count],
       player_views: (0..player_count).map(|_| RemoteView::new(PLAYER_VIEW_SNAPSHOTS, PLAYER_EXTRAPOLATE_MS)).collect(),
       player_sample_ms: vec![0; player_count],
       player_velocity: vec![Vec2::default(); player_count],

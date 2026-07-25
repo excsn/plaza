@@ -147,6 +147,18 @@ impl NetClient {
       .unwrap_or_else(|| self.sim.players().get(me).copied().unwrap_or_default())
   }
 
+  /// Whether there is a world worth drawing yet.
+  ///
+  /// A client that renders in the past has **nothing** to show until its
+  /// timeline has started and a frame has been played out of it, which is one
+  /// render delay after the first packet at the earliest. Drawing anyway is not
+  /// an empty screen, it is a *wrong* one: entities at the origin, a camera on
+  /// the corner of the arena, and then everything teleporting into place at once
+  /// when the first frame lands.
+  pub fn ready(&self) -> bool {
+    self.frames_seen > 0 && self.sim.render_at().is_some()
+  }
+
   pub fn rtt_ms(&self) -> Option<f32> {
     self.rtt.rtt_ms()
   }

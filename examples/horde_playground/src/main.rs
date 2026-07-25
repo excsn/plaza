@@ -259,6 +259,8 @@ async fn networked(
   let mut fps = 60.0f32;
   let plays = options.role.plays();
   let mut touch = TouchSteer::default();
+  // When the world first became drawable, so the fade can be measured from it.
+  let mut ready_at: Option<u64> = None;
 
   loop {
     let controls_now = *controls.lock();
@@ -297,8 +299,17 @@ async fn networked(
       client.tick(step_ms, &controls_now);
     }
 
+    if client.ready() && ready_at.is_none() {
+      ready_at = Some(now_ms);
+    }
     let cam = Camera::follow(client.my_position());
     clear_background(BLACK);
+
+    // Over the world and under everything else. The join transient is a property
+    // of the world, not of the readouts: a panel that faded with it would be
+    // hiding the numbers that say why the world is not there yet, and the egui
+    // pass below draws straight to the screen rather than into a layer.
+    let fade = ready_at.map(|at| now_ms.saturating_sub(at) as f32 / 1000.0);
 
     #[allow(unused_mut)]
     let mut drew_host = false;
@@ -306,6 +317,8 @@ async fn networked(
     if let Some(view) = host.as_ref().map(|v| v.lock().clone()) {
       render::draw_host_world(&view, &client, &controls_now, &cam);
       render::draw_host_minimap(&view, &client, &controls_now, &cam);
+      render::draw_legend(&cam);
+      render::draw_fade_in(fade);
       draw_perf(&mut fps);
       let mut edited = controls_now;
       ui::draw_host_ui(&view, &client, &mut edited, server_stats.as_deref());
@@ -315,6 +328,8 @@ async fn networked(
     if !drew_host {
       render::draw_client_world(&client, &controls_now, &cam);
       render::draw_client_minimap(&client, &controls_now, &cam);
+      render::draw_legend(&cam);
+      render::draw_fade_in(fade);
       draw_perf(&mut fps);
       // A joiner cannot change the host's settings, but the ghost is its own
       // drawing choice, so this one control is live for it.
@@ -322,8 +337,6 @@ async fn networked(
       ui::draw_net_ui(&client, &url, options.role, &mut edited);
       controls.lock().show_ghost = edited.show_ghost;
     }
-    render::draw_legend(&cam);
-
     // Whatever is keeping you out of the game, said on screen rather than only in
     // the panel. Being measured and being refused both used to look like nothing
     // happening.

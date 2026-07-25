@@ -28,6 +28,39 @@ const C_COIN: Color = Color::new(1.0, 0.85, 0.25, 1.0);
 use horde_playground::sim::client::{Burst, DamagePopup};
 use horde_playground::sim::PLAYER_MAX_HEALTH;
 
+/// How long the world takes to fade in once there is one.
+///
+/// Networked only: the offline build owns both sides, so its world exists from
+/// the first frame and there is no transient to mask.
+#[cfg(all(feature = "client", feature = "websocket"))]
+///
+/// Short enough not to be a wait, long enough that the first frame arriving is a
+/// transition rather than a pop.
+const FADE_IN_SECS: f32 = 0.45;
+
+/// Masks the join transient, which is not a cosmetic problem.
+///
+/// A client that renders in the past has nothing to draw until its timeline has
+/// started and a frame has been played out of it. Every game that renders in the
+/// past holds a screen over that gap and fades in, because the alternative is
+/// showing a world that is not merely empty but *wrong*: entities at the origin,
+/// then all of them arriving at once.
+///
+/// One overlay rather than an alpha threaded through every draw call: it masks
+/// uniformly, costs one rectangle, and cannot be forgotten by whoever adds the
+/// next entity type.
+#[cfg(all(feature = "client", feature = "websocket"))]
+pub fn draw_fade_in(ready_secs: Option<f32>) {
+  let alpha = match ready_secs {
+    // Nothing to show yet, so show nothing rather than something wrong.
+    None => 1.0,
+    Some(secs) => (1.0 - secs / FADE_IN_SECS).clamp(0.0, 1.0),
+  };
+  if alpha > 0.0 {
+    draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.0, 0.0, 0.0, alpha));
+  }
+}
+
 /// A health bar over a player at screen `(x, y)`. Green to red as it empties, or
 /// blue while the respawn shield is up.
 fn draw_health_bar(x: f32, y: f32, health: u8, invuln: bool) {

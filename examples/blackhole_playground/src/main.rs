@@ -262,6 +262,9 @@ async fn networked(options: role::Options, controls: std::sync::Arc<parking_lot:
   let mut fx = render::DashFx::new();
   let mut touch = TouchSteer::default();
 
+  // When the world first became drawable, so the fade can be measured from it.
+  let mut ready_at: Option<u64> = None;
+
   loop {
     let dt = get_frame_time();
     // The arena reads this too, but only the panel writes it, so a plain read of
@@ -288,6 +291,14 @@ async fn networked(options: role::Options, controls: std::sync::Arc<parking_lot:
       client.tick(step_ms, &controls_now);
     }
 
+    if client.ready() && ready_at.is_none() {
+      ready_at = Some(now_ms);
+    }
+    // Over the world and under everything else: the join transient belongs to the
+    // world, and a panel that faded with it would hide the numbers saying why the
+    // world is not there yet.
+    let fade = ready_at.map(|at| now_ms.saturating_sub(at) as f32 / 1000.0);
+
     let cam = Camera::follow(client.my_position());
     clear_background(Color::new(0.02, 0.02, 0.05, 1.0));
 
@@ -301,6 +312,7 @@ async fn networked(options: role::Options, controls: std::sync::Arc<parking_lot:
       render::draw_host_world(&view, &client, &controls_now, &cam, &mut fx, dt);
       render::draw_host_minimap(&view, &client, &cam);
       render::draw_host_scores(&view, &client, &cam);
+      render::draw_fade_in(fade);
       draw_perf(&mut fps);
       let mut edited = controls_now;
       ui::draw_host_ui(&view, &client, &mut edited);
@@ -309,6 +321,7 @@ async fn networked(options: role::Options, controls: std::sync::Arc<parking_lot:
     }
     if !drew_host {
       render::draw_client_world(&client, &controls_now, &cam, &mut fx, dt);
+      render::draw_fade_in(fade);
       draw_perf(&mut fps);
       // A joiner cannot change the host's settings, but the ghost is its own
       // drawing choice, so this one control is live for it.
