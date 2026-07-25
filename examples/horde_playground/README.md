@@ -170,19 +170,21 @@ So the local player is now drawn from the played-out stream at `RenderAt`, like 
 
 `cargo run --release -p horde_playground --example reversal` is the measurement, including the strategies that were tried and rejected.
 
-## Three arenas, and a placement rather than a door slam
+## More arenas, and a placement rather than a door slam
 
-An arena that schedules inputs ahead can only carry a connection whose delay fits the schedule, so **one** arena means one budget and everybody past it is turned away. This host runs three, differing in exactly one setting:
+An arena that schedules inputs ahead can only carry a connection whose delay fits the schedule, so **one** arena means one budget and everybody past it is turned away. `--rooms <n>` runs more, in the order they are worth adding:
 
-| room | playout delay | carries a link up to |
-|---|---|---|
-| sharp | 50 ms | 114 ms one way |
-| standard | 100 ms | 164 ms one way |
-| relaxed | 300 ms | 364 ms one way |
+| `--rooms` | room | playout delay | carries a link up to |
+|---|---|---|---|
+| 1 (default) | standard | 100 ms | 164 ms one way |
+| 2 | relaxed | 300 ms | 364 ms one way |
+| 3 | sharp | 50 ms | 114 ms one way |
 
-That table is one trade written three times: a deeper schedule carries a worse connection and costs everybody in that room more input lag. The middle room is the arena that used to be the only one, so the default experience is unchanged and the other two are its tails.
+**One by default, and that is not timidity.** Each room is a whole simulation of thousands of enemies at 60 Hz, so a local run would pay three times over for a spread of latency that one player on one machine does not have. Extra arenas earn their cost the moment real connections arrive, which is a deployment decision rather than a property of the example: `--rooms 3` is what you would publish with.
 
-Connect anywhere, get measured, and if this arena cannot carry you the server replies with the one that can and the client reconnects. **Refusal is what is left when nothing fits**, not the primary behaviour, and that is the whole reason the decision wants a lobby: a room can only say yes or no, a lobby can say *where*. The matching rule itself is [`plaza_lobby::routing::best_for`](../../lobby/src/routing.rs), which orders tightest-schedule-first so a fast link is not sent to the room built for slow ones and made to pay its delay.
+The table is deliberately **not** sorted by depth, which would read better and mislead. The first is the arena that used to be the only one, so a default run is exactly what it always was. The second worth adding is the *deeper* one, because it is the one that rescues links that would otherwise be refused; a sharper room is a nicety for players who already had somewhere to play. The whole set is one trade written three times: a deeper schedule carries a worse connection and costs everybody in that room more input lag.
+
+Connect anywhere, get measured, and if this arena cannot carry you the server replies with the one that can and the client reconnects. With a single room there is nowhere to send anybody, so placement degrades to exactly the refusal it started as. **Refusal is what is left when nothing fits**, not the primary behaviour, and that is the whole reason the decision wants a lobby: a room can only say yes or no, a lobby can say *where*. The matching rule itself is [`plaza_lobby::routing::best_for`](../../lobby/src/routing.rs), which orders tightest-schedule-first so a fast link is not sent to the room built for slow ones and made to pay its delay.
 
 The placement names a **path**, never a whole address. The arena does not know what hostname a client reached it by, and inventing one is how a redirect sends somebody to a machine they cannot route to.
 

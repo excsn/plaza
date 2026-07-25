@@ -20,7 +20,7 @@ use plaza_session::host::{init_logging, Host};
 use plaza_lobby::{RoomId, RoomMetadata};
 
 use crate::net::arena::{Arena, ArenaLogic, HostView, NoSnapshots, PlayerKey, Router};
-use crate::net::rooms::{self, ROOMS, DEFAULT_ROOM};
+use crate::net::rooms::{self, DEFAULT_ROOM};
 use crate::sim::types::MAX_PLAYERS;
 use crate::sim::protocol::Op;
 use crate::sim::types::Controls;
@@ -38,8 +38,10 @@ pub const TICK_HZ: u32 = 60;
 const WASM_FILE: &str = "horde_playground.wasm";
 
 struct Wiring {
-  /// One session per arena, indexed by room id.
-  sessions: Vec<Arc<ArenaSession>>,
+  /// One session per running arena, keyed by room id. A map rather than a
+  /// vector because `--rooms` runs a *subset*, so the ids in play are not
+  /// contiguous and an index would silently serve the wrong arena.
+  sessions: std::collections::HashMap<u32, Arc<ArenaSession>>,
   /// Keys are handed out across every arena from one counter, so a player that
   /// is placed elsewhere and reconnects is a new connection with a new key,
   /// which is what the seat table and the transport's measurements both expect.
@@ -48,7 +50,7 @@ struct Wiring {
 
 async fn ws_route(req: HttpRequest, stream: web::Payload, path: web::Path<u32>, wiring: web::Data<Wiring>) -> Result<HttpResponse, actix_web::Error> {
   let room = path.into_inner();
-  let Some(session) = wiring.sessions.get(room as usize) else {
+  let Some(session) = wiring.sessions.get(&room) else {
     return Ok(HttpResponse::NotFound().body("no such arena"));
   };
   let key = wiring.next_key.fetch_add(1, Ordering::Relaxed);
@@ -77,18 +79,20 @@ pub async fn serve(
   view: Option<Arc<Mutex<HostView>>>,
   static_dir: Option<String>,
   stats: Option<Arc<plaza::stats::ControllerStats>>,
+  rooms: usize,
 ) -> std::io::Result<()> {
   init_logging();
 
   let base = *controls.lock();
-  let mut sessions = Vec::new();
+  let active = rooms::active(rooms);
+  let mut sessions = std::collections::HashMap::new();
 
   // Every arena's advertised capacity, built once so the router can match a
   // measured link against all of them. A room states its own budget, derived
   // from its schedule rather than declared beside it.
   // The lobby's room id is a `Uuid` and this example's is a small index, so the
   // index rides in the settings summary, which is the field for exactly that.
-  let catalogue: Vec<RoomMetadata<u32>> = ROOMS
+  let catalogue: Vec<RoomMetadata<u32>> = active
     .iter()
     .map(|room| RoomMetadata {
       room_id: RoomId::new_v4(),
@@ -114,7 +118,7 @@ pub async fn serve(
     })
   };
 
-  for room in ROOMS.iter() {
+  for room in active.iter() {
     let session: Arc<ArenaSession> = ActixWsPlazaSession::new();
     // Only the arena the host plays in reads the shared panel; the others run on
     // their own settings, or a slider drag would rewrite every room's schedule
@@ -156,7 +160,7 @@ pub async fn serve(
     tokio::spawn(controller.run());
     tokio::spawn(TickDriver::from_hz(TICK_HZ).run(commands.clone()));
     tracing::info!(room = room.id, name = room.name, playout_ms = room.playout_delay_ms, budget_ms = room.budget_ms(&base), "arena up");
-    sessions.push(session);
+    sessions.insert(room.id, session);
   }
 
   let wiring = web::Data::new(Wiring {

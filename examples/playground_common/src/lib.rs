@@ -113,6 +113,14 @@ pub struct Options {
   /// repository root and answers every request with a 404 from anywhere else: a
   /// server that looks healthy and is not.
   pub static_dir: Option<String>,
+  /// How many rooms a host should run, for a game that has more than one.
+  ///
+  /// **One by default, and that is not timidity.** Each room is a whole
+  /// simulation, so a local run of a many-entity game pays for every extra one
+  /// while a single player is using a single arena. More rooms earn their cost
+  /// when real people with real connections arrive, which is a deployment
+  /// decision rather than a property of the example.
+  pub rooms: usize,
 }
 
 impl Default for Options {
@@ -125,6 +133,7 @@ impl Default for Options {
       bind: "0.0.0.0:8080".to_owned(),
       connect: "ws://127.0.0.1:8080/ws".to_owned(),
       static_dir: None,
+      rooms: 1,
     }
   }
 }
@@ -162,7 +171,13 @@ pub fn usage(program: &str) -> String {
   --connect <ws url>                       what to join        (default: ws://127.0.0.1:8080/ws)
   --serve <dir>                            serve a browser client from this directory
   --no-serve                               do not serve a page at all
+  --rooms <n>                              arenas to run       (default: 1)
   --help
+
+rooms
+  One arena is right for a local run: each is a whole simulation, so extra ones
+  cost a machine that has one player on it. Run several when real connections
+  arrive and the spread of their latency is worth having somewhere to put.
 
 roles
   headless   server only, no window. The thing you deploy.
@@ -194,6 +209,14 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I, defaults: Options) -> Resu
       "--connect" => options.connect = value("--connect")?,
       "--serve" => options.static_dir = Some(value("--serve")?),
       "--no-serve" => options.static_dir = None,
+      "--rooms" => {
+        options.rooms = value("--rooms")?
+          .parse()
+          .map_err(|_| format!("--rooms wants a number\n\n{usage}"))?;
+        if options.rooms == 0 {
+          return Err(format!("--rooms must be at least 1\n\n{usage}"));
+        }
+      }
       "--help" | "-h" => return Err(usage),
       other => return Err(format!("unknown option `{other}`\n\n{usage}")),
     }

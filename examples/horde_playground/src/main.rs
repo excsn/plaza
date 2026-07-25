@@ -61,7 +61,7 @@ fn main() {
       let controls = std::sync::Arc::new(parking_lot::Mutex::new(Controls::default()));
       let result = tokio::runtime::Runtime::new()
         .expect("tokio runtime")
-        .block_on(horde_playground::net::host::serve(&options.bind, controls, None, options.static_dir.clone(), None));
+        .block_on(horde_playground::net::host::serve(&options.bind, controls, None, options.static_dir.clone(), None, options.rooms));
       if let Err(e) = result {
         eprintln!("server stopped: {e}");
         std::process::exit(1);
@@ -109,11 +109,12 @@ async fn frame_loop(options: role::Options) {
     let controls = controls.clone();
     let view = view.clone();
     let stats = server_stats.clone();
+    let rooms = options.rooms;
     std::thread::Builder::new()
       .name("arena".to_owned())
       .spawn(move || {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-        if let Err(e) = runtime.block_on(horde_playground::net::host::serve(&bind, controls, view, static_dir, stats)) {
+        if let Err(e) = runtime.block_on(horde_playground::net::host::serve(&bind, controls, view, static_dir, stats, rooms)) {
           eprintln!("arena stopped: {e}");
         }
       })
