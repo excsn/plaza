@@ -11,6 +11,7 @@ use blackhole_playground::sim::{Controls, Vec2 as SimVec2, World};
 #[cfg(feature = "server")]
 use blackhole_playground::sim::{ARENA_H, ARENA_W};
 use macroquad::prelude::*;
+use plaza_client_utils::FixedTimestep;
 use render::Camera;
 
 const STEP_MS: u64 = 16;
@@ -42,26 +43,39 @@ fn main() {
     Ok(options) => options,
     Err(message) => return give_up(message),
   };
-  if let Err(message) = role::check_supported(options.role) {
-    return give_up(message);
+
+  // A build with no networking compiled in (`--features native,client`) is the
+  // single-process teaching demo. The role does not apply there, so run the
+  // offline playground rather than reject the default host role for needing a
+  // server this build was deliberately built without.
+  #[cfg(not(any(feature = "server", all(feature = "client", feature = "websocket"))))]
+  {
+    return windowed(options);
   }
 
-  #[cfg(feature = "server")]
-  if options.role == Role::Headless {
-    // A fixed control set nobody edits, and no view: a headless server has
-    // neither a panel to change it from nor a screen to draw the truth on.
-    let controls = std::sync::Arc::new(parking_lot::Mutex::new(Controls::default()));
-    let result = tokio::runtime::Runtime::new()
-      .expect("tokio runtime")
-      .block_on(blackhole_playground::net::host::serve(&options.bind, controls, None, options.static_dir.clone()));
-    if let Err(e) = result {
-      eprintln!("server stopped: {e}");
-      std::process::exit(1);
+  #[cfg(any(feature = "server", all(feature = "client", feature = "websocket")))]
+  {
+    if let Err(message) = role::check_supported(options.role) {
+      return give_up(message);
     }
-    return;
-  }
 
-  windowed(options);
+    #[cfg(feature = "server")]
+    if options.role == Role::Headless {
+      // A fixed control set nobody edits, and no view: a headless server has
+      // neither a panel to change it from nor a screen to draw the truth on.
+      let controls = std::sync::Arc::new(parking_lot::Mutex::new(Controls::default()));
+      let result = tokio::runtime::Runtime::new()
+        .expect("tokio runtime")
+        .block_on(blackhole_playground::net::host::serve(&options.bind, controls, None, options.static_dir.clone()));
+      if let Err(e) = result {
+        eprintln!("server stopped: {e}");
+        std::process::exit(1);
+      }
+      return;
+    }
+
+    windowed(options);
+  }
 }
 
 fn window_conf() -> Conf {
@@ -155,17 +169,17 @@ type HostHandle = ();
 async fn offline() {
   let mut controls = Controls::default();
   let mut world = World::new(&controls, controls.player_count, SEED);
-  let mut accum_ms: u64 = 0;
+  // Real frame time, spent in whole fixed steps. The cap is what keeps a
+  // backgrounded tab from dumping the minutes it was asleep into one frame.
+  let mut timestep = FixedTimestep::from_step_ms(STEP_MS).with_max_frame_ms(100);
   let mut fps = 60.0f32;
   let mut fx = render::DashFx::new();
 
   loop {
     let input = read_input();
     let mut dash = is_key_pressed(KeyCode::Space);
-    accum_ms += ((get_frame_time() * 1000.0) as u64).clamp(0, 100);
-    while accum_ms >= STEP_MS {
-      accum_ms -= STEP_MS;
-      world.step(STEP_MS, input, dash, &controls);
+    for step_ms in timestep.advance((get_frame_time() * 1000.0) as u64) {
+      world.step(step_ms, input, dash, &controls);
       dash = false; // one dash request per press, not per step
     }
 
@@ -178,7 +192,7 @@ async fn offline() {
 
     if ui::draw_ui(&world, &mut controls) {
       world = World::new(&controls, controls.player_count, SEED);
-      accum_ms = 0;
+      timestep.reset();
     }
 
     next_frame().await;
@@ -242,7 +256,7 @@ async fn networked(options: role::Options, controls: std::sync::Arc<parking_lot:
   };
 
   let mut now_ms: u64 = 0;
-  let mut accum_ms: u64 = 0;
+  let mut timestep = FixedTimestep::from_step_ms(STEP_MS).with_max_frame_ms(100);
   let mut fps = 60.0f32;
   let plays = options.role.plays();
   let mut fx = render::DashFx::new();
@@ -254,7 +268,7 @@ async fn networked(options: role::Options, controls: std::sync::Arc<parking_lot:
     // the current values is all a frame needs.
     let controls_now = *controls.lock();
 
-    let dt_ms = ((get_frame_time() * 1000.0) as u64).clamp(0, 100);
+    let dt_ms = ((get_frame_time() * 1000.0) as u64).min(100);
     now_ms += dt_ms;
     client.poll(now_ms, &controls_now);
 
@@ -265,15 +279,13 @@ async fn networked(options: role::Options, controls: std::sync::Arc<parking_lot:
       input = touch.dir();
     }
     let dash = is_key_pressed(KeyCode::Space);
-    accum_ms += dt_ms;
     let mut dash_this_step = dash;
-    while accum_ms >= STEP_MS {
-      accum_ms -= STEP_MS;
+    for step_ms in timestep.advance(dt_ms) {
       if plays {
-        client.send_input(input, dash_this_step, STEP_MS as f32 / 1000.0);
+        client.send_input(input, dash_this_step, step_ms as f32 / 1000.0);
         dash_this_step = false;
       }
-      client.tick(STEP_MS, &controls_now);
+      client.tick(step_ms, &controls_now);
     }
 
     let cam = Camera::follow(client.my_position());
@@ -286,7 +298,7 @@ async fn networked(options: role::Options, controls: std::sync::Arc<parking_lot:
     let mut drew_host = false;
     #[cfg(feature = "server")]
     if let Some(view) = host.as_ref().map(|v| v.lock().clone()) {
-      render::draw_host_world(&view, &client, &cam, &mut fx, dt);
+      render::draw_host_world(&view, &client, &controls_now, &cam, &mut fx, dt);
       render::draw_host_minimap(&view, &client, &cam);
       render::draw_host_scores(&view, &client, &cam);
       draw_perf(&mut fps);
@@ -298,7 +310,11 @@ async fn networked(options: role::Options, controls: std::sync::Arc<parking_lot:
     if !drew_host {
       render::draw_client_world(&client, &controls_now, &cam, &mut fx, dt);
       draw_perf(&mut fps);
-      ui::draw_net_ui(&client, &url, options.role);
+      // A joiner cannot change the host's settings, but the ghost is its own
+      // drawing choice, so this one control is live for it.
+      let mut edited = controls_now;
+      ui::draw_net_ui(&client, &url, options.role, &mut edited);
+      controls.lock().show_ghost = edited.show_ghost;
     }
 
     if let Status::Gone(reason) = &client.status {

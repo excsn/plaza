@@ -149,15 +149,18 @@ fn draw_hole(hole: &BlackHole, color: Color, cam: &Camera, label: Option<&str>) 
   }
 }
 
-pub fn draw_world(world: &World, _controls: &Controls, cam: &Camera, fx: &mut DashFx, dt: f32) {
+pub fn draw_world(world: &World, controls: &Controls, cam: &Camera, fx: &mut DashFx, dt: f32) {
   let you = world.holes()[0].pos;
 
   // The server's truth, faint. Any gap to the bright pellets is divergence
-  // between the local integration and the authority.
-  for pellet in world.truth_pellets() {
-    if pellet.pos.dist(you) <= VIEW_RADIUS * 1.15 {
-      let (x, y) = cam.at(pellet.pos);
-      draw_circle(x, y, 1.6, C_TRUTH);
+  // between the local integration and the authority, and it is on by default
+  // because that divergence is the entire subject of this example.
+  if controls.show_ghost {
+    for pellet in world.truth_pellets() {
+      if pellet.pos.dist(you) <= VIEW_RADIUS * 1.15 {
+        let (x, y) = cam.at(pellet.pos);
+        draw_circle(x, y, 1.6, C_TRUTH);
+      }
     }
   }
 
@@ -231,9 +234,11 @@ pub fn draw_scores(world: &World, cam: &Camera) {
 /// Drawing what a *networked* client knows, which is strictly less than the
 /// offline view.
 ///
-/// No truth overlay and no server holes, because a real client has neither. What
-/// it has is its own locally integrated pellets, the field it was told about,
-/// and its own predicted position, and that is what goes on the screen.
+/// No *pellet* truth overlay and no server-side holes, because a real client has
+/// neither: pellets under field sync are never sent, so there is nothing to
+/// compare its own integration against. What it does have is the field it was
+/// told about, which includes where the last frame put its own hole, so it gets
+/// a ghost ring for that. Received state is not a privilege.
 #[cfg(all(feature = "client", feature = "websocket"))]
 pub fn draw_client_world(client: &blackhole_playground::net::client::NetClient, controls: &Controls, cam: &Camera, fx: &mut DashFx, dt: f32) {
   let you = client.my_position();
@@ -257,6 +262,17 @@ pub fn draw_client_world(client: &blackhole_playground::net::client::NetClient, 
     if mine {
       drawn.pos = you;
     }
+    // The joiner's own server ghost, which needs no privilege: `hole.pos` is
+    // where the last frame put it, and that is a fact this client holds. Only
+    // your own hole is drawn anywhere else, so only your own hole gets a ring.
+    // The gap is your prediction error plus the one link delay the sample is
+    // old, and it opens during a grapple, where collision separation between
+    // holes is deliberately left unpredicted.
+    if controls.show_ghost && mine && hole.pos.dist(you) <= VIEW_RADIUS * 1.6 {
+      let (gx, gy) = cam.at(hole.pos);
+      draw_circle_lines(gx, gy, hole.radius() * cam.scale, 1.0, C_TRUTH);
+      draw_circle(gx, gy, 2.0, C_TRUTH);
+    }
     if drawn.pos.dist(you) <= VIEW_RADIUS * 1.6 {
       let label = format!("{}  {:.0}", if mine { "you".to_string() } else { format!("P{i}") }, hole.mass);
       let color = if mine { C_YOU } else { C_RIVAL };
@@ -264,7 +280,6 @@ pub fn draw_client_world(client: &blackhole_playground::net::client::NetClient, 
       draw_hole(&drawn, color, cam, Some(&label));
     }
   }
-  let _ = controls;
 }
 
 /// The host's omniscient view: a real client's believed field drawn over the
@@ -276,14 +291,23 @@ pub fn draw_client_world(client: &blackhole_playground::net::client::NetClient, 
 /// is drawn where it is predicted, everyone else's where the server says they
 /// are.
 #[cfg(all(feature = "server", feature = "client", feature = "websocket"))]
-pub fn draw_host_world(view: &blackhole_playground::net::arena::HostView, client: &blackhole_playground::net::client::NetClient, cam: &Camera, fx: &mut DashFx, dt: f32) {
+pub fn draw_host_world(
+  view: &blackhole_playground::net::arena::HostView,
+  client: &blackhole_playground::net::client::NetClient,
+  controls: &Controls,
+  cam: &Camera,
+  fx: &mut DashFx,
+  dt: f32,
+) {
   let you = client.my_position();
   let me = client.me;
 
-  for pellet in &view.pellets {
-    if pellet.pos.dist(you) <= VIEW_RADIUS * 1.15 {
-      let (x, y) = cam.at(pellet.pos);
-      draw_circle(x, y, 1.6, C_TRUTH);
+  if controls.show_ghost {
+    for pellet in &view.pellets {
+      if pellet.pos.dist(you) <= VIEW_RADIUS * 1.15 {
+        let (x, y) = cam.at(pellet.pos);
+        draw_circle(x, y, 1.6, C_TRUTH);
+      }
     }
   }
   for (_, pos) in client.sim.render() {
@@ -309,6 +333,21 @@ pub fn draw_host_world(view: &blackhole_playground::net::arena::HostView, client
       let color = if mine { C_YOU } else { C_RIVAL };
       fx.burst(i, drawn.pos, drawn.radius(), client.is_dashing(i as PlayerId), cam, dt);
       draw_hole(&drawn, color, cam, Some(&label));
+    }
+    // Only your own hole is drawn anywhere other than where the server has it,
+    // so only your own hole gets a ghost. That single gap is this example's
+    // hardest quantity: the hole is a *forced* entity, pulled by every other
+    // hole and pushed out of every overlap, and collision separation is
+    // deliberately left unpredicted. The ring is where the residual lives, and
+    // it opens during a grapple and closes when you break away.
+    //
+    // A host's ring is the server's *current* truth rather than a received
+    // sample, so unlike a joiner's it carries no link delay: the whole gap is
+    // prediction error.
+    if controls.show_ghost && mine && hole.pos.dist(you) <= VIEW_RADIUS * 1.6 {
+      let (gx, gy) = cam.at(hole.pos);
+      draw_circle_lines(gx, gy, hole.radius() * cam.scale, 1.0, C_TRUTH);
+      draw_circle(gx, gy, 2.0, C_TRUTH);
     }
   }
   if me.is_some() && !my_hole_alive {

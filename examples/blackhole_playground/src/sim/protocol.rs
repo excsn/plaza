@@ -27,6 +27,26 @@ use serde::{Deserialize, Serialize};
 
 use crate::sim::types::{Packet, PlayerId, SyncMode};
 
+/// The wire format's version, derived at build time from the source files that
+/// define it (see `build.rs`), so it cannot drift out of date the way a manual
+/// constant does.
+///
+/// The point is a browser client that is a build product: it does not rebuild
+/// when the server does, so a page from before a wire change is the normal state
+/// of affairs rather than an exotic one. Without a version the failure is silent
+/// in the worst way, because the page loads, the game appears to run, and only
+/// the messages whose shape changed are rejected, which reads as a netcode bug
+/// and is a deployment one. With it the client is told to reload.
+///
+/// Two limits worth knowing. It cannot rescue a client older than the handshake
+/// itself, which is the bootstrapping floor every protocol version has. And it
+/// changes when those files change at all, including their comments, so it errs
+/// toward asking for a reload that was not strictly needed.
+pub const PROTOCOL: u32 = WIRE_PROTOCOL;
+
+// Written by `plaza_wire::build` from `build.rs`, as an already-parsed `u32`.
+include!(concat!(env!("OUT_DIR"), "/wire_protocol.rs"));
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Op {
   // ---- client to server ----
@@ -39,6 +59,8 @@ pub enum Op {
   Input { seq: u64, dx: f32, dy: f32, dash: bool },
   /// Round-trip probe; the reply echoes `origin_ms` verbatim.
   Ping { origin_ms: u64 },
+  /// The first thing a client says: which wire format it was built against.
+  Hello { protocol: u32 },
 
   // ---- server to client ----
   /// Sent once on join: which hole is yours, and the settings you would
@@ -56,6 +78,9 @@ pub enum Op {
   /// as the slower of the two.
   Ack { seq: u64 },
   Pong { origin_ms: u64, server_ms: u64 },
+  /// This client was built against a different wire format and should reload.
+  /// Carries both versions so the message can say which way round it is.
+  Outdated { server: u32, client: u32 },
 }
 
 /// Server settings a client cannot see but has to reason about.

@@ -24,7 +24,7 @@ It is deliberately the **hard** case. The [`horde_playground`](../horde_playgrou
 | `host` | yes | yes | yes | plays and serves. **The default** |
 | `client` | no | yes | yes | join only. The only role a browser can take |
 
-A host prints a local URL and a LAN URL; open either in a browser to join, or send the LAN one to a friend. The browser client connects back to whoever served it (over `wss://` if the page was secure), so a `--role headless` deploy behind a TLS terminator works the same way. The impairment sliders (latency, jitter) now act on the **real** per-connection link, so a host can show a joiner what 200 ms feels like while its own view stays crisp.
+A host prints a local URL and a LAN URL; open either in a browser to join, or send the LAN one to a friend. The browser client connects back to whoever served it (over `wss://` if the page was secure), so a `--role headless` deploy behind a TLS terminator works the same way. The impairment sliders (latency, jitter, loss) act on the **real** per-connection link and in **both** directions, so a host can show a joiner what 200 ms and 10% loss feel like.
 
 **WASD / arrows** to move, **space** to dash; on a phone, touch and drag anywhere to steer.
 
@@ -36,7 +36,9 @@ Score and size are separate. **Score** is pellets eaten and only goes up. **Mass
 
 ## What you are looking at
 
-Bright pellets are where **your client** thinks they are; faint ones are the server's truth. The gap between them is divergence. Each hole is drawn as a wide disk (where the pull begins, and the body rivals collide with) around a dark core (where a pellet is actually swallowed), so you can watch pellets accelerate through the well rather than vanish at the rim.
+Bright pellets are where **your client** thinks they are; the faint ones underneath are the **server ghost**, and the gap between them is divergence. A hollow ring shows where the server really has *your* hole, which is the one entity drawn anywhere other than where the authority puts it. Watch that ring open during a grapple and close when you break away: collision separation between holes is deliberately left unpredicted, and the ring is where that residual lives. The ghost is on by default and has a switch, in every role. A host's ring is the server's state now, so its gap is prediction error alone; a joiner's is the newest sample it received, which is received state rather than a privilege, so its gap is that error plus how stale the sample is. The faint *pellets* are the one part a joiner genuinely cannot have, because under field sync pellet positions are never sent at all, which is the entire point of the mode.
+
+**This ghost means something different from [horde's](../horde_playground/), because the two clients have different architectures**, and it is worth knowing rather than flattening. Horde buffers packets and plays them out on a render clock, so its ghost is the *future* it already holds and the gap is the playout delay. This client applies a packet on arrival and predicts forward from it, so its ghost sits *behind* the marker and the gap is prediction error. Same word, opposite side, because one client renders in the past and the other predicts into the present. Each hole is drawn as a wide disk (where the pull begins, and the body rivals collide with) around a dark core (where a pellet is actually swallowed), so you can watch pellets accelerate through the well rather than vanish at the rim.
 
 | Control | What it shows |
 |---|---|
@@ -45,6 +47,9 @@ Bright pellets are where **your client** thinks they are; faint ones are the ser
 | **correct the deepest first** | a targeting policy that measurement says is much worse than plain rotation |
 | **cull the field by view distance** | the deliberate mistake: gravity is long range, so hiding a distant hole makes local physics wrong |
 | **aggregate the far field (angle)** | the third option: distant holes are replaced by one stand-in at their centre of mass, so nothing is deleted, only blurred. Turn the crowd up to 64 first, then compare it against culling |
+| **latency / jitter / loss** | real impairment on real connections, in both directions. Delivery stays ordered, because the transport underneath is TCP and an impairment link that reorders invents failures the real one cannot |
+| **predict the dash burst** | on by default; turn it off to feel the cost of leaving an ability unpredicted. Two shadow predictors run the same gameplay differing only in this flag, so the readout answers whether it earns its keep without you having to remember how the last run felt |
+| **server ghost** | the authoritative pellets and your hole's real position, drawn faintly underneath. On by default, and this is the example that needs it most: the hole is a *forced* entity, so its prediction is the hardest thing here and three separate bugs in it once wore one symptom |
 
 ## What it measured
 
@@ -109,9 +114,15 @@ Three things in that table are worth more than the technique itself.
 
 **Building the tree over a fitted bounding box was a real bug and a quiet one.** The first version derived the root cell from the current extent of the holes, so one hole drifting outward re-centred the entire subdivision, cluster membership changed for reasons having nothing to do with the holes in it, and the client's field twitched every packet. Pinning the root cell to the arena fixed a 15% median error regression that no test would have caught, because everything still ran and every total still added up. The primitive now offers `build_in` for exactly this and its docs say to prefer it.
 
+## The straggler that carried a fixed bug for weeks
+
+Worth recording here rather than only in [LEARNINGS.md](../LEARNINGS.md), because this example was the straggler. `client_utils::net_sim::LatencyLink` gained ordered delivery, since WebSocket is TCP and cannot reorder, and an impairment link that can produce a failure the real transport cannot manufactures red herrings: a full diagnostic cycle in the horde example went into a reordering hypothesis that was a property of the tooling. Horde was migrated onto the fixed link. This example kept a private copy, and that copy was still the unclamped version.
+
+It was not harmless. At the shipped defaults, 15 ms of jitter against a roughly 16 ms send interval, it could hand its own client an older frame after a newer one, and the pellet stream has no tolerance for that at all because `swallowed` and `spawned` are order-sensitive. **A fix applied to one of two copies is a fix half the codebase does not have**, and the rule is not "extract early" but "extract, then go and find the other copy". The reason the copy existed is its own lesson: `LatencyLink` was not `Clone`, and a plaza state must be `Clone`, so **derives are part of the API contract** and a primitive that cannot sit inside application state will be reimplemented.
+
 ## How it is built
 
-Depends on `plaza_client_utils` (for the deterministic `net_sim` link) and `plaza_server_utils` (for the aggregation tree). No relevance grid, which is itself part of the lesson: you cannot cull the inputs to a simulation the way you cull what you draw, and aggregation is what you reach for instead.
+Depends on `plaza_client_utils` (for the deterministic `net_sim` link and the prediction bundle) and `plaza_server_utils` (for the aggregation tree, seats and rate meters). No relevance grid, which is itself part of the lesson: you cannot cull the inputs to a simulation the way you cull what you draw, and aggregation is what you reach for instead.
 
 - **The shared step** ([src/sim/types.rs](src/sim/types.rs)): `step_pellet` is the one function both sides run. Semi-implicit Euler at a fixed timestep, with a small softening term so the well stays steep near the core, which is what makes the pull accelerate inward instead of feeling uniform.
 - **Server** ([src/sim/server.rs](src/sim/server.rs)): integrates the field, and is authoritative for the two things that are actually *decisions*: what got swallowed, and what happened when two players touched. Pellet motion is not a decision, it is a consequence, so it is not replicated under field sync.
@@ -119,7 +130,7 @@ Depends on `plaza_client_utils` (for the deterministic `net_sim` link) and `plaz
 
 The simulation is headless and is where the tests live (`cargo test -p blackhole_playground`). `cargo run --release -p blackhole_playground --example report` prints the tables above.
 
-**The networked layer wraps that headless sim without changing it** ([src/net/](src/net/)). The server side is `plaza` core (`StateController`, `StateLogic`, `TickDriver`) over `plaza_session` (`ActixWsPlazaSession`); the arena buffers each seat's input and drains it on the tick, exactly the shape the offline `advance_seats` already had. The client side is `plaza_client_utils` (`PredictedPlayer` for your own hole, `ClockSyncEstimator`, `RttEstimator`) over a new `plaza_ws::Socket`. Cargo features name what you want to build rather than the crates behind them: `client`, `server` (not available on `web`), `native`, `web`, `websocket`. The host keeps every control and readout because it is the server and a client in one process, publishing a `HostView` of the truth each send round for its own omniscient half.
+**The networked layer wraps that headless sim without changing it** ([src/net/](src/net/)). The server side is `plaza` core (`StateController`, `StateLogic`, `TickDriver`) over `plaza_session` (`ActixWsPlazaSession`); the arena buffers each seat's input and drains it on the tick, exactly the shape the offline `advance_seats` already had. The client side is `plaza_client_utils` (`PredictedPlayer` for your own hole, `CorrectionMonitor` to say whether a correction was abnormal, `ClockSyncEstimator`, `RttEstimator`) over a `plaza_ws::Socket`. The hole is the reason `PredictedPlayer` carries a prediction **context**: it is a *forced* entity, so the client's copy of the rule needs the gravitational field to run, and before the context existed this example was smuggling the whole field through every buffered input. It is also why `set_active` exists, because an eliminated hole is frozen by the server through a respawn delay and a client that keeps integrating into it invents a correction stream entirely of its own making. Cargo features name what you want to build rather than the crates behind them: `client`, `server` (not available on `web`), `native`, `web`, `websocket`. The host keeps every control and readout because it is the server and a client in one process, publishing a `HostView` of the truth each send round for its own omniscient half.
 
 ## Notes
 

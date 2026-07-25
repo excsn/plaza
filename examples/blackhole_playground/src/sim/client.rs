@@ -9,6 +9,7 @@
 //! makes the client do the work; particle sync costs thousands of positions and
 //! makes the client do nothing.
 
+use plaza_client_utils::FixedTimestep;
 use std::collections::BTreeMap;
 
 use crate::sim::types::{step_pellet, Attractor, BlackHole, Controls, Packet, Pellet, PelletId, PlayerId, SyncMode, Vec2, SIM_DT};
@@ -33,7 +34,9 @@ pub struct Client {
   /// the server uses. Integrating with the raw frame delta instead is a slightly
   /// different timestep, and in a divergent system that alone pulls the two
   /// simulations apart.
-  sim_accum_ms: u64,
+  /// The same fixed step the server runs. Same rule *and* same timestep, or the
+  /// two integrations are not the same simulation at all.
+  sim: FixedTimestep,
   /// Corrections applied, so the cost of staying converged is visible.
   pub corrections_applied: u64,
 }
@@ -46,7 +49,7 @@ impl Client {
       field: Vec::new(),
       pellets: BTreeMap::new(),
       now_ms: 0,
-      sim_accum_ms: 0,
+      sim: FixedTimestep::from_step_ms((SIM_DT * 1000.0) as u64),
       corrections_applied: 0,
     }
   }
@@ -120,15 +123,10 @@ impl Client {
     if controls.mode != SyncMode::Field {
       return;
     }
-    // Fixed step, matching the server exactly. Same rule *and* same timestep, or
-    // the two integrations are not the same simulation at all.
-    self.sim_accum_ms += dt_ms;
-    let step_ms = (SIM_DT * 1000.0) as u64;
     let field = self.field.clone();
-    while self.sim_accum_ms >= step_ms {
-      self.sim_accum_ms -= step_ms;
+    for step_ms in self.sim.advance(dt_ms) {
       for pellet in self.pellets.values_mut() {
-        step_pellet(pellet, &field, SIM_DT);
+        step_pellet(pellet, &field, step_ms as f32 / 1000.0);
       }
     }
   }

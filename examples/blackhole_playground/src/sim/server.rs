@@ -5,6 +5,7 @@
 //! consequence of the field, and every client can derive it. Swallowing and
 //! collisions are decisions, and only the server makes them.
 
+use plaza_client_utils::{FixedTimestep, Periodic};
 use plaza_server_utils::aggregate::{AggregateTree, WeightedPoint};
 
 use crate::sim::types::{
@@ -28,8 +29,13 @@ pub struct Server {
   pub pellets: Vec<Pellet>,
 
   clock_ms: u64,
-  sim_accum_ms: u64,
-  sync_accum_ms: u64,
+  /// Simulation time, spent in whole fixed steps. The step has to be the same one
+  /// the client uses, which is why it is taken from here rather than passed in.
+  sim: FixedTimestep,
+  /// When to build the next round of packets. Its interval is a live setting, so
+  /// dragging the send-rate slider takes effect from now rather than restarting
+  /// the period.
+  sync: Periodic,
   /// Rotating cursor, so corrections cover every pellet in turn rather than
   /// refreshing the same few forever.
   correction_cursor: usize,
@@ -73,8 +79,8 @@ impl Server {
       holes,
       pellets,
       clock_ms: 0,
-      sim_accum_ms: 0,
-      sync_accum_ms: 0,
+      sim: FixedTimestep::from_step_ms((SIM_DT * 1000.0) as u64),
+      sync: Periodic::new(1),
       correction_cursor: 0,
       dash_until_ms: vec![0; player_count],
       dash_ready_ms: vec![0; player_count],
@@ -129,19 +135,18 @@ impl Server {
   /// has: some seats are people, the rest are bots, and the set changes as
   /// players come and go.
   pub fn advance_seats(&mut self, dt_ms: u64, seats: &[Seat], controls: &Controls) -> Vec<(PlayerId, Packet)> {
-    self.clock_ms += dt_ms;
-    self.sim_accum_ms += dt_ms;
-
-    let step_ms = (SIM_DT * 1000.0) as u64;
-    while self.sim_accum_ms >= step_ms {
-      self.sim_accum_ms -= step_ms;
+    // The clock tracks *simulated* time, not wall time. They are the same thing
+    // until the step cap refuses to catch up on a long stall, and a packet's
+    // `server_time_ms` has to say when its state is from: a client integrates the
+    // field forward by that packet's age, so a clock ahead of the state it
+    // describes would make every client over-integrate.
+    for step_ms in self.sim.advance(dt_ms) {
+      self.clock_ms += step_ms;
       self.step(seats);
     }
 
-    self.sync_accum_ms += dt_ms;
-    let interval = controls.sync_interval_ms();
-    if self.sync_accum_ms >= interval {
-      self.sync_accum_ms -= interval;
+    self.sync.set_interval_ms(controls.sync_interval_ms());
+    if self.sync.due(dt_ms) {
       return self.build_packets(controls);
     }
     Vec::new()

@@ -9,14 +9,17 @@ default = ["native", "client", "server", "websocket"]
 # What a person wants to build, not the crates behind it.
 client = []
 # Not available on `web`: a browser cannot accept incoming connections.
-server = ["dep:plaza", "dep:plaza_session", "dep:actix-web", "dep:actix-files", "dep:tokio", "dep:async-trait", "dep:tracing", "dep:tracing-subscriber"]
+server = ["dep:plaza", "dep:plaza_session", "dep:actix-web", "dep:tokio", "dep:async-trait", "dep:tracing"]
 native = ["plaza_ws/native"]
 web = ["client", "websocket", "plaza_ws/miniquad"]
-websocket = ["dep:plaza_ws", "dep:plaza_wire", "dep:serde_json"]
+websocket = ["dep:plaza_ws", "plaza_ws/json", "dep:plaza_wire", "dep:serde_json"]
 
 [dependencies]
 plaza_client_utils = { path = "../../client_utils", features = ["net-sim"] }
 plaza_server_utils = { path = "../../server_utils" }
+# The listen-server roles, shared with the other playground. Unconditional and
+# dependency-free, so the wasm client and the server share one definition.
+playground_common = { path = "../playground_common" }
 parking_lot = "0.12"
 serde = { workspace = true }
 serde_json = { version = "^1", optional = true }
@@ -24,17 +27,20 @@ serde_json = { version = "^1", optional = true }
 plaza_ws = { path = "../../ws_client", default-features = false, optional = true }
 plaza_wire = { path = "../../wire", optional = true }
 plaza = { path = "../../core", optional = true }
-plaza_session = { path = "../../session", features = ["actix_ws"], optional = true }
+plaza_session = { path = "../../session", features = ["actix_ws", "actix_host"], optional = true }
 actix-web = { version = "^4", optional = true }
-actix-files = { version = "^0.6", optional = true }
 tokio = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
-tracing-subscriber = { workspace = true, optional = true }
 
 # egui-macroquad is a bridge crate pinned to matching macroquad/egui versions.
 macroquad = "=0.4.15"
 egui-macroquad = "=0.17.3"
+
+# Not the same dependency as the optional runtime one above: this is the
+# build-script half, which only hashes source files and needs none of serde.
+[build-dependencies]
+plaza_wire = { path = "../../wire", default-features = false, features = ["build"] }
 
 [lib]
 name = "blackhole_playground"

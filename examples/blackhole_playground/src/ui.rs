@@ -48,6 +48,14 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls) {
   ui.add(egui::Slider::new(&mut controls.sync_hz, 1..=60).text("send rate (Hz)"));
   ui.add(egui::Slider::new(&mut controls.latency_ms, 0..=400).text("latency ms"));
   ui.add(egui::Slider::new(&mut controls.jitter_ms, 0..=150).text("jitter ms"));
+  ui.add(egui::Slider::new(&mut controls.loss_pct, 0.0..=40.0).text("packet loss %"));
+
+  ui.separator();
+  ui.label(egui::RichText::new("your hole").strong());
+  ui.checkbox(&mut controls.predict_dash, "predict the dash burst")
+    .on_hover_text("On: the hole moves at dash speed the instant the press is granted, so the burst is smooth. Off: the dash is unpredicted and the hole snaps forward a round trip later. Flip it while dashing to feel the difference the prediction makes.");
+  ui.checkbox(&mut controls.show_ghost, "server ghost (the last authoritative sample)")
+    .on_hover_text("On by default. Faint pellets are the server's own integration, and the hollow ring is where the server has your hole. Unlike horde, this client applies a packet on arrival and predicts forward from it rather than buffering a delayed timeline, so the ring is behind your marker, not ahead: the gap is prediction error plus how stale the sample is. Watch it open during a grapple, where collision separation is deliberately unpredicted, and close once you break away.");
 }
 
 /// Returns true when a control changed that needs the world rebuilt.
@@ -102,7 +110,7 @@ pub fn draw_ui(world: &World, controls: &mut Controls) -> bool {
 /// server truth, and a joiner does not have it. Showing them anyway would mean
 /// inventing numbers.
 #[cfg(all(feature = "client", feature = "websocket"))]
-pub fn draw_net_ui(client: &blackhole_playground::net::client::NetClient, url: &str, role: blackhole_playground::role::Role) {
+pub fn draw_net_ui(client: &blackhole_playground::net::client::NetClient, url: &str, role: blackhole_playground::role::Role, controls: &mut Controls) {
   use blackhole_playground::net::client::Status;
 
   egui_macroquad::ui(|ctx| {
@@ -127,6 +135,19 @@ pub fn draw_net_ui(client: &blackhole_playground::net::client::NetClient, url: &
       };
       ui.label(format!("frames applied: {}", client.frames_seen));
       ui.label(format!("pellets held: {}", client.sim.known_pellets()));
+      let (_, abnormal) = client.monitor.counts();
+      ui.label(format!(
+        "hole corrections: {:.1}px typical, {abnormal} abnormal, {:.0}px worst",
+        client.monitor.norm(),
+        client.monitor.peak()
+      ))
+      .on_hover_text("What reconciling your own hole costs. 'Abnormal' counts corrections that stood out against the running norm rather than against a fixed number, so it stays meaningful as the send rate and latency change.");
+      ui.label(format!(
+        "dash A/B (avg correction): predicted {:.1}px vs unpredicted {:.1}px",
+        client.ab_dash_monitor.norm(),
+        client.ab_nodash_monitor.norm()
+      ))
+        .on_hover_text("Two shadow predictions on the same gameplay, one predicting the dash and one not. If 'predicted' is the smaller number, the dash prediction is earning its keep.");
       if let Some(policy) = client.policy {
         ui.separator();
         // The host owns these. Shown read-only rather than hidden: a joiner
@@ -141,6 +162,12 @@ pub fn draw_net_ui(client: &blackhole_playground::net::client::NetClient, url: &
 
       ui.separator();
       ui.label(egui::RichText::new("try it").weak());
+      ui.separator();
+      ui.label(egui::RichText::new("your view").strong());
+      ui.checkbox(&mut controls.show_ghost, "server ghost (the last authoritative sample)")
+        .on_hover_text("On by default. The faint ring is where the last frame put your hole, which is received state rather than anything privileged. This client applies a packet on arrival and predicts forward from it, so the ring sits behind your marker and the gap is prediction error plus how stale the sample is. Watch it open during a grapple, where collision separation between holes is deliberately left unpredicted.");
+
+      ui.separator();
       ui.label("WASD / arrows to move, space to dash.");
       ui.label("On a phone: touch and drag anywhere to steer.");
       ui.label("Others join at this host's address.");

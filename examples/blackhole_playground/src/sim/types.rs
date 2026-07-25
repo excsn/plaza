@@ -282,6 +282,13 @@ pub enum SyncMode {
 pub struct Controls {
   pub latency_ms: u64,
   pub jitter_ms: u64,
+  /// Percentage of packets the impairment link drops.
+  ///
+  /// Worth having even though this example has no delta stream to recover: a
+  /// dropped frame here means a whole send interval's worth of corrections never
+  /// lands, and the local field integration carries on regardless, so it shows
+  /// what running on stale forces costs.
+  pub loss_pct: f32,
   pub sync_hz: u32,
   pub mode: SyncMode,
   /// Under field sync: how many pellets are corrected per packet. Zero means the
@@ -319,6 +326,35 @@ pub struct Controls {
   /// hole, so both the wire cost and the compute cost scale with this.
   pub player_count: usize,
   pub smooth: bool,
+  /// Predict the dash burst locally instead of letting it arrive as a correction.
+  /// On, the local hole moves at dash speed the instant the press is granted, so
+  /// the burst is smooth; off, the dash is unpredicted and the hole snaps forward
+  /// a round trip later. A client-side choice, so it rides in `Controls` next to
+  /// `smooth` rather than in the server policy.
+  pub predict_dash: bool,
+  /// Draw where the last frame put your hole, faintly, under where you predict
+  /// it is.
+  ///
+  /// **This means something different from horde's ghost, because the two
+  /// clients have different architectures**, and flattening the two would be
+  /// worse than the extra sentence. Horde buffers packets and plays them out on a
+  /// render clock, so its ghost is the *future* it already holds and the gap is
+  /// the playout delay. This client applies a packet on arrival and predicts
+  /// forward from it, so its ghost is the newest authoritative sample and the gap
+  /// is prediction error plus the one-way delay the sample is old. That is the
+  /// classic server ghost, the same quantity `netcode_playground` draws.
+  ///
+  /// **On by default**, and this example is the one that needs it most. The hole
+  /// is a *forced* entity, pulled by every other hole and pushed out of every
+  /// overlap, so its prediction is the hardest thing here and three separate bugs
+  /// in it wore one symptom. Each was found by reading a correction log, which is
+  /// a slower way of seeing what a ring next to the marker shows directly.
+  ///
+  /// **Every role has one.** A host's ring is the server's state *now*, because
+  /// it is the server, so its gap is prediction error alone. A joiner's is the
+  /// newest sample it received, which is not a privilege, and its gap is that
+  /// error plus how stale the sample is.
+  pub show_ghost: bool,
 }
 
 impl Default for Controls {
@@ -326,6 +362,7 @@ impl Default for Controls {
     Self {
       latency_ms: 80,
       jitter_ms: 15,
+      loss_pct: 0.0,
       sync_hz: 16,
       mode: SyncMode::Field,
       corrections_per_packet: 40,
@@ -335,6 +372,8 @@ impl Default for Controls {
       pellet_count: 2000,
       player_count: 8,
       smooth: true,
+      predict_dash: true,
+      show_ghost: true,
     }
   }
 }

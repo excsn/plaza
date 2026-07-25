@@ -23,9 +23,10 @@ use parking_lot::Mutex;
 use plaza::session::{MessageTarget, TargetedOp};
 use plaza::state_logic::{LogicInput, LogicOutput, StateLogic, StateLogicError};
 use plaza::Agent;
-use plaza_client_utils::net_sim::Rng;
+use plaza_client_utils::net_sim::{LatencyLink, Rng};
+use plaza_server_utils::{RateMeter, SeatTable, Seating};
 
-use crate::sim::protocol::{Op, ServerPolicy};
+use crate::sim::protocol::{Op, ServerPolicy, PROTOCOL};
 use crate::sim::server::{Seat, Server};
 use crate::sim::types::{BlackHole, Controls, Packet, Pellet, PlayerId, Vec2, CLUSTER_BYTES, HOLE_BYTES};
 
@@ -70,34 +71,25 @@ pub struct HostView {
   /// is measured against, and the number culling quietly drops below.
   pub truth_field_weight: f32,
 
-  bytes_sent: u64,
-  packets_sent: u64,
-  corrections_sent: u64,
-  hole_bytes: u64,
-  /// Server clock, for turning byte totals into rates.
-  uptime_ms: u64,
+  bytes: RateMeter,
+  corrections: RateMeter,
+  hole_bytes: RateMeter,
 }
 
 impl HostView {
   pub fn bytes_per_sec(&self) -> f64 {
-    if self.uptime_ms == 0 {
-      return 0.0;
-    }
-    self.bytes_sent as f64 / (self.uptime_ms as f64 / 1000.0)
+    self.bytes.per_sec()
   }
 
+  /// What share of the wire the field itself costs, which is the example's whole
+  /// question: sending a field instead of its consequences is only a win if the
+  /// field is small.
   pub fn hole_bytes_share(&self) -> f64 {
-    if self.bytes_sent == 0 {
-      return 0.0;
-    }
-    self.hole_bytes as f64 / self.bytes_sent as f64
+    self.hole_bytes.share_of(&self.bytes)
   }
 
   pub fn mean_corrections_per_packet(&self) -> f64 {
-    if self.packets_sent == 0 {
-      return 0.0;
-    }
-    self.corrections_sent as f64 / self.packets_sent as f64
+    self.corrections.mean()
   }
 }
 
@@ -107,36 +99,21 @@ impl HostView {
 /// The offline playground delayed the down-link with a client-side `LatencyLink`.
 /// Here the host is a real server, so the impairment has to sit on the real
 /// outbound path, which is what makes the latency and jitter sliders act on a
-/// link instead of a simulation. Kept `Clone` because the arena state must be
-/// (plaza clones it for a state query, never on the hot path), and `LatencyLink`
-/// is not, so this is the same delay queue with a derivable clone.
-#[derive(Clone, Debug, Default)]
-struct Downlink {
-  /// `(deliver_at_ms, frame)`, drained oldest-delivery-first.
-  queue: Vec<(u64, Packet)>,
-}
-
-impl Downlink {
-  fn send(&mut self, now_ms: u64, packet: Packet, latency_ms: u64, jitter_ms: u64, rng: &mut Rng) {
-    let deliver_at = now_ms + latency_ms + rng.up_to(jitter_ms);
-    self.queue.push((deliver_at, packet));
-  }
-
-  fn drain_due(&mut self, now_ms: u64) -> Vec<Packet> {
-    let mut due: Vec<(u64, Packet)> = Vec::new();
-    let mut kept: Vec<(u64, Packet)> = Vec::new();
-    for (at, packet) in self.queue.drain(..) {
-      if at <= now_ms {
-        due.push((at, packet));
-      } else {
-        kept.push((at, packet));
-      }
-    }
-    self.queue = kept;
-    due.sort_by_key(|(at, _)| *at);
-    due.into_iter().map(|(_, p)| p).collect()
-  }
-}
+/// link instead of a simulation.
+///
+/// [`LatencyLink`] defaults to ordered delivery, which is what this needs and why
+/// it is used directly rather than reimplemented here. A WebSocket is TCP: frames
+/// arrive in the order they were sent and jitter shows up as bursty delay, not
+/// shuffling. A private copy of this used to add jitter without clamping against
+/// the previous frame's delivery time, so at the default 15 ms of jitter against a
+/// ~16 ms send interval it could hand the client an older frame after a newer one.
+/// Nothing downstream tolerates that: [`Packet::swallowed`] and [`Packet::spawned`]
+/// are order-sensitive, so a late frame could resurrect a swallowed pellet or drop
+/// a respawned one. It modelled a UDP link this transport is not.
+///
+/// [`Packet::swallowed`]: crate::sim::types::Packet::swallowed
+/// [`Packet::spawned`]: crate::sim::types::Packet::spawned
+type Downlink = LatencyLink<Packet>;
 
 /// Everything the arena owns. `plaza` requires `Clone` for its state-query
 /// command; nothing on the hot path clones it.
@@ -144,11 +121,10 @@ impl Downlink {
 pub struct Arena {
   pub sim: Server,
   pub controls: Controls,
-  /// Which hole each connected player is driving.
-  seats: HashMap<PlayerKey, usize>,
-  /// Seats nobody holds. Bots drive these, so an empty arena is still a game
-  /// and a joiner never waits for the world to become interesting.
-  free: Vec<usize>,
+  /// Which hole each connected player is driving. Seats nobody holds are driven
+  /// by bots, so an empty arena is still a game and a joiner never waits for the
+  /// world to become interesting.
+  seats: SeatTable<PlayerKey>,
   /// The newest input for each seat, applied on the next tick.
   pending: Vec<Seat>,
   /// Dash is an edge, not a level: it must fire once, on the tick after it is
@@ -167,10 +143,9 @@ pub struct Arena {
   /// Wire accounting, summed across send rounds for the host's bandwidth
   /// readouts. Reset when the world is rebuilt, so a rate is over the current
   /// world rather than every world since launch.
-  bytes_sent: u64,
-  packets_sent: u64,
-  corrections_sent: u64,
-  hole_bytes: u64,
+  bytes: RateMeter,
+  corrections: RateMeter,
+  hole_bytes: RateMeter,
 }
 
 impl Arena {
@@ -180,17 +155,15 @@ impl Arena {
     Self {
       sim,
       controls,
-      seats: HashMap::new(),
-      free: (0..seats).collect(),
+      seats: SeatTable::new(seats),
       pending: vec![Seat::Bot; seats],
       dash_requests: vec![false; seats],
       acked: HashMap::new(),
       down: HashMap::new(),
       rng: Rng::new(IMPAIR_SEED),
-      bytes_sent: 0,
-      packets_sent: 0,
-      corrections_sent: 0,
-      hole_bytes: 0,
+      bytes: RateMeter::new(),
+      corrections: RateMeter::new(),
+      hole_bytes: RateMeter::new(),
     }
   }
 
@@ -204,29 +177,24 @@ impl Arena {
   /// to every returned seat so nobody is left playing against a world that no
   /// longer exists.
   fn reconfigure(&mut self, controls: Controls) -> Vec<(PlayerKey, usize)> {
-    let old_keys: Vec<PlayerKey> = self.seats.keys().copied().collect();
     let seats = controls.player_count;
     self.controls = controls;
     self.sim = Server::new(controls.pellet_count, seats);
-    self.free = (0..seats).collect();
     self.pending = vec![Seat::Bot; seats];
     self.dash_requests = vec![false; seats];
-    self.seats.clear();
     self.acked.clear();
     self.down.clear();
-    self.bytes_sent = 0;
-    self.packets_sent = 0;
-    self.corrections_sent = 0;
-    self.hole_bytes = 0;
-
-    let mut welcomed = Vec::new();
-    for key in old_keys {
-      if let Some(seat) = self.free.pop() {
-        self.seats.insert(key, seat);
-        welcomed.push((key, seat));
-      }
+    // The rates are over the current world, not every world since launch.
+    for meter in self.meters() {
+      meter.reset();
     }
-    welcomed
+
+    self.seats.reseat_all(seats)
+  }
+
+  /// Every counter, for the operations that apply to all of them at once.
+  fn meters(&mut self) -> [&mut RateMeter; 3] {
+    [&mut self.bytes, &mut self.corrections, &mut self.hole_bytes]
   }
 
   /// The omniscient snapshot the host reads. Cheap fields plus one clone of the
@@ -243,11 +211,9 @@ impl Arena {
       eliminations: self.sim.eliminations,
       mass_drained: self.sim.mass_drained,
       truth_field_weight: self.sim.holes.iter().filter(|h| h.alive).map(|h| h.effective_mass()).sum(),
-      bytes_sent: self.bytes_sent,
-      packets_sent: self.packets_sent,
-      corrections_sent: self.corrections_sent,
+      bytes: self.bytes,
+      corrections: self.corrections,
       hole_bytes: self.hole_bytes,
-      uptime_ms: self.sim.now_ms(),
     }
   }
 
@@ -262,7 +228,7 @@ impl Arena {
   }
 
   pub fn seat_of(&self, key: &PlayerKey) -> Option<usize> {
-    self.seats.get(key).copied()
+    self.seats.seat_of(key)
   }
 
   /// Seats a joiner, or refuses when the arena is full.
@@ -270,22 +236,21 @@ impl Arena {
   /// Refusing is a real outcome rather than an assertion: the arena has a fixed
   /// number of holes and a demo people can share is a demo people can overfill.
   fn seat(&mut self, key: PlayerKey) -> Option<usize> {
-    if let Some(seat) = self.seats.get(&key) {
-      return Some(*seat);
+    let seating = self.seats.seat(key);
+    if let Seating::Fresh(seat) = seating {
+      // A rejoin keeps whatever it was doing; only a new occupant starts clean.
+      self.pending[seat] = Seat::Bot;
+      self.dash_requests[seat] = false;
     }
-    let seat = self.free.pop()?;
-    self.seats.insert(key, seat);
-    self.pending[seat] = Seat::Bot;
-    Some(seat)
+    seating.index()
   }
 
   fn unseat(&mut self, key: &PlayerKey) {
-    if let Some(seat) = self.seats.remove(key) {
+    if let Some(seat) = self.seats.unseat(key) {
       // Handed back to the bots rather than left frozen, so a disconnect does
       // not leave a statue in the arena.
       self.pending[seat] = Seat::Bot;
       self.dash_requests[seat] = false;
-      self.free.push(seat);
     }
     self.acked.remove(key);
     self.down.remove(key);
@@ -352,6 +317,14 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         };
         let mut replies = Vec::new();
         for op in ops {
+          // The uplink, impaired where the sliders are. See the same note in the
+          // horde example: a joiner has no reason to sabotage its own outbound,
+          // so the loss is applied on arrival. `Hello` and `Ping` are control
+          // plane and are left alone.
+          let droppable = matches!(op, Op::Input { .. });
+          if droppable && state.controls.loss_pct > 0.0 && state.rng.unit() * 100.0 < state.controls.loss_pct {
+            continue;
+          }
           match op {
             Op::Input { seq, dx, dy, dash } => {
               // Out-of-order inputs are dropped rather than applied. Under
@@ -374,6 +347,15 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
               let server_ms = state.sim.now_ms();
               replies.push(TargetedOp::new_system_to(key, vec![Op::Pong { origin_ms, server_ms }]));
             }
+            // A client announcing a wire format that is not this one cannot be
+            // reasoned with, only told. Said once, on the client's own first
+            // message, instead of the per-op decode warnings a mismatch
+            // otherwise produces for as long as it stays connected.
+            Op::Hello { protocol } if protocol != PROTOCOL => {
+              tracing::warn!(client = protocol, server = PROTOCOL, "client is on a different wire format, telling it to reload");
+              replies.push(TargetedOp::new_system_to(key, vec![Op::Outdated { server: PROTOCOL, client: protocol }]));
+            }
+            Op::Hello { .. } => {}
             // Everything else is server-to-client. A client sending one is
             // confused or hostile; either way it is not an error worth failing
             // the tick over.
@@ -409,18 +391,22 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         let packets = state.sim.advance_seats(delta_time.as_millis() as u64, &pending, &controls);
         let is_send_round = !packets.is_empty();
         let now = state.sim.now_ms();
+        // Rates are over the simulation's own clock, not wall time, so a test
+        // that runs faster than real time still measures itself honestly.
+        for meter in state.meters() {
+          meter.elapsed(now);
+        }
 
         // Seat index back to the player holding it, so a packet built per seat
         // reaches the right connection.
-        let by_seat: HashMap<usize, PlayerKey> = state.seats.iter().map(|(key, seat)| (*seat, *key)).collect();
+        let by_seat = state.seats.by_seat();
         for (player, packet) in packets {
-          state.bytes_sent += packet.bytes() as u64;
-          state.packets_sent += 1;
-          state.corrections_sent += packet.corrections.len() as u64;
-          state.hole_bytes += (packet.holes.len() * HOLE_BYTES + packet.clusters.len() * CLUSTER_BYTES) as u64;
+          state.bytes.add(packet.bytes() as u64);
+          state.corrections.add(packet.corrections.len() as u64);
+          state.hole_bytes.add((packet.holes.len() * HOLE_BYTES + packet.clusters.len() * CLUSTER_BYTES) as u64);
           if let Some(key) = by_seat.get(&(player as usize)) {
             let entry = state.down.entry(*key).or_default();
-            entry.send(now, packet, controls.latency_ms, controls.jitter_ms, &mut state.rng);
+            entry.send(now, packet, controls.latency_ms, controls.jitter_ms, controls.loss_pct, &mut state.rng);
           }
         }
 
@@ -520,7 +506,7 @@ mod tests {
 
     let v = view.lock();
     assert!(!v.holes.is_empty() && !v.pellets.is_empty(), "the omniscient view is populated");
-    assert!(v.bytes_sent > 0 && v.uptime_ms > 0, "bandwidth accounting accrues");
+    assert!(v.bytes_per_sec() > 0.0, "bandwidth accounting accrues");
   }
 
   #[test]
@@ -545,6 +531,37 @@ mod tests {
       later += frames_in(&step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) }));
     }
     assert!(later > 0, "the held frames arrive once the delay passes");
+  }
+
+  #[test]
+  fn jitter_delays_frames_but_never_reorders_them() {
+    // Regression. The impairment used to be a private delay queue that drew a
+    // delivery time per frame without clamping against its predecessor, so jitter
+    // comparable to the send interval let an older frame land after a newer one.
+    // A WebSocket cannot do that, and nothing downstream tolerates it: `swallowed`
+    // and `spawned` are order-sensitive, so a late frame resurrects a pellet the
+    // client already ate. Jitter far larger than the gap between sends is the case
+    // that shuffles if the clamp is missing.
+    let controls = Controls { latency_ms: 40, jitter_ms: 300, sync_hz: 60, ..Controls::default() };
+    let (cs, _view) = slots(controls);
+    let logic = ArenaLogic::new(cs, None);
+    let mut state = Arena::new(controls);
+    step(&logic, &mut state, LogicInput::AgentJoined { agent: Agent::new_human(1u64, "p1") });
+
+    let mut stamps: Vec<u64> = Vec::new();
+    for _ in 0..200 {
+      let out = step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
+      for op in &out.ops {
+        if let Some(Op::Frame(packet)) = op.ops.first() {
+          stamps.push(packet.server_time_ms);
+        }
+      }
+    }
+
+    assert!(stamps.len() > 20, "the test never delivered enough frames to judge: {}", stamps.len());
+    let mut sorted = stamps.clone();
+    sorted.sort_unstable();
+    assert_eq!(stamps, sorted, "frames were delivered out of the order they were sent");
   }
 
   #[test]
