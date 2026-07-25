@@ -98,7 +98,14 @@ pub enum Op {
   Players(PlayerFrame),
   /// The newest movement input this player's state accounts for.
   InputAck { seq: u64 },
-  /// This connection cannot meet the arena's input schedule, so it was not
+  /// This connection was measured and belongs in a different arena. Reconnect
+  /// there.
+  ///
+  /// The useful answer to a link that does not fit *this* room, and the reason
+  /// the decision wants a lobby rather than a room: a room can only refuse, and
+  /// a lobby can say where. [`Op::Refused`] is what is left when nothing fits.
+  Placed { room: u32, name: String, endpoint: String, measured_ms: u32 },
+  /// This connection cannot meet **any** arena's input schedule, so it was not
   /// seated.
   ///
   /// Refusing at the door rather than seating and then silently dropping every

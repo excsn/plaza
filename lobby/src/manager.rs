@@ -228,18 +228,8 @@ where
   /// Ordered by how tight a fit each room is, so a fast connection is not sent
   /// to the room built for slow ones and made to pay its schedule.
   pub fn rooms_playable_at(&self, one_way_ms: u32) -> Vec<RoomMetadata<F::CustomGameSettings>> {
-    let mut rooms: Vec<_> = self
-      .rooms
-      .lock()
-      .values()
-      .map(|handle| handle.metadata())
-      .filter(|m| m.current_players < m.max_players)
-      .filter(|m| m.max_one_way_ms.is_none_or(|allowed| one_way_ms <= allowed))
-      .collect();
-    // A room with no limit sorts last: it will take anybody, so it is the
-    // fallback rather than the first choice.
-    rooms.sort_by_key(|m| m.max_one_way_ms.unwrap_or(u32::MAX));
-    rooms
+    let rooms: Vec<_> = self.rooms.lock().values().map(|handle| handle.metadata()).collect();
+    crate::routing::playable_at(one_way_ms, rooms)
   }
 
   /// Removes rooms whose controller task has ended.

@@ -190,6 +190,19 @@ async fn offline() {
   }
 }
 
+/// Swaps the path of a socket URL, keeping scheme, host and port.
+///
+/// A placement names a path rather than a whole address on purpose: the arena
+/// does not know what hostname a client reached it by, and inventing one is how
+/// a redirect sends somebody to a machine they cannot route to.
+#[cfg(all(feature = "client", feature = "websocket"))]
+fn redirect(current: &str, path: &str) -> String {
+  match current.find("://").and_then(|i| current[i + 3..].find('/').map(|j| i + 3 + j)) {
+    Some(cut) => format!("{}{path}", &current[..cut]),
+    None => format!("{current}{path}"),
+  }
+}
+
 /// Waits a few frames for a freshly spawned host to bind before dialling it.
 #[cfg(all(feature = "client", feature = "websocket"))]
 async fn wait_for_arena() {
@@ -213,7 +226,8 @@ async fn networked(
   if options.role.runs_a_server() {
     wait_for_arena().await;
   }
-  let url = if options.role == Role::Client {
+  #[allow(unused_mut)]
+  let mut url = if options.role == Role::Client {
     #[cfg(all(feature = "web", target_arch = "wasm32"))]
     {
       plaza_ws::miniquad::page_url()
@@ -250,6 +264,24 @@ async fn networked(
     let dt_ms = ((get_frame_time() * 1000.0) as u64).min(100);
     now_ms += dt_ms;
     client.poll(now_ms, &controls_now);
+
+    // Measured and sent to an arena that can carry this link. Reconnecting is
+    // the client's half of placement, and it is the whole difference between
+    // being told where to go and being turned away.
+    if let Status::Placed { endpoint, .. } = &client.status {
+      let target = redirect(&url, endpoint);
+      println!("placed in another arena: {url} -> {target}");
+      match NetClient::connect(&target) {
+        Ok(next) => {
+          client = next;
+          url = target;
+          continue;
+        }
+        Err(e) => {
+          client.status = Status::Gone(format!("could not reach the arena we were placed in: {e}"));
+        }
+      }
+    }
 
     // Keyboard first; a touch drag steers when no key is held, so a desktop is
     // unaffected and a phone gets a floating joystick.
@@ -315,6 +347,10 @@ async fn networked(
         ("inputs are scheduled ahead, so a slower link would lose them entirely".to_owned(), 18.0, GRAY),
       ]),
       Status::NoSeat => centred(&[("the arena is full".to_owned(), 26.0, ORANGE)]),
+      Status::Placed { name, measured_ms, .. } => centred(&[
+        (format!("moving you to the {name} arena"), 28.0, Color::new(0.6, 0.85, 0.7, 1.0)),
+        (format!("your link measured {measured_ms} ms one way, which that one is built for"), 18.0, GRAY),
+      ]),
       Status::Waiting | Status::Playing => {}
     }
 

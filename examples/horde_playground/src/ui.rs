@@ -187,6 +187,10 @@ pub fn draw_net_ui(client: &horde_playground::net::client::NetClient, url: &str,
       let (text, color) = match &client.status {
         Status::Connecting => ("connecting...".to_owned(), egui::Color32::GRAY),
         Status::Measuring => ("checking your connection...".to_owned(), egui::Color32::from_rgb(150, 190, 230)),
+        Status::Placed { name, measured_ms, .. } => (
+          format!("placed in the {name} arena ({measured_ms} ms one way)"),
+          egui::Color32::from_rgb(150, 220, 170),
+        ),
         Status::Refused { measured_ms, allowed_ms } => (
           format!("ping too high: {measured_ms} ms, this arena allows {allowed_ms} ms"),
           egui::Color32::from_rgb(230, 90, 90),

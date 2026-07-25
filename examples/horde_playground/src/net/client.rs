@@ -37,7 +37,9 @@ pub enum Status {
   Waiting,
   Playing,
   NoSeat,
-  /// The server measured this connection and it cannot meet the input schedule.
+  /// Measured, and this arena is the wrong one: reconnect to `endpoint`.
+  Placed { room: u32, name: String, endpoint: String, measured_ms: u32 },
+  /// The server measured this connection and no arena can meet its delay.
   /// Both numbers so the client can say why rather than just decline.
   Refused { measured_ms: u32, allowed_ms: u32 },
   Gone(String),
@@ -312,6 +314,16 @@ impl NetClient {
         Op::InputAck { .. } => {}
         Op::Refused { measured_ms, allowed_ms } => {
           self.status = Status::Refused { measured_ms, allowed_ms };
+        }
+        // Measured and sent somewhere that can carry this link. The caller
+        // reconnects; this client only reports where.
+        Op::Placed { room, name, endpoint, measured_ms } => {
+          self.status = Status::Placed {
+            room,
+            name,
+            endpoint,
+            measured_ms,
+          };
         }
         Op::Pong { origin_ms, server_ms } => {
           self.rtt.observe_pong(origin_ms, now_ms);

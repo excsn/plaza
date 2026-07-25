@@ -170,6 +170,22 @@ So the local player is now drawn from the played-out stream at `RenderAt`, like 
 
 `cargo run --release -p horde_playground --example reversal` is the measurement, including the strategies that were tried and rejected.
 
+## Three arenas, and a placement rather than a door slam
+
+An arena that schedules inputs ahead can only carry a connection whose delay fits the schedule, so **one** arena means one budget and everybody past it is turned away. This host runs three, differing in exactly one setting:
+
+| room | playout delay | carries a link up to |
+|---|---|---|
+| sharp | 50 ms | 114 ms one way |
+| standard | 100 ms | 164 ms one way |
+| relaxed | 300 ms | 364 ms one way |
+
+That table is one trade written three times: a deeper schedule carries a worse connection and costs everybody in that room more input lag. The middle room is the arena that used to be the only one, so the default experience is unchanged and the other two are its tails.
+
+Connect anywhere, get measured, and if this arena cannot carry you the server replies with the one that can and the client reconnects. **Refusal is what is left when nothing fits**, not the primary behaviour, and that is the whole reason the decision wants a lobby: a room can only say yes or no, a lobby can say *where*. The matching rule itself is [`plaza_lobby::routing::best_for`](../../lobby/src/routing.rs), which orders tightest-schedule-first so a fast link is not sent to the room built for slow ones and made to pay its delay.
+
+The placement names a **path**, never a whole address. The arena does not know what hostname a client reached it by, and inventing one is how a redirect sends somebody to a machine they cannot route to.
+
 ## Admission: measured at the door, not seated and then silently broken
 
 The schedule has a ceiling, and it used to be enforced by accident. An input is named for `press + playout_delay` and rejected once it lands more than `input_max_late_ticks` past it, so above about **164 ms one way (330 ms round trip)** every input a player sent was dropped. They were welcomed, given a seat, and could not move, with nothing on screen to say why.

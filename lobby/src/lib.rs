@@ -10,6 +10,7 @@ pub mod factory;
 pub mod manager;
 pub mod op_payloads;
 pub mod room;
+pub mod routing;
 pub mod types;
 
 pub use error::LobbyError;

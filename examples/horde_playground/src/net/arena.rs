@@ -331,10 +331,21 @@ impl Arena {
 /// Returns the minimum round trip seen and how many samples it rests on.
 pub type LatencySource = Arc<dyn Fn(&PlayerKey) -> Option<(Duration, u64)> + Send + Sync>;
 
+/// Where a connection that does not fit *this* arena should go instead.
+///
+/// Takes a measured one-way delay and returns the room that can carry it, or
+/// `None` when nothing can. Refusal is the `None` case rather than the primary
+/// behaviour, which is the whole reason placement is worth wiring at all.
+pub type Router = Arc<dyn Fn(u32) -> Option<(u32, String, String)> + Send + Sync>;
+
 pub struct ArenaLogic {
   controls: Arc<Mutex<Controls>>,
   view: Option<Arc<Mutex<HostView>>>,
   latency: Option<LatencySource>,
+  router: Option<Router>,
+  /// Which room this arena *is*, so it can tell whether a placement is somewhere
+  /// else or right here.
+  room: u32,
 }
 
 impl ArenaLogic {
@@ -343,7 +354,16 @@ impl ArenaLogic {
       controls,
       view,
       latency: None,
+      router: None,
+      room: 0,
     }
+  }
+
+  /// Where to send a connection this arena cannot carry.
+  pub fn with_router(mut self, room: u32, router: Router) -> Self {
+    self.room = room;
+    self.router = Some(router);
+    self
   }
 
   /// Supplies the transport's measurements, without which nothing is ever
@@ -473,6 +493,24 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         }
         for (key, estimate) in decided {
           state.admitting.remove(&key);
+          // Somewhere else that can carry this link, before refusing it.
+          if estimate > budget
+            && let Some(router) = self.router.as_ref()
+            && let Some((room, name, endpoint)) = router(estimate as u32)
+            && room != self.room
+          {
+            tracing::info!(key, estimate_ms = estimate, room, "placing a connection in an arena that can carry it");
+            welcomes.push(TargetedOp::new_system_to(
+              key,
+              vec![Op::Placed {
+                room,
+                name,
+                endpoint,
+                measured_ms: estimate as u32,
+              }],
+            ));
+            continue;
+          }
           if estimate > budget {
             tracing::info!(key, estimate_ms = estimate, budget_ms = budget, "refusing a connection that cannot meet the input schedule");
             welcomes.push(TargetedOp::new_system_to(
@@ -682,6 +720,61 @@ mod tests {
     let mut state = Arena::new(controls);
     admit(&logic, &mut state, &Agent::new_human(1u64, "p1"));
     assert!(state.seat_of(&1).is_some(), "a link inside the budget is seated once it has been measured");
+  }
+
+  #[test]
+  fn a_link_this_arena_cannot_carry_is_placed_rather_than_refused() {
+    // Why placement is worth wiring at all. A room can only say yes or no, so a
+    // single arena turns everybody past its budget away. Given somewhere that
+    // can carry the link, the answer becomes an address instead of a door slam,
+    // and refusal is left for the links no arena can take.
+    let controls = small();
+    let (cs, _view) = slots(controls);
+    let mut state = Arena::new(controls);
+    let budget = state.admission_budget_ms();
+    let elsewhere: Router = Arc::new(|_| Some((7, "relaxed".to_owned(), "/ws/7".to_owned())));
+    let logic = ArenaLogic::new(cs, None)
+      .with_latency(link(budget + 100, ADMIT_SAMPLES))
+      .with_router(0, elsewhere);
+
+    let agent = Agent::new_human(1u64, "p1");
+    step(&logic, &mut state, LogicInput::AgentJoined { agent: agent.clone() });
+
+    let mut placed = None;
+    for _ in 0..8u64 {
+      let out = step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
+      for op in &out.ops {
+        match op.ops.first() {
+          Some(Op::Placed { room, endpoint, .. }) => placed = Some((*room, endpoint.clone())),
+          Some(Op::Refused { .. }) => panic!("refused a link another arena could carry"),
+          _ => {}
+        }
+      }
+    }
+    assert_eq!(placed, Some((7, "/ws/7".to_owned())), "the connection is told where it can play");
+    assert!(state.seat_of(&1).is_none(), "and takes no seat here");
+  }
+
+  #[test]
+  fn a_link_no_arena_can_carry_is_still_refused() {
+    // Placement does not become a way to never say no. When the router finds
+    // nothing, the refusal is what is left, and it still carries both numbers.
+    let controls = small();
+    let (cs, _view) = slots(controls);
+    let mut state = Arena::new(controls);
+    let budget = state.admission_budget_ms();
+    let nowhere: Router = Arc::new(|_| None);
+    let logic = ArenaLogic::new(cs, None)
+      .with_latency(link(budget + 100, ADMIT_SAMPLES))
+      .with_router(0, nowhere);
+
+    step(&logic, &mut state, LogicInput::AgentJoined { agent: Agent::new_human(1u64, "p1") });
+    let mut refused = false;
+    for _ in 0..8u64 {
+      let out = step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
+      refused |= out.ops.iter().any(|o| matches!(o.ops.first(), Some(Op::Refused { .. })));
+    }
+    assert!(refused, "with nowhere to place it, the connection is refused");
   }
 
   #[test]

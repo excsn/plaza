@@ -9,7 +9,7 @@ default = ["native", "client", "server", "websocket"]
 # What a person wants to build, not the crates behind it.
 client = []
 # Not available on `web`: a browser cannot accept incoming connections.
-server = ["dep:plaza", "dep:plaza_session", "dep:actix-web", "dep:tokio", "dep:async-trait", "dep:tracing"]
+server = ["dep:plaza", "dep:plaza_session", "dep:plaza_lobby", "dep:actix-web", "dep:tokio", "dep:async-trait", "dep:tracing"]
 native = ["plaza_ws/native"]
 web = ["client", "websocket", "plaza_ws/miniquad"]
 websocket = ["dep:plaza_ws", "plaza_ws/json", "dep:plaza_wire", "dep:serde_json"]
@@ -30,6 +30,8 @@ plaza_ws = { path = "../../ws_client", default-features = false, optional = true
 plaza_wire = { path = "../../wire", optional = true }
 plaza = { path = "../../core", optional = true }
 plaza_session = { path = "../../session", features = ["actix_ws", "actix_host"], optional = true }
+# For the placement rule alone: which arena can carry a measured link.
+plaza_lobby = { path = "../../lobby", optional = true }
 actix-web = { version = "^4", optional = true }
 tokio = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }

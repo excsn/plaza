@@ -9,6 +9,7 @@
 pub mod arena;
 #[cfg(feature = "server")]
 pub mod host;
+pub mod rooms;
 
 #[cfg(all(feature = "client", feature = "websocket"))]
 pub mod client;
