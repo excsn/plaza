@@ -5,6 +5,7 @@
 //! where the `client_utils` behaviour is actually pinned. The renderer only ever
 //! reads the results of `step`.
 
+use plaza_client_utils::FixedTimestep;
 use plaza_client_utils::net_sim::{LatencyLink, Rng};
 
 use crate::sim::client::Client;
@@ -31,7 +32,9 @@ pub struct World {
   rng: Rng,
 
   wall_ms: u64,
-  input_accum_ms: u64,
+  /// When the client samples its input. A fixed rate independent of the frame
+  /// rate, so what is sent does not depend on how fast the browser is drawing.
+  input_step: FixedTimestep,
   recent_shot: Option<RecentShot>,
   last_ping_ms: u64,
 }
@@ -49,7 +52,7 @@ impl World {
       down: LatencyLink::new(),
       rng: Rng::new(seed),
       wall_ms: 0,
-      input_accum_ms: 0,
+      input_step: FixedTimestep::from_step_ms(STEP_MS),
       recent_shot: None,
       last_ping_ms: 0,
     }
@@ -107,9 +110,7 @@ impl World {
   pub fn step(&mut self, dt_ms: u64, input: MoveInput, controls: &Controls) {
     self.wall_ms += dt_ms;
 
-    self.input_accum_ms += dt_ms;
-    while self.input_accum_ms >= STEP_MS {
-      self.input_accum_ms -= STEP_MS;
+    for _ in self.input_step.advance(dt_ms) {
       let cmd = self.client.sample_input(input, controls);
       self.send_up(ClientMsg::Cmd(cmd), controls);
     }
@@ -288,7 +289,14 @@ mod tests {
     };
     let first = mean_remote_error(&Controls { second_order: false, ..slow }, 900, 0xC0FFEE);
     let second = mean_remote_error(&Controls { second_order: true, ..slow }, 900, 0xC0FFEE);
-    assert!(second < first * 0.97, "at 5 Hz the curve should beat the tangent: {second:.2}px against {first:.2}px");
+    // 2%, and it used to measure 7%. The difference was not the curve, which is
+    // unchanged at 17.79 px: it was the *tangent* improving from 19.12 to 18.15
+    // when `ExtrapolationBase` stopped rewinding to the raw sample past its cap
+    // and started holding at the cap instead. Most of this technique's apparent
+    // advantage was an artifact of a discontinuity in what it was compared
+    // against. Recorded here because a comparative measurement is only ever as
+    // good as its baseline, and a bug in the baseline flatters the challenger.
+    assert!(second < first * 0.99, "at 5 Hz the curve should still beat the tangent: {second:.2}px against {first:.2}px");
 
     // And at a normal rate it is simply inert, which is the part worth pinning:
     // it means the toggle cannot be sold as a general improvement.

@@ -90,7 +90,7 @@ The bandwidth crossover is around 12% loss: targeted costs 28% less on a clean l
 
 ## How it is built, and what it proves
 
-The demo depends on **`plaza_client_utils` only**, not on `plaza` core and not even on a server crate: rollback has no server. Core is async and does not target wasm; `client_utils` is zero-dependency and does, which is what lets two full peers, their wire, and the whole rollback loop run in the browser.
+The demo depends on **`plaza_client_utils` only**, not on `plaza` core and not even on a server crate: rollback has no server. Core is async and does not target wasm; `client_utils` is runtime-free and does, which is what lets two full peers, their wire, and the whole rollback loop run in the browser.
 
 Each peer is a [`RollbackSession`](../../client_utils/src/rollback.rs), the drop-in bundle, wired the same way any integrator would:
 

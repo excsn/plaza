@@ -72,9 +72,9 @@ fn main() {
   }
 
   println!("\n== the same links with adaptive buffering off ==");
-  println!("A fixed delay does not absorb the jitter, so the buffer genuinely starves and");
-  println!("the gaps get long enough for the curve to matter. This is the regime the");
-  println!("primitive was built for, and the only one where it earns anything.\n");
+  println!("A fixed delay does not absorb the jitter, so the buffer genuinely starves");
+  println!("and the gaps get long. This was recorded as the regime the primitive was");
+  println!("built for, and it does not earn anything here either: every row is a wash.\n");
   println!("{:<28}{:>14}{:>14}{:>14}{:>14}", "link", "extrap share", "velocity px", "curve px", "change");
   for (label, latency, jitter, loss) in [
     ("normal, 120 ms", 120u64, 20u64, 5.0f32),
@@ -97,6 +97,10 @@ fn main() {
   }
 
   println!("\n== a low server rate, where the gaps are finally long ==");
+  println!("The regime the curve was meant for, and where it turns net negative. A");
+  println!("quadratic extrapolated far diverges faster than a line does, because the");
+  println!("term it adds goes as dt squared in both directions: the same property that");
+  println!("makes it more accurate over a short gap makes it worse over a long one.\n");
   println!("{:<28}{:>14}{:>14}{:>14}{:>14}", "server rate", "extrap share", "velocity px", "curve px", "change");
   for hz in [20u32, 10, 5, 3, 2] {
     let base = Controls {

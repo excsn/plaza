@@ -5,6 +5,7 @@
 //! the same loop anyway. It owns every box, moves the bots, applies the local
 //! player's inputs in order, and clamps everyone to the arena.
 
+use plaza_client_utils::FixedTimestep;
 use plaza_client_utils::types::SequenceNumber;
 use plaza_client_utils::RttEstimator;
 use plaza_server_utils::HistoricalStateBuffer;
@@ -22,7 +23,9 @@ pub struct ToyServer {
   bots: Vec<Bot>,
 
   clock_ms: u64,
-  step_accum_ms: u64,
+  /// The server tick. Its rate is a live setting, so the step is set per advance
+  /// rather than fixed at construction.
+  step: FixedTimestep,
 
   /// Past bot positions, so a shot can be judged against where they *were* when
   /// the shooter saw them. This is the lag-compensation building block.
@@ -64,7 +67,7 @@ impl ToyServer {
       pending: Vec::new(),
       bots,
       clock_ms: 0,
-      step_accum_ms: 0,
+      step: FixedTimestep::from_step_ms(1),
       history: HistoricalStateBuffer::new(HISTORY_LEN),
       rtt: RttEstimator::default(),
     }
@@ -89,11 +92,9 @@ impl ToyServer {
   /// crossed (usually zero or one per render frame, since the server ticks
   /// slower). `step_ms` can change frame to frame: the server rate is dynamic.
   pub fn advance(&mut self, dt_ms: u64, step_ms: u64) -> Vec<ServerPacket> {
-    let step_ms = step_ms.max(1);
-    self.step_accum_ms += dt_ms;
+    self.step.set_step_ms(step_ms.max(1));
     let mut packets = Vec::new();
-    while self.step_accum_ms >= step_ms {
-      self.step_accum_ms -= step_ms;
+    for step_ms in self.step.advance(dt_ms) {
       self.clock_ms += step_ms;
       packets.push(self.tick());
     }
@@ -107,7 +108,7 @@ impl ToyServer {
       if cmd.seq <= self.last_applied_seq {
         continue;
       }
-      apply_input(&mut self.you, &cmd.input);
+      apply_input(&mut self.you, &cmd.input, &());
       clamp_to_arena(&mut self.you);
       self.last_applied_seq = cmd.seq;
     }

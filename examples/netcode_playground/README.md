@@ -65,7 +65,7 @@ Lag compensation is the fourth part, and its own demonstration. Because the oran
 
 ## How it is built, and what it proves
 
-The demo depends on **`plaza_client_utils` and `plaza_server_utils`**, not on `plaza` core. That is deliberate and is half the point: core is async (fibre + `async_trait`) and does not target wasm, whereas both util crates are zero-dependency and do. A whole working client, and a toy server, are assembled from those two and nothing else, which is the design bet the crates were built around. That the *server* crate is also wasm-safe is what lets the toy server's lag-compensation rewind run in the browser alongside the client.
+The demo depends on **`plaza_client_utils` and `plaza_server_utils`**, not on `plaza` core. That is deliberate and is half the point: core is async (fibre + `async_trait`) and does not target wasm, whereas both util crates are runtime-free and do. A whole working client, and a toy server, are assembled from those two and nothing else, which is the design bet the crates were built around. That the *server* crate is also wasm-safe is what lets the toy server's lag-compensation rewind run in the browser alongside the client.
 
 Everything the client talks to is simulated in the same page, Gambetta-style:
 
@@ -77,11 +77,11 @@ The macroquad frame loop is the simulation clock, so there is no client-side tic
 
 ### What building it found, and what it added
 
-Writing a real consumer is how gaps surface (the same method that turned up the missing turn restart in `card_table`). Three showed up (see [IMPROVEMENTS.md](../../IMPROVEMENTS.md) for the reasoning):
+Writing a real consumer is how gaps surface (the same method that turned up the missing turn restart in `card_table`). Three showed up (see [IMPROVEMENTS-DONE.md](../../IMPROVEMENTS-DONE.md) for the reasoning):
 
 - **`InterpolationClock`** (new in `client_utils`): the interpolation render target was bookkeeping every client hand-rolls, an estimate of server time, advanced by frame delta, minus a fixed delay. It is now one small type. The client's `clock` field is it.
 - **`ErrorSmoother`** (new in `client_utils`): reconciliation snaps the corrected position in one frame, which is correct per Gambetta but abrupt under high latency. `ErrorSmoother` eases only the *rendered* position toward the exact logical state, and the smoothing toggle turns it on and off. It is a standalone primitive, not a method on `PredictedEntity`, because smoothing needs to blend states (which prediction does not) and any jumping entity can use it.
-- **`plaza_server_utils`** (new crate): lag compensation needed the server rewind, `HistoricalStateBuffer`, which existed in async `plaza` core, unused and unreachable from wasm. Relocating it to a zero-dependency crate gave it a wasm home and its first consumer, and unifying its `Interpolatable` trait with the client's fixed a real bug: the old version's `TryInto<f32>` bound could not accept `u64` time.
+- **`plaza_server_utils`** (new crate): lag compensation needed the server rewind, `HistoricalStateBuffer`, which existed in async `plaza` core, unused and unreachable from wasm. Relocating it to a runtime-free crate gave it a wasm home and its first consumer, and unifying its `Interpolatable` trait with the client's fixed a real bug: the old version's `TryInto<f32>` bound could not accept `u64` time.
 
 ## What measuring second-order dead reckoning found
 

@@ -10,6 +10,7 @@ mod render;
 mod ui;
 
 use macroquad::prelude::*;
+use plaza_client_utils::FixedTimestep;
 use render::Layout;
 use rollback_playground::sim::{Controls, Input, World, ARENA_H, ARENA_W};
 
@@ -31,16 +32,15 @@ fn window_conf() -> Conf {
 async fn main() {
   let mut world = World::new(0x9E3779B97F4A7C15);
   let mut controls = Controls::default();
-  let mut accum_ms: u64 = 0;
+  // Spend real time in whole logical frames. The cap is what keeps a paused tab
+  // from dumping a burst of frames on resume, which for a rollback peer means
+  // predicting far past anything it could confirm.
+  let mut timestep = FixedTimestep::from_step_ms(FRAME_MS).with_max_frame_ms(100);
   let mut fps = 60.0f32;
 
   loop {
-    // Spend real time in whole logical frames. Clamp so a paused tab cannot dump
-    // a huge burst of frames on resume.
-    accum_ms += ((get_frame_time() * 1000.0) as u64).clamp(0, 100);
     let input = read_input();
-    while accum_ms >= FRAME_MS {
-      accum_ms -= FRAME_MS;
+    for _ in timestep.advance((get_frame_time() * 1000.0) as u64) {
       world.step(input, &controls);
     }
 
