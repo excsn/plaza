@@ -10,12 +10,33 @@ It addresses these problems, usable independently:
 
 | Problem | Piece |
 |---|---|
-| Local input should feel instant, but the server decides | [`PredictedEntity`](#struct-predictedentity) + [`ClientInputBuffer`](#struct-clientinputbuffer) |
-| Other players' updates arrive discretely and jittery | [`SnapshotBuffer`](#struct-snapshotbuffer) |
-| Updates stop arriving for a moment | [`ExtrapolationBase`](#struct-extrapolationbase) |
+| Local input should feel instant, but the server decides | [`PredictedEntity`](#struct-predictedentitystatetype-op) + [`ClientInputBuffer`](#struct-clientinputbufferop-predictedstatesnapshot) |
+| Other players' updates arrive discretely and jittery | [`SnapshotBuffer`](#struct-snapshotbuffertimestamp-statetype) |
+| Updates stop arriving for a moment | [`ExtrapolationBase`](#struct-extrapolationbasestatetype-velocitytype-servertimestamp) |
+| A variable frame has to drive a fixed-step simulation | [`FixedTimestep`](#7d-module-timestep) |
+| Holding the client side of a streamed entity set, and proving it agrees | [`DeltaMirror`](#7e-module-mirror-the-client-half-of-a-delta-stream) |
 | Peers run one deterministic sim and cannot wait for each other's input | [`RollbackSession`](#3b-rollback-netcode-deterministic-lockstep) |
 
-The first three serve the *server-authoritative* model (an authority decides, a client predicts its own entity and is reconciled). The last serves the other family, *peer-to-peer deterministic lockstep* (rollback), covered in [section 3b](#3b-rollback-netcode-deterministic-lockstep).
+All but the last serve the *server-authoritative* model (an authority decides, a client predicts its own entity and is reconciled). The last serves the other family, *peer-to-peer deterministic lockstep* (rollback), covered in [section 3b](#3b-rollback-netcode-deterministic-lockstep).
+
+### Two rules worth knowing before you predict anything
+
+Neither is enforceable by a type, and between them they account for every prediction bug found while building the playground examples ([examples/LEARNINGS.md](../examples/LEARNINGS.md) is the evidence). They *prevent* bugs, where everything else in this crate only recovers from them.
+
+**A shared rule must be shared code, not code written twice.** The `apply` you hand a predictor is meant to *be* the server's step function, not a client approximation of it. Anything the server does that your copy leaves out arrives as a permanent correction: it looks like network jitter, it is largest exactly when it is most visible, and it is expensive to find later. If your client's rule needs the world to run (gravity, wind, a moving platform), that is what the context parameter is for; being unable to pass the world in is exactly what pushes people into writing the second, lesser rule, so it is a deficiency in the API rather than a reason to fork the rule.
+
+**Prediction is presentation; shared rules consume authoritative state.** Feeding a locally predicted position into a rule that *both* sides run creates a second, divergent world, and every packet then fights the local one. Prediction drives the camera and the local player's own marker; the rules both sides run read the authoritative state, even though it is older. This is counterintuitive, because using the freshest local data looks like an improvement.
+
+### Which predictor
+
+The two local-player bundles differ by how the **server** consumes input, not by how the client feels. Choosing wrong is silent, and shows up as a prediction that is always slightly behind.
+
+| the server | use |
+|---|---|
+| consumes one input per simulation step | [`PredictedPlayer`](#struct-predictedplayerstate-input-ctx) (replay unacknowledged inputs) |
+| holds an input and integrates it every tick | [`HeldInputPredictor`](#struct-heldinputpredictorstate-input-ctx) (dead reckon and ease) |
+
+Replaying inputs against a server of the second kind double counts, and gets worse the more you economise on bandwidth, because one coalesced input can cover a long stretch of simulation.
 
 ### The prediction loop
 
@@ -42,20 +63,44 @@ Most operations here return values or `Option` rather than `Result`: a full buff
 
 ## 3a. Drop-in entities
 
-The recommended starting point: two types that bundle the primitives into the whole client-side job. The primitives (sections 4 onward) remain public for finer control.
+The recommended starting point: three types that bundle the primitives into the whole client-side job. The primitives (sections 4 onward) remain public for finer control.
 
-### Struct `PredictedPlayer<State, Input>`
+### Struct `PredictedPlayer<State, Input, Ctx>`
 
-Your controlled entity: `PredictedEntity` + `ClientInputBuffer` + `ErrorSmoother` + a sequence counter, wired. `apply` and `lerp` are plain `fn` pointers (the game rule and the smoothing blend), so no closure bounds are imposed.
+Your controlled entity when the server consumes **one input per simulation step**: `PredictedEntity` + `ClientInputBuffer` + `ErrorSmoother` + a sequence counter, wired. `apply` and `lerp` are plain `fn` pointers (the game rule and the smoothing blend), so no closure bounds are imposed.
 
-*   **`new(initial, PlayerConfig, apply: fn(&mut State, &Input), lerp: fn(&State, &State, f32) -> State)`**
+*   **`new(initial, PlayerConfig, apply: fn(&mut State, &Input, &Ctx), lerp: fn(&State, &State, f32) -> State)`**
 *   **`input(&mut self, input) -> SequenceNumber`**: predict locally, buffer for replay, return the sequence to send.
-*   **`reconcile(&mut self, authoritative, acked_seq)`**: snap the logical state to authority, replay unacknowledged inputs, begin easing the visible correction.
+*   **`reconcile(&mut self, authoritative, acked_seq) -> Correction<State>`**: snap the logical state to authority, replay unacknowledged inputs, begin easing the visible correction, and hand back what it did (see [`Correction`](#7f-module-correction)).
 *   **`advance(&mut self, dt_secs)`**, **`render() -> State`** (eased), **`logical() -> &State`** (exact), **`authoritative() -> &State`**, **`latest_seq()`**, **`acked_seq()`**, **`unacked_count()`**.
+
+**Lifecycle**, shared with `HeldInputPredictor` so the two read as one family:
+
+*   **`set_active(&mut self, bool)`** / **`is_active()`**: an inactive predictor stops integrating and stops correcting. The case it exists for is a server holding an entity still (a respawn delay, a stun, a cutscene). Without it a client keeps predicting motion into a frozen entity and invents a correction stream entirely of its own making, which is a real bug this cost a diagnostic cycle.
+*   **`teleport(&mut self, State)`**: a discontinuity, applied without easing. Snap-versus-ease is chosen by **cause**, not magnitude: ease continuous error, snap a spawn, a respawn or a warp. Easing a two thousand pixel jump draws the player smoothly across the arena.
+*   **`set_context(&mut self, Ctx)`** / **`context() -> &Ctx`**: the world the rule needs to run. `Ctx` defaults to `()`, so a rule that needs nothing pays nothing.
 
 **`PlayerConfig`**: `input_buffer: usize` (retain the most inputs that can be in flight), `smoothing_secs: f32` (`0.0` disables smoothing), `easing: fn(f32) -> f32` (the correction's time curve, default `linear`). `Default` is 256 / 0.1s / linear.
 
-Snap-versus-ease on a large desync is the caller's call (check `render()` against the incoming authoritative before `reconcile`, or set `smoothing_secs = 0`), because "how far is a desync" is application geometry.
+Keep `smoothing_secs` **shorter than your send interval**. Measured in `horde_playground`: a 250 ms ease never completes when corrections arrive every 33 ms, so the smoother itself becomes the dominant error and accuracy gets *worse* as the send rate rises.
+
+Snap-versus-ease on a large desync is otherwise the caller's call (check `render()` against the incoming authoritative before `reconcile`, or use `teleport`), because "how far is a desync" is application geometry.
+
+### Struct `HeldInputPredictor<State, Input, Ctx>`
+
+Your controlled entity when the server **holds an input and integrates it every tick**. Same shape as `PredictedPlayer` (predict locally, fold in authority, ease the visible correction) and a different correction model: there is nothing to replay, because the server is not consuming a queue, so it dead reckons under the held input and eases a fixed fraction of the error toward each authoritative sample.
+
+*   **`new(initial, HeldInputConfig, advance: fn(&mut State, &Input, f32, &Ctx), lerp: fn(&State, &State, f32) -> State)`**: `advance` is the shared step, taking `dt` in seconds.
+*   **`with_teleport(self, distance: fn(&State, &State) -> f32, beyond: f32)`**: past `beyond`, `reconcile` snaps instead of easing. The metric is an argument rather than a trait bound, so no geometry is imposed on `State`.
+*   **`hold(&mut self, input)`** / **`held() -> &Input`**: the direction the server is holding.
+*   **`advance(&mut self, dt_secs)`**: integrate locally, then progress the ease.
+*   **`project(&self, authoritative: &State, age_secs: f32) -> State`**: where that sample would be *now* under the held input. Public so an application can measure and decide for itself.
+*   **`reconcile(&mut self, authoritative, age_secs) -> Correction<State>`**: project the sample forward by its own age (the server's state is one one-way delay old), then ease toward it.
+*   **`render()`**, **`logical()`**, **`set_active`**, **`is_active`**, **`teleport`**, **`set_context`**, **`context`**: as above.
+
+**`HeldInputConfig`**: `blend` (the fraction of the remaining error absorbed per reconciliation), `smoothing_secs`, `easing`.
+
+**The easing is the point, not a nicety.** Correcting only once the error passes a threshold and then closing the whole gap produces a metronomic sawtooth: holding one direction gave a small jump forward roughly every four hundred milliseconds, at every latency including zero, which a player feels as a rhythmic tug. Continuous easing absorbs the same drift invisibly, so this primitive makes it the default.
 
 ### Struct `RemoteView<State, Velocity>`
 
@@ -72,7 +117,7 @@ An entity you do not control: a `SnapshotBuffer` plus the interpolate / extrapol
 
 A different model from the rest of this crate. There is no server: peers run the **same deterministic simulation**, exchange only inputs, and stay identical frame for frame. Latency is handled by **predicting** a missing remote input (repeat its last one), simulating ahead, and **rolling back** to re-simulate when the real input arrives and disagrees. Determinism is what makes the re-simulation land on the state the other peer already has. Lives in module `rollback`.
 
-Three pieces, smallest first; the primitives stay public for hand-wiring, `RollbackSession` is the ready-made loop (the rollback counterpart to [`PredictedPlayer`](#struct-predictedplayerstate-input)).
+Three pieces, smallest first; the primitives stay public for hand-wiring, `RollbackSession` is the ready-made loop (the rollback counterpart to [`PredictedPlayer`](#struct-predictedplayerstate-input-ctx)).
 
 **`Frame = u64`**: a logical simulation frame. Rollback counts in fixed frames, never wall-clock time.
 
@@ -229,7 +274,11 @@ When snapshots stop arriving, continue an entity along its last known velocity r
 ### Struct `ExtrapolationBase<StateType, VelocityType, ServerTimestamp>`
 
 *   **`new(state, velocity, timestamp) -> Self`**: the last authoritative state.
-*   **`get_extrapolated_state(&self, target_time, max_extrapolation) -> StateType`** Projects forward, clamped by `max_extrapolation` so a long gap does not send an entity off into the distance.
+*   **`get_extrapolated_state(&self, target_time, max_extrapolation) -> StateType`** Projects forward, capping the **duration** by `max_extrapolation` so an entity coasts to the limit and stops there rather than running off into the distance.
+
+Capping the duration rather than discarding the result is the fix to a real bug worth knowing about, because "clamp" reads naturally as the other thing. Returning the *un-extrapolated* state past the cap is a discontinuity: at the limit an entity has coasted `velocity * max_ms` forward, and one millisecond later it was drawn back at the raw sample, a jump of the entire window in the wrong direction, flickering whenever a jittery target crossed the boundary. Two tests had asserted the old behaviour, so they were pinning the bug rather than the requirement.
+
+The cap logs at `warn`, and a *steady* occurrence usually means a render target sitting permanently ahead of the newest snapshot rather than a starved link, so the view never interpolates at all. That warning is doing its job; it was briefly downgraded for being repetitive and was the only thing announcing a real defect.
 
 ### Trait `Extrapolatable<VelocityType, TimeDelta>`
 
@@ -239,7 +288,9 @@ pub trait Extrapolatable<VelocityType, TimeDelta> {
 }
 ```
 
-Prefer interpolation when snapshots are available; extrapolation is a stopgap, and every extrapolated frame is a guess to be corrected.
+**Extrapolation is the starvation fallback, not a general technique.** When the render target runs past the newest snapshot there is nothing to interpolate between, and the only choices are freeze or coast. Whether coasting helps is a property of the **entity**, not of the game: it works when the next state follows from the current one, which is true of vehicles, projectiles and anything with inertia and a turning limit, and is where the term comes from. It fails for anything steered instantaneously by a person or an AI, because there the velocity is not a constraint on the future, it is a record of the past. Dead reckoning a *player* overshoots every direction change and snaps back when the truth lands.
+
+That gives a hierarchy, and this crate has all four rungs. Run the entity's own rule if you know it and know its inputs (best, and what makes a 1 Hz enemy stream playable). Interpolate between two real snapshots if you do not (safest, and what peers should do). Extrapolate from one snapshot and a velocity only if the dynamics are predictable. Hold if they are not. Reach down the list only when the rung above has no data. Different entities in one game legitimately sit on different rungs.
 
 ## 7. Smoothing
 
@@ -255,8 +306,11 @@ Smooths only what you *draw*, never the logical predicted state, which must stay
 *   **`advance(&mut self, dt_secs: f32)`**: progress the ease by a frame.
 *   **`sample(&self, logical: &State, lerp: impl Fn(&State, &State, f32) -> State) -> State`**: where to draw this frame. While easing, blends from the captured position toward the live `logical`; otherwise returns `logical` unchanged.
 *   **`is_easing(&self) -> bool`**
+*   **`reset(&mut self)`**: abandon the ease in progress and draw the logical state directly from this frame. For a genuine discontinuity (a spawn, a respawn, a teleport), where finishing the ease would draw the entity smoothly across the whole jump.
 
-The snap-versus-ease threshold is deliberately not a parameter: check the correction distance yourself and skip `begin_from` for large jumps.
+The snap-versus-ease threshold is deliberately not a parameter: check the correction distance yourself and skip `begin_from` for large jumps. The distinction that matters is by **cause**, not magnitude: ease continuous error, snap discontinuities.
+
+**Keep the ease shorter than the send interval.** Measured in `horde_playground`: a 250 ms ease never completes when corrections arrive every 33 ms, so the smoother becomes the dominant error and accuracy gets worse as the send rate rises.
 
 ## 7b. Module `ack`
 
@@ -271,8 +325,13 @@ A record of which recent sequence numbers arrived: the newest, plus a bitmask of
 *   **`encode() -> Option<(u64, u64)>`** / **`from_encoded(newest, mask)`**: the wire form, twelve bytes, and the rebuild on the far side.
 *   **`contains(seq) -> bool`**, **`newest() -> Option<u64>`**, **`mask() -> u64`**, **`received_in_window() -> u32`**.
 *   **`missing_since(oldest) -> impl Iterator<Item = u64>`**: the gaps, ascending, clamped to the window. What a sender resends. Past the window the data is beyond recovery and the caller should be resynchronising rather than backfilling, so the ask stays bounded no matter how far back it points.
+*   **`contiguous_base(first) -> Option<u64>`**: the newest sequence such that everything from `first` up to it arrived. `None` if `first` itself is missing, so a run that cannot be established at all reports nothing rather than a stale previous answer, and the caller resynchronises instead of backfilling.
 
 Fixed size is the whole point: a link losing half its packets reports in the same twelve bytes as a perfect one, and heavy loss is precisely when there is no room for an explicit list.
+
+**Which of the two you want depends on what your protocol does with the answer**, and getting this wrong is silent. A protocol that **retransmits** wants the mask, which names the holes to refill. A protocol that **re-derives** (a delta stream diffing against a state the peer provably reached) wants `contiguous_base`, because receiving packet N+1 after losing N does not put a peer in the state N+1 implies: whatever N announced and N+1 had no reason to repeat is simply gone. Taking the newest set bit hands the diff a state that never existed. Measured in `horde_playground`, that mistake made loss recovery statistically indistinguishable from no recovery at every loss rate.
+
+The argument is the first sequence to *check*, not the newest already known to have arrived. The latter is the natural signature and it is unrepresentable at the start of a protocol numbering from zero, where a caller has to invent "one before zero" and passing `0` reads as "zero already arrived", silently skipping the first packet.
 
 **On choosing it over blind redundancy.** Measured in `rollback_playground`: ack-driven resends cost 28% less than a fixed six-frame tail on a clean link, 45% more at 50% loss, crossing over around 12%. But blind redundancy makes a *fixed number of attempts*; this retries until acknowledged, so it converged at 55% loss where blind did not. Its own bound is how long the sender keeps the payload, not the attempt count.
 
@@ -291,6 +350,108 @@ Second-order dead reckoning for one scalar: keeps the last three samples, takes 
 
 Scalar rather than generic over a state type on purpose: a curve fit needs arithmetic on the value, and a vector-space bound would fall on every consumer of `RemoteView` for two lines an app can write itself. `netcode_playground` keeps a pair beside each `RemoteView` and overrides the position only when the view was going to dead-reckon anyway.
 
+## 7d. Module `timestep`
+
+Turning however long the last frame took into whole fixed steps, or into "is it time yet". Both sides of a connection stepping the same rule at different step sizes are not running the same simulation, and the drift reads as network jitter, so taking the step from here is what keeps them equal.
+
+### Struct `FixedTimestep`
+
+*   **`from_step_ms(step_ms)`** / **`from_hz(hz)`**: the step size. **Panics on zero.**
+*   **`with_max_frame_ms(ms)`**: cap how much elapsed time one `advance` may pay for. Default `DEFAULT_MAX_FRAME_MS` (250 ms, or fifteen steps at 60 Hz): enough that an ordinary hitch catches up smoothly, small enough that a resumed tab skips ahead instead of grinding through the minutes it was asleep.
+*   **`advance(&mut self, elapsed_ms) -> Steps`**: an `ExactSizeIterator` yielding the step duration in milliseconds, once per step this frame paid for. The duration is *yielded* rather than assumed so a caller cannot accidentally integrate by the frame delta instead.
+*   **`step_ms()`**, **`step_secs()`**, **`set_step_ms(ms)`**, **`pending_ms()`**, **`alpha()`** (the fraction of a step accumulated, for interpolating a render between two simulated states), **`dropped_ms()`**, **`reset()`**.
+
+`dropped_ms` is real time the simulation never ran, because the cap refused it. It is counted rather than discarded on purpose: a world quietly behind wall time explains a whole class of "it desynced and I do not know when".
+
+**If you also keep a clock, advance it by *simulated* time, not wall time.** A packet's timestamp says when its state is from, and clients subtract it to project samples forward, so a clock running ahead of the state it describes has every client integrating into a future the server never simulated. Identical in the normal case, correct in the stalled one.
+
+### Struct `Periodic`
+
+The same accumulator with a different consumption rule, and separate because the two answer different questions. A fixed step asks "how much simulation does this frame pay for", where every step must run or the world falls behind. A period asks "is it time yet", where the work is usually idempotent and running it twice in one frame is waste rather than correctness.
+
+*   **`new(interval_ms)`** / **`from_hz(hz)`**, **`set_interval_ms`**, **`interval_ms()`**, **`remaining_ms()`**, **`reset()`**.
+*   **`due(&mut self, elapsed_ms) -> bool`**: fires at most once per advance.
+*   **`advance(&mut self, elapsed_ms) -> u32`**: every occurrence, for work that genuinely needs each one.
+
+Subtract the interval rather than zeroing the accumulator, which is what `Periodic` does and what a hand-rolled copy usually forgets: zeroing drops the remainder and makes every period slightly too long.
+
+## 7e. Module `mirror`: the client half of a delta stream
+
+The counterpart to `plaza_server_utils::DeltaBaseline`. A server streaming interest-managed entities sends *entered* and *left* and lets each client keep a mirror; this is the mirror, and the two halves are keyed by the same [`SlotKey`](#7g-modules-slot-and-digest) and checked by the same `SetDigest`.
+
+### Struct `DeltaMirror<Entity>`
+
+Generic over the entity, because what an application keeps per entity (a smoother, interpolation history, a render kind) is its business. The mirror owns only the keying, the agreement and the counters.
+
+*   **`new()`**, **`with_generations(bool)`** / **`set_generations(bool)`**: whether a key names an occupant or only a slot.
+*   **`begin(&mut self, seq, full_baseline)`**: start applying a packet. `full_baseline` clears first, for a rebuild.
+*   **`insert(key, entity)`**, **`remove(key) -> Option<Entity>`**, **`get`**, **`get_mut`**, **`contains`**.
+*   **`settle(&mut self, expected: u64) -> Agreement`**: fold the digest and compare it against the server's. `Agreement::agreed()` for the boolean.
+*   **`divergence_from(server_keys) -> Divergence`**: which way it diverged, given the server's own key set. A digest **detects** and cannot **diagnose**, so anything shipping a digest wants a debug mode that ships the ground truth beside it: `missing` means something was lost or never sent, `extra` means a removal never landed.
+*   **`digest()`**, **`acks() -> &AckWindow`**, **`applied_seq()`**, **`keys`**, **`iter`**, **`iter_mut`**, **`values`**, **`values_mut`**, **`len`**, **`is_empty`**, **`clear`**.
+*   **`frames_lost()`**, **`stale_refs()`**, **`divergences()`**.
+
+**Apply every packet, whatever baseline it names.** The instinct is the opposite, and that instinct is correct for a *relative* delta protocol: if you cannot reach the baseline, discard. These deltas carry absolute values, so applying them is idempotent and applying a superset is harmless, while discarding what you cannot rebase starves the mirror. Measured: an earlier `horde_playground` version discarded, and at 25% loss its mirror emptied out while every agreement check read perfect, because the checks only ran over what had been applied. The `begin`/`insert`/`remove`/`settle` shape only makes sense that way, which is why this is a type and not a doc comment.
+
+**The three counters stay separate on purpose.** Sequence gaps mean the wire lost something. Stale references mean a message named an occupant this mirror no longer holds. Digest divergences are the symptom no counter predicts. "Forty mismatches and zero frames lost" and "forty mismatches and forty frames lost" are different bugs, and collapsing them into one health number is how an earlier investigation nearly went wrong.
+
+## 7f. Module `correction`
+
+### Struct `Correction<State>`
+
+What a reconciliation actually did: the state as it was `seen` before the correction, and the `settled` state after. Two states rather than a distance, deliberately: a distance needs a metric on `State`, which would tax every user for the benefit of the ones wanting telemetry. The caller knows its own units, so the subtraction is its business.
+
+### Struct `CorrectionMonitor`
+
+A running picture of prediction error, and an adaptive test for what counts as abnormal.
+
+*   **`new()`**, **`with_warmup(samples)`**, **`with_smoothing(alpha)`**, **`with_sigma(sigma)`**, **`with_floor(floor)`**.
+*   **`record(magnitude) -> bool`**: fold in a sample, returning whether it is abnormal.
+*   **`is_abnormal(magnitude)`** (without recording), **`threshold()`**, **`band()`**, **`norm()`**, **`peak()`**, **`counts() -> (u64, u64)`**, **`is_warming_up()`**, **`reset()`**.
+
+**There is no fixed normal, which is the whole reason this exists.** A thirty pixel correction is unremarkable at one send rate and alarming at another, and the same is true across latency settings and across how much contact the simulation is currently in. A constant threshold reports whatever it happened to be tuned against: it goes quiet exactly when conditions change, and noisy for reasons that have nothing to do with a bug. Tracking the mean and variance of the corrections it is fed keeps its meaning as conditions move underneath it.
+
+**Cold start is a decision, not an accident**, which is what `with_warmup` is for. A baseline initialised to zero says every early correction is enormous, so the monitor alarms loudest at startup, when it knows least.
+
+## 7g. Modules `slot` and `digest`
+
+The vocabulary both sides of a streamed entity set have to agree about. They live in this crate, and `plaza_server_utils` re-exports them, because a browser client needs both and must not inherit a server to get them. Two implementations that agree today are a disagreement waiting to happen, and the failure would present as a divergence about the *world* rather than about the arithmetic.
+
+### Struct `SlotKey`
+
+A storage slot and the generation of its current occupant. **`new(index: u32, generation: u16)`**, **`encode() -> u64`** (`(index << 16) | generation`, the key space `SetDigest`, `DeltaBaseline` and `DeltaMirror` all work in), **`decode(u64)`**, **`ungenerational()`**, **`same_occupant(other)`**, plus `From` both ways.
+
+### Struct `SlotAllocator`
+
+Hands out `SlotKey`s over a dense index space, recycling freed slots and bumping a generation so stale handles stay detectable. **`alloc`**, **`free`**, **`is_live`**, and `ReusePolicy`.
+
+*   **It does not store your entities.** Keep them in a `Vec<T>` indexed by `SlotKey::index`, which is what the rest of these crates expect anyway: `VisibilitySet` takes dense `u32` indices, and the delta types key on `SlotKey::encode`. An allocator that owned the payload would force an application to restructure around it and would still compose with neither.
+*   **The generation bumps on free, not on allocate.** A handle should stop naming anything the moment its subject dies, not whenever something happens to want the index. The gap between those two moments is exactly the window a delta stream re-derives retractions in.
+*   **`ReusePolicy::{Lifo, Fifo}` is public contract, not an implementation detail**, because it decides how *clustered* recycled indices are, and that decides which wire encoding is cheapest for a despawn set. Measured: under `Lifo` a burst of 233 despawns was 204 separate runs (mean run length **1.14**), which is why run-length encoding lost decisively to delta-varint there. Neither policy is more correct; if something downstream cares about clustering, measure rather than assume.
+*   **The ceiling, stated rather than assumed.** A `u16` generation wraps after 65,536 reuses of one slot and nothing can detect the wrap. The width is the mitigation, with `Fifo` available to spread reuse across the index space instead of hammering the same slots.
+
+**When a generation earns its keep** is narrower than it sounds and was measured both ways. Under ordered delivery with each death announced explicitly before the next diff, `horde_playground` recorded **zero** stale handle references across 413 kills with slots actively recycling. It became load-bearing again the moment loss recovery re-derived a retraction *after* a slot may have been recycled. The rule reconciling the two: a generation insures against a slot being reused between the moment you name an entity and the moment the other side reads the name, so anything that widens that window (unordered delivery, loss, re-derivation, a client applying late) brings it back.
+
+### Struct `SetDigest`
+
+An order-independent digest of a set of `u64` keys, maintainable incrementally. **`new`**, **`from_keys`**, **`insert`**, **`remove`**, **`clear`**, **`len`**, **`is_empty`**, **`digest() -> u64`**.
+
+A delta-relevance stream has a silent failure mode: the client applies `entered`/`left`, and if one delta is lost, malformed or misapplied, the mirror is wrong **for good**, with no symptom. Bandwidth looks normal, positions look normal, and the only evidence is on the screen. Both sides summarise their set and compare.
+
+Order independence is the requirement that shapes it: two peers holding the same set may iterate it in different orders. Summation gives that, and unlike XOR it does not silently cancel duplicates (a double-insert is itself a mistake worth catching). Because the combine is addition, a key can be added or removed in O(1), so a client maintains its digest as entities enter and leave rather than rehashing every tick. The key is a `u64` you choose, which is the important flexibility: hash a bare index to check *membership*, or pack index with generation to check that both sides agree on the *occupant*.
+
+`VisibilitySet::digest()` computes the same value over a bitset's membership.
+
+## 7h. Module `coalesce`
+
+### Struct `InputCoalescer<Input>`
+
+Send an input on change, plus a keepalive. **`new(keepalive_ms)`**, **`should_send(&input, now_ms) -> bool`**, **`set_enabled`**, **`is_enabled`**, **`last_sent`**, **`reset`**.
+
+**The keepalive is the content.** Sending purely on change means a *dropped* direction change is not a missing update but a **wrong state that persists**, because the server holds the last direction it received: the player keeps gliding until they press something else. It is intermittent and it reads as the controls sticking rather than as packet loss.
+
+Pairs with [`HeldInputPredictor`](#struct-heldinputpredictorstate-input-ctx) and explicitly **not** with `PredictedPlayer`, whose server consumes one input per step and therefore needs every one of them.
+
 ## 8. Module `math`
 
 Small vector and quaternion types, so this crate is usable without pulling in a math library. Implement `Interpolatable` and `Extrapolatable` for your own types instead if you already have `glam` or `nalgebra`.
@@ -303,6 +464,23 @@ These implement `Interpolatable` and `Extrapolatable`, so they work with the buf
 
 > This overlaps `plaza::common::math` intentionally. Keeping this crate free of
 > workspace dependencies matters more than sharing sixty lines of plain data.
+
+## 8b. Module `net_sim` (feature `net-sim`)
+
+A deterministic latency / jitter / loss queue, so prediction and reconciliation are testable at all. Opt-in, because it is a test and demo aid rather than core client API.
+
+### Struct `LatencyLink<T>`
+
+*   **`new()`**, **`with_ordering(Ordering)`**, **`send(now_ms, packet, latency_ms, jitter_ms, loss_pct, &mut Rng)`**, **`drain_due(now_ms) -> Vec<T>`**, **`in_flight()`**.
+*   **`Ordering::Ordered`** (the default) clamps each delivery time to at least the previous one, so jitter delays a packet past its predecessor but never ahead of it. **`Ordering::Unordered`** is the datagram case.
+
+**Impairment tooling must be faithful to the transport it stands in for**, and the default is ordered because that is what TCP and WebSocket are. An unclamped queue reorders under jitter, which manufactures a failure mode the real transport cannot produce: a full diagnostic cycle here went into a reordering hypothesis that WebSocket makes impossible. Worse than the wasted time, it hides the fact that the real system has stronger guarantees than the tests assume. At one example's shipped defaults (15 ms of jitter against a ~16 ms send interval) the unclamped version could hand a client an older frame after a newer one, which an order-sensitive spawn/despawn stream has no tolerance for.
+
+`LatencyLink` is `Clone`, which is load-bearing rather than incidental: a plaza state must be `Clone`, and a primitive that cannot sit inside application state gets reimplemented, which is how this fix once lived in an example instead of the library. **Derives are part of the API contract.**
+
+### Struct `Rng`
+
+A seeded, reproducible generator: **`new(seed)`**, **`unit() -> f32`**, **`up_to(n) -> u64`**. It is a test and demo aid; it is deliberately not a "deterministic shared stream" block, because identical seeds fed divergent inputs still diverge.
 
 ## 9. Putting It Together
 

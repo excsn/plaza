@@ -46,29 +46,75 @@ impl Rng {
   }
 }
 
+/// Whether the simulated wire may deliver packets out of send order.
+///
+/// This is not a detail. Impairment tooling that can produce failures the real
+/// transport cannot is worse than no tooling, because the failures are credible
+/// enough to spend a day chasing, and because it quietly hides that the real
+/// system has stronger guarantees than the tests assume. Pick the one that
+/// matches the transport being stood in for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Ordering {
+  /// Jitter delays a packet, possibly past its successors, but never ahead of
+  /// its predecessors. **The default**, and what TCP, WebSocket, QUIC streams
+  /// and any ordered channel actually do.
+  #[default]
+  Ordered,
+  /// Jitter may reorder freely, so a later packet can arrive first. What raw
+  /// UDP and unordered datagram channels do. Choose this deliberately: a
+  /// delta stream that assumes ordering will diverge under it, which is a real
+  /// finding on a datagram transport and a phantom on an ordered one.
+  Unordered,
+}
+
 /// One direction of a simulated wire: packets handed in at `now` become
 /// deliverable at `now + latency (+ jitter)`, unless dropped. Generic over the
 /// packet type, drive both directions with two of them.
-#[derive(Debug)]
+///
+/// `Clone` so it can live inside application state that has to be cloneable,
+/// which a `plaza` state does.
+#[derive(Clone, Debug)]
 pub struct LatencyLink<T> {
   queue: VecDeque<(u64, T)>,
+  ordering: Ordering,
+  /// The delivery time of the last packet queued, so an ordered link can hold a
+  /// jittered packet back behind its predecessor.
+  last_deliver_ms: u64,
 }
 
 impl<T> LatencyLink<T> {
   pub fn new() -> Self {
-    Self { queue: VecDeque::new() }
+    Self {
+      queue: VecDeque::new(),
+      ordering: Ordering::Ordered,
+      last_deliver_ms: 0,
+    }
+  }
+
+  /// Chooses whether jitter may reorder. See [`Ordering`]; the default is
+  /// [`Ordering::Ordered`].
+  pub fn with_ordering(mut self, ordering: Ordering) -> Self {
+    self.ordering = ordering;
+    self
   }
 
   /// Hands a packet to the wire. It may be delayed by `latency_ms` plus up to
   /// `jitter_ms`, or dropped with probability `loss_pct / 100`.
   ///
-  /// Jitter can reorder delivery; [`drain_due`](Self::drain_due) sorts by
-  /// delivery time so the receiver still gets them in order.
+  /// Under [`Ordering::Ordered`] the jittered delivery time is clamped to at
+  /// least the previous packet's, so jitter shows up as a packet arriving late
+  /// rather than as the stream shuffling. Loss is independent of ordering: an
+  /// ordered transport still loses whole connections and, at this level of
+  /// abstraction, still models a dropped application message.
   pub fn send(&mut self, now_ms: u64, packet: T, latency_ms: u64, jitter_ms: u64, loss_pct: f32, rng: &mut Rng) {
     if loss_pct > 0.0 && rng.unit() * 100.0 < loss_pct {
       return;
     }
-    let deliver_at = now_ms + latency_ms + rng.up_to(jitter_ms);
+    let mut deliver_at = now_ms + latency_ms + rng.up_to(jitter_ms);
+    if self.ordering == Ordering::Ordered {
+      deliver_at = deliver_at.max(self.last_deliver_ms);
+    }
+    self.last_deliver_ms = deliver_at;
     self.queue.push_back((deliver_at, packet));
   }
 
@@ -133,6 +179,43 @@ mod tests {
     link.queue.push_back((100, "a"));
     assert_eq!(link.drain_due(300), vec!["a", "b"]);
     let _ = &mut rng;
+  }
+
+  #[test]
+  fn an_ordered_link_delays_but_never_reorders() {
+    // A WebSocket or TCP stream cannot deliver out of order, so jitter has to
+    // show up as lateness and never as shuffling. Getting this wrong invents a
+    // failure mode the real transport cannot produce, and a delta stream will
+    // dutifully diverge under it, which is a day spent chasing nothing.
+    let mut link: LatencyLink<u64> = LatencyLink::new();
+    let mut rng = Rng::new(7);
+    for seq in 0..40u64 {
+      // Sent 16ms apart with jitter far larger than the gap: without clamping
+      // this shuffles badly.
+      link.send(seq * 16, seq, 40, 300, 0.0, &mut rng);
+    }
+    let delivered = link.drain_due(100_000);
+    let mut expected: Vec<u64> = (0..40).collect();
+    assert_eq!(delivered, expected, "an ordered link preserves send order exactly");
+    expected.dedup();
+    assert_eq!(expected.len(), 40, "and delivers every packet once");
+  }
+
+  #[test]
+  fn an_unordered_link_may_reorder_under_jitter() {
+    // The datagram case, kept selectable: if a transport really can reorder,
+    // testing against a link that never does is testing the wrong system.
+    let mut link: LatencyLink<u64> = LatencyLink::new().with_ordering(Ordering::Unordered);
+    let mut rng = Rng::new(7);
+    for seq in 0..40u64 {
+      link.send(seq * 16, seq, 40, 300, 0.0, &mut rng);
+    }
+    let delivered = link.drain_due(100_000);
+    let in_order: Vec<u64> = (0..40).collect();
+    assert_ne!(delivered, in_order, "jitter this large should shuffle a datagram link");
+    let mut sorted = delivered.clone();
+    sorted.sort_unstable();
+    assert_eq!(sorted, in_order, "but every packet still arrives exactly once");
   }
 
   #[test]

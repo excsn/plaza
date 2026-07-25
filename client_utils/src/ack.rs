@@ -142,6 +142,59 @@ impl AckWindow {
     (floor..end).filter(move |seq| self.started && !self.contains(*seq))
   }
 
+  /// The newest sequence such that **everything** from `known` up to it arrived,
+  /// with no gap anywhere in between.
+  ///
+  /// This is what a delta-compressing protocol wants, and it is not
+  /// [`newest`](Self::newest). A protocol that *retransmits* needs to know which
+  /// packets are missing, which is the mask. A protocol that *re-derives* needs a
+  /// state the peer provably reached, and receiving packet N+1 after losing N
+  /// does not put a peer in the state N+1 implies: whatever N announced and N+1
+  /// had no reason to repeat is simply gone. Taking the newest set bit as the
+  /// baseline hands the sender a state that never existed, and the resulting bug
+  /// is close to invisible, because the traffic looks correct and the divergence
+  /// is permanent. Measured, it made loss recovery statistically indistinguishable
+  /// from no recovery at every loss rate.
+  ///
+  /// `first` is the oldest sequence not yet accounted for: one past the baseline
+  /// a sender last settled on, or the oldest packet it still holds if it has
+  /// settled on none. Expressed as the first sequence to *check* rather than the
+  /// last one known, because a protocol numbering from zero has no representable
+  /// "one before the first".
+  ///
+  /// Returns `None` when the run is empty, which covers two cases a caller
+  /// treats identically: `first` did not arrive, or it is older than the window
+  /// can speak about after a reconnect or a long stall. Both mean the frontier
+  /// cannot advance, and neither is a reason to move it *backwards*, which is
+  /// the failure mode of the naive version: it sticks at an old base forever
+  /// instead of admitting the state is unreachable and resynchronising. Use
+  /// [`missing_since`](Self::missing_since) to tell the two apart when it
+  /// matters.
+  ///
+  /// Costs at most [`WINDOW`] steps, never a scan of history.
+  ///
+  /// ```
+  /// # use plaza_client_utils::ack::AckWindow;
+  /// let mut window = AckWindow::new();
+  /// for seq in [1u64, 2, 3, 5] {
+  ///   window.observe(seq);
+  /// }
+  /// // 5 arrived, but 4 did not, so the newest state the peer provably reached
+  /// // is the one after 3.
+  /// assert_eq!(window.newest(), Some(5));
+  /// assert_eq!(window.contiguous_base(1), Some(3));
+  /// ```
+  pub fn contiguous_base(&self, first: u64) -> Option<u64> {
+    if !self.contains(first) {
+      return None;
+    }
+    let mut base = first;
+    while base < self.newest && self.contains(base + 1) {
+      base += 1;
+    }
+    Some(base)
+  }
+
   /// How many of the window's slots are filled, the newest included. A cheap
   /// delivery-rate readout: `received_in_window` over the span it covers.
   pub fn received_in_window(&self) -> u32 {
@@ -254,6 +307,90 @@ mod tests {
     assert_eq!(clean.received_in_window(), 64);
     assert_eq!(awful.received_in_window(), 13);
     assert_eq!(core::mem::size_of_val(&clean.encode().unwrap()), core::mem::size_of_val(&awful.encode().unwrap()));
+  }
+
+  #[test]
+  fn the_contiguous_base_stops_at_the_first_gap_not_the_newest_bit() {
+    // The distinction the whole method exists for. A retransmitting protocol
+    // wants the mask; a re-deriving one wants a state the peer provably reached,
+    // and 5 arriving after 4 was lost does not put the peer in state 5.
+    let mut w = AckWindow::new();
+    for seq in [1u64, 2, 3, 5, 6, 7] {
+      w.observe(seq);
+    }
+    assert_eq!(w.newest(), Some(7));
+    assert_eq!(w.contiguous_base(1), Some(3), "took a state the peer never reached");
+  }
+
+  #[test]
+  fn a_run_that_reaches_the_newest_reports_it() {
+    let mut w = AckWindow::new();
+    for seq in 1..=10u64 {
+      w.observe(seq);
+    }
+    assert_eq!(w.contiguous_base(1), Some(10));
+    assert_eq!(w.contiguous_base(10), Some(10), "a run of one is still a run");
+    assert_eq!(w.contiguous_base(11), None, "nothing beyond the newest has arrived");
+  }
+
+  #[test]
+  fn a_protocol_numbering_from_zero_is_representable() {
+    // The reason this takes the first sequence to check rather than the last one
+    // known: with a `u64` there is no "one before sequence zero" to pass in, and
+    // a caller forced to invent one lands on zero, which reads as "zero already
+    // arrived" and quietly skips the first packet.
+    let mut w = AckWindow::new();
+    for seq in [0u64, 1, 2] {
+      w.observe(seq);
+    }
+    assert_eq!(w.contiguous_base(0), Some(2), "the very first packet is part of the run");
+  }
+
+  #[test]
+  fn a_filled_gap_lets_the_frontier_jump_past_it() {
+    // Reordering, not loss: the straggler arrives and the frontier should
+    // immediately cover everything it was blocking.
+    let mut w = AckWindow::new();
+    for seq in [1u64, 2, 4, 5, 6] {
+      w.observe(seq);
+    }
+    assert_eq!(w.contiguous_base(1), Some(2));
+    w.observe(3);
+    assert_eq!(w.contiguous_base(1), Some(6), "the whole run unblocked at once");
+  }
+
+  #[test]
+  fn a_base_older_than_the_window_is_reported_as_unknowable() {
+    // The failure mode a naive version gets wrong in the other direction, by
+    // sticking at an old base forever after a reconnect or a long stall. The
+    // honest answer is that contiguity cannot be established, so the caller
+    // resynchronises instead of backfilling.
+    let mut w = AckWindow::new();
+    w.observe(5);
+    w.observe(1000);
+    assert_eq!(w.contiguous_base(6), None, "the window cannot speak about 6..936");
+    // Still answerable inside the window.
+    assert_eq!(w.contiguous_base(1000), Some(1000));
+  }
+
+  #[test]
+  fn an_empty_window_has_no_run_at_all() {
+    let w = AckWindow::new();
+    assert_eq!(w.contiguous_base(0), None);
+    assert_eq!(w.contiguous_base(7), None);
+  }
+
+  #[test]
+  fn the_frontier_costs_at_most_a_window_regardless_of_the_gap() {
+    // It must never become a scan of history. `known` sitting exactly at the edge
+    // of the window is the worst case, and it is bounded.
+    let mut w = AckWindow::new();
+    for seq in 0..=WINDOW {
+      w.observe(seq);
+    }
+    assert_eq!(w.contiguous_base(0), Some(WINDOW));
+    assert_eq!(w.contiguous_base(WINDOW - 1), Some(WINDOW));
+    assert_eq!(w.contiguous_base(WINDOW), Some(WINDOW));
   }
 
   #[test]

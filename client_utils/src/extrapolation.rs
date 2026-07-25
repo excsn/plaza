@@ -106,18 +106,48 @@ where
     // Calculate how long ago (in client's time) this server state was received.
     let time_since_receipt_ms: u64 = target_client_render_time_ms - self.client_receipt_time_ms;
 
+    // Cap the *duration*, do not discard the extrapolation.
+    //
+    // Returning the un-extrapolated state past the limit is the obvious reading
+    // of "clamp", and it is a discontinuity: at the limit the entity has coasted
+    // `velocity * max_ms` forward, and one millisecond later it is drawn back at
+    // the raw sample. That is a jump of the entire extrapolation window, in the
+    // wrong direction, and jitter around the boundary makes it flicker back and
+    // forth. Capping the duration instead means the entity coasts to the limit
+    // and stops there, which is continuous.
+    let capped_ms = time_since_receipt_ms.min(max_extrapolation_duration_ms);
+
     if time_since_receipt_ms > max_extrapolation_duration_ms {
+      // Deliberately `warn`, and deliberately saying what it usually means.
+      //
+      // Holding is a legitimate outcome, so the temptation is to call this
+      // routine and quieten it. That is wrong: reaching this branch *steadily*
+      // is almost never a starved link, it is a **render target computed the
+      // wrong way**. A target derived from an absolute clock estimate sits ahead
+      // of the newest sample by the whole link delay, so the view never
+      // interpolates at all and every entity is drawn held or dead reckoned. The
+      // symptom on screen is remote entities that stutter or overshoot, and this
+      // line is the only place it announces itself.
+      //
+      // Steer the render clock toward the stream instead (see
+      // [`InterpolationClock::resync`]) so the target trails the newest sample
+      // by a couple of send intervals. Then this fires only on real starvation,
+      // which is bursty and rare and worth hearing about. For remote entities
+      // specifically, the standard answer is not to extrapolate at all: render
+      // in the past far enough that two real snapshots always bracket the
+      // target, which is Gambetta's entity interpolation and what
+      // `RenderOpts { extrapolate: false }` selects.
+      //
+      // [`InterpolationClock::resync`]: crate::interpolation::InterpolationClock::resync
       tracing::warn!(
         elapsed_ms = time_since_receipt_ms,
         max_ms = max_extrapolation_duration_ms,
-        "Extrapolation duration exceeds maximum. Clamping to last authoritative state."
+        "Extrapolation window exceeded, holding at the limit. Steady occurrences usually mean the render target is ahead of the newest snapshot rather than trailing it."
       );
-      // Exceeded max extrapolation window, clamp to the last known authoritative state.
-      return Some(self.state.clone());
     }
 
     // Convert the client-time extrapolation duration to the TimeDelta type for the state.
-    let extrapolation_delta: TimeDelta = convert_ms_to_time_delta(time_since_receipt_ms);
+    let extrapolation_delta: TimeDelta = convert_ms_to_time_delta(capped_ms);
 
     let extrapolated_state = self
       .state
@@ -136,6 +166,50 @@ where
 mod tests {
   use super::*;
   use crate::types::ClientTimeMs;
+
+  /// A one-dimensional position, so the boundary arithmetic is readable.
+  #[derive(Clone, Copy, Debug, PartialEq)]
+  struct Pos(f32);
+
+  impl Extrapolatable<f32, f32> for Pos {
+    fn extrapolate_with_velocity(&self, velocity: &f32, dt: f32) -> Self {
+      Pos(self.0 + velocity * dt)
+    }
+  }
+
+  #[test]
+  fn crossing_the_extrapolation_limit_does_not_move_the_entity_backwards() {
+    // The limit used to return the *un-extrapolated* state, so an entity coasted
+    // `velocity * max_ms` forward and then, one millisecond later, was drawn back
+    // at the raw sample. A jump of the whole window, in the wrong direction, and
+    // jitter around the boundary made it flicker. Capping the duration instead
+    // means it coasts to the limit and stops there.
+    let base = ExtrapolationBase::new(Pos(0.0), 100.0, 0u64, 0);
+    let max_ms = 120;
+    let at = |t: ClientTimeMs| base.get_extrapolated_state(t, max_ms, |ms| ms as f32 / 1000.0).unwrap();
+
+    let inside = at(119);
+    let outside = at(121);
+    assert!(
+      (outside.0 - inside.0).abs() < 1.0,
+      "crossing the limit jumped from {inside:?} to {outside:?}"
+    );
+    assert!(inside.0 > 11.0, "it really was extrapolating up to the limit: {inside:?}");
+  }
+
+  #[test]
+  fn past_the_limit_the_entity_holds_where_it_stopped() {
+    // Held at the limit, not at the sample, and held *steadily* however far the
+    // target runs on.
+    let base = ExtrapolationBase::new(Pos(0.0), 100.0, 0u64, 0);
+    let max_ms = 120;
+    let at = |t: ClientTimeMs| base.get_extrapolated_state(t, max_ms, |ms| ms as f32 / 1000.0).unwrap();
+
+    let limit = at(120);
+    assert_eq!(at(500), limit);
+    assert_eq!(at(5000), limit);
+    assert!((limit.0 - 12.0).abs() < 1e-4, "held at the limit's position: {limit:?}");
+  }
   use std::time::Duration; // For a concrete TimeDelta in tests
 
   #[derive(Debug, Clone, PartialEq)]
@@ -203,8 +277,17 @@ mod tests {
       .get_extrapolated_state(target_render_time, max_extrap_ms, ms_to_duration)
       .unwrap();
 
-    // Should clamp to the base state because 300ms > 200ms max
-    assert_eq!(extrapolated, base_state);
+    // Capped at 200ms of travel, *not* rewound to the base state. This assertion
+    // used to demand the base state, which is the discontinuity: at 200ms the
+    // entity has moved a full second's worth of velocity and at 201ms it was
+    // drawn back where it started.
+    let capped = base_state.position + base_velocity.speed * (max_extrap_ms as f32 / 1000.0);
+    assert!(
+      (extrapolated.position - capped).abs() < 1e-4,
+      "expected the position at the cap ({capped}), got {}",
+      extrapolated.position
+    );
+    assert_ne!(extrapolated, base_state, "past the cap must not rewind to the raw sample");
   }
 
   #[test]

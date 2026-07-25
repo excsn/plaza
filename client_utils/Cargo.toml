@@ -5,7 +5,7 @@ edition = { workspace = true }
 license = { workspace = true }
 
 authors = { workspace = true }
-description = "Client-side prediction, server reconciliation, and entity smoothing for real-time applications. No server dependencies."
+description = "Client-side prediction, server reconciliation, and entity smoothing for real-time applications. No async runtime and no server crates, so it builds for wasm."
 repository = { workspace = true }
 readme = "README.md"
 keywords = ["gamedev", "networking", "multiplayer", "prediction", "reconciliation"]

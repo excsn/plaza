@@ -2,7 +2,7 @@
 
 **License:** Mozilla Public License 2.0 (MPL-2.0) · **Status:** Experimental
 
-The client half of real-time networking: making a server's authoritative updates feel immediate and smooth. Client-side prediction, server reconciliation, interpolation, and extrapolation. Plus the other netcode family, peer-to-peer deterministic [rollback](#rollback-netcode).
+The client half of real-time networking: making a server's authoritative updates feel immediate and smooth. Client-side prediction (for either server input model), server reconciliation, interpolation, extrapolation, and the mirror that holds a streamed entity set and can prove it still agrees with the server. Plus the other netcode family, peer-to-peer deterministic [rollback](#rollback-netcode).
 
 The server half lives in [`plaza`](../core/) under `game_common::reconciliation`. Full surface in [API_REFERENCE.md](API_REFERENCE.md).
 
@@ -19,9 +19,10 @@ You do not need a Plaza server to use it. Anything speaking a sequence-numbered-
 
 ## Two ways in
 
-**The drop-in bundles.** Most clients wire the primitives the same way, so two types package the whole job:
+**The drop-in bundles.** Most clients wire the primitives the same way, so three types package the whole job:
 
-- `PredictedPlayer` is your controlled entity: feed it inputs and server packets, read a render position back. Predict, reconcile, and smooth, wired.
+- `PredictedPlayer` is your controlled entity when the server consumes **one input per simulation step**: feed it inputs and server packets, read a render position back. Predict, reconcile, replay, and smooth, wired.
+- `HeldInputPredictor` is your controlled entity when the server **holds a direction and integrates it every tick**: dead reckon locally, ease toward each authoritative sample. See [which predictor](#which-predictor).
 - `RemoteView` is an entity you do not control: `push` snapshots, `render` a state. Interpolation, extrapolation, and the starvation handling in between, wired.
 
 **Or the primitives underneath**, if you want finer control. The bundles are built from them and nothing more:
@@ -32,14 +33,41 @@ You do not need a Plaza server to use it. Anything speaking a sequence-numbered-
 | Other players' updates arrive discretely and jittery | `SnapshotBuffer` (+ `InterpolationClock` for the render target) |
 | Updates stop arriving for a moment | `ExtrapolationBase` |
 | A correction snaps the local entity to a new spot | `ErrorSmoother` |
+| Knowing whether a correction was normal, without a threshold you tuned once | `CorrectionMonitor` (running mean and variance, adaptive) |
 | The render clock drifts as latency changes | `InterpolationClock::resync` (position) or `observe_rate` (playback-rate glide) |
+| A variable frame has to drive a fixed-step simulation | `timestep::FixedTimestep` (and `Periodic` for "is it time yet") |
 | Measuring round-trip latency to the other end | `RttEstimator` (with `plaza_wire`'s `Ping`/`Pong`) |
 | Tracking clock offset **and drift** against a server | `ClockSyncEstimator` (least-squares offset + skew) |
 | Optimally smoothing one noisy signal (jitter, latency) | `ScalarKalman` (a 1D Kalman filter) |
 | Telling the other side what arrived, in twelve bytes, however bad the link | `ack::AckWindow` (a sliding-window bitmask) |
 | Coasting a *turning* entity through a long gap, not off its tangent | `trajectory::TrajectoryPredictor` (a damped quadratic fit) |
+| Sending an input only when it changes, without the state sticking on a lost packet | `coalesce::InputCoalescer` |
+| Holding the client side of a streamed entity set, and proving it still agrees | `mirror::DeltaMirror` (+ `SetDigest`, `SlotKey`, `SlotAllocator`) |
 
 Each is usable on its own. The [`netcode_playground`](../examples/netcode_playground/) example wires the whole picture together interactively, through the bundles.
+
+## Which predictor
+
+The two local-player bundles differ by how the **server** consumes input, not by how the client feels, and choosing wrong is silent: it shows up as a prediction that is always slightly behind.
+
+| the server | use |
+|---|---|
+| consumes one input per simulation step | `PredictedPlayer` (replay unacknowledged inputs) |
+| holds an input and integrates it every tick | `HeldInputPredictor` (dead reckon and ease) |
+
+Replaying inputs against a server of the second kind double counts, and it gets worse the more you economise on bandwidth, because one coalesced input can cover a long stretch of simulation. `InputCoalescer` pairs with `HeldInputPredictor` for exactly that reason and explicitly not with `PredictedPlayer`, whose server needs every input.
+
+Both share the same lifecycle vocabulary, so they read as one family: `set_active` (the server is holding this entity still, so stop integrating into it), `teleport` (a discontinuity, which must not be eased), a prediction context (`set_context`, for a rule that needs the world to run), and a `Correction` returned from `reconcile` for `CorrectionMonitor` to measure.
+
+## Two rules worth knowing before you predict anything
+
+Neither is enforceable by a type, and between them they account for every prediction bug found while building the playground examples. They prevent bugs, where everything else here only recovers from them.
+
+**A shared rule must be shared code, not code written twice.** The `apply` you hand a predictor is meant to *be* the server's step function, not a client approximation of it. Anything the server does that your copy leaves out arrives as a permanent correction: it looks like network jitter, it is largest exactly when it is most visible, and it is expensive to find later. If your rule needs the world to run (gravity, wind, a moving platform), that is what the context parameter is for; being unable to pass the world in is what pushes people into writing the second, lesser rule.
+
+**Prediction is presentation; shared rules consume authoritative state.** Feeding a locally predicted position into a rule that *both* sides run creates a second, divergent world, and every packet then fights the local one. Prediction drives the camera and the local player's own marker. The rules both sides run read the authoritative state, even though it is older.
+
+Both are drawn from measurement rather than taste: see [examples/LEARNINGS.md](../examples/LEARNINGS.md).
 
 ## Rollback netcode
 
@@ -132,6 +160,24 @@ Two later additions, both with a measured regime narrower than they first appear
 **`ack::AckWindow`** is a sequence number plus a bitmask of the 64 before it: one fixed-size record of exactly what arrived, so a sender can resend only the gaps. Fixed size is the point, a link losing half its packets reports in the same twelve bytes as a perfect one. Measured in [`rollback_playground`](../examples/rollback_playground/), swapping blind input redundancy for ack-driven redundancy cut bandwidth 28% on a clean link and *raised* it 45% at 50% loss, crossing over around 12%. The finding worth carrying is the one that was not obvious: blind redundancy makes a fixed number of attempts and then gives up, while ack-driven retries until acknowledged, so at 55% loss it converged where blind did not. The two policies are bounded effort against bounded outcome, not cheap against expensive. Its own limit is the history window, not the attempt count.
 
 **`trajectory::TrajectoryPredictor`** fits a damped quadratic through the last three samples of one scalar, so a turning entity coasted through a gap follows its curve instead of leaving on the tangent. Scalar deliberately, matching `ScalarKalman`: run one per axis rather than forcing a vector-space bound on every consumer. In isolation it cuts the error over a 100 ms gap on a circular path by 45%. In [`netcode_playground`](../examples/netcode_playground/) it does **nothing at all** at a normal server rate, and that negative result is the more useful half: the correction goes as the gap squared, and an adaptive buffer keeps the render target within a few milliseconds of the newest snapshot, so there is no gap to improve. It starts paying below about 10 Hz (7% at 5 Hz). Reach for it when your snapshot interval is long, not because it is the better algorithm.
+
+## The client half of a delta-relevance stream
+
+A server streaming interest-managed entities sends *entered* and *left* and lets each client keep a mirror. `plaza_server_utils::DeltaBaseline` owns the server's half; `mirror::DeltaMirror` is the half that has to agree with it, and the two are keyed by the same `SlotKey` and checked by the same `SetDigest`, which live here because a browser client needs them and must not inherit a server to get them.
+
+`DeltaMirror` applies the packet, checks generations, counts sequence gaps, folds the digest and compares it. The rule it carries is the reason it is a type rather than a snippet: **apply every packet, whatever baseline it names.** The instinct is the opposite, and that instinct is right for a *relative* delta protocol. These deltas carry absolute values, so applying them is idempotent and applying a superset is harmless, while discarding what you cannot rebase starves the mirror. Measured in `horde_playground`: a version that discarded emptied its mirror out at 25% loss while every agreement check read perfect, because the checks only ran over what had been applied.
+
+Its three counters stay separate on purpose. Sequence gaps mean the wire lost something; stale references mean a message named an occupant this mirror no longer holds; digest divergences are the symptom no counter predicts. "Forty mismatches and zero frames lost" and "forty mismatches and forty frames lost" are different bugs.
+
+## Fixed steps and periods
+
+`timestep::FixedTimestep` turns however long the last frame took into whole fixed steps. Three things it owns that six hand-written copies in this repo each got differently:
+
+- **The clamp.** A backgrounded tab, a resumed laptop or a debugger breakpoint returns an enormous delta; uncapped, the loop pays for all of it in one frame, which takes longer than a frame, which makes the next delta larger. Default cap is 250 ms.
+- **The step is yielded, not assumed.** `advance` returns an iterator of the step *duration*, so a caller cannot accidentally integrate by the frame delta instead. That is not hypothetical: a client integrating by frame delta against a fixed-step server drifts continuously and reads exactly like network jitter. Same rule is not enough; same timestep is required.
+- **Time refused is counted.** `dropped_ms` is real time the simulation never ran, and a world quietly behind wall time explains a whole class of "it desynced and I do not know when".
+
+`Periodic` is the same accumulator with a different consumption rule, and the split is deliberate. A fixed step asks "how much simulation does this frame pay for", where every step must run. A period asks "is it time yet", where the work is usually idempotent and running it twice in one frame is waste. So `due` fires at most once per advance and `advance` reports every occurrence.
 
 ## Math types
 

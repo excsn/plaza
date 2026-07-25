@@ -28,9 +28,57 @@
 //!   remote entity's movement for short durations to hide gaps between updates.
 //! - **`smoothing::ErrorSmoother`**: eases a reconciliation correction over a few frames
 //!   instead of snapping it.
+//! - **`timestep::FixedTimestep`** and **`Periodic`**: turning however long the
+//!   last frame took into whole fixed steps, or into "is it time yet". Two
+//!   simulations running the same rule at different step sizes are not the same
+//!   simulation, and the drift reads as network jitter, so both sides taking the
+//!   step from here is what keeps them equal.
 //! - **`rollback`**: the other netcode family, peer-to-peer deterministic lockstep.
 //!   `StateHistory`, `InputTimeline`, and the `RollbackSession` bundle predict a
 //!   missing remote input and roll back to re-simulate when the guess is disproved.
+//!
+//! # Two rules worth knowing before you predict anything
+//!
+//! Neither is enforceable by a type, and between them they account for every
+//! prediction bug found while building the playground examples. They prevent
+//! bugs, where everything else in this crate only recovers from them.
+//!
+//! **1. A shared rule must be shared code, not code written twice.** The `apply`
+//! you hand [`PredictedPlayer`] or [`HeldInputPredictor`] is meant to *be* the
+//! server's step function, not a client approximation of it. Anything the server
+//! does that your copy leaves out arrives as a permanent correction: it looks
+//! like network jitter, it is largest exactly when it is most visible, and it is
+//! extremely expensive to find later. Measured across two examples, every entity
+//! whose rule lived in one function both sides called was correct and stayed
+//! correct, and every entity whose rule was written twice drifted.
+//!
+//! If your client's rule needs the world to run (gravity, wind, a moving
+//! platform), that is what the context parameter is for. Being unable to pass
+//! the world in is exactly what pushes people into writing the second, lesser
+//! rule, so it is a deficiency in the API rather than a reason to fork the rule.
+//!
+//! **2. Prediction is presentation; shared rules consume authoritative state.**
+//! Feeding a locally predicted position into a rule that *both* sides run
+//! creates a second, divergent world, and every packet then fights the local
+//! one. Prediction drives the camera and the local player's own marker. The
+//! rules both sides run read the authoritative state, even though it is older.
+//! This is counterintuitive, because using the freshest local data looks like an
+//! improvement.
+//!
+//! # Which predictor
+//!
+//! The two differ by how the *server* consumes input, not by how the client
+//! feels. Choosing wrong is silent, and shows up as a prediction that is always
+//! slightly behind.
+//!
+//! | the server | use |
+//! |---|---|
+//! | consumes one input per simulation step | [`PredictedPlayer`] (replay unacknowledged inputs) |
+//! | holds an input and integrates it every tick | [`HeldInputPredictor`] (dead reckon and ease) |
+//!
+//! Replaying inputs against a server of the second kind double counts, and gets
+//! worse the more you economise on bandwidth, because one coalesced input can
+//! cover a long stretch of simulation.
 //!
 //! # Philosophy
 //!
@@ -45,17 +93,24 @@
 // Main module declarations
 pub mod ack;
 pub mod clock_sync;
+pub mod coalesce;
+pub mod correction;
+pub mod digest;
 pub mod error;
 pub mod filter;
+pub mod held_input;
 pub mod input_buffer;
+pub mod mirror;
 pub mod prediction;
 pub mod predicted_player;
 pub mod remote_view;
 pub mod rollback;
+pub mod slot;
 pub mod types;
 pub mod interpolation;
 pub mod extrapolation;
 pub mod smoothing;
+pub mod timestep;
 pub mod trajectory;
 pub mod rtt;
 pub mod math;
@@ -63,15 +118,23 @@ pub mod math;
 #[cfg(feature = "net-sim")]
 pub mod net_sim;
 
+pub use ack::AckWindow;
 pub use clock_sync::ClockSyncEstimator;
+pub use coalesce::InputCoalescer;
+pub use correction::{Correction, CorrectionMonitor};
+pub use digest::SetDigest;
 pub use error::ClientUtilError;
+pub use held_input::{HeldInputConfig, HeldInputPredictor};
 pub use filter::ScalarKalman;
 pub use input_buffer::{BufferedInput, ClientInputBuffer};
+pub use mirror::{Agreement, DeltaMirror, Divergence};
 pub use interpolation::{InterpolationClock, SnapshotBuffer};
 pub use predicted_player::{PlayerConfig, PredictedPlayer};
 pub use prediction::PredictedEntity;
 pub use remote_view::{RemoteView, RenderOpts};
 pub use rollback::{repeat_last_input, Frame, InputTimeline, RollbackConfig, RollbackSession, StateHistory};
 pub use rtt::RttEstimator;
+pub use slot::{ReusePolicy, SlotAllocator, SlotKey};
+pub use timestep::{FixedTimestep, Periodic, Steps};
 pub use smoothing::{ease_in_cubic, ease_in_out_quad, ease_in_quad, ease_out_cubic, linear, smoothstep, Easing, ErrorSmoother};
 pub use types::{ClientTimeMs, SequenceNumber};

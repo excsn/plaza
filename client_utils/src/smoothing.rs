@@ -189,6 +189,18 @@ impl<State: Clone> ErrorSmoother<State> {
     }
   }
 
+  /// Abandons any ease in progress, so the next [`sample`](Self::sample) returns
+  /// the logical state outright.
+  ///
+  /// For a discontinuity, where the entity did not travel from where it was being
+  /// drawn to where it now is: a teleport, a respawn, a level load. Easing across
+  /// one of those would slide the entity through everything in between, which is
+  /// a worse artefact than the snap the ease exists to avoid.
+  pub fn reset(&mut self) {
+    self.from = None;
+    self.elapsed = 0.0;
+  }
+
   /// Whether a correction is still being eased.
   pub fn is_easing(&self) -> bool {
     self.from.is_some()

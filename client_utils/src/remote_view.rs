@@ -18,7 +18,23 @@ use crate::extrapolation::{Extrapolatable, ExtrapolationBase};
 use crate::interpolation::{Interpolatable, SnapshotBuffer};
 
 /// How a [`RemoteView`] resolves a render. The booleans map directly onto UI
-/// toggles; a real client fixes them (interpolate and extrapolate both on).
+/// toggles; a real client fixes them, and **which way it fixes them is a real
+/// decision** rather than the obvious "both on".
+///
+/// Interpolation is nearly always right. Extrapolation is a fallback for a
+/// starved buffer, and whether it helps depends on the *entity*, not the game:
+/// it works when the next state follows from the current one, which is true of
+/// vehicles, projectiles and anything with inertia and a turning limit, and
+/// false of anything steered instantaneously by a person or an AI. Dead
+/// reckoning a player on foot, or an enemy that homes, is guessing at an
+/// intention nothing on the wire carries, so it overshoots every direction
+/// change and snaps back when the truth lands.
+///
+/// The safer default for steered entities is `extrapolate: false` plus a render
+/// delay of a couple of send intervals, so two real snapshots always bracket the
+/// target and the fallback is never reached. That is Gambetta's entity
+/// interpolation, and it trades a fixed, unnoticeable display lag for never
+/// guessing.
 #[derive(Debug, Clone, Copy)]
 pub struct RenderOpts {
   /// Interpolate at the target time. `false` draws the raw newest snapshot,
@@ -227,13 +243,24 @@ mod tests {
   }
 
   #[test]
-  fn extrapolation_holds_beyond_the_cap() {
+  fn extrapolation_holds_at_the_cap_rather_than_flying_off_or_snapping_back() {
     let mut v = view(); // max 500ms
     v.push(100, S { x: 0.0 }, 10.0);
     v.push(200, S { x: 1.0 }, 10.0);
-    // 2s past the newest, well beyond the 500ms cap: holds at the newest rather
-    // than flying off into the distance.
-    let far = v.render(Some(2200), RenderOpts { interpolate: true, extrapolate: true }).unwrap();
-    assert!((far.x - 1.0).abs() < 1e-3, "held at newest beyond the cap, got {}", far.x);
+    let opts = RenderOpts { interpolate: true, extrapolate: true };
+
+    // 2s past the newest, well beyond the 500ms cap. It must not fly off along
+    // the velocity, and it must not rewind to the newest sample either: it holds
+    // where the cap stopped it, which is the only continuous answer.
+    let at_cap = v.render(Some(700), opts).unwrap();
+    let far = v.render(Some(2200), opts).unwrap();
+    assert!((far.x - at_cap.x).abs() < 1e-3, "past the cap it must hold steady: {} then {}", at_cap.x, far.x);
+    assert!(far.x > 1.0, "and hold at the cap, not back at the newest sample: {}", far.x);
+
+    // The boundary itself is continuous, which is the property a jitter-y target
+    // crossing it back and forth depends on.
+    let inside = v.render(Some(699), opts).unwrap();
+    let outside = v.render(Some(701), opts).unwrap();
+    assert!((outside.x - inside.x).abs() < 0.05, "crossing the cap jumped: {} to {}", inside.x, outside.x);
   }
 }
