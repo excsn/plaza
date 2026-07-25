@@ -7,13 +7,13 @@
 //! entity silently lands on whatever now occupies its slot. Whether that actually
 //! happens here is measured, not assumed.
 
-use std::collections::BTreeMap;
 
-use plaza_client_utils::{ease_in_quad, ErrorSmoother};
-use plaza_client_utils::ack::AckWindow;
-use plaza_server_utils::relevance::SetDigest;
+use std::collections::HashMap;
 
-use crate::sim::types::{coin_pull, difficulty, enemy_speed_scale, repulsor_pulse, step_coin, Coin, CoinId, Crowd, Upgrade, Wallet, COIN_FLIGHT_MS, COIN_PICKUP_RADIUS, step_enemy, Controls, Enemy, EnemyKind, Handle, LeaveReason, Packet, PlayerId, Projectile, RemoteMode, Vec2, PLAYER_MAX_HEALTH, SIM_DT};
+use plaza_client_utils::mirror::{Agreement, DeltaMirror};
+use plaza_client_utils::{ease_in_quad, AckWindow, ErrorSmoother, InterpolationClock, RemoteView, RenderOpts, SlotKey};
+
+use crate::sim::types::{PlayerFrame, coin_pull, difficulty, enemy_speed_scale, repulsor_pulse, step_coin, Coin, CoinId, Crowd, Upgrade, Wallet, COIN_FLIGHT_MS, COIN_PICKUP_RADIUS, step_enemy, Controls, Enemy, EnemyKind, Handle, LeaveReason, Packet, PlayerId, Projectile, RemoteMode, Vec2, PLAYER_MAX_HEALTH, SIM_DT};
 
 /// A fading damage number floating up from where a shot landed.
 #[derive(Clone, Copy, Debug)]
@@ -78,8 +78,6 @@ fn lerp(a: &Vec2, b: &Vec2, t: f32) -> Vec2 {
 }
 
 struct RemoteEnemy {
-  /// The generation this client believes it holds, for detecting stale refs.
-  generation: u16,
   /// Kind came in the spawn and never changes, so it is never re-sent.
   kind: EnemyKind,
   sim: Enemy,
@@ -88,6 +86,46 @@ struct RemoteEnemy {
   last_ms: u64,
   prev_pos: Vec2,
   prev_ms: u64,
+}
+
+/// Snapshots buffered per player. Two is the minimum to interpolate between; a
+/// few more absorb a jittery arrival without the buffer starving.
+const PLAYER_VIEW_SNAPSHOTS: usize = 8;
+/// Unused in practice: peers are interpolated and never extrapolated, so the
+/// view holds the newest snapshot rather than dead reckoning past it. Kept as the
+/// bound `RemoteView` is constructed with, and deliberately short, so turning
+/// extrapolation on for an experiment cannot fling a peer across the arena.
+const PLAYER_EXTRAPOLATE_MS: u64 = 120;
+/// How fast the arrival-lateness statistics follow the link.
+const ARRIVAL_SMOOTHING: f32 = 0.05;
+/// The shortest gap between two samples that yields a usable velocity. Below it
+/// the division amplifies noise into a spike.
+const MIN_VELOCITY_GAP_MS: u64 = 8;
+
+/// The single instant a frame is drawn at.
+///
+/// A newtype with a private field, so the only way to obtain one is
+/// [`Client::render_at`]. That is the whole point: every remote thing on screen
+/// has to be evaluated at the *same* time or the picture contradicts itself, and
+/// the way that goes wrong is somebody reaching for `now_ms` in one draw path
+/// because it is right there. This makes that unavailable rather than
+/// discouraged.
+///
+/// Why one shared timeline at all, rather than drawing each thing as fresh as its
+/// data allows: **a uniform delay is imperceptible and an inconsistent one is
+/// not.** A world entirely 40 ms old looks right, because everything in it agrees
+/// with everything else. A world where the enemies are at now, the peers are 25 ms
+/// back and the shots are somewhere between shows its seams as muzzles detaching
+/// from shooters and bullets passing through enemies. This is what every online
+/// shooter does: one interpolation timeline for all remote state, and prediction
+/// only for the entity you control.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct RenderAt(u64);
+
+impl RenderAt {
+  pub fn server_time_ms(self) -> u64 {
+    self.0
+  }
 }
 
 /// How long an announcement stays on screen.
@@ -125,27 +163,95 @@ impl CoinFlight {
 
 pub struct Client {
   pub id: PlayerId,
-  enemies: BTreeMap<Handle, RemoteEnemy>,
+  /// This client's copy of the entity stream, and everything that says whether
+  /// the copy is right: the generation checks, the sequence gaps, the
+  /// acknowledgement window, and the digest the server compares against.
+  ///
+  /// All of that used to live here as loose fields. It is
+  /// [`DeltaMirror`](plaza_client_utils::DeltaMirror) now, which is the exact
+  /// counterpart of the server's `DeltaBaseline`: the two have to agree, and the
+  /// only way to be sure they do is for both to be one implementation rather
+  /// than two that look alike.
+  enemies: DeltaMirror<RemoteEnemy>,
+  /// The authoritative player positions, as last received.
+  ///
+  /// **This is what the shared rules read**, deliberately: `step_enemy` aims at
+  /// a player, and the server aims at its own authoritative copy, so the client
+  /// must too. Feeding a locally massaged position in here is the mistake that
+  /// once made the whole horde lunge whenever the local player moved.
   players: Vec<Vec2>,
+  /// The same players, buffered for *drawing* them smoothly between samples.
+  ///
+  /// Separate from `players` for the reason above: this is presentation, and it
+  /// never reaches a rule. `RemoteView` is exactly the block for it, so a peer
+  /// gets interpolation with dead reckoning on starvation rather than the raw
+  /// newest sample, which is what made other players visibly teleport at low
+  /// send rates.
+  player_views: Vec<RemoteView<Vec2, Vec2>>,
+  /// Server time of each player's last sample, for deriving a velocity and for
+  /// rejecting a sample that arrives out of order.
+  player_sample_ms: Vec<u64>,
+  /// Each player's last derived velocity, kept so a pair of samples too close
+  /// together in time does not produce a spike.
+  player_velocity: Vec<Vec2>,
+  /// Smoothed gap between player frame arrivals, in ms. Measured rather than
+  /// taken from the configured rate, so the server may send at any rate it likes.
+  arrival_interval_ms: f32,
+  last_player_frame_ms: u64,
+  /// Smoothed spread in how late player frames arrive, in ms.
+  ///
+  /// The render delay has to cover the *irregularity* of arrivals, not their
+  /// average: a steady 200 ms link needs no more buffer than a steady 20 ms one,
+  /// because a constant delay just shifts the whole timeline. What eats the
+  /// buffer is one frame arriving later than its neighbours. Mean deviation
+  /// rather than variance, which is what RFC 6298 uses for the same job and is
+  /// cheaper and less spike-prone.
+  arrival_jitter_ms: f32,
+  /// The mean arrival lateness the deviation is measured against.
+  arrival_mean_ms: f32,
+  /// The clock peers are drawn against.
+  ///
+  /// It cannot be `now_ms - delay`, which is what the first version of this did.
+  /// `now_ms` is an estimate of server time *now*, and a sample is a link delay
+  /// old by the time it arrives, so that target sits *ahead* of the newest
+  /// sample and the view spends its whole life extrapolating and then clamping.
+  /// On a host it is worse still, because pongs come back instantly while frames
+  /// go through the impairment link, so the two disagree by the whole latency.
+  ///
+  /// [`InterpolationClock::resync`] steers toward the newest sample instead, so
+  /// the target self-calibrates to whatever the link is doing without knowing
+  /// the latency, the jitter, or how good the clock sync is.
+  render_clock: InterpolationClock<u64>,
+  /// How far behind the server clock this client displays the world. Declared by
+  /// the server, identical on every client, and never moved by the link.
+  render_delay_ms: u64,
+  /// Packets that arrived after the instant they describe had already gone past.
+  /// The honest form of what an adaptive buffer used to hide by widening the
+  /// delay until late packets fitted.
+  underruns: u64,
+  /// Packets that have arrived but whose moment has not come.
+  ///
+  /// **Nothing is applied on arrival.** A packet describes the world at its own
+  /// `server_time_ms`, and it is applied when the render clock reaches that
+  /// instant, so a death, a spark, a coin claim, a spawn and a position all land
+  /// at the time they actually happened rather than at the time the network got
+  /// round to delivering them. Without this the players were on the render
+  /// timeline and everything else was ahead of it, which means there is no single
+  /// instant the world can be asked about, and a replay camera has nothing to
+  /// drive.
+  queued: Vec<Packet>,
+  /// The live shots, as the last packet reported them, and the server time that
+  /// packet described.
+  ///
+  /// Authoritative: a shot that hit something stops appearing, which is the whole
+  /// reason this is the live set rather than a spawn event the client flies
+  /// itself. Carried forward to now for drawing, since a constant velocity
+  /// evaluated at a time is exact.
   pub projectiles: Vec<Projectile>,
+  projectiles_at_ms: u64,
   now_ms: u64,
 
-  /// A reference whose generation did not match what we hold. With generations
-  /// on these are rejected; with them off the same reference would have been
-  /// applied to the wrong entity.
-  pub stale_refs: u64,
   pub deaths_seen: u64,
-  /// Packets after which this client's mirror did not match the server's digest.
-  /// A real client would ask for a full resync; here it is counted, because the
-  /// point is that the divergence is *visible at all*.
-  pub digest_mismatches: u64,
-  /// Frames the wire dropped, detected as gaps in the sequence number. The direct
-  /// cause of a digest mismatch: a lost frame is a hole recovery must re-derive.
-  pub frames_lost: u64,
-  /// Which packets have arrived. Twelve bytes back up the wire, and the whole
-  /// input to the server's recovery: it needs to know which of its deltas the
-  /// client is actually holding, and nothing else.
-  pub acks: AckWindow,
   /// The distant crowds this client was told about, in place of the entities
   /// themselves. What lets it draw a whole-arena map from its own knowledge
   /// rather than from the server's.
@@ -172,6 +278,10 @@ pub struct Client {
   /// be compared. A single field would make the error unmeasurable, which is the
   /// mistake that has hidden four separate defects in this project already.
   pub believed_balance: u32,
+  /// How many pickups this client has predicted, ever. The denominator the
+  /// denial count means nothing without: no denials because every guess was
+  /// right and no denials because it never guessed look identical otherwise.
+  pub predicted_total: u64,
   /// Coins this client predicted it won. Cleared when the server confirms or
   /// denies.
   predicted_claims: Vec<CoinId>,
@@ -209,7 +319,6 @@ pub struct Client {
   /// The newest sequence this client has actually *applied*. Only these are
   /// acknowledged, because that is what the server needs to know: not what
   /// arrived, but which state the client is in.
-  applied_seq: Option<u64>,
 
   /// Every player's health and respawn shield, from the last packet.
   pub player_health: Vec<u8>,
@@ -226,20 +335,29 @@ impl Client {
   pub fn new(id: PlayerId, player_count: usize) -> Self {
     Self {
       id,
-      enemies: BTreeMap::new(),
+      enemies: DeltaMirror::new(),
       players: vec![Vec2::default(); player_count],
+      player_views: (0..player_count).map(|_| RemoteView::new(PLAYER_VIEW_SNAPSHOTS, PLAYER_EXTRAPOLATE_MS)).collect(),
+      player_sample_ms: vec![0; player_count],
+      player_velocity: vec![Vec2::default(); player_count],
+      arrival_interval_ms: 0.0,
+      last_player_frame_ms: 0,
+      arrival_jitter_ms: 0.0,
+      arrival_mean_ms: 0.0,
+      render_clock: InterpolationClock::new(0),
+      render_delay_ms: 100,
+      underruns: 0,
+      queued: Vec::new(),
       projectiles: Vec::new(),
+      projectiles_at_ms: 0,
       now_ms: 0,
-      stale_refs: 0,
       deaths_seen: 0,
-      digest_mismatches: 0,
-      frames_lost: 0,
-      acks: AckWindow::new(),
       crowds: Vec::new(),
       coins: Vec::new(),
       flights: Vec::new(),
       wallets: vec![Wallet::default(); player_count],
       believed_balance: 0,
+      predicted_total: 0,
       predicted_claims: Vec::new(),
       denied_claims: 0,
       believed_upgrades: Vec::new(),
@@ -247,7 +365,6 @@ impl Client {
       est_server_ms: 0,
       pending_buys: Vec::new(),
       wrong_rule_packets: 0,
-      applied_seq: None,
       player_health: vec![PLAYER_MAX_HEALTH as u8; player_count],
       player_invuln: vec![false; player_count],
       popups: Vec::new(),
@@ -325,6 +442,7 @@ impl Client {
       false
     });
     for (coin, from) in won {
+      self.predicted_total += 1;
       self.predicted_claims.push(coin);
       self.flights.push(CoinFlight {
         id: coin,
@@ -362,14 +480,171 @@ impl Client {
     self.enemies.len()
   }
 
+  /// Drop one held enemy, standing in for the silent mirror drift a real socket
+  /// produces: an entity the server still believes this client holds, so it is
+  /// only ever sampled again and the sample discarded. The incremental stream can
+  /// never re-send it; only the acknowledged-digest check recovers it.
+  #[cfg(test)]
+  pub fn force_drop_an_enemy(&mut self) -> bool {
+    let victim = self.enemies.keys().next();
+    if let Some(key) = victim {
+      self.enemies.remove(key);
+      return true;
+    }
+    false
+  }
+
   /// The difficulty multiplier this client believes, from its clock estimate.
   pub fn difficulty(&self) -> f32 {
     difficulty(self.est_server_ms)
   }
 
-  /// Every player position as last known, for drawing peers.
+  /// Every player position as last known. What the shared rules read.
   pub fn players(&self) -> &[Vec2] {
     &self.players
+  }
+
+  /// Where each held enemy is **going** to be: the newest position received, from
+  /// packets held but not yet due.
+  ///
+  /// The opposite of what the name suggests. The *actual* position is the delayed
+  /// one, played out of the buffer at the render instant, and it is correct
+  /// rather than approximate. This is the future, so the gap between them is the
+  /// playout delay made visible: where the marker is about to resolve to. An
+  /// empty ghost means the buffer has run dry.
+  pub fn ghost_enemies(&self) -> Vec<(Vec2, EnemyKind)> {
+    let mut newest: HashMap<u64, (u64, Vec2)> = HashMap::new();
+    for packet in &self.queued {
+      for sample in &packet.samples {
+        let key = SlotKey::from(sample.handle).encode();
+        let slot = newest.entry(key).or_insert((0, sample.pos));
+        if packet.server_time_ms >= slot.0 {
+          *slot = (packet.server_time_ms, sample.pos);
+        }
+      }
+    }
+    newest
+      .into_iter()
+      .filter_map(|(key, (_, pos))| self.enemies.get(SlotKey::decode(key)).map(|e| (pos, e.kind)))
+      .collect()
+  }
+
+  /// Adopt the server's declared render delay. See
+  /// [`ServerPolicy::render_delay_ms`](crate::sim::protocol::ServerPolicy::render_delay_ms).
+  pub fn set_render_delay(&mut self, ms: u64) {
+    self.render_delay_ms = ms;
+  }
+
+  pub fn render_delay_ms(&self) -> u64 {
+    self.render_delay_ms
+  }
+
+  /// How many packets arrived too late to be played at the instant they describe.
+  pub fn underruns(&self) -> u64 {
+    self.underruns
+  }
+
+  /// The instant this frame should be drawn at, once the stream has started.
+  ///
+  /// The only way to get a [`RenderAt`], and therefore the only way to draw
+  /// anything: every remote accessor demands one, so a frame is consistent by
+  /// construction rather than by everybody remembering to use the same clock.
+  pub fn render_at(&self) -> Option<RenderAt> {
+    self.render_clock.target().map(RenderAt)
+  }
+
+  /// Where to draw each shot, at the render instant.
+  ///
+  /// The packet that reported these was applied when the clock reached *its*
+  /// timestamp, so the list is the set of shots alive at that moment, and this
+  /// carries them the small remaining distance to the current render instant. A
+  /// shot therefore leaves the player who fired it, both being drawn at the same
+  /// time, and a shot the server has destroyed simply is not in the list.
+  pub fn render_projectiles(&self, at: RenderAt) -> Vec<Vec2> {
+    let age = at.server_time_ms().saturating_sub(self.projectiles_at_ms) as f32 / 1000.0;
+    self
+      .projectiles
+      .iter()
+      .map(|p| Vec2::new(p.pos.x + p.vel.x * age, p.pos.y + p.vel.y * age))
+      .collect()
+  }
+
+  /// Where to *draw* each player: interpolated between samples, dead reckoned a
+  /// little way past the newest, and held after that.
+  ///
+  /// Rendered a send interval in the past, which is what lets two samples
+  /// bracket the target and makes the motion continuous. A caller substitutes
+  /// its own predicted position for the local player, which is neither
+  /// interpolated nor late.
+  pub fn render_players(&self, at: RenderAt) -> Vec<Vec2> {
+    let target = Some(at.0);
+    self
+      .player_views
+      .iter()
+      .enumerate()
+      // Interpolate, never extrapolate. This is Gambetta's entity interpolation
+      // exactly: render in the past by enough that two real snapshots bracket the
+      // target, and accept a fixed, invisible display lag instead of guessing at
+      // where a peer went. Dead reckoning a *player* is guessing at a human's
+      // intention, which nothing on the wire carries, so it overshoots on every
+      // direction change and then snaps back when the truth lands.
+      .map(|(p, view)| {
+        view
+          .render(target, RenderOpts { interpolate: true, extrapolate: false })
+          .unwrap_or_else(|| self.players[p])
+      })
+      .collect()
+  }
+
+  /// Folds in a player stream frame. See [`Controls::player_sync_hz`] for why
+  /// this arrives separately from, and far more often than, the entity stream.
+  pub fn on_player_frame(&mut self, frame: &PlayerFrame, recv_ms: u64) {
+    self.now_ms = recv_ms;
+    self.est_server_ms = frame.server_time_ms;
+    for (p, pos) in &frame.players {
+      self.observe_player(*p as usize, *pos, frame.server_time_ms);
+    }
+    // Steer the render clock toward the stream rather than toward a clock
+    // estimate. Gently, so it glides instead of snapping on every frame.
+    self.observe_arrival(frame.server_time_ms, recv_ms);
+    if !frame.player_health.is_empty() {
+      self.player_health.clone_from(&frame.player_health);
+    }
+    if !frame.player_invuln.is_empty() {
+      self.player_invuln.clone_from(&frame.player_invuln);
+    }
+  }
+
+  /// Records one authoritative player position, on whichever stream carried it.
+  ///
+  /// The velocity handed to the view is derived from the previous sample rather
+  /// than sent: a player's direction is a human's input and nothing on the wire
+  /// predicts it, so the last observed motion is the only honest guess.
+  fn observe_player(&mut self, p: usize, pos: Vec2, server_time_ms: u64) {
+    if p >= self.players.len() {
+      return;
+    }
+    // Two streams carry players, and they interleave: the entity packet is built
+    // less often and travels the same delayed link, so one can arrive *after* a
+    // newer player frame. Taking it anyway walks the authoritative position
+    // backwards in time, and `players` is what the enemy rule reads.
+    let gap_ms = server_time_ms.saturating_sub(self.player_sample_ms[p]);
+    if self.player_sample_ms[p] > 0 && gap_ms == 0 {
+      return;
+    }
+
+    // A velocity is only meaningful over a real interval. Two samples a couple of
+    // milliseconds apart divide a small position difference by a smaller time and
+    // produce a spike, which the view then dead reckons along: that is what made
+    // peers look worse than the teleporting they replaced.
+    if gap_ms >= MIN_VELOCITY_GAP_MS {
+      let previous = self.players[p];
+      let elapsed = gap_ms as f32 / 1000.0;
+      self.player_velocity[p] = Vec2::new((pos.x - previous.x) / elapsed, (pos.y - previous.y) / elapsed);
+    }
+    self.player_views[p].push(server_time_ms, pos, self.player_velocity[p]);
+    self.player_sample_ms[p] = server_time_ms;
+    self.players[p] = pos;
   }
 
   /// Overrides the local player's position with a locally predicted one.
@@ -384,7 +659,78 @@ impl Client {
     }
   }
 
-  pub fn on_packet(&mut self, packet: &Packet, recv_ms: u64, controls: &Controls) {
+  /// Notes that something arrived, and steers the render clock toward it.
+  ///
+  /// Both streams feed this. The clock has to track what has *arrived* to decide
+  /// how far behind to sit, and the buffer it holds is sized from how irregular
+  /// arrivals are rather than from any configured rate, so the server may send at
+  /// whatever rate it likes and change it live.
+  fn observe_arrival(&mut self, server_time_ms: u64, recv_ms: u64) {
+    // Tracks the synced server clock (`recv_ms`), not the packet's timestamp:
+    // steering by the timestamp puts the estimate one trip behind and makes T
+    // depend on latency, which is the conflation this design removes.
+    self.render_clock.resync(recv_ms, 1.0);
+
+    let lateness = recv_ms.saturating_sub(server_time_ms) as f32;
+    if self.last_player_frame_ms > 0 && server_time_ms > self.last_player_frame_ms {
+      let gap = (server_time_ms - self.last_player_frame_ms) as f32;
+      self.arrival_interval_ms = if self.arrival_interval_ms == 0.0 {
+        gap
+      } else {
+        self.arrival_interval_ms + (gap - self.arrival_interval_ms) * ARRIVAL_SMOOTHING
+      };
+    }
+    if server_time_ms > self.last_player_frame_ms {
+      self.last_player_frame_ms = server_time_ms;
+    }
+    if self.arrival_mean_ms == 0.0 {
+      self.arrival_mean_ms = lateness;
+    } else {
+      let deviation = (lateness - self.arrival_mean_ms).abs();
+      self.arrival_mean_ms += (lateness - self.arrival_mean_ms) * ARRIVAL_SMOOTHING;
+      self.arrival_jitter_ms += (deviation - self.arrival_jitter_ms) * ARRIVAL_SMOOTHING;
+    }
+  }
+
+  /// Takes delivery of a packet. Does **not** apply it: see [`Client::queued`].
+  ///
+  /// The render clock is steered here rather than at apply time, because it has
+  /// to track what has *arrived* in order to decide how far behind to sit.
+  pub fn receive_packet(&mut self, packet: Packet, recv_ms: u64) {
+    self.now_ms = recv_ms;
+    self.observe_arrival(packet.server_time_ms, recv_ms);
+    // Late: its instant has passed, so it can never be played at the right
+    // moment. Counted rather than compensated for.
+    if self.render_at().is_some_and(|at| packet.server_time_ms < at.server_time_ms()) {
+      self.underruns += 1;
+    }
+    self.queued.push(packet);
+  }
+
+  /// Applies every queued packet whose moment has arrived, oldest first.
+  ///
+  /// Returns whether anything was applied, which is when a client has something
+  /// new to acknowledge: the acknowledgement carries the digest of the mirror,
+  /// so it has to describe the state actually *reached*, not the packets merely
+  /// received.
+  fn apply_due(&mut self, controls: &Controls) -> bool {
+    let Some(at) = self.render_at() else {
+      return false;
+    };
+    let now = at.server_time_ms();
+    // Oldest first, so deltas compose in the order the server built them.
+    self.queued.sort_by_key(|p| p.seq);
+    let due = self.queued.iter().take_while(|p| p.server_time_ms <= now).count();
+    if due == 0 {
+      return false;
+    }
+    for packet in self.queued.drain(..due).collect::<Vec<_>>() {
+      self.apply_packet(&packet, now, controls);
+    }
+    true
+  }
+
+  fn apply_packet(&mut self, packet: &Packet, recv_ms: u64, controls: &Controls) {
     // Every packet is applied, whatever baseline it names.
     //
     // Worth stating because the instinct is the opposite, and the instinct is
@@ -398,23 +744,27 @@ impl Client {
     // A gap in the sequence is a dropped frame: every frame is numbered, the link
     // is ordered, so a jump of more than one means the wire lost the ones in
     // between. This is the direct measure of whether frames are being dropped.
-    if let Some(prev) = self.applied_seq
-      && packet.seq > prev + 1
-    {
-      self.frames_lost += packet.seq - prev - 1;
-    }
-    self.applied_seq = Some(packet.seq);
-    self.acks.observe(packet.seq);
+    // Opening the packet: the mirror notes what the wire lost, acknowledges the
+    // sequence, and tears itself down if this is a full baseline (which the
+    // server only sends when it can no longer reach this mirror by deltas, so
+    // merging into the old contents would keep the very drift it is repairing).
+    // Only the enemy set is torn down; players, coins and wallets are absolute in
+    // every packet already.
+    // The panel can turn generations off to demonstrate what they prevent. The
+    // mirror rebuilds when it changes, because the key space itself changes.
+    self.enemies.set_generations(controls.generational_ids);
+    self.enemies.begin(packet.seq, packet.full_baseline);
     self.now_ms = recv_ms;
     self.est_server_ms = packet.server_time_ms;
     let generational = controls.generational_ids;
 
+    // The entity stream still carries the players, so a client is never without
+    // them, and both streams feed the same buffer on the same server timeline.
     for (p, pos) in &packet.players {
-      if (*p as usize) < self.players.len() {
-        self.players[*p as usize] = *pos;
-      }
+      self.observe_player(*p as usize, *pos, packet.server_time_ms);
     }
     self.projectiles = packet.projectiles.clone();
+    self.projectiles_at_ms = packet.server_time_ms;
     self.crowds.clone_from(&packet.crowds);
     if !packet.player_health.is_empty() {
       self.player_health.clone_from(&packet.player_health);
@@ -489,10 +839,11 @@ impl Client {
     // authoritative snapshot, and it cannot drift because there is nothing to
     // drift from. Anything the server does that the client did not model is
     // absorbed for free.
-    // A prediction is only outstanding while the coin is still unresolved. If the
-    // server's list no longer carries it and no claim named it, it expired, and a
-    // prediction with nothing left to confirm it must be dropped or the
-    // outstanding count grows without bound.
+    // A prediction is only outstanding while the coin is still unresolved. Once
+    // the server's list no longer carries it, it is settled one way or another
+    // and the prediction has to be retired, or the outstanding count grows
+    // without bound.
+    //
     let still_there: std::collections::BTreeSet<CoinId> = packet.coins.iter().map(|c| c.id).collect();
     self.predicted_claims.retain(|c| still_there.contains(c));
     // Hide coins already predicted, or the next tick predicts them again. The
@@ -557,32 +908,23 @@ impl Client {
       if died {
         self.deaths_seen += 1;
       }
-      let key = handle.key(generational);
-      match self.enemies.get(&key) {
-        // Generation mismatch: this names an occupant we no longer hold. With
-        // generations off the key would have matched and we would have removed
-        // the wrong entity.
-        Some(existing) if generational && existing.generation != handle.generation => {
-          self.stale_refs += 1;
-        }
-        Some(existing) => {
-          // A death gets an explosion where the client last had the enemy.
-          if died {
-            let pos = existing.sim.pos;
-            self.bursts.push(Burst { pos, age: 0.0, big: true });
-          }
-          self.enemies.remove(&key);
-        }
-        None => {}
+      // A death gets an explosion where the client last had the enemy, so the
+      // position is read before the removal. The mirror refuses a removal whose
+      // generation names an occupant it no longer holds, and counts it: with
+      // generations off the key matches and the wrong entity is deleted, which is
+      // the whole demonstration.
+      let pos = died.then(|| self.enemies.get(handle.into()).map(|e| e.sim.pos)).flatten();
+      if self.enemies.remove(handle.into()).is_some()
+        && let Some(pos) = pos
+      {
+        self.bursts.push(Burst { pos, age: 0.0, big: true });
       }
     }
 
     for spawn in &packet.entered {
-      let key = spawn.handle.key(generational);
       self.enemies.insert(
-        key,
+        spawn.handle.into(),
         RemoteEnemy {
-          generation: spawn.handle.generation,
           kind: spawn.kind,
           sim: Enemy {
             pos: spawn.pos,
@@ -600,21 +942,28 @@ impl Client {
       );
     }
 
-    // How stale this packet is. In-process both sides share a clock, so this is
-    // the exact one-way delay; a real client estimates it from clock sync.
-    let age_ms = recv_ms.saturating_sub(packet.server_time_ms);
+    // How far this sample has to be carried to reach the instant being drawn.
+    //
+    // The **render target**, not now. Every other remote thing on screen is drawn
+    // at the target, so simulating an enemy to now puts it on a different clock
+    // from the peers and the shots, and the picture contradicts itself: a shot
+    // leaves a player who is 25 ms in the past and arrives at an enemy who is
+    // not. One timeline for all remote state is what an online shooter does, and
+    // the delay is invisible precisely because it is uniform.
+    //
+    // Before the stream starts there is no target, so fall back to the arrival
+    // clock; that is the join transient and it lasts one render delay.
+    let render_now = self.render_clock.target().unwrap_or(recv_ms);
+    let age_ms = render_now.saturating_sub(packet.server_time_ms);
     let players = self.players.clone();
     let repels: Vec<Option<f32>> = self.repel_flags();
 
     for sample in &packet.samples {
-      let key = sample.handle.key(generational);
-      let Some(entity) = self.enemies.get_mut(&key) else {
+      // A sample for an occupant this mirror no longer holds is refused and
+      // counted, rather than moving whoever inherited the slot.
+      let Some(entity) = self.enemies.get_mut(sample.handle.into()) else {
         continue;
       };
-      if generational && entity.generation != sample.handle.generation {
-        self.stale_refs += 1;
-        continue;
-      }
       if let Some(t) = sample.target {
         entity.sim.target = t;
       }
@@ -647,19 +996,58 @@ impl Client {
 
     // Everything in this packet is applied, so the mirror must now match what the
     // server said it should be. This is the check that a lost or malformed
-    // despawn cannot hide from.
+    // despawn cannot hide from, and the digest it settles on rides the next
+    // acknowledgement so the server can see the same disagreement and repair it.
     if generational {
-      let mine = SetDigest::from_keys(self.enemies.keys().map(|h| ((h.idx as u64) << 16) | h.generation as u64)).digest();
-      if mine != packet.visible_digest {
-        self.digest_mismatches += 1;
+      if let Agreement::Diverged { held, expected } = self.enemies.settle(packet.visible_digest) {
+        // A digest detects a divergence and cannot diagnose one, so under
+        // `debug_digest` the server ships its own key set alongside. Which side
+        // the difference falls on names the bug: `missing` was lost or never
+        // sent, `extra` is a removal that never landed.
+        if !packet.debug_keys.is_empty() {
+          let divergence = self.enemies.divergence_from(packet.debug_keys.iter().copied());
+          let spell = |k: &SlotKey| (k.index, k.generation);
+          eprintln!(
+            "digest mismatch seq={} baseline_seq={:?} held={held:016x} server={expected:016x} extra(slot,gen)={:?} missing(slot,gen)={:?}",
+            packet.seq,
+            packet.baseline_seq,
+            divergence.extra.iter().map(spell).collect::<Vec<_>>(),
+            divergence.missing.iter().map(spell).collect::<Vec<_>>(),
+          );
+        }
       }
     }
   }
 
-  pub fn tick(&mut self, dt_ms: u64, controls: &Controls) {
+  /// Advances the render clock, plays out every packet whose moment has come,
+  /// and steps everything that moves between packets.
+  ///
+  /// Returns whether a packet was applied, which is when there is something new
+  /// to acknowledge.
+  pub fn tick(&mut self, dt_ms: u64, controls: &Controls) -> bool {
     self.now_ms += dt_ms;
     self.est_server_ms += dt_ms;
     let dt = dt_ms as f32 / 1000.0;
+
+    // One observed send interval, which is the minimum for two samples to bracket
+    // the target, plus enough to cover how irregular arrivals actually are.
+    //
+    // **Observed, not configured.** The client never asks what rate the server
+    // was set to: it measures the gap between arrivals and the spread in their
+    // lateness, so the server is free to send at whatever rate it likes, change
+    // it live, or have the number mean something different by the time it
+    // arrives. A client that trusts a configured rate is wrong exactly when the
+    // rate is being changed, which is when it matters.
+    //
+    // Only the *interpolated* stream constrains this. Enemies are simulated
+    // forward from one sample, so however slowly they arrive they do not widen
+    // the buffer; the peers need two samples to interpolate between, so they do.
+    self.render_clock.set_delay(self.render_delay_ms);
+    self.render_clock.advance(dt_ms);
+
+    // The clock has moved, so anything it has now reached is played out before
+    // the world is stepped forward from it.
+    let applied = self.apply_due(controls);
 
     if controls.mode == RemoteMode::Simulate {
       let players = self.players.clone();
@@ -732,17 +1120,50 @@ impl Client {
     for entity in self.enemies.values_mut() {
       entity.smoother.advance(dt);
     }
-    // Shots keep flying locally between packets.
-    for p in &mut self.projectiles {
-      p.pos.x += p.vel.x * dt;
-      p.pos.y += p.vel.y * dt;
-      p.ttl -= dt;
+    // Expiry only. The server owns when a shot ends: it stops listing one that
+    // hit something, and the list is replaced wholesale by each packet as it is
+    // played out.
+    if let Some(at) = self.render_at() {
+      let age = at.server_time_ms().saturating_sub(self.projectiles_at_ms) as f32 / 1000.0;
+      self.projectiles.retain(|p| p.ttl - age > 0.0);
     }
-    self.projectiles.retain(|p| p.ttl > 0.0);
+    applied
+  }
+
+  /// Which packets have arrived. Twelve bytes back up the wire, and the whole
+  /// input to the server's recovery: it needs to know which of its deltas the
+  /// client is actually holding, and nothing else.
+  pub fn acks(&self) -> &AckWindow {
+    self.enemies.acks()
+  }
+
+  /// The digest of this client's mirror after the most recent packet, sent up on
+  /// the next acknowledgement so the server can detect a drifted mirror the delta
+  /// stream cannot itself recover.
+  pub fn last_digest(&self) -> u64 {
+    self.enemies.digest()
+  }
+
+  /// A reference whose generation did not match what we hold. With generations
+  /// on these are rejected; with them off the same reference would have been
+  /// applied to the wrong entity.
+  pub fn stale_refs(&self) -> u64 {
+    self.enemies.stale_refs()
+  }
+
+  /// Packets after which this client's mirror did not match the server's digest.
+  pub fn digest_mismatches(&self) -> u64 {
+    self.enemies.divergences()
+  }
+
+  /// Frames the wire dropped, detected as gaps in the sequence number. The direct
+  /// cause of a digest mismatch: a lost frame is a hole recovery must re-derive.
+  pub fn frames_lost(&self) -> u64 {
+    self.enemies.frames_lost()
   }
 
   /// Where this client draws each enemy it knows about.
-  pub fn render(&self, controls: &Controls) -> Vec<(Handle, Vec2, EnemyKind)> {
+  pub fn render(&self, controls: &Controls, at: RenderAt) -> Vec<(Handle, Vec2, EnemyKind)> {
     self
       .enemies
       .iter()
@@ -751,7 +1172,7 @@ impl Client {
           RemoteMode::Simulate => e.smoother.sample(&e.sim.pos, lerp),
           RemoteMode::DeadReckon => {
             let span = e.last_ms.saturating_sub(e.prev_ms) as f32 / 1000.0;
-            let ahead = self.now_ms.saturating_sub(e.last_ms) as f32 / 1000.0;
+            let ahead = at.server_time_ms().saturating_sub(e.last_ms) as f32 / 1000.0;
             if span > 1e-3 {
               let vx = (e.last_pos.x - e.prev_pos.x) / span;
               let vy = (e.last_pos.y - e.prev_pos.y) / span;
@@ -761,8 +1182,7 @@ impl Client {
             }
           }
           RemoteMode::Interpolate => {
-            let delay = controls.sync_interval_ms();
-            let target = self.now_ms.saturating_sub(delay);
+            let target = at.server_time_ms();
             let span = e.last_ms.saturating_sub(e.prev_ms) as f32;
             if span > 1e-3 {
               let t = (target.saturating_sub(e.prev_ms) as f32 / span).clamp(0.0, 1.0);
@@ -772,7 +1192,7 @@ impl Client {
             }
           }
         };
-        (*key, pos, e.kind)
+        (key.into(), pos, e.kind)
       })
       .collect()
   }

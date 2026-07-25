@@ -7,15 +7,16 @@
 //! one naming the new. Whether that generation actually earns its keep is
 //! something this example measures rather than assumes.
 
+use plaza_client_utils::{FixedTimestep, Periodic, SlotAllocator, SlotKey};
 use std::collections::BTreeSet;
 
-use plaza_client_utils::ack::AckWindow;
 use plaza_server_utils::aggregate::{AggregateTree, WeightedPoint};
+use plaza_server_utils::delta::{DeltaBaseline, RecoveryPolicy};
 use plaza_server_utils::relevance::{GridQuantizer, SetDigest, SpatialGrid, VisibilitySet};
 
-use crate::sim::types::{
-  coin_pull, difficulty, enemy_speed_scale, repulsor_pulse, step_coin, step_enemy, Coin, CoinId, Controls, Crowd, Enemy, EnemyKind, EntityIndex, Handle, LeaveReason, Packet, PlayerId, Projectile, Sample, Spawn, Upgrade, Vec2, Wallet, COIN_PICKUP_RADIUS, COIN_DROP_IN, COIN_TTL_MS, ARENA_H, ARENA_W, CELL_SIZE, CONTACT_HIT_DAMAGE, FIRE_INTERVAL_MS, HIT_INVULN_MS, HIT_RADIUS, NOVA_INTERVAL_MS,
-  NOVA_DAMAGE, NOVA_RADIUS, PLAYER_CONTACT_RADIUS, PLAYER_INVULN_MS, PLAYER_MAX_HEALTH, PLAYER_SPEED, PROJECTILE_SPEED, PROJECTILE_TTL, SIM_DT, VIEW_RADIUS, WAVE_INTERVAL_MS,
+use crate::sim::types::{PlayerFrame, 
+  coin_pull, difficulty, step_player, enemy_speed_scale, repulsor_pulse, step_coin, step_enemy, Coin, CoinId, Controls, Crowd, Enemy, EnemyKind, EntityIndex, Handle, LeaveReason, Packet, PlayerId, Projectile, Sample, Spawn, Upgrade, Vec2, Wallet, COIN_PICKUP_RADIUS, COIN_DROP_IN, COIN_TTL_MS, ARENA_H, ARENA_W, CELL_SIZE, CONTACT_HIT_DAMAGE, FIRE_INTERVAL_MS, HIT_INVULN_MS, HIT_RADIUS, NOVA_INTERVAL_MS,
+  NOVA_DAMAGE, NOVA_RADIUS, PLAYER_CONTACT_RADIUS, PLAYER_INVULN_MS, PLAYER_MAX_HEALTH, PROJECTILE_SPEED, PROJECTILE_TTL, SIM_DT, VIEW_RADIUS, WAVE_INTERVAL_MS,
 };
 
 const RETARGET_INTERVAL_MS: u64 = 1000;
@@ -30,44 +31,73 @@ pub enum Seat {
   Bot,
 }
 
-/// One entity's identity as a single integer: slot index in the high bits,
-/// generation in the low. The same shape the digest hashes, deliberately, so the
-/// recovery baseline and the agreement check cannot disagree about what an
-/// entity *is*.
-fn slot_key(idx: EntityIndex, generation: u16) -> u32 {
-  (idx << 16) | generation as u32
-}
-
-#[derive(Clone, Debug)]
-struct Slot {
-  generation: u16,
-  alive: bool,
-  enemy: Enemy,
-}
-
 #[derive(Clone, Debug)]
 pub struct Server {
   pub players: Vec<Vec2>,
-  slots: Vec<Slot>,
-  free: Vec<EntityIndex>,
+  /// Which slots are occupied, and by which generation. The pool hands out
+  /// [`SlotKey`]s in the same key space the digest hashes and `DeltaBaseline`
+  /// diffs in, which is the point of taking it from here: an identity invented
+  /// locally would have to agree with those by convention instead of by
+  /// construction.
+  pool: SlotAllocator,
+  /// The enemies themselves, indexed by slot. Deliberately parallel to the pool
+  /// rather than owned by it: `VisibilitySet` wants dense indices and so does
+  /// this, and an allocator that owned the payload would compose with neither.
+  enemies: Vec<Enemy>,
   pub projectiles: Vec<Projectile>,
 
   grid: SpatialGrid<EntityIndex>,
-  prev_vis: Vec<VisibilitySet>,
   cur_vis: Vec<VisibilitySet>,
   announced_target: Vec<PlayerId>,
 
-  /// Enemies that died since the last send, so their despawn is explicit rather
-  /// than inferred, which is what lets a slot be safely reused.
-  deaths_since_send: Vec<(EntityIndex, u16)>,
 
   clock_ms: u64,
-  sim_accum_ms: u64,
-  sync_accum_ms: u64,
-  retarget_accum_ms: u64,
-  wave_accum_ms: u64,
-  fire_accum_ms: u64,
-  nova_accum_ms: u64,
+  /// Inputs waiting for the tick they were scheduled to execute on, per seat, as
+  /// `(execute_at_ms, direction)`.
+  ///
+  /// Not applied on arrival. An input carries when it was *pressed*, and it runs
+  /// at that time plus the playout delay, so two players who pressed at the same
+  /// instant execute on the same tick however far apart their pings are. Sorted
+  /// by scheduled time rather than arrival, which is the whole point: arrival
+  /// order is a property of the network and execution order must not be.
+  scheduled: Vec<Vec<(u64, Vec2)>>,
+  /// The direction each seat is currently holding, once an input for it has come
+  /// due. Persists between inputs, which is what makes the steering continuous.
+  held: Vec<Option<Vec2>>,
+  /// Inputs that arrived after the tick they were meant for. The direct measure
+  /// of whether the playout delay is covering the players actually connected.
+  late_inputs: u64,
+  /// Inputs named for a tick outside the accepting window, and dropped. A few are
+  /// normal on a bad link; a steady stream is either a client that cannot reach
+  /// the window or one trying to reopen a closed tick.
+  rejected_inputs: u64,
+  accepted_inputs: u64,
+  /// The newest time anything has been scheduled to execute per seat, so a client
+  /// cannot walk its own timestamps backwards.
+  last_executed: Vec<Option<u64>>,
+  /// Simulation time, spent in whole fixed steps. The step has to be the same one
+  /// a client integrates by, which is why it is taken from here rather than
+  /// passed in.
+  sim: FixedTimestep,
+  /// When to build the next round of entity packets. Its interval is a live
+  /// setting, so dragging the send-rate slider takes effect from now rather than
+  /// restarting the period.
+  sync: Periodic,
+  /// When to send the players, which is far more often. See
+  /// [`Controls::player_sync_hz`] for why the two rates are separate.
+  player_sync: Periodic,
+  /// The player frame this tick produced, if it was due. Held rather than
+  /// returned so `advance_seats` keeps its signature and every caller opts in.
+  pending_players: Option<PlayerFrame>,
+  /// Re-aiming the horde. Idempotent within a tick, so it fires at most once
+  /// however long the frame was.
+  retarget: Periodic,
+  /// Spawning, firing and the area pulse. Each occurrence matters (three
+  /// intervals in one frame means three waves), so these count rather than
+  /// answering yes or no.
+  wave: Periodic,
+  fire: Periodic,
+  nova: Periodic,
 
   target_population: usize,
   pub kills: u64,
@@ -77,38 +107,18 @@ pub struct Server {
 
   candidates: Vec<EntityIndex>,
   entered_buf: Vec<u32>,
-  left_buf: Vec<u32>,
 
   next_seq: u64,
-  /// Per client, the visibility set each recent packet would leave them holding.
+  /// Per client, the reliability half of the delta stream: what each packet
+  /// would leave them holding, what they have acknowledged, and therefore what
+  /// to send next.
   ///
-  /// This is the whole recovery mechanism. A delta stream has to be diffed
-  /// against a baseline, and the naive choice is "what I last sent", which
-  /// silently assumes every packet arrives. Keeping the last few sent states lets
-  /// the diff be taken against the last one the client *acknowledged* instead, so
-  /// whatever a dropped packet carried is simply re-derived by the next diff. No
-  /// retransmission buffer and no gap detection: the diff already knows how to
-  /// say "here is the difference between what you have and what you need".
-  /// Keyed by **(index, generation)**, not by index alone, and that is the fix
-  /// for the bug this mechanism otherwise reintroduces.
-  ///
-  /// A retraction has to name the occupant the client was told about. A bare
-  /// index cannot: by the time a lost retraction is re-derived, the slot may have
-  /// died and been refilled, so naming its *current* generation retracts an
-  /// entity the client has never heard of while the corpse it does hold is never
-  /// mentioned again. Working in the same key space the digest uses makes the
-  /// baseline and the agreement check answer the same question.
-  sent_states: Vec<std::collections::VecDeque<(u64, BTreeSet<u32>)>>,
-  /// The newest acknowledged baseline per client, once one is known.
-  acked_keys: Vec<Option<(u64, BTreeSet<u32>)>>,
-  /// The last sequence sent to each client, which is the baseline the naive
-  /// policy diffs against.
-  last_sent_seq: Vec<Option<u64>>,
-  /// Everything each client *might* be holding: the acknowledged baseline plus
-  /// everything announced since. What a retraction has to be measured against,
-  /// because an entity that entered and left inside that gap is in neither the
-  /// baseline nor the current set, so a single diff never mentions it.
-  assumed_held: Vec<BTreeSet<u32>>,
+  /// This used to be four parallel vectors and a hundred lines of baseline
+  /// arithmetic here. It is set-theoretic and knows nothing about enemies, so it
+  /// belongs in `server_utils` where every game gets the same two bugs fixed for
+  /// free: a joiner sent a difference against a baseline it never held, and a
+  /// mirror that drifts and can never recover.
+  baselines: Vec<DeltaBaseline>,
   /// Currency on the ground, and what each player has banked and bought.
   pub coins: Vec<Coin>,
   next_coin_id: CoinId,
@@ -127,13 +137,6 @@ pub struct Server {
   /// Refusals to report to each client on the next packet.
   denials_since_send: Vec<Vec<Upgrade>>,
 
-  /// Packets sent whose fate is still unknown, for a readout.
-  pub unacked: Vec<usize>,
-  /// How often a client's baseline aged out and it had to be sent the whole
-  /// visible set. The cost of recovery, and the number that says whether the
-  /// history window is long enough.
-  pub full_resends: Vec<u64>,
-
   /// Each player's health as a float so fractional per-step contact damage
   /// accumulates; it goes out quantized to a byte. Zero means a death is being
   /// resolved this step.
@@ -150,61 +153,60 @@ pub struct Server {
   hits_since_send: Vec<(Vec2, u8)>,
 }
 
-/// How many sent states to remember per client. A packet older than this is past
-/// recovery, and the baseline falls back to the last sent state, which is the
-/// naive behaviour: the mechanism degrades to the thing it replaced rather than
-/// to something worse.
+/// How many sent states to remember per client. Cover the packets that can be
+/// in flight plus the acknowledgement's return trip; older than this cannot be
+/// re-derived and forces a full rebuild.
 const SENT_HISTORY: usize = 24;
 
 impl Server {
   pub fn new(enemy_count: usize, player_count: usize, spread: bool) -> Self {
     let players = (0..player_count).map(|p| player_start(p, spread)).collect::<Vec<_>>();
-    let slots = (0..enemy_count)
-      .map(|i| Slot {
-        generation: 0,
-        alive: true,
-        enemy: {
-          let kind = EnemyKind::from_seed(i as u32);
-          Enemy {
-            pos: scatter(i as u32),
-            target: (i % player_count.max(1)) as PlayerId,
-            kind,
-            health: kind.max_health(),
-          }
-        },
+    let mut pool = SlotAllocator::with_capacity(enemy_count);
+    let enemies = (0..enemy_count)
+      .map(|i| {
+        pool.alloc();
+        let kind = EnemyKind::from_seed(i as u32);
+        Enemy {
+          pos: scatter(i as u32),
+          target: (i % player_count.max(1)) as PlayerId,
+          kind,
+          health: kind.max_health(),
+        }
       })
-      .collect::<Vec<_>>();
-    let announced_target = slots.iter().map(|s| s.enemy.target).collect();
+      .collect::<Vec<Enemy>>();
+    let announced_target = enemies.iter().map(|e| e.target).collect();
 
     Self {
       players,
-      slots,
-      free: Vec::new(),
+      pool,
+      enemies,
       projectiles: Vec::new(),
       grid: SpatialGrid::new(GridQuantizer::new((0.0, 0.0), CELL_SIZE)),
-      prev_vis: (0..player_count).map(|_| VisibilitySet::with_capacity(enemy_count as u32)).collect(),
       cur_vis: (0..player_count).map(|_| VisibilitySet::with_capacity(enemy_count as u32)).collect(),
       announced_target,
-      deaths_since_send: Vec::new(),
       clock_ms: 0,
-      sim_accum_ms: 0,
-      sync_accum_ms: 0,
-      retarget_accum_ms: 0,
-      wave_accum_ms: 0,
-      fire_accum_ms: 0,
-      nova_accum_ms: 0,
+      scheduled: vec![Vec::new(); player_count],
+      held: vec![None; player_count],
+      late_inputs: 0,
+      rejected_inputs: 0,
+      accepted_inputs: 0,
+      last_executed: vec![None; player_count],
+      sim: FixedTimestep::from_step_ms((SIM_DT * 1000.0) as u64),
+      sync: Periodic::new(1),
+      player_sync: Periodic::new(1),
+      pending_players: None,
+      retarget: Periodic::new(RETARGET_INTERVAL_MS),
+      wave: Periodic::new(WAVE_INTERVAL_MS),
+      fire: Periodic::new(FIRE_INTERVAL_MS),
+      nova: Periodic::new(NOVA_INTERVAL_MS),
       target_population: enemy_count,
       kills: 0,
       nova_kills_last: 0,
       last_nova_ms: None,
       candidates: Vec::new(),
       entered_buf: Vec::new(),
-      left_buf: Vec::new(),
       next_seq: 0,
-      sent_states: (0..player_count).map(|_| std::collections::VecDeque::with_capacity(SENT_HISTORY)).collect(),
-      acked_keys: vec![None; player_count],
-      last_sent_seq: vec![None; player_count],
-      assumed_held: (0..player_count).map(|_| BTreeSet::new()).collect(),
+      baselines: (0..player_count).map(|_| DeltaBaseline::new(SENT_HISTORY)).collect(),
       coins: Vec::new(),
       next_coin_id: 0,
       wallets: vec![Wallet::default(); player_count],
@@ -213,8 +215,6 @@ impl Server {
       claims_since_send: Vec::new(),
       denied_purchases: 0,
       denials_since_send: vec![Vec::new(); player_count],
-      unacked: vec![0; player_count],
-      full_resends: vec![0; player_count],
       player_health: vec![PLAYER_MAX_HEALTH; player_count],
       player_invuln_until_ms: vec![0; player_count],
       player_shield_until_ms: vec![0; player_count],
@@ -239,11 +239,11 @@ impl Server {
 
   /// How many slots exist, alive or free: the id space a presence mask covers.
   pub fn slot_count(&self) -> usize {
-    self.slots.len()
+    self.pool.index_space()
   }
 
   pub fn alive_count(&self) -> usize {
-    self.slots.iter().filter(|s| s.alive).count()
+    self.pool.len()
   }
 
   /// A player's health, quantized the way the packet carries it.
@@ -263,12 +263,7 @@ impl Server {
 
   /// Every live enemy with its handle, for rendering the ground truth.
   pub fn live_enemies(&self) -> impl Iterator<Item = (Handle, &Enemy)> {
-    self
-      .slots
-      .iter()
-      .enumerate()
-      .filter(|(_, s)| s.alive)
-      .map(|(i, s)| (Handle::new(i as EntityIndex, s.generation), &s.enemy))
+    self.pool.iter().map(|key| (key.into(), &self.enemies[key.index as usize]))
   }
 
   /// Advances by `dt_ms`. `local_input` steers player 0; the rest drift.
@@ -287,43 +282,47 @@ impl Server {
   /// has: some seats are people, the rest are bots, and the set changes as
   /// players come and go.
   pub fn advance_seats(&mut self, dt_ms: u64, seats: &[Seat], controls: &Controls) -> Vec<(PlayerId, Packet)> {
-    self.clock_ms += dt_ms;
-    self.sim_accum_ms += dt_ms;
-    self.retarget_accum_ms += dt_ms;
-
-    let step_ms = (SIM_DT * 1000.0) as u64;
-    while self.sim_accum_ms >= step_ms {
-      self.sim_accum_ms -= step_ms;
-      self.step(seats, controls);
+    // The clock tracks *simulated* time, not wall time. Normally they are the
+    // same thing, and they diverge exactly when the step cap refuses to catch up
+    // on a long stall. A packet's `server_time_ms` says when its state is from,
+    // and a client subtracts it from its own clock to project a sample forward,
+    // so a clock that ran ahead of the state it describes would have every client
+    // projecting the horde into a future the server never simulated.
+    for step_ms in self.sim.advance(dt_ms) {
+      self.clock_ms += step_ms;
+      // Per step, not per packet: an input is due at a *tick*, so consuming the
+      // queue once per network frame would collapse everything that arrived
+      // between two ticks onto whichever one happened to run next.
+      self.execute_due_inputs();
+      let occupants = self.occupants(seats);
+      self.step(&occupants, controls);
     }
 
-    if self.retarget_accum_ms >= RETARGET_INTERVAL_MS {
-      self.retarget_accum_ms = 0;
+    if self.retarget.due(dt_ms) {
       self.retarget();
     }
 
     if controls.combat {
-      self.wave_accum_ms += dt_ms;
-      while self.wave_accum_ms >= WAVE_INTERVAL_MS {
-        self.wave_accum_ms -= WAVE_INTERVAL_MS;
+      for _ in 0..self.wave.advance(dt_ms) {
         self.spawn_wave();
       }
-      self.fire_accum_ms += dt_ms;
-      while self.fire_accum_ms >= FIRE_INTERVAL_MS {
-        self.fire_accum_ms -= FIRE_INTERVAL_MS;
+      for _ in 0..self.fire.advance(dt_ms) {
         self.fire_weapons();
       }
-      self.nova_accum_ms += dt_ms;
-      while self.nova_accum_ms >= NOVA_INTERVAL_MS {
-        self.nova_accum_ms -= NOVA_INTERVAL_MS;
+      for _ in 0..self.nova.advance(dt_ms) {
         self.nova();
       }
     }
 
-    self.sync_accum_ms += dt_ms;
-    let interval = controls.sync_interval_ms();
-    if self.sync_accum_ms >= interval {
-      self.sync_accum_ms -= interval;
+    // The player stream, on its own clock. Cheap enough to build unconditionally
+    // when due: four entities against the entity stream's thousands.
+    self.player_sync.set_interval_ms(controls.player_sync_interval_ms());
+    if self.player_sync.due(dt_ms) {
+      self.pending_players = Some(self.build_player_frame());
+    }
+
+    self.sync.set_interval_ms(controls.sync_interval_ms());
+    if self.sync.due(dt_ms) {
       return self.build_packets(controls);
     }
     Vec::new()
@@ -338,14 +337,17 @@ impl Server {
         // one player in it is still a game and the horde still has somewhere to go.
         _ => player_drift(p, t, controls.spread_players),
       };
-      pos.x = (pos.x + dx * PLAYER_SPEED * SIM_DT).clamp(0.0, ARENA_W);
-      pos.y = (pos.y + dy * PLAYER_SPEED * SIM_DT).clamp(0.0, ARENA_H);
+      step_player(pos, Vec2::new(dx, dy), SIM_DT);
     }
     let speed_scale = enemy_speed_scale(self.clock_ms);
-    for slot in self.slots.iter_mut().filter(|s| s.alive) {
-      let t_idx = slot.enemy.target as usize % self.players.len();
+    for i in 0..self.enemies.len() {
+      if !self.pool.is_occupied(i as u32) {
+        continue;
+      }
+      let enemy = &mut self.enemies[i];
+      let t_idx = enemy.target as usize % self.players.len();
       let repel = self.wallets[t_idx].has(Upgrade::Repulsor).then(|| repulsor_pulse(self.clock_ms)).flatten();
-      step_enemy(&mut slot.enemy, self.players[t_idx], repel, speed_scale, SIM_DT);
+      step_enemy(enemy, self.players[t_idx], repel, speed_scale, SIM_DT);
     }
     self.resolve_contact_damage();
     if controls.combat {
@@ -371,7 +373,11 @@ impl Server {
         continue;
       }
       let eye = self.players[p];
-      let touched = self.slots.iter().filter(|s| s.alive).any(|s| s.enemy.pos.dist(eye) <= PLAYER_CONTACT_RADIUS + s.enemy.kind.radius());
+      let touched = self
+        .pool
+        .iter()
+        .map(|key| &self.enemies[key.index as usize])
+        .any(|e| e.pos.dist(eye) <= PLAYER_CONTACT_RADIUS + e.kind.radius());
       if !touched {
         continue;
       }
@@ -465,9 +471,10 @@ impl Server {
     // would query the same spatial grid it already maintains.
     let mut hits: Vec<(usize, EntityIndex)> = Vec::new();
     for (pi, proj) in self.projectiles.iter().enumerate() {
-      for (i, slot) in self.slots.iter().enumerate() {
-        if slot.alive && slot.enemy.pos.dist(proj.pos) <= HIT_RADIUS + slot.enemy.kind.radius() {
-          hits.push((pi, i as EntityIndex));
+      for key in self.pool.iter() {
+        let enemy = &self.enemies[key.index as usize];
+        if enemy.pos.dist(proj.pos) <= HIT_RADIUS + enemy.kind.radius() {
+          hits.push((pi, key.index as EntityIndex));
           break;
         }
       }
@@ -478,7 +485,7 @@ impl Server {
     let mut spent: Vec<usize> = Vec::new();
     for (pi, target) in hits {
       spent.push(pi);
-      self.hits_since_send.push((self.slots[target as usize].enemy.pos, 1));
+      self.hits_since_send.push((self.enemies[target as usize].pos, 1));
       self.damage(target, 1);
     }
     spent.sort_unstable();
@@ -495,9 +502,9 @@ impl Server {
   fn nova(&mut self) {
     let mut caught: Vec<EntityIndex> = Vec::new();
     for player in self.players.clone() {
-      for (i, slot) in self.slots.iter().enumerate() {
-        if slot.alive && slot.enemy.pos.dist(player) <= NOVA_RADIUS {
-          caught.push(i as EntityIndex);
+      for key in self.pool.iter() {
+        if self.enemies[key.index as usize].pos.dist(player) <= NOVA_RADIUS {
+          caught.push(key.index as EntityIndex);
         }
       }
     }
@@ -514,32 +521,32 @@ impl Server {
     self.last_nova_ms = Some(self.clock_ms);
   }
 
-  /// Applies damage, and announces a death only when one actually happens.
+  /// Applies damage, and kills only when the health actually reaches zero.
+  ///
+  /// A death needs no separate announcement list. The delta stream diffs in a key
+  /// space carrying the generation, so a slot that died reads as a retraction of
+  /// the occupant the client was told about, and a slot reused in the same
+  /// interval reads as despawn-then-spawn on its own.
   fn damage(&mut self, idx: EntityIndex, amount: u8) {
-    let (health, generation) = {
-      let slot = &mut self.slots[idx as usize];
-      if !slot.alive {
-        return;
-      }
-      slot.enemy.health = slot.enemy.health.saturating_sub(amount);
-      (slot.enemy.health, slot.generation)
-    };
-    if health == 0 {
-      self.deaths_since_send.push((idx, generation));
+    if !self.pool.is_occupied(idx as u32) {
+      return;
+    }
+    let enemy = &mut self.enemies[idx as usize];
+    enemy.health = enemy.health.saturating_sub(amount);
+    if enemy.health == 0 {
       self.kill(idx);
     }
   }
 
   fn kill(&mut self, idx: EntityIndex) {
-    let slot = &mut self.slots[idx as usize];
-    if !slot.alive {
+    // The pool bumps the generation on free, so any handle naming this occupant
+    // stops matching the moment it dies rather than when something takes the
+    // slot. A stale free is refused, which is why this reads the result.
+    let Some(key) = self.pool.key(idx as u32) else {
       return;
-    }
-    slot.alive = false;
-    let died_at = slot.enemy.pos;
-    // Bump on free: any handle naming the previous occupant no longer matches.
-    slot.generation = slot.generation.wrapping_add(1);
-    self.free.push(idx);
+    };
+    let died_at = self.enemies[idx as usize].pos;
+    self.pool.free(key);
     self.kills += 1;
     if self.kills.is_multiple_of(COIN_DROP_IN as u64) {
       let id = self.next_coin_id;
@@ -557,10 +564,11 @@ impl Server {
   fn fire_weapons(&mut self) {
     for player in self.players.clone() {
       let mut best: Option<(f32, Vec2)> = None;
-      for slot in self.slots.iter().filter(|s| s.alive) {
-        let d = slot.enemy.pos.dist(player);
+      for key in self.pool.iter() {
+        let enemy = &self.enemies[key.index as usize];
+        let d = enemy.pos.dist(player);
         if d < VIEW_RADIUS && best.is_none_or(|(bd, _)| d < bd) {
-          best = Some((d, slot.enemy.pos));
+          best = Some((d, enemy.pos));
         }
       }
       if let Some((d, target)) = best
@@ -599,83 +607,239 @@ impl Server {
         health: kind.max_health(),
       };
 
-      if let Some(idx) = self.free.pop() {
-        let slot = &mut self.slots[idx as usize];
-        slot.alive = true;
-        slot.enemy = enemy;
-        self.announced_target[idx as usize] = enemy.target;
+      // The pool reuses a freed index when it has one, so the id space stays
+      // dense and settles at the high-water mark of simultaneously live enemies.
+      let key = self.pool.alloc();
+      let idx = key.index as usize;
+      if idx < self.enemies.len() {
+        self.enemies[idx] = enemy;
+        self.announced_target[idx] = enemy.target;
       } else {
-        self.slots.push(Slot { generation: 0, alive: true, enemy });
+        self.enemies.push(enemy);
         self.announced_target.push(enemy.target);
       }
     }
   }
 
   fn retarget(&mut self) {
-    for slot in self.slots.iter_mut().filter(|s| s.alive) {
-      let mut best = slot.enemy.target;
+    for i in 0..self.enemies.len() {
+      if !self.pool.is_occupied(i as u32) {
+        continue;
+      }
+      let enemy = &mut self.enemies[i];
+      let mut best = enemy.target;
       let mut best_d = f32::MAX;
       for (p, pos) in self.players.iter().enumerate() {
-        let d = slot.enemy.pos.dist(*pos);
+        let d = enemy.pos.dist(*pos);
         if d < best_d {
           best_d = d;
           best = p as PlayerId;
         }
       }
-      slot.enemy.target = best;
+      enemy.target = best;
     }
   }
 
   /// Folds in a client's acknowledgement, moving its baseline forward.
   ///
-  /// Takes the **contiguous** frontier, not the newest bit set, and the
-  /// distinction is the whole correctness of this.
-  ///
-  /// A bitmask answers "what arrived", which is what a retransmitting protocol
-  /// wants: it names the holes to refill. A protocol that re-derives instead
-  /// needs a state the client provably *reached*, and receiving packet N+1 after
-  /// losing N does not put the client in the state N+1 implies, because whatever
-  /// N announced and N+1 had no reason to repeat is simply gone. Taking the
-  /// newest set bit hands the diff a state that never existed, and the client is
-  /// then permanently short by the gap's contents. Measured: that mistake made
-  /// recovery indistinguishable from no recovery, identical mismatch counts at
-  /// every loss rate.
-  pub fn receive_ack(&mut self, player: usize, newest: u64, mask: u64) {
-    let window = AckWindow::from_encoded(newest, mask);
-    let floor = self.acked_keys[player].as_ref().map(|(s, _)| *s);
-    let mut frontier: Option<(u64, BTreeSet<u32>)> = None;
-    for (seq, state) in self.sent_states[player].iter() {
-      if floor.is_some_and(|f| *seq <= f) {
-        continue;
-      }
-      if !window.contains(*seq) {
-        break;
-      }
-      frontier = Some((*seq, state.clone()));
-    }
-    if let Some(found) = frontier {
-      self.acked_keys[player] = Some(found);
-    }
-    self.unacked[player] = self.sent_states[player].iter().filter(|(seq, _)| !window.contains(*seq)).count();
+  /// `digest` is the client's own view of its mirror. The block compares it to
+  /// the state it believes the client reached and forces a clean rebuild when
+  /// they disagree, which is the only cure for a mirror that has drifted: a
+  /// drifted entity stays in view, is only ever sampled, and a sample for an
+  /// entity you do not hold is discarded.
+  pub fn receive_ack(&mut self, player: usize, newest: u64, mask: u64, digest: u64) {
+    self.baselines[player].observe_ack(newest, mask, digest);
   }
 
-  /// Whether this client's acknowledged baseline has fallen out of the history,
-  /// leaving nothing valid to diff against.
-  fn baseline_is_stale(&self, player: usize) -> bool {
-    let Some((acked_seq, _)) = &self.acked_keys[player] else {
+  /// Resets one seat's relevance baseline so the next packet to it is a full
+  /// dump rather than a delta.
+  ///
+  /// Called when a fresh client takes the seat. Every seat gets packets built for
+  /// it from startup, occupied or not (an empty seat drifts as a bot), so by the
+  /// time a real client connects the seat's baseline is already most of the
+  /// world. Without this the joiner's first frame is a diff against a state it
+  /// never held, and the visible world arrives only as the slow trickle of
+  /// whatever happens to become newly relevant.
+  pub fn reset_seat(&mut self, seat: usize) {
+    self.baselines[seat].reset();
+  }
+
+  /// How often a client's baseline had to be rebuilt from nothing. The cost of
+  /// recovery, and the number that says whether the history window is long
+  /// enough for the loss and latency actually being seen.
+  pub fn full_resends(&self) -> u64 {
+    self.baselines.iter().map(|b| b.full_rebuilds()).sum()
+  }
+
+  /// Packets sent to each client whose fate is still unknown.
+  pub fn unacked(&self, player: usize) -> usize {
+    self.baselines[player].unacked()
+  }
+
+  /// Who is driving each seat this step: whatever the buffer has come due for,
+  /// falling back to what the caller supplied (a bot, or an unoccupied seat).
+  fn occupants(&self, seats: &[Seat]) -> Vec<Seat> {
+    (0..self.players.len())
+      .map(|p| match self.held.get(p).copied().flatten() {
+        Some(dir) => Seat::Steered(dir),
+        None => seats.get(p).copied().unwrap_or_default(),
+      })
+      .collect()
+  }
+
+  /// Clears a seat's buffered and held input, for somebody leaving it.
+  pub fn clear_input(&mut self, seat: usize) {
+    if let Some(queue) = self.scheduled.get_mut(seat) {
+      queue.clear();
+    }
+    if let Some(held) = self.held.get_mut(seat) {
+      *held = None;
+    }
+  }
+
+  /// Schedules an input to execute at the time it was pressed plus the playout
+  /// delay.
+  ///
+  /// `at_ms` is the client's estimate of server time when it sampled the input.
+  /// It is trusted only as a *schedule*, never as a claim about the world: the
+  /// worst a lying client can do is have its own steering applied early or late.
+  /// It is also clamped, so a client cannot park an input arbitrarily far in the
+  /// future and have it fire much later.
+  pub fn submit_input(&mut self, seat: usize, tick: u64, dir: Vec2, controls: &Controls) -> bool {
+    if seat >= self.scheduled.len() {
       return false;
-    };
-    let history = &self.sent_states[player];
-    history.len() >= SENT_HISTORY && history.front().is_some_and(|(oldest, _)| *acked_seq < *oldest)
+    }
+    if !controls.input_playout {
+      // The naive path, kept so the difference can be measured: whatever arrives
+      // takes effect on the next tick.
+      self.held[seat] = Some(dir);
+      self.accepted_inputs += 1;
+      return true;
+    }
+    // **The server owns time.** The client names a tick it intends; whether that
+    // tick is still accepting is not the client's to decide.
+    //
+    // Rejected rather than corrected, which is the whole difference. Correcting a
+    // backdated tick into the window still executes it, so a liar loses the lie
+    // and keeps the input, and the residual advantage is whatever slack the
+    // correction had to allow. Dropping it means backdating costs you the input.
+    // It also removes the question of how much lying is tolerable, which has no
+    // good answer, and replaces it with one that does: is this tick open.
+    //
+    // The cost is real and lands on honest clients too. A link slower than the
+    // window loses inputs and rubber-bands, which is why the window is a setting
+    // rather than a constant.
+    let current = self.tick();
+    if tick + controls.input_max_late_ticks < current {
+      // Already simulated. That tick is closed, and reopening it is exactly the
+      // rewrite of history a lag switch is trying to buy.
+      self.rejected_inputs += 1;
+      return false;
+    }
+    if tick > current + controls.input_max_early_ticks {
+      // Far enough ahead to be parking inputs in the future.
+      self.rejected_inputs += 1;
+      return false;
+    }
+    // Never behind something already executed for this seat, so a client cannot
+    // reorder its own history by walking its ticks backwards.
+    let mut execute_at = tick;
+    if let Some(last) = self.last_executed.get(seat).copied().flatten() {
+      execute_at = execute_at.max(last);
+    }
+    if execute_at < current {
+      // Inside the window but past its tick: applied on the next one, and counted,
+      // because a steady stream of these is the signal that the window is too
+      // tight for who is connected.
+      self.late_inputs += 1;
+    }
+    self.scheduled[seat].push((execute_at, dir));
+    self.accepted_inputs += 1;
+    true
+  }
+
+  /// Inputs that arrived after the tick they were scheduled for.
+  pub fn late_inputs(&self) -> u64 {
+    self.late_inputs
+  }
+
+  /// Inputs the server accepted and scheduled. The denominator every other input
+  /// count needs: rejections mean nothing without knowing how many arrived.
+  pub fn accepted_inputs(&self) -> u64 {
+    self.accepted_inputs
+  }
+
+  /// Inputs named for a tick the server was not accepting, and dropped.
+  pub fn rejected_inputs(&self) -> u64 {
+    self.rejected_inputs
+  }
+
+  /// The tick the server is currently simulating. What a client aims at.
+  ///
+  /// **Derived from the clock, never counted alongside it.** A separate counter
+  /// has to be kept in step with `clock_ms` through every path that touches
+  /// either, and rebuilding the world is such a path: it preserves the clock so
+  /// a client's packet-age estimate does not jump, and it reset the counter to
+  /// zero. The clock then said thirty seconds and the tick said nought, so every
+  /// input a client aimed was hundreds of ticks past the accepting window and was
+  /// refused, permanently. The player simply stopped responding after a reset.
+  pub fn tick(&self) -> u64 {
+    self.clock_ms / (SIM_DT * 1000.0) as u64
+  }
+
+  /// Applies every input whose scheduled time has arrived, in scheduled order.
+  ///
+  /// Ordered by *when it was meant to happen*, not by when it turned up, which is
+  /// the property the whole buffer exists for. Within one step the newest due
+  /// input wins, because a held direction is a level rather than an edge.
+  fn execute_due_inputs(&mut self) {
+    let now = self.tick();
+    for (seat, queue) in self.scheduled.iter_mut().enumerate() {
+      if queue.is_empty() {
+        continue;
+      }
+      queue.sort_by_key(|(at, _)| *at);
+      let mut applied = None;
+      queue.retain(|(at, dir)| {
+        if *at <= now {
+          applied = Some(*dir);
+          false
+        } else {
+          true
+        }
+      });
+      if let Some(dir) = applied {
+        self.held[seat] = Some(dir);
+        self.last_executed[seat] = Some(now);
+      }
+    }
+  }
+
+  /// Takes this tick's player frame, if the player stream was due.
+  ///
+  /// Everyone gets the same one: there are four players and they are the input
+  /// to every enemy's behaviour, so there is nothing per-recipient to decide and
+  /// no relevance to apply. That asymmetry against the entity stream is the
+  /// whole reason the two are separate.
+  pub fn take_player_frame(&mut self) -> Option<PlayerFrame> {
+    self.pending_players.take()
+  }
+
+  fn build_player_frame(&self) -> PlayerFrame {
+    PlayerFrame {
+      server_time_ms: self.clock_ms,
+      players: self.players.iter().enumerate().map(|(p, pos)| (p as PlayerId, *pos)).collect(),
+      player_health: self.players.iter().enumerate().map(|(p, _)| self.player_health(p)).collect(),
+      player_invuln: self.player_shield_until_ms.iter().map(|&t| self.clock_ms < t).collect(),
+    }
   }
 
   fn build_packets(&mut self, controls: &Controls) -> Vec<(PlayerId, Packet)> {
     if controls.relevance {
       self.grid.clear();
-      for (i, slot) in self.slots.iter().enumerate() {
-        if slot.alive {
-          self.grid.insert(i as EntityIndex, slot.enemy.pos.x, slot.enemy.pos.y);
-        }
+      for key in self.pool.iter() {
+        let pos = self.enemies[key.index as usize].pos;
+        self.grid.insert(key.index as EntityIndex, pos.x, pos.y);
       }
     }
 
@@ -694,12 +858,14 @@ impl Server {
     // this affordable for a crowd this size.
     let crowd_tree = (controls.crowd_lod_theta > 0.0).then(|| {
       let points: Vec<WeightedPoint> = self
-        .slots
+        .pool
         .iter()
-        .filter(|s| s.alive)
         // Weight one per enemy: the quantity being summarised is a headcount, so
         // a summary's weight *is* how many are standing there.
-        .map(|s| WeightedPoint::new(s.enemy.pos.x, s.enemy.pos.y, 1.0))
+        .map(|key| {
+          let pos = self.enemies[key.index as usize].pos;
+          WeightedPoint::new(pos.x, pos.y, 1.0)
+        })
         .collect();
       AggregateTree::build_in(&points, (ARENA_W * 0.5, ARENA_H * 0.5), ARENA_W.max(ARENA_H), 10)
     });
@@ -708,188 +874,94 @@ impl Server {
     for p in 0..self.players.len() {
       let eye = self.players[p];
 
-      // Re-anchor the baseline to what the client has actually confirmed. With
-      // this off, `prev_vis` stays "what I last sent" and a dropped packet is
-      // lost forever; with it on, the very next diff carries the difference.
-      let mut baseline_seq = self.last_sent_seq[p];
-
-      // A baseline that has aged out of the history is not recoverable by
-      // re-derivation: whatever the missing packet carried is no longer
-      // expressible as a difference from anything still known. The only honest
-      // response is to stop pretending and send the whole visible set, which is
-      // what every delta protocol does at this point and what this example was
-      // missing. Without it the frontier simply steps over the gap when history
-      // evicts it, and the client is left permanently short by that packet's
-      // contents while every readout looks healthy.
-      if controls.ack_recovery && self.baseline_is_stale(p) {
-        self.acked_keys[p] = None;
-        self.assumed_held[p].clear();
-        // `prev_vis` too, and forgetting it is a quiet way to make this a no-op:
-        // with the acknowledged baseline dropped the code falls back to the naive
-        // diff, and diffing against a stale "what I last sent" emits nothing. The
-        // resync counter still ticks, so the readout claims a recovery that never
-        // happened. Clearing it is what makes the next diff the full set.
-        self.prev_vis[p].clear();
-        self.full_resends[p] += 1;
-        baseline_seq = None;
-      }
-
-      let mut baseline_keys: BTreeSet<u32> = BTreeSet::new();
-      let recovering = controls.ack_recovery && self.acked_keys[p].is_some();
-      if let Some((acked_seq, acked)) = &self.acked_keys[p]
-        && controls.ack_recovery
-      {
-        // Two baselines, and they have to be built by *opposite* operations.
-        //
-        // The client's true holdings are the acknowledged state plus everything
-        // announced since, minus everything retracted since, and the middle terms
-        // are exactly the packets whose fate is unknown. So neither bound is the
-        // acknowledged state on its own:
-        //
-        // - What to **send** must assume the least: the intersection, the
-        //   acknowledged state minus anything a later packet may have retracted.
-        //   Using the raw acknowledged state instead claims the client still holds
-        //   an entity we told it to drop, so when that entity becomes relevant
-        //   again it is never re-sent and the client is permanently short of it.
-        // - What to **retract** must assume the most: the union, everything the
-        //   client could be holding.
-        //
-        // Getting the union right and leaving the other half as the raw baseline
-        // trades one silent failure for its mirror image: corpses became
-        // omissions, which no readout but a dedicated missing-entity count can
-        // see.
-        baseline_keys.clone_from(acked);
-        self.assumed_held[p].clone_from(acked);
-        for (sent_seq, state) in &self.sent_states[p] {
-          if *sent_seq > *acked_seq {
-            baseline_keys.retain(|key| state.contains(key));
-            self.assumed_held[p].extend(state.iter().copied());
+      // What this client should hold after applying, in the key space the digest
+      // uses: index *and* generation, so "which occupant" is part of the answer.
+      // The block requires exactly that: its key must be the key the digest
+      // hashes, or the drift check compares two unrelated numbers.
+      self.cur_vis[p].clear();
+      if controls.relevance {
+        self.candidates.clear();
+        self.grid.query_radius(eye.x, eye.y, VIEW_RADIUS, &mut self.candidates);
+        for &idx in &self.candidates {
+          if self.enemies[idx as usize].pos.dist(eye) <= VIEW_RADIUS {
+            self.cur_vis[p].insert(idx);
           }
         }
-        baseline_seq = Some(*acked_seq);
+      } else {
+        for key in self.pool.iter() {
+          self.cur_vis[p].insert(key.index as EntityIndex);
+        }
       }
+      // The pool's own key, not one packed here: the digest, the delta baseline
+      // and the client's mirror all key on `SlotKey::encode`, and a second
+      // packing that agrees today is a disagreement waiting to happen.
+      let cur_keys: BTreeSet<u64> = self
+        .cur_vis[p]
+        .iter()
+        .filter_map(|idx| self.pool.key(idx).map(|key| key.encode()))
+        .collect();
+
+      // The whole reliability decision, in one call: what to send, what to
+      // retract, whether this has to be a clean rebuild, and what baseline it is
+      // all measured against.
+      self.baselines[p].set_policy(if controls.ack_recovery { RecoveryPolicy::AckRecovery } else { RecoveryPolicy::Naive });
+      let plan = self.baselines[p].plan(&cur_keys, seq);
 
       let mut packet = Packet {
         server_time_ms: self.clock_ms,
         seq,
-        baseline_seq,
+        baseline_seq: plan.baseline_seq,
+        full_baseline: plan.full_baseline,
         players: player_list.clone(),
         player_health: health_list.clone(),
         player_invuln: invuln_list.clone(),
         ..Default::default()
       };
 
-      // Deaths are announced explicitly, before the visibility diff, so a slot
-      // that is reused in the same interval reads as despawn-then-spawn rather
-      // than silently becoming a different entity.
-      // Filtered by what the client *might* hold, not by the baseline. An enemy
-      // that appeared after the acknowledged state and then died is absent from
-      // the baseline, so filtering on that would silently skip announcing its
-      // death and leave the client holding a corpse it can never be told about.
-      for &(idx, gen_at_death) in &self.deaths_since_send {
-        // Under recovery the retraction is derived from the key sets below, which
-        // name the right occupant even after the slot is refilled. This explicit
-        // announcement stays for the naive path only.
-        if !recovering && self.prev_vis[p].contains(idx) {
-          // `gen_at_death` was recorded *before* `kill` bumped the slot, so it is
-          // already the generation the client was told at spawn. Do not adjust it:
-          // naming any other generation makes the client's lookup miss and the
-          // dead entity linger forever.
-          packet.left.push((Handle::new(idx, gen_at_death), LeaveReason::Died));
-          self.prev_vis[p].remove(idx);
-          // Deliberately *not* removed from `assumed_held`. A death is announced
-          // once, out of band from the visibility diff, so if that packet is lost
-          // nothing ever mentions the entity again and the client holds a corpse
-          // forever. Leaving it in the assumed set means the next diff sees it as
-          // something the client might hold and no longer should, and retracts it
-          // again. Announcing is not the same as being heard, and only an
-          // acknowledgement may retire the assumption.
-        }
-      }
-
-      self.cur_vis[p].clear();
-      if controls.relevance {
-        self.candidates.clear();
-        self.grid.query_radius(eye.x, eye.y, VIEW_RADIUS, &mut self.candidates);
-        for &idx in &self.candidates {
-          if self.slots[idx as usize].enemy.pos.dist(eye) <= VIEW_RADIUS {
-            self.cur_vis[p].insert(idx);
-          }
-        }
-      } else {
-        for (i, slot) in self.slots.iter().enumerate() {
-          if slot.alive {
-            self.cur_vis[p].insert(i as EntityIndex);
-          }
-        }
-      }
-
-      // What this client should hold after applying, in the key space the digest
-      // uses: index *and* generation, so "which occupant" is part of the answer.
-      let cur_keys: BTreeSet<u32> = self.cur_vis[p].iter().map(|idx| slot_key(idx, self.slots[idx as usize].generation)).collect();
-
+      // Keys to payloads. This is the half that is actually this game's: the
+      // block decided *which* entities, and only the application knows what an
+      // entity looks like on the wire.
       self.entered_buf.clear();
-      self.left_buf.clear();
-      if recovering {
-        // Two different baselines, because the two halves of a diff answer two
-        // different questions.
+      for key in &plan.entered {
+        let slot = SlotKey::decode(*key);
+        let enemy = &self.enemies[slot.index as usize];
+        packet.entered.push(Spawn {
+          handle: slot.into(),
+          pos: enemy.pos,
+          target: enemy.target,
+          kind: enemy.kind,
+        });
+        self.entered_buf.push(slot.index as EntityIndex);
+      }
+      self.entered_buf.sort_unstable();
+
+      for key in &plan.left {
+        let slot = SlotKey::decode(*key);
+        // Dead if the slot has moved on, gone out of view if it has not. Naming
+        // the generation from the *key* rather than from the slot is the whole
+        // point: a refilled slot must not have its new occupant retracted in
+        // place of the corpse the client is actually holding.
         //
-        // What to *send* is decided against the acknowledged state, the newest
-        // one the client provably holds. What to *retract* is decided against
-        // everything the client might be holding, which includes anything
-        // announced since. An entity that entered and left inside that gap is in
-        // neither the baseline nor the current set, so a single diff never
-        // mentions it and the client keeps it forever.
-        for key in cur_keys.difference(&baseline_keys) {
-          let idx = *key >> 16;
-          let slot = &self.slots[idx as usize];
-          packet.entered.push(Spawn {
-            handle: Handle::new(idx, (*key & 0xFFFF) as u16),
-            pos: slot.enemy.pos,
-            target: slot.enemy.target,
-            kind: slot.enemy.kind,
-          });
-          self.entered_buf.push(idx);
-        }
-        for key in self.assumed_held[p].difference(&cur_keys) {
-          let (idx, generation) = (*key >> 16, (*key & 0xFFFF) as u16);
-          // Dead if the slot has moved on, gone out of view if it has not. Naming
-          // the generation from the *key* rather than from the slot is the whole
-          // point: a refilled slot must not have its new occupant retracted in
-          // place of the corpse the client is actually holding.
-          let reason = if self.slots[idx as usize].generation != generation || !self.slots[idx as usize].alive {
-            LeaveReason::Died
-          } else {
-            LeaveReason::OutOfRange
-          };
-          packet.left.push((Handle::new(idx, generation), reason));
-        }
-        self.entered_buf.sort_unstable();
-      } else {
-        self.cur_vis[p].diff(&self.prev_vis[p], &mut self.entered_buf, &mut self.left_buf);
-        for &idx in &self.entered_buf {
-          let slot = &self.slots[idx as usize];
-          packet.entered.push(Spawn {
-            handle: Handle::new(idx, slot.generation),
-            pos: slot.enemy.pos,
-            target: slot.enemy.target,
-            kind: slot.enemy.kind,
-          });
-        }
-        for &idx in &self.left_buf {
-          packet.left.push((Handle::new(idx, self.slots[idx as usize].generation), LeaveReason::OutOfRange));
-        }
+        // Deaths need no separate out-of-band announcement now. Diffing in a key
+        // space that carries the generation means a slot that died and was
+        // refilled reads as despawn-then-spawn on its own, which is what the
+        // explicit death list used to be for back when the diff was index-only.
+        let reason = if self.pool.is_live(slot) { LeaveReason::OutOfRange } else { LeaveReason::Died };
+        packet.left.push((slot.into(), reason));
       }
 
       for idx in self.cur_vis[p].iter() {
         if self.entered_buf.binary_search(&idx).is_ok() {
           continue;
         }
-        let slot = &self.slots[idx as usize];
-        let target = (slot.enemy.target != self.announced_target[idx as usize]).then_some(slot.enemy.target);
+        let Some(key) = self.pool.key(idx) else {
+          continue;
+        };
+        let enemy = &self.enemies[idx as usize];
+        let target = (enemy.target != self.announced_target[idx as usize]).then_some(enemy.target);
         packet.samples.push(Sample {
-          handle: Handle::new(idx, slot.generation),
-          pos: slot.enemy.pos,
+          handle: key.into(),
+          pos: enemy.pos,
           target,
         });
       }
@@ -935,30 +1007,20 @@ impl Server {
       // Summarise what the client must hold once it applies this packet. Keyed by
       // index *and* generation, so agreeing on membership is not enough: both
       // sides have to agree on which occupant of each slot it is.
-      packet.visible_digest = SetDigest::from_keys(
-        self.cur_vis[p]
-          .iter()
-          .map(|idx| ((idx as u64) << 16) | self.slots[idx as usize].generation as u64),
-      )
-      .digest();
+      packet.visible_digest = SetDigest::from_keys(cur_keys.iter().copied()).digest();
 
-      std::mem::swap(&mut self.prev_vis[p], &mut self.cur_vis[p]);
-
-      // Remember what this packet would leave the client holding, so a later
-      // acknowledgement can name it as the baseline.
-      self.last_sent_seq[p] = Some(seq);
-      let history = &mut self.sent_states[p];
-      history.push_back((seq, cur_keys));
-      while history.len() > SENT_HISTORY {
-        history.pop_front();
+      // The same keys spelled out, for a client to diff against on a mismatch.
+      // Off the normal wire; a diagnostic paid for only while it is on.
+      if controls.debug_digest {
+        packet.debug_keys = cur_keys.iter().copied().collect();
       }
+
       out.push((p as PlayerId, packet));
     }
 
-    for (i, slot) in self.slots.iter().enumerate() {
-      self.announced_target[i] = slot.enemy.target;
+    for (i, enemy) in self.enemies.iter().enumerate() {
+      self.announced_target[i] = enemy.target;
     }
-    self.deaths_since_send.clear();
     self.claims_since_send.clear();
     self.hits_since_send.clear();
     out
@@ -994,14 +1056,154 @@ fn player_drift(p: usize, t: f32, spread: bool) -> (f32, f32) {
 mod tests {
   use super::*;
 
+  /// Runs a server for `ms`, with nobody steering except the buffer.
+  fn idle(server: &mut Server, ms: u64, controls: &Controls) {
+    // Seats 0 and 1 stand still rather than drifting: an unoccupied seat takes
+    // the scripted drift, which would move the two players under test apart for
+    // reasons that have nothing to do with when their input executed.
+    let mut seats = vec![Seat::Bot; server.players.len()];
+    seats[0] = Seat::Steered(Vec2::default());
+    seats[1] = Seat::Steered(Vec2::default());
+    for _ in 0..(ms / 16) {
+      server.advance_seats(16, &seats, controls);
+    }
+  }
+
+  /// The tick an honest client aims at: the server's current one, plus the
+  /// playout depth it advertised, which is the same arithmetic every client does.
+  fn aimed_tick(server: &Server, controls: &Controls) -> u64 {
+    server.tick() + controls.playout_delay_ms / (SIM_DT * 1000.0) as u64
+  }
+
+  #[test]
+  fn two_players_who_pressed_together_execute_together_whatever_their_ping() {
+    // The point of the playout buffer, as a number.
+    //
+    // Both press at the same instant and therefore name the same tick. One is on
+    // a fast link and one is not, so their packets arrive four ticks apart.
+    // Applied on arrival the near player gets those four ticks of movement free,
+    // and anything decided by who was where first is decided by ping. Named for a
+    // tick, they execute on the same one and move together.
+    fn spread(controls: &Controls) -> f32 {
+      let mut server = Server::new(50, 4, false);
+      idle(&mut server, 480, controls);
+
+      let middle = Vec2::new(ARENA_W * 0.5, ARENA_H * 0.5);
+      server.players[0] = middle;
+      server.players[1] = middle;
+      let start = server.players.clone();
+      let target = aimed_tick(&server, controls);
+
+      // The near player's packet lands almost at once.
+      server.submit_input(0, target, Vec2::new(1.0, 0.0), controls);
+      idle(&mut server, 64, controls);
+      // The far player's lands four ticks later, naming the same tick.
+      server.submit_input(1, target, Vec2::new(1.0, 0.0), controls);
+      idle(&mut server, 400, controls);
+
+      (server.players[0].dist(start[0]) - server.players[1].dist(start[1])).abs()
+    }
+
+    let scheduled = spread(&Controls::default());
+    let on_arrival = spread(&Controls { input_playout: false, ..Controls::default() });
+
+    assert!(on_arrival > 8.0, "applying on arrival should hand the near player a head start: {on_arrival:.1} px");
+    assert!(scheduled < 1.0, "the buffer should erase it, got {scheduled:.1} px against {on_arrival:.1} px");
+  }
+
+  #[test]
+  fn a_tick_that_has_already_been_simulated_is_closed() {
+    // The lag switch, and the reason this rejects rather than corrects. Buffer
+    // your packets, dump them late, and you would be asking the server to reopen
+    // ticks it has already run. Correcting the tick into the window would still
+    // execute the input, so the lie costs nothing and the input still lands.
+    // Dropping it means backdating costs you the input.
+    let controls = Controls::default();
+    let mut server = Server::new(50, 4, false);
+    idle(&mut server, 480, &controls);
+
+    let middle = Vec2::new(ARENA_W * 0.5, ARENA_H * 0.5);
+    server.players[0] = middle;
+    server.players[1] = middle;
+    let start = server.players.clone();
+
+    // Seat 0 aims honestly. Seat 1 names a tick from five seconds ago.
+    server.submit_input(0, aimed_tick(&server, &controls), Vec2::new(1.0, 0.0), &controls);
+    let stale = server.tick().saturating_sub(300);
+    assert!(!server.submit_input(1, stale, Vec2::new(1.0, 0.0), &controls), "a closed tick must be refused");
+    assert_eq!(server.rejected_inputs(), 1);
+
+    idle(&mut server, 400, &controls);
+    assert!(server.players[0].dist(start[0]) > 10.0, "the honest input took effect");
+    assert!(server.players[1].dist(start[1]) < 1.0, "the rejected one did nothing at all");
+  }
+
+  #[test]
+  fn a_rebuilt_world_keeps_accepting_the_inputs_a_client_is_already_aiming() {
+    // Regression, and it made the player simply stop responding.
+    //
+    // Changing the enemy count rebuilds the world, and the rebuild deliberately
+    // preserves the clock so a client's packet-age estimate does not jump. When
+    // the tick was a separate counter it was *not* preserved: the clock said
+    // thirty seconds and the tick said nought, so every input a client aimed was
+    // hundreds of ticks beyond the accepting window and was refused for good.
+    let controls = Controls::default();
+    let mut warm = Server::new(50, 4, false);
+    idle(&mut warm, 30_000, &controls);
+    let clock = warm.now_ms();
+    assert!(warm.tick() > 1_000, "the warm server has a real tick: {}", warm.tick());
+
+    // Exactly what `Arena::reconfigure` does.
+    let mut rebuilt = Server::new(80, 4, false);
+    rebuilt.set_clock(clock);
+
+    assert_eq!(rebuilt.tick(), warm.tick(), "the rebuilt world kept its place in time");
+    let aimed = aimed_tick(&rebuilt, &controls);
+    assert!(
+      rebuilt.submit_input(0, aimed, Vec2::new(1.0, 0.0), &controls),
+      "a client aiming normally was refused after the rebuild"
+    );
+    assert_eq!(rebuilt.rejected_inputs(), 0);
+  }
+
+  #[test]
+  fn a_tick_too_far_ahead_is_refused() {
+    // Otherwise a client could park inputs minutes into the future.
+    let controls = Controls::default();
+    let mut server = Server::new(50, 4, false);
+    idle(&mut server, 480, &controls);
+
+    let far = server.tick() + controls.input_max_early_ticks + 1;
+    assert!(!server.submit_input(0, far, Vec2::new(1.0, 0.0), &controls));
+    assert_eq!(server.rejected_inputs(), 1);
+    // And the edge of the window is still accepted.
+    let edge = server.tick() + controls.input_max_early_ticks;
+    assert!(server.submit_input(0, edge, Vec2::new(1.0, 0.0), &controls));
+  }
+
+  #[test]
+  fn an_input_inside_the_window_but_past_its_tick_is_counted_and_still_applied() {
+    // The window forgives a little lateness on purpose, because a jittery link
+    // produces it honestly. It is counted, because a steady stream of these is
+    // the signal that the window is too tight for who is connected.
+    let controls = Controls::default();
+    let mut server = Server::new(50, 4, false);
+    idle(&mut server, 480, &controls);
+
+    let just_late = server.tick().saturating_sub(controls.input_max_late_ticks);
+    assert!(server.submit_input(0, just_late, Vec2::new(1.0, 0.0), &controls), "inside the window");
+    assert_eq!(server.rejected_inputs(), 0);
+    assert_eq!(server.late_inputs(), 1, "and counted as late");
+  }
+
   #[test]
   fn a_player_pressed_by_enemies_takes_hits_and_is_eventually_overrun() {
     let mut server = Server::new(200, 4, false);
     // Pin every enemy onto player 0 and point it at them, so the pile presses.
     let p0 = server.players[0];
-    for slot in server.slots.iter_mut() {
-      slot.enemy.pos = p0;
-      slot.enemy.target = 0;
+    for enemy in server.enemies.iter_mut() {
+      enemy.pos = p0;
+      enemy.target = 0;
     }
     let controls = Controls::default();
     // Stand still in the pile for fifteen seconds.
@@ -1017,9 +1219,9 @@ mod tests {
     // tick: the i-frame is what stops a swarm deleting you in an instant.
     let mut server = Server::new(50, 1, false);
     let p0 = server.players[0];
-    for slot in server.slots.iter_mut() {
-      slot.enemy.pos = p0;
-      slot.enemy.target = 0;
+    for enemy in server.enemies.iter_mut() {
+      enemy.pos = p0;
+      enemy.target = 0;
     }
     let before = server.player_health(0);
     // A single simulation step (advance runs the fixed-step loop once for 16ms).

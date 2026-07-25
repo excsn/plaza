@@ -2,6 +2,9 @@
 //! run, the packets that cross the wire, and the byte accounting that makes
 //! bandwidth claims measurable rather than asserted.
 
+use plaza_client_utils::extrapolation::Extrapolatable;
+use plaza_client_utils::interpolation::Interpolatable;
+use plaza_client_utils::SlotKey;
 use serde::{Deserialize, Serialize};
 
 pub const ARENA_W: f32 = 3000.0;
@@ -76,6 +79,23 @@ pub type EntityIndex = u32;
 pub type PlayerId = u8;
 pub const MAX_PLAYERS: usize = 4;
 
+/// So a remote player can be smoothed with [`RemoteView`], which is what it is
+/// for. Both are the obvious implementations; they exist here rather than in the
+/// library because a wire type should not have to adopt somebody's vector.
+///
+/// [`RemoteView`]: plaza_client_utils::RemoteView
+impl Interpolatable<u64> for Vec2 {
+  fn interpolate(&self, other: &Self, t: f32, _a: u64, _b: u64) -> Self {
+    Vec2::new(self.x + (other.x - self.x) * t, self.y + (other.y - self.y) * t)
+  }
+}
+
+impl Extrapolatable<Vec2, f32> for Vec2 {
+  fn extrapolate_with_velocity(&self, velocity: &Vec2, dt: f32) -> Self {
+    Vec2::new(self.x + velocity.x * dt, self.y + velocity.y * dt)
+  }
+}
+
 /// A handle to an entity: which slot, and which *occupant* of that slot.
 ///
 /// The generation is what makes a recycled slot detectable. Without it, a packet
@@ -95,6 +115,32 @@ impl Handle {
   /// is discarded, which is exactly how stale references become corruption.
   pub fn key(self, generational: bool) -> Handle {
     if generational { self } else { Handle { idx: self.idx, generation: 0 } }
+  }
+}
+
+/// The wire handle and the library's key are the same pair, so this is a
+/// widening and never a decision.
+///
+/// Worth having as a conversion rather than an open-coded shift at each call
+/// site: the client's mirror and the server's baseline both key on
+/// `SlotKey::encode`, and two hand-written packings that agree today are a
+/// disagreement waiting to happen. It would present as a digest mismatch over a
+/// world both sides actually hold identically, which is a genuinely bad afternoon.
+impl From<Handle> for SlotKey {
+  fn from(handle: Handle) -> Self {
+    SlotKey::new(handle.idx as u32, handle.generation)
+  }
+}
+
+impl From<&Handle> for SlotKey {
+  fn from(handle: &Handle) -> Self {
+    (*handle).into()
+  }
+}
+
+impl From<SlotKey> for Handle {
+  fn from(key: SlotKey) -> Self {
+    Handle::new(key.index as EntityIndex, key.generation)
   }
 }
 
@@ -180,6 +226,20 @@ pub struct Projectile {
   pub pos: Vec2,
   pub vel: Vec2,
   pub ttl: f32,
+}
+
+/// **The shared movement rule for a player.** The server integrates a held
+/// direction every tick, and a client predicting its own player runs exactly
+/// this, so the two cannot disagree.
+///
+/// Sharing it is the point. This rule lived in two places for a while, the
+/// server's `step` and the client's local prediction, and every divergence bug
+/// in this example was in an entity whose rule was written twice rather than
+/// called twice. A player is *unforced*, nothing pushes it but its own input, so
+/// this really is the whole of it and a client running it is exact.
+pub fn step_player(pos: &mut Vec2, dir: Vec2, dt: f32) {
+  pos.x = (pos.x + dir.x * PLAYER_SPEED * dt).clamp(0.0, ARENA_W);
+  pos.y = (pos.y + dir.y * PLAYER_SPEED * dt).clamp(0.0, ARENA_H);
 }
 
 /// **The shared behaviour rule.** Both the authoritative server and every client
@@ -423,6 +483,37 @@ pub struct Crowd {
   pub count: u16,
 }
 
+/// The player stream: a handful of entities, sent far more often than the
+/// entity stream because everything else is computed *from* them.
+///
+/// Deliberately its own message rather than a field on [`Packet`]. The entity
+/// stream carries a sequence number, an acknowledgement window and a digest,
+/// and all three describe the delta-compressed enemy set; numbering these would
+/// put packets carrying no deltas into that machinery for nothing.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct PlayerFrame {
+  pub server_time_ms: u64,
+  pub players: Vec<(PlayerId, Vec2)>,
+  pub player_health: Vec<u8>,
+  pub player_invuln: Vec<bool>,
+}
+
+impl PlayerFrame {
+  /// Roughly what this costs on the wire: a timestamp, then an id and a
+  /// quantized position each, plus a byte of health and a bit of shield.
+  pub fn bytes(&self) -> usize {
+    8 + self.players.len() * (1 + 4) + self.player_health.len() + self.player_invuln.len()
+  }
+}
+
+/// Everything the server sends downstream, so one impaired link carries both
+/// streams and they arrive interleaved exactly as they would on a real socket.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum Downstream {
+  Frame(Box<Packet>),
+  Players(PlayerFrame),
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Packet {
   pub server_time_ms: u64,
@@ -438,16 +529,36 @@ pub struct Packet {
   /// and a server that believes the difference will diff against a baseline the
   /// client never reached.
   pub baseline_seq: Option<u64>,
+  /// This packet is a clean rebuild: the client must drop its whole mirror before
+  /// applying, so the full visible set that follows lands exactly rather than
+  /// merged onto a state that had drifted. Set when the server forces a resync,
+  /// either because the baseline aged out of history or an acknowledged digest
+  /// proved the mirror wrong.
+  pub full_baseline: bool,
   pub entered: Vec<Spawn>,
   pub left: Vec<(Handle, LeaveReason)>,
   pub samples: Vec<Sample>,
   pub players: Vec<(PlayerId, Vec2)>,
   /// Shots near this player, sent outright: there are few and they are short-lived.
+  /// The live shots near this player.
+  ///
+  /// The **authoritative set**, re-sent each packet, which is what makes a shot
+  /// that hit something simply stop appearing. Sending a spawn event once and
+  /// letting the client fly it was tried and is worse in two ways: the client has
+  /// to be told when the shot ends (or it flies on through the enemy it killed),
+  /// and it cannot decide that for itself, because it draws the shot in the past
+  /// while its enemy mirror holds the present, so the enemy that should stop the
+  /// bullet has already been removed.
   pub projectiles: Vec<Projectile>,
   /// An order-independent digest of exactly what this client should hold once it
   /// has applied this packet. Eight bytes that turn a silent mirror divergence
   /// into a detected one.
   pub visible_digest: u64,
+  /// The server's exact visible key set (`(idx << 16) | generation`), populated
+  /// only under [`Controls::debug_digest`]. Lets a client that sees the digest
+  /// disagree name the precise entities it holds wrongly rather than only tally
+  /// them. Empty on the normal wire.
+  pub debug_keys: Vec<u64>,
   /// Stand-ins for the enemies outside this client's view radius. Empty unless
   /// crowd LOD is on.
   pub crowds: Vec<Crowd>,
@@ -504,7 +615,9 @@ impl Wallet {
 /// to make.
 #[derive(Clone, Copy, Debug)]
 pub enum ClientMsg {
-  Ack { newest: u64, mask: u64 },
+  /// `digest` is the client's view of its own mirror, so the server can catch a
+  /// mirror that has silently drifted from the state it acknowledges.
+  Ack { newest: u64, mask: u64, digest: u64 },
   /// A purchase *request*. Naming it a request rather than a purchase is the
   /// whole protocol: the client proposes, and only the server can spend.
   Buy(Upgrade),
@@ -546,8 +659,9 @@ fn delta_varint_bytes(mut ids: Vec<u32>) -> usize {
   total
 }
 pub const SAMPLE_BYTES: usize = ID_BYTES + POS_BYTES;
-/// An acknowledgement travelling back up: a sequence number plus the 64-bit mask.
-pub const ACK_BYTES: usize = 2 + 8;
+/// An acknowledgement travelling back up: a sequence number, the 64-bit mask,
+/// and the mirror's own digest so the server can catch a drift it cannot see.
+pub const ACK_BYTES: usize = 2 + 8 + 8;
 /// A crowd stand-in: a quantized position and a count.
 pub const CROWD_BYTES: usize = POS_BYTES + 2;
 pub const PROJECTILE_BYTES: usize = POS_BYTES + POS_BYTES;
@@ -657,7 +771,68 @@ pub struct Controls {
   /// summarised into stand-ins rather than dropped entirely. Zero is off, and
   /// off is what relevance culling alone gives you: nothing at all out there.
   pub crowd_lod_theta: f32,
+  /// How often the **entity** stream goes out: enemies entering, leaving and
+  /// being resampled. The expensive one, and the one relevance and crowd LOD
+  /// exist to make cheap.
   pub sync_hz: u32,
+  /// How often the **player** stream goes out, separately and much faster.
+  ///
+  /// Two knobs rather than one because they answer different questions, and
+  /// collapsing them is what makes a low entity rate look far worse than it is.
+  /// Enemy positions can be stale, because every client runs the enemies' own
+  /// rule locally and only needs correcting. Player positions cannot, because
+  /// they are the **input** to that rule: an enemy aims at where it thinks a
+  /// player is, so a stale player position turns into a whole horde changing
+  /// heading at once, every time the stream ticks. Players are also a handful of
+  /// entities rather than thousands, so sending them often is nearly free.
+  ///
+  /// This is the case study's own principle applied honestly: sync the input to
+  /// the behaviour, not just the behaviour's output.
+  pub player_sync_hz: u32,
+  /// How long the server holds an input before executing it, in ms.
+  ///
+  /// The playout buffer, and the reason it exists is fairness rather than
+  /// smoothness. Applied on arrival, an input from a 20 ms player lands on the
+  /// tick after they pressed it and one from a 200 ms player lands nine ticks
+  /// later, so any outcome decided by who was where first (a contested pickup)
+  /// is decided by ping. Scheduling every input to execute at the moment it was
+  /// *pressed* plus this delay puts everyone on the same footing, as long as the
+  /// delay covers their latency.
+  ///
+  /// It is not free: it is added to how long the world takes to react to you.
+  /// Prediction hides it for your own movement and cannot hide it for anything
+  /// the server adjudicates.
+  pub playout_delay_ms: u64,
+  /// How far behind the server's clock every client displays the world.
+  ///
+  /// A property of the timeline, not of anybody's link: the same instant is on
+  /// every screen, so the server can reason about what a client has yet to play.
+  /// It must cover `one_way + jitter + one send interval`, because the newest
+  /// sample a client holds is already a trip old; short of that, T sits ahead of
+  /// every sample and peers snap to the raw newest instead of interpolating.
+  ///
+  /// It used to be sized from measured arrival jitter, which let the transport
+  /// decide which moment was on screen and hid a bad link by showing that player
+  /// an older world. Now a link too slow for the declared delay produces
+  /// [`Client::underruns`](crate::sim::client::Client::underruns) instead.
+  pub render_delay_ms: u64,
+  /// How many ticks late an input may be named for and still be accepted.
+  ///
+  /// The accepting window, and a setting rather than a constant because it is a
+  /// genre decision. Tight is what a competitive shooter wants: a closed tick
+  /// stays closed, and a player who cannot reach the window loses inputs and
+  /// rubber-bands. Loose forgives a jittery link at the cost of letting a
+  /// slightly stale input take effect. Widening it is also what a lag switch
+  /// wants, so it should be sized from what honest links actually do.
+  pub input_max_late_ticks: u64,
+  /// How many ticks ahead of the server's current tick an input may be named for.
+  ///
+  /// Has to cover the playout depth, since that is exactly how far ahead an
+  /// honest client aims. Beyond it, a client is parking inputs in the future.
+  pub input_max_early_ticks: u64,
+  /// Whether to use the playout buffer at all. Off is the naive behaviour,
+  /// apply-on-arrival, kept so the difference is measurable rather than argued.
+  pub input_playout: bool,
   pub relevance: bool,
   pub mode: RemoteMode,
   pub smooth: bool,
@@ -677,6 +852,26 @@ pub struct Controls {
   /// safe here only because the local player has no server-side forces, so the
   /// client predicts it exactly and a coalesced stream cannot drift the position.
   pub coalesce_input: bool,
+  /// Draw where everything is **going** to be, faintly, ahead of where it is.
+  ///
+  /// The solid marker is the actual position: the server's resolved state at the
+  /// render instant, played out of the buffer. The ghost is the future the client
+  /// already holds but has not reached, so the gap is the playout delay rather
+  /// than an error.
+  ///
+  /// The drawing half only. Whether a ghost can exist is
+  /// [`ServerPolicy::allow_ghost`](crate::sim::protocol::ServerPolicy::allow_ghost).
+  pub show_ghost: bool,
+  /// Server side: send frames ahead of the instant a client is rendering, which
+  /// is what makes a ghost possible at all. See
+  /// [`ServerPolicy::allow_ghost`](crate::sim::protocol::ServerPolicy::allow_ghost).
+  pub allow_ghost: bool,
+  /// Ship the server's exact visible key set on every frame so a client that
+  /// detects a digest mismatch can print precisely which enemies it holds in
+  /// error (extra) or is short of (missing), and log every prediction correction,
+  /// instead of only counting them. Off by default: it adds real wire weight. Turn
+  /// it on from the panel to chase a mismatch or a jump down to specifics.
+  pub debug_digest: bool,
 }
 
 impl Default for Controls {
@@ -691,6 +886,16 @@ impl Default for Controls {
       predict_balance: false,
       auto_buy: true,
       sync_hz: 16,
+      // Far above the entity rate on purpose: four entities, and every enemy in
+      // the world aims at one of them.
+      player_sync_hz: 30,
+      playout_delay_ms: 100,
+      // one_way (80) + jitter (20) + a 30 Hz player interval (33), rounded up.
+      render_delay_ms: 150,
+      input_playout: true,
+      // Roughly the playout depth in 16 ms steps, plus slack for jitter.
+      input_max_late_ticks: 4,
+      input_max_early_ticks: 10,
       relevance: true,
       mode: RemoteMode::Simulate,
       smooth: true,
@@ -699,6 +904,9 @@ impl Default for Controls {
       generational_ids: true,
       combat: true,
       coalesce_input: false,
+      show_ghost: true,
+      allow_ghost: true,
+      debug_digest: false,
     }
   }
 }
@@ -706,5 +914,9 @@ impl Default for Controls {
 impl Controls {
   pub fn sync_interval_ms(&self) -> u64 {
     (1000 / self.sync_hz.max(1)) as u64
+  }
+
+  pub fn player_sync_interval_ms(&self) -> u64 {
+    (1000 / self.player_sync_hz.max(1)) as u64
   }
 }

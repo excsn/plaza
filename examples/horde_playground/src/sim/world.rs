@@ -7,13 +7,13 @@ use plaza_client_utils::net_sim::{LatencyLink, Rng};
 use crate::sim::client::Client;
 use crate::sim::server::Server;
 use crate::sim::types::ACK_BYTES;
-use crate::sim::types::{ClientMsg, Controls, EnemyKind, Handle, Packet, PlayerId, Projectile, Vec2};
+use crate::sim::types::{ClientMsg, Controls, Downstream, EnemyKind, Handle, PlayerId, Vec2};
 
 pub struct World {
   server: Server,
   clients: Vec<Client>,
   /// One downstream link per player.
-  down: Vec<LatencyLink<Packet>>,
+  down: Vec<LatencyLink<Downstream>>,
   /// Acknowledgements travelling back. They take the same latency and the same
   /// loss as everything else, which matters: a baseline is always at least a
   /// round trip out of date, so the server re-derives slightly more than it
@@ -83,20 +83,35 @@ impl World {
       }
 
       let link = &mut self.down[player as usize];
-      link.send(self.wall_ms, packet, controls.latency_ms, controls.jitter_ms, controls.loss_pct, &mut self.rng);
+      link.send(self.wall_ms, Downstream::Frame(Box::new(packet)), controls.latency_ms, controls.jitter_ms, controls.loss_pct, &mut self.rng);
+    }
+
+    // The player stream, on the same impaired link so it is delayed and dropped
+    // exactly as the entity stream is. Everyone gets the same frame.
+    if let Some(frame) = self.server.take_player_frame() {
+      self.bytes_sent += (frame.bytes() * self.down.len()) as u64;
+      for link in self.down.iter_mut() {
+        link.send(self.wall_ms, Downstream::Players(frame.clone()), controls.latency_ms, controls.jitter_ms, controls.loss_pct, &mut self.rng);
+      }
     }
 
     for (p, link) in self.down.iter_mut().enumerate() {
-      let mut got = false;
-      for packet in link.drain_due(self.wall_ms) {
-        self.clients[p].on_packet(&packet, self.wall_ms, controls);
-        got = true;
+      for message in link.drain_due(self.wall_ms) {
+        match message {
+          // Taken, not applied. It is played out when the render clock reaches
+          // the instant it describes.
+          Downstream::Frame(packet) => self.clients[p].receive_packet(*packet, self.wall_ms),
+          Downstream::Players(frame) => self.clients[p].on_player_frame(&frame, self.wall_ms),
+        }
       }
-      // Acknowledge on receipt, not on a timer, so the baseline advances as fast
-      // as the link allows.
-      if got && let Some((newest, mask)) = self.clients[p].acks.encode() {
+      // Play out whatever is due, then acknowledge. Acknowledging on *receipt*
+      // would send a digest of a state this client has not reached yet, and the
+      // server compares that digest against what it believes the client holds.
+      self.clients[p].set_render_delay(controls.render_delay_ms);
+      let got = self.clients[p].tick(dt_ms, controls);
+      if got && let Some((newest, mask)) = self.clients[p].acks().encode() {
         self.bytes_sent += ACK_BYTES as u64;
-        self.up[p].send(self.wall_ms, ClientMsg::Ack { newest, mask }, controls.latency_ms, controls.jitter_ms, controls.loss_pct, &mut self.rng);
+        self.up[p].send(self.wall_ms, ClientMsg::Ack { newest, mask, digest: self.clients[p].last_digest() }, controls.latency_ms, controls.jitter_ms, controls.loss_pct, &mut self.rng);
       }
       // A purchase is a *request*, and it travels the same lossy wire as anything
       // else, so the client's belief about its own wallet is unconfirmed for a
@@ -109,13 +124,10 @@ impl World {
     for (p, link) in self.up.iter_mut().enumerate() {
       for msg in link.drain_due(self.wall_ms) {
         match msg {
-          ClientMsg::Ack { newest, mask } => self.server.receive_ack(p, newest, mask),
+          ClientMsg::Ack { newest, mask, digest } => self.server.receive_ack(p, newest, mask, digest),
           ClientMsg::Buy(upgrade) => self.server.receive_buy(p, upgrade),
         }
       }
-    }
-    for client in &mut self.clients {
-      client.tick(dt_ms, controls);
     }
   }
 
@@ -126,7 +138,8 @@ impl World {
     let mut sum = 0.0;
     let mut n = 0u32;
     for client in &self.clients {
-      for (handle, drawn, _kind) in client.render(controls) {
+      let Some(at) = client.render_at() else { continue };
+      for (handle, drawn, _kind) in client.render(controls, at) {
         // Compare only against the occupant the client believes it holds.
         if let Some(t) = truth.get(&handle) {
           sum += drawn.dist(*t);
@@ -142,7 +155,8 @@ impl World {
     let truth: std::collections::BTreeMap<Handle, Vec2> = self.truth().into_iter().collect();
     let mut worst = 0.0f32;
     for client in &self.clients {
-      for (handle, drawn, _kind) in client.render(controls) {
+      let Some(at) = client.render_at() else { continue };
+      for (handle, drawn, _kind) in client.render(controls, at) {
         if let Some(t) = truth.get(&handle) {
           worst = worst.max(drawn.dist(*t));
         }
@@ -222,8 +236,13 @@ impl World {
   }
 
   /// Shots this client currently knows about, for drawing.
-  pub fn client_projectiles(&self, player: usize) -> &[Projectile] {
-    &self.clients[player].projectiles
+  /// Where the offline playground draws a client's shots: at the render target,
+  /// the same instant the peers are drawn at.
+  pub fn client_projectiles(&self, player: usize) -> Vec<Vec2> {
+    self.clients[player]
+      .render_at()
+      .map(|at| self.clients[player].render_projectiles(at))
+      .unwrap_or_default()
   }
 
   pub fn alive_enemies(&self) -> usize {
@@ -251,7 +270,7 @@ impl World {
   /// generational handles these are rejected; without them they would have been
   /// applied to whatever now occupies the slot.
   pub fn stale_refs(&self) -> u64 {
-    self.clients.iter().map(|c| c.stale_refs).sum()
+    self.clients.iter().map(|c| c.stale_refs()).sum()
   }
 
   /// What this client *believes* its balance is, against what the server says.
@@ -387,7 +406,13 @@ impl World {
   /// quietly starves the mirror scores perfectly on everything else.
   pub fn missing_entities(&self, player: usize, controls: &Controls) -> usize {
     let eye = self.server.players[player];
-    let held: std::collections::BTreeSet<Handle> = self.clients[player].render(controls).into_iter().map(|(h, _, _)| h).collect();
+    let held: std::collections::BTreeSet<Handle> = self.clients[player]
+      .render_at()
+      .map(|at| self.clients[player].render(controls, at))
+      .unwrap_or_default()
+      .into_iter()
+      .map(|(h, _, _)| h)
+      .collect();
     self
       .server
       .live_enemies()
@@ -401,7 +426,7 @@ impl World {
   /// despawn failed to land, which is invisible from bandwidth or error numbers.
   pub fn phantom_entities(&self, player: usize, controls: &Controls) -> usize {
     let live: std::collections::BTreeSet<Handle> = self.truth().into_iter().map(|(h, _)| h).collect();
-    self.clients[player].render(controls).into_iter().filter(|(h, _, _)| !live.contains(h)).count()
+    self.client_render(player, controls).into_iter().filter(|(h, _, _)| !live.contains(h)).count()
   }
 
   /// Total bytes by part: samples, spawns, despawns, projectiles, other.
@@ -425,15 +450,15 @@ impl World {
   /// set resent. Recovery's price, and the readout that says whether the sent
   /// history is long enough for the link.
   pub fn full_resends(&self) -> u64 {
-    self.server.full_resends.iter().sum()
+    self.server.full_resends()
   }
 
   pub fn digest_mismatches(&self) -> u64 {
-    self.clients.iter().map(|c| c.digest_mismatches).sum()
+    self.clients.iter().map(|c| c.digest_mismatches()).sum()
   }
 
   pub fn frames_lost(&self) -> u64 {
-    self.clients.iter().map(|c| c.frames_lost).sum()
+    self.clients.iter().map(|c| c.frames_lost()).sum()
   }
 
   pub fn deaths_seen(&self, player: usize) -> u64 {
@@ -472,9 +497,13 @@ impl World {
     &self.clients[player].bursts
   }
 
-  /// What one client would draw, for the renderer.
+  /// What one client would draw, at its own render instant. Empty before the
+  /// stream has started, which is the join transient.
   pub fn client_render(&self, player: usize, controls: &Controls) -> Vec<(Handle, Vec2, EnemyKind)> {
-    self.clients[player].render(controls)
+    self.clients[player]
+      .render_at()
+      .map(|at| self.clients[player].render(controls, at))
+      .unwrap_or_default()
   }
 }
 
@@ -573,36 +602,53 @@ mod tests {
   }
 
   #[test]
-  fn predicting_a_contested_pickup_costs_snaps_that_scale_with_latency() {
-    // Coins are claimed by whoever is nearest inside the radius. A client can
-    // apply that rule locally, and it will be right most of the time, but it
-    // judges "am I nearest?" against remote positions that are a latency out of
-    // date. So the cost of prediction is not drift, it is a count of moments
-    // where a coin was shown collected and then taken back.
+  fn a_consistent_timeline_turns_predicting_a_pickup_into_replaying_it() {
+    // This test used to assert the opposite, and the reversal is the finding.
     //
-    // And it cannot be smoothed. Every other correction in these examples eases a
-    // position toward the truth over a few frames; there is no continuous path
-    // between "you have this coin" and "you do not".
-    let together = Controls {
-      spread_players: false,
-      ..Controls::default()
-    };
+    // Coins are claimed by whoever is nearest inside the radius. When the client
+    // applied each packet the moment it landed, it judged "am I nearest?" against
+    // a mixture: its own position fresh, everyone else's a latency out of date.
+    // That is a genuine guess, and it was wrong often enough to measure, more
+    // often the worse the link (15 taken back over thirty seconds at 250 ms).
+    //
+    // Now that packets are played out when the render clock reaches the instant
+    // they describe, the client is not guessing at the present, it is **replaying
+    // the past**: it evaluates the same rule, on the same positions, at the same
+    // instant the server did. Same inputs and same function give the same answer,
+    // so the guess stops being a guess. Measured at 250 ms, 166 predictions and
+    // zero taken back.
+    //
+    // What it costs instead is *lateness*: the pickup is shown when the timeline
+    // reaches it rather than the moment the player believes it happened. That is
+    // the trade the playout buffer makes everywhere, and it is why this is worth
+    // pinning: the same change that removed the snapping introduced the delay.
+    let together = Controls { spread_players: false, ..Controls::default() };
+    // The delay has to cover the trip, or the client is rendering ahead of every
+    // sample it holds and cannot replay anything. 250 ms of latency needs a
+    // timeline at least that far back, plus jitter and an interval.
+    let together = Controls { render_delay_ms: 350, ..together };
     let confirmed = run_circling(&Controls { predict_balance: false, latency_ms: 250, ..together }, 30);
-    let near = run_circling(&Controls { predict_balance: true, latency_ms: 80, ..together }, 30);
     let far = run_circling(&Controls { predict_balance: true, latency_ms: 250, ..together }, 30);
 
     assert_eq!(confirmed.denied_claims(), 0, "waiting for the server cannot mispredict");
-    assert!(far.denied_claims() > 0, "predicting at 250ms loses races: {}", far.denied_claims());
-    // Only the ordering is asserted, not that the near case is non-zero. At 80 ms
-    // a lost race needs two players inside one pickup radius within a window the
-    // staleness can actually flip, which is rare enough to be seed-dependent: the
-    // report sees 4 over thirty seconds and this drive pattern sees none. The
-    // scaling is the robust claim; a specific count at low latency is not.
     assert!(
-      far.denied_claims() >= near.denied_claims(),
-      "and loses more the staler the remote positions are: {} at 250ms against {} at 80ms",
+      far.clients[0].predicted_total > 50,
+      "the test needs the client to actually be predicting: {}",
+      far.clients[0].predicted_total
+    );
+    // Rare, not zero, and the earlier "zero" was over-fitted to one configuration.
+    // Replaying the past makes a contested claim very nearly deterministic,
+    // because both sides run one rule over the same positions at the same
+    // instant. What survives is the boundary: two players equidistant to within
+    // float error still flip, and no amount of timeline agreement removes that.
+    // Measured across declared delays of 300 to 500 ms it is 1 to 3 claims,
+    // against hundreds predicted, and it does not improve with a wider delay,
+    // which is what says it is a tie-break rather than a staleness problem.
+    assert!(
+      far.denied_claims() * 20 <= far.clients[0].predicted_total as u64,
+      "adjudicating on the server's own timeline should lose races only at the boundary: {} of {}",
       far.denied_claims(),
-      near.denied_claims()
+      far.clients[0].predicted_total
     );
   }
 
@@ -651,6 +697,11 @@ mod tests {
     };
     let near = run_circling(&Controls { latency_ms: 80, ..together }, 30);
     let far = run_circling(&Controls { latency_ms: 250, ..together }, 30);
+    for d in [300u64, 350, 400, 500] {
+      let t = Controls { render_delay_ms: d, ..together };
+      let f = run_circling(&Controls { predict_balance: true, latency_ms: 250, ..t }, 30);
+      println!("  delay {d}ms -> predicted {} denied {}", f.clients[0].predicted_total, f.denied_claims());
+    }
     let confirmed = run_circling(&Controls { predict_balance: false, latency_ms: 250, ..together }, 30);
 
     assert_eq!(confirmed.wrong_rule_packets(), 0, "waiting for confirmation never simulates a rule the server rejects");
@@ -777,6 +828,152 @@ mod tests {
       "relevance should cut bandwidth by more than 10x: {:.0} vs {:.0} B/s",
       w_on.bytes_per_sec(),
       w_off.bytes_per_sec()
+    );
+  }
+
+  /// The worst a client's idea of a *peer* is behind the server's truth, in px,
+  /// sampled every frame rather than at the end so a transient is not missed.
+  fn worst_peer_lag(controls: &Controls, secs: u64) -> f32 {
+    let mut w = World::new(controls, 4, 0x5EED_D00D);
+    let mut worst = 0.0f32;
+    // Warm up first. Before the first packet lands a client believes the origin,
+    // and the distance from there to wherever a player actually started is
+    // arena-sized: measuring through that reports the same number for every
+    // configuration, which is what the first version of this test did.
+    let warmup = 2 * 60;
+    for frame in 0..(secs * 60) {
+      w.step(16, Vec2::new(1.0, 0.0), controls);
+      if frame < warmup {
+        continue;
+      }
+      // What client 0 believes about player 1, against where player 1 really is.
+      let believed = w.clients[0].players()[1];
+      worst = worst.max(believed.dist(w.server.players[1]));
+    }
+    worst
+  }
+
+  #[test]
+  fn a_peer_is_drawn_smoothly_rather_than_snapped_to_the_newest_sample() {
+    // The complaint this pair of fixes came from, as a number. A peer drawn at
+    // the raw newest sample stands still between arrivals and jumps a whole
+    // send interval's worth when one lands; drawn through `RemoteView` against a
+    // clock steered by the stream, it moves a little every frame.
+    //
+    // Measuring the *largest single frame's movement* rather than an average is
+    // the point: an averaged position error is exactly the metric that said this
+    // was fine while it visibly stuttered.
+    // A 10 Hz player stream on an 80 ms link needs 80 + 20 + 100 back before two
+    // samples bracket T. Declared, because under one shared timeline the delay is
+    // a chosen number rather than something the client discovers.
+    let controls = Controls { sync_hz: 4, player_sync_hz: 10, render_delay_ms: 250, ..Controls::default() };
+    let mut w = World::new(&controls, 4, 0x5EED_D00D);
+
+    let mut worst_raw = 0.0f32;
+    let mut worst_drawn = 0.0f32;
+    let mut last_raw: Option<Vec2> = None;
+    let mut last_drawn: Option<Vec2> = None;
+    let warmup = 2 * 60;
+    for frame in 0..(8 * 60) {
+      w.step(16, Vec2::new(1.0, 0.0), &controls);
+      let raw = w.clients[0].players()[1];
+      let drawn = w.clients[0].render_at().map(|at| w.clients[0].render_players(at)[1]).unwrap_or_default();
+      if frame >= warmup {
+        if let Some(previous) = last_raw {
+          worst_raw = worst_raw.max(previous.dist(raw));
+        }
+        if let Some(previous) = last_drawn {
+          worst_drawn = worst_drawn.max(previous.dist(drawn));
+        }
+      }
+      last_raw = Some(raw);
+      last_drawn = Some(drawn);
+    }
+
+    assert!(worst_raw > 8.0, "the raw sample should visibly jump between arrivals: {worst_raw:.1} px");
+    assert!(
+      worst_drawn * 2.0 < worst_raw,
+      "a drawn peer should move in small steps, not the raw sample's jumps: {worst_drawn:.1} px against {worst_raw:.1} px"
+    );
+  }
+
+  #[test]
+  fn a_bad_link_underruns_instead_of_quietly_getting_an_older_world() {
+    // This test asserted the opposite, and the reversal is the finding.
+    //
+    // It used to require that a steady link buy itself a *smaller* buffer, on the
+    // reasoning that every millisecond of render delay is a peer drawn further
+    // behind where they are. The buffer was sized from measured arrival jitter,
+    // so each client picked its own render instant.
+    //
+    // That conflated two unrelated things. Latency and jitter describe when bytes
+    // show up, a property of one link. The render delay describes which moment is
+    // on screen, a property of the world. Letting the first move the second means
+    // no two clients agree on what "now" is, the server cannot say what any of
+    // them has yet to play, and, worst, a player on a bad link is silently shown
+    // an older world than everybody else while every readout says fine.
+    //
+    // Fixed on the server's clock, both links render the same instant. The
+    // difference does not vanish, it becomes visible: the link that cannot keep
+    // up reports underruns, packets that arrived after the moment they describe
+    // had already gone past.
+    // Measured on the timeline itself rather than on a position, because the two
+    // answer different questions. How far behind the server clock the client is
+    // *rendering* is the timeline, and it must be identical. How far the drawn
+    // peer is from the truth is a consequence, and it legitimately gets worse
+    // when the data for that instant has not arrived, which is the starvation the
+    // underrun counter is there to name.
+    fn timeline_and_underruns(controls: &Controls) -> (i64, u64) {
+      let mut w = World::new(controls, 4, 0x5EED_D00D);
+      let mut worst = 0i64;
+      for frame in 0..(8 * 60) {
+        w.step(16, Vec2::new(1.0, 0.0), controls);
+        if frame < 180 {
+          continue;
+        }
+        if let Some(at) = w.clients[0].render_at() {
+          let behind = w.server.now_ms() as i64 - at.server_time_ms() as i64;
+          worst = worst.max((behind - controls.render_delay_ms as i64).abs());
+        }
+      }
+      (worst, w.clients[0].underruns())
+    }
+
+    let base = Controls { sync_hz: 16, player_sync_hz: 30, latency_ms: 0, render_delay_ms: 100, ..Controls::default() };
+    let (steady_drift, steady_late) = timeline_and_underruns(&Controls { jitter_ms: 0, ..base });
+    let (rough_drift, rough_late) = timeline_and_underruns(&Controls { jitter_ms: 200, ..base });
+
+    assert!(steady_drift <= 16, "a steady link should render exactly the declared delay back: off by {steady_drift} ms");
+    assert!(
+      rough_drift <= 16,
+      "and so should a jittery one, because the timeline is the world's and not the link's: off by {rough_drift} ms"
+    );
+    assert_eq!(steady_late, 0, "a link inside the declared delay should never underrun");
+    assert!(rough_late > 0, "a link outside it should say so rather than absorb it: {rough_late} underruns");
+  }
+
+  #[test]
+  fn a_slow_entity_stream_does_not_have_to_starve_the_player_stream() {
+    // The bug this pair of rates exists for. Enemy positions can be stale,
+    // because every client runs the enemies' own rule and only needs correcting.
+    // Player positions cannot: they are the *input* to that rule, so a stale one
+    // makes every enemy aim at a ghost and the whole horde changes heading at
+    // once each time the stream ticks. It also makes peers visibly teleport.
+    //
+    // With one shared rate at 1 Hz a player can be a full second stale, and at
+    // PLAYER_SPEED that is 190 px, nearly half a view radius. Splitting the rates
+    // keeps the entity stream at 1 Hz and the input to it fresh.
+    let shared = Controls { sync_hz: 1, player_sync_hz: 1, latency_ms: 0, jitter_ms: 0, ..Controls::default() };
+    let split = Controls { player_sync_hz: 30, ..shared };
+
+    let starved = worst_peer_lag(&shared, 6);
+    let fed = worst_peer_lag(&split, 6);
+
+    println!("worst peer lag: shared 1 Hz = {starved:.0} px, split (1 Hz entities / 30 Hz players) = {fed:.0} px");
+    assert!(starved > 100.0, "one shared rate should strand a peer badly: {starved:.0} px");
+    assert!(
+      fed * 4.0 < starved,
+      "a separate player rate should keep the input to the enemy rule fresh: {fed:.0} px against {starved:.0} px"
     );
   }
 

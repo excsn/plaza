@@ -18,12 +18,15 @@
 //!   read from server state a joiner does not have.
 
 use plaza_client_utils::clock_sync::ClockSyncEstimator;
-use plaza_client_utils::{ErrorSmoother, RttEstimator};
-use plaza_ws::{CloseReason, Event, Socket, State};
+use plaza_client_utils::{CorrectionMonitor, HeldInputConfig, HeldInputPredictor, InputCoalescer, RttEstimator};
+use plaza_ws::{CloseReason, Event, SendJson, Socket, State};
 
 use crate::sim::client::Client as SimClient;
-use crate::sim::protocol::{Op, ServerPolicy};
-use crate::sim::types::{Controls, LeaveReason, PlayerId, Vec2, ARENA_H, ARENA_W, PLAYER_SPEED};
+use crate::sim::protocol::{Op, ServerPolicy, PROTOCOL};
+use crate::sim::types::{step_player, Controls, LeaveReason, PlayerId, Vec2, ARENA_H, ARENA_W, SIM_DT};
+
+/// The server's simulation step, which is the unit its ticks are counted in.
+const SIM_STEP_MS: u64 = (SIM_DT * 1000.0) as u64;
 
 /// What to tell the player about the connection.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -35,27 +38,34 @@ pub enum Status {
   Gone(String),
 }
 
-/// Integrates a held direction for `dt` seconds, clamped to the arena. The local
-/// player is unforced (no gravity, nothing pushes it), so this is exactly what
-/// the server does, which is what lets the client predict it without replaying a
-/// per-tick input stream.
-fn integrate(pos: Vec2, dir: Vec2, dt: f32) -> Vec2 {
-  Vec2::new((pos.x + dir.x * PLAYER_SPEED * dt).clamp(0.0, ARENA_W), (pos.y + dir.y * PLAYER_SPEED * dt).clamp(0.0, ARENA_H))
+/// The prediction rule, which is literally the server's own [`step_player`]
+/// rather than a client copy of it. The context is `()` because a player is
+/// unforced: nothing but its own input moves it.
+fn integrate(pos: &mut Vec2, dir: &Vec2, dt: f32, _ctx: &()) {
+  step_player(pos, *dir, dt);
 }
 
 fn lerp_pos(a: &Vec2, b: &Vec2, t: f32) -> Vec2 {
   Vec2::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
 }
 
-const SMOOTHING_SECS: f32 = 0.12;
 const PING_INTERVAL_MS: u64 = 1000;
 /// When coalescing, resend the held input at least this often, so a dropped
 /// direction change cannot strand the player gliding until the next keypress.
+/// See [`InputCoalescer`], which is where that reasoning now lives.
 const INPUT_KEEPALIVE_MS: u64 = 120;
-/// Only pull the local prediction toward the server past this much drift. The
-/// prediction is exact for an unforced player, so a small disagreement is clock
-/// or one-way-estimate noise, not a real error; a large one means a lost input.
+/// A disagreement past this much, in a single packet, is a real discontinuity
+/// (the first spawn, a respawn, a teleport) rather than drift, and is snapped
+/// outright. Ordinary drift is eased continuously instead, see `CORRECT_BLEND`.
 const LOCAL_CORRECT_PX: f32 = 24.0;
+/// Fraction of the remaining gap to the server the local prediction closes each
+/// packet. The prediction is close to exact for an unforced player, so what is
+/// left is a slow drift from clock and one-way-estimate noise; easing a fixed
+/// share of it every packet keeps the marker within a pixel or two of the server
+/// without ever accumulating into the visible snap a hard threshold produced.
+const CORRECT_BLEND: f32 = 0.25;
+/// A gap larger than this is not drift to ease but a discontinuity to snap.
+const TELEPORT_PX: f32 = 200.0;
 /// How many `Died` retractions in one packet read as an area pulse rather than
 /// ordinary attrition. A nova clears a whole radius at once; single shots do not.
 const NOVA_BURST: usize = 10;
@@ -72,15 +82,19 @@ pub struct NetClient {
   pub me: Option<PlayerId>,
   pub policy: Option<ServerPolicy>,
 
-  /// Your own player, integrated locally from the held direction and eased toward
-  /// the server only when it drifts.
-  pred: Vec2,
-  smoother: ErrorSmoother<Vec2>,
-  held_dir: Vec2,
+  /// Your own player.
+  ///
+  /// The server holds your direction and integrates it every tick rather than
+  /// consuming one input per step, which is what makes this the continuous model
+  /// and why replaying inputs would double count. It is also what lets the input
+  /// be coalesced: what is transmitted is a bandwidth decision, what is
+  /// integrated is a simulation one.
+  local: HeldInputPredictor<Vec2, Vec2>,
   input_seq: u64,
-  /// What was last transmitted, and when, for the coalesced send policy.
-  last_sent_dir: Vec2,
-  last_input_sent_ms: u64,
+  /// When to actually transmit, as opposed to when to integrate. The two are
+  /// deliberately different: the prediction advances every tick whatever the wire
+  /// is doing, so a quiet wire is not a stuttering player.
+  send_policy: InputCoalescer<Vec2>,
   rtt: RttEstimator,
   clock: ClockSyncEstimator,
 
@@ -94,6 +108,10 @@ pub struct NetClient {
   prev_health: u8,
   /// Seconds of red damage flash left to draw, refreshed when you take a hit.
   hit_flash_secs: f32,
+  /// What the local prediction is costing, measured against a running norm
+  /// rather than a fixed pixel count so it stays meaningful as the send rate and
+  /// latency change.
+  pub monitor: CorrectionMonitor,
 }
 
 impl NetClient {
@@ -105,13 +123,17 @@ impl NetClient {
       status: Status::Connecting,
       me: None,
       policy: None,
-      pred: Vec2::new(ARENA_W * 0.5, ARENA_H * 0.5),
-      smoother: ErrorSmoother::new(SMOOTHING_SECS),
-      held_dir: Vec2::default(),
+      local: HeldInputPredictor::new(
+        Vec2::new(ARENA_W * 0.5, ARENA_H * 0.5),
+        HeldInputConfig { blend: CORRECT_BLEND },
+        integrate,
+        lerp_pos,
+      )
+      // Beyond this the player did not travel there: a spawn or a respawn. Snap
+      // it, because easing would slide the marker across the whole arena.
+      .with_teleport(|a: &Vec2, b: &Vec2| a.dist(*b), TELEPORT_PX),
       input_seq: 0,
-      // An impossible first "last sent", so the very first input always transmits.
-      last_sent_dir: Vec2::new(f32::NAN, f32::NAN),
-      last_input_sent_ms: 0,
+      send_policy: InputCoalescer::new(INPUT_KEEPALIVE_MS),
       rtt: RttEstimator::new(0.15),
       clock: ClockSyncEstimator::new(32),
       events: Vec::new(),
@@ -121,6 +143,7 @@ impl NetClient {
       nova_flash_secs: 0.0,
       prev_health: crate::sim::types::PLAYER_MAX_HEALTH as u8,
       hit_flash_secs: 0.0,
+      monitor: CorrectionMonitor::new().with_floor(LOCAL_CORRECT_PX),
     })
   }
 
@@ -137,7 +160,7 @@ impl NetClient {
   /// Where to draw your own player: the prediction, eased through recent
   /// corrections.
   pub fn my_position(&self) -> Vec2 {
-    self.smoother.sample(&self.pred, lerp_pos)
+    self.local.render()
   }
 
   pub fn rtt_ms(&self) -> Option<f32> {
@@ -161,16 +184,23 @@ impl NetClient {
     }
     // Predict locally every tick regardless of what is transmitted, so movement
     // is smooth even when the wire stays quiet.
-    self.held_dir = dir;
-    self.pred = integrate(self.pred, dir, dt);
+    self.local.hold(dir);
+    self.local.advance(dt);
     self.input_seq += 1;
 
-    let changed = (dir.x, dir.y) != (self.last_sent_dir.x, self.last_sent_dir.y);
-    let keepalive_due = self.now_ms.saturating_sub(self.last_input_sent_ms) >= INPUT_KEEPALIVE_MS;
-    if !controls.coalesce_input || changed || keepalive_due {
-      let _ = self.socket.send_json(&Op::Input { seq: self.input_seq, dx: dir.x, dy: dir.y });
-      self.last_sent_dir = dir;
-      self.last_input_sent_ms = self.now_ms;
+    self.send_policy.set_enabled(controls.coalesce_input);
+    if self.send_policy.should_send(&dir, self.now_ms) {
+      // The tick this input is *for*, computed the same way by every client, so
+      // two players pressing at the same instant name the same one however far
+      // apart their pings are. Its own estimate of the server clock, plus the
+      // playout depth the server advertised, in the server's step units.
+      //
+      // The server decides whether that tick is still open. This is an intention,
+      // not a claim.
+      let server_now = self.clock.server_time_at(self.now_ms as f64).unwrap_or(self.now_ms as f64).max(0.0) as u64;
+      let depth = self.policy.map(|p| p.playout_delay_ms).unwrap_or(0);
+      let tick = (server_now + depth) / SIM_STEP_MS;
+      let _ = self.socket.send_json(&Op::Input { seq: self.input_seq, dx: dir.x, dy: dir.y, tick });
     }
   }
 
@@ -191,6 +221,9 @@ impl NetClient {
           if self.status == Status::Connecting {
             self.status = Status::Waiting;
           }
+          // Before anything else: say which wire format this build speaks, so a
+          // stale page is told to reload rather than half-working.
+          let _ = self.socket.send_json(&Op::Hello { protocol: PROTOCOL });
         }
         Event::Text(text) => applied_a_frame |= self.on_frame(text.as_bytes(), now_ms, controls),
         Event::Message(bytes) => applied_a_frame |= self.on_frame(&bytes, now_ms, controls),
@@ -210,9 +243,9 @@ impl NetClient {
     // against a state we provably reached. On receipt, as the offline world does,
     // so the baseline advances as fast as the link allows.
     if applied_a_frame
-      && let Some((newest, mask)) = self.sim.acks.encode()
+      && let Some((newest, mask)) = self.sim.acks().encode()
     {
-      let _ = self.socket.send_json(&Op::Ack { newest, mask });
+      let _ = self.socket.send_json(&Op::Ack { newest, mask, digest: self.sim.last_digest() });
     }
 
     // A purchase is a request on the same wire as anything else. Ask once; the
@@ -238,9 +271,20 @@ impl NetClient {
           self.me = Some(player);
           self.policy = Some(policy);
           self.sim = SimClient::new(player, policy.player_count);
+          self.sim.set_render_delay(policy.render_delay_ms);
           self.status = Status::Playing;
         }
-        Op::Policy(policy) => self.policy = Some(policy),
+        Op::Policy(policy) => {
+          self.policy = Some(policy);
+          self.sim.set_render_delay(policy.render_delay_ms);
+        }
+        // The player stream. It arrives far more often than a frame and carries
+        // no deltas, so it is deliberately outside the sequence, acknowledgement
+        // and digest machinery the entity stream runs on.
+        Op::Players(frame) => {
+          let server_now = self.clock.server_time_at(now_ms as f64).unwrap_or(now_ms as f64).max(0.0) as u64;
+          self.sim.on_player_frame(&frame, server_now);
+        }
         Op::Frame(packet) => {
           let _ = controls;
           let deaths = packet.left.iter().filter(|(_, r)| *r == LeaveReason::Died).count();
@@ -264,11 +308,30 @@ impl NetClient {
           if let Some(me) = self.me
             && let Some((_, pos)) = packet.players.iter().find(|(id, _)| *id == me)
           {
-            let projected = integrate(*pos, self.held_dir, (one_way / 1000.0) as f32);
-            if self.pred.dist(projected) > LOCAL_CORRECT_PX {
-              let seen = self.my_position();
-              self.pred = projected;
-              self.smoother.begin_from(seen);
+            // The predictor projects the authoritative position forward by its own
+            // age under the held direction, then eases toward it: drift is
+            // absorbed continuously rather than accumulating into the visible
+            // snap a hard threshold used to produce. A gap past `TELEPORT_PX` is
+            // a discontinuity and snaps instead, which the predictor decides.
+            let correction = self.local.reconcile(*pos, (one_way / 1000.0) as f32);
+            let moved = correction.seen.dist(correction.settled);
+            if self.monitor.record(moved) && controls.debug_digest {
+              // Which way the correction went, relative to where the player is
+              // steering. A forward correction is the surprising one: it means
+              // the server got further than the prediction did.
+              let delta = Vec2::new(correction.settled.x - correction.seen.x, correction.settled.y - correction.seen.y);
+              let held = *self.local.held();
+              let forward = delta.x * held.x + delta.y * held.y;
+              eprintln!(
+                "player correction seq={} moved={:.1}px (norm {:.1}px) {} one_way={:.1}ms held=({:.2},{:.2})",
+                packet.seq,
+                moved,
+                self.monitor.norm(),
+                if forward > 0.0 { "FORWARD" } else if forward < 0.0 { "back" } else { "lateral" },
+                one_way,
+                held.x,
+                held.y,
+              );
             }
           }
           // Hand the sim server time, not local time. It computes a packet's age
@@ -278,10 +341,15 @@ impl NetClient {
           // sync converges this falls back to local time, which yields an age near
           // zero rather than a wild one.
           let server_now = self.clock.server_time_at(now_ms as f64).unwrap_or(now_ms as f64).max(0.0) as u64;
-          self.sim.on_packet(&packet, server_now, controls);
-          // Feed the predicted local position back in, so the coin and repulsor
-          // rules the sim runs read where you are, not where the packet put you.
-          self.sim.set_local_pos(self.my_position());
+          self.sim.receive_packet(*packet, server_now);
+          // Deliberately do NOT overwrite the local player with the prediction
+          // here. The sim aims enemies at the player position, and the server aims
+          // them at its *authoritative* one; feeding the prediction in instead made
+          // the client chase a position the server was not, so every sample
+          // snapped the enemies between the two and they appeared to lunge at the
+          // player whenever it moved. The prediction drives only the camera and
+          // your own marker; the shared rules use the authoritative position, the
+          // same as the offline build, which is smooth.
           // A drop in your own health is a hit worth flashing.
           let health = self.my_health();
           if health < self.prev_health {
@@ -300,7 +368,12 @@ impl NetClient {
           let offset = (server_ms as f64 + one_way) - now_ms as f64;
           self.clock.observe(now_ms as f64, offset);
         }
-        Op::Input { .. } | Op::Ack { .. } | Op::Buy(_) | Op::Ping { .. } => {}
+        Op::Outdated { server, client } => {
+          self.status = Status::Gone(format!(
+            "this page was built for wire format {client} and the server speaks {server}: reload to get the current client"
+          ));
+        }
+        Op::Input { .. } | Op::Ack { .. } | Op::Buy(_) | Op::Ping { .. } | Op::Hello { .. } => {}
       }
     }
     applied_frame
@@ -309,8 +382,6 @@ impl NetClient {
   /// Advances the sim and the correction ease.
   pub fn tick(&mut self, dt_ms: u64, controls: &Controls) {
     self.sim.tick(dt_ms, controls);
-    self.smoother.advance(dt_ms as f32 / 1000.0);
-    self.sim.set_local_pos(self.my_position());
     if self.nova_flash_secs > 0.0 {
       self.nova_flash_secs = (self.nova_flash_secs - dt_ms as f32 / 1000.0).max(0.0);
     }
@@ -319,22 +390,6 @@ impl NetClient {
     }
     if self.socket.state() == State::Closed && !matches!(self.status, Status::Gone(_)) {
       self.status = Status::Gone("connection lost".to_owned());
-    }
-  }
-}
-
-/// A little sugar so call sites are not full of `serde_json::to_vec`.
-trait SendJson {
-  fn send_json<T: serde::Serialize>(&self, value: &T) -> Result<(), plaza_ws::WsError>;
-}
-
-impl<S: Socket + ?Sized> SendJson for S {
-  fn send_json<T: serde::Serialize>(&self, value: &T) -> Result<(), plaza_ws::WsError> {
-    // A bare op, never an envelope: the server attaches who it came from, and a
-    // client that could name itself could name somebody else.
-    match serde_json::to_string(value) {
-      Ok(text) => self.send_text(&text),
-      Err(e) => Err(plaza_ws::WsError::Send(e.to_string())),
     }
   }
 }

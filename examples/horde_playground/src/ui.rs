@@ -16,7 +16,9 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls) {
 
   ui.separator();
   ui.label(egui::RichText::new("network").strong());
-  ui.add(egui::Slider::new(&mut controls.sync_hz, 1..=60).text("server send rate (Hz)"));
+  ui.add(egui::Slider::new(&mut controls.sync_hz, 1..=60).text("entity send rate (Hz)"));
+  ui.add(egui::Slider::new(&mut controls.player_sync_hz, 1..=60).text("player send rate (Hz)"));
+  ui.label("Drop the entity rate to 1 Hz and the horde still moves smoothly, because every client runs its rule. Drop the *player* rate too and it does not, because player positions are the input to that rule.");
   ui.add(egui::Slider::new(&mut controls.latency_ms, 0..=400).text("latency ms"));
   ui.add(egui::Slider::new(&mut controls.jitter_ms, 0..=150).text("jitter ms"));
   ui.add(egui::Slider::new(&mut controls.loss_pct, 0.0..=40.0).text("packet loss %"))
@@ -35,6 +37,8 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls) {
     .on_hover_text("Off: every player is sent every entity, the broadcast this example exists to avoid.");
   ui.checkbox(&mut controls.generational_ids, "generational entity handles")
     .on_hover_text("A handle names a slot and its occupant. Off, a reference to a dead entity lands on whoever recycled its slot.");
+  ui.checkbox(&mut controls.debug_digest, "debug digest mismatches (verbose)")
+    .on_hover_text("Ships the server's exact visible set each frame so a mismatching client prints which enemies it holds in error (extra) or is short of (missing) to stderr. A diagnostic: adds wire weight while on.");
   ui.checkbox(&mut controls.coalesce_input, "send input only on change (+ keepalive)")
     .on_hover_text("Off: an input every tick (~60/s), so a dropped one is covered by the next. On: send only when your direction changes, plus a slow keepalive, which cuts idle upstream traffic. Safe here because the local player has no server-side forces, so it is predicted exactly.");
 
@@ -48,6 +52,15 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls) {
   ui.radio_value(&mut controls.mode, RemoteMode::DeadReckon, "dead reckon (last velocity)");
   ui.radio_value(&mut controls.mode, RemoteMode::Interpolate, "interpolate (render in the past)");
   ui.checkbox(&mut controls.smooth, "ease corrections");
+  ui.add(egui::Slider::new(&mut controls.render_delay_ms, 0..=600).text("render delay ms"))
+    .on_hover_text("How far behind the server clock every client shows the world. A property of the timeline, not of anybody's link, so the same instant is on every screen. It has to cover one-way latency + jitter + a send interval: the newest sample a client holds is already a trip old, so a delay short of that leaves nothing to interpolate between and peers snap to the raw sample. Too short and the underrun counter climbs.");
+  ui.checkbox(&mut controls.allow_ghost, "server: send unresolved frames (allows a ghost)")
+    .on_hover_text("The permission a ghost needs, and a server setting rather than a client one, the way a shipped game exposes it: a client cannot draw a future it was not sent. Currently declared rather than enforced, so an honest client obeys it and a cheat client would not. Real enforcement means not sending past the render instant at all, which needs the server to hold frames rather than delay them; delaying was tried and measurably does nothing, because the client's clock shifts with the stream.");
+  ui.add_enabled(controls.allow_ghost, egui::Checkbox::new(&mut controls.show_ghost, "draw the ghost"))
+    .on_hover_text("The drawing half. The solid markers are the actual positions: the server's resolved state at the instant being drawn, played out of the buffer in order, which is correct rather than approximate. The faint ghosts are ahead of them. The gap is the playout delay made visible, so it is where each marker is about to resolve to, not an error.");
+  if !controls.allow_ghost {
+    ui.label(egui::RichText::new("no ghost: the server is not sending unresolved frames").weak());
+  }
 }
 
 /// Returns true when a control changed that requires rebuilding the world
@@ -135,7 +148,7 @@ fn warn_line_amber(ui: &mut egui::Ui, text: String, warn: bool) {
 /// The panel a networked client gets. Deliberately smaller than the host's:
 /// every cross-side readout needs server truth, and a joiner does not have it.
 #[cfg(all(feature = "client", feature = "websocket"))]
-pub fn draw_net_ui(client: &horde_playground::net::client::NetClient, url: &str, role: horde_playground::role::Role) {
+pub fn draw_net_ui(client: &horde_playground::net::client::NetClient, url: &str, role: horde_playground::role::Role, controls: &mut Controls) {
   use horde_playground::net::client::Status;
 
   egui_macroquad::ui(|ctx| {
@@ -157,16 +170,27 @@ pub fn draw_net_ui(client: &horde_playground::net::client::NetClient, url: &str,
         Some(rtt) => ui.label(format!("round trip: {rtt:.0} ms")),
         None => ui.label("round trip: measuring"),
       };
-      ui.label(format!("frames applied: {}   lost: {}", client.frames_seen, client.sim.frames_lost));
+      ui.label(format!("frames applied: {}   lost: {}", client.frames_seen, client.sim.frames_lost()));
+      ui.label(format!("render delay: {} ms   underruns: {}", client.sim.render_delay_ms(), client.sim.underruns()))
+        .on_hover_text("An underrun is a packet that arrived after the instant it describes had already gone past, so it could never be played at the right moment. It is the honest form of what an adaptive buffer used to hide by quietly showing you an older world than everybody else.");
       ui.label(format!("enemies held: {}", client.sim.known_entities()));
       ui.label(format!("difficulty: x{:.1}   your health: {}", client.sim.difficulty(), client.my_health()));
       ui.label(format!("coins: {}   pickups taken back: {}", client.sim.believed_balance, client.sim.denied_claims));
       if let Some(policy) = client.policy {
         ui.separator();
         ui.label(egui::RichText::new("the host's settings").strong());
-        ui.label(format!("send rate: {} Hz", policy.sync_hz));
+        ui.label(format!("send rate: {} Hz entities, {} Hz players", policy.sync_hz, policy.player_sync_hz));
         ui.label(format!("enemies: {}   coins: {}", policy.enemy_count, policy.coins));
         ui.label(format!("crowd LOD angle: {:.1}", policy.crowd_lod_theta));
+      }
+
+      ui.separator();
+      ui.label(egui::RichText::new("your view").strong());
+      let allowed = client.policy.is_none_or(|p| p.allow_ghost);
+      ui.add_enabled(allowed, egui::Checkbox::new(&mut controls.show_ghost, "draw the ghost"))
+        .on_hover_text("The solid markers are the actual positions, played out of your buffer at the instant being drawn. The faint ghosts are ahead of them, from packets you already hold but have not reached yet, so the gap is your playout delay rather than an error: it is where each marker is about to resolve to. Nothing outside your relevance radius has a ghost, because you were never sent it.");
+      if !allowed {
+        ui.label(egui::RichText::new("this host is not sending unresolved frames, so there is no ghost to draw").weak());
       }
 
       ui.separator();
@@ -205,8 +229,14 @@ pub fn draw_host_ui(view: &horde_playground::net::arena::HostView, client: &hord
       ui.label(format!("churn: {:.1} spawns / {:.1} despawns per packet", view.mean_spawns_per_packet(), view.mean_despawns_per_packet()));
       ui.label(format!("alive: {} enemies, {} killed total", view.alive, view.kills));
       ui.label(format!("last area pulse killed: {} at once", view.nova_kills_last));
-      ui.label(format!("stale handle references: {}", client.sim.stale_refs));
-      warn_line(ui, format!("mirror digest mismatches: {}   frames lost: {}", client.sim.digest_mismatches, client.sim.frames_lost), client.sim.digest_mismatches > 0);
+      ui.label(format!("stale handle references: {}", client.sim.stale_refs()));
+      warn_line(ui, format!("mirror digest mismatches: {}   frames lost: {}", client.sim.digest_mismatches(), client.sim.frames_lost()), client.sim.digest_mismatches() > 0);
+      let (_, abnormal) = client.monitor.counts();
+      warn_line(
+        ui,
+        format!("player corrections: {:.1}px typical, {abnormal} abnormal, {:.0}px worst", client.monitor.norm(), client.monitor.peak()),
+        abnormal > 0,
+      );
       warn_line(ui, format!("entities held that are dead on the server: {phantoms}"), phantoms > 0);
       if controls.crowd_lod_theta > 0.0 {
         ui.label(format!("distant world: {} crowd summaries for {:.1} KiB/s", client.sim.crowds.len(), view.crowd_bytes_per_sec() / 1024.0));
@@ -294,7 +324,7 @@ fn render_error(view: &horde_playground::net::arena::HostView, client: &horde_pl
   let mut sum = 0.0;
   let mut n = 0u32;
   let mut worst = 0.0f32;
-  for (handle, drawn, _) in client.sim.render(controls) {
+  for (handle, drawn, _) in client.sim.render_at().map(|at| client.sim.render(controls, at)).unwrap_or_default() {
     if let Some(t) = truth.get(&handle) {
       let e = drawn.dist(*t);
       sum += e;
@@ -311,7 +341,7 @@ fn phantom_and_missing(view: &horde_playground::net::arena::HostView, client: &h
   use horde_playground::sim::{Handle, Vec2, VIEW_RADIUS};
   use std::collections::BTreeSet;
   let live: BTreeSet<Handle> = view.truth.iter().map(|(h, _, _)| *h).collect();
-  let held: BTreeSet<Handle> = client.sim.render(controls).into_iter().map(|(h, _, _)| h).collect();
+  let held: BTreeSet<Handle> = client.sim.render_at().map(|at| client.sim.render(controls, at)).unwrap_or_default().into_iter().map(|(h, _, _)| h).collect();
   let phantoms = held.iter().filter(|h| !live.contains(h)).count();
 
   let eye: Vec2 = client.me.and_then(|m| view.players.get(m as usize)).copied().unwrap_or_default();

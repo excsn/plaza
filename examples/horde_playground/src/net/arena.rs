@@ -16,12 +16,13 @@ use parking_lot::Mutex;
 use plaza::session::{MessageTarget, TargetedOp};
 use plaza::state_logic::{LogicInput, LogicOutput, StateLogic, StateLogicError};
 use plaza::Agent;
-use plaza_client_utils::net_sim::Rng;
+use plaza_client_utils::net_sim::{LatencyLink, Rng};
+use plaza_server_utils::{RateMeter, SeatTable, Seating};
 
-use crate::sim::protocol::{Op, ServerPolicy};
+use crate::sim::protocol::{Op, ServerPolicy, PROTOCOL};
 use crate::sim::server::{Seat, Server};
 use crate::sim::types::{
-  Coin, Controls, EnemyKind, Handle, Packet, PlayerId, Projectile, Vec2, Wallet, CROWD_BYTES, MAX_PLAYERS,
+  Coin, Controls, Downstream, EnemyKind, Handle, PlayerId, Projectile, Vec2, Wallet, CROWD_BYTES, MAX_PLAYERS,
 };
 
 /// How a connection is identified. Assigned by the server on accept, never
@@ -70,53 +71,34 @@ pub struct HostView {
   pub denied_purchases: u64,
   pub full_resends: u64,
 
-  bytes_sent: u64,
-  naive_bytes_sent: u64,
-  crowd_bytes: u64,
-  packets_sent: u64,
-  relevant_total: u64,
-  relevant_samples: u64,
-  spawns_total: u64,
-  despawns_total: u64,
-  uptime_ms: u64,
+  bytes: RateMeter,
+  naive_bytes: RateMeter,
+  crowd_bytes: RateMeter,
+  relevant: RateMeter,
+  spawns: RateMeter,
+  despawns: RateMeter,
 }
 
 impl HostView {
   pub fn bytes_per_sec(&self) -> f64 {
-    if self.uptime_ms == 0 {
-      return 0.0;
-    }
-    self.bytes_sent as f64 / (self.uptime_ms as f64 / 1000.0)
+    self.bytes.per_sec()
   }
+  /// What the same world would have cost sent the obvious way. The comparison is
+  /// the example's whole claim, so it is measured rather than argued.
   pub fn naive_bytes_per_sec(&self) -> f64 {
-    if self.uptime_ms == 0 {
-      return 0.0;
-    }
-    self.naive_bytes_sent as f64 / (self.uptime_ms as f64 / 1000.0)
+    self.naive_bytes.per_sec()
   }
   pub fn crowd_bytes_per_sec(&self) -> f64 {
-    if self.uptime_ms == 0 {
-      return 0.0;
-    }
-    self.crowd_bytes as f64 / (self.uptime_ms as f64 / 1000.0)
+    self.crowd_bytes.per_sec()
   }
   pub fn mean_relevant(&self) -> f64 {
-    if self.relevant_samples == 0 {
-      return 0.0;
-    }
-    self.relevant_total as f64 / self.relevant_samples as f64
+    self.relevant.mean()
   }
   pub fn mean_spawns_per_packet(&self) -> f64 {
-    if self.packets_sent == 0 {
-      return 0.0;
-    }
-    self.spawns_total as f64 / self.packets_sent as f64
+    self.spawns.mean()
   }
   pub fn mean_despawns_per_packet(&self) -> f64 {
-    if self.packets_sent == 0 {
-      return 0.0;
-    }
-    self.despawns_total as f64 / self.packets_sent as f64
+    self.despawns.mean()
   }
   /// How long ago the last area pulse fired, in seconds, while still worth
   /// drawing. Computed at publish, which is fine for an observer without a clock.
@@ -129,46 +111,15 @@ impl HostView {
 
 /// The outbound impairment for one connection: frames held for `latency ± jitter`
 /// before they are released, so the host's latency and jitter sliders act on a
-/// real link instead of a simulation. Kept `Clone` because the arena state must
-/// be, and `LatencyLink` is not.
+/// real link instead of a simulation.
 ///
-/// It never **reorders**. A WebSocket is TCP: frames arrive in the order they
-/// were sent, and jitter shows up as bursty delay, not shuffling. Letting a
-/// jittered frame overtake an earlier one would be modelling a UDP link this
-/// transport is not, and it would desync the delta-relevance stream, whose
-/// recovery is built for loss and not for reordering, lighting up digest
-/// mismatches no real ordered transport produces.
-#[derive(Clone, Debug, Default)]
-struct Downlink {
-  queue: Vec<(u64, Packet)>,
-  /// The delivery time of the last frame queued. A new frame's jittered time is
-  /// clamped to at least this, so jitter can delay it past its predecessor but
-  /// never ahead of it.
-  last_deliver_ms: u64,
-}
-
-impl Downlink {
-  fn send(&mut self, now_ms: u64, packet: Packet, latency_ms: u64, jitter_ms: u64, rng: &mut Rng) {
-    let deliver_at = (now_ms + latency_ms + rng.up_to(jitter_ms)).max(self.last_deliver_ms);
-    self.last_deliver_ms = deliver_at;
-    self.queue.push((deliver_at, packet));
-  }
-
-  fn drain_due(&mut self, now_ms: u64) -> Vec<Packet> {
-    let mut due: Vec<(u64, Packet)> = Vec::new();
-    let mut kept: Vec<(u64, Packet)> = Vec::new();
-    for (at, packet) in self.queue.drain(..) {
-      if at <= now_ms {
-        due.push((at, packet));
-      } else {
-        kept.push((at, packet));
-      }
-    }
-    self.queue = kept;
-    due.sort_by_key(|(at, _)| *at);
-    due.into_iter().map(|(_, p)| p).collect()
-  }
-}
+/// [`LatencyLink`] defaults to ordered delivery, which is what this needs and
+/// why it is used directly rather than reimplemented here. A WebSocket is
+/// TCP: frames arrive in the order they were sent and jitter shows up as bursty
+/// delay, not shuffling. Letting a jittered frame overtake an earlier one would
+/// model a UDP link this transport is not, and it would desync the delta stream,
+/// whose recovery is built for loss and not reordering.
+type Downlink = LatencyLink<Downstream>;
 
 /// Everything the arena owns. `plaza` requires `Clone` for its state-query
 /// command; nothing on the hot path clones it.
@@ -177,8 +128,7 @@ pub struct Arena {
   pub sim: Server,
   pub controls: Controls,
   /// Which player each connection is driving.
-  seats: HashMap<PlayerKey, usize>,
-  free: Vec<usize>,
+  seats: SeatTable<PlayerKey>,
   /// The newest movement direction for each seat, applied on the next tick.
   pending: Vec<Seat>,
   /// The newest input sequence accepted per player, echoed back so a client can
@@ -188,14 +138,19 @@ pub struct Arena {
   down: HashMap<PlayerKey, Downlink>,
   rng: Rng,
 
-  bytes_sent: u64,
-  naive_bytes_sent: u64,
-  crowd_bytes: u64,
-  packets_sent: u64,
-  relevant_total: u64,
-  relevant_samples: u64,
-  spawns_total: u64,
-  despawns_total: u64,
+
+  /// What is actually going out, which is what makes the relevance claim
+  /// checkable rather than asserted. `naive` is the counterfactual: the same
+  /// world sent the obvious way.
+  bytes: RateMeter,
+  naive_bytes: RateMeter,
+  crowd_bytes: RateMeter,
+  /// Entities in a packet, spawns in a packet, despawns in a packet. Each counts
+  /// every packet, including the empty ones, or the averages only describe the
+  /// interesting frames.
+  relevant: RateMeter,
+  spawns: RateMeter,
+  despawns: RateMeter,
 }
 
 impl Arena {
@@ -204,26 +159,27 @@ impl Arena {
     Self {
       sim,
       controls,
-      seats: HashMap::new(),
-      free: (0..PLAYER_COUNT).collect(),
+      seats: SeatTable::new(PLAYER_COUNT),
       pending: vec![Seat::Bot; PLAYER_COUNT],
       input_acked: HashMap::new(),
       down: HashMap::new(),
       rng: Rng::new(IMPAIR_SEED),
-      bytes_sent: 0,
-      naive_bytes_sent: 0,
-      crowd_bytes: 0,
-      packets_sent: 0,
-      relevant_total: 0,
-      relevant_samples: 0,
-      spawns_total: 0,
-      despawns_total: 0,
+      bytes: RateMeter::new(),
+      naive_bytes: RateMeter::new(),
+      crowd_bytes: RateMeter::new(),
+      relevant: RateMeter::new(),
+      spawns: RateMeter::new(),
+      despawns: RateMeter::new(),
     }
   }
 
   pub fn policy(&self) -> ServerPolicy {
     ServerPolicy {
       sync_hz: self.controls.sync_hz,
+      playout_delay_ms: self.controls.playout_delay_ms,
+      render_delay_ms: self.controls.render_delay_ms,
+      player_sync_hz: self.controls.player_sync_hz,
+      allow_ghost: self.controls.allow_ghost,
       coins: self.controls.coins,
       generational_ids: self.controls.generational_ids,
       crowd_lod_theta: self.controls.crowd_lod_theta,
@@ -234,24 +190,32 @@ impl Arena {
   }
 
   pub fn seat_of(&self, key: &PlayerKey) -> Option<usize> {
-    self.seats.get(key).copied()
+    self.seats.seat_of(key)
   }
 
   /// Seats a joiner, or refuses when the arena is full.
   fn seat(&mut self, key: PlayerKey) -> Option<usize> {
-    if let Some(seat) = self.seats.get(&key) {
-      return Some(*seat);
+    let seating = self.seats.seat(key);
+    if let Seating::Fresh(seat) = seating {
+      self.pending[seat] = Seat::Bot;
+      // The server has been advancing this seat's relevance baseline since
+      // startup, occupied or not. Clear it so this fresh client's first frame is
+      // a full dump rather than a delta against a world it never received. This
+      // is the whole reason `seat` reports freshness instead of an index: a
+      // rejoin must *not* do this, and the two are indistinguishable otherwise.
+      self.sim.reset_seat(seat);
     }
-    let seat = self.free.pop()?;
-    self.seats.insert(key, seat);
-    self.pending[seat] = Seat::Bot;
-    Some(seat)
+    seating.index()
   }
 
   fn unseat(&mut self, key: &PlayerKey) {
-    if let Some(seat) = self.seats.remove(key) {
+    if let Some(seat) = self.seats.unseat(key) {
+      // Whatever they had scheduled goes with them, or a bot inherits a direction
+      // its former occupant pressed.
+      self.sim.clear_input(seat);
+      // Handed back to the bots rather than left frozen, so a disconnect does not
+      // leave a statue in the arena.
       self.pending[seat] = Seat::Bot;
-      self.free.push(seat);
     }
     self.input_acked.remove(key);
     self.down.remove(key);
@@ -260,35 +224,33 @@ impl Arena {
   /// Rebuilds the world for a new enemy count or player layout, reseating whoever
   /// is connected and returning the seats that need a fresh `Welcome`.
   fn reconfigure(&mut self, controls: Controls) -> Vec<(PlayerKey, usize)> {
-    let old_keys: Vec<PlayerKey> = self.seats.keys().copied().collect();
     let clock = self.sim.now_ms();
     self.controls = controls;
     self.sim = Server::new(controls.enemy_count, PLAYER_COUNT, controls.spread_players);
     // Keep time continuous across the rebuild, so a client's packet-age estimate
     // does not jump and fling the horde at the player.
     self.sim.set_clock(clock);
-    self.free = (0..PLAYER_COUNT).collect();
     self.pending = vec![Seat::Bot; PLAYER_COUNT];
-    self.seats.clear();
     self.input_acked.clear();
     self.down.clear();
-    self.bytes_sent = 0;
-    self.naive_bytes_sent = 0;
-    self.crowd_bytes = 0;
-    self.packets_sent = 0;
-    self.relevant_total = 0;
-    self.relevant_samples = 0;
-    self.spawns_total = 0;
-    self.despawns_total = 0;
-
-    let mut welcomed = Vec::new();
-    for key in old_keys {
-      if let Some(seat) = self.free.pop() {
-        self.seats.insert(key, seat);
-        welcomed.push((key, seat));
-      }
+    // The rates are over the current world, not every world since launch.
+    for meter in self.meters() {
+      meter.reset();
     }
-    welcomed
+
+    self.seats.reseat_all(PLAYER_COUNT)
+  }
+
+  /// Every counter, for the operations that apply to all of them at once.
+  fn meters(&mut self) -> [&mut RateMeter; 6] {
+    [
+      &mut self.bytes,
+      &mut self.naive_bytes,
+      &mut self.crowd_bytes,
+      &mut self.relevant,
+      &mut self.spawns,
+      &mut self.despawns,
+    ]
   }
 
   fn host_view(&self) -> HostView {
@@ -310,16 +272,13 @@ impl Arena {
       server_now_ms: self.sim.now_ms(),
       coins_expired: self.sim.coins_expired,
       denied_purchases: self.sim.denied_purchases,
-      full_resends: self.sim.full_resends.iter().sum(),
-      bytes_sent: self.bytes_sent,
-      naive_bytes_sent: self.naive_bytes_sent,
+      full_resends: self.sim.full_resends(),
+      bytes: self.bytes,
+      naive_bytes: self.naive_bytes,
       crowd_bytes: self.crowd_bytes,
-      packets_sent: self.packets_sent,
-      relevant_total: self.relevant_total,
-      relevant_samples: self.relevant_samples,
-      spawns_total: self.spawns_total,
-      despawns_total: self.despawns_total,
-      uptime_ms: self.sim.now_ms(),
+      relevant: self.relevant,
+      spawns: self.spawns,
+      despawns: self.despawns,
     }
   }
 }
@@ -369,27 +328,58 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         };
         let mut replies = Vec::new();
         for op in ops {
+          // The uplink, impaired here rather than at the client.
+          //
+          // A joiner sends over a real socket and has no reason to sabotage
+          // itself, and the panel that owns these sliders lives on the host. So
+          // the loss a client's *outbound* traffic suffers is applied where the
+          // controls actually are, on arrival. Without this the slider only ever
+          // thinned the downstream, and the whole return path (acknowledgements,
+          // inputs, purchases) was perfect however far it was dragged, which is
+          // exactly the traffic the recovery machinery exists for.
+          //
+          // Gameplay ops only. `Hello` and `Ping` are control plane: dropping the
+          // version handshake makes a diagnostic flaky without teaching anything
+          // about the netcode.
+          let droppable = matches!(op, Op::Input { .. } | Op::Ack { .. } | Op::Buy(_));
+          if droppable && state.controls.loss_pct > 0.0 && state.rng.unit() * 100.0 < state.controls.loss_pct {
+            continue;
+          }
           match op {
-            Op::Input { seq, dx, dy } => {
-              // Out-of-order inputs are dropped; an older direction overwriting a
-              // newer one reads to the player as the controls sticking.
+            Op::Input { seq, dx, dy, tick } => {
+              // Out-of-order *arrivals* are still dropped, because a duplicate or
+              // a straggler carries nothing new. Out-of-order execution is a
+              // different matter and is the buffer's job: the schedule below is
+              // keyed on when the player pressed, not on when this turned up.
               if state.input_acked.get(&key).is_some_and(|newest| seq <= *newest) {
                 continue;
               }
               state.input_acked.insert(key, seq);
+              // Normalised here, not on the client: a client that sent a longer
+              // vector would simply move faster.
               let len = (dx * dx + dy * dy).sqrt();
               let dir = if len > 1.0 { Vec2::new(dx / len, dy / len) } else { Vec2::new(dx, dy) };
-              state.pending[seat] = Seat::Steered(dir);
+              let controls = state.controls;
+              state.sim.submit_input(seat, tick, dir, &controls);
             }
             // The entity stream's acknowledgement and the one purchase a client
             // may request. Both go straight to the server, which is the only thing
             // allowed to move a baseline or spend a coin.
-            Op::Ack { newest, mask } => state.sim.receive_ack(seat, newest, mask),
+            Op::Ack { newest, mask, digest } => state.sim.receive_ack(seat, newest, mask, digest),
             Op::Buy(upgrade) => state.sim.receive_buy(seat, upgrade),
             Op::Ping { origin_ms } => {
               let server_ms = state.sim.now_ms();
               replies.push(TargetedOp::new_system_to(key, vec![Op::Pong { origin_ms, server_ms }]));
             }
+            // A client announcing a wire format that is not this one cannot be
+            // reasoned with, only told. Said once, on the client's own first
+            // message, instead of the per-op decode warnings a mismatch
+            // otherwise produces for as long as it stays connected.
+            Op::Hello { protocol } if protocol != PROTOCOL => {
+              tracing::warn!(client = protocol, server = PROTOCOL, "client is on a different wire format, telling it to reload");
+              replies.push(TargetedOp::new_system_to(key, vec![Op::Outdated { server: PROTOCOL, client: protocol }]));
+            }
+            Op::Hello { .. } => {}
             // Server-to-client variants coming up mean a confused or hostile
             // client; not an error worth failing the tick over.
             _ => {}
@@ -428,20 +418,34 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         let packets = state.sim.advance_seats(delta_time.as_millis() as u64, &pending, &controls);
         let is_send_round = !packets.is_empty();
         let now = state.sim.now_ms();
+        // Rates are over the simulation's own clock, not wall time, so a test
+        // that runs faster than real time still measures itself honestly.
+        for meter in state.meters() {
+          meter.elapsed(now);
+        }
 
-        let by_seat: HashMap<usize, PlayerKey> = state.seats.iter().map(|(key, seat)| (*seat, *key)).collect();
+        let by_seat = state.seats.by_seat();
         for (player, packet) in packets {
-          state.bytes_sent += packet.bytes() as u64;
-          state.naive_bytes_sent += packet.naive_bytes() as u64;
-          state.crowd_bytes += (packet.crowds.len() * CROWD_BYTES) as u64;
-          state.packets_sent += 1;
-          state.relevant_total += (packet.samples.len() + packet.entered.len()) as u64;
-          state.relevant_samples += 1;
-          state.spawns_total += packet.entered.len() as u64;
-          state.despawns_total += packet.left.len() as u64;
+          state.bytes.add(packet.bytes() as u64);
+          state.naive_bytes.add(packet.naive_bytes() as u64);
+          state.crowd_bytes.add((packet.crowds.len() * CROWD_BYTES) as u64);
+          state.relevant.add((packet.samples.len() + packet.entered.len()) as u64);
+          state.spawns.add(packet.entered.len() as u64);
+          state.despawns.add(packet.left.len() as u64);
           if let Some(key) = by_seat.get(&(player as usize)) {
             let entry = state.down.entry(*key).or_default();
-            entry.send(now, packet, controls.latency_ms, controls.jitter_ms, &mut state.rng);
+            entry.send(now, Downstream::Frame(Box::new(packet)), controls.latency_ms, controls.jitter_ms, controls.loss_pct, &mut state.rng);
+          }
+        }
+
+        // The player stream, through the same impairment link so it is delayed
+        // exactly as the entity stream is. Everyone gets the same frame: four
+        // entities, no relevance to apply, and every enemy in the world aims at
+        // one of them.
+        if let Some(frame) = state.sim.take_player_frame() {
+          for key in by_seat.values() {
+            let entry = state.down.entry(*key).or_default();
+            entry.send(now, Downstream::Players(frame.clone()), controls.latency_ms, controls.jitter_ms, controls.loss_pct, &mut state.rng);
           }
         }
 
@@ -449,8 +453,12 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         // Frames leave through the impairment link, so the host's latency and
         // jitter act on a real outbound path. With no host, the delay is zero.
         for (key, link) in state.down.iter_mut() {
-          for packet in link.drain_due(now) {
-            out.push(TargetedOp::new_system_to(*key, vec![Op::Frame(Box::new(packet))]));
+          for message in link.drain_due(now) {
+            let op = match message {
+              Downstream::Frame(packet) => Op::Frame(packet),
+              Downstream::Players(frame) => Op::Players(frame),
+            };
+            out.push(TargetedOp::new_system_to(*key, vec![op]));
           }
         }
         // Movement acknowledgements ride the tick, not the frame: inputs arrive
@@ -534,7 +542,8 @@ mod tests {
 
     let v = view.lock();
     assert!(!v.players.is_empty() && !v.truth.is_empty(), "the omniscient view is populated");
-    assert!(v.bytes_sent > 0 && v.uptime_ms > 0, "bandwidth accounting accrues");
+    assert!(v.bytes_per_sec() > 0.0, "bandwidth accounting accrues");
+    assert!(v.mean_relevant() > 0.0, "the relevance readout has something in it");
   }
 
   #[test]
@@ -555,6 +564,64 @@ mod tests {
       later += frames_in(&step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) }));
     }
     assert!(later > 0, "the held frames arrive once the delay passes");
+  }
+
+  #[test]
+  fn the_loss_slider_actually_drops_frames_on_the_real_path() {
+    // Regression. The impairment link was given latency and jitter from the
+    // panel and a hardcoded zero for loss, so the slider moved and nothing
+    // happened. It worked in the offline world, which is where every measurement
+    // was taken, and did nothing at all on the path a host or a joiner uses.
+    fn delivered(loss: f32) -> usize {
+      let controls = Controls { loss_pct: loss, latency_ms: 0, jitter_ms: 0, ..small() };
+      let (cs, _view) = slots(controls);
+      let logic = ArenaLogic::new(cs, None);
+      let mut state = Arena::new(controls);
+      step(&logic, &mut state, LogicInput::AgentJoined { agent: Agent::new_human(1u64, "p1") });
+      let mut frames = 0;
+      for _ in 0..200 {
+        frames += frames_in(&step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) }));
+      }
+      frames
+    }
+
+    let clean = delivered(0.0);
+    let lossy = delivered(40.0);
+    assert!(clean > 20, "the test needs frames to lose: {clean}");
+    assert!(
+      (lossy as f32) < clean as f32 * 0.8,
+      "40% loss should visibly thin the stream: {lossy} against {clean}"
+    );
+  }
+
+  #[test]
+  fn the_loss_slider_thins_the_uplink_too() {
+    // The return path was perfect however far the slider was dragged, which is
+    // exactly the traffic the recovery machinery exists for: acknowledgements are
+    // what let the server tell a starved mirror from a healthy one.
+    fn accepted(loss: f32) -> u64 {
+      let controls = Controls { loss_pct: loss, latency_ms: 0, jitter_ms: 0, ..small() };
+      let (cs, _view) = slots(controls);
+      let logic = ArenaLogic::new(cs, None);
+      let mut state = Arena::new(controls);
+      let agent = Agent::new_human(1u64, "p1");
+      step(&logic, &mut state, LogicInput::AgentJoined { agent: agent.clone() });
+      for i in 0..400u64 {
+        let tick = state.sim.tick() + controls.playout_delay_ms / 16;
+        step(
+          &logic,
+          &mut state,
+          LogicInput::AgentOps { source: agent.clone(), ops: vec![Op::Input { seq: i + 1, dx: 1.0, dy: 0.0, tick }] },
+        );
+        step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
+      }
+      state.sim.accepted_inputs()
+    }
+
+    let clean = accepted(0.0);
+    let lossy = accepted(40.0);
+    assert!(clean > 300, "the test needs inputs to lose: {clean}");
+    assert!((lossy as f32) < clean as f32 * 0.8, "40% loss should thin the uplink: {lossy} against {clean}");
   }
 
   #[test]
@@ -596,6 +663,58 @@ mod tests {
   }
 
   #[test]
+  fn a_client_joining_a_warm_arena_gets_the_whole_world_at_once() {
+    // Every seat's relevance baseline advances from startup, occupied or not, so
+    // a client that joins after the arena has been running a while must still be
+    // handed the whole visible world at once. Without the seat reset on join, its
+    // first frame is a diff against a baseline it never held: almost nothing is
+    // sent as `entered`, and the world arrives only as the slow trickle of what
+    // later becomes newly relevant, hundreds of frames short of the truth.
+    let controls = Controls { enemy_count: 300, ..Controls::default() };
+    let (cs, _view) = slots(controls);
+    let logic = ArenaLogic::new(cs, None);
+    let mut state = Arena::new(controls);
+    // Warm the arena well past a full baseline's worth of frames with nobody in
+    // seat 0, so its `prev_vis` fills up before the client arrives.
+    for _ in 0..150u64 {
+      step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
+    }
+
+    step(&logic, &mut state, LogicInput::AgentJoined { agent: Agent::new_human(1u64, "p1") });
+    let seat = state.seat_of(&1).unwrap();
+    let mut client = crate::sim::client::Client::new(seat as PlayerId, 4);
+
+    let mut recv = 3000u64;
+    let mut pending_ack: Option<Op> = None;
+    let mut frames_seen = 0u32;
+    let mut synced_on_frame: Option<u32> = None;
+    for _ in 0..60u64 {
+      if let Some(ack) = pending_ack.take() {
+        step(&logic, &mut state, LogicInput::AgentOps { source: Agent::new_human(1u64, "p1"), ops: vec![ack] });
+      }
+      let out = step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
+      recv += 16;
+      for op in &out.ops {
+        if let Some(Op::Frame(packet)) = op.ops.first() {
+          frames_seen += 1;
+          client.receive_packet((**packet).clone(), recv);
+          client.tick(16, &controls);
+          if synced_on_frame.is_none() && client.known_entities() > 0 && client.last_digest() == packet.visible_digest {
+            synced_on_frame = Some(frames_seen);
+          }
+          if let Some((newest, mask)) = client.acks().encode() {
+            pending_ack = Some(Op::Ack { newest, mask, digest: client.last_digest() });
+          }
+        }
+      }
+    }
+    // The very first frame the joiner receives is the whole world, in agreement
+    // at once, not a trickle that converges frames later.
+    assert_eq!(synced_on_frame, Some(1), "the joiner was not whole on its first frame");
+    assert_eq!(client.digest_mismatches(), 0, "the mirror disagreed after a warm-arena join {} times", client.digest_mismatches());
+  }
+
+  #[test]
   fn a_networked_client_mirror_stays_in_sync_through_the_arena() {
     // Reproduces the digest-mismatch report by driving the real ArenaLogic and a
     // real client through the frame/ack loop, without a socket: extract each
@@ -620,14 +739,135 @@ mod tests {
       recv += 16;
       for op in &out.ops {
         if let Some(Op::Frame(packet)) = op.ops.first() {
-          client.on_packet(packet, recv, &controls);
-          if let Some((newest, mask)) = client.acks.encode() {
-            pending_ack = Some(Op::Ack { newest, mask });
+          client.receive_packet((**packet).clone(), recv);
+          client.tick(16, &controls);
+          if let Some((newest, mask)) = client.acks().encode() {
+            pending_ack = Some(Op::Ack { newest, mask, digest: client.last_digest() });
           }
         }
       }
     }
-    assert_eq!(client.digest_mismatches, 0, "the client mirror disagreed with the server digest {} times", client.digest_mismatches);
+    assert_eq!(client.digest_mismatches(), 0, "the client mirror disagreed with the server digest {} times", client.digest_mismatches());
+  }
+
+  /// Drives a real client through the real arena and reports what it saw: the
+  /// most unresolved frames it ever held (the ghost), and how many arrived after
+  /// the instant they describe had passed (the underruns).
+  fn ghost_and_underruns(jitter_ms: u64, render_delay_ms: u64) -> (usize, u64) {
+    let controls = Controls { enemy_count: 300, jitter_ms, render_delay_ms, ..Controls::default() };
+    let (cs, _view) = slots(controls);
+    let logic = ArenaLogic::new(cs, None);
+    let mut state = Arena::new(controls);
+    step(&logic, &mut state, LogicInput::AgentJoined { agent: Agent::new_human(1u64, "p1") });
+    let seat = state.seat_of(&1).unwrap();
+    let mut client = crate::sim::client::Client::new(seat as PlayerId, 4);
+    client.set_render_delay(render_delay_ms);
+
+    let mut recv = 0u64;
+    let mut peak = 0usize;
+    // The ack loop is load-bearing and its absence is invisible: without it the
+    // baseline never advances, every frame is a full rebuild carrying no samples,
+    // and any measurement about samples reads zero for an unrelated reason.
+    let mut pending_ack: Option<Op> = None;
+    for _ in 0..600u64 {
+      if let Some(ack) = pending_ack.take() {
+        step(&logic, &mut state, LogicInput::AgentOps { source: Agent::new_human(1u64, "p1"), ops: vec![ack] });
+      }
+      let out = step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
+      recv += 16;
+      for op in &out.ops {
+        if let Some(Op::Frame(packet)) = op.ops.first() {
+          client.receive_packet((**packet).clone(), recv);
+        }
+      }
+      client.tick(16, &controls);
+      if let Some((newest, mask)) = client.acks().encode() {
+        pending_ack = Some(Op::Ack { newest, mask, digest: client.last_digest() });
+      }
+      peak = peak.max(client.ghost_enemies().len());
+    }
+    (peak, client.underruns())
+  }
+
+  #[test]
+  fn the_render_delay_is_the_servers_and_a_jittery_link_underruns_rather_than_hiding() {
+    // The point of fixing T on the server's timeline. Latency and jitter say when
+    // bytes arrive; the render delay says which moment is on screen. Letting the
+    // first move the second is what let a bad link quietly show one player an
+    // older world than everybody else, reporting nothing.
+    //
+    // With T fixed, a declared delay wide enough for the link carries it, and one
+    // too narrow produces a countable event instead of silent degradation.
+    let (ghost_wide, late_wide) = ghost_and_underruns(20, 200);
+    let (_, late_narrow) = ghost_and_underruns(200, 30);
+
+    assert!(ghost_wide > 0, "a delay wider than the link should leave unresolved frames to ghost");
+    assert_eq!(late_wide, 0, "a delay wider than the link should not underrun");
+    assert!(late_narrow > 0, "a delay narrower than the jitter should underrun rather than absorb it");
+  }
+
+  #[test]
+  fn a_drifted_mirror_is_caught_by_its_digest_and_rebuilt() {
+    // Same loop as the sync test, but partway through we reach into the client and
+    // drop an enemy it holds, exactly the silent drift a real socket produces: the
+    // entity stays in view, is only sampled again, and the client discards a
+    // sample for something it no longer holds. The delta stream can never re-send
+    // it, because the server believes the client already has it. Only the
+    // acknowledged digest can catch the disagreement and force a clean rebuild.
+    let controls = Controls { enemy_count: 300, ..Controls::default() };
+    let (cs, _view) = slots(controls);
+    let logic = ArenaLogic::new(cs, None);
+    let mut state = Arena::new(controls);
+    step(&logic, &mut state, LogicInput::AgentJoined { agent: Agent::new_human(1u64, "p1") });
+    let seat = state.seat_of(&1).unwrap();
+    let mut client = crate::sim::client::Client::new(seat as PlayerId, 4);
+
+    let mut recv = 0u64;
+    let mut pending_ack: Option<Op> = None;
+    let mut injected_at: Option<u64> = None;
+    let mut rebuilt = false;
+    let mut mismatches_at_mark = 0u64;
+    for i in 0..1200u64 {
+      if let Some(ack) = pending_ack.take() {
+        step(&logic, &mut state, LogicInput::AgentOps { source: Agent::new_human(1u64, "p1"), ops: vec![ack] });
+      }
+      let out = step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
+      recv += 16;
+      for op in &out.ops {
+        if let Some(Op::Frame(packet)) = op.ops.first() {
+          // A rebuild after the injection is the repair firing.
+          if injected_at.is_some() && packet.full_baseline {
+            rebuilt = true;
+          }
+          client.receive_packet((**packet).clone(), recv);
+          client.tick(16, &controls);
+          // Once the mirror is well populated, corrupt it exactly once.
+          if injected_at.is_none() && i > 200 && client.force_drop_an_enemy() {
+            injected_at = Some(i);
+          }
+          if let Some((newest, mask)) = client.acks().encode() {
+            pending_ack = Some(Op::Ack { newest, mask, digest: client.last_digest() });
+          }
+        }
+      }
+      // A margin after the injection, freeze the mismatch count. From here on it
+      // must not grow: the mirror is rebuilt and stays in agreement.
+      if let Some(at) = injected_at
+        && i == at + 80
+      {
+        mismatches_at_mark = client.digest_mismatches();
+      }
+    }
+    assert!(injected_at.is_some(), "the test never managed to drop an enemy");
+    // The drift was actually noticed, not silently tolerated.
+    assert!(mismatches_at_mark > 0, "the injected drift went undetected");
+    // The repair fired: the server sent a clean full baseline after the drift.
+    assert!(rebuilt, "no full baseline was sent to repair the drifted mirror");
+    // And it healed: no new disagreement once the rebuild landed.
+    assert_eq!(
+      client.digest_mismatches(), mismatches_at_mark,
+      "the mirror kept disagreeing after it should have been rebuilt"
+    );
   }
 
   #[cfg(feature = "websocket")]
@@ -661,28 +901,7 @@ mod tests {
     assert!(checked > 100, "actually exercised the wire: {checked} frames");
   }
 
-  #[test]
-  fn the_impairment_link_delays_but_never_reorders() {
-    // A WebSocket is ordered, so jitter must delay the stream, not shuffle it.
-    // Reordering the delta-relevance stream would desync the client mirror and
-    // register digest mismatches no ordered transport produces. Send frames with
-    // huge jitter and confirm they still come out in send order.
-    let mut link = Downlink::default();
-    let mut rng = Rng::new(1);
-    for seq in 0u64..12 {
-      let packet = Packet { seq, ..Default::default() };
-      // 16ms apart, latency 40, jitter 300: without the fix this shuffles badly.
-      link.send(seq * 16, packet, 40, 300, &mut rng);
-    }
-    let mut delivered = Vec::new();
-    for tick in 0..200u64 {
-      for packet in link.drain_due(tick * 16) {
-        delivered.push(packet.seq);
-      }
-    }
-    assert_eq!(delivered.len(), 12, "every frame arrives");
-    let mut sorted = delivered.clone();
-    sorted.sort_unstable();
-    assert_eq!(delivered, sorted, "and in send order, never reordered: {delivered:?}");
-  }
+  // The impairment link's ordering guarantee is now `LatencyLink`'s to keep, and
+  // is covered by `an_ordered_link_delays_but_never_reorders` in
+  // `plaza_client_utils::net_sim`.
 }

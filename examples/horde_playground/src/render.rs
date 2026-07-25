@@ -166,11 +166,14 @@ pub fn draw_world(world: &World, controls: &Controls, cam: &Camera) {
   let you = world.players()[0];
 
   // What the server really has, faint: the error between this and the solid
-  // dots is what the drawing strategy costs.
-  for (_, pos) in world.truth() {
-    if pos.dist(you) <= VIEW_RADIUS * 1.3 {
-      let (x, y) = cam.at(pos);
-      draw_circle(x, y, 3.0, C_TRUTH);
+  // dots is what the drawing strategy costs. On by default, because without it
+  // every strategy looks equally correct.
+  if controls.show_ghost {
+    for (_, pos) in world.truth() {
+      if pos.dist(you) <= VIEW_RADIUS * 1.3 {
+        let (x, y) = cam.at(pos);
+        draw_circle(x, y, 3.0, C_TRUTH);
+      }
     }
   }
 
@@ -187,8 +190,8 @@ pub fn draw_world(world: &World, controls: &Controls, cam: &Camera) {
   }
 
   // Shots in flight, as this client knows them.
-  for proj in world.client_projectiles(0) {
-    let (x, y) = cam.at(proj.pos);
+  for pos in world.client_projectiles(0) {
+    let (x, y) = cam.at(pos);
     draw_circle(x, y, 2.5, C_SHOT);
   }
 
@@ -413,8 +416,9 @@ fn draw_players(players: &[SimVec2], me: Option<usize>, eye: SimVec2, you: SimVe
   draw_circle(cx, cy, 8.0, C_YOU);
 }
 
-/// What a networked client actually knows and draws: its own relevant slice, no
-/// truth overlay, its own predicted position.
+/// What a networked client knows and draws: its own relevant slice, its predicted
+/// position, and its own ghost. No host privilege: a held packet is received
+/// state.
 #[cfg(all(feature = "client", feature = "websocket"))]
 pub fn draw_client_world(client: &horde_playground::net::client::NetClient, controls: &Controls, cam: &Camera) {
   let you = client.my_position();
@@ -432,27 +436,63 @@ pub fn draw_client_world(client: &horde_playground::net::client::NetClient, cont
     }
   }
 
-  for (_, pos, kind) in client.sim.render(controls) {
-    let (x, y) = cam.at(pos);
-    draw_circle(x, y, kind.radius() * cam.scale.max(0.35), enemy_color(kind));
-  }
-  for proj in &client.sim.projectiles {
-    let (x, y) = cam.at(proj.pos);
-    draw_circle(x, y, 2.5, C_SHOT);
-  }
+  // One instant for everything remote, obtained once. Enemies, shots and peers
+  // are all drawn at `at`, so the picture cannot contradict itself: a shot leaves
+  // the player who fired it, and reaches the enemy it was aimed at. Only the
+  // local player is elsewhere, predicted to now, which is the one entity whose
+  // input this machine already has.
+  //
+  // Before the first packet lands there is no instant and nothing remote to draw,
+  // which is the join transient: it lasts one render delay and everything falls
+  // back to the newest sample it has, so it degrades to the old behaviour rather
+  // than to a blank screen.
+  let at = client.sim.render_at();
 
-  draw_nova(client.nova_flash_age(), client.sim.players(), you, cam);
-  if controls.coins {
-    for (i, player) in client.sim.players().iter().enumerate() {
-      if let Some(radius) = client.sim.repel_radius(i)
-        && player.dist(you) <= VIEW_RADIUS * 2.0
-      {
-        draw_repulsor(radius, *player, cam);
+  // The ghost is ahead of the markers: packets held but not yet due. Gated on the
+  // server's permission too, since a client cannot draw a future it was not sent.
+  let allowed = client.policy.is_none_or(|p| p.allow_ghost);
+  if controls.show_ghost && allowed {
+    for (pos, _) in client.sim.ghost_enemies() {
+      let (x, y) = cam.at(pos);
+      draw_circle(x, y, 3.0, C_TRUTH);
+    }
+    for (i, pos) in client.sim.players().iter().enumerate() {
+      if pos.dist(you) <= VIEW_RADIUS * 1.3 {
+        let (x, y) = cam.at(*pos);
+        draw_circle_lines(x, y, 7.0, 1.0, C_TRUTH);
+        draw_text(&format!("P{i}"), x + 9.0, y - 6.0, 14.0, C_TRUTH);
       }
     }
   }
 
-  let mut players = client.sim.players().to_vec();
+  for (_, pos, kind) in at.map(|at| client.sim.render(controls, at)).unwrap_or_default() {
+    let (x, y) = cam.at(pos);
+    draw_circle(x, y, kind.radius() * cam.scale.max(0.35), enemy_color(kind));
+  }
+  for pos in at.map(|at| client.sim.render_projectiles(at)).unwrap_or_default() {
+    let (x, y) = cam.at(pos);
+    draw_circle(x, y, 2.5, C_SHOT);
+  }
+
+  let drawn = at.map(|at| client.sim.render_players(at)).unwrap_or_else(|| client.sim.players().to_vec());
+  draw_nova(client.nova_flash_age(), &drawn, you, cam);
+  if controls.coins {
+    for (i, player) in drawn.iter().enumerate() {
+      // Your own repulsor emanates from where you are *now*, the predicted marker,
+      // not the authoritative position a packet last placed you at. That position
+      // only moves when a frame lands, so pinning the ring to it stutters it
+      // against a marker that glides every frame, at any send rate. Peers are
+      // drawn at their authoritative position, so their rings belong there.
+      let center = if Some(i) == me { you } else { *player };
+      if let Some(radius) = client.sim.repel_radius(i)
+        && center.dist(you) <= VIEW_RADIUS * 2.0
+      {
+        draw_repulsor(radius, center, cam);
+      }
+    }
+  }
+
+  let mut players = drawn;
   if let Some(m) = me
     && m < players.len()
   {
@@ -494,14 +534,41 @@ pub fn draw_client_world(client: &horde_playground::net::client::NetClient, cont
 #[cfg(all(feature = "server", feature = "client", feature = "websocket"))]
 pub fn draw_host_world(view: &horde_playground::net::arena::HostView, client: &horde_playground::net::client::NetClient, controls: &Controls, cam: &Camera) {
   let you = client.my_position();
-  // The server's truth, faint. The gap to the solid believed dots is the error.
-  for (_, pos, _) in &view.truth {
-    if pos.dist(you) <= VIEW_RADIUS * 1.3 {
-      let (x, y) = cam.at(*pos);
-      draw_circle(x, y, 3.0, C_TRUTH);
+  // The server ghost: the authoritative state under what this client believes.
+  //
+  // A host may legitimately draw it because it *is* the server, and it is on by
+  // default because every delay here is deliberate and every one of them is
+  // invisible on its own. A peer is drawn interpolated, a send interval or two in
+  // the past; your own player is drawn predicted, slightly ahead; an enemy is
+  // drawn wherever the chosen strategy puts it. Without something to compare
+  // against, a wrong client and a correct one look identical, which is how
+  // several bugs here survived for days.
+  // Gated on `allow_ghost` even though a host owns the truth regardless: a host
+  // that kept its ghost while denying everyone else's could not see what the
+  // setting does. An observer stays omniscient; spectating is its job.
+  if controls.show_ghost && controls.allow_ghost {
+    for (_, pos, _) in &view.truth {
+      if pos.dist(you) <= VIEW_RADIUS * 1.3 {
+        let (x, y) = cam.at(*pos);
+        draw_circle(x, y, 3.0, C_TRUTH);
+      }
+    }
+    // The same for the *players*, which was missing and should not have been:
+    // the only way to see how far a peer trails or how much your prediction is
+    // being corrected was to infer it from where their shots came out.
+    for (i, pos) in view.players.iter().enumerate() {
+      if pos.dist(you) <= VIEW_RADIUS * 1.3 {
+        let (x, y) = cam.at(*pos);
+        draw_circle_lines(x, y, 7.0, 1.0, C_TRUTH);
+        draw_text(&format!("P{i}"), x + 9.0, y - 6.0, 14.0, C_TRUTH);
+      }
     }
   }
-  draw_client_world(client, controls, cam);
+  // The host already drew the stronger ghost (truth now); the client-side one is
+  // the same entities a trip earlier, and stacking both reads as noise.
+  let mut inner = *controls;
+  inner.show_ghost = false;
+  draw_client_world(client, &inner, cam);
 }
 
 /// An observer's view: the authoritative truth, and nothing believed.
@@ -558,7 +625,7 @@ pub fn draw_client_minimap(client: &horde_playground::net::client::NetClient, co
   let (ox, oy, size, s) = minimap_frame(cam);
   let lod = controls.crowd_lod_theta > 0.0;
   if lod {
-    for (_, pos, _) in client.sim.render(controls) {
+    for (_, pos, _) in client.sim.render_at().map(|at| client.sim.render(controls, at)).unwrap_or_default() {
       draw_rectangle(ox + pos.x * s, oy + pos.y * s, 1.0, 1.0, C_KNOWN);
     }
     for crowd in &client.sim.crowds {
@@ -568,7 +635,7 @@ pub fn draw_client_minimap(client: &horde_playground::net::client::NetClient, co
   } else {
     // Culling alone: a real client knows nothing past its radius, so the map can
     // only show what it holds. That emptiness is the honest picture.
-    for (_, pos, _) in client.sim.render(controls) {
+    for (_, pos, _) in client.sim.render_at().map(|at| client.sim.render(controls, at)).unwrap_or_default() {
       draw_rectangle(ox + pos.x * s, oy + pos.y * s, 1.0, 1.0, C_KNOWN);
     }
   }
@@ -591,7 +658,7 @@ pub fn draw_host_minimap(view: &horde_playground::net::arena::HostView, client: 
   for (_, pos, _) in &view.truth {
     draw_rectangle(ox + pos.x * s, oy + pos.y * s, 1.0, 1.0, C_TRUTH);
   }
-  for (_, pos, _) in client.sim.render(controls) {
+  for (_, pos, _) in client.sim.render_at().map(|at| client.sim.render(controls, at)).unwrap_or_default() {
     draw_rectangle(ox + pos.x * s, oy + pos.y * s, 1.0, 1.0, C_KNOWN);
   }
   let you = client.my_position();
