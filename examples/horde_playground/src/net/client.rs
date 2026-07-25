@@ -1,16 +1,14 @@
 //! A client on a real wire.
 //!
 //! It wraps the same [`sim::Client`] the offline playground uses, so the relevance
-//! mirror, the correction smoothing, the coins and the drawing are unchanged. What
-//! it adds is everything a shared clock and a function argument were standing in
-//! for:
+//! mirror, the coins and the drawing are unchanged. What it adds is everything a
+//! shared clock and a function argument were standing in for:
 //!
-//! - **Your own movement is predicted.** Offline, the local player's input went
-//!   straight into authoritative state at 60 Hz. Over a wire it costs a round
-//!   trip, so the player is predicted locally and reconciled against the server,
-//!   through [`PredictedPlayer`]. The predicted position is also fed back into the
-//!   wrapped sim, because the coin and repulsor rules read the local player and
-//!   should read where you actually are, not where a packet last put you.
+//! - **Your own movement is not predicted.** The whole scene, your own marker
+//!   included, is drawn from the played-out stream at one render instant; the
+//!   cost is stated where it is chosen, on `Controls::playout_delay_ms`. What
+//!   this client adds is naming the tick an input is *for*, from its clock
+//!   estimate plus the server's declared playout depth.
 //! - **The entity stream is acknowledged over the real wire.** The sim already
 //!   tracks which relevance packets it holds; this sends that acknowledgement up
 //!   so the server's loss recovery has something to diff against.
@@ -23,7 +21,7 @@ use plaza_ws::{CloseReason, Event, SendJson, Socket, State};
 
 use crate::sim::client::Client as SimClient;
 use crate::sim::protocol::{Op, ServerPolicy, PROTOCOL};
-use crate::sim::types::{Controls, LeaveReason, PlayerId, Vec2, ARENA_H, ARENA_W, SIM_DT};
+use crate::sim::types::{Controls, PlayerId, Vec2, ARENA_H, ARENA_W, SIM_DT};
 
 /// The server's simulation step, which is the unit its ticks are counted in.
 const SIM_STEP_MS: u64 = (SIM_DT * 1000.0) as u64;
@@ -83,6 +81,9 @@ pub struct NetClient {
   nova_flash_secs: f32,
   /// Your own health last frame, to catch the moment it drops.
   prev_health: u8,
+  /// Deaths seen as of the last tick, to catch the burst that means an area
+  /// pulse at the moment it is played out.
+  prev_deaths: u64,
   /// Seconds of red damage flash left to draw, refreshed when you take a hit.
   hit_flash_secs: f32,
 }
@@ -106,6 +107,7 @@ impl NetClient {
       now_ms: 0,
       nova_flash_secs: 0.0,
       prev_health: crate::sim::types::PLAYER_MAX_HEALTH as u8,
+      prev_deaths: 0,
       hit_flash_secs: 0.0,
     })
   }
@@ -120,8 +122,6 @@ impl NetClient {
     (self.hit_flash_secs > 0.0).then_some(HIT_FLASH_SECS - self.hit_flash_secs)
   }
 
-  /// Where to draw your own player: the prediction, eased through recent
-  /// corrections.
   /// Where to draw your own player: **on the same timeline as everything else**.
   ///
   /// Not predicted. The client renders the world at one instant, and exempting
@@ -290,10 +290,6 @@ impl NetClient {
         }
         Op::Frame(packet) => {
           let _ = controls;
-          let deaths = packet.left.iter().filter(|(_, r)| *r == LeaveReason::Died).count();
-          if deaths >= NOVA_BURST {
-            self.nova_flash_secs = NOVA_FLASH_SECS;
-          }
           // Clock sync is driven by pongs alone, not by frames. A frame's offset
           // is only right if the one-way estimate matches the delay the frame
           // actually took, and on a *host* those disagree: pongs come straight
@@ -302,33 +298,19 @@ impl NetClient {
           // wobble every ping interval and jerk the enemy projection backward.
           // Pongs are correct on a host (direct) and a remote (delayed like the
           // frames), so they are the honest source.
-          // Reconcile the local player. Its authoritative position is a one-way
-          // delay old, so advance it by that with the held direction to estimate
-          // where the server has it *now*, and only pull the prediction toward it
-          // when they genuinely disagree, which for an unforced player means a lost
-          // input under the coalesced policy rather than routine noise.
           // Hand the sim server time, not local time. It computes a packet's age
           // as `recv - server_time` to project a sample into the present, and that
           // is only meaningful if the two clocks agree; over a real wire they do
           // not, so give it this client's *estimate* of server-time-now. Before
           // sync converges this falls back to local time, which yields an age near
           // zero rather than a wild one.
+          // Nothing else happens here. The packet is queued for its instant, so
+          // everything derived from its contents (the hit flash, the pulse
+          // flash) is detected in `tick` when it is actually played out, not at
+          // arrival, or the reaction would land one render delay before the
+          // thing it reacts to is visible.
           let server_now = self.clock.server_time_at(now_ms as f64).unwrap_or(now_ms as f64).max(0.0) as u64;
           self.sim.receive_packet(*packet, server_now);
-          // Deliberately do NOT overwrite the local player with the prediction
-          // here. The sim aims enemies at the player position, and the server aims
-          // them at its *authoritative* one; feeding the prediction in instead made
-          // the client chase a position the server was not, so every sample
-          // snapped the enemies between the two and they appeared to lunge at the
-          // player whenever it moved. The prediction drives only the camera and
-          // your own marker; the shared rules use the authoritative position, the
-          // same as the offline build, which is smooth.
-          // A drop in your own health is a hit worth flashing.
-          let health = self.my_health();
-          if health < self.prev_health {
-            self.hit_flash_secs = HIT_FLASH_SECS;
-          }
-          self.prev_health = health;
           self.frames_seen += 1;
           applied_frame = true;
         }
@@ -365,9 +347,25 @@ impl NetClient {
     applied_frame
   }
 
-  /// Advances the sim and the correction ease.
+  /// Advances the sim, plays out whatever is due, and reacts to what actually
+  /// appeared on screen this tick.
   pub fn tick(&mut self, dt_ms: u64, controls: &Controls) {
     self.sim.tick(dt_ms, controls);
+    // Reactions are detected after play-out, not at receipt, so they land at
+    // the instant on screen: the flash and the deaths it announces arrive in
+    // the same frame, instead of the flash leading by one render delay.
+    let deaths = self.sim.deaths_seen;
+    if deaths.saturating_sub(self.prev_deaths) >= NOVA_BURST as u64 {
+      self.nova_flash_secs = NOVA_FLASH_SECS;
+    }
+    self.prev_deaths = deaths;
+    // A drop in your own health is a hit worth flashing, and health itself now
+    // changes at play-out.
+    let health = self.my_health();
+    if health < self.prev_health {
+      self.hit_flash_secs = HIT_FLASH_SECS;
+    }
+    self.prev_health = health;
     if self.nova_flash_secs > 0.0 {
       self.nova_flash_secs = (self.nova_flash_secs - dt_ms as f32 / 1000.0).max(0.0);
     }

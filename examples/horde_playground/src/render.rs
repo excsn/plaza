@@ -449,9 +449,9 @@ fn draw_players(players: &[SimVec2], me: Option<usize>, eye: SimVec2, you: SimVe
   draw_circle(cx, cy, 8.0, C_YOU);
 }
 
-/// What a networked client knows and draws: its own relevant slice, its predicted
-/// position, and its own ghost. No host privilege: a held packet is received
-/// state.
+/// What a networked client knows and draws: its own relevant slice, all of it at
+/// one render instant, and its own ghost. No host privilege: a held packet is
+/// received state.
 #[cfg(all(feature = "client", feature = "websocket"))]
 pub fn draw_client_world(client: &horde_playground::net::client::NetClient, controls: &Controls, cam: &Camera) {
   let you = client.my_position();
@@ -469,11 +469,11 @@ pub fn draw_client_world(client: &horde_playground::net::client::NetClient, cont
     }
   }
 
-  // One instant for everything remote, obtained once. Enemies, shots and peers
-  // are all drawn at `at`, so the picture cannot contradict itself: a shot leaves
-  // the player who fired it, and reaches the enemy it was aimed at. Only the
-  // local player is elsewhere, predicted to now, which is the one entity whose
-  // input this machine already has.
+  // One instant for everything, obtained once. Enemies, shots, peers and your
+  // own marker are all drawn at `at`, so the picture cannot contradict itself: a
+  // shot leaves the player who fired it, and reaches the enemy it was aimed at.
+  // Nothing is predicted; the only thing deliberately off this instant is the
+  // ghost overlay, whose job is to show the future.
   //
   // Before the first packet lands there is no instant and nothing remote to draw,
   // which is the join transient: it lasts one render delay and everything falls

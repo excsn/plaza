@@ -208,8 +208,8 @@ pub fn draw_net_ui(client: &horde_playground::net::client::NetClient, url: &str,
         None => ui.label("round trip: measuring"),
         };
         ui.label(format!("frames applied: {}   lost: {}", client.frames_seen, client.sim.frames_lost()));
-        ui.label(format!("render delay: {} ms   underruns: {}", client.sim.render_delay_ms(), client.sim.underruns()))
-          .on_hover_text("An underrun is a packet that arrived after the instant it describes had already gone past, so it could never be played at the right moment. It is the honest form of what an adaptive buffer used to hide by quietly showing you an older world than everybody else.");
+        ui.label(format!("render delay: {} ms   underruns: {}   view fallbacks: {}", client.sim.render_delay_ms(), client.sim.underruns(), client.sim.view_fallbacks()))
+          .on_hover_text("An underrun is a packet that arrived after the instant it describes had already gone past, so it could never be played at the right moment. It is the honest form of what an adaptive buffer used to hide by quietly showing you an older world than everybody else. A view fallback is a player drawn from its newest sample because its buffer could not produce the render instant, which silently puts that player on a different timeline for a frame; both counters are the same honesty applied to different buffers.");
         ui.label(format!("enemies held: {}", client.sim.known_entities()));
         ui.label(format!("difficulty: x{:.1}   your health: {}", client.sim.difficulty(), client.my_health()));
         ui.label(format!("coins: {}   pickups taken back: {}", client.sim.believed_balance, client.sim.denied_claims));
