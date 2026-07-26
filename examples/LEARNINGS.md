@@ -157,6 +157,20 @@ Reading the shape of a counter rather than its value: a count climbing without b
 
 **The general form.** In a protocol that repeats until acknowledged, "how many times was I told" and "how many times did it happen" diverge by design. Anything derived from such a stream must be exactly as idempotent as the stream itself: count state transitions, never messages. The mirror got this right from the start; the one counter that read the wire instead of the state is the one that produced a visible artifact.
 
+### The 127 clients that never acknowledged (horde)
+
+**Symptom.** A host running 128 players reported bandwidth climbing slowly over half an hour, and `churn: 136.9 spawns / 0.2 despawns per packet` against `sent per packet: 138 entities`. Almost every entity in every packet was arriving as a brand new spawn, and almost nothing was ever retracted.
+
+**The measured world disagreed.** A harness driving the same arena for twenty simulated minutes, to maximum difficulty, showed bandwidth flat to 2.5% and roughly 17 spawns per packet. The difference between the two was not the game: it was that every client in the harness **acknowledged**, and 127 of the 128 seats in the real arena had nobody to acknowledge for them.
+
+**Cause.** Seats with no connection still have packets built for them, because an empty seat drifts as a bot and is still simulated. Under ack recovery a baseline advances only on acknowledgement, so those seats sat at an empty baseline for ever and every packet built for them was a **full dump of the whole visible set**. Nothing was sent (there is no connection), but the readouts count every packet built, so a full arena was being charged for a defect none of its actual clients had, and the spawn count was eight times the truth.
+
+**Fix.** The arena acknowledges on behalf of a seat nobody is connected to. Its client is the server itself, holding exactly what it was sent over a wire that cannot drop anything, so the acknowledgement is not a convenient lie: it is the only accurate thing to say.
+
+**And the slow climb was the horde refilling.** A separate fix had just raised the wave cap so 128 players could no longer annihilate the population, so the arena spent several minutes growing from a few dozen enemies to three thousand, and the per-view cost grew with it. It plateaus.
+
+**The general form, for the third time in this file.** An unacknowledged delta stream reports full re-sends for ever, and the numbers it produces look entirely plausible. It was found in a ghost measurement, then in a bandwidth harness, and now in the shipped example itself. The first two were fixed by writing the lesson down and later by an assertion in the harness; neither of those could reach this one, because here the missing acknowledgement was a property of the *arena* rather than of a test. What would have caught it is a readout comparing spawns per packet against entities per packet, which is exactly the pair the panel was already showing and nobody had thought to read as a ratio.
+
 ### A world that was not there, and the saving that went negative (horde)
 
 **Symptom.** Two at once, both reported by a player at 128 players: bandwidth appearing to climb the longer a session ran, and the "saved against UUIDs and `f32`" readout going **negative** for the first time, at -17%.

@@ -107,6 +107,8 @@ pub struct Server {
 
   candidates: Vec<EntityIndex>,
   entered_buf: Vec<u32>,
+  /// Spawns announced in the last send round, for the readout above.
+  last_spawns: usize,
   /// Which players each client needs: the ones it can see, plus the ones its
   /// visible enemies are chasing. Recomputed on each entity round and reused by
   /// the player stream, which runs on its own clock.
@@ -223,6 +225,7 @@ impl Server {
       last_nova_ms: None,
       candidates: Vec::new(),
       entered_buf: Vec::new(),
+      last_spawns: 0,
       relevant_players: vec![Vec::new(); player_count],
       wallets_dirty: (0..player_count as PlayerId).collect(),
       shots_fired_since_send: Vec::new(),
@@ -878,6 +881,14 @@ impl Server {
     self.pending_players.take()
   }
 
+  /// Entities announced as new in the most recent send round, across all seats.
+  /// A delta stream in steady state should keep this near the real churn; a
+  /// number close to the whole visible set means somebody's baseline is not
+  /// advancing.
+  pub fn last_spawn_count(&self) -> usize {
+    self.last_spawns
+  }
+
   /// How many players client `c` is currently being sent.
   ///
   /// The per-round set, which is what the bandwidth depends on. A client's
@@ -1157,6 +1168,7 @@ impl Server {
     self.shots_fired_since_send.clear();
     self.shots_ended_since_send.clear();
     self.wallets_dirty.clear();
+    self.last_spawns = out.iter().map(|(_, p)| p.entered.len()).sum();
     out
   }
 }

@@ -291,7 +291,14 @@ pub fn draw_host_ui(
         let (compact, naive) = (view.bytes_per_sec() / 1024.0, view.naive_bytes_per_sec() / 1024.0);
         ui.label(format!("bandwidth: {compact:.1} KiB/s (all players)"));
         ui.label(format!("with uuids + f32 positions: {naive:.1} KiB/s ({:.0}% saved)", if naive > 0.0 { (1.0 - compact / naive) * 100.0 } else { 0.0 }));
-        ui.label(format!("sent per packet: {:.0} entities", view.mean_relevant()));
+        // Spawns as a share of what is sent, because the ratio is the readout
+        // that matters and two separate numbers hid it: a stream whose
+        // baselines are advancing announces a little churn, and one that is not
+        // announces its whole visible set, for ever, at numbers that look
+        // entirely reasonable side by side.
+        let sent = view.mean_relevant().max(1.0);
+        ui.label(format!("sent per packet: {:.0} entities ({:.0}% of it new)", sent, view.mean_spawns_per_packet() / sent * 100.0))
+          .on_hover_text("A delta stream in steady state should be mostly position samples for entities the client already holds. If most of a packet is new arrivals, somebody's baseline is not advancing and every packet is a full re-send: that is what an unacknowledged stream looks like, and it is expensive while looking healthy.");
         ui.label(format!("churn: {:.1} spawns / {:.1} despawns per packet", view.mean_spawns_per_packet(), view.mean_despawns_per_packet()));
         ui.label(format!("alive: {} enemies, {} killed total", view.alive, view.kills));
         ui.label(format!("last area pulse killed: {} at once", view.nova_kills_last));
@@ -347,7 +354,14 @@ pub fn draw_observer_ui(view: &horde_playground::net::arena::HostView, controls:
         ui.label(format!("bandwidth: {:.1} KiB/s (all players, {} alive)", view.bytes_per_sec() / 1024.0, view.alive))
           .on_hover_text("The live count rides along because a bandwidth number is meaningless without it: an arena whose horde has been wiped out is cheap to send, and reads as a saving rather than as a missing world. Watch them together.");
         ui.label(format!("with uuids + f32 positions: {:.1} KiB/s", view.naive_bytes_per_sec() / 1024.0));
-        ui.label(format!("sent per packet: {:.0} entities", view.mean_relevant()));
+        // Spawns as a share of what is sent, because the ratio is the readout
+        // that matters and two separate numbers hid it: a stream whose
+        // baselines are advancing announces a little churn, and one that is not
+        // announces its whole visible set, for ever, at numbers that look
+        // entirely reasonable side by side.
+        let sent = view.mean_relevant().max(1.0);
+        ui.label(format!("sent per packet: {:.0} entities ({:.0}% of it new)", sent, view.mean_spawns_per_packet() / sent * 100.0))
+          .on_hover_text("A delta stream in steady state should be mostly position samples for entities the client already holds. If most of a packet is new arrivals, somebody's baseline is not advancing and every packet is a full re-send: that is what an unacknowledged stream looks like, and it is expensive while looking healthy.");
         ui.label(format!("churn: {:.1} spawns / {:.1} despawns per packet", view.mean_spawns_per_packet(), view.mean_despawns_per_packet()));
         ui.label(format!("alive: {} enemies, {} killed total", view.alive, view.kills));
         ui.label(format!("last area pulse killed: {} at once", view.nova_kills_last));

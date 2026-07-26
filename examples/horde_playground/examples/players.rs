@@ -145,12 +145,13 @@ fn drift(enemy_count: usize, players: usize, windows: usize, window_secs: f32) {
   let mut clients: Vec<Client> = (0..players).map(|p| Client::new(p as u8, players)).collect();
 
   println!("\ndrift at {enemy_count} enemies / {players} players, {window_secs:.0}s windows");
-  println!("  window   KiB/s   naive   saved    alive   spawns/pkt   difficulty");
+  println!("  window   KiB/s  entities  spawnB  sampleB   coinB   shotB    alive   coins  spawns/pkt   diff");
   for w in 0..windows {
     let mut bytes = 0usize;
     let mut naive = 0usize;
     let mut spawns = 0usize;
     let mut packets = 0usize;
+    let (mut spawn_b, mut sample_b, mut coin_b, mut shot_b, mut ent_b) = (0usize, 0usize, 0usize, 0usize, 0usize);
     for _ in 0..(window_secs / SIM_DT) as usize {
       let packets_out = server.advance_seats(step_ms, &seats, &controls);
       let frames = server.take_player_frames();
@@ -159,6 +160,12 @@ fn drift(enemy_count: usize, players: usize, windows: usize, window_secs: f32) {
         naive += packet.naive_bytes();
         spawns += packet.entered.len();
         packets += 1;
+        let split = packet.bytes_breakdown();
+        sample_b += split[0];
+        spawn_b += split[1] + split[2];
+        shot_b += split[3];
+        ent_b += split[0] + split[1] + split[2] + packet.crowds.len() * CROWD_BYTES;
+        coin_b += packet.coins.len() * (ID_BYTES + POS_BYTES) + packet.hits.len() * (POS_BYTES + 1);
       }
       for (_, frame) in frames.iter().flatten() {
         bytes += frame.bytes();
@@ -178,14 +185,18 @@ fn drift(enemy_count: usize, players: usize, windows: usize, window_secs: f32) {
       }
     }
     let per = |b: usize| b as f32 / 1024.0 / window_secs;
-    let saved = if naive > 0 { (1.0 - bytes as f32 / naive as f32) * 100.0 } else { 0.0 };
+    let _ = naive;
     println!(
-      "  {:6}  {:6.0}  {:6.0}  {:5.0}%  {:7}  {:11.1}   {:10.1}",
+      "  {:6}  {:6.0}  {:8.0}  {:6.0}  {:7.0}  {:6.0}  {:6.0}  {:7}  {:6}  {:10.1}  {:5.1}",
       w,
       per(bytes),
-      per(naive),
-      saved,
+      per(ent_b),
+      per(spawn_b),
+      per(sample_b),
+      per(coin_b),
+      per(shot_b),
       server.alive_count(),
+      server.coins.len(),
       spawns as f32 / packets.max(1) as f32,
       server.difficulty(),
     );
@@ -222,5 +233,5 @@ fn main() {
   }
 
   // The shape over time, at the count where it was reported as climbing.
-  drift(3000, 128, 8, 15.0);
+  drift(3000, 128, 8, 30.0);
 }

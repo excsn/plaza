@@ -611,6 +611,21 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
           if let Some(key) = by_seat.get(&(player as usize)) {
             let entry = state.down.entry(*key).or_default();
             entry.send(now, Downstream::Frame(Box::new(packet)), controls.latency_ms, controls.jitter_ms, controls.loss_pct, &mut state.rng);
+          } else {
+            // A seat nobody is connected to still has packets built for it, and
+            // its "client" is this process: it holds exactly what it was sent,
+            // over a wire that cannot lose anything. So it acknowledges.
+            //
+            // Without this, every unoccupied seat's baseline stays empty for
+            // ever, and under ack recovery an empty baseline means the next
+            // packet is a **full dump** rather than a delta. With one human and
+            // 127 bots that made 127 of every 128 packets a complete re-send of
+            // a whole visible set: the arena reported ~137 spawns per packet
+            // where a well-behaved client sees ~17, and the bandwidth readout
+            // charged a full arena for a defect none of its clients had.
+            let seq = packet.seq;
+            let digest = packet.visible_digest;
+            state.sim.receive_ack(player as usize, seq, u64::MAX, digest);
           }
         }
 
@@ -727,6 +742,44 @@ mod tests {
       }
       step(logic, state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
     }
+  }
+
+  #[test]
+  fn a_seat_nobody_is_connected_to_still_acknowledges() {
+    // An unacknowledged baseline stays empty, and under ack recovery an empty
+    // baseline means the next packet is a full dump rather than a delta. Seats
+    // driven by bots have no client to acknowledge for them, so every packet
+    // built for them was a complete re-send of a whole visible set, for ever.
+    //
+    // It is invisible on the wire (nothing is connected to those seats) and
+    // loud in the readouts, which count every packet built: the arena reported
+    // roughly eight times the spawns per packet that a well-behaved client
+    // actually causes, and charged the bandwidth meter for all of it.
+    let controls = Controls { player_count: 4, enemy_count: 400, ..small() };
+    let (cs, _view) = slots(controls);
+    let mut state = Arena::new(controls);
+    let logic = ArenaLogic::new(cs, None).with_latency(link(0, ADMIT_SAMPLES));
+
+    // Nobody joins: every seat is a bot.
+    let mut spawns_early = 0usize;
+    let mut spawns_late = 0usize;
+    for tick in 0..240u32 {
+      step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
+      let spawns: usize = state.sim.last_spawn_count();
+      if tick < 60 {
+        spawns_early += spawns;
+      } else if tick >= 180 {
+        spawns_late += spawns;
+      }
+    }
+    assert!(spawns_early > 0, "the arena did fill, so there was something to spawn");
+    // Not a larger factor, because the arena is genuinely still filling: waves
+    // keep arriving, and a real arrival is a real spawn. What matters is that
+    // the count falls at all, which it cannot do while a baseline stays empty.
+    assert!(
+      spawns_late * 3 < spawns_early,
+      "once a seat's baseline is acknowledged its packets become deltas: {spawns_late} late against {spawns_early} early"
+    );
   }
 
   #[test]
