@@ -110,6 +110,13 @@ impl HostView {
   pub fn bytes_per_sec(&self) -> f64 {
     self.bytes.per_sec()
   }
+  /// The same traffic averaged over the whole life of the meter. Shown beside
+  /// the current rate rather than instead of it, because the two answer
+  /// different questions and the difference between them is itself a reading:
+  /// a session mean below the current rate is still climbing toward it.
+  pub fn lifetime_bytes_per_sec(&self) -> f64 {
+    self.bytes.lifetime_per_sec()
+  }
   /// What the same world would have cost sent the obvious way. The comparison is
   /// the example's whole claim, so it is measured rather than argued.
   pub fn naive_bytes_per_sec(&self) -> f64 {
@@ -167,6 +174,9 @@ pub struct Arena {
   /// joiner cannot park one and make the arena look full.
   admitting: HashMap<PlayerKey, Admission>,
   rng: Rng,
+  /// The last whole second a trace line was emitted for, so `HORDE_TRACE`
+  /// prints one row per second rather than one per packet.
+  traced_second: u64,
 
 
   /// What is actually going out, which is what makes the relevance claim
@@ -196,6 +206,7 @@ impl Arena {
       down: HashMap::new(),
       admitting: HashMap::new(),
       rng: Rng::new(IMPAIR_SEED),
+      traced_second: 0,
       bytes: RateMeter::new(),
       naive_bytes: RateMeter::new(),
       crowd_bytes: RateMeter::new(),
@@ -673,6 +684,32 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
 
         if is_send_round && let Some(view) = &self.view {
           *view.lock() = state.host_view();
+        }
+
+        // A machine-readable trace of the numbers the panel shows, once a
+        // second, when `HORDE_TRACE=1` is set. Screenshots of a live readout
+        // cannot settle an argument about a trend: they are two points, they
+        // arrive with no timeline, and every explanation offered for them so
+        // far has been a story fitted to two numbers. This is the raw series
+        // from the machine that is actually running the thing.
+        if is_send_round && std::env::var_os("HORDE_TRACE").is_some() {
+          let second = now / 1000;
+          if second > state.traced_second {
+            state.traced_second = second;
+            let v = state.host_view();
+            println!(
+              "TRACE,{},{:.0},{:.0},{},{},{:.1},{:.1},{},{}",
+              second,
+              v.bytes_per_sec(),
+              v.lifetime_bytes_per_sec(),
+              v.alive,
+              v.kills,
+              v.mean_relevant(),
+              v.mean_spawns_per_packet(),
+              state.sim.coin_count(),
+              state.seats.occupied_count(),
+            );
+          }
         }
         Ok(LogicOutput::ops(out))
       }

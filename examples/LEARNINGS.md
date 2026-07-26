@@ -157,6 +157,20 @@ Reading the shape of a counter rather than its value: a count climbing without b
 
 **The general form.** In a protocol that repeats until acknowledged, "how many times was I told" and "how many times did it happen" diverge by design. Anything derived from such a stream must be exactly as idempotent as the stream itself: count state transitions, never messages. The mirror got this right from the start; the one counter that read the wire instead of the state is the one that produced a visible artifact.
 
+### Bandwidth that climbed for ever, and was the meter (horde)
+
+**Symptom.** A player reported, repeatedly, that bandwidth crept upward the longer a session ran and never settled: standing still, moving about, at 128 players and again at 10. Two screenshots three minutes apart showed 127.6 then 143.9 KiB/s while the live enemy count *fell* from 2311 to 1751.
+
+**Three wrong explanations, each defended with a measurement.** That the horde was collapsing and refilling (true earlier, fixed, and not this). That it tracked the live enemy count (refuted by the screenshots above: bandwidth up, population down). That it was the nova cycle oscillating (real, but an oscillation is not a trend). Each was checked against a harness that measured **per window** and therefore could not reproduce the symptom at all, which should itself have been the clue.
+
+**Cause.** `RateMeter::per_sec` was `total / elapsed` over the meter's whole life. That is a session mean, not a rate. A session mean chasing a steady state it has not reached converges **asymptotically**: it climbs by less and less, but it climbs, for as long as the session runs. Every reading is arithmetically correct and the number goes up every time you look. Anything that raised traffic even briefly, a burst of spawns, a walk through a dense corner, raised the mean permanently, because the denominator only ever grows.
+
+**It also made the panel useless for its stated purpose.** A slider you have just moved is one second of evidence against twenty minutes of history, so the readout barely twitches, in a panel whose entire job is showing what the sliders do.
+
+**Fix.** The meter keeps a rolling window (sixteen buckets of 500 ms) and reports the recent rate; the lifetime figure is still available as `lifetime_per_sec` for summaries, where a session mean is the right answer. One subtlety worth keeping: the newest bucket is normally only part filled, so the divisor is the span the retained buckets actually cover rather than the nominal window, which is otherwise a steady few percent of understatement.
+
+**The general form.** A measurement instrument is part of the system under test, and this file now has four entries where the instrument was the defect: a harness with no acknowledgement loop, a counterfactual that modelled only some fields, a fault check that compared a delayed client against the present, and now a rate that was a mean. The pattern in all four is the same: the number was *plausible*, so it was read as evidence about the game rather than as a claim about the instrument. When a measurement disagrees with a player who is watching the thing directly, suspect the measurement.
+
 ### A fault readout that was really the render delay, twice (horde)
 
 **Symptom.** After the acknowledgement fix above, `entities held that are dead on the server` went from 15 to 156 and turned red, while every other number improved: churn balanced, the packet became 4% new arrivals instead of 99%, the worst server tick fell from 185 ms to 6 ms.

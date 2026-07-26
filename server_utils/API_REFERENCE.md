@@ -176,6 +176,8 @@ Returning this rather than a bare index is the entire reason the type exists. `F
 A running total, a sample count, an elapsed clock, and the three questions over them.
 
 *   **`new()`**, **`add(amount)`**, **`add_empty()`** (a sample carrying nothing, which still counts toward the mean), **`elapsed(elapsed_ms)`**, **`reset()`**.
-*   **`total()`**, **`samples()`**, **`elapsed_ms()`**, **`per_sec()`**, **`mean()`**, **`share_of(&other) -> f64`**.
+*   **`total()`**, **`samples()`**, **`elapsed_ms()`**, **`per_sec()`**, **`mean()`**, **`lifetime_per_sec()`**, **`share_of(&other) -> f64`**.
+
+**`per_sec` and `mean` are over a rolling window** (eight seconds), not over the meter's whole life; `total`, `samples` and `lifetime_per_sec` are the lifetime figures. The distinction is load bearing rather than a nicety. A lifetime average chasing a steady state that has risen converges to it asymptotically, so it climbs by less and less but never stops climbing, and on a live readout that reads as a quantity slowly increasing for ever with nothing wrong. It also makes such a readout unusable for its usual purpose, because a setting you just changed is one second of evidence against the whole session. Call `elapsed` with your clock each tick to roll the window; `lifetime_per_sec` is the right answer for a summary over a fixed run, and the wrong one for a number somebody watches.
 
 Trivial arithmetic, and every hand-rolled copy had to remember the same divide-by-zero guard, whose absence renders as `NaN` on the first frame and looks like the thing being measured is broken. `share_of` is here because **measuring a stream's share of the packet before optimising its encoding** is the check that would have saved three separate rounds of optimising the wrong thing: despawn ids were 1.2% of horde's traffic while position samples were 86.1%.

@@ -906,6 +906,11 @@ impl Server {
     self.recently_dead.clone()
   }
 
+  /// Coins currently on the ground.
+  pub fn coin_count(&self) -> usize {
+    self.coins.len()
+  }
+
   /// Entities announced as new in the most recent send round, across all seats.
   /// A delta stream in steady state should keep this near the real churn; a
   /// number close to the whole visible set means somebody's baseline is not

@@ -351,8 +351,13 @@ pub fn draw_observer_ui(view: &horde_playground::net::arena::HostView, controls:
       section(ui, "controls", true, |ui| draw_controls(ui, controls));
 
       section(ui, "stats (authoritative)", true, |ui| {
-        ui.label(format!("bandwidth: {:.1} KiB/s (all players, {} alive)", view.bytes_per_sec() / 1024.0, view.alive))
-          .on_hover_text("The live count rides along because a bandwidth number is meaningless without it: an arena whose horde has been wiped out is cheap to send, and reads as a saving rather than as a missing world. Watch them together.");
+        ui.label(format!(
+          "bandwidth: {:.1} KiB/s now, {:.1} KiB/s session ({} alive)",
+          view.bytes_per_sec() / 1024.0,
+          view.lifetime_bytes_per_sec() / 1024.0,
+          view.alive
+        ))
+        .on_hover_text("Two numbers because they answer different questions and neither is a substitute for the other. **Now** is over a rolling eight seconds, so it responds to a slider you just moved and settles when the world does. **Session** is the total over the whole run, which is the right figure for quoting what a configuration cost but is not a rate: while it sits below the current number it is still climbing toward it, by less and less, for as long as the run lasts, and that climb is a property of the average rather than of the traffic. The live count rides along because a bandwidth figure is meaningless without it: an arena whose horde has been wiped out is cheap to send, and reads as a saving rather than as a missing world.");
         ui.label(format!("with uuids + f32 positions: {:.1} KiB/s", view.naive_bytes_per_sec() / 1024.0));
         // Spawns as a share of what is sent, because the ratio is the readout
         // that matters and two separate numbers hid it: a stream whose
