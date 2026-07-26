@@ -160,7 +160,7 @@ const SENT_HISTORY: usize = 24;
 
 impl Server {
   pub fn new(enemy_count: usize, player_count: usize, spread: bool) -> Self {
-    let players = (0..player_count).map(|p| player_start(p, spread)).collect::<Vec<_>>();
+    let players = (0..player_count).map(|p| player_start(p, player_count, spread)).collect::<Vec<_>>();
     let mut pool = SlotAllocator::with_capacity(enemy_count);
     let enemies = (0..enemy_count)
       .map(|i| {
@@ -817,7 +817,7 @@ impl Server {
 
   /// Takes this tick's player frame, if the player stream was due.
   ///
-  /// Everyone gets the same one: there are four players and they are the input
+  /// Everyone gets the same one: the players are few and they are the input
   /// to every enemy's behaviour, so there is nothing per-recipient to decide and
   /// no relevance to apply. That asymmetry against the entity stream is the
   /// whole reason the two are separate.
@@ -1034,13 +1034,37 @@ fn scatter(i: u32) -> Vec2 {
   Vec2::new(x, y)
 }
 
-fn player_start(p: usize, spread: bool) -> Vec2 {
+/// Where player `p` of `count` starts.
+///
+/// Both layouts are **sized from the count**, which the fixed 2x2 and the single
+/// row they replaced were not: past four players the grid's third row sat at
+/// `1.25 * ARENA_H`, outside the world, and the cluster's row grew longer than a
+/// view radius so the players it exists to gather could not see each other. At
+/// four both formulations agree exactly, so the arena everything here was
+/// measured in is unchanged.
+fn player_start(p: usize, count: usize, spread: bool) -> Vec2 {
   if spread {
-    let fx = (p % 2) as f32;
-    let fy = (p / 2) as f32;
-    Vec2::new(ARENA_W * (0.25 + 0.5 * fx), ARENA_H * (0.25 + 0.5 * fy))
+    // Cells of a grid just big enough for the count, each player at its centre.
+    let cols = (count as f32).sqrt().ceil().max(1.0);
+    let rows = (count as f32 / cols).ceil().max(1.0);
+    let (fx, fy) = ((p % cols as usize) as f32, (p / cols as usize) as f32);
+    Vec2::new(ARENA_W * (fx + 0.5) / cols, ARENA_H * (fy + 0.5) / rows)
   } else {
-    Vec2::new(ARENA_W * 0.5 + p as f32 * 40.0, ARENA_H * 0.5)
+    // One knot in the middle, so the horde converges on a single place. A grid
+    // rather than a row, and one whose spacing tightens once the default would
+    // spread it further than anybody can see: a cluster whose members are not
+    // in each other's view is not a cluster, and the setting stops meaning
+    // anything. A row of four at the usual spacing spans well inside a view, so
+    // the small counts keep the exact layout they always had.
+    const ROW: usize = 4;
+    const SPACING: f32 = 40.0;
+    let cols = ROW.max((count as f32).sqrt().ceil() as usize);
+    let rows = count.div_ceil(cols);
+    // Player 0 sits at a corner, so the span to cover is the grid's diagonal.
+    let diagonal = ((((cols - 1) * (cols - 1)) + ((rows - 1) * (rows - 1))) as f32).sqrt().max(1.0);
+    let spacing = SPACING.min(VIEW_RADIUS * 0.9 / diagonal);
+    let (fx, fy) = ((p % cols) as f32, (p / cols) as f32);
+    Vec2::new(ARENA_W * 0.5 + fx * spacing, ARENA_H * 0.5 + fy * spacing)
   }
 }
 
@@ -1056,6 +1080,56 @@ fn player_drift(p: usize, t: f32, spread: bool) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn every_player_starts_inside_the_arena_however_many_there_are() {
+    // The layout used to be a fixed 2x2 grid and a single row, both of which
+    // were fine at four and wrong at anything else: the grid's third row sat at
+    // 1.25 * ARENA_H, outside the world, so a fifth player spawned in the void
+    // with the horde unable to reach it.
+    for count in [1usize, 2, 4, 5, 7, 16, 64, crate::sim::types::MAX_PLAYERS] {
+      for spread in [true, false] {
+        for p in 0..count {
+          let at = player_start(p, count, spread);
+          assert!(
+            at.x >= 0.0 && at.x <= ARENA_W && at.y >= 0.0 && at.y <= ARENA_H,
+            "player {p} of {count} (spread={spread}) starts at {at:?}, outside the arena"
+          );
+        }
+      }
+    }
+  }
+
+  #[test]
+  fn the_four_player_layout_is_exactly_what_it_always_was() {
+    // The generalisation has to be a superset, not a replacement: every
+    // measurement in the README was taken in the four-player arena, and a
+    // layout change would quietly invalidate all of them.
+    for spread in [true, false] {
+      for p in 0..4 {
+        let now = player_start(p, 4, spread);
+        let before = if spread {
+          Vec2::new(ARENA_W * (0.25 + 0.5 * (p % 2) as f32), ARENA_H * (0.25 + 0.5 * (p / 2) as f32))
+        } else {
+          Vec2::new(ARENA_W * 0.5 + p as f32 * 40.0, ARENA_H * 0.5)
+        };
+        assert_eq!((now.x, now.y), (before.x, before.y), "player {p} (spread={spread}) moved");
+      }
+    }
+  }
+
+  #[test]
+  fn a_clustered_lobby_stays_inside_one_view_however_big_it_is() {
+    // The point of clustering is that the players can see each other and the
+    // horde converges on one place. A single row of 128 spanned 5000 px, which
+    // is not a cluster, and the setting silently stopped meaning anything.
+    let count = crate::sim::types::MAX_PLAYERS;
+    let first = player_start(0, count, false);
+    for p in 1..count {
+      let at = player_start(p, count, false);
+      assert!(at.dist(first) <= VIEW_RADIUS, "player {p} of {count} is {:.0} px away, outside a view radius", at.dist(first));
+    }
+  }
 
   /// Runs a server for `ms`, with nobody steering except the buffer.
   fn idle(server: &mut Server, ms: u64, controls: &Controls) {

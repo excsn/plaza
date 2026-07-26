@@ -30,10 +30,15 @@ use crate::sim::types::{
 /// supplied by the client.
 pub type PlayerKey = u64;
 
-/// Seats in the arena. Fixed, unlike the black hole example: horde's player count
-/// is a property of the world, not a live slider, so joiners fill these four and
-/// bots drive whatever is empty.
-const PLAYER_COUNT: usize = MAX_PLAYERS;
+/// The seat count the panel is asking for, in range. A zero-seat arena serves
+/// nobody, and the ceiling is [`MAX_PLAYERS`].
+///
+/// Live, but **structural**: enemies aim at a player index and every player owns
+/// a relevance stream, so a change rebuilds the world and reseats everyone
+/// through [`Arena::reconfigure`] rather than being absorbed in place.
+fn requested_seats(controls: &Controls) -> usize {
+  controls.player_count.clamp(1, MAX_PLAYERS)
+}
 
 /// How many round trips the transport must have measured before a decision.
 /// One sample on a jittery link decides nothing, and the transport probes fast
@@ -176,12 +181,13 @@ pub struct Arena {
 
 impl Arena {
   pub fn new(controls: Controls) -> Self {
-    let sim = Server::new(controls.enemy_count, PLAYER_COUNT, controls.spread_players);
+    let seats = requested_seats(&controls);
+    let sim = Server::new(controls.enemy_count, seats, controls.spread_players);
     Self {
       sim,
       controls,
-      seats: SeatTable::new(PLAYER_COUNT),
-      pending: vec![Seat::Bot; PLAYER_COUNT],
+      seats: SeatTable::new(seats),
+      pending: vec![Seat::Bot; seats],
       input_acked: HashMap::new(),
       down: HashMap::new(),
       admitting: HashMap::new(),
@@ -207,7 +213,7 @@ impl Arena {
       crowd_lod_theta: self.controls.crowd_lod_theta,
       relevance: self.controls.relevance,
       enemy_count: self.controls.enemy_count,
-      player_count: PLAYER_COUNT,
+      player_count: self.sim.players.len(),
     }
   }
 
@@ -256,16 +262,30 @@ impl Arena {
     self.down.remove(key);
   }
 
+  /// How many seats the arena will actually run: what the panel asked for, but
+  /// **never fewer than the people already in them**.
+  ///
+  /// Lowering the count is a decision about how full the arena may get, not
+  /// permission to throw somebody out of a game they are playing. So the request
+  /// takes effect as players leave, and until then the arena stays as large as
+  /// it has to be. The host sees this: the effective count is written back to
+  /// the panel, so the slider springs back rather than showing a number the
+  /// world is not running.
+  fn seat_target(&self, controls: &Controls) -> usize {
+    requested_seats(controls).max(self.seats.occupied_count())
+  }
+
   /// Rebuilds the world for a new enemy count or player layout, reseating whoever
   /// is connected and returning the seats that need a fresh `Welcome`.
   fn reconfigure(&mut self, controls: Controls) -> Vec<(PlayerKey, usize)> {
     let clock = self.sim.now_ms();
     self.controls = controls;
-    self.sim = Server::new(controls.enemy_count, PLAYER_COUNT, controls.spread_players);
+    let seats = self.seat_target(&controls);
+    self.sim = Server::new(controls.enemy_count, seats, controls.spread_players);
     // Keep time continuous across the rebuild, so a client's packet-age estimate
     // does not jump and fling the horde at the player.
     self.sim.set_clock(clock);
-    self.pending = vec![Seat::Bot; PLAYER_COUNT];
+    self.pending = vec![Seat::Bot; seats];
     self.input_acked.clear();
     self.down.clear();
     // The rates are over the current world, not every world since launch.
@@ -273,7 +293,7 @@ impl Arena {
       meter.reset();
     }
 
-    self.seats.reseat_all(PLAYER_COUNT)
+    self.seats.reseat_all(seats)
   }
 
   /// Every counter, for the operations that apply to all of them at once.
@@ -467,7 +487,16 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         // Pick up whatever the host's panel changed. A structural change (enemy
         // count or player layout) rebuilds the world and re-welcomes everyone;
         // anything else is a live edit the next tick simply reads.
-        let live = *self.controls.lock();
+        let mut live = *self.controls.lock();
+        // A lowered player count cannot evict anyone already playing, so it is
+        // held at the number of occupied seats and written back, which is what
+        // makes the slider spring back instead of reading as a promise the
+        // arena is quietly refusing to keep.
+        let target = state.seat_target(&live);
+        if target != live.player_count {
+          live.player_count = target;
+          self.controls.lock().player_count = target;
+        }
         let mut welcomes = Vec::new();
 
         // Admission: ask the transport what it has measured, and decide whoever
@@ -524,12 +553,26 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
           }
           if let Some(seat) = state.seat(key) {
             welcomes.push(TargetedOp::new_system_to(key, vec![Op::Welcome { player: seat as PlayerId, policy: state.policy() }]));
+          } else {
+            // Full. Said outright, because a seatless connection receives no
+            // packets at all (they are built per seat) and would otherwise sit
+            // on a black screen indistinguishable from a broken server.
+            welcomes.push(TargetedOp::new_system_to(key, vec![Op::NoSeat { seats: state.policy().player_count }]));
           }
         }
 
-        if live.enemy_count != state.controls.enemy_count || live.spread_players != state.controls.spread_players {
-          for (key, seat) in state.reconfigure(live) {
-            welcomes.push(TargetedOp::new_system_to(key, vec![Op::Welcome { player: seat as PlayerId, policy: state.policy() }]));
+        if live.enemy_count != state.controls.enemy_count
+          || live.spread_players != state.controls.spread_players
+          || target != state.sim.players.len()
+        {
+          // Everyone holding a seat is re-welcomed into the rebuilt world, and
+          // everyone holding a seat keeps one: `target` is floored at the number
+          // occupied, so `reseat_all` never has to drop anybody.
+          let occupied = state.seats.occupied_count();
+          let reseated = state.reconfigure(live);
+          debug_assert_eq!(reseated.len(), occupied, "a resize must not unseat a player");
+          for (key, seat) in &reseated {
+            welcomes.push(TargetedOp::new_system_to(*key, vec![Op::Welcome { player: *seat as PlayerId, policy: state.policy() }]));
           }
         } else {
           // A non-structural edit still moves the policy a joiner reasons about
@@ -677,6 +720,63 @@ mod tests {
       }
       step(logic, state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
     }
+  }
+
+  #[test]
+  fn lowering_the_player_count_does_not_throw_anyone_out_of_the_game() {
+    // The count is a decision about how full the arena may get, not permission
+    // to evict somebody mid-game, so it is floored at the number of seats
+    // actually occupied and takes effect as people leave.
+    let controls = Controls { player_count: 4, ..small() };
+    let (cs, _view) = slots(controls);
+    let mut state = Arena::new(controls);
+    let logic = ArenaLogic::new(cs.clone(), None).with_latency(link(0, ADMIT_SAMPLES));
+
+    let agents: Vec<Agent<PlayerKey>> = (1..=3u64).map(|k| Agent::new_human(k, format!("p{k}"))).collect();
+    for agent in &agents {
+      admit(&logic, &mut state, agent);
+    }
+    assert_eq!(state.seats.occupied_count(), 3);
+
+    cs.lock().player_count = 1;
+    let out = step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
+
+    for agent in &agents {
+      let key = agent.id_cloned().unwrap();
+      assert!(state.seat_of(&key).is_some(), "player {key} was playing and must keep a seat");
+    }
+    assert!(
+      !out.ops.iter().any(|op| matches!(op.ops.first(), Some(Op::NoSeat { .. }))),
+      "nobody is told to leave"
+    );
+    assert_eq!(state.sim.players.len(), 3, "the world holds exactly the people in it");
+    assert_eq!(cs.lock().player_count, 3, "and the panel is told what it actually got, so the slider springs back");
+  }
+
+  #[test]
+  fn a_seat_freed_by_a_leaver_lets_a_lowered_count_take_effect() {
+    // The other half: held, not ignored. Once the arena is no longer keeping a
+    // seat for somebody, the request the host already made applies.
+    let controls = Controls { player_count: 4, ..small() };
+    let (cs, _view) = slots(controls);
+    let mut state = Arena::new(controls);
+    let logic = ArenaLogic::new(cs.clone(), None).with_latency(link(0, ADMIT_SAMPLES));
+
+    let agent = Agent::new_human(1u64, "p1");
+    admit(&logic, &mut state, &agent);
+    cs.lock().player_count = 1;
+    step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
+    assert_eq!(state.sim.players.len(), 1, "one player, one seat requested, nothing to hold open");
+
+    let latecomer = Agent::new_human(2u64, "p2");
+    step(&logic, &mut state, LogicInput::AgentJoined { agent: latecomer.clone() });
+    let mut told = false;
+    for _ in 0..8u64 {
+      let out = step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
+      told |= out.ops.iter().any(|op| matches!(op.ops.first(), Some(Op::NoSeat { .. })));
+    }
+    assert_eq!(state.seats.occupied_count(), 1, "the arena is one seat wide, so the joiner gets nothing");
+    assert!(told, "and is told so rather than left on a black screen");
   }
 
   #[test]

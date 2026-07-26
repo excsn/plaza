@@ -36,7 +36,9 @@ pub enum Status {
   Measuring,
   Waiting,
   Playing,
-  NoSeat,
+  /// Connected, but there is no seat: the arena is full, or the host shrank it.
+  /// Carries what it is competing for, so the screen can say more than "no".
+  NoSeat { seats: usize },
   /// Measured, and this arena is the wrong one: reconnect to `endpoint`.
   Placed { room: u32, name: String, endpoint: String, measured_ms: u32 },
   /// The server measured this connection and no arena can meet its delay.
@@ -310,6 +312,12 @@ impl NetClient {
         Op::InputAck { .. } => {}
         Op::Refused { measured_ms, allowed_ms } => {
           self.status = Status::Refused { measured_ms, allowed_ms };
+        }
+        // No seat, or one taken away by a resize. Either way this client is
+        // about to stop receiving packets, so it says so rather than freezing
+        // on the last world it was sent.
+        Op::NoSeat { seats } => {
+          self.status = Status::NoSeat { seats };
         }
         // Measured and sent somewhere that can carry this link. The caller
         // reconnects; this client only reports where.

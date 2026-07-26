@@ -113,6 +113,14 @@ pub enum Op {
   /// simply could not move, with nothing on screen to say why. Carries both
   /// numbers so the client can state the case rather than just decline.
   Refused { measured_ms: u32, allowed_ms: u32 },
+  /// There is no seat: the arena is full, or the host shrank it out from under
+  /// this player.
+  ///
+  /// Said outright for the same reason as `Refused`. A connection with no seat
+  /// receives no packets, because packets are built per seat, so without this it
+  /// sits on a black screen that is indistinguishable from a broken server. The
+  /// count is carried so the message can say what it is competing for.
+  NoSeat { seats: usize },
   Pong { origin_ms: u64, server_ms: u64 },
   /// This client was built against a different wire format and should reload.
   /// Carries both versions so the message can say which way round it is.

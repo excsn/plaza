@@ -898,6 +898,48 @@ mod tests {
   }
 
   #[test]
+  fn the_shipped_defaults_cover_each_other() {
+    // The render delay has to cover `one_way + jitter + one send interval`,
+    // because the newest sample a client holds is already a trip old and
+    // interpolation needs two of them to bracket the target. Every term is a
+    // separate default, so the budget is a relationship *between* defaults that
+    // nothing checks: drop the player send rate and the interval term grows
+    // until the delay no longer covers it, and every peer, including your own
+    // marker, is drawn off the timeline from then on.
+    //
+    // That is not hypothetical. This test was written when the player rate was
+    // changed to 8 Hz, which pushed the interval to 125 ms and the requirement
+    // to 225 ms against a 150 ms delay.
+    let controls = Controls::default();
+    let required = controls.latency_ms + controls.jitter_ms + 1000 / controls.player_sync_hz.max(1) as u64;
+    assert!(
+      controls.render_delay_ms >= required,
+      "the default render delay ({} ms) must cover one way + jitter + one player send interval ({required} ms)",
+      controls.render_delay_ms
+    );
+
+    // And the arithmetic is checked against the thing it predicts, not trusted:
+    // a client running the shipped defaults draws every player at the render
+    // instant, so nothing falls back to an off-timeline sample.
+    let mut w = World::new(&controls, 4, 0x5EED_D00D);
+    for _ in 0..(6 * 60) {
+      w.step(16, Vec2::new(1.0, 0.0), &controls);
+    }
+    let before = w.clients[0].view_fallbacks();
+    for _ in 0..(4 * 60) {
+      w.step(16, Vec2::new(1.0, 0.0), &controls);
+      if let Some(at) = w.clients[0].render_at() {
+        let _ = w.clients[0].render_players(at);
+      }
+    }
+    assert_eq!(
+      w.clients[0].view_fallbacks(),
+      before,
+      "a client on the shipped defaults should never be drawn off its own timeline"
+    );
+  }
+
+  #[test]
   fn a_bad_link_underruns_instead_of_quietly_getting_an_older_world() {
     // This test asserted the opposite, and the reversal is the finding.
     //

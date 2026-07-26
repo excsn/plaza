@@ -18,7 +18,6 @@ use plaza_client_utils::FixedTimestep;
 use render::Camera;
 
 const STEP_MS: u64 = 16;
-const PLAYERS: usize = 4;
 const SEED: u64 = 0x5EED_D00D;
 
 /// Reports a fatal misconfiguration. Never `process::exit` on wasm: there is no
@@ -160,7 +159,7 @@ type HostHandle = ();
 /// The single-process playground: no sockets, every readout, exactly as it was.
 async fn offline() {
   let mut controls = Controls::default();
-  let mut world = World::new(&controls, PLAYERS, SEED);
+  let mut world = World::new(&controls, controls.player_count, SEED);
   // Real frame time, spent in whole fixed steps. The cap is what keeps a
   // backgrounded tab from dumping the minutes it was asleep into one frame.
   let mut timestep = FixedTimestep::from_step_ms(STEP_MS).with_max_frame_ms(100);
@@ -181,7 +180,7 @@ async fn offline() {
     draw_perf(&mut fps);
 
     if ui::draw_ui(&world, &mut controls) {
-      world = World::new(&controls, PLAYERS, SEED);
+      world = World::new(&controls, controls.player_count, SEED);
       timestep.reset();
     } else if is_key_pressed(KeyCode::R) {
       world.reset_stats();
@@ -360,7 +359,10 @@ async fn networked(
         (format!("measured {measured_ms} ms one way, this arena allows {allowed_ms} ms"), 20.0, GRAY),
         ("inputs are scheduled ahead, so a slower link would lose them entirely".to_owned(), 18.0, GRAY),
       ]),
-      Status::NoSeat => centred(&[("the arena is full".to_owned(), 26.0, ORANGE)]),
+      Status::NoSeat { seats } => centred(&[
+        ("no seat in this arena".to_owned(), 26.0, ORANGE),
+        (format!("all {seats} are taken, and the host decides how many there are"), 18.0, GRAY),
+      ]),
       Status::Placed { name, measured_ms, .. } => centred(&[
         (format!("moving you to the {name} arena"), 28.0, Color::new(0.6, 0.85, 0.7, 1.0)),
         (format!("your link measured {measured_ms} ms one way, which that one is built for"), 18.0, GRAY),

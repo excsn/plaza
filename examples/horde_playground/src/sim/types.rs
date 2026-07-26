@@ -93,7 +93,25 @@ pub fn enemy_speed_scale(now_ms: u64) -> f32 {
 /// A dense entity index, the slot an entity occupies.
 pub type EntityIndex = u32;
 pub type PlayerId = u8;
-pub const MAX_PLAYERS: usize = 4;
+/// The most players an arena will seat: the ceiling on
+/// [`Controls::player_count`], not the count itself.
+///
+/// A player is a *viewer*, so it costs a relevance query and a packet of its own
+/// every send round, and a pass over the live enemies in both `fire_weapons` and
+/// `nova`, making the server `O(players * enemies)`. What bounds this is
+/// bandwidth rather than CPU. At 8000 enemies, `examples/players.rs` reports:
+///
+/// | players | server CPU per simulated second | downstream |
+/// |---|---|---|
+/// | 4 | 10 ms | 435 KiB/s |
+/// | 128 | 125 ms | 5.6 MiB/s |
+///
+/// Re-run it before moving this. The hard limit above it is the wire, where
+/// `PlayerId` is a `u8`.
+pub const MAX_PLAYERS: usize = 128;
+/// The count an arena runs with unless told otherwise, and what every
+/// measurement in the README was taken at.
+pub const DEFAULT_PLAYERS: usize = 4;
 
 /// So a remote player can be smoothed with [`RemoteView`], which is what it is
 /// for. Both are the obvious implementations; they exist here rather than in the
@@ -860,6 +878,13 @@ pub struct Controls {
   pub mode: RemoteMode,
   pub smooth: bool,
   pub spread_players: bool,
+  /// How many players the world has, bots filling whatever nobody occupies.
+  ///
+  /// **Structural**, like `enemy_count`: enemies aim at a player index and every
+  /// player owns a relevance stream, so changing it rebuilds the world and
+  /// reseats everyone rather than being absorbed live. Capped at
+  /// [`MAX_PLAYERS`].
+  pub player_count: usize,
   pub enemy_count: usize,
   /// Whether handles carry a generation. Turn it off to watch a recycled slot be
   /// corrupted by a packet that was already in flight.
@@ -909,12 +934,17 @@ impl Default for Controls {
       predict_balance: false,
       auto_buy: true,
       sync_hz: 16,
-      // Far above the entity rate on purpose: four entities, and every enemy in
-      // the world aims at one of them.
-      player_sync_hz: 30,
+      // Above the entity rate on purpose: the players are few, and every enemy
+      // in the world aims at one of them, so their positions are the input to
+      // the rule every client runs.
+      player_sync_hz: 8,
       playout_delay_ms: 100,
-      // one_way (80) + jitter (20) + a 30 Hz player interval (33), rounded up.
-      render_delay_ms: 150,
+      // one_way (80) + jitter (20) + an 8 Hz player interval (125), rounded up.
+      // A whole send interval is part of the budget because interpolation needs
+      // two samples bracketing the target, so lowering `player_sync_hz` without
+      // raising this draws every peer, and your own marker, off the timeline.
+      // Checked by `the_shipped_defaults_cover_each_other`.
+      render_delay_ms: 250,
       input_playout: true,
       // Roughly the playout depth in 16 ms steps, plus slack for jitter.
       input_max_late_ticks: 4,
@@ -923,6 +953,7 @@ impl Default for Controls {
       mode: RemoteMode::Simulate,
       smooth: true,
       spread_players: true,
+      player_count: DEFAULT_PLAYERS,
       enemy_count: 3000,
       generational_ids: true,
       combat: true,

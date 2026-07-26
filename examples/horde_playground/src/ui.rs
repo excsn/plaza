@@ -2,7 +2,7 @@
 //! makes into a number you can watch move.
 
 use egui_macroquad::egui;
-use horde_playground::sim::types::{RENDER_DELAY_MAX_MS, SEND_RATE_MAX_HZ};
+use horde_playground::sim::types::{MAX_PLAYERS, RENDER_DELAY_MAX_MS, SEND_RATE_MAX_HZ};
 use horde_playground::sim::{Controls, RemoteMode, World};
 
 /// One collapsible section.
@@ -23,8 +23,10 @@ fn section<R>(ui: &mut egui::Ui, title: &str, default_open: bool, add: impl FnOn
 fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls) {
   section(ui, "world", true, |ui| {
     ui.add(egui::Slider::new(&mut controls.enemy_count, 200..=8000).text("enemies"));
+    ui.add(egui::Slider::new(&mut controls.player_count, 1..=MAX_PLAYERS).text("players"))
+      .on_hover_text("Every player is a viewer, and a viewer is the expensive thing here: it owns a relevance query and a packet of its own every send round, so bandwidth scales with this while the enemy count mostly does not. Turn it up and watch the KiB/s readout rather than the frame rate. Structural, so the world is rebuilt: on a host, everyone is reseated and anyone who no longer fits is told.");
     ui.checkbox(&mut controls.spread_players, "players spread across the arena")
-      .on_hover_text("Off: all four cluster together, so the horde converges on one spot.");
+      .on_hover_text("Off: they cluster together, so the horde converges on one spot.");
   });
 
   section(ui, "network", true, |ui| {
@@ -96,7 +98,7 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls) {
 /// Returns true when a control changed that requires rebuilding the world
 /// (entity count or player layout), rather than just applying live.
 pub fn draw_ui(world: &World, controls: &mut Controls) -> bool {
-  let before = (controls.enemy_count, controls.spread_players);
+  let before = (controls.enemy_count, controls.spread_players, controls.player_count);
 
   egui_macroquad::ui(|ctx| {
     ctx.set_pixels_per_point(1.35);
@@ -155,7 +157,7 @@ pub fn draw_ui(world: &World, controls: &mut Controls) -> bool {
   });
   egui_macroquad::draw();
 
-  (controls.enemy_count, controls.spread_players) != before
+  (controls.enemy_count, controls.spread_players, controls.player_count) != before
 }
 
 fn warn_line(ui: &mut egui::Ui, text: String, warn: bool) {
@@ -198,7 +200,7 @@ pub fn draw_net_ui(client: &horde_playground::net::client::NetClient, url: &str,
         ),
         Status::Waiting => ("connected, waiting for a seat".to_owned(), egui::Color32::YELLOW),
         Status::Playing => (format!("playing as P{}", client.me.unwrap_or(0)), egui::Color32::from_rgb(80, 220, 110)),
-        Status::NoSeat => ("the arena is full".to_owned(), egui::Color32::from_rgb(230, 160, 90)),
+        Status::NoSeat { seats } => (format!("no seat: all {seats} are taken"), egui::Color32::from_rgb(230, 160, 90)),
         Status::Gone(reason) => (format!("disconnected: {reason}"), egui::Color32::from_rgb(230, 90, 90)),
       };
       ui.label(egui::RichText::new(text).color(color));
