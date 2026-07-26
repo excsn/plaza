@@ -1178,9 +1178,16 @@ mod tests {
         }
       }
     }
-    // The very first frame the joiner receives is the whole world, in agreement
-    // at once, not a trickle that converges frames later.
-    assert_eq!(synced_on_frame, Some(1), "the joiner was not whole on its first frame");
+    // Whole the moment it applies anything, rather than converging over several
+    // packets, which is what the warm-arena bug looked like.
+    //
+    // Counted in packets *received*, while the client applies them at its render
+    // instant, so the first packet is played out a tick or two after it lands
+    // and the count is not always one. What the bug produced was a trickle over
+    // many frames, so a small bound still catches it and an exact one only
+    // tracked whatever the render delay happened to be.
+    let synced = synced_on_frame.expect("the joiner never agreed with the server at all");
+    assert!(synced <= 3, "the joiner took {synced} frames to hold the whole world, which is a trickle rather than a dump");
     assert_eq!(client.digest_mismatches(), 0, "the mirror disagreed after a warm-arena join {} times", client.digest_mismatches());
   }
 

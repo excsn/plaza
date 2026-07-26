@@ -650,8 +650,6 @@ pub fn draw_observer_world(view: &horde_playground::net::arena::HostView, contro
   }
 }
 
-/// The whole arena from the *client's own* knowledge (with LOD) or borrowed truth.
-#[cfg(all(feature = "client", feature = "websocket"))]
 /// How solidly to draw a peer whose position is `age` seconds old, or `None`
 /// once it is too old to draw at all.
 ///
@@ -673,6 +671,8 @@ fn peer_alpha(age: Option<f32>) -> Option<f32> {
   (faded > 0.02).then_some(faded)
 }
 
+/// The whole arena from the *client's own* knowledge (with LOD) or borrowed truth.
+#[cfg(all(feature = "client", feature = "websocket"))]
 pub fn draw_client_minimap(client: &horde_playground::net::client::NetClient, controls: &Controls, cam: &Camera) {
   let (ox, oy, size, s) = minimap_frame(cam);
   let lod = controls.crowd_lod_theta > 0.0;

@@ -81,6 +81,15 @@ impl HostView {
     self.bytes.per_sec()
   }
 
+  /// The same traffic averaged over the whole life of the meter, shown beside
+  /// the current rate rather than instead of it. A session mean sitting below
+  /// the current rate is still climbing toward it, which is a fact about the
+  /// average and not about the traffic, and reading one as the other cost this
+  /// project an afternoon.
+  pub fn lifetime_bytes_per_sec(&self) -> f64 {
+    self.bytes.lifetime_per_sec()
+  }
+
   /// What share of the wire the field itself costs, which is the example's whole
   /// question: sending a field instead of its consequences is only a win if the
   /// field is small.

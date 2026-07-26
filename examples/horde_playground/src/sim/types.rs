@@ -1063,7 +1063,7 @@ pub struct Controls {
 impl Default for Controls {
   fn default() -> Self {
     Self {
-      latency_ms: 80,
+      latency_ms: 30,
       jitter_ms: 20,
       loss_pct: 0.0,
       ack_recovery: true,
@@ -1075,14 +1075,15 @@ impl Default for Controls {
       // Above the entity rate on purpose: the players are few, and every enemy
       // in the world aims at one of them, so their positions are the input to
       // the rule every client runs.
-      player_sync_hz: 8,
+      player_sync_hz: 10,
       playout_delay_ms: 100,
-      // one_way (80) + jitter (20) + an 8 Hz player interval (125), rounded up.
+      // one_way (30) + jitter (20) + a 10 Hz player interval (100), exactly.
       // A whole send interval is part of the budget because interpolation needs
       // two samples bracketing the target, so lowering `player_sync_hz` without
       // raising this draws every peer, and your own marker, off the timeline.
-      // Checked by `the_shipped_defaults_cover_each_other`.
-      render_delay_ms: 250,
+      // Checked by `the_shipped_defaults_cover_each_other`, and these three are
+      // now an exact fit: moving any one of them needs another to move too.
+      render_delay_ms: 150,
       input_playout: true,
       // Roughly the playout depth in 16 ms steps, plus slack for jitter.
       input_max_late_ticks: 4,

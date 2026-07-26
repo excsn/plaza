@@ -25,6 +25,7 @@ Its only dependency is `plaza_client_utils`, for the shared `Interpolatable` and
 | Streaming that set as *entered* and *left* assumes every packet arrives, and one that does not is lost for good | `delta` (`DeltaBaseline`) |
 | A bounded number of seats, where a fresh occupant must not inherit the last one's accumulated state | `seats` (`SeatTable`, `Seating`) |
 | A claim about bandwidth should be a number on screen, not an assertion in a README | `meter` (`RateMeter`) |
+| ...and that number should be a **rate**, not the session's average, which climbs for ever toward a level it never reaches | `RateMeter::per_sec` (windowed) against `lifetime_per_sec` |
 
 `SetDigest`, `SlotKey`, `SlotAllocator` and `DeltaMirror` are re-exported from [`plaza_client_utils`](../client_utils/) rather than defined here. Both sides of a delta stream have to agree about them exactly, and a browser client needs them and must not inherit a server to get them.
 

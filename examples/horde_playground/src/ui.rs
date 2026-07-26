@@ -428,7 +428,7 @@ fn phantom_and_missing(view: &horde_playground::net::arena::HostView, client: &h
   // the past is holding everything that has died since that instant, by
   // construction, and comparing it against the present charges it for the delay
   // rather than finding a drifted mirror: at a thousand kills a second and a
-  // 250 ms delay that is a couple of hundred false phantoms, reported in red.
+  // render delay that is a couple of hundred false phantoms, reported in red.
   let drawn_at = at.map(|at| at.server_time_ms()).unwrap_or(view.server_now_ms);
   let died_since: BTreeSet<Handle> = view.recently_dead.iter().filter(|(_, t)| *t > drawn_at).map(|(h, _)| *h).collect();
   let phantoms = held.iter().filter(|h| !live.contains(h) && !died_since.contains(h)).count();
