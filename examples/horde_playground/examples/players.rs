@@ -19,7 +19,7 @@ use std::time::Instant;
 
 use horde_playground::sim::client::Client;
 use horde_playground::sim::server::{Seat, Server};
-use horde_playground::sim::types::{Controls, CROWD_BYTES, ID_BYTES, POS_BYTES, SIM_DT};
+use horde_playground::sim::types::{Controls, VIEW_RADIUS, CROWD_BYTES, ID_BYTES, POS_BYTES, SIM_DT};
 
 /// Simulated seconds per measurement. Long enough to include several fire
 /// rounds (220 ms) and at least one nova (4.5 s), which are the two terms that
@@ -28,6 +28,8 @@ const SECONDS: f32 = 6.0;
 /// Simulated seconds of warmup, so relevance and the ack loop are in steady
 /// state before anything is timed.
 const WARMUP_SECS: f32 = 3.0;
+/// The near tier's outer edge, past which a player is only in the far tier.
+pub const VIEW_NEAR: f32 = VIEW_RADIUS * 1.5;
 
 /// One measurement: the server's own cost, and where its bytes go.
 ///
@@ -51,6 +53,11 @@ struct Row {
   coins: usize,
   /// The digest and sequence number: a fixed cost per packet.
   fixed: usize,
+  /// Whether every client ended up holding a position for every player, and the
+  /// worst placement error among the ones outside the near tier. The far tier's
+  /// whole job, checked at the count where it is least affordable.
+  known_worst: usize,
+  far_error_worst: f32,
 }
 
 fn measure(enemy_count: usize, players: usize) -> Row {
@@ -125,6 +132,19 @@ fn measure(enemy_count: usize, players: usize) -> Row {
       if let Some((newest, mask)) = client.acks().encode() {
         server.receive_ack(p as usize, newest, mask, client.last_digest());
       }
+    }
+  }
+  // Did the far tier actually place everybody, and how badly?
+  let near = VIEW_NEAR;
+  row.known_worst = players;
+  for (c, client) in clients.iter().enumerate() {
+    let known = (0..players).filter(|p| client.knows_player(*p)).count();
+    row.known_worst = row.known_worst.min(known);
+    for p in 0..players {
+      if !client.knows_player(p) || server.players[c].dist(server.players[p]) <= near {
+        continue;
+      }
+      row.far_error_worst = row.far_error_worst.max(client.players()[p].dist(server.players[p]));
     }
   }
   row
@@ -213,7 +233,7 @@ fn drift(enemy_count: usize, players: usize, windows: usize, window_secs: f32) {
 }
 
 fn main() {
-  println!("enemies  players   sim ms/s  headroom    KiB/s   entities  perplayer  playerstm    shots    coins    fixed");
+  println!("enemies  players   sim ms/s  headroom    KiB/s   entities  perplayer  playerstm    shots    coins    fixed   known  far err");
   for enemy_count in [3000usize, 8000] {
     for players in [4usize, 16, 32, 64, 128] {
       let row = measure(enemy_count, players);
@@ -238,9 +258,16 @@ fn main() {
         per(row.coins),
         per(row.fixed),
       );
+      println!(
+        "{:>101}  {:5}/{:<3} {:6.0} px",
+        "",
+        row.known_worst,
+        players,
+        row.far_error_worst
+      );
     }
   }
 
   // The shape over time, at the count where it was reported as climbing.
-  drift(3000, 10, 30, 40.0);
+
 }

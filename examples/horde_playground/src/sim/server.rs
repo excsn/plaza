@@ -15,11 +15,25 @@ use plaza_server_utils::delta::{DeltaBaseline, RecoveryPolicy};
 use plaza_server_utils::relevance::{GridQuantizer, SetDigest, SpatialGrid, VisibilitySet};
 
 use crate::sim::types::{PlayerFrame, 
-  coin_pull, difficulty, step_player, enemy_speed_scale, repulsor_pulse, step_coin, step_enemy, Coin, CoinId, Controls, Crowd, Enemy, EnemyKind, EntityIndex, Handle, LeaveReason, Packet, PlayerId, Projectile, Sample, Shot, ShotId, Spawn, Upgrade, Vec2, Wallet, COIN_PICKUP_RADIUS, COIN_DROP_IN, COIN_TTL_MS, ARENA_H, ARENA_W, CELL_SIZE, CONTACT_HIT_DAMAGE, FIRE_INTERVAL_MS, HIT_INVULN_MS, HIT_RADIUS, NOVA_INTERVAL_MS,
+  coin_pull, difficulty, step_player, enemy_speed_scale, repulsor_pulse, quantize_far, step_coin, step_enemy, Coin, CoinId, Controls, Crowd, Enemy, EnemyKind, EntityIndex, Handle, LeaveReason, Packet, PlayerId, Projectile, Sample, Shot, ShotId, Spawn, Upgrade, Vec2, Wallet, COIN_PICKUP_RADIUS, COIN_DROP_IN, COIN_TTL_MS, ARENA_H, ARENA_W, CELL_SIZE, CONTACT_HIT_DAMAGE, FIRE_INTERVAL_MS, HIT_INVULN_MS, HIT_RADIUS, NOVA_INTERVAL_MS,
   NOVA_DAMAGE, NOVA_RADIUS, PLAYER_CONTACT_RADIUS, PLAYER_INVULN_MS, PLAYER_MAX_HEALTH, PROJECTILE_SPEED, PROJECTILE_TTL, SIM_DT, VIEW_RADIUS, WAVE_INTERVAL_MS,
 };
 
 const RETARGET_INTERVAL_MS: u64 = 1000;
+
+/// How close a player must come to enter the near tier, and how far they must
+/// go to leave it. The gap is hysteresis: without it a peer loitering on the
+/// boundary changes tier every few frames.
+const NEAR_TIER_ENTER: f32 = VIEW_RADIUS * 1.3;
+const NEAR_TIER_LEAVE: f32 = VIEW_RADIUS * 1.5;
+/// One far-tier update every this many player frames. At the default 8 Hz
+/// player rate that is one every two seconds, which is a marker gliding on a
+/// map rather than a position anybody aims with.
+///
+/// Halving it was measured and rejected: the worst placement error stayed at
+/// 138 px and the far tier cost 20 KiB/s more at 128 players, so the error is
+/// not bound by this rate at this point and the faster setting bought nothing.
+const FAR_TIER_EVERY: u32 = 16;
 
 /// Who is driving a player this tick.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -109,6 +123,8 @@ pub struct Server {
   entered_buf: Vec<u32>,
   /// Spawns announced in the last send round, for the readout above.
   last_spawns: usize,
+  /// Player frames until the far tier is sent again.
+  far_tier_countdown: u32,
   /// Recently dead handles and when they died. Pruned to the deepest render
   /// delay, so it is bounded by the kill rate over that window rather than by
   /// the length of the session.
@@ -230,6 +246,7 @@ impl Server {
       candidates: Vec::new(),
       entered_buf: Vec::new(),
       last_spawns: 0,
+      far_tier_countdown: 1,
       recently_dead: Vec::new(),
       relevant_players: vec![Vec::new(); player_count],
       wallets_dirty: (0..player_count as PlayerId).collect(),
@@ -349,7 +366,16 @@ impl Server {
     // it carries a different subset to each one.
     self.player_sync.set_interval_ms(controls.player_sync_interval_ms());
     if self.player_sync.due(dt_ms) {
-      self.pending_players = Some((0..self.players.len()).map(|c| (c as PlayerId, self.build_player_frame(c))).collect());
+      // The far tier rides a slower clock than the near one. A distant peer is a
+      // couple of pixels on a map, so a low rate is invisible there and is the
+      // larger of the two savings: precision halves the bytes per sample, rate
+      // removes whole samples.
+      self.far_tier_countdown = self.far_tier_countdown.saturating_sub(1);
+      let far_due = self.far_tier_countdown == 0;
+      if far_due {
+        self.far_tier_countdown = FAR_TIER_EVERY;
+      }
+      self.pending_players = Some((0..self.players.len()).map(|c| (c as PlayerId, self.build_player_frame(c, far_due))).collect());
     }
 
     self.sync.set_interval_ms(controls.sync_interval_ms());
@@ -953,9 +979,16 @@ impl Server {
     // Yourself, always: your own marker and health are not optional.
     needed.insert(c as PlayerId);
     for (p, pos) in self.players.iter().enumerate() {
-      // The same threshold the renderer draws a peer at, so the wire carries
-      // exactly what the screen can use.
-      if pos.dist(eye) <= VIEW_RADIUS * 1.3 {
+      // The threshold the renderer draws a peer at, so the wire carries exactly
+      // what the screen can use, with **hysteresis**: it takes less distance to
+      // stay in the near tier than to enter it. Without the gap, a peer walking
+      // along the boundary flips tier every few frames, and every flip is a
+      // precision change the client has to absorb.
+      //
+      // The previous set is the memory, so this costs no extra state.
+      let was_near = self.relevant_players[c].contains(&(p as PlayerId));
+      let radius = if was_near { NEAR_TIER_LEAVE } else { NEAR_TIER_ENTER };
+      if pos.dist(eye) <= radius {
         needed.insert(p as PlayerId);
       }
     }
@@ -967,8 +1000,22 @@ impl Server {
     out.extend(needed);
   }
 
-  fn build_player_frame(&self, c: usize) -> PlayerFrame {
+  /// One recipient's player frame: the near tier every time, and the far tier
+  /// only on the frames it is due.
+  fn build_player_frame(&self, c: usize, far_due: bool) -> PlayerFrame {
     let relevant = &self.relevant_players[c];
+    let distant = if far_due {
+      (0..self.players.len())
+        .map(|p| p as PlayerId)
+        .filter(|p| !relevant.contains(p))
+        .map(|p| {
+          let (x, y) = quantize_far(self.players[p as usize]);
+          (p, x, y)
+        })
+        .collect()
+    } else {
+      Vec::new()
+    };
     PlayerFrame {
       server_time_ms: self.clock_ms,
       players: relevant.iter().map(|&p| (p, self.players[p as usize])).collect(),
@@ -976,6 +1023,7 @@ impl Server {
         .iter()
         .map(|&p| (p, self.player_health(p as usize), self.clock_ms < self.player_shield_until_ms[p as usize]))
         .collect(),
+      distant,
     }
   }
 

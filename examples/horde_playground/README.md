@@ -76,6 +76,25 @@ The cost is CPU: computing who is relevant is a pass over the players plus a pas
 
 Two consequences worth knowing. A player who has never been sent to you still occupies a slot in every per-player array, holding the arena-centre seed, so the renderer has to know the difference between "at the centre" and "never heard of": drawing the seed puts a peer in the middle of the map who is not there. And a peer who walks out of your relevance stops updating and freezes at their last known position, which is correct (you cannot see them) but means any measurement of peer freshness has to sample only while the peer is actually relevant, or it measures the feature rather than the link.
 
+## Relevance has two axes, and a radius is only one of them
+
+Culling by distance answers "can I see it". It does not answer "does it matter to me", and a minimap asks the second question. Sending nothing past the view radius left a teammate's marker frozen wherever they were last seen, and walking over to find them produced a jump when they came back into range: the map was stating a position with full confidence and no evidence.
+
+So players are streamed in **two tiers**, with the boundary at the view radius:
+
+| tier | what is sent | rate | for |
+|---|---|---|---|
+| near | full precision position, health, shield | the player rate (8 Hz) | the main view, where a peer is drawn at full size |
+| far | position quantised to one byte per axis | every 16th frame (0.5 Hz) | the minimap, where a peer is two pixels |
+
+**Two tiers rather than a gradient, and the geometry is why.** In the main view a peer's apparent motion falls off as `1/distance`, so coarser updates are genuinely invisible further away. The minimap does not work like that: it is a fixed-scale view of the whole arena, so a peer's error in map pixels is the same wherever they stand. The requirement therefore drops once, at the edge of the view, and then flattens. There is nothing meaningful between "on screen" and "a dot on a map", so a third tier would only add a second boundary to tune.
+
+**Measured at 128 players**, the far tier costs about 25 KiB/s against a 2.2 MiB/s total, roughly 1%, and every client ends up holding a position for every player (`128/128` in `examples/players.rs`) with a worst placement error of 138 px, about nine pixels on a minimap. Doubling its rate was measured and rejected: the worst error did not move and it cost 20 KiB/s more.
+
+Two details that are easy to leave out. The boundary has **hysteresis**, a smaller radius to stay in the near tier than to enter it, or a peer loitering on the edge changes tier every few frames and each change is a precision jump the client has to absorb. And coarse samples feed the same `RemoteView` as precise ones, so a peer crossing the boundary is interpolated across the change instead of teleporting.
+
+**Staleness is still drawn honestly**, because a peer can go quiet for reasons distance does not cover: disconnected, or never seated. The client records when it last heard about each player, and the minimap fades a marker out and then drops it rather than holding a confident dot for somebody who has gone.
+
 ## One timeline, declared by the server
 
 The render delay is **a property of the world, not of anybody's link**. Every client shows `server_now - render_delay_ms`, the same instant on every screen.

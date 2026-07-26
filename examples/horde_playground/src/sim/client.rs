@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use plaza_client_utils::mirror::{Agreement, DeltaMirror};
 use plaza_client_utils::{ease_in_quad, AckWindow, HeldInputConfig, HeldInputPredictor, InterpolationClock, RemoteView, RenderOpts, SlotKey};
 
-use crate::sim::types::{PlayerFrame, coin_pull, difficulty, enemy_speed_scale, repulsor_pulse, step_coin, Coin, CoinId, Crowd, Upgrade, Wallet, COIN_FLIGHT_MS, COIN_PICKUP_RADIUS, step_enemy, Controls, Enemy, EnemyKind, Handle, LeaveReason, Packet, PlayerId, RemoteMode, Shot, Vec2, PLAYER_MAX_HEALTH};
+use crate::sim::types::{PlayerFrame, dequantize_far, coin_pull, difficulty, enemy_speed_scale, repulsor_pulse, step_coin, Coin, CoinId, Crowd, Upgrade, Wallet, COIN_FLIGHT_MS, COIN_PICKUP_RADIUS, step_enemy, Controls, Enemy, EnemyKind, Handle, LeaveReason, Packet, PlayerId, RemoteMode, Shot, Vec2, PLAYER_MAX_HEALTH};
 
 /// A fading damage number floating up from where a shot landed.
 #[derive(Clone, Copy, Debug)]
@@ -635,6 +635,21 @@ impl Client {
     self.player_seen.get(p).copied().unwrap_or(false)
   }
 
+  /// How long ago this client last heard where a player is, at the instant on
+  /// screen. `None` if it has never heard.
+  ///
+  /// A marker drawn from a position nobody has confirmed in a while is making a
+  /// claim it cannot support, and the honest answer is to fade it out rather
+  /// than to keep drawing it at full strength. Even with a far tier this
+  /// happens: a player who disconnects stops arriving in either tier.
+  pub fn player_age_secs(&self, p: usize) -> Option<f32> {
+    if !self.knows_player(p) {
+      return None;
+    }
+    let at = self.frame_clock_ms();
+    Some(at.saturating_sub(*self.player_sample_ms.get(p)?) as f32 / 1000.0)
+  }
+
   /// Every player position as last known: the newest authoritative copy, which
   /// is the *future* relative to the instant on screen. The ghost overlay's
   /// source, and the fallback before the timeline starts. The shared rules read
@@ -801,6 +816,14 @@ impl Client {
     self.now_ms = recv_ms;
     for (p, pos) in &frame.players {
       self.observe_player(*p as usize, *pos, frame.server_time_ms);
+    }
+    // The far tier, at map resolution. It feeds the same views as the near one,
+    // so a peer crossing the boundary is interpolated across the change rather
+    // than teleporting, and the error being absorbed is one quantisation step
+    // plus one interval of movement. The main view never draws these, because
+    // it culls at a radius they are by definition outside; the minimap does.
+    for (p, x, y) in &frame.distant {
+      self.observe_player(*p as usize, dequantize_far(*x, *y), frame.server_time_ms);
     }
     // Steer the render clock toward the stream rather than toward a clock
     // estimate. Gently, so it glides instead of snapping on every frame.
@@ -1507,6 +1530,7 @@ mod tests {
       server_time_ms: t,
       players: vec![(0, Vec2::new(x, 0.0)), (1, Vec2::new(0.0, 0.0))],
       vitals: vec![],
+      distant: vec![],
     };
     client.on_player_frame(&at(1_000, 0.0), 1_000);
     client.on_player_frame(&at(2_000, 1_000.0), 2_000);
@@ -1555,6 +1579,7 @@ mod tests {
       server_time_ms: 1_000,
       players: vec![(0, Vec2::new(50.0, 50.0)), (1, Vec2::new(60.0, 60.0))],
       vitals: vec![(0, 1, false), (1, 5, false)],
+      distant: vec![],
     };
     client.on_player_frame(&hit, 1_000);
     let full = PLAYER_MAX_HEALTH as u8;
@@ -1578,6 +1603,7 @@ mod tests {
       server_time_ms: 6_900,
       players: vec![(0, Vec2::new(0.0, 0.0)), (1, Vec2::new(0.0, 0.0))],
       vitals: vec![],
+      distant: vec![],
     };
     client.on_player_frame(&frame, 7_550);
     client.tick(0, &Controls::default());
@@ -1598,6 +1624,7 @@ mod tests {
       // Only player 0 gets a sample, so player 1's view has nothing at T.
       players: vec![(0, Vec2::new(50.0, 50.0))],
       vitals: vec![],
+      distant: vec![],
     };
     client.on_player_frame(&frame, 1_000);
     assert_eq!(client.view_fallbacks(), 0);
@@ -1647,6 +1674,7 @@ mod tests {
       // Only players 0 and 2 are relevant to this client.
       players: vec![(0, Vec2::new(100.0, 100.0)), (2, Vec2::new(140.0, 100.0))],
       vitals: vec![(0, 50, false), (2, 90, true)],
+      distant: vec![],
     };
     client.on_player_frame(&frame, 1_000);
 
@@ -1761,6 +1789,7 @@ mod tests {
         server_time_ms: t,
         players: vec![(0, Vec2::new(t as f32 * 0.19, 0.0))],
         vitals: vec![],
+        distant: vec![],
       };
       client.on_player_frame(&frame, t);
       t += 33;
@@ -1786,6 +1815,7 @@ mod tests {
         server_time_ms: t,
         players: vec![(0, Vec2::new(t as f32, 0.0))],
         vitals: vec![],
+        distant: vec![],
       };
       client.on_player_frame(&frame, t);
     }

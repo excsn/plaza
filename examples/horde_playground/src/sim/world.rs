@@ -520,6 +520,77 @@ mod tests {
   use crate::sim::types::RemoteMode;
 
   #[test]
+  fn a_distant_teammate_is_still_placed_on_the_map() {
+    // The complaint the far tier exists for: past the view radius a peer was
+    // sent nothing at all, so the client kept drawing the last position it ever
+    // received. On the minimap that is a teammate frozen somewhere they left
+    // minutes ago, and walking there to find them produces a jump when they
+    // finally re-enter relevance.
+    let controls = Controls { spread_players: true, ..Controls::default() };
+    let mut w = World::new(&controls, 8, 0x5EED_D00D);
+    // Long enough for several far-tier rounds, which are deliberately slow.
+    for _ in 0..(12 * 60) {
+      w.step(16, Vec2::new(1.0, 0.0), &controls);
+    }
+    let view = crate::sim::types::VIEW_RADIUS * 1.5;
+    let client = &w.clients[0];
+    let mut checked = 0;
+    for p in 1..8 {
+      if w.server.players[0].dist(w.server.players[p]) <= view {
+        continue; // near tier, not what this is testing
+      }
+      checked += 1;
+      assert!(client.knows_player(p), "client 0 was told nothing about distant player {p}");
+      // Placed to map resolution: good enough for a marker, nowhere near good
+      // enough to aim with, which is the whole point of the tier.
+      let error = client.players()[p].dist(w.server.players[p]);
+      assert!(error < 400.0, "distant player {p} is placed within map resolution, off by {error:.0} px");
+    }
+    assert!(checked > 0, "the arena did spread players beyond the near tier");
+  }
+
+  #[test]
+  fn a_peer_who_stops_arriving_fades_rather_than_lying() {
+    // Even with a far tier a peer can go quiet: disconnected, or never seated.
+    // The client has to tell "here recently" from "here once", or the map goes
+    // back to drawing a confident marker for somebody who is gone.
+    let controls = Controls::default();
+    let mut w = World::new(&controls, 4, 0x5EED_D00D);
+    for _ in 0..120 {
+      w.step(16, Vec2::new(1.0, 0.0), &controls);
+    }
+    let fresh = w.clients[0].player_age_secs(1).expect("player 1 has been heard from");
+    assert!(fresh < 3.0, "a peer being streamed reads as fresh: {fresh:.1}s");
+
+    // Nothing arrives for anybody from here on, but the clock keeps moving.
+    for _ in 0..(20 * 60) {
+      w.clients[0].tick(16, &controls);
+    }
+    let stale = w.clients[0].player_age_secs(1).expect("still known, just old");
+    assert!(stale > 10.0, "and one that has stopped arriving reads as old: {stale:.1}s");
+  }
+
+  #[test]
+  fn crossing_the_tier_boundary_does_not_flap() {
+    // Hysteresis: it takes less distance to stay in the near tier than to enter
+    // it. Without the gap a peer loitering on the boundary changes tier every
+    // few frames, and every change is a precision jump the client absorbs.
+    let controls = Controls { spread_players: false, ..Controls::default() };
+    let mut w = World::new(&controls, 4, 0x5EED_D00D);
+    let mut flips = 0u32;
+    let mut previous: Option<usize> = None;
+    for _ in 0..(30 * 60) {
+      w.step(16, Vec2::new(1.0, 0.0), &controls);
+      let near = w.server.relevant_player_count(0);
+      if previous.is_some_and(|was| was != near) {
+        flips += 1;
+      }
+      previous = Some(near);
+    }
+    assert!(flips < 60, "the near set should not thrash across the boundary: {flips} changes in 30 seconds");
+  }
+
+  #[test]
   fn a_client_is_only_sent_the_players_it_can_use() {
     // The change that took 128 players from 3.9 MB/s to 0.6. Player state used
     // to go to everybody, on both streams, which is `O(players^2)` and was 81%

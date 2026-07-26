@@ -588,13 +588,43 @@ pub struct PlayerFrame {
   /// Health and shield for the same set, paired with the id rather than
   /// positional, because the set is a subset now.
   pub vitals: Vec<(PlayerId, u8, bool)>,
+  /// Everyone else, at map resolution and a low rate: the **far tier**.
+  ///
+  /// Sending nothing at all past the view radius is what made a teammate freeze
+  /// on the minimap and then jump when you walked over to them. But the near
+  /// tier's precision is not what a distant peer needs either: they are two
+  /// pixels on a map, and the error that matters is measured in map pixels
+  /// rather than world units.
+  ///
+  /// So the falloff is by *what can be perceived*. Inside the view radius a
+  /// peer is drawn at full size and needs full precision and rate. Outside it
+  /// the only consumer is the minimap, whose requirement is a flat floor that
+  /// does not get cheaper with further distance, which is why this is one extra
+  /// tier and not a gradient.
+  #[serde(default)]
+  pub distant: Vec<(PlayerId, u8, u8)>,
+}
+
+/// Turns a world position into the far tier's two bytes, and back.
+///
+/// One byte per axis over a 3000 unit arena is about 12 units a step, which is
+/// under a single pixel on a minimap of any usual size. The quantisation is
+/// therefore invisible where it is used and would be unacceptable anywhere
+/// else, which is exactly the point of a tier.
+pub fn quantize_far(pos: Vec2) -> (u8, u8) {
+  let q = |v: f32, span: f32| ((v / span).clamp(0.0, 1.0) * 255.0).round() as u8;
+  (q(pos.x, ARENA_W), q(pos.y, ARENA_H))
+}
+
+pub fn dequantize_far(x: u8, y: u8) -> Vec2 {
+  Vec2::new(x as f32 / 255.0 * ARENA_W, y as f32 / 255.0 * ARENA_H)
 }
 
 impl PlayerFrame {
   /// Roughly what this costs on the wire: a timestamp, then an id and a
   /// quantized position each, plus an id, a health byte and a shield bit.
   pub fn bytes(&self) -> usize {
-    8 + self.players.len() * (1 + POS_BYTES) + self.vitals.len() * 2
+    8 + self.players.len() * (1 + POS_BYTES) + self.vitals.len() * 2 + self.distant.len() * 3
   }
 
   /// The same content with a UUID per player and raw `f32` positions.
@@ -605,7 +635,9 @@ impl PlayerFrame {
   /// stream while the baseline it was measured against no longer did, so the
   /// saving read as *negative* at a large player count.
   pub fn naive_bytes(&self) -> usize {
-    8 + self.players.len() * (NAIVE_ID_BYTES + NAIVE_POS_BYTES) + self.vitals.len() * (NAIVE_ID_BYTES + 2)
+    8 + self.players.len() * (NAIVE_ID_BYTES + NAIVE_POS_BYTES)
+      + self.vitals.len() * (NAIVE_ID_BYTES + 2)
+      + self.distant.len() * (NAIVE_ID_BYTES + NAIVE_POS_BYTES)
   }
 }
 

@@ -652,6 +652,27 @@ pub fn draw_observer_world(view: &horde_playground::net::arena::HostView, contro
 
 /// The whole arena from the *client's own* knowledge (with LOD) or borrowed truth.
 #[cfg(all(feature = "client", feature = "websocket"))]
+/// How solidly to draw a peer whose position is `age` seconds old, or `None`
+/// once it is too old to draw at all.
+///
+/// Full strength while the far tier is keeping it current, then a fade rather
+/// than a cliff, so a peer that drops out reads as "was here" instead of
+/// vanishing or, worse, staying put and lying.
+#[cfg(all(feature = "client", feature = "websocket"))]
+fn peer_alpha(age: Option<f32>) -> Option<f32> {
+  /// Longer than a far-tier interval plus slack, so an ordinary distant peer
+  /// never fades at all.
+  const SOLID_SECS: f32 = 3.0;
+  /// How long the fade takes once it starts.
+  const FADE_SECS: f32 = 4.0;
+  let age = age?;
+  if age <= SOLID_SECS {
+    return Some(1.0);
+  }
+  let faded = 1.0 - (age - SOLID_SECS) / FADE_SECS;
+  (faded > 0.02).then_some(faded)
+}
+
 pub fn draw_client_minimap(client: &horde_playground::net::client::NetClient, controls: &Controls, cam: &Camera) {
   let (ox, oy, size, s) = minimap_frame(cam);
   let lod = controls.crowd_lod_theta > 0.0;
@@ -673,8 +694,17 @@ pub fn draw_client_minimap(client: &horde_playground::net::client::NetClient, co
   let you = client.my_position();
   let me = client.me.map(|m| m as usize);
   for (i, p) in client.sim.players().iter().enumerate() {
-    let at = if me == Some(i) { you } else { *p };
-    draw_circle(ox + at.x * s, oy + at.y * s, 2.5, if me == Some(i) { C_YOU } else { C_PEER });
+    if me == Some(i) {
+      draw_circle(ox + you.x * s, oy + you.y * s, 2.5, C_YOU);
+      continue;
+    }
+    // Faded by how stale the position is, and gone once nothing has confirmed
+    // it for a while. A marker that keeps its full colour is claiming a peer is
+    // there now; drawing one from a sample nobody has refreshed in a minute is
+    // how the map came to show teammates frozen in places they had long left.
+    let Some(alpha) = peer_alpha(client.sim.player_age_secs(i)) else { continue };
+    let (x, y) = (ox + p.x * s, oy + p.y * s);
+    draw_circle(x, y, 2.5, Color { a: alpha, ..C_PEER });
   }
   draw_circle_lines(ox + you.x * s, oy + you.y * s, VIEW_RADIUS * s, 1.5, C_VIEW);
   let caption = if lod { "whole arena (your client's own knowledge)" } else { "whole arena (only what is relevant to you)" };
