@@ -34,14 +34,17 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls) {
   });
 
   // The link comes first because it is an *input* to the two budgets below.
-  // Latency and jitter are properties of a network you do not control; the
-  // delays and rates under them are policy you choose to cover it. Keeping them
-  // in one section, above the things they constrain, is the whole point of this
-  // grouping: the terms of a budget used to live in different sections, so the
-  // relationship between them was invisible while you were editing it.
-  section(ui, "the link you are pretending to have", true, |ui| {
+  // Nothing here is real: the host runs the server in this process, so the
+  // actual link is microseconds and these sliders are what make it behave as
+  // though it were not. Latency and jitter are properties of a network you do
+  // not control; the delays and rates under them are policy you choose to cover
+  // it. Keeping them in one section, above the things they constrain, is the
+  // whole point of this grouping: the terms of a budget used to live in
+  // different sections, so the relationship between them was invisible while
+  // you were editing it.
+  section(ui, "simulated link", true, |ui| {
     ui.add(egui::Slider::new(&mut controls.latency_ms, 0..=400).text("latency ms"))
-      .on_hover_text("One way, each direction. Not a setting a real deployment has: it stands in for a network, and the two budgets below are sized to cover it.");
+      .on_hover_text("One way, each direction, applied to traffic leaving the host and to traffic arriving from a client. Not a setting a real deployment has: the host runs the server in this process, so the real link is microseconds and this is what stands in for one. The two budgets below are sized to cover it.");
     ui.add(egui::Slider::new(&mut controls.jitter_ms, 0..=150).text("jitter ms"));
     ui.add(egui::Slider::new(&mut controls.loss_pct, 0.0..=40.0).text("packet loss %"))
       .on_hover_text("A delta stream assumes every packet arrives. Raise this with recovery off and watch the phantom count climb.");
@@ -80,7 +83,7 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls) {
   });
 
   // The input schedule: what the server does between your key and the world.
-  section(ui, "the input schedule", true, |ui| {
+  section(ui, "input schedule", true, |ui| {
     ui.add(egui::Slider::new(&mut controls.playout_delay_ms, 0..=400).text("input playout delay ms"))
       .on_hover_text("How long the server holds an input before executing it. This is what makes a contested pickup independent of ping: every input executes at press time plus this, so a 20 ms player and a 200 ms player are on the same footing.");
     ui.checkbox(&mut controls.input_playout, "use the playout buffer")
@@ -102,7 +105,7 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls) {
 
   // The timeline: which instant is on screen. Sized from the link above plus a
   // send interval, which is why the player rate is named here as well.
-  section(ui, "the timeline", true, |ui| {
+  section(ui, "render timeline", true, |ui| {
     ui.add(egui::Slider::new(&mut controls.render_delay_ms, 0..=RENDER_DELAY_MAX_MS).text("render delay ms"))
       .on_hover_text("How far behind the server clock every client shows the world. A property of the timeline, not of anybody's link, so the same instant is on every screen. Too short and peers have nothing to interpolate between: the underrun and view-fallback counters climb.");
     let interval = 1000 / controls.player_sync_hz.max(1) as u64;
@@ -162,7 +165,7 @@ pub fn draw_ui(world: &World, controls: &mut Controls) -> bool {
         ui.label(format!("your client knows {known} of {total} enemies ({culled:.0}% culled)"));
 
         let (compact, naive) = (world.bytes_per_sec() / 1024.0, world.naive_bytes_per_sec() / 1024.0);
-        ui.label(format!("bandwidth: {compact:.1} KiB/s (all players)"));
+        ui.label(format!("bandwidth (all players): {compact:.1} KiB/s recent"));
         ui.label(format!("with uuids + f32 positions: {naive:.1} KiB/s ({:.0}% saved)", if naive > 0.0 { (1.0 - compact / naive) * 100.0 } else { 0.0 }));
         ui.label(format!("sent per packet: {:.0} entities", world.mean_relevant()));
         ui.label(format!("churn: {:.1} spawns / {:.1} despawns per packet", world.mean_spawns_per_packet(), world.mean_despawns_per_packet()));
@@ -264,7 +267,7 @@ pub fn draw_net_ui(client: &horde_playground::net::client::NetClient, url: &str,
         // an aggregate for the whole arena and cannot answer "is my link the
         // problem"; this can.
         let (recent, session) = client.downstream_per_sec();
-        ui.label(format!("downstream: {:.1} KiB/s ({:.1} KiB/s recent), {:.0} msg/s", session / 1024.0, recent / 1024.0, client.packets_per_sec()))
+        ui.label(format!("downstream (this client): {:.1} KiB/s session, {:.1} KiB/s recent, {:.0} msg/s", session / 1024.0, recent / 1024.0, client.packets_per_sec()))
           .on_hover_text("What this client is receiving, counted on the wire as it arrives. The session average first, the last few seconds second. The host's bandwidth figure is the whole arena's; this one is yours, and the two differ by roughly the number of players.");
         ui.label(format!("frames applied: {}   lost: {}", client.frames_seen, client.sim.frames_lost()));
         ui.label(format!("render delay: {} ms   underruns: {}   view fallbacks: {}", client.sim.render_delay_ms(), client.sim.underruns(), client.sim.view_fallbacks()))
@@ -345,7 +348,8 @@ pub fn draw_host_ui(
         let culled = if total > 0 { (1.0 - known as f32 / total.max(1) as f32) * 100.0 } else { 0.0 };
         ui.label(format!("your client knows {known} of ~{} enemies ({culled:.0}% culled)", view.alive));
         let (compact, naive) = (view.bytes_per_sec() / 1024.0, view.naive_bytes_per_sec() / 1024.0);
-        ui.label(format!("bandwidth: {:.1} KiB/s (all players), {compact:.1} KiB/s recent", view.lifetime_bytes_per_sec() / 1024.0));
+        ui.label(format!("bandwidth (all players): {:.1} KiB/s session, {compact:.1} KiB/s recent", view.lifetime_bytes_per_sec() / 1024.0))
+          .on_hover_text("Scope first, then the two windows. **All players** is the whole arena: the host builds and meters a packet per seat, so this covers every one of them, not just your own client. **Session** is the average since the meter started, **recent** is the last few seconds. The session figure sitting below the recent one means it is still climbing toward it, which is a fact about the average rather than about the traffic.");
         ui.label(format!("with uuids + f32 positions: {naive:.1} KiB/s ({:.0}% saved)", if naive > 0.0 { (1.0 - compact / naive) * 100.0 } else { 0.0 }));
         // Spawns as a share of what is sent, because the ratio is the readout
         // that matters and two separate numbers hid it: a stream whose
@@ -408,10 +412,10 @@ pub fn draw_observer_ui(view: &horde_playground::net::arena::HostView, controls:
 
       section(ui, "stats (authoritative)", true, |ui| {
         ui.label(format!(
-          "bandwidth: {:.1} KiB/s ({} alive), {:.1} KiB/s recent",
+          "bandwidth (all players): {:.1} KiB/s session, {:.1} KiB/s recent   ({} alive)",
           view.lifetime_bytes_per_sec() / 1024.0,
-          view.alive,
-          view.bytes_per_sec() / 1024.0
+          view.bytes_per_sec() / 1024.0,
+          view.alive
         ))
         .on_hover_text("Two numbers because they answer different questions and neither is a substitute for the other. **Now** is over a rolling eight seconds, so it responds to a slider you just moved and settles when the world does. **Session** is the total over the whole run, which is the right figure for quoting what a configuration cost but is not a rate: while it sits below the current number it is still climbing toward it, by less and less, for as long as the run lasts, and that climb is a property of the average rather than of the traffic. The live count rides along because a bandwidth figure is meaningless without it: an arena whose horde has been wiped out is cheap to send, and reads as a saving rather than as a missing world.");
         ui.label(format!("with uuids + f32 positions: {:.1} KiB/s", view.naive_bytes_per_sec() / 1024.0));

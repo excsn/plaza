@@ -78,7 +78,7 @@ pub fn draw_ui(world: &World, controls: &mut Controls) -> bool {
       section(ui, "controls", true, |ui| draw_controls(ui, controls));
 
       section(ui, "stats", true, |ui| {
-        ui.label(format!("bandwidth: {:.1} KiB/s (all players, session average)", world.bytes_per_sec() / 1024.0));
+        ui.label(format!("bandwidth (all players): {:.1} KiB/s session", world.bytes_per_sec() / 1024.0));
         ui.label(format!("of which hole states: {:.0}%", world.hole_bytes_share() * 100.0));
         ui.label(format!("force evals: {:.1} M/s per machine", world.force_evals_per_client_per_sec() / 1e6));
         let (believed, truth) = world.field_weight(0);
@@ -212,7 +212,7 @@ pub fn draw_host_ui(view: &blackhole_playground::net::arena::HostView, client: &
 
       section(ui, "stats", true, |ui| {
         ui.label(format!(
-          "bandwidth: {:.1} KiB/s (all players), {:.1} KiB/s recent",
+          "bandwidth (all players): {:.1} KiB/s session, {:.1} KiB/s recent",
           view.lifetime_bytes_per_sec() / 1024.0,
           view.bytes_per_sec() / 1024.0
         ))
@@ -313,7 +313,7 @@ pub fn draw_observer_ui(view: &blackhole_playground::net::arena::HostView, contr
 
       section(ui, "stats (authoritative)", true, |ui| {
         ui.label(format!(
-          "bandwidth: {:.1} KiB/s (all players), {:.1} KiB/s recent",
+          "bandwidth (all players): {:.1} KiB/s session, {:.1} KiB/s recent",
           view.lifetime_bytes_per_sec() / 1024.0,
           view.bytes_per_sec() / 1024.0
         ))
