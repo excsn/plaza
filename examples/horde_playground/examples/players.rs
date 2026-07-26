@@ -143,15 +143,9 @@ fn drift(enemy_count: usize, players: usize, windows: usize, window_secs: f32) {
   let mut server = Server::new(enemy_count, players, controls.spread_players);
   let seats = vec![Seat::Bot; players];
   let mut clients: Vec<Client> = (0..players).map(|p| Client::new(p as u8, players)).collect();
-  let mut meter = plaza_server_utils::RateMeter::new();
-  let mut clock = 0u64;
 
   println!("\ndrift at {enemy_count} enemies / {players} players, {window_secs:.0}s windows");
-  // Three ways of answering "what is the bandwidth", so the difference between
-  // them is visible rather than argued: the true rate over this window computed
-  // from raw bytes, the same thing through the windowed meter, and the session
-  // mean the meter used to report.
-  println!("  window   KiB/s   meter  lifetime   entities  sampleB    alive   spawns/pkt   diff");
+  println!("  window   KiB/s  entities  spawnB  sampleB   coinB   shotB    alive   coins  spawns/pkt   diff");
   for w in 0..windows {
     let mut bytes = 0usize;
     let mut naive = 0usize;
@@ -163,7 +157,6 @@ fn drift(enemy_count: usize, players: usize, windows: usize, window_secs: f32) {
       let frames = server.take_player_frames();
       for (_, packet) in &packets_out {
         bytes += packet.bytes();
-        meter.add(packet.bytes() as u64);
         naive += packet.naive_bytes();
         spawns += packet.entered.len();
         packets += 1;
@@ -176,11 +169,8 @@ fn drift(enemy_count: usize, players: usize, windows: usize, window_secs: f32) {
       }
       for (_, frame) in frames.iter().flatten() {
         bytes += frame.bytes();
-        meter.add(frame.bytes() as u64);
         naive += frame.naive_bytes();
       }
-      clock += step_ms;
-      meter.elapsed(clock);
       let now = server.now_ms();
       for (p, frame) in frames.iter().flatten() {
         clients[*p as usize].on_player_frame(frame, now);
@@ -196,16 +186,17 @@ fn drift(enemy_count: usize, players: usize, windows: usize, window_secs: f32) {
     }
     let per = |b: usize| b as f32 / 1024.0 / window_secs;
     let _ = naive;
-    let _ = (spawn_b, coin_b, shot_b);
     println!(
-      "  {:6}  {:6.0}  {:6.0}  {:8.0}   {:8.0}  {:7.0}  {:7}  {:10.1}  {:5.1}",
+      "  {:6}  {:6.0}  {:8.0}  {:6.0}  {:7.0}  {:6.0}  {:6.0}  {:7}  {:6}  {:10.1}  {:5.1}",
       w,
       per(bytes),
-      meter.per_sec() as f32 / 1024.0,
-      meter.lifetime_per_sec() as f32 / 1024.0,
       per(ent_b),
+      per(spawn_b),
       per(sample_b),
+      per(coin_b),
+      per(shot_b),
       server.alive_count(),
+      server.coins.len(),
       spawns as f32 / packets.max(1) as f32,
       server.difficulty(),
     );
@@ -242,5 +233,5 @@ fn main() {
   }
 
   // The shape over time, at the count where it was reported as climbing.
-  drift(3000, 10, 30, 40.0);
+  drift(3000, 128, 8, 20.0);
 }

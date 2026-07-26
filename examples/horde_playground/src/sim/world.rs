@@ -4,8 +4,6 @@
 
 use plaza_client_utils::net_sim::{LatencyLink, Rng};
 
-use plaza_server_utils::RateMeter;
-
 use crate::sim::client::Client;
 use crate::sim::server::Server;
 use crate::sim::types::ACK_BYTES;
@@ -24,13 +22,10 @@ pub struct World {
   rng: Rng,
   wall_ms: u64,
 
-  // Rolling measurements. The byte rates are `RateMeter`s rather than running
-  // totals, because a total over a whole session is a session mean and not a
-  // rate: it chases a risen steady state for ever without reaching it, which
-  // reads as bandwidth that climbs and never settles.
-  bytes_sent: RateMeter,
-  crowd_bytes: RateMeter,
-  naive_bytes_sent: RateMeter,
+  // Rolling measurements.
+  bytes_sent: u64,
+  crowd_bytes: u64,
+  naive_bytes_sent: u64,
   packets_sent: u64,
   relevant_total: u64,
   relevant_samples: u64,
@@ -51,9 +46,9 @@ impl World {
       up: (0..player_count).map(|_| LatencyLink::new()).collect(),
       rng: Rng::new(seed),
       wall_ms: 0,
-      bytes_sent: RateMeter::new(),
-      crowd_bytes: RateMeter::new(),
-      naive_bytes_sent: RateMeter::new(),
+      bytes_sent: 0,
+      crowd_bytes: 0,
+      naive_bytes_sent: 0,
       packets_sent: 0,
       relevant_total: 0,
       relevant_samples: 0,
@@ -67,19 +62,14 @@ impl World {
   /// Advances everything. `local_input` is the direction player 0 is steering.
   pub fn step(&mut self, dt_ms: u64, local_input: Vec2, controls: &Controls) {
     self.wall_ms += dt_ms;
-    // The meters roll their window on this clock, so a rate is over recent
-    // traffic rather than over the whole session.
-    for meter in [&mut self.bytes_sent, &mut self.naive_bytes_sent, &mut self.crowd_bytes] {
-      meter.elapsed(self.wall_ms);
-    }
 
     for (player, packet) in self.server.advance(dt_ms, local_input, controls) {
-      self.bytes_sent.add(packet.bytes() as u64);
+      self.bytes_sent += packet.bytes() as u64;
       for (slot, part) in self.bytes_by_part.iter_mut().zip(packet.bytes_breakdown()) {
         *slot += part as u64;
       }
-      self.crowd_bytes.add((packet.crowds.len() * crate::sim::types::CROWD_BYTES) as u64);
-      self.naive_bytes_sent.add(packet.naive_bytes() as u64);
+      self.crowd_bytes += (packet.crowds.len() * crate::sim::types::CROWD_BYTES) as u64;
+      self.naive_bytes_sent += packet.naive_bytes() as u64;
       self.packets_sent += 1;
       self.relevant_total += (packet.samples.len() + packet.entered.len()) as u64;
       self.relevant_samples += 1;
@@ -102,8 +92,8 @@ impl World {
     if let Some(frames) = self.server.take_player_frames() {
       for (p, frame) in frames {
         let Some(link) = self.down.get_mut(p as usize) else { continue };
-        self.bytes_sent.add(frame.bytes() as u64);
-        self.naive_bytes_sent.add(frame.naive_bytes() as u64);
+        self.bytes_sent += frame.bytes() as u64;
+        self.naive_bytes_sent += frame.naive_bytes() as u64;
         link.send(self.wall_ms, Downstream::Players(frame), controls.latency_ms, controls.jitter_ms, controls.loss_pct, &mut self.rng);
       }
     }
@@ -123,14 +113,14 @@ impl World {
       self.clients[p].set_render_delay(controls.render_delay_ms);
       let got = self.clients[p].tick(dt_ms, controls);
       if got && let Some((newest, mask)) = self.clients[p].acks().encode() {
-        self.bytes_sent.add(ACK_BYTES as u64);
+        self.bytes_sent += ACK_BYTES as u64;
         self.up[p].send(self.wall_ms, ClientMsg::Ack { newest, mask, digest: self.clients[p].last_digest() }, controls.latency_ms, controls.jitter_ms, controls.loss_pct, &mut self.rng);
       }
       // A purchase is a *request*, and it travels the same lossy wire as anything
       // else, so the client's belief about its own wallet is unconfirmed for a
       // round trip whether or not it chose to predict.
       if controls.coins && controls.auto_buy && let Some(upgrade) = self.clients[p].wants_to_buy() {
-        self.bytes_sent.add(2);
+        self.bytes_sent += 2;
         self.up[p].send(self.wall_ms, ClientMsg::Buy(upgrade), controls.latency_ms, controls.jitter_ms, controls.loss_pct, &mut self.rng);
       }
     }
@@ -181,12 +171,18 @@ impl World {
   /// Bytes per second across all players, with compact ids and quantized
   /// positions.
   pub fn bytes_per_sec(&self) -> f64 {
-    self.bytes_sent.per_sec()
+    if self.wall_ms == 0 {
+      return 0.0;
+    }
+    self.bytes_sent as f64 / (self.wall_ms as f64 / 1000.0)
   }
 
   /// The same traffic with UUIDs and raw `f32` positions.
   pub fn naive_bytes_per_sec(&self) -> f64 {
-    self.naive_bytes_sent.per_sec()
+    if self.wall_ms == 0 {
+      return 0.0;
+    }
+    self.naive_bytes_sent as f64 / (self.wall_ms as f64 / 1000.0)
   }
 
   /// Average entities included per packet (the relevance result).
@@ -214,9 +210,9 @@ impl World {
   /// Zeroes the rolling measurements, so a readout re-baselines after a control
   /// changes instead of averaging across two different configurations.
   pub fn reset_stats(&mut self) {
-    self.bytes_sent.reset();
-    self.crowd_bytes.reset();
-    self.naive_bytes_sent.reset();
+    self.bytes_sent = 0;
+    self.crowd_bytes = 0;
+    self.naive_bytes_sent = 0;
     self.packets_sent = 0;
     self.relevant_total = 0;
     self.relevant_samples = 0;
@@ -399,7 +395,7 @@ impl World {
     if self.wall_ms == 0 {
       return 0.0;
     }
-    self.crowd_bytes.per_sec()
+    self.crowd_bytes as f64 / (self.wall_ms as f64 / 1000.0)
   }
 
   /// Entities the server considers relevant to this client that the client does
