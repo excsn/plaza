@@ -134,6 +134,7 @@ An entity you do not control: a `SnapshotBuffer` plus the interpolate / extrapol
 *   **`push(&mut self, time_ms, state, velocity)`**: record a snapshot and the velocity to dead-reckon along.
 *   **`render(&self, target: Option<u64>, RenderOpts) -> Option<State>`**: `None` until the first push; otherwise the state to draw. Interpolated at `target`, dead-reckoned when the buffer has starved (if `opts.extrapolate`), or the raw newest (if `opts.interpolate` is false).
 *   **`latest() -> Option<&State>`**.
+*   **`oldest_timestamp() -> Option<u64>`**: the oldest instant the view can still interpolate at. A `render` target before this is **clamped to the oldest snapshot**, silently drawing the entity at a newer instant than asked for; a caller rendering a whole scene at one instant should compare its target against this and count the misses, and size `buffer_size` to cover its deepest render delay at its highest sample rate so they stay rare.
 
 **`RenderOpts`**: `interpolate: bool`, `extrapolate: bool`. `Default` is both on; a real client fixes them, the booleans exist so a UI can toggle them.
 
