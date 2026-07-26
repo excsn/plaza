@@ -51,6 +51,15 @@ pub struct RateMeter {
   bucket_total: [u64; BUCKETS],
   bucket_samples: [u64; BUCKETS],
   head: u64,
+  /// The clock reading this meter started counting from.
+  ///
+  /// The clock is supplied by the caller and is usually the simulation's, which
+  /// does not restart when a meter does. Without this, a meter reset twenty
+  /// minutes into a session divides its fresh total by the whole twenty
+  /// minutes: the lifetime rate reads a fraction of the truth and then creeps
+  /// up toward it for hours. That is not a rounding error, it is the readout
+  /// being wrong by a factor of two after every settings change.
+  started_ms: Option<u64>,
 }
 
 impl RateMeter {
@@ -79,6 +88,8 @@ impl RateMeter {
   /// Idempotent within a bucket, so it can be called every tick with the
   /// simulation clock.
   pub fn elapsed(&mut self, elapsed_ms: u64) {
+    let started = *self.started_ms.get_or_insert(elapsed_ms);
+    debug_assert!(elapsed_ms >= started, "the clock a meter is given must not go backwards");
     let want = elapsed_ms / BUCKET_MS;
     if want > self.head {
       // Clear whatever the ring is about to reuse. More than a full window of
@@ -143,11 +154,16 @@ impl RateMeter {
   }
 
   /// The rate over the meter's whole life, for a summary rather than a readout.
+  ///
+  /// Measured from when *this meter* started, not from zero on the caller's
+  /// clock, so a meter reset partway through a session describes the part it
+  /// actually saw.
   pub fn lifetime_per_sec(&self) -> f64 {
-    if self.elapsed_ms == 0 {
+    let span = self.elapsed_ms.saturating_sub(self.started_ms.unwrap_or(0));
+    if span == 0 {
       return 0.0;
     }
-    self.total as f64 / (self.elapsed_ms as f64 / 1000.0)
+    self.total as f64 / (span as f64 / 1000.0)
   }
 
   /// This meter's total as a share of another's, in `0.0..=1.0`.
@@ -159,6 +175,12 @@ impl RateMeter {
       return 0.0;
     }
     self.total as f64 / whole.total as f64
+  }
+
+  /// How long this meter has been running, which is not the same as the clock
+  /// it is given once it has been reset.
+  pub fn running_ms(&self) -> u64 {
+    self.elapsed_ms.saturating_sub(self.started_ms.unwrap_or(0))
   }
 
   /// Forgets everything, for a world that has been rebuilt.
@@ -268,6 +290,79 @@ mod tests {
     // The lifetime figure is still available, and is still the number that
     // would have crept: it is well below the rate actually being sustained.
     assert!(meter.lifetime_per_sec() < settled * 0.95, "the session mean lags a risen rate, which is why it is not the readout");
+  }
+
+  #[test]
+  fn a_meter_reset_partway_through_measures_only_what_it_saw() {
+    // The clock a meter is given is usually the simulation's, and that does not
+    // restart when the meter does. Dividing a fresh total by the whole session
+    // reads a fraction of the truth and then creeps toward it for hours, which
+    // is indistinguishable from a quantity that is genuinely climbing.
+    let mut meter = RateMeter::new();
+    let mut now = 0u64;
+    for _ in 0..6000 {
+      meter.add(100);
+      now += 100;
+      meter.elapsed(now);
+    }
+    // Ten minutes in, the settings change and the world is rebuilt.
+    meter.reset();
+    for _ in 0..100 {
+      meter.add(100);
+      now += 100;
+      meter.elapsed(now);
+    }
+    // Ten seconds of traffic at 1000 per second, and that is what it must say,
+    // not a hundredth of it because the denominator remembers the old world.
+    assert!((meter.lifetime_per_sec() - 1000.0).abs() < 20.0, "after a reset the rate is over what it saw: {:.0}", meter.lifetime_per_sec());
+    assert!((meter.per_sec() - 1000.0).abs() < 60.0, "and so is the window: {:.0}", meter.per_sec());
+    // One tick short of ten seconds: the clock is first seen on the tick after
+    // the reset, which is the only moment a meter can learn where it started.
+    assert_eq!(meter.running_ms(), 9_900);
+  }
+
+  #[test]
+  fn the_readings_a_player_reported_are_reproduced_by_the_defect() {
+    // A defect is only diagnosed when it can reproduce the observation, so this
+    // replays what the old meter did and checks it against two readings taken
+    // from a running host, three minutes apart, with no setting touched between
+    // them: 127.6 KiB/s at tick 72394 and 143.9 KiB/s at tick 82039.
+    //
+    // The old behaviour was two faults compounding. `per_sec` was the session
+    // mean rather than a rate, and `reset` (which a settings change triggers)
+    // zeroed the total while the caller went on supplying an absolute clock, so
+    // the denominator still counted the time before the reset.
+    //
+    // Nothing here is fitted to those readings. The rate is the one measured
+    // independently by `examples/players.rs` at these settings, and the reset
+    // time is when the player count was changed. The readings are the
+    // prediction.
+    const TRUE_RATE: f64 = 265.0 * 1024.0; // bytes per second, measured
+    const RESET_AT_MS: u64 = 628_000;
+    let old_per_sec = |total: f64, absolute_ms: u64| total / (absolute_ms as f64 / 1000.0) / 1024.0;
+
+    for (tick, reported) in [(72_394u64, 127.6f64), (82_039, 143.9)] {
+      let absolute_ms = tick * 1000 / 60;
+      let since_reset = absolute_ms.saturating_sub(RESET_AT_MS);
+      let total = TRUE_RATE * (since_reset as f64 / 1000.0);
+      let predicted = old_per_sec(total, absolute_ms);
+      assert!(
+        (predicted - reported).abs() < 2.0,
+        "the old meter at tick {tick} predicts {predicted:.1} KiB/s against the {reported:.1} actually seen"
+      );
+    }
+
+    // And the same world through the meter as it is now reads the real rate
+    // straight away, rather than approaching it over the following hour.
+    let mut meter = RateMeter::new();
+    let mut now = RESET_AT_MS;
+    for _ in 0..600 {
+      meter.add((TRUE_RATE / 10.0) as u64);
+      now += 100;
+      meter.elapsed(now);
+    }
+    let windowed = meter.per_sec() / 1024.0;
+    assert!((windowed - 265.0).abs() < 15.0, "the window reports the rate itself: {windowed:.1} KiB/s");
   }
 
   #[test]
