@@ -143,6 +143,16 @@ Reading the shape of a counter rather than its value: a count climbing without b
 
 ## The bug catalogue
 
+### The pulse ring that fired several times per pulse (horde)
+
+**Symptom.** The nova's expanding ring visibly restarted two or three times per pulse, a fraction of a second apart. Reported by a player as "the animation seems to activate multiple times, but dunno if it is just part of the animation". It was not the animation.
+
+**Cause.** The ring is *inferred*: a burst of ten or more deaths in one tick reads as a pulse. Ack-based recovery deliberately repeats an announcement until the acknowledgement for it comes back, which takes a round trip, and the entity stream sends every 62 ms, so one nova's death batch arrives two or three times. The mirror absorbs the repeats idempotently, by design and documented ("applying a superset is harmless"). The death *counter* did not: it incremented per announcement, on the wire, so every repeated batch was a fresh ten-plus-death tick and the ring re-fired.
+
+**Fix.** Count the removal, not the announcement: a death increments the counter only when the mirror actually held the entity and removed it, the same gate the explosion effect already used. A repeat is then a no-op all the way down.
+
+**The general form.** In a protocol that repeats until acknowledged, "how many times was I told" and "how many times did it happen" diverge by design. Anything derived from such a stream must be exactly as idempotent as the stream itself: count state transitions, never messages. The mirror got this right from the start; the one counter that read the wire instead of the state is the one that produced a visible artifact.
+
 ### The marker that detached from its own timeline (horde)
 
 **Symptom.** At 600 ms render delay, shots visibly left from "a point in the past", well behind the player's marker. Reported by a player; every readout said healthy. The natural reading of the symptom, that the shots were mis-timed, is backwards: the shots, enemies and coins were all faithfully at the render instant. The *marker* was the thing off the timeline.

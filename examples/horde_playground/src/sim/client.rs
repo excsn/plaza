@@ -1061,19 +1061,25 @@ impl Client {
 
     for (handle, reason) in &packet.left {
       let died = *reason == LeaveReason::Died;
-      if died {
-        self.deaths_seen += 1;
-      }
       // A death gets an explosion where the client last had the enemy, so the
       // position is read before the removal. The mirror refuses a removal whose
       // generation names an occupant it no longer holds, and counts it: with
       // generations off the key matches and the wrong entity is deleted, which is
       // the whole demonstration.
       let pos = died.then(|| self.enemies.get(handle.into()).map(|e| e.sim.logical().pos)).flatten();
-      if self.enemies.remove(handle.into()).is_some()
-        && let Some(pos) = pos
-      {
-        self.bursts.push(Burst { pos, age: 0.0, big: true });
+      if self.enemies.remove(handle.into()).is_some() {
+        // Counted on the *removal*, not the announcement. Recovery deliberately
+        // repeats an announcement until it is acknowledged, and the mirror
+        // absorbs the repeats idempotently; a counter that read the wire
+        // instead of the state counted one nova's deaths two or three times,
+        // an RTT apart, and everything downstream of it (the inferred pulse
+        // ring) fired again with each repeat.
+        if died {
+          self.deaths_seen += 1;
+        }
+        if let Some(pos) = pos {
+          self.bursts.push(Burst { pos, age: 0.0, big: true });
+        }
       }
     }
 
@@ -1536,6 +1542,34 @@ mod tests {
     let at = client.render_at().expect("the timeline has started");
     let _ = client.render_players(at);
     assert!(client.view_fallbacks() > 0, "the starved view fell back, and said so");
+  }
+
+  #[test]
+  fn a_repeated_death_announcement_is_counted_once() {
+    // Recovery deliberately repeats an announcement until it is acknowledged,
+    // and the mirror absorbs the repeats idempotently. The death counter did
+    // not: it read the wire instead of the state, so one nova's burst was
+    // counted again with every repeat, an RTT apart, and the pulse ring
+    // inferred from it visibly re-fired.
+    use crate::sim::types::Spawn;
+    let mut client = Client::new(0, 1);
+    let controls = Controls::default();
+    let key = SlotKey { index: 3, generation: 1 };
+
+    let mut spawn = Packet { server_time_ms: 100, seq: 1, ..Default::default() };
+    spawn.entered.push(Spawn { handle: key.into(), pos: Vec2::new(10.0, 10.0), target: 0, kind: EnemyKind::from_seed(0) });
+    client.apply_packet(&spawn, 100, &controls);
+    assert_eq!(client.known_entities(), 1);
+
+    let mut death = Packet { server_time_ms: 200, seq: 2, ..Default::default() };
+    death.left.push((key.into(), LeaveReason::Died));
+    client.apply_packet(&death, 200, &controls);
+    assert_eq!(client.deaths_seen, 1, "the death was seen once");
+
+    let mut repeat = Packet { server_time_ms: 260, seq: 3, ..Default::default() };
+    repeat.left.push((key.into(), LeaveReason::Died));
+    client.apply_packet(&repeat, 260, &controls);
+    assert_eq!(client.deaths_seen, 1, "a recovery repeat is the same death, not a second one");
   }
 
   #[test]
