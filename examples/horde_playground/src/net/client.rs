@@ -72,6 +72,12 @@ pub struct NetClient {
   rtt: RttEstimator,
   clock: ClockSyncEstimator,
 
+  /// What this client is actually receiving, which is the number it wants and
+  /// the host cannot give it. The host reports "all players", an aggregate for
+  /// the whole arena; a joiner wants its own share, because that is what says
+  /// whether *its* link is the problem.
+  traffic: plaza_server_utils::RateMeter,
+  packets: plaza_server_utils::RateMeter,
   events: Vec<Event>,
   last_ping_ms: u64,
   pub frames_seen: u64,
@@ -95,6 +101,8 @@ impl NetClient {
       send_policy: InputCoalescer::new(INPUT_KEEPALIVE_MS),
       rtt: RttEstimator::new(0.15),
       clock: ClockSyncEstimator::new(32),
+      traffic: plaza_server_utils::RateMeter::new(),
+      packets: plaza_server_utils::RateMeter::new(),
       events: Vec::new(),
       last_ping_ms: 0,
       frames_seen: 0,
@@ -254,7 +262,21 @@ impl NetClient {
     }
   }
 
+  /// Bytes a second arriving at this client, over a rolling window and over the
+  /// whole session, and messages a second.
+  pub fn downstream_per_sec(&self) -> (f64, f64) {
+    (self.traffic.per_sec(), self.traffic.lifetime_per_sec())
+  }
+
+  pub fn packets_per_sec(&self) -> f64 {
+    self.packets.per_sec()
+  }
+
   fn on_frame(&mut self, bytes: &[u8], now_ms: u64, controls: &Controls) -> bool {
+    // Measured on the wire as it arrives, before decoding, so it is the cost of
+    // the transport rather than of the model behind it.
+    self.traffic.add(bytes.len() as u64);
+    self.packets.add(1);
     let Ok(message) = serde_json::from_slice::<plaza_wire::SessionMessage<Op, u64, ()>>(bytes) else {
       return false;
     };
@@ -350,6 +372,9 @@ impl NetClient {
   /// appeared on screen this tick.
   pub fn tick(&mut self, dt_ms: u64, controls: &Controls) {
     self.sim.tick(dt_ms, controls);
+    // The meters roll their window on this client's own clock.
+    self.traffic.elapsed(self.now_ms);
+    self.packets.elapsed(self.now_ms);
     // A drop in your own health is a hit worth flashing. Detected after
     // play-out, not at receipt, so the flash lands at the instant on screen.
     let health = self.my_health();

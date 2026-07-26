@@ -260,6 +260,12 @@ pub fn draw_net_ui(client: &horde_playground::net::client::NetClient, url: &str,
         Some(rtt) => ui.label(format!("round trip: {rtt:.0} ms")),
         None => ui.label("round trip: measuring"),
         };
+        // The joiner's own share, measured on its own wire. The host's readout is
+        // an aggregate for the whole arena and cannot answer "is my link the
+        // problem"; this can.
+        let (recent, session) = client.downstream_per_sec();
+        ui.label(format!("downstream: {:.1} KiB/s ({:.1} KiB/s recent), {:.0} msg/s", session / 1024.0, recent / 1024.0, client.packets_per_sec()))
+          .on_hover_text("What this client is receiving, counted on the wire as it arrives. The session average first, the last few seconds second. The host's bandwidth figure is the whole arena's; this one is yours, and the two differ by roughly the number of players.");
         ui.label(format!("frames applied: {}   lost: {}", client.frames_seen, client.sim.frames_lost()));
         ui.label(format!("render delay: {} ms   underruns: {}   view fallbacks: {}", client.sim.render_delay_ms(), client.sim.underruns(), client.sim.view_fallbacks()))
           .on_hover_text("An underrun is a packet that arrived after the instant it describes had already gone past, so it could never be played at the right moment. It is the honest form of what an adaptive buffer used to hide by quietly showing you an older world than everybody else. A view fallback is a player drawn from its newest sample because its buffer could not produce the render instant, which silently puts that player on a different timeline for a frame; both counters are the same honesty applied to different buffers.");

@@ -170,6 +170,15 @@ pub struct Arena {
   input_acked: HashMap<PlayerKey, u64>,
 
   down: HashMap<PlayerKey, Downlink>,
+  /// The inbound half of the impaired link, one per connection.
+  ///
+  /// A client's outbound traffic was already being *dropped* per the loss
+  /// slider, but never delayed, so inputs and acknowledgements arrived
+  /// instantly however far latency was dragged. That made the link asymmetric
+  /// in a way nothing on screen admitted: a round trip read as one direction,
+  /// and the input schedule, whose entire job is to cover a player's one way
+  /// delay, was being tested against a path that had none.
+  up: HashMap<PlayerKey, LatencyLink<Op>>,
   /// Connections being measured. They hold no seat while this runs, so a slow
   /// joiner cannot park one and make the arena look full.
   admitting: HashMap<PlayerKey, Admission>,
@@ -204,6 +213,7 @@ impl Arena {
       pending: vec![Seat::Bot; seats],
       input_acked: HashMap::new(),
       down: HashMap::new(),
+      up: HashMap::new(),
       admitting: HashMap::new(),
       rng: Rng::new(IMPAIR_SEED),
       traced_second: 0,
@@ -275,6 +285,61 @@ impl Arena {
     }
     self.input_acked.remove(key);
     self.down.remove(key);
+    self.up.remove(key);
+  }
+
+  /// Applies one client op whose uplink delay has expired.
+  ///
+  /// Returns a reply for the ops that have one. Split out of the receive path so
+  /// the uplink can hold traffic: what a client sent and what the arena acts on
+  /// are now separated by the same delay the downstream has.
+  fn apply_client_op(&mut self, key: PlayerKey, op: Op) -> Option<TargetedOp<Op, PlayerKey>> {
+    let seat = self.seat_of(&key)?;
+    match op {
+      Op::Input { seq, dx, dy, tick } => {
+        // Out-of-order *arrivals* are still dropped, because a duplicate or a
+        // straggler carries nothing new. Out-of-order execution is a different
+        // matter and is the buffer's job: the schedule is keyed on when the
+        // player pressed, not on when this turned up.
+        if self.input_acked.get(&key).is_some_and(|newest| seq <= *newest) {
+          return None;
+        }
+        self.input_acked.insert(key, seq);
+        // Normalised here, not on the client: a client that sent a longer
+        // vector would simply move faster.
+        let len = (dx * dx + dy * dy).sqrt();
+        let dir = if len > 1.0 { Vec2::new(dx / len, dy / len) } else { Vec2::new(dx, dy) };
+        let controls = self.controls;
+        self.sim.submit_input(seat, tick, dir, &controls);
+        None
+      }
+      // The entity stream's acknowledgement and the one purchase a client may
+      // request. Both go straight to the server, which is the only thing allowed
+      // to move a baseline or spend a coin.
+      Op::Ack { newest, mask, digest } => {
+        self.sim.receive_ack(seat, newest, mask, digest);
+        None
+      }
+      Op::Buy(upgrade) => {
+        self.sim.receive_buy(seat, upgrade);
+        None
+      }
+      Op::Ping { origin_ms } => {
+        let server_ms = self.sim.now_ms();
+        Some(TargetedOp::new_system_to(key, vec![Op::Pong { origin_ms, server_ms }]))
+      }
+      // A client announcing a wire format that is not this one cannot be
+      // reasoned with, only told. Said once, on the client's own first message,
+      // instead of the per-op decode warnings a mismatch otherwise produces for
+      // as long as it stays connected.
+      Op::Hello { protocol } if protocol != PROTOCOL => {
+        tracing::warn!(client = protocol, server = PROTOCOL, "client is on a different wire format, telling it to reload");
+        Some(TargetedOp::new_system_to(key, vec![Op::Outdated { server: PROTOCOL, client: protocol }]))
+      }
+      // Server-to-client variants coming up mean a confused or hostile client;
+      // not an error worth failing the tick over.
+      _ => None,
+    }
   }
 
   /// How many seats the arena will actually run: what the panel asked for, but
@@ -434,69 +499,25 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         let Some(key) = source.id_cloned() else {
           return Ok(LogicOutput::none());
         };
-        let Some(seat) = state.seat_of(&key) else {
+        if state.seat_of(&key).is_none() {
           return Ok(LogicOutput::none());
-        };
-        let mut replies = Vec::new();
-        for op in ops {
-          // The uplink, impaired here rather than at the client.
-          //
-          // A joiner sends over a real socket and has no reason to sabotage
-          // itself, and the panel that owns these sliders lives on the host. So
-          // the loss a client's *outbound* traffic suffers is applied where the
-          // controls actually are, on arrival. Without this the slider only ever
-          // thinned the downstream, and the whole return path (acknowledgements,
-          // inputs, purchases) was perfect however far it was dragged, which is
-          // exactly the traffic the recovery machinery exists for.
-          //
-          // Gameplay ops only. `Hello` and `Ping` are control plane: dropping the
-          // version handshake makes a diagnostic flaky without teaching anything
-          // about the netcode.
-          let droppable = matches!(op, Op::Input { .. } | Op::Ack { .. } | Op::Buy(_));
-          if droppable && state.controls.loss_pct > 0.0 && state.rng.unit() * 100.0 < state.controls.loss_pct {
-            continue;
-          }
-          match op {
-            Op::Input { seq, dx, dy, tick } => {
-              // Out-of-order *arrivals* are still dropped, because a duplicate or
-              // a straggler carries nothing new. Out-of-order execution is a
-              // different matter and is the buffer's job: the schedule below is
-              // keyed on when the player pressed, not on when this turned up.
-              if state.input_acked.get(&key).is_some_and(|newest| seq <= *newest) {
-                continue;
-              }
-              state.input_acked.insert(key, seq);
-              // Normalised here, not on the client: a client that sent a longer
-              // vector would simply move faster.
-              let len = (dx * dx + dy * dy).sqrt();
-              let dir = if len > 1.0 { Vec2::new(dx / len, dy / len) } else { Vec2::new(dx, dy) };
-              let controls = state.controls;
-              state.sim.submit_input(seat, tick, dir, &controls);
-            }
-            // The entity stream's acknowledgement and the one purchase a client
-            // may request. Both go straight to the server, which is the only thing
-            // allowed to move a baseline or spend a coin.
-            Op::Ack { newest, mask, digest } => state.sim.receive_ack(seat, newest, mask, digest),
-            Op::Buy(upgrade) => state.sim.receive_buy(seat, upgrade),
-            Op::Ping { origin_ms } => {
-              let server_ms = state.sim.now_ms();
-              replies.push(TargetedOp::new_system_to(key, vec![Op::Pong { origin_ms, server_ms }]));
-            }
-            // A client announcing a wire format that is not this one cannot be
-            // reasoned with, only told. Said once, on the client's own first
-            // message, instead of the per-op decode warnings a mismatch
-            // otherwise produces for as long as it stays connected.
-            Op::Hello { protocol } if protocol != PROTOCOL => {
-              tracing::warn!(client = protocol, server = PROTOCOL, "client is on a different wire format, telling it to reload");
-              replies.push(TargetedOp::new_system_to(key, vec![Op::Outdated { server: PROTOCOL, client: protocol }]));
-            }
-            Op::Hello { .. } => {}
-            // Server-to-client variants coming up mean a confused or hostile
-            // client; not an error worth failing the tick over.
-            _ => {}
-          }
         }
-        Ok(LogicOutput::ops(replies))
+        // Held, not applied. The uplink is impaired here rather than at the
+        // client, because a joiner sends over a real socket and has no reason
+        // to sabotage itself, and the panel that owns these sliders is on the
+        // host. Ops come back out on the tick their delay expires.
+        //
+        // Control plane rides the same delay but never the loss: dropping a
+        // version handshake makes a diagnostic flaky without teaching anything
+        // about the netcode.
+        let now = state.sim.now_ms();
+        let (latency, jitter, loss) = (state.controls.latency_ms, state.controls.jitter_ms, state.controls.loss_pct);
+        for op in ops {
+          let droppable = matches!(op, Op::Input { .. } | Op::Ack { .. } | Op::Buy(_));
+          let entry = state.up.entry(key).or_default();
+          entry.send(now, op, latency, jitter, if droppable { loss } else { 0.0 }, &mut state.rng);
+        }
+        Ok(LogicOutput::none())
       }
 
       LogicInput::TimeStep { delta_time } => {
@@ -514,6 +535,22 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
           self.controls.lock().player_count = target;
         }
         let mut welcomes = Vec::new();
+
+        // Whatever the uplink has finished holding, applied before the world
+        // moves, so an input still lands on the tick it named when it is early
+        // enough and is refused when the delay pushed it past the window. That
+        // second case is the one the schedule exists for and was previously
+        // unreachable from the panel.
+        let now_in = state.sim.now_ms();
+        let keys: Vec<PlayerKey> = state.up.keys().copied().collect();
+        for key in keys {
+          let due: Vec<Op> = state.up.get_mut(&key).map(|link| link.drain_due(now_in)).unwrap_or_default();
+          for op in due {
+            if let Some(reply) = state.apply_client_op(key, op) {
+              welcomes.push(reply);
+            }
+          }
+        }
 
         // Admission: ask the transport what it has measured, and decide whoever
         // it has measured enough of. Runs before seating so a decision made this
@@ -1117,6 +1154,37 @@ mod tests {
   }
 
   #[test]
+  fn a_clients_own_traffic_is_delayed_by_the_hosts_slider() {
+    // The link was asymmetric and nothing said so: outbound traffic was dropped
+    // per the loss slider but never delayed, so a client's inputs and
+    // acknowledgements arrived instantly however far latency was dragged. A
+    // round trip therefore read as one direction, and the input schedule, whose
+    // whole job is to cover a player's one way delay, was being exercised
+    // against a path that had none.
+    let controls = Controls { latency_ms: 200, jitter_ms: 0, ..small() };
+    let (cs, _view) = slots(controls);
+    let logic = ArenaLogic::new(cs, None).with_latency(link(0, ADMIT_SAMPLES));
+    let mut state = Arena::new(controls);
+    let agent = Agent::new_human(1u64, "p1");
+    admit(&logic, &mut state, &agent);
+
+    let before = state.sim.denied_purchases;
+    step(&logic, &mut state, LogicInput::AgentOps { source: agent.clone(), ops: vec![Op::Buy(Upgrade::Repulsor)] });
+
+    // Nothing for the first stretch, because the op is still in flight.
+    for _ in 0..6u32 {
+      step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
+    }
+    assert_eq!(state.sim.denied_purchases, before, "a 200 ms uplink should not have delivered after 96 ms");
+
+    // And then it lands.
+    for _ in 0..10u32 {
+      step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
+    }
+    assert_eq!(state.sim.denied_purchases, before + 1, "and should have delivered by 256 ms");
+  }
+
+  #[test]
   fn a_purchase_request_reaches_the_server() {
     // Proves the Buy op is routed to the authoritative server: an unaffordable
     // request is refused there, which is the only place that count can move.
@@ -1128,6 +1196,10 @@ mod tests {
 
     assert_eq!(state.sim.denied_purchases, 0);
     step(&logic, &mut state, LogicInput::AgentOps { source: Agent::new_human(1u64, "p1"), ops: vec![Op::Buy(Upgrade::Repulsor)] });
+    // A tick, because an op is held on the impaired uplink and acted on when its
+    // delay expires rather than the instant it arrives. At zero latency that is
+    // the very next tick, which is the point: the path is the same either way.
+    step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
     assert_eq!(state.sim.denied_purchases, 1, "an empty wallet's purchase is refused by the server");
   }
 
