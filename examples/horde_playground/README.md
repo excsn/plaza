@@ -54,6 +54,24 @@ Drawing the whole scene at `server_now - render_delay` means there is nothing to
 
 Without it the first second is not an empty world but a wrong one, and the arena is 3000 units square measured from a corner, so a camera with no player to follow points at the outside of it. Both playgrounds do this now; the offline builds do not need it, because they own both sides and their world exists from the first frame.
 
+## Relevance applies to players too, or it does not scale
+
+The example's whole claim is that per-player relevance beats broadcast, and for a long time it applied that only to the enemies. Player state (positions, health, shields) went to everybody on both streams, and every wallet rode in every packet. That is `O(players^2)`, and at 128 players it was **81% of all downstream traffic** while the three thousand enemies, which do get relevance, were 9%.
+
+Measured by `cargo run -p horde_playground --release --example players --no-default-features --features native,client`, at 3000 enemies:
+
+| players | before | after |
+|---|---|---|
+| 4 | 139 KiB/s | 136 KiB/s |
+| 32 | 585 KiB/s | 399 KiB/s |
+| 128 | 3886 KiB/s | 607 KiB/s |
+
+Four changes, and the first two are the whole of it. **The player stream is per recipient**, carrying only the players you can see or that an enemy you hold is chasing. That second clause is the one that is easy to miss: `step_enemy` aims at a player, so a target you cannot place is a rule you cannot run, and skipping it makes your horde drift from the server's. **The entity packet no longer carries players at all**, because it was sending the same thing the player stream already sends, at a different rate. **Wallets are sent when they change** rather than restated every packet, and only for players who matter to you. **Shots are events**, an origin, a velocity and a fire time, rather than a live set re-sent for the whole 1.4 s flight.
+
+The cost is CPU: computing who is relevant is a pass over the players plus a pass over your visible enemies, and it pushed 128 players from 68 to 75 ms of server time per simulated second. Bandwidth fell by a factor of six for a tenth more CPU.
+
+Two consequences worth knowing. A player who has never been sent to you still occupies a slot in every per-player array, holding the arena-centre seed, so the renderer has to know the difference between "at the centre" and "never heard of": drawing the seed puts a peer in the middle of the map who is not there. And a peer who walks out of your relevance stops updating and freezes at their last known position, which is correct (you cannot see them) but means any measurement of peer freshness has to sample only while the peer is actually relevant, or it measures the feature rather than the link.
+
 ## One timeline, declared by the server
 
 The render delay is **a property of the world, not of anybody's link**. Every client shows `server_now - render_delay_ms`, the same instant on every screen.

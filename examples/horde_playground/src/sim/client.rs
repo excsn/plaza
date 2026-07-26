@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use plaza_client_utils::mirror::{Agreement, DeltaMirror};
 use plaza_client_utils::{ease_in_quad, AckWindow, HeldInputConfig, HeldInputPredictor, InterpolationClock, RemoteView, RenderOpts, SlotKey};
 
-use crate::sim::types::{PlayerFrame, coin_pull, difficulty, enemy_speed_scale, repulsor_pulse, step_coin, Coin, CoinId, Crowd, Upgrade, Wallet, COIN_FLIGHT_MS, COIN_PICKUP_RADIUS, step_enemy, Controls, Enemy, EnemyKind, Handle, LeaveReason, Packet, PlayerId, Projectile, RemoteMode, Vec2, PLAYER_MAX_HEALTH};
+use crate::sim::types::{PlayerFrame, coin_pull, difficulty, enemy_speed_scale, repulsor_pulse, step_coin, Coin, CoinId, Crowd, Upgrade, Wallet, COIN_FLIGHT_MS, COIN_PICKUP_RADIUS, step_enemy, Controls, Enemy, EnemyKind, Handle, LeaveReason, Packet, PlayerId, RemoteMode, Shot, Vec2, PLAYER_MAX_HEALTH};
 
 /// A fading damage number floating up from where a shot landed.
 #[derive(Clone, Copy, Debug)]
@@ -243,6 +243,19 @@ pub struct Client {
   /// Server time of each player's last sample, for deriving a velocity and for
   /// rejecting a sample that arrives out of order.
   player_sample_ms: Vec<u64>,
+  /// Which players this client has ever been told about.
+  ///
+  /// Necessary once the player stream is relevance-limited: a player who has
+  /// never been sent still occupies a slot in every per-player array, holding
+  /// the arena-centre seed, and drawing that is a **phantom peer** standing in
+  /// the middle of the map. The seed is right for a camera with nothing to
+  /// follow and wrong for a marker, and the difference is exactly whether this
+  /// client has heard anything.
+  ///
+  /// The enemy rule needs no such guard: an enemy is only sent to a client whose
+  /// relevant set already contains that enemy's target, so a rule input is never
+  /// read from a slot that was never filled.
+  player_seen: Vec<bool>,
   /// Each player's last derived velocity, kept so a pair of samples too close
   /// together in time does not produce a spike.
   player_velocity: Vec<Vec2>,
@@ -292,15 +305,15 @@ pub struct Client {
   /// instant the world can be asked about, and a replay camera has nothing to
   /// drive.
   queued: Vec<Packet>,
-  /// The live shots, as the last packet reported them, and the server time that
-  /// packet described.
+  /// Shots in flight, as **events**: an origin, a velocity and a fire time each.
   ///
-  /// Authoritative: a shot that hit something stops appearing, which is the whole
-  /// reason this is the live set rather than a spawn event the client flies
-  /// itself. Carried forward to now for drawing, since a constant velocity
-  /// evaluated at a time is exact.
-  pub projectiles: Vec<Projectile>,
-  projectiles_at_ms: u64,
+  /// The client flies them itself, which is what puts them on the same delayed
+  /// timeline as everything else: a constant velocity from a known origin is
+  /// exact at any instant, so a shot can be drawn at the render target rather
+  /// than only where the last packet happened to say it was. They leave the list
+  /// on their own expiry, which both sides compute, or on an explicit end when
+  /// the server says one hit something.
+  shots: Vec<Shot>,
   now_ms: u64,
 
   pub deaths_seen: u64,
@@ -365,10 +378,11 @@ pub struct Client {
   /// be paying twice for one event.
   pub notices: Vec<(String, f32)>,
   /// Health and shield samples waiting for their instant: the server time they
-  /// describe, and the two arrays as sent. Applied when the render clock
-  /// reaches them, like every other packet, so a bar does not drop one render
-  /// delay before the hit that caused it is visible.
-  health_queue: Vec<(u64, Vec<u8>, Vec<bool>)>,
+  /// describe, and the vitals as sent, which is a **subset** of players now.
+  /// Applied when the render clock reaches them, like every other packet, so a
+  /// bar does not drop one render delay before the hit that caused it is
+  /// visible.
+  health_queue: Vec<(u64, Vec<(PlayerId, u8, bool)>)>,
   /// The server time of the health state currently applied. Two streams carry
   /// health at different rates, and without this the slower one walks it
   /// backwards.
@@ -414,6 +428,7 @@ impl Client {
       players: vec![Vec2::new(crate::sim::types::ARENA_W * 0.5, crate::sim::types::ARENA_H * 0.5); player_count],
       player_views: (0..player_count).map(|_| RemoteView::new(PLAYER_VIEW_SNAPSHOTS, PLAYER_EXTRAPOLATE_MS)).collect(),
       player_sample_ms: vec![0; player_count],
+      player_seen: vec![false; player_count],
       player_velocity: vec![Vec2::default(); player_count],
       arrival_interval_ms: 0.0,
       last_player_frame_ms: 0,
@@ -423,8 +438,7 @@ impl Client {
       render_delay_ms: 100,
       underruns: 0,
       queued: Vec::new(),
-      projectiles: Vec::new(),
-      projectiles_at_ms: 0,
+      shots: Vec::new(),
       now_ms: 0,
       deaths_seen: 0,
       nova_at_ms: None,
@@ -612,6 +626,15 @@ impl Client {
     (age <= crate::sim::types::NOVA_RING_SECS).then_some(age)
   }
 
+  /// Whether this client has ever been told where a player is.
+  ///
+  /// False for anyone outside its relevance, whose slot still holds the seed. A
+  /// renderer must not draw those: the seed sits at the arena centre and would
+  /// appear as a peer standing there.
+  pub fn knows_player(&self, p: usize) -> bool {
+    self.player_seen.get(p).copied().unwrap_or(false)
+  }
+
   /// Every player position as last known: the newest authoritative copy, which
   /// is the *future* relative to the instant on screen. The ghost overlay's
   /// source, and the fallback before the timeline starts. The shared rules read
@@ -702,18 +725,25 @@ impl Client {
 
   /// Where to draw each shot, at the render instant.
   ///
-  /// The packet that reported these was applied when the clock reached *its*
-  /// timestamp, so the list is the set of shots alive at that moment, and this
-  /// carries them the small remaining distance to the current render instant. A
-  /// shot therefore leaves the player who fired it, both being drawn at the same
-  /// time, and a shot the server has destroyed simply is not in the list.
+  /// Evaluated from the event rather than carried forward from a reported
+  /// position, so a shot is placed *exactly* at the instant being drawn instead
+  /// of at whatever moment the last packet described. A shot therefore leaves
+  /// the player who fired it, both being drawn at the same time, and one whose
+  /// moment has not arrived yet is simply not drawn.
   pub fn render_projectiles(&self, at: RenderAt) -> Vec<Vec2> {
-    let age = at.server_time_ms().saturating_sub(self.projectiles_at_ms) as f32 / 1000.0;
+    let now = at.server_time_ms();
     self
-      .projectiles
+      .shots
       .iter()
-      .map(|p| Vec2::new(p.pos.x + p.vel.x * age, p.pos.y + p.vel.y * age))
+      .filter(|shot| now >= shot.fired_ms && !shot.expired(now))
+      .map(|shot| shot.at(now))
       .collect()
+  }
+
+  /// How many shots this client is holding, live or not yet due. A readout, and
+  /// the number that showed the old design dropping every shot at low rates.
+  pub fn shots_held(&self) -> usize {
+    self.shots.len()
   }
 
   /// Where to *draw* each player: interpolated between samples, dead reckoned a
@@ -778,8 +808,8 @@ impl Client {
     // Health rides the timeline like everything else. Applying it on arrival
     // put the bar one render delay ahead of the body it is drawn over, so a hit
     // showed before the contact that caused it was visible.
-    if !frame.player_health.is_empty() || !frame.player_invuln.is_empty() {
-      self.health_queue.push((frame.server_time_ms, frame.player_health.clone(), frame.player_invuln.clone()));
+    if !frame.vitals.is_empty() {
+      self.health_queue.push((frame.server_time_ms, frame.vitals.clone()));
     }
   }
 
@@ -788,18 +818,20 @@ impl Client {
   /// Both streams carry health at different rates and both land here, so the
   /// guard is what keeps the slower one from walking the bar backwards: the two
   /// writers still exist on the wire, but they meet a single monotonic clock.
-  fn apply_health(&mut self, at_ms: u64, health: &[u8], invuln: &[bool]) {
+  fn apply_health(&mut self, at_ms: u64, vitals: &[(PlayerId, u8, bool)]) {
     if at_ms < self.health_at_ms {
       return;
     }
     self.health_at_ms = at_ms;
-    if !health.is_empty() {
-      self.player_health.clear();
-      self.player_health.extend_from_slice(health);
-    }
-    if !invuln.is_empty() {
-      self.player_invuln.clear();
-      self.player_invuln.extend_from_slice(invuln);
+    // Updated in place rather than replacing the array, because this is a
+    // subset: a player the server did not mention is one this client cannot
+    // see, and its last known bar is the right thing to keep.
+    for &(p, health, shield) in vitals {
+      let p = p as usize;
+      if p < self.player_health.len() {
+        self.player_health[p] = health;
+        self.player_invuln[p] = shield;
+      }
     }
   }
 
@@ -832,6 +864,7 @@ impl Client {
     }
     self.player_views[p].push(server_time_ms, pos, self.player_velocity[p]);
     self.player_sample_ms[p] = server_time_ms;
+    self.player_seen[p] = true;
     self.players[p] = pos;
   }
 
@@ -935,18 +968,19 @@ impl Client {
 
     // The entity stream still carries the players, so a client is never without
     // them, and both streams feed the same buffer on the same server timeline.
-    for (p, pos) in &packet.players {
-      self.observe_player(*p as usize, *pos, packet.server_time_ms);
+    // Shots arrive as events and are flown locally, so this only folds in what
+    // started and what ended early.
+    self.shots.extend(packet.shots_fired.iter().copied());
+    if !packet.shots_ended.is_empty() {
+      self.shots.retain(|s| !packet.shots_ended.contains(&s.id));
     }
-    self.projectiles = packet.projectiles.clone();
-    self.projectiles_at_ms = packet.server_time_ms;
     if packet.nova_at_ms.is_some() {
       self.nova_at_ms = packet.nova_at_ms;
     }
     self.crowds.clone_from(&packet.crowds);
     // This packet is being applied because its instant has come, so its health
     // is due now; the guard only stops it undoing a newer player-stream sample.
-    self.apply_health(packet.server_time_ms, &packet.player_health, &packet.player_invuln);
+
     for &(pos, amount) in &packet.hits {
       self.popups.push(DamagePopup { pos, amount, age: 0.0 });
       // A bright spark right at the hit, so the enemy there lights up.
@@ -959,7 +993,14 @@ impl Client {
     let previously_owned = self.wallets[self.id as usize].upgrades.clone();
     let was_at: std::collections::BTreeMap<CoinId, Vec2> = self.coins.iter().map(|c| (c.id, c.pos)).collect();
     self.coins.clone_from(&packet.coins);
-    self.wallets.clone_from(&packet.wallets);
+    // A subset, and only what changed, so this updates in place. Replacing the
+    // array would blank every player the server had no news about.
+    for (id, wallet) in &packet.wallets {
+      let id = *id as usize;
+      if id < self.wallets.len() {
+        self.wallets[id] = wallet.clone();
+      }
+    }
     // With coins off the server sends no wallets, so this list is empty and the
     // `self.wallets[self.id]` reads below would panic (and did: the first joiner
     // takes seat 3, so the index was 3 into a length of 0). Pad to cover this
@@ -1233,10 +1274,10 @@ impl Client {
     // `apply_health` sees them in order.
     if let Some(at) = self.render_at() {
       let now = at.server_time_ms();
-      self.health_queue.sort_by_key(|(ts, _, _)| *ts);
-      let due = self.health_queue.iter().take_while(|(ts, _, _)| *ts <= now).count();
-      for (ts, health, invuln) in self.health_queue.drain(..due).collect::<Vec<_>>() {
-        self.apply_health(ts, &health, &invuln);
+      self.health_queue.sort_by_key(|(ts, _)| *ts);
+      let due = self.health_queue.iter().take_while(|(ts, _)| *ts <= now).count();
+      for (ts, vitals) in self.health_queue.drain(..due).collect::<Vec<_>>() {
+        self.apply_health(ts, &vitals);
       }
     }
 
@@ -1315,9 +1356,13 @@ impl Client {
     // Expiry only. The server owns when a shot ends: it stops listing one that
     // hit something, and the list is replaced wholesale by each packet as it is
     // played out.
+    // Expiry is computed, never announced: both sides hold the fire time and the
+    // lifetime is a constant, so a message saying so would be paying twice.
+    // Dropped once the *render* instant has passed it, not once now has, or a
+    // shot would vanish a render delay before it was drawn arriving.
     if let Some(at) = self.render_at() {
-      let age = at.server_time_ms().saturating_sub(self.projectiles_at_ms) as f32 / 1000.0;
-      self.projectiles.retain(|p| p.ttl - age > 0.0);
+      let now = at.server_time_ms();
+      self.shots.retain(|shot| !shot.expired(now));
     }
     applied
   }
@@ -1461,8 +1506,7 @@ mod tests {
     let at = |t, x| PlayerFrame {
       server_time_ms: t,
       players: vec![(0, Vec2::new(x, 0.0)), (1, Vec2::new(0.0, 0.0))],
-      player_health: vec![],
-      player_invuln: vec![],
+      vitals: vec![],
     };
     client.on_player_frame(&at(1_000, 0.0), 1_000);
     client.on_player_frame(&at(2_000, 1_000.0), 2_000);
@@ -1510,8 +1554,7 @@ mod tests {
     let hit = PlayerFrame {
       server_time_ms: 1_000,
       players: vec![(0, Vec2::new(50.0, 50.0)), (1, Vec2::new(60.0, 60.0))],
-      player_health: vec![1, 5],
-      player_invuln: vec![false, false],
+      vitals: vec![(0, 1, false), (1, 5, false)],
     };
     client.on_player_frame(&hit, 1_000);
     let full = PLAYER_MAX_HEALTH as u8;
@@ -1534,8 +1577,7 @@ mod tests {
     let frame = PlayerFrame {
       server_time_ms: 6_900,
       players: vec![(0, Vec2::new(0.0, 0.0)), (1, Vec2::new(0.0, 0.0))],
-      player_health: vec![],
-      player_invuln: vec![],
+      vitals: vec![],
     };
     client.on_player_frame(&frame, 7_550);
     client.tick(0, &Controls::default());
@@ -1555,8 +1597,7 @@ mod tests {
       server_time_ms: 1_000,
       // Only player 0 gets a sample, so player 1's view has nothing at T.
       players: vec![(0, Vec2::new(50.0, 50.0))],
-      player_health: vec![],
-      player_invuln: vec![],
+      vitals: vec![],
     };
     client.on_player_frame(&frame, 1_000);
     assert_eq!(client.view_fallbacks(), 0);
@@ -1591,6 +1632,94 @@ mod tests {
     repeat.left.push((key.into(), LeaveReason::Died));
     client.apply_packet(&repeat, 260, &controls);
     assert_eq!(client.deaths_seen, 1, "a recovery repeat is the same death, not a second one");
+  }
+
+  #[test]
+  fn a_player_who_was_never_sent_is_not_drawn() {
+    // A player outside this client's relevance still occupies a slot, holding
+    // the seed a camera falls back to, which is the middle of the arena.
+    // Drawing that is a peer standing in the centre of the map who is not
+    // there: the same class of mistake as the corner camera, a default that is
+    // right for one use and wrong for another.
+    let mut client = Client::new(0, 4);
+    let frame = PlayerFrame {
+      server_time_ms: 1_000,
+      // Only players 0 and 2 are relevant to this client.
+      players: vec![(0, Vec2::new(100.0, 100.0)), (2, Vec2::new(140.0, 100.0))],
+      vitals: vec![(0, 50, false), (2, 90, true)],
+    };
+    client.on_player_frame(&frame, 1_000);
+
+    assert!(client.knows_player(0) && client.knows_player(2), "the two that were sent are known");
+    assert!(!client.knows_player(1) && !client.knows_player(3), "the two that were not are not");
+    for p in [1usize, 3] {
+      assert_eq!(
+        (client.players()[p].x, client.players()[p].y),
+        (crate::sim::types::ARENA_W * 0.5, crate::sim::types::ARENA_H * 0.5),
+        "player {p} still holds the seed, which is exactly why it must not be drawn"
+      );
+    }
+    // And the vitals that did arrive landed on the right players.
+    client.tick(0, &Controls::default());
+    client.tick(200, &Controls::default());
+    assert_eq!(client.player_health[0], 50);
+    assert_eq!(client.player_health[2], 90);
+    assert!(client.player_invuln[2], "the shield rode with the id, not with a position in an array");
+  }
+
+  #[test]
+  fn a_shot_is_flown_from_its_event_and_ends_when_told() {
+    // Shots are events now: an origin, a velocity and a time, evaluated at the
+    // render instant. Two things this has to get right, and the second is why
+    // the idea was reverted the first time it was tried.
+    let controls = Controls::default();
+    let mut client = client_with_a_moving_player(500);
+    let at = client.render_at().expect("timeline started").server_time_ms();
+
+    let mut packet = Packet { server_time_ms: at, seq: 1, ..Default::default() };
+    packet.shots_fired.push(Shot {
+      id: 7,
+      origin: Vec2::new(0.0, 0.0),
+      vel: Vec2::new(100.0, 0.0),
+      fired_ms: at.saturating_sub(500),
+    });
+    client.apply_packet(&packet, at, &controls);
+
+    // Placed by evaluating the rule at the instant being drawn, not carried
+    // forward from wherever the last packet happened to say it was.
+    let drawn = client.render_projectiles(client.render_at().unwrap());
+    assert_eq!(drawn.len(), 1);
+    assert!((drawn[0].x - 50.0).abs() < 1.0, "half a second at 100 px/s from the origin: {drawn:?}");
+
+    // An early end, which is the thing a client cannot derive and the reason
+    // the first attempt at this flew shots through the enemies they killed.
+    let mut ended = Packet { server_time_ms: at, seq: 2, ..Default::default() };
+    ended.shots_ended.push(7);
+    client.apply_packet(&ended, at, &controls);
+    assert!(client.render_projectiles(client.render_at().unwrap()).is_empty(), "a shot that hit something stops being drawn");
+  }
+
+  #[test]
+  fn a_shot_expires_without_being_told() {
+    // Ordinary expiry is computed from the fire time and a constant both sides
+    // hold, so saying it on the wire would be paying twice for one fact.
+    let controls = Controls::default();
+    let mut client = client_with_a_moving_player(500);
+    let at = client.render_at().expect("timeline started").server_time_ms();
+    let mut packet = Packet { server_time_ms: at, seq: 1, ..Default::default() };
+    packet.shots_fired.push(Shot {
+      id: 9,
+      origin: Vec2::new(0.0, 0.0),
+      vel: Vec2::new(100.0, 0.0),
+      fired_ms: at,
+    });
+    client.apply_packet(&packet, at, &controls);
+    assert_eq!(client.render_projectiles(client.render_at().unwrap()).len(), 1);
+
+    // Past its lifetime, with nothing arriving to say so.
+    client.tick((crate::sim::types::PROJECTILE_TTL * 1000.0) as u64 + 100, &controls);
+    assert!(client.render_projectiles(client.render_at().unwrap()).is_empty(), "it expired on its own");
+    assert_eq!(client.shots_held(), 0, "and was dropped rather than accumulating for ever");
   }
 
   #[test]
@@ -1631,8 +1760,7 @@ mod tests {
       let frame = PlayerFrame {
         server_time_ms: t,
         players: vec![(0, Vec2::new(t as f32 * 0.19, 0.0))],
-        player_health: vec![],
-        player_invuln: vec![],
+        vitals: vec![],
       };
       client.on_player_frame(&frame, t);
       t += 33;
@@ -1657,8 +1785,7 @@ mod tests {
       let frame = PlayerFrame {
         server_time_ms: t,
         players: vec![(0, Vec2::new(t as f32, 0.0))],
-        player_health: vec![],
-        player_invuln: vec![],
+        vitals: vec![],
       };
       client.on_player_frame(&frame, t);
     }

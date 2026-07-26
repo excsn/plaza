@@ -615,13 +615,15 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         }
 
         // The player stream, through the same impairment link so it is delayed
-        // exactly as the entity stream is. Everyone gets the same frame: four
-        // entities, no relevance to apply, and every enemy in the world aims at
-        // one of them.
-        if let Some(frame) = state.sim.take_player_frame() {
-          for key in by_seat.values() {
+        // exactly as the entity stream is. One frame per recipient now: each
+        // carries only the players that recipient can see, or that an enemy it
+        // holds is chasing, which is what stops the player stream being the
+        // largest line in the budget once the arena is large.
+        if let Some(frames) = state.sim.take_player_frames() {
+          for (seat, frame) in frames {
+            let Some(key) = by_seat.get(&(seat as usize)) else { continue };
             let entry = state.down.entry(*key).or_default();
-            entry.send(now, Downstream::Players(frame.clone()), controls.latency_ms, controls.jitter_ms, controls.loss_pct, &mut state.rng);
+            entry.send(now, Downstream::Players(frame), controls.latency_ms, controls.jitter_ms, controls.loss_pct, &mut state.rng);
           }
         }
 

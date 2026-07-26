@@ -98,19 +98,19 @@ pub type PlayerId = u8;
 ///
 /// A player is a *viewer*, so it costs a relevance query and a packet of its own
 /// every send round, and a pass over the live enemies in both `fire_weapons` and
-/// `nova`, making the server `O(players * enemies)`. What bounds this is
-/// bandwidth rather than CPU. At 8000 enemies, `examples/players.rs` reports:
+/// `nova`, making the server `O(players * enemies)`. At 3000 enemies,
+/// `examples/players.rs` reports:
 ///
 /// | players | server CPU per simulated second | downstream |
 /// |---|---|---|
-/// | 4 | 16 ms | 355 KiB/s |
-/// | 128 | 168 ms | 5.1 MiB/s |
+/// | 4 | 6 ms | 136 KiB/s |
+/// | 128 | 75 ms | 607 KiB/s |
 ///
-/// Most of that traffic is not the enemies. Player positions go to everybody
-/// with no relevance applied, on both streams, so they are `O(players^2)` and
-/// are 55% of the total at 128 against 2% at four. Relevance is what this
-/// example is about, and the one thing it does not apply it to is what dominates
-/// once the count is large.
+/// Bandwidth used to be what bounded this, at 3.9 MiB/s for that second row,
+/// because everything per-player went to everybody: positions and vitals on both
+/// streams and every wallet in every packet, all `O(players^2)` and 81% of the
+/// total. Relevance now applies to players as well as enemies, so the term is
+/// flat and CPU is the honest limit again.
 ///
 /// Re-run it before moving this. The hard limit above it is the wire, where
 /// `PlayerId` is a `u8`.
@@ -263,9 +263,48 @@ pub struct Enemy {
 /// A shot in flight. Few enough to send outright.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Projectile {
+  pub id: ShotId,
   pub pos: Vec2,
+  /// Where it started. Kept so an early end can be sent to exactly the clients
+  /// that were told it started, rather than to everybody.
+  pub origin: Vec2,
   pub vel: Vec2,
   pub ttl: f32,
+}
+
+/// A shot's identity, so an early end can name it.
+pub type ShotId = u32;
+
+/// A shot as an **event**: where it started, how fast, and when.
+///
+/// Everything a client needs to place it at any instant, which is what lets it
+/// live on the same delayed timeline as everything else. The alternative, a
+/// position re-sent every packet, cannot be evaluated at an instant between
+/// packets and costs an entry per packet for the whole flight.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Shot {
+  pub id: ShotId,
+  pub origin: Vec2,
+  pub vel: Vec2,
+  pub fired_ms: u64,
+}
+
+impl Shot {
+  /// Where this shot is at `at_ms`, on the server clock.
+  ///
+  /// The shared rule, in the only form a shot needs: constant velocity from a
+  /// known origin is exact at any instant, so both sides agree without either
+  /// of them sending a position.
+  pub fn at(&self, at_ms: u64) -> Vec2 {
+    let age = at_ms.saturating_sub(self.fired_ms) as f32 / 1000.0;
+    Vec2::new(self.origin.x + self.vel.x * age, self.origin.y + self.vel.y * age)
+  }
+
+  /// Whether it has outlived [`PROJECTILE_TTL`] by `at_ms`. Derived, never sent:
+  /// both sides hold the fire time and the lifetime is a constant.
+  pub fn expired(&self, at_ms: u64) -> bool {
+    at_ms.saturating_sub(self.fired_ms) as f32 / 1000.0 >= PROJECTILE_TTL
+  }
 }
 
 /// **The shared movement rule for a player.** The server integrates a held
@@ -533,16 +572,29 @@ pub struct Crowd {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct PlayerFrame {
   pub server_time_ms: u64,
+  /// **Only the players this recipient needs**, which is what keeps the player
+  /// stream from being the dominant cost of a large arena.
+  ///
+  /// It used to be everybody, to everybody, on this stream *and* inside every
+  /// entity packet. That is `O(players^2)`, and measured at 128 players it was
+  /// 81% of all downstream traffic while the three thousand enemies, which do
+  /// get relevance, were 9%. The one thing this example never applied its own
+  /// technique to was the thing that dominated it.
+  ///
+  /// A player is needed here if this recipient can see them, or if an enemy the
+  /// recipient holds is chasing them: `step_enemy` aims at a player, so a target
+  /// the client cannot place is a rule it cannot run.
   pub players: Vec<(PlayerId, Vec2)>,
-  pub player_health: Vec<u8>,
-  pub player_invuln: Vec<bool>,
+  /// Health and shield for the same set, paired with the id rather than
+  /// positional, because the set is a subset now.
+  pub vitals: Vec<(PlayerId, u8, bool)>,
 }
 
 impl PlayerFrame {
   /// Roughly what this costs on the wire: a timestamp, then an id and a
-  /// quantized position each, plus a byte of health and a bit of shield.
+  /// quantized position each, plus an id, a health byte and a shield bit.
   pub fn bytes(&self) -> usize {
-    8 + self.players.len() * (1 + 4) + self.player_health.len() + self.player_invuln.len()
+    8 + self.players.len() * (1 + POS_BYTES) + self.vitals.len() * 2
   }
 }
 
@@ -578,7 +630,6 @@ pub struct Packet {
   pub entered: Vec<Spawn>,
   pub left: Vec<(Handle, LeaveReason)>,
   pub samples: Vec<Sample>,
-  pub players: Vec<(PlayerId, Vec2)>,
   /// When the most recent area pulse fired, on the server clock. An event
   /// declared outright rather than inferred from the death burst it causes: the
   /// inference re-fired on recovery repeats, and a mid-pulse joiner had nothing
@@ -586,17 +637,29 @@ pub struct Packet {
   /// the render instant, so repeats are naturally idempotent.
   #[serde(default)]
   pub nova_at_ms: Option<u64>,
-  /// Shots near this player, sent outright: there are few and they are short-lived.
-  /// The live shots near this player.
+  /// Shots that **started** near this player since the last packet.
   ///
-  /// The **authoritative set**, re-sent each packet, which is what makes a shot
-  /// that hit something simply stop appearing. Sending a spawn event once and
-  /// letting the client fly it was tried and is worse in two ways: the client has
-  /// to be told when the shot ends (or it flies on through the enemy it killed),
-  /// and it cannot decide that for itself, because it draws the shot in the past
-  /// while its enemy mirror holds the present, so the enemy that should stop the
-  /// bullet has already been removed.
-  pub projectiles: Vec<Projectile>,
+  /// An event, not a live set. The set was re-sent in full every packet for the
+  /// whole 1.4 s flight, which is one entry in roughly twenty packets per shot,
+  /// and it is sending the output of an equation both sides can solve: a shot is
+  /// an origin, a velocity and a time, and a client can evaluate that at any
+  /// instant exactly.
+  ///
+  /// This was tried once and reverted, for two stated reasons. The first was
+  /// real and is fixed by [`Packet::shots_ended`]: without it a shot flies on
+  /// through the enemy it killed. The second, that the client draws shots in the
+  /// past while its enemy mirror holds the present, stopped being true when the
+  /// whole scene moved to one render instant, and it is why this is worth
+  /// revisiting rather than a decision being re-litigated.
+  #[serde(default)]
+  pub shots_fired: Vec<Shot>,
+  /// Shots that ended **early**, because they hit something.
+  ///
+  /// Expiry is not in here: a client can compute that from the fire time and the
+  /// fixed lifetime, so saying it again would be paying twice for a fact both
+  /// sides already hold. Only a hit is information the client cannot derive.
+  #[serde(default)]
+  pub shots_ended: Vec<ShotId>,
   /// An order-independent digest of exactly what this client should hold once it
   /// has applied this packet. Eight bytes that turn a silent mirror divergence
   /// into a detected one.
@@ -612,9 +675,17 @@ pub struct Packet {
   /// Coins near this player, sent outright: there are few and they are the thing
   /// a race is fought over, so partial knowledge would be worse than the bytes.
   pub coins: Vec<Coin>,
-  /// Every player's authoritative balance and upgrades. Small, and the client is
-  /// not trusted to derive either.
-  pub wallets: Vec<Wallet>,
+  /// Wallets this recipient needs and does not already have: the relevant
+  /// players' balances and upgrades, sent **when they change** rather than in
+  /// every packet.
+  ///
+  /// Paired with the id because it is a subset twice over. A wallet is a rule
+  /// input, not just a readout (the repulsor and the magnet both come from it),
+  /// so it is needed for any player whose upgrades could reach an enemy this
+  /// client holds, and it changes only on a pickup or a purchase. Re-sending
+  /// every wallet in every packet was three bytes per player per packet, which
+  /// at 128 players was a third of the per-player traffic and none of it new.
+  pub wallets: Vec<(PlayerId, Wallet)>,
   /// Purchases this recipient asked for and did not get.
   ///
   /// Told rather than inferred, for the same reason claims are. A client that
@@ -629,12 +700,6 @@ pub struct Packet {
   /// able to tell "you lost that one" from "you never saw it", and an absence
   /// says neither.
   pub claims: Vec<(PlayerId, CoinId)>,
-  /// Every player's health, `0..=PLAYER_MAX_HEALTH`, indexed by `PlayerId`. Sent
-  /// to everyone so a client can draw a bar over a peer as well as itself. One
-  /// byte each; the player count is tiny.
-  pub player_health: Vec<u8>,
-  /// Which players are briefly invulnerable after a respawn, for the shield.
-  pub player_invuln: Vec<bool>,
   /// Weapon hits near this player since the last packet: where, and how much
   /// damage, so a client can float a fading number like a bullet-heaven does.
   ///
@@ -712,6 +777,9 @@ pub const ACK_BYTES: usize = 2 + 8 + 8;
 /// A crowd stand-in: a quantized position and a count.
 pub const CROWD_BYTES: usize = POS_BYTES + 2;
 pub const PROJECTILE_BYTES: usize = POS_BYTES + POS_BYTES;
+/// A fire event: an id, a quantized origin and velocity, and a fire time as a
+/// small offset from the packet's own timestamp.
+pub const SHOT_BYTES: usize = ID_BYTES + POS_BYTES + POS_BYTES + 2;
 /// What the same data costs with a 16-byte UUID and two `f32`s.
 pub const NAIVE_ID_BYTES: usize = 16;
 pub const NAIVE_POS_BYTES: usize = 8;
@@ -730,34 +798,38 @@ impl Packet {
     delta_varint_bytes(died) + delta_varint_bytes(ranged)
   }
 
-  /// Where the bytes actually go: (samples, spawns, despawns, projectiles, other).
+  /// Where the bytes actually go: (samples, spawns, despawns, shots, per-player).
   /// Worth having, because it is easy to optimise a stream that turns out to be a
-  /// rounding error of the packet.
+  /// rounding error of the packet, and because the reverse happened here: the
+  /// per-player slot was the whole story at scale and nobody had looked.
   pub fn bytes_breakdown(&self) -> [usize; 5] {
     [
       self.samples.len() * SAMPLE_BYTES,
       self.entered.len() * SPAWN_BYTES,
       self.despawn_bytes(),
-      self.projectiles.len() * PROJECTILE_BYTES,
-      self.players.len() * (1 + POS_BYTES) + 10,
+      self.shot_bytes(),
+      self.wallets.len() * (1 + 3) + 10,
     ]
+  }
+
+  /// A fire event is an id, an origin, a velocity and a fire time; an early end
+  /// is just the id.
+  fn shot_bytes(&self) -> usize {
+    self.shots_fired.len() * SHOT_BYTES + self.shots_ended.len() * ID_BYTES
   }
 
   pub fn bytes(&self) -> usize {
     self.entered.len() * SPAWN_BYTES
       + self.despawn_bytes()
       + self.samples.len() * SAMPLE_BYTES
-      + self.projectiles.len() * PROJECTILE_BYTES
-      + self.players.len() * (1 + POS_BYTES)
+      + self.shot_bytes()
       + self.crowds.len() * CROWD_BYTES
       + self.coins.len() * (ID_BYTES + POS_BYTES)
-      // A balance and a bitmask of upgrades per player.
-      + self.wallets.len() * 3
+      // An id, a balance, and a bitmask of upgrades, for the wallets that
+      // actually changed.
+      + self.wallets.len() * (1 + 3)
       + self.claims.len() * (1 + ID_BYTES)
       + self.denied_buys.len()
-      // A health byte per player, and the invuln flags packed to a bitmask.
-      + self.player_health.len()
-      + self.player_invuln.len().div_ceil(8)
       // A quantized position and a damage byte per hit.
       + self.hits.len() * (POS_BYTES + 1)
       + 8 // the digest
@@ -769,8 +841,7 @@ impl Packet {
     self.entered.len() * (per + 1)
       + self.left.len() * NAIVE_ID_BYTES
       + self.samples.len() * per
-      + self.projectiles.len() * (NAIVE_POS_BYTES * 2)
-      + self.players.len() * (1 + NAIVE_POS_BYTES)
+      + self.shots_fired.len() * (NAIVE_POS_BYTES * 2)
   }
 }
 

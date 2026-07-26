@@ -432,9 +432,15 @@ fn draw_repulsor(radius: f32, at: SimVec2, cam: &Camera) {
 
 /// Peers near the eye, and your own marker.
 #[cfg(all(feature = "client", feature = "websocket"))]
-fn draw_players(players: &[SimVec2], me: Option<usize>, eye: SimVec2, you: SimVec2, cam: &Camera) {
+fn draw_players(players: &[SimVec2], known: &dyn Fn(usize) -> bool, me: Option<usize>, eye: SimVec2, you: SimVec2, cam: &Camera) {
   for (i, p) in players.iter().enumerate() {
     if me == Some(i) {
+      continue;
+    }
+    // A player this client has never been told about still has a slot, holding
+    // the arena-centre seed. Drawing it puts a peer in the middle of the map who
+    // is not there.
+    if !known(i) {
       continue;
     }
     if p.dist(eye) <= VIEW_RADIUS * 1.3 {
@@ -490,7 +496,7 @@ pub fn draw_client_world(client: &horde_playground::net::client::NetClient, cont
       draw_circle(x, y, 3.0, C_TRUTH);
     }
     for (i, pos) in client.sim.players().iter().enumerate() {
-      if pos.dist(you) <= VIEW_RADIUS * 1.3 {
+      if client.sim.knows_player(i) && pos.dist(you) <= VIEW_RADIUS * 1.3 {
         let (x, y) = cam.at(*pos);
         draw_circle_lines(x, y, 7.0, 1.0, C_TRUTH);
         draw_text(&format!("P{i}"), x + 9.0, y - 6.0, 14.0, C_TRUTH);
@@ -523,13 +529,13 @@ pub fn draw_client_world(client: &horde_playground::net::client::NetClient, cont
   }
 
   let players = drawn;
-  draw_players(&players, me, you, you, cam);
+  draw_players(&players, &|i| client.sim.knows_player(i), me, you, you, cam);
 
   // Hit sparks, death explosions, damage numbers, health bars, and the shield.
   draw_bursts(&client.sim.bursts, cam);
   draw_popups(&client.sim.popups, cam);
   for (i, p) in players.iter().enumerate() {
-    if p.dist(you) > VIEW_RADIUS * 1.3 && me != Some(i) {
+    if (p.dist(you) > VIEW_RADIUS * 1.3 || !client.sim.knows_player(i)) && me != Some(i) {
       continue;
     }
     let (x, y) = cam.at(*p);

@@ -87,11 +87,13 @@ impl World {
     }
 
     // The player stream, on the same impaired link so it is delayed and dropped
-    // exactly as the entity stream is. Everyone gets the same frame.
-    if let Some(frame) = self.server.take_player_frame() {
-      self.bytes_sent += (frame.bytes() * self.down.len()) as u64;
-      for link in self.down.iter_mut() {
-        link.send(self.wall_ms, Downstream::Players(frame.clone()), controls.latency_ms, controls.jitter_ms, controls.loss_pct, &mut self.rng);
+    // exactly as the entity stream is. One frame per recipient: each carries
+    // only the players that recipient can see or is being hunted on behalf of.
+    if let Some(frames) = self.server.take_player_frames() {
+      for (p, frame) in frames {
+        let Some(link) = self.down.get_mut(p as usize) else { continue };
+        self.bytes_sent += frame.bytes() as u64;
+        link.send(self.wall_ms, Downstream::Players(frame), controls.latency_ms, controls.jitter_ms, controls.loss_pct, &mut self.rng);
       }
     }
 
@@ -512,6 +514,86 @@ mod tests {
   use super::*;
   use crate::sim::types::RemoteMode;
 
+  #[test]
+  fn a_client_is_only_sent_the_players_it_can_use() {
+    // The change that took 128 players from 3.9 MB/s to 0.6. Player state used
+    // to go to everybody, on both streams, which is `O(players^2)` and was 81%
+    // of all traffic at a large count while the three thousand enemies, which do
+    // get relevance, were 9%.
+    //
+    // Measured on the **per-round** set, not on what a client has ever heard.
+    // Cumulative knowledge grows to the whole roster and costs nothing: a
+    // freshly spawned enemy chases whoever the wave assigned it until the next
+    // retarget, so everybody passes through everybody's set eventually.
+    let controls = Controls { spread_players: true, ..Controls::default() };
+    let mut w = World::new(&controls, 32, 0x5EED_D00D);
+    for _ in 0..(4 * 60) {
+      w.step(16, Vec2::new(1.0, 0.0), &controls);
+    }
+    for c in 0..32 {
+      let sent = w.server.relevant_player_count(c);
+      assert!(sent >= 1, "client {c} must at least be sent itself");
+      assert!(sent < 32 / 2, "client {c} is being sent {sent} of 32 players, which is not a slice");
+    }
+  }
+
+  #[test]
+  fn a_player_an_enemy_is_chasing_is_sent_even_when_out_of_view() {
+    // The half of the rule that is easy to miss. `step_enemy` aims at a player,
+    // so a client holding an enemy needs that enemy's target wherever it is: a
+    // target it cannot place is a rule it cannot run, and its horde would drift
+    // from the server's.
+    let controls = Controls { spread_players: true, ..Controls::default() };
+    let w = run(&controls, 4);
+    for (c, client) in w.clients.iter().enumerate() {
+      let Some(at) = client.render_at() else { continue };
+      for (handle, _, _) in client.render(&controls, at) {
+        if let Some(target) = w.server.enemy_target(handle) {
+          assert!(
+            client.knows_player(target as usize),
+            "client {c} holds an enemy chasing player {target} and was never told where that is"
+          );
+        }
+      }
+    }
+  }
+
+  #[test]
+  fn a_wallet_is_sent_when_it_changes_and_not_in_every_packet() {
+    // Wallets are a rule input (the repulsor and the magnet both come from
+    // them), so they cannot simply be dropped, but they change only on a pickup
+    // or a purchase. Restating every wallet in every packet was three bytes per
+    // player per packet and a third of the per-player traffic.
+    // At scale and spread out, which is where the saving is. Four players in one
+    // cluster all farm the same coins, so all four wallets change every round
+    // and there is correctly nothing to save.
+    let controls = Controls { coins: true, spread_players: true, ..Controls::default() };
+    let players = 32;
+    let mut server = Server::new(controls.enemy_count, players, controls.spread_players);
+    let seats = vec![crate::sim::server::Seat::Bot; players];
+    let mut wallets_sent = 0usize;
+    let mut packets = 0u32;
+    for _ in 0..(8 * 60) {
+      for (_, packet) in server.advance_seats(16, &seats, &controls) {
+        packets += 1;
+        wallets_sent += packet.wallets.len();
+      }
+    }
+    assert!(packets > 0, "there were packets to look at");
+    // Not "few packets carry a wallet", which is false when everyone is earning
+    // at once. What changed is that a packet carries *the wallets that moved and
+    // matter to this recipient* instead of the whole roster.
+    // Bounded by the relevant set rather than the roster. With every player
+    // earning at once the change-only half saves little here and the relevance
+    // half saves all of it, which is the honest reading: the two are worth
+    // having together because a real arena is not uniformly busy.
+    let per_packet = wallets_sent as f32 / packets as f32;
+    assert!(
+      per_packet < players as f32 / 2.0,
+      "a packet should carry the relevant wallets, not one per player: {per_packet:.1} of {players}"
+    );
+  }
+
   fn run(controls: &Controls, secs: u64) -> World {
     let mut w = World::new(controls, 4, 0x5EED_D00D);
     for _ in 0..(secs * 60) {
@@ -833,7 +915,15 @@ mod tests {
 
   /// The worst a client's idea of a *peer* is behind the server's truth, in px,
   /// sampled every frame rather than at the end so a transient is not missed.
+  /// Worst error in what client 0 believes about player 1.
+  ///
+  /// **Clustered**, because the player stream is relevance-limited now: spread
+  /// across the arena the two are 1500 px apart, client 0 is never told about
+  /// player 1 at all, and the measurement is of a seed rather than of staleness.
+  /// That is the feature working, and it makes the spread arena the wrong place
+  /// to measure freshness.
   fn worst_peer_lag(controls: &Controls, secs: u64) -> f32 {
+    let controls = &Controls { spread_players: false, ..*controls };
     let mut w = World::new(controls, 4, 0x5EED_D00D);
     let mut worst = 0.0f32;
     // Warm up first. Before the first packet lands a client believes the origin,
@@ -847,6 +937,13 @@ mod tests {
         continue;
       }
       // What client 0 believes about player 1, against where player 1 really is.
+      // Only while the peer is actually relevant. Player 0 is steered and player
+      // 1 drifts, so they separate past the relevance radius within a few
+      // seconds, and past that the client is *correctly* not being told: the
+      // number would measure the feature rather than the send rate.
+      if w.server.players[0].dist(w.server.players[1]) > crate::sim::types::VIEW_RADIUS * 1.3 {
+        continue;
+      }
       let believed = w.clients[0].players()[1];
       worst = worst.max(believed.dist(w.server.players[1]));
     }
@@ -866,7 +963,10 @@ mod tests {
     // A 10 Hz player stream on an 80 ms link needs 80 + 20 + 100 back before two
     // samples bracket T. Declared, because under one shared timeline the delay is
     // a chosen number rather than something the client discovers.
-    let controls = Controls { sync_hz: 4, player_sync_hz: 10, render_delay_ms: 250, ..Controls::default() };
+    // Clustered, and only sampled while the peer is in view: the player stream
+    // is relevance-limited, so a peer that walks out of range stops arriving and
+    // its drawn position freezes, which would read here as one enormous step.
+    let controls = Controls { sync_hz: 4, player_sync_hz: 10, render_delay_ms: 250, spread_players: false, ..Controls::default() };
     let mut w = World::new(&controls, 4, 0x5EED_D00D);
 
     let mut worst_raw = 0.0f32;
@@ -878,7 +978,8 @@ mod tests {
       w.step(16, Vec2::new(1.0, 0.0), &controls);
       let raw = w.clients[0].players()[1];
       let drawn = w.clients[0].render_at().map(|at| w.clients[0].render_players(at)[1]).unwrap_or_default();
-      if frame >= warmup {
+      let in_view = w.server.players[0].dist(w.server.players[1]) <= crate::sim::types::VIEW_RADIUS * 1.3;
+      if frame >= warmup && in_view {
         if let Some(previous) = last_raw {
           worst_raw = worst_raw.max(previous.dist(raw));
         }
@@ -886,8 +987,10 @@ mod tests {
           worst_drawn = worst_drawn.max(previous.dist(drawn));
         }
       }
-      last_raw = Some(raw);
-      last_drawn = Some(drawn);
+      // Dropped while out of view, so the first sample after the peer returns is
+      // not compared against one from before it left.
+      last_raw = in_view.then_some(raw);
+      last_drawn = in_view.then_some(drawn);
     }
 
     assert!(worst_raw > 8.0, "the raw sample should visibly jump between arrivals: {worst_raw:.1} px");

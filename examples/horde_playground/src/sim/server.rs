@@ -15,7 +15,7 @@ use plaza_server_utils::delta::{DeltaBaseline, RecoveryPolicy};
 use plaza_server_utils::relevance::{GridQuantizer, SetDigest, SpatialGrid, VisibilitySet};
 
 use crate::sim::types::{PlayerFrame, 
-  coin_pull, difficulty, step_player, enemy_speed_scale, repulsor_pulse, step_coin, step_enemy, Coin, CoinId, Controls, Crowd, Enemy, EnemyKind, EntityIndex, Handle, LeaveReason, Packet, PlayerId, Projectile, Sample, Spawn, Upgrade, Vec2, Wallet, COIN_PICKUP_RADIUS, COIN_DROP_IN, COIN_TTL_MS, ARENA_H, ARENA_W, CELL_SIZE, CONTACT_HIT_DAMAGE, FIRE_INTERVAL_MS, HIT_INVULN_MS, HIT_RADIUS, NOVA_INTERVAL_MS,
+  coin_pull, difficulty, step_player, enemy_speed_scale, repulsor_pulse, step_coin, step_enemy, Coin, CoinId, Controls, Crowd, Enemy, EnemyKind, EntityIndex, Handle, LeaveReason, Packet, PlayerId, Projectile, Sample, Shot, ShotId, Spawn, Upgrade, Vec2, Wallet, COIN_PICKUP_RADIUS, COIN_DROP_IN, COIN_TTL_MS, ARENA_H, ARENA_W, CELL_SIZE, CONTACT_HIT_DAMAGE, FIRE_INTERVAL_MS, HIT_INVULN_MS, HIT_RADIUS, NOVA_INTERVAL_MS,
   NOVA_DAMAGE, NOVA_RADIUS, PLAYER_CONTACT_RADIUS, PLAYER_INVULN_MS, PLAYER_MAX_HEALTH, PROJECTILE_SPEED, PROJECTILE_TTL, SIM_DT, VIEW_RADIUS, WAVE_INTERVAL_MS,
 };
 
@@ -88,7 +88,7 @@ pub struct Server {
   player_sync: Periodic,
   /// The player frame this tick produced, if it was due. Held rather than
   /// returned so `advance_seats` keeps its signature and every caller opts in.
-  pending_players: Option<PlayerFrame>,
+  pending_players: Option<Vec<(PlayerId, PlayerFrame)>>,
   /// Re-aiming the horde. Idempotent within a tick, so it fires at most once
   /// however long the frame was.
   retarget: Periodic,
@@ -107,6 +107,24 @@ pub struct Server {
 
   candidates: Vec<EntityIndex>,
   entered_buf: Vec<u32>,
+  /// Which players each client needs: the ones it can see, plus the ones its
+  /// visible enemies are chasing. Recomputed on each entity round and reused by
+  /// the player stream, which runs on its own clock.
+  relevant_players: Vec<Vec<PlayerId>>,
+  /// Wallets that changed since the last send round. A wallet is a rule input
+  /// and changes only on a pickup or a purchase, so it is sent on change rather
+  /// than restated in every packet.
+  wallets_dirty: BTreeSet<PlayerId>,
+  /// Shots fired since the last send, and shots that ended **early** because
+  /// they hit something. Expiry is not in here: both sides can compute it.
+  shots_fired_since_send: Vec<Shot>,
+  /// Ends carry the shot's **origin**, not its death place, purely so they can
+  /// be filtered by the same rule the fire event was: exactly the clients that
+  /// were told a shot started are the ones told it stopped. Filtering on where
+  /// it died would miss a client holding a shot that travelled out of its view,
+  /// and that client would fly the shot on through what killed it.
+  shots_ended_since_send: Vec<(ShotId, Vec2)>,
+  next_shot_id: ShotId,
 
   next_seq: u64,
   /// Per client, the reliability half of the delta stream: what each packet
@@ -205,6 +223,11 @@ impl Server {
       last_nova_ms: None,
       candidates: Vec::new(),
       entered_buf: Vec::new(),
+      relevant_players: vec![Vec::new(); player_count],
+      wallets_dirty: (0..player_count as PlayerId).collect(),
+      shots_fired_since_send: Vec::new(),
+      shots_ended_since_send: Vec::new(),
+      next_shot_id: 0,
       next_seq: 0,
       baselines: (0..player_count).map(|_| DeltaBaseline::new(SENT_HISTORY)).collect(),
       coins: Vec::new(),
@@ -314,11 +337,11 @@ impl Server {
       }
     }
 
-    // The player stream, on its own clock. Cheap enough to build unconditionally
-    // when due: four entities against the entity stream's thousands.
+    // The player stream, on its own clock and now built per recipient, because
+    // it carries a different subset to each one.
     self.player_sync.set_interval_ms(controls.player_sync_interval_ms());
     if self.player_sync.due(dt_ms) {
-      self.pending_players = Some(self.build_player_frame());
+      self.pending_players = Some((0..self.players.len()).map(|c| (c as PlayerId, self.build_player_frame(c))).collect());
     }
 
     self.sync.set_interval_ms(controls.sync_interval_ms());
@@ -441,6 +464,7 @@ impl Server {
     for (p, id) in claimed {
       self.wallets[p].balance += 1;
       self.coins_claimed[p] += 1;
+      self.wallets_dirty.insert(p as PlayerId);
       self.claims_since_send.push((p as PlayerId, id));
     }
   }
@@ -457,6 +481,7 @@ impl Server {
     wallet.balance -= upgrade.cost();
     wallet.upgrades.push(upgrade);
     wallet.upgrades.sort_unstable();
+    self.wallets_dirty.insert(player as PlayerId);
   }
 
   fn step_projectiles(&mut self) {
@@ -492,6 +517,11 @@ impl Server {
     spent.dedup();
     for pi in spent.into_iter().rev() {
       if pi < self.projectiles.len() {
+        // An early end, and the one thing about a shot a client cannot derive:
+        // it holds the fire time and the lifetime, so ordinary expiry needs no
+        // message, but a hit does or the shot flies on through what it killed.
+        let ended = &self.projectiles[pi];
+        self.shots_ended_since_send.push((ended.id, ended.origin));
         self.projectiles.remove(pi);
       }
     }
@@ -576,10 +606,24 @@ impl Server {
       {
         let (dx, dy) = (target.x - player.x, target.y - player.y);
         let len = (dx * dx + dy * dy).sqrt().max(1.0);
+        let vel = Vec2::new(dx / len * PROJECTILE_SPEED, dy / len * PROJECTILE_SPEED);
+        let id = self.next_shot_id;
+        self.next_shot_id = self.next_shot_id.wrapping_add(1);
         self.projectiles.push(Projectile {
+          id,
           pos: player,
-          vel: Vec2::new(dx / len * PROJECTILE_SPEED, dy / len * PROJECTILE_SPEED),
+          origin: player,
+          vel,
           ttl: PROJECTILE_TTL,
+        });
+        // The event, which is all a client is told. It carries the rule's
+        // inputs, so a client places the shot at any instant exactly instead of
+        // being handed a position it could have computed.
+        self.shots_fired_since_send.push(Shot {
+          id,
+          origin: player,
+          vel,
+          fired_ms: self.clock_ms,
         });
       }
     }
@@ -815,22 +859,74 @@ impl Server {
     }
   }
 
-  /// Takes this tick's player frame, if the player stream was due.
+  /// Takes this tick's player frames, one per recipient, if the stream was due.
   ///
-  /// Everyone gets the same one: the players are few and they are the input
-  /// to every enemy's behaviour, so there is nothing per-recipient to decide and
-  /// no relevance to apply. That asymmetry against the entity stream is the
-  /// whole reason the two are separate.
-  pub fn take_player_frame(&mut self) -> Option<PlayerFrame> {
+  /// **Per recipient, not one broadcast.** Everyone used to get the same frame
+  /// listing every player, on the reasoning that players are few. That holds at
+  /// four and fails at scale: it is `O(players^2)`, and measured at 128 it was
+  /// the largest single line in the whole bandwidth budget. Each recipient now
+  /// gets the players it can see or is being hunted on behalf of.
+  pub fn take_player_frames(&mut self) -> Option<Vec<(PlayerId, PlayerFrame)>> {
     self.pending_players.take()
   }
 
-  fn build_player_frame(&self) -> PlayerFrame {
+  /// How many players client `c` is currently being sent.
+  ///
+  /// The per-round set, which is what the bandwidth depends on. A client's
+  /// *cumulative* knowledge is much larger and says nothing about cost: a
+  /// freshly spawned enemy briefly chases whoever the wave assigned it, so over
+  /// a minute almost every player passes through almost every client's set once.
+  pub fn relevant_player_count(&self, c: usize) -> usize {
+    self.relevant_players[c].len()
+  }
+
+  /// Which player an enemy is chasing, if this handle still names a live one.
+  /// For checking that a client was told where its enemies' targets are.
+  pub fn enemy_target(&self, handle: Handle) -> Option<PlayerId> {
+    let key = SlotKey::from(handle);
+    self.pool.is_live(key).then(|| self.enemies[key.index as usize].target)
+  }
+
+  /// Which players client `c` actually needs.
+  ///
+  /// Two reasons a player is needed, and the second is the one that is easy to
+  /// miss: it can be **seen**, or it is being **chased** by an enemy this client
+  /// holds. `step_enemy` aims at a player, so a client that cannot place an
+  /// enemy's target runs a different rule than the server and the horde drifts.
+  ///
+  /// Recomputed on each entity round, when the visible set is already in hand,
+  /// and reused by the player stream on its own clock. At most one entity
+  /// interval stale, which costs nothing: a player who has just come into view
+  /// is one interval late rather than absent.
+  fn recompute_relevant_players(&mut self, c: usize) {
+    let eye = self.players[c];
+    let mut needed: BTreeSet<PlayerId> = BTreeSet::new();
+    // Yourself, always: your own marker and health are not optional.
+    needed.insert(c as PlayerId);
+    for (p, pos) in self.players.iter().enumerate() {
+      // The same threshold the renderer draws a peer at, so the wire carries
+      // exactly what the screen can use.
+      if pos.dist(eye) <= VIEW_RADIUS * 1.3 {
+        needed.insert(p as PlayerId);
+      }
+    }
+    for idx in self.cur_vis[c].iter() {
+      needed.insert(self.enemies[idx as usize].target);
+    }
+    let out = &mut self.relevant_players[c];
+    out.clear();
+    out.extend(needed);
+  }
+
+  fn build_player_frame(&self, c: usize) -> PlayerFrame {
+    let relevant = &self.relevant_players[c];
     PlayerFrame {
       server_time_ms: self.clock_ms,
-      players: self.players.iter().enumerate().map(|(p, pos)| (p as PlayerId, *pos)).collect(),
-      player_health: self.players.iter().enumerate().map(|(p, _)| self.player_health(p)).collect(),
-      player_invuln: self.player_shield_until_ms.iter().map(|&t| self.clock_ms < t).collect(),
+      players: relevant.iter().map(|&p| (p, self.players[p as usize])).collect(),
+      vitals: relevant
+        .iter()
+        .map(|&p| (p, self.player_health(p as usize), self.clock_ms < self.player_shield_until_ms[p as usize]))
+        .collect(),
     }
   }
 
@@ -843,11 +939,11 @@ impl Server {
       }
     }
 
-    let player_list: Vec<(PlayerId, Vec2)> = self.players.iter().enumerate().map(|(p, pos)| (p as PlayerId, *pos)).collect();
-    // Everyone's health and shield, indexed by player id. Small, and sent to all
-    // so a client draws a bar over a peer as well as itself.
-    let health_list: Vec<u8> = self.player_health.iter().map(|h| h.round().clamp(0.0, PLAYER_MAX_HEALTH) as u8).collect();
-    let invuln_list: Vec<bool> = self.player_shield_until_ms.iter().map(|&t| self.clock_ms < t).collect();
+    // Positions, health and shields are the player stream's business now, not
+    // this one's. They used to ride here as well, which meant every packet
+    // carried every player twice over: the single largest line in the budget at
+    // a large count, and none of it anything the other stream was not already
+    // saying.
     let mut out = Vec::with_capacity(self.players.len());
 
     let seq = self.next_seq;
@@ -892,6 +988,11 @@ impl Server {
           self.cur_vis[p].insert(key.index as EntityIndex);
         }
       }
+      // Which players this client needs, from the visible set just computed.
+      // Both streams read it: the entity packet for wallets, and the player
+      // stream on its own clock.
+      self.recompute_relevant_players(p);
+
       // The pool's own key, not one packed here: the digest, the delta baseline
       // and the client's mirror all key on `SlotKey::encode`, and a second
       // packing that agrees today is a disagreement waiting to happen.
@@ -912,9 +1013,6 @@ impl Server {
         seq,
         baseline_seq: plan.baseline_seq,
         full_baseline: plan.full_baseline,
-        players: player_list.clone(),
-        player_health: health_list.clone(),
-        player_invuln: invuln_list.clone(),
         nova_at_ms: self.last_nova_ms,
         ..Default::default()
       };
@@ -991,18 +1089,39 @@ impl Server {
         }
       }
 
-      // Coins near enough to race for, and everyone's wallet. Both are small
-      // enough that partial knowledge would cost more in confusion than the bytes
-      // save: a coin you cannot see is one you cannot contest.
+      // Coins near enough to race for: a coin you cannot see is one you cannot
+      // contest, so partial knowledge would cost more in confusion than the
+      // bytes save.
       if controls.coins {
         packet.coins = self.coins.iter().filter(|c| c.pos.dist(eye) <= VIEW_RADIUS * 1.2).copied().collect();
-        packet.wallets = self.wallets.clone();
+        // Wallets for the players this client needs, and only the ones that
+        // actually changed. A rebuild carries the lot, because a client that
+        // has just dropped its world has no wallet to update either.
+        packet.wallets = self.relevant_players[p]
+          .iter()
+          .filter(|id| plan.full_baseline || self.wallets_dirty.contains(id))
+          .map(|&id| (id, self.wallets[id as usize].clone()))
+          .collect();
         packet.claims = self.claims_since_send.clone();
         packet.denied_buys = std::mem::take(&mut self.denials_since_send[p]);
       }
 
-      // Shots close enough to matter, and the hits near this player.
-      packet.projectiles = self.projectiles.iter().filter(|pr| pr.pos.dist(eye) <= VIEW_RADIUS * 1.2).copied().collect();
+      // Shots that *started* near this player, and the ones that ended early.
+      // Events, not the live set: the flight itself is an equation both sides
+      // solve, so re-sending a position for it every packet pays for arithmetic
+      // twice and still cannot be evaluated between packets.
+      packet.shots_fired = self
+        .shots_fired_since_send
+        .iter()
+        .filter(|shot| shot.origin.dist(eye) <= VIEW_RADIUS * 1.2)
+        .copied()
+        .collect();
+      packet.shots_ended = self
+        .shots_ended_since_send
+        .iter()
+        .filter(|(_, origin)| origin.dist(eye) <= VIEW_RADIUS * 1.2)
+        .map(|(id, _)| *id)
+        .collect();
       packet.hits = self.hits_since_send.iter().filter(|(pos, _)| pos.dist(eye) <= VIEW_RADIUS * 1.2).copied().collect();
 
       // Summarise what the client must hold once it applies this packet. Keyed by
@@ -1024,6 +1143,12 @@ impl Server {
     }
     self.claims_since_send.clear();
     self.hits_since_send.clear();
+    // These are per-send-round events, so they are consumed by the round that
+    // carried them. A client that misses the packet misses the shot, which is
+    // the trade an event makes against a re-sent set, and it costs one sprite.
+    self.shots_fired_since_send.clear();
+    self.shots_ended_since_send.clear();
+    self.wallets_dirty.clear();
     out
   }
 }

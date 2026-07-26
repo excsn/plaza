@@ -135,6 +135,10 @@ Doing that exposes which entities can be on the timeline at all. A peer can, bec
 
 The fix is the same move that has worked everywhere else here, one level down: **send the input to the behaviour, not the behaviour's output.** A shot became an origin, a velocity and a fire time sent once as an event, so the client can evaluate it at any instant exactly. Shots drawn per frame went from 0.2, 0.1 and 0.0 at 30, 16 and 4 Hz to essentially rate-independent, and it costs one message instead of an entry in every packet for the whole flight.
 
+**It was then reverted, and this file went on claiming it for months.** The revert had two stated reasons, recorded on the wire type rather than here, which is how the two came to disagree: a client is not told when a shot *ends*, so it flies on through the enemy it killed, and it cannot decide that for itself because it draws shots in the past while its enemy mirror holds the present. The first is real. The second stopped being true the moment [the whole scene moved to one render instant](#an-entity-can-join-a-delayed-timeline-only-if-its-state-is-reconstructable-at-an-arbitrary-past-instant), and nobody revisited it. The event form is now back, with an explicit end event carrying only *early* ends (a hit), because ordinary expiry is derivable from the fire time and a constant both sides already hold.
+
+**The lesson is not about shots.** A decision recorded in two places will disagree, and the copy that is wrong is the one further from the code. The wire type's comment was right for months while this file, the document whose entire purpose is to be trusted, was wrong. Reasons for a revert belong next to the thing reverted, and a claim of a fix belongs where the fix would be visible if it were there.
+
 ### Techniques worth reusing
 
 Running two predictors over identical inputs that differ in exactly one variable, and comparing their error, answers "is this prediction earning its keep" in one session instead of two, with no toggling and no memory of how the last run felt. It is only cheap because predictors are pure and hold no resources, which is an argument for keeping them that way.

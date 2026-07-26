@@ -76,7 +76,7 @@ fn measure(enemy_count: usize, players: usize) -> Row {
     // and in a real deployment they are other machines.
     let start = Instant::now();
     let packets = server.advance_seats(step_ms, &seats, &controls);
-    let frame = server.take_player_frame();
+    let frames = server.take_player_frames();
     if timed {
       row.server_ms += start.elapsed().as_secs_f32() * 1000.0;
       for (_, packet) in &packets {
@@ -86,10 +86,9 @@ fn measure(enemy_count: usize, players: usize) -> Row {
         // digest and sequence number, so it is unpacked here to keep the groups
         // honest.
         let entities = split[0] + split[1] + split[2] + packet.crowds.len() * CROWD_BYTES;
-        let per_player = packet.players.len() * (1 + POS_BYTES)
-          + packet.wallets.len() * 3
-          + packet.player_health.len()
-          + packet.player_invuln.len().div_ceil(8);
+        // Wallets only, now. Positions, health and shields moved to the player
+        // stream, which is where the relevance rule can reach them.
+        let per_player = packet.wallets.len() * (1 + 3);
         let coins = packet.coins.len() * (ID_BYTES + POS_BYTES)
           + packet.claims.len() * (1 + ID_BYTES)
           + packet.denied_buys.len()
@@ -110,18 +109,18 @@ fn measure(enemy_count: usize, players: usize) -> Row {
       }
       // The player stream is built once and goes to everybody, so its cost is
       // per recipient and this has to say so.
-      if let Some(frame) = &frame {
-        row.player_stream += frame.bytes() * players;
+      for (_, frame) in frames.iter().flatten() {
+        row.player_stream += frame.bytes();
       }
     }
 
     let now = server.now_ms();
+    for (p, frame) in frames.iter().flatten() {
+      clients[*p as usize].on_player_frame(frame, now);
+    }
     for (p, packet) in packets {
       let client = &mut clients[p as usize];
       client.receive_packet(packet, now);
-      if let Some(frame) = &frame {
-        client.on_player_frame(frame, now);
-      }
       client.tick(step_ms, &controls);
       if let Some((newest, mask)) = client.acks().encode() {
         server.receive_ack(p as usize, newest, mask, client.last_digest());
