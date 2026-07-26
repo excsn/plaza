@@ -104,13 +104,13 @@ pub type PlayerId = u8;
 /// | players | server CPU per simulated second | downstream |
 /// |---|---|---|
 /// | 4 | 6 ms | 136 KiB/s |
-/// | 128 | 75 ms | 607 KiB/s |
+/// | 128 | 76 ms | 2.1 MiB/s |
 ///
-/// Bandwidth used to be what bounded this, at 3.9 MiB/s for that second row,
-/// because everything per-player went to everybody: positions and vitals on both
-/// streams and every wallet in every packet, all `O(players^2)` and 81% of the
-/// total. Relevance now applies to players as well as enemies, so the term is
-/// flat and CPU is the honest limit again.
+/// Almost all of that second row is now the enemies, which is the honest shape:
+/// per-player traffic used to go to everybody on both streams and was 81% of
+/// the total, and relevance applies to players as well as enemies now, so the
+/// `O(players^2)` term is gone. What is left grows because 128 viewers each see
+/// their own slice of a 3000-strong horde.
 ///
 /// Re-run it before moving this. The hard limit above it is the wire, where
 /// `PlayerId` is a `u8`.
@@ -596,6 +596,17 @@ impl PlayerFrame {
   pub fn bytes(&self) -> usize {
     8 + self.players.len() * (1 + POS_BYTES) + self.vitals.len() * 2
   }
+
+  /// The same content with a UUID per player and raw `f32` positions.
+  ///
+  /// The counterfactual has to cover this stream too. It did when player state
+  /// rode inside the entity packet, and when that moved here the comparison
+  /// silently lost its other half: the real cost still counted the player
+  /// stream while the baseline it was measured against no longer did, so the
+  /// saving read as *negative* at a large player count.
+  pub fn naive_bytes(&self) -> usize {
+    8 + self.players.len() * (NAIVE_ID_BYTES + NAIVE_POS_BYTES) + self.vitals.len() * (NAIVE_ID_BYTES + 2)
+  }
 }
 
 /// Everything the server sends downstream, so one impaired link carries both
@@ -836,12 +847,30 @@ impl Packet {
       + 2 // the sequence number, delta coded
   }
 
+  /// What this **same packet** costs with a 16-byte UUID per entity and raw
+  /// `f32` positions: an encoding comparison, not a relevance one.
+  ///
+  /// Every field the real packet carries has to appear here, or the ratio is
+  /// measuring which fields were modelled rather than what the encoding saves.
+  /// It used to cover only the entity lists, which was invisible while the
+  /// entities dominated and became a *negative* saving once they did not: at
+  /// 128 players the arena is nearly empty, and coins, wallets and hit markers
+  /// were being counted on one side of the comparison only.
   pub fn naive_bytes(&self) -> usize {
     let per = NAIVE_ID_BYTES + NAIVE_POS_BYTES;
     self.entered.len() * (per + 1)
       + self.left.len() * NAIVE_ID_BYTES
       + self.samples.len() * per
-      + self.shots_fired.len() * (NAIVE_POS_BYTES * 2)
+      + self.shots_fired.len() * (NAIVE_ID_BYTES + NAIVE_POS_BYTES * 2 + 8)
+      + self.shots_ended.len() * NAIVE_ID_BYTES
+      + self.crowds.len() * (NAIVE_POS_BYTES + 2)
+      + self.coins.len() * (NAIVE_ID_BYTES + NAIVE_POS_BYTES)
+      + self.wallets.len() * (NAIVE_ID_BYTES + 3)
+      + self.claims.len() * (NAIVE_ID_BYTES * 2)
+      + self.denied_buys.len()
+      + self.hits.len() * (NAIVE_POS_BYTES + 1)
+      + 8 // the digest, which costs the same either way
+      + 8 // a sequence number nobody thought to delta code
   }
 }
 

@@ -636,7 +636,15 @@ impl Server {
     if alive >= self.target_population {
       return;
     }
-    let want = (self.target_population - alive).min(40);
+    // The per-wave cap exists so a deficit is filled over a few waves rather
+    // than in one spike. It has to scale with the player count, because the
+    // *kill* rate does: every player carries an auto-firing weapon and a nova
+    // that clears a radius every 4.5 s. Fixed at 40 it let 128 players
+    // annihilate a 3000-strong horde and hold it near 40 alive, which reads as
+    // an empty arena and quietly turns every entity measurement into a
+    // measurement of the overheads instead.
+    let cap = 40 * self.players.len().div_ceil(crate::sim::types::DEFAULT_PLAYERS);
+    let want = (self.target_population - alive).min(cap);
     for k in 0..want {
       let p = (self.clock_ms as usize / 97 + k) % self.players.len();
       let around = self.players[p];

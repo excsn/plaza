@@ -622,6 +622,11 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         if let Some(frames) = state.sim.take_player_frames() {
           for (seat, frame) in frames {
             let Some(key) = by_seat.get(&(seat as usize)) else { continue };
+            // Metered on both sides of the comparison. Counting the real cost
+            // here and not its counterfactual is what made the saving read
+            // negative once player state moved onto this stream.
+            state.bytes.add(frame.bytes() as u64);
+            state.naive_bytes.add(frame.naive_bytes() as u64);
             let entry = state.down.entry(*key).or_default();
             entry.send(now, Downstream::Players(frame), controls.latency_ms, controls.jitter_ms, controls.loss_pct, &mut state.rng);
           }

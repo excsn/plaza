@@ -60,15 +60,19 @@ The example's whole claim is that per-player relevance beats broadcast, and for 
 
 Measured by `cargo run -p horde_playground --release --example players --no-default-features --features native,client`, at 3000 enemies:
 
-| players | before | after |
+| players | per-player traffic before | after |
 |---|---|---|
-| 4 | 139 KiB/s | 136 KiB/s |
-| 32 | 585 KiB/s | 399 KiB/s |
-| 128 | 3886 KiB/s | 607 KiB/s |
+| 4 | 3 KiB/s | 1 KiB/s |
+| 32 | 198 KiB/s | 12 KiB/s |
+| 128 | 3148 KiB/s | 137 KiB/s |
+
+The `O(players^2)` term is gone: what a client is sent about *other players* is now flat in the arena's size. Total downstream at 128 players is 2.1 MiB/s, and almost all of it is the enemies, which is 128 viewers each holding their own slice of a 3000-strong horde.
 
 Four changes, and the first two are the whole of it. **The player stream is per recipient**, carrying only the players you can see or that an enemy you hold is chasing. That second clause is the one that is easy to miss: `step_enemy` aims at a player, so a target you cannot place is a rule you cannot run, and skipping it makes your horde drift from the server's. **The entity packet no longer carries players at all**, because it was sending the same thing the player stream already sends, at a different rate. **Wallets are sent when they change** rather than restated every packet, and only for players who matter to you. **Shots are events**, an origin, a velocity and a fire time, rather than a live set re-sent for the whole 1.4 s flight.
 
-The cost is CPU: computing who is relevant is a pass over the players plus a pass over your visible enemies, and it pushed 128 players from 68 to 75 ms of server time per simulated second. Bandwidth fell by a factor of six for a tenth more CPU.
+The cost is CPU: computing who is relevant is a pass over the players plus a pass over your visible enemies, and it costs about a tenth more server time per simulated second.
+
+**A caveat about measuring any of this**, learned by getting it wrong here. A fixed cap of 40 spawns per wave could not keep up with 128 players' kill rate, so the horde collapsed to about 40 alive out of 3000 and every measurement above was really a measurement of an empty arena. The cap scales with the player count now. Watch the `alive` readout before trusting a bandwidth number: a world that is not there is cheap to send.
 
 Two consequences worth knowing. A player who has never been sent to you still occupies a slot in every per-player array, holding the arena-centre seed, so the renderer has to know the difference between "at the centre" and "never heard of": drawing the seed puts a peer in the middle of the map who is not there. And a peer who walks out of your relevance stops updating and freezes at their last known position, which is correct (you cannot see them) but means any measurement of peer freshness has to sample only while the peer is actually relevant, or it measures the feature rather than the link.
 

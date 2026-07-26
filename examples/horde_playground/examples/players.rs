@@ -130,6 +130,68 @@ fn measure(enemy_count: usize, players: usize) -> Row {
   row
 }
 
+/// Does the cost drift as a run goes on? Reported as successive windows of the
+/// same length, because one average over a long run hides a trend, and a trend
+/// is what a player notices as "it keeps going up".
+fn drift(enemy_count: usize, players: usize, windows: usize, window_secs: f32) {
+  let step_ms = (SIM_DT * 1000.0) as u64;
+  let controls = Controls {
+    enemy_count,
+    player_count: players,
+    ..Controls::default()
+  };
+  let mut server = Server::new(enemy_count, players, controls.spread_players);
+  let seats = vec![Seat::Bot; players];
+  let mut clients: Vec<Client> = (0..players).map(|p| Client::new(p as u8, players)).collect();
+
+  println!("\ndrift at {enemy_count} enemies / {players} players, {window_secs:.0}s windows");
+  println!("  window   KiB/s   naive   saved    alive   spawns/pkt   difficulty");
+  for w in 0..windows {
+    let mut bytes = 0usize;
+    let mut naive = 0usize;
+    let mut spawns = 0usize;
+    let mut packets = 0usize;
+    for _ in 0..(window_secs / SIM_DT) as usize {
+      let packets_out = server.advance_seats(step_ms, &seats, &controls);
+      let frames = server.take_player_frames();
+      for (_, packet) in &packets_out {
+        bytes += packet.bytes();
+        naive += packet.naive_bytes();
+        spawns += packet.entered.len();
+        packets += 1;
+      }
+      for (_, frame) in frames.iter().flatten() {
+        bytes += frame.bytes();
+        naive += frame.naive_bytes();
+      }
+      let now = server.now_ms();
+      for (p, frame) in frames.iter().flatten() {
+        clients[*p as usize].on_player_frame(frame, now);
+      }
+      for (p, packet) in packets_out {
+        let client = &mut clients[p as usize];
+        client.receive_packet(packet, now);
+        client.tick(step_ms, &controls);
+        if let Some((newest, mask)) = client.acks().encode() {
+          server.receive_ack(p as usize, newest, mask, client.last_digest());
+        }
+      }
+    }
+    let per = |b: usize| b as f32 / 1024.0 / window_secs;
+    let saved = if naive > 0 { (1.0 - bytes as f32 / naive as f32) * 100.0 } else { 0.0 };
+    println!(
+      "  {:6}  {:6.0}  {:6.0}  {:5.0}%  {:7}  {:11.1}   {:10.1}",
+      w,
+      per(bytes),
+      per(naive),
+      saved,
+      server.alive_count(),
+      spawns as f32 / packets.max(1) as f32,
+      server.difficulty(),
+    );
+  }
+}
+
 fn main() {
   println!("enemies  players   sim ms/s  headroom    KiB/s   entities  perplayer  playerstm    shots    coins    fixed");
   for enemy_count in [3000usize, 8000] {
@@ -158,4 +220,7 @@ fn main() {
       );
     }
   }
+
+  // The shape over time, at the count where it was reported as climbing.
+  drift(3000, 128, 8, 15.0);
 }

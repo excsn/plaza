@@ -157,6 +157,18 @@ Reading the shape of a counter rather than its value: a count climbing without b
 
 **The general form.** In a protocol that repeats until acknowledged, "how many times was I told" and "how many times did it happen" diverge by design. Anything derived from such a stream must be exactly as idempotent as the stream itself: count state transitions, never messages. The mirror got this right from the start; the one counter that read the wire instead of the state is the one that produced a visible artifact.
 
+### A world that was not there, and the saving that went negative (horde)
+
+**Symptom.** Two at once, both reported by a player at 128 players: bandwidth appearing to climb the longer a session ran, and the "saved against UUIDs and `f32`" readout going **negative** for the first time, at -17%.
+
+**The negative saving was a broken comparison, not a regression.** `naive_bytes` modelled only the entity lists, while `bytes` counted coins, wallets, hit markers, the digest and the sequence number as well. That was invisible for as long as entities dominated the packet, and the moment they did not, the ratio was comparing a full packet against a partial model of itself. Moving player state onto the player stream made it worse, because the real cost still counted that stream while the counterfactual had lost its only player term. The fix is that the baseline models **every field the packet carries**, so it measures the encoding rather than which fields somebody remembered.
+
+**And the entities did not dominate, because the horde was gone.** The wave spawner filled at most 40 enemies per 500 ms whatever the player count, while the kill rate scales with players: each one carries an auto-firing weapon and a nova that clears a radius every 4.5 seconds. At 128 players that held a 3000-strong horde at **about 40 alive**. Every entity number was therefore a measurement of an almost empty arena, including the ones quoted as evidence that the relevance work had succeeded: 607 KiB/s at 128 players was really 2.1 MiB/s once the world existed.
+
+**Bandwidth was not climbing at all.** Measured in fifteen-second windows it is flat to within 5% across two minutes. What a player sees climbing is a rolling average filling up, and the arena repopulating after each nova.
+
+**The general form, and it is the third time this file has arrived at it.** A number from a system in a degenerate state describes the degeneracy, not the system. A harness with no acknowledgement loop reported zero samples; a nearly empty arena reports small packets and a negative saving. Both look plausible. The defence is the same in both cases: assert the precondition, and put the population on screen next to the bandwidth so the reading cannot be believed without it.
+
 ### The marker that detached from its own timeline (horde)
 
 **Symptom.** At 600 ms render delay, shots visibly left from "a point in the past", well behind the player's marker. Reported by a player; every readout said healthy. The natural reading of the symptom, that the shots were mis-timed, is backwards: the shots, enemies and coins were all faithfully at the render instant. The *marker* was the thing off the timeline.

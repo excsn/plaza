@@ -344,7 +344,8 @@ pub fn draw_observer_ui(view: &horde_playground::net::arena::HostView, controls:
       section(ui, "controls", true, |ui| draw_controls(ui, controls));
 
       section(ui, "stats (authoritative)", true, |ui| {
-        ui.label(format!("bandwidth: {:.1} KiB/s (all players)", view.bytes_per_sec() / 1024.0));
+        ui.label(format!("bandwidth: {:.1} KiB/s (all players, {} alive)", view.bytes_per_sec() / 1024.0, view.alive))
+          .on_hover_text("The live count rides along because a bandwidth number is meaningless without it: an arena whose horde has been wiped out is cheap to send, and reads as a saving rather than as a missing world. Watch them together.");
         ui.label(format!("with uuids + f32 positions: {:.1} KiB/s", view.naive_bytes_per_sec() / 1024.0));
         ui.label(format!("sent per packet: {:.0} entities", view.mean_relevant()));
         ui.label(format!("churn: {:.1} spawns / {:.1} despawns per packet", view.mean_spawns_per_packet(), view.mean_despawns_per_packet()));

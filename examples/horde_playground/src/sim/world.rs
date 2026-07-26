@@ -93,6 +93,7 @@ impl World {
       for (p, frame) in frames {
         let Some(link) = self.down.get_mut(p as usize) else { continue };
         self.bytes_sent += frame.bytes() as u64;
+        self.naive_bytes_sent += frame.naive_bytes() as u64;
         link.send(self.wall_ms, Downstream::Players(frame), controls.latency_ms, controls.jitter_ms, controls.loss_pct, &mut self.rng);
       }
     }
