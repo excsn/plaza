@@ -123,9 +123,20 @@ struct RemoteEnemy {
   prev_ms: u64,
 }
 
-/// Snapshots buffered per player. Two is the minimum to interpolate between; a
-/// few more absorb a jittery arrival without the buffer starving.
-const PLAYER_VIEW_SNAPSHOTS: usize = 8;
+/// Snapshots buffered per player: enough history to interpolate at the deepest
+/// render delay the panel can declare, with both streams feeding samples at
+/// their maximum rate, plus slack for jitter.
+///
+/// **Derived from the thing it must cover, not picked.** This was a constant 8,
+/// which at the default rates held roughly 200 ms of history: fine at the
+/// default 150 ms render delay, and quietly wrong the moment the slider went
+/// past what it covered. The view then clamped every render to the oldest
+/// snapshot it still had, so the marker rode a couple of hundred milliseconds
+/// behind "now" while the rest of the scene was faithfully at T, and the gap
+/// between them scaled with the slider. Found by playing, at 600 ms: the
+/// weapon appeared to fire from the player's past, and the shots were the
+/// correctly placed half of the picture.
+const PLAYER_VIEW_SNAPSHOTS: usize = ((crate::sim::types::RENDER_DELAY_MAX_MS as usize * 2 * crate::sim::types::SEND_RATE_MAX_HZ as usize) / 1000) + 8;
 /// Unused in practice: peers are interpolated and never extrapolated, so the
 /// view holds the newest snapshot rather than dead reckoning past it. Kept as the
 /// bound `RemoteView` is constructed with, and deliberately short, so turning
@@ -357,10 +368,13 @@ pub struct Client {
   /// health at different rates, and without this the slower one walks it
   /// backwards.
   health_at_ms: u64,
-  /// Times a player view could not produce a position at the render instant and
-  /// the newest sample stood in for it. That player is silently on a different
-  /// timeline from the rest of the scene for the frame, which is the pattern
-  /// that hid the corner-camera regression, so it is counted rather than quiet.
+  /// Times a player was drawn off the render instant because its view could
+  /// not reach it: history no longer covering the target (clamped to the
+  /// oldest snapshot), or no samples at all (the newest authoritative copy
+  /// stands in). Either way that player is silently on a different timeline
+  /// from the rest of the scene for the frame, which is the pattern that hid
+  /// both the corner-camera regression and the detached-marker bug, so it is
+  /// counted rather than quiet.
   view_fallbacks: std::sync::atomic::AtomicU64,
   /// Purchases asked for and not yet answered.
   ///
@@ -594,7 +608,7 @@ impl Client {
   /// The opposite of what the name suggests. The *actual* position is the delayed
   /// one, played out of the buffer at the render instant, and it is correct
   /// rather than approximate. This is the future, so the gap between them is the
-  /// playout delay made visible: where the marker is about to resolve to. An
+  /// render delay made visible: where the marker is about to resolve to. An
   /// empty ghost means the buffer has run dry.
   pub fn ghost_enemies(&self) -> Vec<(Vec2, EnemyKind)> {
     let mut newest: HashMap<u64, (u64, Vec2)> = HashMap::new();
@@ -704,12 +718,18 @@ impl Client {
       // intention, which nothing on the wire carries, so it overshoots on every
       // direction change and then snaps back when the truth lands.
       .map(|(p, view)| {
+        // A target older than the view's history is *clamped* to the oldest
+        // snapshot inside the buffer, which silently draws this player at a
+        // newer instant than the scene. The degradation stays, but it is
+        // counted, because this exact clamp once detached the marker from the
+        // timeline the shots were on and nothing said so.
+        if view.oldest_timestamp().is_some_and(|oldest| at.0 < oldest) {
+          self.view_fallbacks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         view
           .render(target, RenderOpts { interpolate: true, extrapolate: false })
-          // The newest sample stands in when the view cannot produce T, which
-          // quietly puts this player on a different timeline from the scene for
-          // a frame. A reasonable degradation, and exactly the shape of silent
-          // compensation that has hidden regressions before, so it is counted.
+          // The newest sample stands in when the view has no samples at all,
+          // the same off-timeline degradation, counted the same way.
           .unwrap_or_else(|| {
             self.view_fallbacks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.players[p]
@@ -718,9 +738,11 @@ impl Client {
       .collect()
   }
 
-  /// Times a player was drawn from its newest sample because its view could not
-  /// produce the render instant. Zero on a healthy link once the timeline has
-  /// started; climbing means somebody is being shown off-timeline.
+  /// Times a player was drawn off the render instant because its view could
+  /// not reach it. Zero on a healthy link once the timeline has started (the
+  /// join transient legitimately counts a few, until the history spans the
+  /// render delay); climbing after that means somebody is being shown
+  /// off-timeline.
   pub fn view_fallbacks(&self) -> u64 {
     self.view_fallbacks.load(std::sync::atomic::Ordering::Relaxed)
   }
@@ -1514,6 +1536,58 @@ mod tests {
     let at = client.render_at().expect("the timeline has started");
     let _ = client.render_players(at);
     assert!(client.view_fallbacks() > 0, "the starved view fell back, and said so");
+  }
+
+  #[test]
+  fn the_marker_stays_on_the_timeline_at_the_deepest_render_delay() {
+    // The detached-marker bug, found by playing at 600 ms. The history buffer
+    // held ~200 ms, so past that the view clamped every render to the oldest
+    // snapshot it still had: the marker rode near now while the shots were
+    // faithfully at T, and the weapon appeared to fire from the player's past.
+    // The marker was the wrong half of that picture.
+    let mut client = Client::new(0, 1);
+    client.set_render_delay(crate::sim::types::RENDER_DELAY_MAX_MS);
+    // Three seconds of 30 Hz samples of a player moving at a steady 0.19 px/ms.
+    let mut t = 0;
+    while t <= 3_000 {
+      let frame = PlayerFrame {
+        server_time_ms: t,
+        players: vec![(0, Vec2::new(t as f32 * 0.19, 0.0))],
+        player_health: vec![],
+        player_invuln: vec![],
+      };
+      client.on_player_frame(&frame, t);
+      t += 33;
+    }
+    client.tick(0, &Controls::default());
+    let at = client.render_at().expect("timeline started");
+    let expected = at.server_time_ms() as f32 * 0.19;
+    let drawn = client.render_players(at)[0];
+    assert!((drawn.x - expected).abs() < 7.0, "the marker sits at T ({expected:.0}), not at the edge of a too-short history: {drawn:?}");
+    assert_eq!(client.view_fallbacks(), 0, "and the history reached, so nothing was drawn off-timeline");
+  }
+
+  #[test]
+  fn a_marker_drawn_past_its_history_is_counted() {
+    // The degradation stays (something must be drawn), but it says so: the
+    // clamp inside the view is exactly the silent compensation that made the
+    // detached marker invisible to every readout.
+    let mut client = Client::new(0, 1);
+    client.set_render_delay(crate::sim::types::RENDER_DELAY_MAX_MS);
+    // A history far too short to reach 600 ms back.
+    for t in [2_900u64, 2_950, 3_000] {
+      let frame = PlayerFrame {
+        server_time_ms: t,
+        players: vec![(0, Vec2::new(t as f32, 0.0))],
+        player_health: vec![],
+        player_invuln: vec![],
+      };
+      client.on_player_frame(&frame, t);
+    }
+    client.tick(0, &Controls::default());
+    let at = client.render_at().expect("timeline started");
+    let _ = client.render_players(at);
+    assert!(client.view_fallbacks() > 0, "a clamped render is counted, not silent");
   }
 
   #[test]

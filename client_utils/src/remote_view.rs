@@ -149,6 +149,18 @@ where
   pub fn latest(&self) -> Option<&State> {
     self.latest.as_ref().map(|(_, s, _)| s)
   }
+
+  /// The oldest instant this view can still interpolate at.
+  ///
+  /// A target before this is **clamped to the oldest snapshot**, which silently
+  /// draws the entity at a newer instant than the one asked for. That is the
+  /// right degradation and the wrong thing to hide: a caller rendering a whole
+  /// scene at one instant should compare its target against this and count the
+  /// times the view could not reach it, because the alternative is one entity
+  /// quietly living on a different timeline than everything around it.
+  pub fn oldest_timestamp(&self) -> Option<u64> {
+    self.buffer.oldest_timestamp()
+  }
 }
 
 #[cfg(test)]

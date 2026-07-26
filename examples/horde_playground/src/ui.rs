@@ -2,6 +2,7 @@
 //! makes into a number you can watch move.
 
 use egui_macroquad::egui;
+use horde_playground::sim::types::{RENDER_DELAY_MAX_MS, SEND_RATE_MAX_HZ};
 use horde_playground::sim::{Controls, RemoteMode, World};
 
 /// One collapsible section.
@@ -27,8 +28,8 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls) {
   });
 
   section(ui, "network", true, |ui| {
-    ui.add(egui::Slider::new(&mut controls.sync_hz, 1..=60).text("entity send rate (Hz)"));
-    ui.add(egui::Slider::new(&mut controls.player_sync_hz, 1..=60).text("player send rate (Hz)"));
+    ui.add(egui::Slider::new(&mut controls.sync_hz, 1..=SEND_RATE_MAX_HZ).text("entity send rate (Hz)"));
+    ui.add(egui::Slider::new(&mut controls.player_sync_hz, 1..=SEND_RATE_MAX_HZ).text("player send rate (Hz)"));
     ui.label("Drop the entity rate to 1 Hz and the horde still moves smoothly, because every client runs its rule. Drop the *player* rate too and it does not, because player positions are the input to that rule.");
     ui.add(egui::Slider::new(&mut controls.latency_ms, 0..=400).text("latency ms"));
     ui.add(egui::Slider::new(&mut controls.jitter_ms, 0..=150).text("jitter ms"));
@@ -70,7 +71,7 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls) {
       .on_hover_text("How long the server holds an input before executing it. This is what makes a contested pickup independent of ping: every input executes at press time plus this, so a 20 ms player and a 200 ms player are on the same footing. It has to cover the worst connected player's one-way delay, or their inputs arrive after the tick they named and are rejected outright.");
     ui.checkbox(&mut controls.input_playout, "use the playout buffer")
       .on_hover_text("Off is apply-on-arrival, which is what ping-independence costs you: whoever is closer to the server reaches the coin first.");
-    ui.add(egui::Slider::new(&mut controls.render_delay_ms, 0..=600).text("render delay ms"))
+    ui.add(egui::Slider::new(&mut controls.render_delay_ms, 0..=RENDER_DELAY_MAX_MS).text("render delay ms"))
       .on_hover_text("How far behind the server clock every client shows the world. A property of the timeline, not of anybody's link, so the same instant is on every screen. It has to cover one-way latency + jitter + a send interval: the newest sample a client holds is already a trip old, so a delay short of that leaves nothing to interpolate between and peers snap to the raw sample. Too short and the underrun counter climbs.");
     ui.label(
       egui::RichText::new(format!(
@@ -85,7 +86,7 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls) {
     ui.checkbox(&mut controls.allow_ghost, "server: send unresolved frames (allows a ghost)")
       .on_hover_text("The permission a ghost needs, and a server setting rather than a client one, the way a shipped game exposes it: a client cannot draw a future it was not sent. Currently declared rather than enforced, so an honest client obeys it and a cheat client would not. Real enforcement means not sending past the render instant at all, which needs the server to hold frames rather than delay them; delaying was tried and measurably does nothing, because the client's clock shifts with the stream.");
     ui.add_enabled(controls.allow_ghost, egui::Checkbox::new(&mut controls.show_ghost, "draw the ghost"))
-      .on_hover_text("The drawing half. The solid markers are the actual positions: the server's resolved state at the instant being drawn, played out of the buffer in order, which is correct rather than approximate. The faint ghosts are ahead of them. The gap is the playout delay made visible, so it is where each marker is about to resolve to, not an error.");
+      .on_hover_text("The drawing half. The solid markers are the actual positions: the server's resolved state at the instant being drawn, played out of the buffer in order, which is correct rather than approximate. The faint ghosts are ahead of them. The gap is the render delay made visible, so it is where each marker is about to resolve to, not an error. (Render delay, not the input playout delay: that one sits between your keys and the world, and never appears on screen.)");
     if !controls.allow_ghost {
       ui.label(egui::RichText::new("no ghost: the server is not sending unresolved frames").weak());
     }
@@ -227,7 +228,7 @@ pub fn draw_net_ui(client: &horde_playground::net::client::NetClient, url: &str,
       section(ui, "controls", true, |ui| {
         let allowed = client.policy.is_none_or(|p| p.allow_ghost);
         ui.add_enabled(allowed, egui::Checkbox::new(&mut controls.show_ghost, "draw the ghost"))
-          .on_hover_text("The solid markers are the actual positions, played out of your buffer at the instant being drawn. The faint ghosts are ahead of them, from packets you already hold but have not reached yet, so the gap is your playout delay rather than an error: it is where each marker is about to resolve to. Nothing outside your relevance radius has a ghost, because you were never sent it.");
+          .on_hover_text("The solid markers are the actual positions, played out of your buffer at the instant being drawn. The faint ghosts are ahead of them, from packets you already hold but have not reached yet, so the gap is your render delay rather than an error: it is where each marker is about to resolve to. Nothing outside your relevance radius has a ghost, because you were never sent it.");
         if !allowed {
         ui.label(egui::RichText::new("this host is not sending unresolved frames, so there is no ghost to draw").weak());
         }

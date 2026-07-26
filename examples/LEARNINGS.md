@@ -143,6 +143,18 @@ Reading the shape of a counter rather than its value: a count climbing without b
 
 ## The bug catalogue
 
+### The marker that detached from its own timeline (horde)
+
+**Symptom.** At 600 ms render delay, shots visibly left from "a point in the past", well behind the player's marker. Reported by a player; every readout said healthy. The natural reading of the symptom, that the shots were mis-timed, is backwards: the shots, enemies and coins were all faithfully at the render instant. The *marker* was the thing off the timeline.
+
+**Cause.** The player history buffer held a constant 8 snapshots, roughly 200 ms at the default send rates, while the render delay slider went to 600. Past what the history covered, the snapshot buffer *clamps to the oldest sample it still holds*, so the marker rode a couple of hundred milliseconds behind now while the scene was drawn at T, and the gap scaled with the slider. At the default 150 ms delay the 8 snapshots happened to cover it, which is why it looked fine for as long as it did.
+
+**Why nothing caught it.** The clamp returns `Some`, so the off-timeline counter that exists for exactly this class of failure never fired: the silent compensation lived one layer below the layer that was instrumented. A mechanism that silently compensates for a fault destroys the evidence of it, and this time it also destroyed the evidence gathered *about* it.
+
+**Fix.** Two parts, both principles this file already states. The buffer capacity is now derived from the thing it must cover, `RENDER_DELAY_MAX_MS` at the maximum rate of both streams, and the slider range is derived from the same constant, so the two cannot disagree again. And the clamp is counted: `RemoteView` exposes the oldest instant it can still reach, and a render target older than that increments the same `view fallbacks` readout as an empty view.
+
+**The general form.** A buffer sized by a constant is an accidental limit, and an accidental limit does not refuse you, it degrades you silently, exactly as the admission entry found one layer up. Any buffer that exists to serve a *declared* number (a render delay, a playout depth) must have its capacity derived from that number's maximum, or the declaration is a lie past the point the constant happens to cover.
+
 ### A client mirror that diverged and could never recover (horde)
 
 **Symptom.** The digest mismatch counter climbed to a few hundred within a minute and then stopped, always around the same number. Turning latency, jitter and loss to zero did not help. The offline build reported zero with the same simulation code.

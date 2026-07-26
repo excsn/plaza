@@ -36,9 +36,9 @@ The **main view** follows your player and draws only what your client was actual
 
 **The naming is the opposite of what it sounds like, and getting it backwards makes the overlay unreadable.** The solid marker is the **actual** position: the server's resolved state at the instant being drawn, played out of the buffer in order. It is correct, not an approximation of anything. The ghost is the *future*, and it is a future this client already holds, because a packet is applied only once its timestamp is reached and everything newer waits in the queue.
 
-So the gap is **the playout delay made visible**, not an error. It is where the marker is about to resolve to. A widening gap means the buffer is filling; an empty ghost means it has run dry and the client is about to have nothing left to play.
+So the gap is **the render delay made visible**, not an error. It is where the marker is about to resolve to. A widening gap means the buffer is filling; an empty ghost means it has run dry and the client is about to have nothing left to play. (Render delay, not the input playout delay: that one sits between your keys and the world, and never appears on screen.)
 
-**Every role has one, and they differ only in how far ahead they see.** A joiner's ghost is its queue, one playout delay out. A host's is the server's state now, which is the same thing a link delay further ahead, because it is the server. A queued packet is received state, so a joiner needs no privilege to have this and does not get a lesser version of it.
+**Every role has one, and they differ only in how far ahead they see.** A joiner's ghost is its queue, one render delay out. A host's is the server's state now, which is the same thing a link delay further ahead, because it is the server. A queued packet is received state, so a joiner needs no privilege to have this and does not get a lesser version of it.
 
 ### The ghost is a server permission, not a client setting
 

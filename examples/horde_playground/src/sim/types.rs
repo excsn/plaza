@@ -23,6 +23,18 @@ pub const ENEMY_SPEED: f32 = 62.0;
 pub const SIM_HZ: u32 = 60;
 pub const SIM_DT: f32 = 1.0 / SIM_HZ as f32;
 
+/// The deepest render delay the panel can ask for. One constant, because two
+/// things must agree on it: the slider's range, and how much player history a
+/// client keeps. When they were sized independently, the slider could ask for
+/// an instant the history no longer held, and the view silently clamped to the
+/// oldest snapshot it had: the marker detached from the timeline everything
+/// else was drawn on, and shots visibly left from "a point in the past", which
+/// was in fact the only correctly placed thing on screen.
+pub const RENDER_DELAY_MAX_MS: u64 = 600;
+/// The fastest either stream can be asked to send, for the same reason: the
+/// history buffer must cover [`RENDER_DELAY_MAX_MS`] at this rate.
+pub const SEND_RATE_MAX_HZ: u32 = 60;
+
 // Combat.
 pub const FIRE_INTERVAL_MS: u64 = 220;
 pub const PROJECTILE_SPEED: f32 = 620.0;
