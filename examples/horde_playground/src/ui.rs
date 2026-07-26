@@ -2,7 +2,11 @@
 //! makes into a number you can watch move.
 
 use egui_macroquad::egui;
-use horde_playground::sim::types::{MAX_PLAYERS, RENDER_DELAY_MAX_MS, SEND_RATE_MAX_HZ};
+use horde_playground::sim::types::{MAX_PLAYERS, RENDER_DELAY_MAX_MS, SEND_RATE_MAX_HZ, SIM_DT};
+
+/// The simulation step in whole milliseconds, for turning a late window in
+/// ticks into the time budget it actually represents.
+const SIM_STEP_MS: u64 = (SIM_DT * 1000.0) as u64;
 use horde_playground::sim::{Controls, RemoteMode, World};
 
 /// One collapsible section.
@@ -29,14 +33,28 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls) {
       .on_hover_text("Off: they cluster together, so the horde converges on one spot.");
   });
 
-  section(ui, "network", true, |ui| {
-    ui.add(egui::Slider::new(&mut controls.sync_hz, 1..=SEND_RATE_MAX_HZ).text("entity send rate (Hz)"));
-    ui.add(egui::Slider::new(&mut controls.player_sync_hz, 1..=SEND_RATE_MAX_HZ).text("player send rate (Hz)"));
-    ui.label("Drop the entity rate to 1 Hz and the horde still moves smoothly, because every client runs its rule. Drop the *player* rate too and it does not, because player positions are the input to that rule.");
-    ui.add(egui::Slider::new(&mut controls.latency_ms, 0..=400).text("latency ms"));
+  // The link comes first because it is an *input* to the two budgets below.
+  // Latency and jitter are properties of a network you do not control; the
+  // delays and rates under them are policy you choose to cover it. Keeping them
+  // in one section, above the things they constrain, is the whole point of this
+  // grouping: the terms of a budget used to live in different sections, so the
+  // relationship between them was invisible while you were editing it.
+  section(ui, "the link you are pretending to have", true, |ui| {
+    ui.add(egui::Slider::new(&mut controls.latency_ms, 0..=400).text("latency ms"))
+      .on_hover_text("One way, each direction. Not a setting a real deployment has: it stands in for a network, and the two budgets below are sized to cover it.");
     ui.add(egui::Slider::new(&mut controls.jitter_ms, 0..=150).text("jitter ms"));
     ui.add(egui::Slider::new(&mut controls.loss_pct, 0.0..=40.0).text("packet loss %"))
       .on_hover_text("A delta stream assumes every packet arrives. Raise this with recovery off and watch the phantom count climb.");
+  });
+
+  section(ui, "send rates", true, |ui| {
+    ui.add(egui::Slider::new(&mut controls.sync_hz, 1..=SEND_RATE_MAX_HZ).text("entity send rate (Hz)"));
+    ui.add(egui::Slider::new(&mut controls.player_sync_hz, 1..=SEND_RATE_MAX_HZ).text("player send rate (Hz)"));
+    ui.label("Drop the entity rate to 1 Hz and the horde still moves smoothly, because every client runs its rule. Drop the *player* rate too and it does not, because player positions are the input to that rule.");
+    ui.label(egui::RichText::new("The player rate is also a term in the render delay below: a slower one needs a deeper timeline.").weak());
+  });
+
+  section(ui, "wire", true, |ui| {
     ui.checkbox(&mut controls.coins, "coins (currency, contested by proximity)")
       .on_hover_text("Coins drop from kills and go to whoever is nearest inside the pickup radius. Currency rather than score: you spend it.");
     ui.add_enabled(controls.coins, egui::Checkbox::new(&mut controls.predict_balance, "predict pickups and balance locally"))
@@ -61,20 +79,45 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls) {
     ui.checkbox(&mut controls.combat, "weapons, deaths, and waves");
   });
 
-  section(ui, "how remotes are drawn", true, |ui| {
-    ui.radio_value(&mut controls.mode, RemoteMode::Simulate, "simulate (run the AI rule locally)");
-    ui.radio_value(&mut controls.mode, RemoteMode::DeadReckon, "dead reckon (last velocity)");
-    ui.radio_value(&mut controls.mode, RemoteMode::Interpolate, "interpolate (render in the past)");
-    ui.checkbox(&mut controls.smooth, "ease corrections");
-    // The two delays that make up your input lag, next to each other and with
-    // their sum stated, because each was justified on its own and nobody had
-    // costed the total against the hand.
+  // The input schedule: what the server does between your key and the world.
+  section(ui, "the input schedule", true, |ui| {
     ui.add(egui::Slider::new(&mut controls.playout_delay_ms, 0..=400).text("input playout delay ms"))
-      .on_hover_text("How long the server holds an input before executing it. This is what makes a contested pickup independent of ping: every input executes at press time plus this, so a 20 ms player and a 200 ms player are on the same footing. It has to cover the worst connected player's one-way delay, or their inputs arrive after the tick they named and are rejected outright.");
+      .on_hover_text("How long the server holds an input before executing it. This is what makes a contested pickup independent of ping: every input executes at press time plus this, so a 20 ms player and a 200 ms player are on the same footing.");
     ui.checkbox(&mut controls.input_playout, "use the playout buffer")
       .on_hover_text("Off is apply-on-arrival, which is what ping-independence costs you: whoever is closer to the server reaches the coin first.");
+    // The budget this group has to satisfy, spelled out against the link above.
+    // An input named for `press + playout` that lands past the accepting window
+    // is dropped, so this is the ceiling on who can play here at all, and
+    // admission refuses a connection past it rather than seating it broken.
+    let admit = controls.playout_delay_ms + controls.input_max_late_ticks * SIM_STEP_MS;
+    ui.label(
+      egui::RichText::new(format!(
+        "carries a link up to {admit} ms one way  ({} playout + {} late ticks)",
+        controls.playout_delay_ms, controls.input_max_late_ticks
+      ))
+      .weak(),
+    )
+    .on_hover_text("Past this an input arrives after the tick it named and is rejected, so admission refuses the connection at the door rather than seating a player who cannot move. Raise the playout delay to carry a worse link, at the cost of everybody's input lag.");
+  });
+
+  // The timeline: which instant is on screen. Sized from the link above plus a
+  // send interval, which is why the player rate is named here as well.
+  section(ui, "the timeline", true, |ui| {
     ui.add(egui::Slider::new(&mut controls.render_delay_ms, 0..=RENDER_DELAY_MAX_MS).text("render delay ms"))
-      .on_hover_text("How far behind the server clock every client shows the world. A property of the timeline, not of anybody's link, so the same instant is on every screen. It has to cover one-way latency + jitter + a send interval: the newest sample a client holds is already a trip old, so a delay short of that leaves nothing to interpolate between and peers snap to the raw sample. Too short and the underrun counter climbs.");
+      .on_hover_text("How far behind the server clock every client shows the world. A property of the timeline, not of anybody's link, so the same instant is on every screen. Too short and peers have nothing to interpolate between: the underrun and view-fallback counters climb.");
+    let interval = 1000 / controls.player_sync_hz.max(1) as u64;
+    let needs = controls.latency_ms + controls.jitter_ms + interval;
+    let line = format!(
+      "needs {needs} ms  ({} one way + {} jitter + {interval} at {} Hz)",
+      controls.latency_ms, controls.jitter_ms, controls.player_sync_hz
+    );
+    let short = controls.render_delay_ms < needs;
+    ui.label(if short {
+      egui::RichText::new(format!("{line}  <- shorter than that right now")).color(egui::Color32::from_rgb(230, 160, 90))
+    } else {
+      egui::RichText::new(line).weak()
+    })
+    .on_hover_text("A whole send interval is in the budget because interpolation needs two samples bracketing the instant being drawn, and the newest sample a client holds is already one trip old. Stated rather than enforced: setting it too short is a demonstration, and the counters report the consequence.");
     ui.label(
       egui::RichText::new(format!(
         "your input appears after {} ms  (playout {} + render {})",
@@ -85,6 +128,13 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls) {
       .weak(),
     )
     .on_hover_text("Nothing about your own player is predicted: it is drawn from the played-out stream at the same instant as everything else, so there is no correction to fight and a recording replays to exactly what you saw. The price is this number, and it is the sum of two delays that were each chosen for a different reason.");
+  });
+
+  section(ui, "how remotes are drawn", true, |ui| {
+    ui.radio_value(&mut controls.mode, RemoteMode::Simulate, "simulate (run the AI rule locally)");
+    ui.radio_value(&mut controls.mode, RemoteMode::DeadReckon, "dead reckon (last velocity)");
+    ui.radio_value(&mut controls.mode, RemoteMode::Interpolate, "interpolate (render in the past)");
+    ui.checkbox(&mut controls.smooth, "ease corrections");
     ui.checkbox(&mut controls.allow_ghost, "server: send unresolved frames (allows a ghost)")
       .on_hover_text("The permission a ghost needs, and a server setting rather than a client one, the way a shipped game exposes it: a client cannot draw a future it was not sent. Currently declared rather than enforced, so an honest client obeys it and a cheat client would not. Real enforcement means not sending past the render instant at all, which needs the server to hold frames rather than delay them; delaying was tried and measurably does nothing, because the client's clock shifts with the stream.");
     ui.add_enabled(controls.allow_ghost, egui::Checkbox::new(&mut controls.show_ghost, "draw the ghost"))
