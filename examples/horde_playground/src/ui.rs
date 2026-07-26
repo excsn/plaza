@@ -384,15 +384,16 @@ pub fn draw_host_ui(
         let total = view.truth.len() + known;
         let culled = if total > 0 { (1.0 - known as f32 / total.max(1) as f32) * 100.0 } else { 0.0 };
         ui.label(format!("your client knows {known} of ~{} enemies ({culled:.0}% culled)", view.alive));
+        // Straight after what this client holds, because it is the same subject:
+        // what one client knows, and what that costs it. The host's own player is
+        // a client on a real socket with no privilege, so it has exactly the
+        // counters a joiner does, and putting them beside the arena-wide model is
+        // what explains a host reading 60 KiB/s while a browser reads 180.
+        client_traffic(ui, client);
         let (compact, naive) = (view.bytes_per_sec() / 1024.0, view.naive_bytes_per_sec() / 1024.0);
         ui.label(format!("modelled, all players: {:.1} KiB/s session, {compact:.1} KiB/s recent", view.lifetime_bytes_per_sec() / 1024.0))
-          .on_hover_text("Scope first, then the two windows. **All players** is the whole arena: the host builds and meters a packet per seat, so this covers every one of them, not just your own client. **Modelled**, because it is what those packets would cost with compact ids and quantised positions, not what the JSON on the wire actually costs. The line below measures that.");
+          .on_hover_text("Scope first, then the two windows. **All players** is the whole arena: the host builds and meters a packet per seat, so this covers every one of them, not just your own client. **Modelled**, because it is what those packets would cost with compact ids and quantised positions, not what the JSON on the wire actually costs. The line above measures that.");
         ui.label(format!("with uuids + f32 positions: {naive:.1} KiB/s ({:.0}% saved)", if naive > 0.0 { (1.0 - compact / naive) * 100.0 } else { 0.0 }));
-        // The host's own player is a client on a real socket with no privilege,
-        // so it has the same measured counters a joiner does. Showing them here
-        // is what puts the model and the measurement on one screen: without it
-        // a host reads 60 KiB/s, a browser reads 180, and nothing explains why.
-        client_traffic(ui, client);
         // Spawns as a share of what is sent, because the ratio is the readout
         // that matters and two separate numbers hid it: a stream whose
         // baselines are advancing announces a little churn, and one that is not

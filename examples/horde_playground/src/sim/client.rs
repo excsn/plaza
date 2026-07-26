@@ -275,6 +275,14 @@ pub struct Client {
   /// relevant set already contains that enemy's target, so a rule input is never
   /// read from a slot that was never filled.
   player_seen: Vec<bool>,
+  /// The first instant this client ever heard about each player.
+  ///
+  /// Separates the join transient from real starvation. Until the render clock
+  /// has caught up to a player's first sample, that player's history cannot
+  /// cover the instant being drawn and there is nothing wrong with that; after
+  /// it, the same condition means history was evicted or arrived too sparsely,
+  /// which is worth reporting.
+  player_first_ms: Vec<u64>,
   /// Each player's last derived velocity, kept so a pair of samples too close
   /// together in time does not produce a spike.
   player_velocity: Vec<Vec2>,
@@ -452,6 +460,7 @@ impl Client {
       player_views: (0..player_count).map(|_| RemoteView::new(PLAYER_VIEW_SNAPSHOTS, PLAYER_EXTRAPOLATE_MS)).collect(),
       player_sample_ms: vec![0; player_count],
       player_seen: vec![false; player_count],
+      player_first_ms: vec![0; player_count],
       player_velocity: vec![Vec2::default(); player_count],
       arrival_interval_ms: 0.0,
       last_player_frame_ms: 0,
@@ -805,24 +814,37 @@ impl Client {
       // intention, which nothing on the wire carries, so it overshoots on every
       // direction change and then snaps back when the truth lands.
       .map(|(p, view)| {
-        // A target older than the view's history is *clamped* to the oldest
-        // snapshot inside the buffer, which silently draws this player at a
-        // newer instant than the scene. The degradation stays, but it is
-        // counted, because this exact clamp once detached the marker from the
-        // timeline the shots were on and nothing said so.
-        if view.oldest_timestamp().is_some_and(|oldest| at.0 < oldest) {
-          self.view_fallbacks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        }
         view
           .render(target, RenderOpts { interpolate: true, extrapolate: false })
-          // The newest sample stands in when the view has no samples at all,
-          // the same off-timeline degradation, counted the same way.
-          .unwrap_or_else(|| {
-            self.view_fallbacks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            self.players[p]
-          })
+          // The newest sample stands in when the view has nothing at all, which
+          // is the join transient rather than a fault.
+          .unwrap_or_else(|| self.players[p])
       })
       .collect()
+  }
+
+  /// Counts players being drawn off the render instant, once per frame.
+  ///
+  /// Deliberately not counted inside [`Client::render_players`]. That runs
+  /// several times a frame (the camera, the enemy rule's context, the coin
+  /// attractors, the claim prediction, the renderer), so counting there
+  /// multiplied every occurrence by however many callers happened to ask, and a
+  /// join transient of three unknown players read as a thousand faults.
+  ///
+  /// A player that has never been heard from is not counted: it is not being
+  /// drawn at the wrong instant, it is not being drawn at all. What is counted
+  /// is a view that *has* history and still cannot reach the instant, which is
+  /// the genuine starvation the number exists to report.
+  fn count_view_fallbacks(&self) {
+    let Some(at) = self.render_at() else { return };
+    for (p, view) in self.player_views.iter().enumerate() {
+      if !self.knows_player(p) || at.0 < self.player_first_ms[p] {
+        continue;
+      }
+      if view.oldest_timestamp().is_some_and(|oldest| at.0 < oldest) {
+        self.view_fallbacks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+      }
+    }
   }
 
   /// Times a player was drawn off the render instant because its view could
@@ -911,7 +933,10 @@ impl Client {
     }
     self.player_views[p].push(server_time_ms, pos, self.player_velocity[p]);
     self.player_sample_ms[p] = server_time_ms;
-    self.player_seen[p] = true;
+    if !self.player_seen[p] {
+      self.player_seen[p] = true;
+      self.player_first_ms[p] = server_time_ms;
+    }
     self.players[p] = pos;
   }
 
@@ -1355,6 +1380,7 @@ impl Client {
     // The clock has moved, so anything it has now reached is played out before
     // the world is stepped forward from it.
     let applied = self.apply_due(controls);
+    self.count_view_fallbacks();
 
     // Health samples whose instant has come, oldest first so the guard in
     // `apply_health` sees them in order.
@@ -1676,24 +1702,45 @@ mod tests {
   }
 
   #[test]
-  fn a_player_drawn_off_the_timeline_is_counted_not_silent() {
-    // The starvation fallback quietly moves one player onto a different
-    // timeline than the scene. It stays as the degradation, but it is counted,
-    // because silent compensation is the pattern that hid the corner-camera
-    // regression.
+  fn a_player_never_heard_from_is_not_counted_as_a_fault() {
+    // Being outside relevance is not starvation. A player with no samples is not
+    // being drawn at the wrong instant, it is not being drawn at all, and the
+    // renderer already skips it. Counting it made the join transient read as a
+    // thousand faults on a healthy client.
+    let controls = Controls::default();
     let mut client = Client::new(0, 2);
     let frame = PlayerFrame {
       server_time_ms: 1_000,
-      // Only player 0 gets a sample, so player 1's view has nothing at T.
       players: vec![(0, Vec2::new(50.0, 50.0))],
       vitals: vec![],
       distant: vec![],
     };
     client.on_player_frame(&frame, 1_000);
-    assert_eq!(client.view_fallbacks(), 0);
-    let at = client.render_at().expect("the timeline has started");
-    let _ = client.render_players(at);
-    assert!(client.view_fallbacks() > 0, "the starved view fell back, and said so");
+    for _ in 0..30 {
+      client.tick(16, &controls);
+    }
+    assert!(!client.knows_player(1), "player 1 was never sent");
+    assert_eq!(client.view_fallbacks(), 0, "and is not a fault, merely absent");
+  }
+
+  #[test]
+  fn the_fallback_count_is_per_frame_not_per_reader() {
+    // `render_players` runs several times a frame: the camera, the enemy rule's
+    // context, the coin attractors, the claim prediction, the renderer. Counting
+    // inside it multiplied every occurrence by however many callers happened to
+    // ask, so the number reported was a property of the call graph rather than
+    // of the timeline.
+    let controls = Controls::default();
+    let mut client = client_with_a_moving_player(150);
+    let before = client.view_fallbacks();
+    let at = client.render_at().expect("started");
+    for _ in 0..10 {
+      let _ = client.render_players(at);
+      let _ = client.drawn_players();
+    }
+    assert_eq!(client.view_fallbacks(), before, "reading does not count");
+    client.tick(16, &controls);
+    assert!(client.view_fallbacks() - before <= 2, "and a frame counts at most once per player");
   }
 
   #[test]
@@ -1917,8 +1964,12 @@ mod tests {
     // detached marker invisible to every readout.
     let mut client = Client::new(0, 1);
     client.set_render_delay(crate::sim::types::RENDER_DELAY_MAX_MS);
-    // A history far too short to reach 600 ms back.
-    for t in [2_900u64, 2_950, 3_000] {
+    // A client that has been running a while, whose buffer has evicted its way
+    // to a history shorter than the render delay. That is the failure: not "it
+    // has just joined", which cannot cover the instant either and is expected,
+    // but "it has been here throughout and still cannot".
+    let mut t = 0u64;
+    while t <= 1_000 {
       let frame = PlayerFrame {
         server_time_ms: t,
         players: vec![(0, Vec2::new(t as f32, 0.0))],
@@ -1926,10 +1977,11 @@ mod tests {
         distant: vec![],
       };
       client.on_player_frame(&frame, t);
+      t += 5;
     }
     client.tick(0, &Controls::default());
     let at = client.render_at().expect("timeline started");
-    let _ = client.render_players(at);
+    assert!(at.server_time_ms() >= client.player_first_ms[0], "the instant is inside this client's lifetime");
     assert!(client.view_fallbacks() > 0, "a clamped render is counted, not silent");
   }
 
