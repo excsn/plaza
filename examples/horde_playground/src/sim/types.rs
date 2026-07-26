@@ -103,8 +103,14 @@ pub type PlayerId = u8;
 ///
 /// | players | server CPU per simulated second | downstream |
 /// |---|---|---|
-/// | 4 | 10 ms | 435 KiB/s |
-/// | 128 | 125 ms | 5.6 MiB/s |
+/// | 4 | 16 ms | 355 KiB/s |
+/// | 128 | 168 ms | 5.1 MiB/s |
+///
+/// Most of that traffic is not the enemies. Player positions go to everybody
+/// with no relevance applied, on both streams, so they are `O(players^2)` and
+/// are 55% of the total at 128 against 2% at four. Relevance is what this
+/// example is about, and the one thing it does not apply it to is what dominates
+/// once the count is large.
 ///
 /// Re-run it before moving this. The hard limit above it is the wire, where
 /// `PlayerId` is a `u8`.
