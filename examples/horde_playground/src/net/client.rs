@@ -19,7 +19,7 @@
 
 use plaza_client_utils::clock_sync::ClockSyncEstimator;
 use plaza_client_utils::{InputCoalescer, RttEstimator};
-use plaza_ws::{CloseReason, Event, SendJson, Socket, State};
+use plaza_ws::{CloseReason, Event, Socket, State};
 
 use crate::sim::client::Client as SimClient;
 use crate::sim::protocol::{Op, ServerPolicy, PROTOCOL};
@@ -77,6 +77,17 @@ pub struct NetClient {
   /// the whole arena; a joiner wants its own share, because that is what says
   /// whether *its* link is the problem.
   traffic: plaza_server_utils::RateMeter,
+  /// The same traffic as the *server* counts it: what these packets would cost
+  /// with compact ids and quantised positions, rather than what the JSON on the
+  /// wire actually cost. Kept beside the real figure because the gap between
+  /// them is the encoding's price, and it is the one number about wire cost
+  /// this example never showed.
+  modelled: plaza_server_utils::RateMeter,
+  /// What this client *sends*. Bandwidth has two directions and every counter
+  /// here measured one of them, which made "bandwidth" mean downstream by
+  /// accident. Upstream is small but it is not nothing: an input every tick
+  /// unless coalescing is on, plus an acknowledgement per applied frame.
+  sent: plaza_server_utils::RateMeter,
   packets: plaza_server_utils::RateMeter,
   events: Vec<Event>,
   last_ping_ms: u64,
@@ -102,6 +113,8 @@ impl NetClient {
       rtt: RttEstimator::new(0.15),
       clock: ClockSyncEstimator::new(32),
       traffic: plaza_server_utils::RateMeter::new(),
+      modelled: plaza_server_utils::RateMeter::new(),
+      sent: plaza_server_utils::RateMeter::new(),
       packets: plaza_server_utils::RateMeter::new(),
       events: Vec::new(),
       last_ping_ms: 0,
@@ -205,7 +218,7 @@ impl NetClient {
       let server_now = self.clock.server_time_at(self.now_ms as f64).unwrap_or(self.now_ms as f64).max(0.0) as u64;
       let depth = self.policy.map(|p| p.playout_delay_ms).unwrap_or(0);
       let tick = (server_now + depth) / SIM_STEP_MS;
-      let _ = self.socket.send_json(&Op::Input { seq: self.input_seq, dx: dir.x, dy: dir.y, tick });
+      self.send_op(&Op::Input { seq: self.input_seq, dx: dir.x, dy: dir.y, tick });
     }
   }
 
@@ -214,7 +227,7 @@ impl NetClient {
     self.now_ms = now_ms;
     if now_ms.saturating_sub(self.last_ping_ms) >= PING_INTERVAL_MS && self.socket.is_open() {
       self.last_ping_ms = now_ms;
-      let _ = self.socket.send_json(&Op::Ping { origin_ms: now_ms });
+      self.send_op(&Op::Ping { origin_ms: now_ms });
     }
 
     self.socket.poll(&mut self.events);
@@ -228,7 +241,7 @@ impl NetClient {
           }
           // Before anything else: say which wire format this build speaks, so a
           // stale page is told to reload rather than half-working.
-          let _ = self.socket.send_json(&Op::Hello { protocol: PROTOCOL });
+          self.send_op(&Op::Hello { protocol: PROTOCOL });
         }
         Event::Text(text) => applied_a_frame |= self.on_frame(text.as_bytes(), now_ms, controls),
         Event::Message(bytes) => applied_a_frame |= self.on_frame(&bytes, now_ms, controls),
@@ -250,7 +263,7 @@ impl NetClient {
     if applied_a_frame
       && let Some((newest, mask)) = self.sim.acks().encode()
     {
-      let _ = self.socket.send_json(&Op::Ack { newest, mask, digest: self.sim.last_digest() });
+      self.send_op(&Op::Ack { newest, mask, digest: self.sim.last_digest() });
     }
 
     // A purchase is a request on the same wire as anything else. Ask once; the
@@ -258,7 +271,7 @@ impl NetClient {
     if controls.coins && controls.auto_buy && self.is_playing()
       && let Some(upgrade) = self.sim.wants_to_buy()
     {
-      let _ = self.socket.send_json(&Op::Buy(upgrade));
+      self.send_op(&Op::Buy(upgrade));
     }
   }
 
@@ -270,6 +283,36 @@ impl NetClient {
 
   pub fn packets_per_sec(&self) -> f64 {
     self.packets.per_sec()
+  }
+
+  /// What this client's traffic would have cost with the compact encoding the
+  /// server's own readout models. Divide the measured figure by this and you
+  /// have what the wire format costs over the encoding it is accounted in.
+  pub fn modelled_per_sec(&self) -> f64 {
+    self.modelled.per_sec()
+  }
+
+  /// Bytes a second this client is sending, measured the same way as the
+  /// downstream: serialised once, counted, then handed to the socket.
+  pub fn upstream_per_sec(&self) -> f64 {
+    self.sent.per_sec()
+  }
+
+  /// Serialises an op, counts it, and sends it.
+  ///
+  /// `send_json` would serialise internally and give nothing back to measure,
+  /// so the same work happens here where the length is visible. One allocation
+  /// either way.
+  fn send_op(&mut self, op: &Op) {
+    match serde_json::to_string(op) {
+      Ok(text) => {
+        self.sent.add(text.len() as u64);
+        let _ = self.socket.send_text(&text);
+      }
+      // Nowhere to log on wasm, and an op that will not serialise is a bug in
+      // this build rather than a runtime condition to report.
+      Err(_) => debug_assert!(false, "an op failed to serialise"),
+    }
   }
 
   fn on_frame(&mut self, bytes: &[u8], now_ms: u64, controls: &Controls) -> bool {
@@ -301,11 +344,13 @@ impl NetClient {
         // no deltas, so it is deliberately outside the sequence, acknowledgement
         // and digest machinery the entity stream runs on.
         Op::Players(frame) => {
+          self.modelled.add(frame.bytes() as u64);
           let server_now = self.clock.server_time_at(now_ms as f64).unwrap_or(now_ms as f64).max(0.0) as u64;
           self.sim.on_player_frame(&frame, server_now);
         }
         Op::Frame(packet) => {
           let _ = controls;
+          self.modelled.add(packet.bytes() as u64);
           // Clock sync is driven by pongs alone, not by frames. A frame's offset
           // is only right if the one-way estimate matches the delay the frame
           // actually took, and on a *host* those disagree: pongs come straight
@@ -374,6 +419,8 @@ impl NetClient {
     self.sim.tick(dt_ms, controls);
     // The meters roll their window on this client's own clock.
     self.traffic.elapsed(self.now_ms);
+    self.modelled.elapsed(self.now_ms);
+    self.sent.elapsed(self.now_ms);
     self.packets.elapsed(self.now_ms);
     // A drop in your own health is a hit worth flashing. Detected after
     // play-out, not at receipt, so the flash lands at the instant on screen.

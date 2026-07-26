@@ -9,6 +9,39 @@ use horde_playground::sim::types::{MAX_PLAYERS, RENDER_DELAY_MAX_MS, SEND_RATE_M
 const SIM_STEP_MS: u64 = (SIM_DT * 1000.0) as u64;
 use horde_playground::sim::{Controls, RemoteMode, World};
 
+/// What one client is actually receiving, next to what the server's own readout
+/// models that same traffic as costing.
+///
+/// The two are not the same quantity and were never shown together, which is how
+/// a host reading 60 KiB/s and a browser reading 180 went unexplained: the
+/// server counts a hypothetical compact encoding (a 3 byte id, quantised
+/// positions) while the wire actually carries JSON. The gap between them is the
+/// format's price, and it is the one number about wire cost this example
+/// measures rather than models.
+#[cfg(all(feature = "client", feature = "websocket"))]
+fn client_traffic(ui: &mut egui::Ui, client: &horde_playground::net::client::NetClient) {
+  let (recent, session) = client.downstream_per_sec();
+  let modelled = client.modelled_per_sec();
+  ui.label(format!(
+    "this client: down {:.1} KiB/s, up {:.1} KiB/s  ({:.1} KiB/s down session, {:.0} msg/s)",
+    recent / 1024.0,
+    client.upstream_per_sec() / 1024.0,
+    session / 1024.0,
+    client.packets_per_sec()
+  ))
+  .on_hover_text("Both directions, measured on the wire: down is counted as bytes arrive before decoding, up is counted as each op is serialised. Yours alone, not the arena's, which is what makes it the number that says whether your own link is the problem. Upstream is small and asymmetric by design: an input per tick unless coalescing is on, plus an acknowledgement per applied frame, against a whole world coming the other way.");
+  let ratio = if modelled > 0.0 { recent / modelled } else { 0.0 };
+  ui.label(
+    egui::RichText::new(format!(
+      "of which the wire format costs {:.1}x  ({:.1} KiB/s if encoded as the server accounts it)",
+      ratio,
+      modelled / 1024.0
+    ))
+    .weak(),
+  )
+  .on_hover_text("The server's bandwidth readout is a model: what these packets would cost with compact ids and quantised positions, which is the encoding every saving in this example is quoted against. What actually crosses is JSON, with field names and decimal-text floats. This ratio is the difference, and it is why a host and a client reading 'bandwidth' can disagree by several times without either being wrong.");
+}
+
 /// One collapsible section.
 ///
 /// The panel carries roughly fifty widgets and twenty readouts, and any given
@@ -266,9 +299,7 @@ pub fn draw_net_ui(client: &horde_playground::net::client::NetClient, url: &str,
         // The joiner's own share, measured on its own wire. The host's readout is
         // an aggregate for the whole arena and cannot answer "is my link the
         // problem"; this can.
-        let (recent, session) = client.downstream_per_sec();
-        ui.label(format!("downstream (this client): {:.1} KiB/s session, {:.1} KiB/s recent, {:.0} msg/s", session / 1024.0, recent / 1024.0, client.packets_per_sec()))
-          .on_hover_text("What this client is receiving, counted on the wire as it arrives. The session average first, the last few seconds second. The host's bandwidth figure is the whole arena's; this one is yours, and the two differ by roughly the number of players.");
+        client_traffic(ui, client);
         ui.label(format!("frames applied: {}   lost: {}", client.frames_seen, client.sim.frames_lost()));
         ui.label(format!("render delay: {} ms   underruns: {}   view fallbacks: {}", client.sim.render_delay_ms(), client.sim.underruns(), client.sim.view_fallbacks()))
           .on_hover_text("An underrun is a packet that arrived after the instant it describes had already gone past, so it could never be played at the right moment. It is the honest form of what an adaptive buffer used to hide by quietly showing you an older world than everybody else. A view fallback is a player drawn from its newest sample because its buffer could not produce the render instant, which silently puts that player on a different timeline for a frame; both counters are the same honesty applied to different buffers.");
@@ -348,9 +379,14 @@ pub fn draw_host_ui(
         let culled = if total > 0 { (1.0 - known as f32 / total.max(1) as f32) * 100.0 } else { 0.0 };
         ui.label(format!("your client knows {known} of ~{} enemies ({culled:.0}% culled)", view.alive));
         let (compact, naive) = (view.bytes_per_sec() / 1024.0, view.naive_bytes_per_sec() / 1024.0);
-        ui.label(format!("bandwidth (all players): {:.1} KiB/s session, {compact:.1} KiB/s recent", view.lifetime_bytes_per_sec() / 1024.0))
-          .on_hover_text("Scope first, then the two windows. **All players** is the whole arena: the host builds and meters a packet per seat, so this covers every one of them, not just your own client. **Session** is the average since the meter started, **recent** is the last few seconds. The session figure sitting below the recent one means it is still climbing toward it, which is a fact about the average rather than about the traffic.");
+        ui.label(format!("modelled, all players: {:.1} KiB/s session, {compact:.1} KiB/s recent", view.lifetime_bytes_per_sec() / 1024.0))
+          .on_hover_text("Scope first, then the two windows. **All players** is the whole arena: the host builds and meters a packet per seat, so this covers every one of them, not just your own client. **Modelled**, because it is what those packets would cost with compact ids and quantised positions, not what the JSON on the wire actually costs. The line below measures that.");
         ui.label(format!("with uuids + f32 positions: {naive:.1} KiB/s ({:.0}% saved)", if naive > 0.0 { (1.0 - compact / naive) * 100.0 } else { 0.0 }));
+        // The host's own player is a client on a real socket with no privilege,
+        // so it has the same measured counters a joiner does. Showing them here
+        // is what puts the model and the measurement on one screen: without it
+        // a host reads 60 KiB/s, a browser reads 180, and nothing explains why.
+        client_traffic(ui, client);
         // Spawns as a share of what is sent, because the ratio is the readout
         // that matters and two separate numbers hid it: a stream whose
         // baselines are advancing announces a little churn, and one that is not
