@@ -417,8 +417,16 @@ fn phantom_and_missing(view: &horde_playground::net::arena::HostView, client: &h
   use horde_playground::sim::{Handle, Vec2, VIEW_RADIUS};
   use std::collections::BTreeSet;
   let live: BTreeSet<Handle> = view.truth.iter().map(|(h, _, _)| *h).collect();
-  let held: BTreeSet<Handle> = client.sim.render_at().map(|at| client.sim.render(controls, at)).unwrap_or_default().into_iter().map(|(h, _, _)| h).collect();
-  let phantoms = held.iter().filter(|h| !live.contains(h)).count();
+  let at = client.sim.render_at();
+  let held: BTreeSet<Handle> = at.map(|at| client.sim.render(controls, at)).unwrap_or_default().into_iter().map(|(h, _, _)| h).collect();
+  // Dead *at the instant being drawn*, not dead now. A client that renders in
+  // the past is holding everything that has died since that instant, by
+  // construction, and comparing it against the present charges it for the delay
+  // rather than finding a drifted mirror: at a thousand kills a second and a
+  // 250 ms delay that is a couple of hundred false phantoms, reported in red.
+  let drawn_at = at.map(|at| at.server_time_ms()).unwrap_or(view.server_now_ms);
+  let died_since: BTreeSet<Handle> = view.recently_dead.iter().filter(|(_, t)| *t > drawn_at).map(|(h, _)| *h).collect();
+  let phantoms = held.iter().filter(|h| !live.contains(h) && !died_since.contains(h)).count();
 
   let eye: Vec2 = client.me.and_then(|m| view.players.get(m as usize)).copied().unwrap_or_default();
   let missing = view.truth.iter().filter(|(_, pos, _)| pos.dist(eye) <= VIEW_RADIUS).filter(|(h, _, _)| !held.contains(h)).count();

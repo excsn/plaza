@@ -157,6 +157,16 @@ Reading the shape of a counter rather than its value: a count climbing without b
 
 **The general form.** In a protocol that repeats until acknowledged, "how many times was I told" and "how many times did it happen" diverge by design. Anything derived from such a stream must be exactly as idempotent as the stream itself: count state transitions, never messages. The mirror got this right from the start; the one counter that read the wire instead of the state is the one that produced a visible artifact.
 
+### A fault readout that was really the render delay, twice (horde)
+
+**Symptom.** After the acknowledgement fix above, `entities held that are dead on the server` went from 15 to 156 and turned red, while every other number improved: churn balanced, the packet became 4% new arrivals instead of 99%, the worst server tick fell from 185 ms to 6 ms.
+
+**Cause.** The check compared what the client draws **at its render instant** against server truth **now**. A client that renders 250 ms in the past is holding every entity that has died since that moment, by construction. At roughly a thousand kills a second, that is a couple of hundred entities, and the number got *worse* precisely because the client had stopped being force-fed the present and was correctly on its own timeline again.
+
+**Fix.** The server keeps a bounded log of recent deaths with their times, capped at the deepest render delay the panel allows, and a held entity counts as a phantom only if it was already dead **at the instant being drawn**.
+
+**This is the same mistake as `mean_render_error`**, which is already filed as open work, and it went unnoticed in a second metric for as long as nothing exercised it. Any comparison between a delayed client and an authoritative server needs the server's state *at the client's instant*, and a server that keeps no history cannot answer that: the alternatives are keeping one (a bounded log here, `HistoricalStateBuffer` in general) or not making the claim.
+
 ### The 127 clients that never acknowledged (horde)
 
 **Symptom.** A host running 128 players reported bandwidth climbing slowly over half an hour, and `churn: 136.9 spawns / 0.2 despawns per packet` against `sent per packet: 138 entities`. Almost every entity in every packet was arriving as a brand new spawn, and almost nothing was ever retracted.

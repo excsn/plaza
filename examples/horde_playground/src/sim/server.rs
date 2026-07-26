@@ -109,6 +109,10 @@ pub struct Server {
   entered_buf: Vec<u32>,
   /// Spawns announced in the last send round, for the readout above.
   last_spawns: usize,
+  /// Recently dead handles and when they died. Pruned to the deepest render
+  /// delay, so it is bounded by the kill rate over that window rather than by
+  /// the length of the session.
+  recently_dead: Vec<(Handle, u64)>,
   /// Which players each client needs: the ones it can see, plus the ones its
   /// visible enemies are chasing. Recomputed on each entity round and reused by
   /// the player stream, which runs on its own clock.
@@ -226,6 +230,7 @@ impl Server {
       candidates: Vec::new(),
       entered_buf: Vec::new(),
       last_spawns: 0,
+      recently_dead: Vec::new(),
       relevant_players: vec![Vec::new(); player_count],
       wallets_dirty: (0..player_count as PlayerId).collect(),
       shots_fired_since_send: Vec::new(),
@@ -581,6 +586,10 @@ impl Server {
     let died_at = self.enemies[idx as usize].pos;
     self.pool.free(key);
     self.kills += 1;
+    // Logged with the time, so a client drawing the past can be asked whether
+    // this was dead *at the instant it is drawing* rather than whether it is
+    // dead now.
+    self.recently_dead.push((key.into(), self.clock_ms));
     if self.kills.is_multiple_of(COIN_DROP_IN as u64) {
       let id = self.next_coin_id;
       self.next_coin_id += 1;
@@ -881,6 +890,22 @@ impl Server {
     self.pending_players.take()
   }
 
+  /// Handles that died recently, with when. Bounded to the deepest render delay
+  /// the panel allows, which is exactly how far back any client can be drawing.
+  ///
+  /// For asking "was this dead *at the instant being drawn*" rather than "is it
+  /// dead now". A client that renders in the past is holding entities the server
+  /// has since killed, by construction, and a check against the present charges
+  /// it for the delay instead of finding a fault.
+  pub fn died_after(&self, handle: Handle, at_ms: u64) -> bool {
+    self.recently_dead.iter().any(|(h, t)| *h == handle && *t > at_ms)
+  }
+
+  /// The death log itself, for an observer that has to make the same judgement.
+  pub fn recently_dead_log(&self) -> Vec<(Handle, u64)> {
+    self.recently_dead.clone()
+  }
+
   /// Entities announced as new in the most recent send round, across all seats.
   /// A delta stream in steady state should keep this near the real churn; a
   /// number close to the whole visible set means somebody's baseline is not
@@ -1169,6 +1194,10 @@ impl Server {
     self.shots_ended_since_send.clear();
     self.wallets_dirty.clear();
     self.last_spawns = out.iter().map(|(_, p)| p.entered.len()).sum();
+    // Bounded by the deepest render delay: past that, no client can still be
+    // drawing the moment this entity was alive.
+    let keep_after = self.clock_ms.saturating_sub(crate::sim::types::RENDER_DELAY_MAX_MS);
+    self.recently_dead.retain(|(_, t)| *t >= keep_after);
     out
   }
 }

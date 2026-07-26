@@ -89,6 +89,10 @@ pub struct HostView {
   pub kills: u64,
   pub nova_kills_last: usize,
   pub last_nova_ms: Option<u64>,
+  /// Handles that died within the deepest render delay, with when. A client
+  /// drawing the past legitimately still holds these, so a check for a drifted
+  /// mirror has to exclude them or it reports the render delay as a fault.
+  pub recently_dead: Vec<(Handle, u64)>,
   pub server_now_ms: u64,
   pub coins_expired: u64,
   pub denied_purchases: u64,
@@ -324,6 +328,7 @@ impl Arena {
       kills: self.sim.kills,
       nova_kills_last: self.sim.nova_kills_last,
       last_nova_ms: self.sim.last_nova_ms,
+      recently_dead: self.sim.recently_dead_log(),
       server_now_ms: self.sim.now_ms(),
       coins_expired: self.sim.coins_expired,
       denied_purchases: self.sim.denied_purchases,
