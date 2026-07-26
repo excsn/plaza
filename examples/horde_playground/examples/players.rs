@@ -233,5 +233,5 @@ fn main() {
   }
 
   // The shape over time, at the count where it was reported as climbing.
-  drift(3000, 128, 8, 20.0);
+  drift(3000, 10, 30, 40.0);
 }
