@@ -123,7 +123,7 @@ impl HostView {
   pub fn nova_flash_age(&self) -> Option<f32> {
     let fired = self.last_nova_ms?;
     let age = self.server_now_ms.saturating_sub(fired) as f32 / 1000.0;
-    (age <= 0.45).then_some(age)
+    (age <= crate::sim::types::NOVA_RING_SECS).then_some(age)
   }
 }
 

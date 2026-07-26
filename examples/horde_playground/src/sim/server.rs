@@ -915,6 +915,7 @@ impl Server {
         players: player_list.clone(),
         player_health: health_list.clone(),
         player_invuln: invuln_list.clone(),
+        nova_at_ms: self.last_nova_ms,
         ..Default::default()
       };
 

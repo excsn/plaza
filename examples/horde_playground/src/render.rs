@@ -10,7 +10,7 @@
 //!   outside that circle are the bandwidth relevance is saving you.
 
 use macroquad::prelude::*;
-use horde_playground::sim::{Controls, EnemyKind, Vec2 as SimVec2, World, ARENA_H, ARENA_W, NOVA_RADIUS, VIEW_RADIUS};
+use horde_playground::sim::{Controls, EnemyKind, Vec2 as SimVec2, World, ARENA_H, ARENA_W, NOVA_RADIUS, NOVA_RING_SECS, VIEW_RADIUS};
 
 const C_YOU: Color = SKYBLUE;
 const C_PEER: Color = Color::new(0.5, 0.8, 1.0, 0.9);
@@ -231,7 +231,7 @@ pub fn draw_world(world: &World, controls: &Controls, cam: &Camera) {
   // The area pulse, while it is fresh. Without this the mass elimination it
   // causes is indistinguishable from entities silently disappearing.
   if let Some(age) = world.nova_flash_age() {
-    let progress = (age / 0.45).clamp(0.0, 1.0);
+    let progress = (age / NOVA_RING_SECS).clamp(0.0, 1.0);
     let alpha = 1.0 - progress;
     let ring = Color::new(0.6, 0.95, 1.0, alpha * 0.9);
     for player in world.players() {
@@ -408,7 +408,7 @@ fn enemy_color(kind: EnemyKind) -> Color {
 #[cfg(any(all(feature = "client", feature = "websocket"), feature = "server"))]
 fn draw_nova(age: Option<f32>, players: &[SimVec2], eye: SimVec2, cam: &Camera) {
   let Some(age) = age else { return };
-  let progress = (age / 0.45).clamp(0.0, 1.0);
+  let progress = (age / NOVA_RING_SECS).clamp(0.0, 1.0);
   let alpha = 1.0 - progress;
   let ring = Color::new(0.6, 0.95, 1.0, alpha * 0.9);
   for player in players {

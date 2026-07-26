@@ -46,6 +46,10 @@ pub const HIT_RADIUS: f32 = 14.0;
 pub const NOVA_INTERVAL_MS: u64 = 4500;
 pub const NOVA_RADIUS: f32 = 190.0;
 pub const NOVA_DAMAGE: u8 = 3;
+/// How long the pulse ring is drawn for, everywhere a pulse is drawn: the
+/// clients, the offline world and the host view all derive the ring from a
+/// timestamp and this one duration.
+pub const NOVA_RING_SECS: f32 = 0.45;
 /// New enemies arrive in waves, just outside somebody's view.
 pub const WAVE_INTERVAL_MS: u64 = 500;
 
@@ -551,6 +555,13 @@ pub struct Packet {
   pub left: Vec<(Handle, LeaveReason)>,
   pub samples: Vec<Sample>,
   pub players: Vec<(PlayerId, Vec2)>,
+  /// When the most recent area pulse fired, on the server clock. An event
+  /// declared outright rather than inferred from the death burst it causes: the
+  /// inference re-fired on recovery repeats, and a mid-pulse joiner had nothing
+  /// to infer from at all. The ring is a pure function of this timestamp and
+  /// the render instant, so repeats are naturally idempotent.
+  #[serde(default)]
+  pub nova_at_ms: Option<u64>,
   /// Shots near this player, sent outright: there are few and they are short-lived.
   /// The live shots near this player.
   ///

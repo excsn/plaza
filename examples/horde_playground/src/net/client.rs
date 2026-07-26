@@ -12,8 +12,10 @@
 //! - **The entity stream is acknowledged over the real wire.** The sim already
 //!   tracks which relevance packets it holds; this sends that acknowledgement up
 //!   so the server's loss recovery has something to diff against.
-//! - **The area pulse is inferred from the death burst it causes**, rather than
-//!   read from server state a joiner does not have.
+//! - **The area pulse arrives as a declared event.** The packet carries the
+//!   pulse's server timestamp, and the ring is a pure function of it and the
+//!   render instant. It was inferred from the death burst it causes once, and
+//!   the inference re-fired on every recovery repeat of the same announcements.
 
 use plaza_client_utils::clock_sync::ClockSyncEstimator;
 use plaza_client_utils::{InputCoalescer, RttEstimator};
@@ -48,11 +50,6 @@ const PING_INTERVAL_MS: u64 = 1000;
 /// direction change cannot strand the player gliding until the next keypress.
 /// See [`InputCoalescer`], which is where that reasoning now lives.
 const INPUT_KEEPALIVE_MS: u64 = 120;
-/// How many `Died` retractions in one packet read as an area pulse rather than
-/// ordinary attrition. A nova clears a whole radius at once; single shots do not.
-const NOVA_BURST: usize = 10;
-/// How long the pulse ring is drawn for after the burst.
-const NOVA_FLASH_SECS: f32 = 0.45;
 /// How long the red damage flash is drawn for after a hit.
 const HIT_FLASH_SECS: f32 = 0.35;
 
@@ -77,13 +74,8 @@ pub struct NetClient {
   last_ping_ms: u64,
   pub frames_seen: u64,
   now_ms: u64,
-  /// Seconds of area-pulse flash left to draw, refreshed on a death burst.
-  nova_flash_secs: f32,
   /// Your own health last frame, to catch the moment it drops.
   prev_health: u8,
-  /// Deaths seen as of the last tick, to catch the burst that means an area
-  /// pulse at the moment it is played out.
-  prev_deaths: u64,
   /// Seconds of red damage flash left to draw, refreshed when you take a hit.
   hit_flash_secs: f32,
 }
@@ -105,9 +97,7 @@ impl NetClient {
       last_ping_ms: 0,
       frames_seen: 0,
       now_ms: 0,
-      nova_flash_secs: 0.0,
       prev_health: crate::sim::types::PLAYER_MAX_HEALTH as u8,
-      prev_deaths: 0,
       hit_flash_secs: 0.0,
     })
   }
@@ -178,9 +168,11 @@ impl NetClient {
     self.status == Status::Playing
   }
 
-  /// How long ago the last area pulse fired, while still worth drawing.
+  /// How long ago the last area pulse fired, at the instant on screen. The
+  /// packet declares the pulse's timestamp, and the sim derives the ring from
+  /// it and the frame clock; this client adds nothing.
   pub fn nova_flash_age(&self) -> Option<f32> {
-    (self.nova_flash_secs > 0.0).then_some(NOVA_FLASH_SECS - self.nova_flash_secs)
+    self.sim.nova_flash_age()
   }
 
   /// Advances the local prediction and transmits the intent, either every tick or
@@ -306,9 +298,8 @@ impl NetClient {
           // zero rather than a wild one.
           // Nothing else happens here. The packet is queued for its instant, so
           // everything derived from its contents (the hit flash, the pulse
-          // flash) is detected in `tick` when it is actually played out, not at
-          // arrival, or the reaction would land one render delay before the
-          // thing it reacts to is visible.
+          // ring) follows play-out, not arrival, or the reaction would land one
+          // render delay before the thing it reacts to is visible.
           let server_now = self.clock.server_time_at(now_ms as f64).unwrap_or(now_ms as f64).max(0.0) as u64;
           self.sim.receive_packet(*packet, server_now);
           self.frames_seen += 1;
@@ -351,24 +342,13 @@ impl NetClient {
   /// appeared on screen this tick.
   pub fn tick(&mut self, dt_ms: u64, controls: &Controls) {
     self.sim.tick(dt_ms, controls);
-    // Reactions are detected after play-out, not at receipt, so they land at
-    // the instant on screen: the flash and the deaths it announces arrive in
-    // the same frame, instead of the flash leading by one render delay.
-    let deaths = self.sim.deaths_seen;
-    if deaths.saturating_sub(self.prev_deaths) >= NOVA_BURST as u64 {
-      self.nova_flash_secs = NOVA_FLASH_SECS;
-    }
-    self.prev_deaths = deaths;
-    // A drop in your own health is a hit worth flashing, and health itself now
-    // changes at play-out.
+    // A drop in your own health is a hit worth flashing. Detected after
+    // play-out, not at receipt, so the flash lands at the instant on screen.
     let health = self.my_health();
     if health < self.prev_health {
       self.hit_flash_secs = HIT_FLASH_SECS;
     }
     self.prev_health = health;
-    if self.nova_flash_secs > 0.0 {
-      self.nova_flash_secs = (self.nova_flash_secs - dt_ms as f32 / 1000.0).max(0.0);
-    }
     if self.hit_flash_secs > 0.0 {
       self.hit_flash_secs = (self.hit_flash_secs - dt_ms as f32 / 1000.0).max(0.0);
     }

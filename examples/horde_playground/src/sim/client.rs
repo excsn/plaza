@@ -304,6 +304,11 @@ pub struct Client {
   now_ms: u64,
 
   pub deaths_seen: u64,
+  /// When the most recent area pulse fired, on the server clock, as the last
+  /// applied packet declared it. The ring is derived from this and the frame
+  /// clock, so it fires once, repeats are idempotent by construction, and a
+  /// mid-pulse joiner draws the remainder of the ring it walked in on.
+  nova_at_ms: Option<u64>,
   /// The distant crowds this client was told about, in place of the entities
   /// themselves. What lets it draw a whole-arena map from its own knowledge
   /// rather than from the server's.
@@ -422,6 +427,7 @@ impl Client {
       projectiles_at_ms: 0,
       now_ms: 0,
       deaths_seen: 0,
+      nova_at_ms: None,
       crowds: Vec::new(),
       coins: Vec::new(),
       flights: Vec::new(),
@@ -592,6 +598,18 @@ impl Client {
   /// The difficulty multiplier this client believes, at the instant on screen.
   pub fn difficulty(&self) -> f32 {
     difficulty(self.frame_clock_ms())
+  }
+
+  /// How long ago the last area pulse fired, at the instant on screen, while
+  /// the ring is still worth drawing.
+  ///
+  /// A pure function of the declared timestamp and the frame clock: nothing to
+  /// trigger, nothing to decay, nothing for a recovery repeat to re-fire. The
+  /// same shape as the offline world's, which reads its server directly.
+  pub fn nova_flash_age(&self) -> Option<f32> {
+    let fired = self.nova_at_ms?;
+    let age = self.frame_clock_ms().saturating_sub(fired) as f32 / 1000.0;
+    (age <= crate::sim::types::NOVA_RING_SECS).then_some(age)
   }
 
   /// Every player position as last known: the newest authoritative copy, which
@@ -922,6 +940,9 @@ impl Client {
     }
     self.projectiles = packet.projectiles.clone();
     self.projectiles_at_ms = packet.server_time_ms;
+    if packet.nova_at_ms.is_some() {
+      self.nova_at_ms = packet.nova_at_ms;
+    }
     self.crowds.clone_from(&packet.crowds);
     // This packet is being applied because its instant has come, so its health
     // is due now; the guard only stops it undoing a newer player-stream sample.
@@ -1570,6 +1591,29 @@ mod tests {
     repeat.left.push((key.into(), LeaveReason::Died));
     client.apply_packet(&repeat, 260, &controls);
     assert_eq!(client.deaths_seen, 1, "a recovery repeat is the same death, not a second one");
+  }
+
+  #[test]
+  fn the_pulse_ring_is_a_pure_function_of_the_declared_timestamp() {
+    // The ring used to be inferred from a burst of deaths per tick, and the
+    // inference re-fired on every recovery repeat of the same announcements.
+    // Declared, there is nothing to trigger: the age is the frame clock minus
+    // the timestamp the packet carries, so a repeat is the same ring and the
+    // fade needs no local timer to decay.
+    let mut client = client_with_a_moving_player(500);
+    let controls = Controls::default();
+    let mut nova = Packet { server_time_ms: 1_400, seq: 1, nova_at_ms: Some(1_400), ..Default::default() };
+    client.apply_packet(&nova, 1_400, &controls);
+    let age = client.nova_flash_age().expect("the ring is live at the render instant");
+    assert!((age - 0.1).abs() < 0.02, "the age is T minus the declared instant: {age}");
+
+    nova.seq = 2;
+    client.apply_packet(&nova, 1_450, &controls);
+    let same = client.nova_flash_age().expect("still live");
+    assert!((same - age).abs() < 1e-6, "a recovery repeat is the same ring, not a restart");
+
+    client.tick(500, &controls);
+    assert!(client.nova_flash_age().is_none(), "and it fades because the clock passed it, not because a timer ran down");
   }
 
   #[test]
