@@ -157,6 +157,18 @@ Reading the shape of a counter rather than its value: a count climbing without b
 
 **The general form.** In a protocol that repeats until acknowledged, "how many times was I told" and "how many times did it happen" diverge by design. Anything derived from such a stream must be exactly as idempotent as the stream itself: count state transitions, never messages. The mirror got this right from the start; the one counter that read the wire instead of the state is the one that produced a visible artifact.
 
+### A backgrounded tab could not come back (horde)
+
+**Symptom.** Switch away from the browser client for a while, come back, and the world does not resume. It never resyncs, and the longer it was away the worse it is.
+
+**Cause, and it was not the resync.** The client's clock was built by accumulating frame time with a cap: `now_ms += min(frame_time, 100)`. The cap is right for deciding how much *simulation* a frame runs, and wrong as a clock. A browser stops running frames for a hidden tab, so a client that adds up the frames it happened to run believes less time passed than did, **permanently**. Its estimate of server time is then wrong by however long it was away, nothing arriving is ever due, and the playout queue grows without bound because the queue was drained by a clock that had stopped.
+
+**The recovery that existed could not fire.** A client that falls behind is supposed to be rescued by the server: its acknowledged baseline ages out of history and the next packet is a full rebuild. But that only happens once the client resumes applying and acknowledging, and a client whose clock is wrong keeps acknowledging old sequences, so the server reads it as slow rather than lost.
+
+**Fix, in three parts.** The clock comes from real time and the cap applies only to the simulation step, which is the actual bug and the one that would have prevented the rest. The queue is bounded, because a buffer fed by a peer and drained by a local clock has to be. And a client that finds itself far past the instant it is drawing treats it as a **discontinuity**: drop the queue, drop the mirror, re-anchor on what just arrived, and let the server's next digest check rebuild the world. Counted as `timeline restarts` in the panel, beside the underruns and view fallbacks.
+
+**The general form.** "How much time has passed" and "how much work may I do about it" are different questions, and a frame loop that answers both with one number will lose time whenever it is throttled. Cap the work, never the clock. And the discontinuity rule already established for position applies to time: there are no intermediate states between a minute ago and now to ease through, so snap.
+
 ### Bandwidth that climbed for ever, and was the meter (horde)
 
 **Symptom.** A player reported, repeatedly, that bandwidth crept upward the longer a session ran and never settled: standing still, moving about, at 128 players and again at 10. Two screenshots three minutes apart showed 127.6 then 143.9 KiB/s while the live enemy count *fell* from 2311 to 1751.

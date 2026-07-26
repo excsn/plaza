@@ -142,6 +142,25 @@ const PLAYER_VIEW_SNAPSHOTS: usize = ((crate::sim::types::RENDER_DELAY_MAX_MS as
 /// bound `RemoteView` is constructed with, and deliberately short, so turning
 /// extrapolation on for an experiment cannot fling a peer across the arena.
 const PLAYER_EXTRAPOLATE_MS: u64 = 120;
+/// The most packets a client will hold waiting for their moment.
+///
+/// A queue fed by a remote peer and drained by a local clock has to be bounded,
+/// or a client that stops draining (a browser tab in the background, a stalled
+/// frame loop) accumulates without limit. Sized well past any honest buffer:
+/// at the maximum render delay and the fastest send rate this is several times
+/// what a healthy client holds, so reaching it means something is wrong rather
+/// than merely slow.
+const MAX_QUEUED_PACKETS: usize = 256;
+
+/// How far ahead of the render instant the queue may reach before the client
+/// treats itself as *lost* rather than buffering.
+///
+/// A discontinuity, not a delay: the arithmetic that recovers a late packet has
+/// nothing to say about a client that missed a minute. Snap, as with any other
+/// discontinuity, rather than easing across a gap that has no intermediate
+/// states to ease through.
+const LOST_AHEAD_MS: u64 = 3_000;
+
 /// How fast the arrival-lateness statistics follow the link.
 const ARRIVAL_SMOOTHING: f32 = 0.05;
 /// The shortest gap between two samples that yields a usable velocity. Below it
@@ -316,6 +335,10 @@ pub struct Client {
   shots: Vec<Shot>,
   now_ms: u64,
 
+  /// Times the timeline was abandoned and rebuilt because the client had fallen
+  /// too far behind to play its way out. Zero on a healthy client; anything else
+  /// is a stall worth knowing about.
+  pub resyncs: u64,
   pub deaths_seen: u64,
   /// When the most recent area pulse fired, on the server clock, as the last
   /// applied packet declared it. The ring is derived from this and the frame
@@ -440,6 +463,7 @@ impl Client {
       queued: Vec::new(),
       shots: Vec::new(),
       now_ms: 0,
+      resyncs: 0,
       deaths_seen: 0,
       nova_at_ms: None,
       crowds: Vec::new(),
@@ -936,7 +960,46 @@ impl Client {
     if self.render_at().is_some_and(|at| packet.server_time_ms < at.server_time_ms()) {
       self.underruns += 1;
     }
+    let arrived_at = packet.server_time_ms;
     self.queued.push(packet);
+
+    // Buffering or lost? A queue reaching far past the instant being drawn is
+    // not a client waiting for a moment to arrive, it is one whose clock stopped
+    // while the world kept going: a backgrounded tab, a stalled frame loop, a
+    // machine that slept. Playing out of that is hopeless, because the packets
+    // describe moments the client can only reach by simulating through all of
+    // them at once.
+    let behind = self
+      .render_at()
+      .map(|at| arrived_at.saturating_sub(at.server_time_ms()))
+      .unwrap_or(0);
+    if behind > LOST_AHEAD_MS || self.queued.len() > MAX_QUEUED_PACKETS {
+      self.restart_timeline(recv_ms);
+    }
+  }
+
+  /// Abandons the timeline and starts again from the newest thing received.
+  ///
+  /// The discontinuity rule, applied to time rather than to a position: there
+  /// are no intermediate states between "a minute ago" and "now" to ease
+  /// through, so the only honest move is to snap. The queue goes, the mirror
+  /// goes, and the render clock re-anchors on what just arrived.
+  ///
+  /// Dropping the mirror is what makes the server rebuild it. Its next digest
+  /// check finds a client holding nothing where it expected a world, and sends a
+  /// full baseline, which is the same path a drifted mirror already takes.
+  fn restart_timeline(&mut self, recv_ms: u64) {
+    self.resyncs += 1;
+    // Keep only the newest packet: it is the one the clock is about to be
+    // anchored on, and everything older describes moments that are now past.
+    let newest = self.queued.pop();
+    self.queued.clear();
+    self.queued.extend(newest);
+    self.enemies.clear();
+    self.shots.clear();
+    self.health_queue.clear();
+    self.render_clock = InterpolationClock::new(self.render_delay_ms);
+    self.render_clock.resync(recv_ms, 1.0);
   }
 
   /// Applies every queued packet whose moment has arrived, oldest first.
@@ -1748,6 +1811,51 @@ mod tests {
     client.tick((crate::sim::types::PROJECTILE_TTL * 1000.0) as u64 + 100, &controls);
     assert!(client.render_projectiles(client.render_at().unwrap()).is_empty(), "it expired on its own");
     assert_eq!(client.shots_held(), 0, "and was dropped rather than accumulating for ever");
+  }
+
+  #[test]
+  fn a_client_that_stalled_restarts_its_timeline_instead_of_queueing_for_ever() {
+    // A browser stops running frames for a hidden tab. The socket keeps
+    // delivering, so packets arrive describing moments the client's clock has
+    // not reached and cannot reach by playing: there is nothing between "a
+    // minute ago" and "now" to play through. Queueing them is unbounded growth
+    // and a world that never resumes.
+    let controls = Controls::default();
+    let mut client = client_with_a_moving_player(150);
+    let at = client.render_at().expect("timeline started").server_time_ms();
+
+    // The world moves on while this client's clock does not, which is what a
+    // stalled frame loop looks like from inside: arrivals are stamped with the
+    // client's own estimate of server time, and that estimate is only as fresh
+    // as the last frame it ran.
+    let stalled_clock = at + 150;
+    for step in 1..=60u64 {
+      let t = at + step * 1000;
+      client.receive_packet(Packet { server_time_ms: t, seq: step, ..Default::default() }, stalled_clock);
+    }
+
+    assert!(client.resyncs > 0, "a minute ahead is a discontinuity, not a buffer");
+    assert!(client.queued.len() <= 2, "the queue is dropped rather than played through: {}", client.queued.len());
+    assert_eq!(client.known_entities(), 0, "and the mirror goes too, so the server rebuilds it");
+
+    // And it is playing again rather than stuck: the clock is anchored on what
+    // just arrived instead of on a moment a minute gone.
+    client.tick(16, &controls);
+    assert!(client.render_at().is_some(), "the timeline restarted rather than stopping");
+  }
+
+  #[test]
+  fn the_playout_queue_is_bounded() {
+    // Fed by a remote peer and drained by a local clock, so it has to be
+    // bounded on its own terms: whatever the reason a client stops draining, it
+    // must not accumulate without limit.
+    let mut client = client_with_a_moving_player(150);
+    let at = client.render_at().expect("timeline started").server_time_ms();
+    // All within the lost threshold, so only the count can stop this.
+    for seq in 1..=(MAX_QUEUED_PACKETS as u64 * 2) {
+      client.receive_packet(Packet { server_time_ms: at + 1, seq, ..Default::default() }, at + 1);
+    }
+    assert!(client.queued.len() <= MAX_QUEUED_PACKETS + 1, "held {} packets", client.queued.len());
   }
 
   #[test]

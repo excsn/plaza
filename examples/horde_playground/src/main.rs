@@ -263,8 +263,22 @@ async fn networked(
 
   loop {
     let controls_now = *controls.lock();
-    let dt_ms = ((get_frame_time() * 1000.0) as u64).min(100);
-    now_ms += dt_ms;
+    // Two different quantities, and conflating them is what makes a backgrounded
+    // tab unrecoverable.
+    //
+    // `now_ms` is **what time it is**, taken from the real clock. A browser
+    // stops running frames for a hidden tab, and a client whose clock is the sum
+    // of the frames it happened to run believes less time passed than did, for
+    // ever: its estimate of server time is wrong by however long it was away,
+    // nothing it receives is ever due, and the playout queue grows without
+    // bound.
+    //
+    // `step_budget` is **how much simulation this frame may run**, and that is
+    // the thing worth capping, so returning to a tab does not dump the minutes
+    // it was away into one frame.
+    let real_ms = (get_time() * 1000.0) as u64;
+    let step_budget = real_ms.saturating_sub(now_ms).min(100);
+    now_ms = real_ms;
     client.poll(now_ms, &controls_now);
 
     // Measured and sent to an arena that can carry this link. Reconnecting is
@@ -291,7 +305,7 @@ async fn networked(
     if input.x == 0.0 && input.y == 0.0 {
       input = touch.dir();
     }
-    for step_ms in timestep.advance(dt_ms) {
+    for step_ms in timestep.advance(step_budget) {
       if plays {
         client.send_input(input, &controls_now);
       }
