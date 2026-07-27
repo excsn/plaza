@@ -12,7 +12,8 @@ use std::collections::HashMap;
 
 use plaza_client_utils::mirror::{Agreement, DeltaMirror};
 use plaza_client_utils::{
-  ease_in_quad, AckWindow, Admission, HeldInputConfig, HeldInputPredictor, InterpolationClock, PlayoutBuffer, RemoteView, RenderOpts, SlotKey,
+  ease_in_quad, AckWindow, Admission, ArrivalMonitor, HeldInputConfig, HeldInputPredictor, InterpolationClock, PlayoutBuffer, RemoteView,
+  RenderOpts, SlotKey,
 };
 
 use crate::sim::types::{PlayerFrame, dequantize_far, coin_pull, difficulty, enemy_speed_scale, repulsor_pulse, step_coin, Coin, CoinId, Crowd, Upgrade, Wallet, COIN_FLIGHT_MS, COIN_PICKUP_RADIUS, step_enemy, Controls, Enemy, EnemyKind, Handle, LeaveReason, Packet, PlayerId, RemoteMode, Shot, Vec2, PLAYER_MAX_HEALTH};
@@ -288,21 +289,10 @@ pub struct Client {
   /// Each player's last derived velocity, kept so a pair of samples too close
   /// together in time does not produce a spike.
   player_velocity: Vec<Vec2>,
-  /// Smoothed gap between player frame arrivals, in ms. Measured rather than
-  /// taken from the configured rate, so the server may send at any rate it likes.
-  arrival_interval_ms: f32,
-  last_player_frame_ms: u64,
-  /// Smoothed spread in how late player frames arrive, in ms.
-  ///
-  /// The render delay has to cover the *irregularity* of arrivals, not their
-  /// average: a steady 200 ms link needs no more buffer than a steady 20 ms one,
-  /// because a constant delay just shifts the whole timeline. What eats the
-  /// buffer is one frame arriving later than its neighbours. Mean deviation
-  /// rather than variance, which is what RFC 6298 uses for the same job and is
-  /// cheaper and less spike-prone.
-  arrival_jitter_ms: f32,
-  /// The mean arrival lateness the deviation is measured against.
-  arrival_mean_ms: f32,
+  /// How the player stream actually arrives: the measured terms of the
+  /// render-delay budget. See [`ArrivalMonitor`] for the two measurement
+  /// decisions (jitter as mean deviation, intervals between declared stamps).
+  arrivals: ArrivalMonitor,
   /// The clock peers are drawn against.
   ///
   /// It cannot be `now_ms - delay`, which is what the first version of this did.
@@ -457,10 +447,7 @@ impl Client {
       player_seen: vec![false; player_count],
       player_first_ms: vec![0; player_count],
       player_velocity: vec![Vec2::default(); player_count],
-      arrival_interval_ms: 0.0,
-      last_player_frame_ms: 0,
-      arrival_jitter_ms: 0.0,
-      arrival_mean_ms: 0.0,
+      arrivals: ArrivalMonitor::new(ARRIVAL_SMOOTHING),
       render_clock: InterpolationClock::new(0),
       render_delay_ms: 100,
       playout: PlayoutBuffer::new(MAX_QUEUED_PACKETS, LOST_AHEAD_MS),
@@ -731,6 +718,14 @@ impl Client {
     self.playout.restarts()
   }
 
+  /// The render-delay budget as this client has actually measured it, for the
+  /// panel to hold against the delay in force. A host can compute the budget
+  /// from its sliders; a joiner can only measure, which is also what stays
+  /// honest when the host changes a rate live.
+  pub fn measured_arrivals(&self) -> &ArrivalMonitor {
+    &self.arrivals
+  }
+
   /// Every player at the instant this frame is drawn at: the interpolated
   /// authoritative positions once the timeline has started, and the newest
   /// authoritative copy during the join transient.
@@ -951,26 +946,7 @@ impl Client {
     // steering by the timestamp puts the estimate one trip behind and makes T
     // depend on latency, which is the conflation this design removes.
     self.render_clock.resync(recv_ms, 1.0);
-
-    let lateness = recv_ms.saturating_sub(server_time_ms) as f32;
-    if self.last_player_frame_ms > 0 && server_time_ms > self.last_player_frame_ms {
-      let gap = (server_time_ms - self.last_player_frame_ms) as f32;
-      self.arrival_interval_ms = if self.arrival_interval_ms == 0.0 {
-        gap
-      } else {
-        self.arrival_interval_ms + (gap - self.arrival_interval_ms) * ARRIVAL_SMOOTHING
-      };
-    }
-    if server_time_ms > self.last_player_frame_ms {
-      self.last_player_frame_ms = server_time_ms;
-    }
-    if self.arrival_mean_ms == 0.0 {
-      self.arrival_mean_ms = lateness;
-    } else {
-      let deviation = (lateness - self.arrival_mean_ms).abs();
-      self.arrival_mean_ms += (lateness - self.arrival_mean_ms) * ARRIVAL_SMOOTHING;
-      self.arrival_jitter_ms += (deviation - self.arrival_jitter_ms) * ARRIVAL_SMOOTHING;
-    }
+    self.arrivals.observe(server_time_ms, recv_ms);
   }
 
   /// Takes delivery of a packet. Does **not** apply it: see [`Client::playout`].

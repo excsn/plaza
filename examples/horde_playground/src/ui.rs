@@ -254,11 +254,11 @@ fn warn_line(ui: &mut egui::Ui, text: String, warn: bool) {
   }
 }
 
-fn warn_line_amber(ui: &mut egui::Ui, text: String, warn: bool) {
+fn warn_line_amber(ui: &mut egui::Ui, text: String, warn: bool) -> egui::Response {
   if warn {
-    ui.label(egui::RichText::new(text).color(egui::Color32::from_rgb(240, 200, 90)));
+    ui.label(egui::RichText::new(text).color(egui::Color32::from_rgb(240, 200, 90)))
   } else {
-    ui.label(text);
+    ui.label(text)
   }
 }
 
@@ -312,6 +312,21 @@ pub fn draw_net_ui(client: &horde_playground::net::client::NetClient, url: &str,
         if let Some((msgs, bytes)) = client.last_resume_drop() {
           ui.label(format!("resume drops: {} (last discarded {} msgs, {:.1} KiB unread)", client.resume_drops(), msgs, bytes as f64 / 1024.0))
             .on_hover_text("While this tab was not running frames, its socket kept receiving. On the first poll back, everything but the newest few messages was discarded without being parsed: none of it described a moment the restarted timeline could still play, and parsing it is what used to freeze the tab for seconds on refocus.");
+        }
+        let arrivals = client.sim.measured_arrivals();
+        if arrivals.warmed_up() {
+          let needs = arrivals.needed_delay_ms();
+          warn_line_amber(
+            ui,
+            format!(
+              "measured, this link needs ~{needs:.0} ms  ({:.0} one way + {:.0} jitter + {:.0} between stamps)",
+              arrivals.lateness_ms(),
+              arrivals.jitter_ms(),
+              arrivals.interval_ms()
+            ),
+            (client.sim.render_delay_ms() as f32) < needs,
+          )
+          .on_hover_text("The host computes this budget from its sliders; this client cannot see them, so it measures: the smoothed one-way lateness of declared timestamps against the synced clock, the mean deviation in that lateness, and the gap between consecutive declared timestamps across both streams. Amber means the render delay in force is smaller than what this link measurably needs, and the underrun counter above is where that shows up.");
         }
         ui.label(format!("enemies held: {}", client.sim.known_entities()));
         ui.label(format!("difficulty: x{:.1}   your health: {}", client.sim.difficulty(), client.my_health()));

@@ -142,6 +142,7 @@
 
 // Main module declarations
 pub mod ack;
+pub mod arrival;
 pub mod clock_sync;
 pub mod coalesce;
 pub mod correction;
@@ -170,6 +171,7 @@ pub mod math;
 pub mod net_sim;
 
 pub use ack::AckWindow;
+pub use arrival::ArrivalMonitor;
 pub use clock_sync::ClockSyncEstimator;
 pub use coalesce::InputCoalescer;
 pub use correction::{Correction, CorrectionMonitor};
