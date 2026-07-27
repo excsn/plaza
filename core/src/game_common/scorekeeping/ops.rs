@@ -39,7 +39,7 @@ impl<T> ScoreValue for T where
 #[serde(bound = "
     ScoreType: ScoreValue
 ")]
-    // If ScoreType is simple like u32, it already meets ScoreValue if it has Serialize/Deserialize
+// If ScoreType is simple like u32, it already meets ScoreValue if it has Serialize/Deserialize
 pub struct SetScorePayload<ID: AgentId, ScoreType: ScoreValue> {
   pub player_id: ID,
   pub score: ScoreType,

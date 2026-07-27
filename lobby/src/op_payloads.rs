@@ -35,10 +35,9 @@ where
   /// every input a player sends lands outside the accepting window and is
   /// dropped, so they are seated and then cannot play.
   ///
-  /// `None` means no limit, which is the right default for a game that applies
-  /// input on arrival and therefore has nothing to miss.
+  /// `None` means no limit.
   pub max_one_way_ms: Option<u32>,
-  pub custom_game_settings_summary: CustomGameSettings, // Or a summarized version
+  pub custom_game_settings_summary: CustomGameSettings,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
