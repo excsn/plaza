@@ -845,6 +845,19 @@ impl Server {
     self.input_schedules.iter().map(|s| s.rejected()).sum()
   }
 
+  /// Per-seat admission verdicts:
+  /// `(accepted, late, rejected_closed, rejected_ahead, last margin in ticks)`.
+  pub fn input_verdicts(&self) -> Vec<(u64, u64, u64, u64, Option<i64>)> {
+    self
+      .input_schedules
+      .iter()
+      .map(|s| {
+        let (closed, ahead) = s.rejected_split();
+        (s.accepted(), s.late(), closed, ahead, s.last_reject_margin())
+      })
+      .collect()
+  }
+
   /// The tick the server is currently simulating. What a client aims at.
   ///
   /// **Derived from the clock, never counted alongside it.** A separate counter
@@ -1005,6 +1018,13 @@ impl Server {
     let seq = self.next_seq;
     self.next_seq += 1;
 
+    // Round-robin over the visible set: each enemy is corrected at
+    // `sample_hz`, not per packet, by taking one rotating slice of it per
+    // round. Safe because a sample is a correction to a rule every client runs
+    // locally, and because everything that is not a correction (spawns,
+    // departures, target changes) still goes the round it happened.
+    let sample_phases = (controls.sync_hz / controls.sample_hz.clamp(1, controls.sync_hz.max(1))).max(1) as u64;
+
     // One tree over the whole live population, walked once per player. The build
     // is the expensive half and it is viewer independent, which is what makes
     // this affordable for a crowd this size.
@@ -1121,6 +1141,12 @@ impl Server {
         };
         let enemy = &self.enemies[idx as usize];
         let target = (enemy.target != self.announced_target[idx as usize]).then_some(enemy.target);
+        // A target change rides immediately whatever the rotation says:
+        // `announced_target` is cleared globally after this round, so a
+        // deferred one would not just arrive late, it would never arrive.
+        if target.is_none() && (idx as u64 + seq) % sample_phases != 0 {
+          continue;
+        }
         packet.samples.push(Sample {
           handle: key.into(),
           pos: enemy.pos,

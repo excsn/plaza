@@ -137,6 +137,11 @@ pub enum Op {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ServerPolicy {
   pub sync_hz: u32,
+  /// How often any one enemy's correction arrives, as opposed to `sync_hz`,
+  /// which is how often a packet does. A joiner drawing in Interpolate or
+  /// DeadReckon mode needs it: those modes render the samples directly, so this
+  /// rate, not the packet rate, is what their staleness is measured against.
+  pub sample_hz: u32,
   /// How far ahead of the server's current tick a client should aim its inputs,
   /// in ms. A client cannot compute the accepting window without it.
   pub playout_delay_ms: u64,

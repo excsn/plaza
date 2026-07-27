@@ -100,6 +100,16 @@ pub struct HostView {
   /// Seats currently throttled because they stopped acknowledging: a hidden
   /// tab, a stalled machine. Zero on a healthy arena.
   pub stalled_seats: usize,
+  /// Input admission totals, straight off the schedules: the host-side half of
+  /// a joiner's ack readout. Rejected climbing while a joiner's seq climbs is
+  /// this server refusing ticks it has closed; nothing climbing at all is
+  /// inputs not arriving in the first place.
+  pub inputs_accepted: u64,
+  pub inputs_late: u64,
+  pub inputs_rejected: u64,
+  /// The same verdicts per seat, with the last rejection's margin in ticks, so
+  /// a rejection wave names its seat and its side of the window on sight.
+  pub input_verdicts: Vec<(u64, u64, u64, u64, Option<i64>)>,
 
   bytes: RateMeter,
   naive_bytes: RateMeter,
@@ -232,6 +242,7 @@ impl Arena {
   pub fn policy(&self) -> ServerPolicy {
     ServerPolicy {
       sync_hz: self.controls.sync_hz,
+      sample_hz: self.controls.sample_hz,
       playout_delay_ms: self.controls.playout_delay_ms,
       render_delay_ms: self.controls.render_delay_ms,
       player_sync_hz: self.controls.player_sync_hz,
@@ -413,6 +424,10 @@ impl Arena {
       denied_purchases: self.sim.denied_purchases,
       full_resends: self.sim.full_resends(),
       stalled_seats: self.sim.stalled_seats(),
+      inputs_accepted: self.sim.accepted_inputs(),
+      inputs_late: self.sim.late_inputs(),
+      inputs_rejected: self.sim.rejected_inputs(),
+      input_verdicts: self.sim.input_verdicts(),
       bytes: self.bytes,
       naive_bytes: self.naive_bytes,
       crowd_bytes: self.crowd_bytes,

@@ -975,8 +975,10 @@ mod tests {
 
   #[test]
   fn relevance_culls_the_broadcast() {
-    let on = Controls::default();
-    let off = Controls { relevance: false, ..Controls::default() };
+    // The sample rotation held at the packet rate in both arms, so the ratio
+    // measures relevance alone rather than relevance entangled with sampling.
+    let on = Controls { sample_hz: Controls::default().sync_hz, ..Controls::default() };
+    let off = Controls { relevance: false, ..on };
 
     let w_on = run(&on, 4);
     let w_off = run(&off, 4);

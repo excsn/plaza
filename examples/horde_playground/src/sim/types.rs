@@ -142,9 +142,22 @@ impl Extrapolatable<Vec2, f32> for Vec2 {
 /// still in flight that refers to slot 5 will be applied to whatever now lives in
 /// slot 5, which is the whole reason this type is not just an index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(into = "u64", from = "u64")]
 pub struct Handle {
   pub idx: EntityIndex,
   pub generation: u16,
+}
+
+impl From<Handle> for u64 {
+  fn from(handle: Handle) -> Self {
+    SlotKey::from(handle).encode()
+  }
+}
+
+impl From<u64> for Handle {
+  fn from(key: u64) -> Self {
+    SlotKey::decode(key).into()
+  }
 }
 
 impl Handle {
@@ -184,10 +197,33 @@ impl From<SlotKey> for Handle {
   }
 }
 
+/// One step of the wire's position grid, in world units.
+///
+/// Every serialized [`Vec2`] crosses as two fixed-point `i32`s in these steps
+/// rather than as two `f32`s: msgpack spends 5 bytes on any float and 3 on an
+/// arena coordinate this size. A sixteenth of a unit is two orders of magnitude
+/// under the smallest enemy radius, and nothing reconciles against an exact
+/// float (own movement is not predicted), so the rounding is invisible
+/// everywhere a serialized position or velocity lands.
+pub const WIRE_POS_STEP: f32 = 1.0 / 16.0;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(into = "(i32, i32)", from = "(i32, i32)")]
 pub struct Vec2 {
   pub x: f32,
   pub y: f32,
+}
+
+impl From<Vec2> for (i32, i32) {
+  fn from(v: Vec2) -> Self {
+    ((v.x / WIRE_POS_STEP).round() as i32, (v.y / WIRE_POS_STEP).round() as i32)
+  }
+}
+
+impl From<(i32, i32)> for Vec2 {
+  fn from((x, y): (i32, i32)) -> Self {
+    Vec2::new(x as f32 * WIRE_POS_STEP, y as f32 * WIRE_POS_STEP)
+  }
 }
 
 impl Vec2 {
@@ -203,7 +239,13 @@ impl Vec2 {
 /// What kind of enemy this is. **Static for its whole life**, which is why it
 /// rides the spawn message once (one byte) and never appears in a correction.
 /// Size, speed, and toughness all follow from it.
+///
+/// Crosses as a `u8` because msgpack spells a unit variant as its name: six
+/// bytes of `"Swarm"` on every spawn, and the same for every other fieldless
+/// enum on this wire. The `From` impls pin the numbers, so reordering the
+/// variants cannot silently renumber them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(into = "u8", try_from = "u8")]
 pub enum EnemyKind {
   /// The horde: small, ordinary speed, dies to anything.
   Swarm,
@@ -211,6 +253,28 @@ pub enum EnemyKind {
   Runner,
   /// Big and slow, and survives an area pulse.
   Brute,
+}
+
+impl From<EnemyKind> for u8 {
+  fn from(kind: EnemyKind) -> Self {
+    match kind {
+      EnemyKind::Swarm => 0,
+      EnemyKind::Runner => 1,
+      EnemyKind::Brute => 2,
+    }
+  }
+}
+
+impl TryFrom<u8> for EnemyKind {
+  type Error = String;
+  fn try_from(v: u8) -> Result<Self, Self::Error> {
+    match v {
+      0 => Ok(EnemyKind::Swarm),
+      1 => Ok(EnemyKind::Runner),
+      2 => Ok(EnemyKind::Brute),
+      other => Err(format!("unknown EnemyKind {other}")),
+    }
+  }
 }
 
 impl EnemyKind {
@@ -406,7 +470,9 @@ pub struct Coin {
   pub id: CoinId,
   pub pos: Vec2,
   /// When it dropped, so an uncollected coin expires rather than silting up the
-  /// field. Server-side only; a client infers nothing from it.
+  /// field. Server-side only and skipped on the wire; a client infers nothing
+  /// from it, and coins are re-sent in every packet.
+  #[serde(skip)]
   pub spawned_ms: u64,
 }
 
@@ -427,11 +493,32 @@ pub const COIN_TTL_MS: u64 = 12_000;
 /// point: an upgrade that only changed a server-side number could not corrupt a
 /// client's simulation, and corrupting it is the behaviour worth demonstrating.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(into = "u8", try_from = "u8")]
 pub enum Upgrade {
   /// Enemies within [`REPULSOR_RADIUS`] flee the owner instead of chasing.
   Repulsor,
   /// Coins drift toward the owner, widening the effective pickup radius.
   Magnet,
+}
+
+impl From<Upgrade> for u8 {
+  fn from(upgrade: Upgrade) -> Self {
+    match upgrade {
+      Upgrade::Repulsor => 0,
+      Upgrade::Magnet => 1,
+    }
+  }
+}
+
+impl TryFrom<u8> for Upgrade {
+  type Error = String;
+  fn try_from(v: u8) -> Result<Self, Self::Error> {
+    match v {
+      0 => Ok(Upgrade::Repulsor),
+      1 => Ok(Upgrade::Magnet),
+      other => Err(format!("unknown Upgrade {other}")),
+    }
+  }
 }
 
 impl Upgrade {
@@ -543,9 +630,30 @@ pub struct Sample {
 /// Why an entity left a client's view. Deaths are worth distinguishing because
 /// they arrive in bursts and a client may want to play an effect.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(into = "u8", try_from = "u8")]
 pub enum LeaveReason {
   OutOfRange,
   Died,
+}
+
+impl From<LeaveReason> for u8 {
+  fn from(reason: LeaveReason) -> Self {
+    match reason {
+      LeaveReason::OutOfRange => 0,
+      LeaveReason::Died => 1,
+    }
+  }
+}
+
+impl TryFrom<u8> for LeaveReason {
+  type Error = String;
+  fn try_from(v: u8) -> Result<Self, Self::Error> {
+    match v {
+      0 => Ok(LeaveReason::OutOfRange),
+      1 => Ok(LeaveReason::Died),
+      other => Err(format!("unknown LeaveReason {other}")),
+    }
+  }
 }
 
 /// A stand-in for a group of enemies too far away to be worth sending
@@ -954,6 +1062,17 @@ pub struct Controls {
   /// being resampled. The expensive one, and the one relevance and crowd LOD
   /// exist to make cheap.
   pub sync_hz: u32,
+  /// How often each visible enemy's position correction goes out, per enemy.
+  ///
+  /// The packet rate stays [`Controls::sync_hz`]; this spreads the visible set
+  /// across those packets round-robin, so any one enemy is corrected this often
+  /// rather than in every packet. Under [`RemoteMode::Simulate`] a sample is a
+  /// correction to a rule the client is already running, so a quarter of the
+  /// packet rate holds the mirror while cutting the dominant stream to a
+  /// quarter. Spawns, departures and target changes are never deferred.
+  /// Interpolate and DeadReckon draw from the samples directly, so they want
+  /// this raised back to `sync_hz`.
+  pub sample_hz: u32,
   /// How often the **player** stream goes out, separately and much faster.
   ///
   /// Two knobs rather than one because they answer different questions, and
@@ -1072,6 +1191,7 @@ impl Default for Controls {
       predict_balance: false,
       auto_buy: true,
       sync_hz: 16,
+      sample_hz: 4,
       // Above the entity rate on purpose: the players are few, and every enemy
       // in the world aims at one of them, so their positions are the input to
       // the rule every client runs.

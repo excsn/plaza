@@ -103,6 +103,8 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls) {
 
   section(ui, "send rates", true, |ui| {
     ui.add(egui::Slider::new(&mut controls.sync_hz, 1..=SEND_RATE_MAX_HZ).text("entity send rate (Hz)"));
+    ui.add(egui::Slider::new(&mut controls.sample_hz, 1..=SEND_RATE_MAX_HZ).text("per-enemy correction rate (Hz)"))
+      .on_hover_text("How often any one visible enemy is corrected, spread round-robin across the packets above. Under Simulate a sample is a correction to a rule the client already runs, so a quarter of the packet rate holds the mirror and the bandwidth readout drops with it. Interpolate and DeadReckon draw the samples directly, so they want this raised back to the packet rate.");
     ui.add(egui::Slider::new(&mut controls.player_sync_hz, 1..=SEND_RATE_MAX_HZ).text("player send rate (Hz)"));
     ui.label("Drop the entity rate to 1 Hz and the horde still moves smoothly, because every client runs its rule. Drop the *player* rate too and it does not, because player positions are the input to that rule.");
     ui.label(egui::RichText::new("The player rate is also a term in the render delay below: a slower one needs a deeper timeline.").weak());
@@ -346,6 +348,24 @@ pub fn draw_net_ui(client: &horde_playground::net::client::NetClient, url: &str,
           )
           .on_hover_text("The host computes this budget from its sliders; this client cannot see them, so it measures: the smoothed one-way lateness of declared timestamps against the synced clock, the mean deviation in that lateness, and the gap between consecutive declared timestamps across both streams. Amber means the render delay in force is smaller than what this link measurably needs, and the underrun counter above is where that shows up.");
         }
+        // The input round trip, spelled out. Every failure in this loop plays
+        // as the same thing, a player who cannot move, and these three lines
+        // say which stage broke: the aim (this client's clock), the ack (the
+        // server refusing or never receiving), or the pong (the sync feed).
+        let (seq, acked) = client.input_ack_lag();
+        let lag = seq.saturating_sub(acked);
+        warn_line_amber(ui, format!("inputs: seq {seq}, newest acked {acked} (lag {lag})"), lag > 30)
+          .on_hover_text("Every input carries a sequence number and the server echoes the newest it has applied. The lag is round-trip-sized on a healthy link; frozen acked under a climbing seq means inputs are being refused or are not arriving, which is otherwise invisible.");
+        let aim = client.input_aim_ticks();
+        warn_line_amber(ui, format!("input aims {aim:+} ticks vs newest frame"), aim <= 0)
+          .on_hover_text("The tick the last input named, minus the newest stamp the wire has delivered. Healthy is the playout depth plus the one-way delay in ticks. At or below zero this client's clock estimate is naming ticks the server already closed, and every input is silently dropped.");
+        let (rtt, worst_rtt) = client.pong_rtts();
+        let (offset, samples) = client.clock_diag();
+        ui.label(egui::RichText::new(format!(
+          "pong rtt {rtt} ms raw (worst since resume {worst_rtt})   clock offset {} over {samples} pongs",
+          offset.map_or("unsynced".to_owned(), |o| format!("{o:.0} ms"))
+        )).weak())
+          .on_hover_text("Raw, not smoothed, so a pong that crossed a suspension shows as itself: a worst in the tens of seconds is a cross-stall exchange feeding the clock fit a suspension-length round trip. The offset is this client's current estimate of server minus local time; watch whether it jumps at resume and how long it takes to settle.");
         ui.label(format!("enemies held: {}", client.sim.known_entities()));
         ui.label(format!("difficulty: x{:.1}   your health: {}", client.sim.difficulty(), client.my_health()));
         ui.label(format!("coins: {}   pickups taken back: {}", client.sim.believed_balance, client.sim.denied_claims));
@@ -353,7 +373,10 @@ pub fn draw_net_ui(client: &horde_playground::net::client::NetClient, url: &str,
 
       if let Some(policy) = client.policy {
         section(ui, "the host's settings", false, |ui| {
-          ui.label(format!("send rate: {} Hz entities, {} Hz players", policy.sync_hz, policy.player_sync_hz));
+          ui.label(format!(
+            "send rate: {} Hz entities ({} Hz per-enemy corrections), {} Hz players",
+            policy.sync_hz, policy.sample_hz, policy.player_sync_hz
+          ));
           ui.label(format!("enemies: {}   coins: {}", policy.enemy_count, policy.coins));
           ui.label(format!("crowd LOD angle: {:.1}", policy.crowd_lod_theta));
           ui.label(format!("render delay: {} ms", policy.render_delay_ms));
@@ -463,6 +486,21 @@ pub fn draw_host_ui(
         }
         if view.stalled_seats > 0 {
         warn_line_amber(ui, format!("seats throttled for silence: {}", view.stalled_seats), true);
+        }
+        warn_line_amber(
+          ui,
+          format!("inputs: {} accepted, {} late (still run), {} rejected", view.inputs_accepted, view.inputs_late, view.inputs_rejected),
+          view.inputs_rejected > 0,
+        )
+        .on_hover_text("The host half of a joiner's ack readout, totals across all seats. During a joiner's resume, watch which counter moves: rejected climbing means their inputs arrive naming closed ticks (their clock), nothing climbing means their inputs are not arriving at all, accepted climbing while they still cannot move means the fault is past admission. Note a rejected input is still acknowledged, because the ack records arrival, so the joiner's ack lag cannot show this.");
+        for (seat, (acc, late, closed, ahead, margin)) in view.input_verdicts.iter().enumerate() {
+          if closed + ahead > 0 {
+            let margin = margin.map_or("?".to_owned(), |m| format!("{m:+}"));
+            ui.label(egui::RichText::new(format!(
+              "  seat {seat}: {acc} accepted, {late} late, rejected {closed} closed / {ahead} ahead, last margin {margin} ticks"
+            )).weak())
+            .on_hover_text("Margin is the named tick minus the server's current tick at the rejecting arrival, in 16 ms steps. A steady negative margin says everything feeding that client's aim (its clock fit and the newest stamp it floors against) trails the simulation by that much, which points at its downstream; a positive one says its clock runs fast.");
+          }
         }
         ui.separator();
         ui.label(format!("render error: {mean_err:.0} px mean, {worst_err:.0} px worst"));

@@ -117,6 +117,24 @@ pub struct NetClient {
   packets: plaza_server_utils::RateMeter,
   events: Vec<Event>,
   last_ping_ms: u64,
+  /// The newest input seq the server has answered. Frozen while `input_seq`
+  /// climbs, this is the one signal that separates "the server is refusing my
+  /// inputs" from "my inputs are not reaching it", both of which play as a
+  /// player who cannot move with nothing else on screen.
+  last_input_ack: u64,
+  /// The tick the last transmitted input named, kept beside the newest stamp
+  /// seen so the panel can show where inputs aim relative to the stream. An
+  /// aim at or behind the stream names closed ticks, which the server drops.
+  last_input_tick: u64,
+  /// Newest server stamp seen on either stream, recorded on arrival rather
+  /// than play-out, so the aim readout compares against what the wire has
+  /// actually delivered.
+  newest_stamp_ms: u64,
+  /// The last pong's raw round trip and the worst since the last resume. Raw
+  /// rather than smoothed, so a pong that crossed a stall shows as itself
+  /// instead of being averaged into plausibility.
+  last_pong_rtt_ms: u64,
+  worst_pong_rtt_ms: u64,
   pub frames_seen: u64,
   now_ms: u64,
   /// Your own health last frame, to catch the moment it drops.
@@ -246,6 +264,11 @@ impl NetClient {
       packets: plaza_server_utils::RateMeter::new(),
       events: Vec::new(),
       last_ping_ms: 0,
+      last_input_ack: 0,
+      last_input_tick: 0,
+      newest_stamp_ms: 0,
+      last_pong_rtt_ms: 0,
+      worst_pong_rtt_ms: 0,
       frames_seen: 0,
       now_ms: 0,
       prev_health: crate::sim::types::PLAYER_MAX_HEALTH as u8,
@@ -348,7 +371,18 @@ impl NetClient {
       // not a claim.
       let server_now = self.clock.server_time_at(self.now_ms as f64).unwrap_or(self.now_ms as f64).max(0.0) as u64;
       let depth = self.policy.map(|p| p.playout_delay_ms).unwrap_or(0);
-      let tick = (server_now + depth) / SIM_STEP_MS;
+      // The clock names the tick, and the newest arrived stamp bounds it from
+      // below: the server wrote that stamp, so server time is provably past it,
+      // and an aim behind it is a rejection bought in advance. After a resume
+      // the fit can trail the stream by hundreds of ms until its window refills
+      // (measured: aim -5 ticks against a 4-tick late window, every input
+      // dropped); the floor keeps those inputs inside the accepting window with
+      // no clock involved at all. It only ever lifts the aim, and never past
+      // the ideal: the stamp trails true server time by the one-way delay, so
+      // `stamp + depth` is at most where a perfect clock would have aimed.
+      let floor = (self.newest_stamp_ms + depth) / SIM_STEP_MS;
+      let tick = ((server_now + depth) / SIM_STEP_MS).max(floor);
+      self.last_input_tick = tick;
       self.send_op(&Op::Input { seq: self.input_seq, dx: dir.x, dy: dir.y, tick });
     }
   }
@@ -432,11 +466,51 @@ impl NetClient {
     self.last_drop_bytes = dropped.bytes;
     let server_now = self.clock.server_time_at(now_ms as f64).unwrap_or(now_ms as f64).max(0.0) as u64;
     self.sim.timeline_lost(server_now);
+    // One line per resume, so the panel readouts that follow have a timestamped
+    // anchor in the console without any per-frame logging.
+    let offset = self.clock.server_time_at(now_ms as f64).map_or("unsynced".to_owned(), |s| format!("{:.0}", s - now_ms as f64));
+    eprintln!(
+      "resume at local {now_ms} ms: dropped {} msgs ({:.1} KiB) unread; clock offset {offset} ms over {} pongs, last pong rtt {} ms, input seq {} acked {}",
+      dropped.messages,
+      dropped.bytes as f64 / 1024.0,
+      self.clock.sample_count(),
+      self.last_pong_rtt_ms,
+      self.input_seq,
+      self.last_input_ack,
+    );
+    self.worst_pong_rtt_ms = 0;
   }
 
   /// Times a resume backlog was dropped unread.
   pub fn resume_drops(&self) -> u64 {
     self.resume_drops
+  }
+
+  /// The input round trip as `(seq named, newest acked)`. An acked value frozen
+  /// under a climbing seq is the wire saying inputs are not landing.
+  pub fn input_ack_lag(&self) -> (u64, u64) {
+    (self.input_seq, self.last_input_ack)
+  }
+
+  /// How many ticks ahead of the newest arrived stamp the last input aimed.
+  /// Healthy is roughly the playout depth plus the one-way delay in ticks; at
+  /// or below zero the input names a closed tick and the server drops it.
+  pub fn input_aim_ticks(&self) -> i64 {
+    self.last_input_tick as i64 - (self.newest_stamp_ms / SIM_STEP_MS) as i64
+  }
+
+  /// The last raw pong round trip and the worst since the last resume.
+  pub fn pong_rtts(&self) -> (u64, u64) {
+    (self.last_pong_rtt_ms, self.worst_pong_rtt_ms)
+  }
+
+  /// The clock fit as `(offset_ms, samples)`; the offset is `None` until two
+  /// exchanges are in.
+  pub fn clock_diag(&self) -> (Option<f64>, usize) {
+    (
+      self.clock.server_time_at(self.now_ms as f64).map(|s| s - self.now_ms as f64),
+      self.clock.sample_count(),
+    )
   }
 
   /// What the last resume drop discarded: `(messages, bytes)`.
@@ -546,6 +620,7 @@ impl NetClient {
         // and digest machinery the entity stream runs on.
         Op::Players(frame) => {
           self.modelled.add(frame.bytes() as u64);
+          self.newest_stamp_ms = self.newest_stamp_ms.max(frame.server_time_ms);
           let server_now = self.clock.server_time_at(now_ms as f64).unwrap_or(now_ms as f64).max(0.0) as u64;
           self.sim.on_player_frame(&frame, server_now);
         }
@@ -570,14 +645,18 @@ impl NetClient {
           // everything derived from its contents (the hit flash, the pulse
           // ring) follows play-out, not arrival, or the reaction would land one
           // render delay before the thing it reacts to is visible.
+          self.newest_stamp_ms = self.newest_stamp_ms.max(packet.server_time_ms);
           let server_now = self.clock.server_time_at(now_ms as f64).unwrap_or(now_ms as f64).max(0.0) as u64;
           self.sim.receive_packet(*packet, server_now);
           self.frames_seen += 1;
           applied_frame = true;
         }
-        // Nothing needs it: the local player is drawn from the played-out stream
-        // like every other entity, so there is no prediction to retire against.
-        Op::InputAck { .. } => {}
+        // The local player is drawn from the played-out stream like every other
+        // entity, so there is no prediction to retire against; the seq is kept
+        // for the panel's input round-trip readout.
+        Op::InputAck { seq } => {
+          self.last_input_ack = self.last_input_ack.max(seq);
+        }
         Op::Refused { measured_ms, allowed_ms } => {
           self.status = Status::Refused { measured_ms, allowed_ms };
         }
@@ -598,6 +677,9 @@ impl NetClient {
           };
         }
         Op::Pong { origin_ms, server_ms } => {
+          let raw = now_ms.saturating_sub(origin_ms);
+          self.last_pong_rtt_ms = raw;
+          self.worst_pong_rtt_ms = self.worst_pong_rtt_ms.max(raw);
           self.rtt.observe_pong(origin_ms, now_ms);
           let one_way = self.rtt.one_way_ms().unwrap_or(0.0) as f64;
           let offset = (server_ms as f64 + one_way) - now_ms as f64;
@@ -700,6 +782,7 @@ mod tests {
   fn policy() -> ServerPolicy {
     ServerPolicy {
       sync_hz: 16,
+      sample_hz: 4,
       playout_delay_ms: 100,
       render_delay_ms: 150,
       player_sync_hz: 10,
@@ -750,5 +833,27 @@ mod tests {
       "only the tail was parsed"
     );
     assert_eq!(client.sim.resyncs(), 1, "one deliberate restart, not one per queue-bound trip");
+  }
+
+  #[test]
+  fn an_input_cannot_aim_behind_what_the_stream_has_proven() {
+    // The accepting window is four ticks wide, so an aim behind the newest
+    // arrived stamp is an input the server is guaranteed to drop. Measured on
+    // a resumed tab: the clock fit trailed the stream, every input aimed -5
+    // ticks, and the player could not move while the acks said everything was
+    // arriving. The stamp needs no sync to be a lower bound: the server wrote
+    // it.
+    let controls = Controls::default();
+    let feed = ScriptedSocket(Arc::new(Mutex::new(VecDeque::new())));
+    feed.0.lock().push_back(envelope(vec![Op::Welcome { player: 0, policy: policy() }]));
+    // A stream far ahead of this client's unsynced clock, which falls back to
+    // local time: the shape a resume leaves behind, at test-visible scale.
+    feed.0.lock().push_back(frame(1, 100_000));
+    let mut client = NetClient::from_socket(Box::new(feed.clone()));
+    client.poll(500, &controls);
+
+    client.send_input(Vec2::new(1.0, 0.0), &controls);
+    let aim = client.input_aim_ticks();
+    assert!(aim > 0, "the floor holds the aim ahead of the newest stamp: {aim} ticks");
   }
 }
