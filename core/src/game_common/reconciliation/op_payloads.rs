@@ -1,10 +1,7 @@
 //! The netcode payload vocabulary for client-server communication.
 //!
-//! These types now live in the runtime-free `plaza_wire` crate, so a wasm client
-//! or server can share them; they are re-exported here for the paths that used
-//! them from core. The vector/rotation defaults that used to live on
-//! `RemoteEntitySnapshot` were dropped when it moved (they were unused), so name
-//! its position/rotation types explicitly.
+//! The types live in the runtime-free `plaza_wire` crate, so a wasm client or
+//! server can share them; they are re-exported here for convenience.
 
 pub use plaza_wire::payloads::{AuthoritativeStateUpdate, RemoteEntitySnapshot, SequencedClientInput, TimestampedClientAction};
 

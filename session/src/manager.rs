@@ -76,8 +76,7 @@ fn take_stream<T: Send + 'static>(slot: &RwLock<Option<T>>, name: &str) -> T {
 
 /// Returns whether `agent` is included in `target`.
 ///
-/// The single copy of the targeting rules: previously duplicated in every
-/// transport.
+/// The single copy of the targeting rules, shared by every transport.
 pub fn target_matches<ID: AgentId>(target: &MessageTarget<ID>, agent: &Agent<ID>) -> bool {
   let agent_id = match agent.id() {
     Some(id) => id,
@@ -409,7 +408,7 @@ where
 
 /// Turns raw inbound bytes into typed `SessionMessage`s for the controller.
 ///
-/// One task per session: previously copy-pasted into each transport.
+/// One task per session, shared by every transport.
 async fn deserialize_bridge<Op, ID, SnapshotPayload, C>(
   transport: &'static str,
   codec: C,

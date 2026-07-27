@@ -317,43 +317,20 @@ impl Extrapolatable<Vec3, f32> for Vec3 {
 // Or that angular_velocity is represented as another Quat (a small rotation).
 
 // This is a very simplified angular extrapolation, assuming Velocity is a delta Quat for that step.
-// A proper Extrapolatable for Quat would take an angular velocity vector (Vec3) and dt.
+// Deliberately minimal: the "velocity" is taken as a per-second delta rotation
+// and slerped toward by `delta_time_secs`. Real angular velocity is a Vec3
+// axis-angle, which this minimal Quat cannot express; for real rotational
+// extrapolation, implement `Extrapolatable` for your engine's quaternion type.
 impl Extrapolatable<Quat, f32> for Quat {
-  // TimeDelta = f32 seconds
   fn extrapolate_with_velocity(&self, angular_velocity_as_delta_quat_per_sec: &Quat, delta_time_secs: f32) -> Self {
-    // This is not standard. Usually angular velocity is a Vec3 (axis-angle).
-    // scaled such that multiplying by delta_time_secs gives the rotation for that period.
-    // This is a placeholder for a more robust implementation.
-    // For true extrapolation:
-    // 3. new_rotation = old_rotation * delta_rotation.
-
-    // Simplified: if angular_velocity_as_delta_quat_per_sec IS the delta rotation for 1s.
-    // This would mean it's not a velocity but a per-second rotation.
-    // So, if VelocityType for Quat IS the delta_quat for this specific delta_time.
-    // This is not ideal for the Extrapolatable trait signature.
-
-    // Let's define VelocityType for Quat as Vec3 (axis of rotation * angular speed in rad/s)
-    // and TimeDelta as f32 (seconds)
-    // The method will be: self.extrapolate_with_velocity(angular_velocity_vec3: &Vec3, delta_time: f32)
-    // For now, I'll leave this less complete, as robust quaternion physics is out of scope for basic math.
-    // The user would typically use their game engine's math library.
-
-    // If the user provides a Quat that IS the delta rotation for this exact extrapolation step:
-    // (This means the `VelocityType` for `Quat` is also `Quat` representing a delta)
     if angular_velocity_as_delta_quat_per_sec.w.abs() < 1.0 - f32::EPSILON {
-      // Check if it's not an identity quat used as velocity placeholder
-      let scaled_delta_rotation = Quat::IDENTITY.slerp(*angular_velocity_as_delta_quat_per_sec, delta_time_secs); // Not quite right for velocity
-                                                                                                                  // This slerps TOWARDS the velocity quat over 1s.
+      let scaled_delta_rotation = Quat::IDENTITY.slerp(*angular_velocity_as_delta_quat_per_sec, delta_time_secs);
       return self.multiply(scaled_delta_rotation).normalize();
     }
-    *self // No change if velocity is identity-like
+    // An identity-like velocity rotates nothing.
+    *self
   }
 }
-// Better Extrapolatable for Quat with Vec3 angular velocity:
-//         if angle.abs() < f32::EPSILON {
-//             return *self;
-//         (*self * delta_rotation).normalize()
-// (Requires Quat::from_axis_angle which isn't in our minimal Quat)
 
 #[cfg(test)]
 mod tests {

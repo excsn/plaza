@@ -236,11 +236,10 @@ pub struct Client {
   /// the copy is right: the generation checks, the sequence gaps, the
   /// acknowledgement window, and the digest the server compares against.
   ///
-  /// All of that used to live here as loose fields. It is
-  /// [`DeltaMirror`](plaza_client_utils::DeltaMirror) now, which is the exact
-  /// counterpart of the server's `DeltaBaseline`: the two have to agree, and the
-  /// only way to be sure they do is for both to be one implementation rather
-  /// than two that look alike.
+  /// [`DeltaMirror`](plaza_client_utils::DeltaMirror) is the exact counterpart
+  /// of the server's `DeltaBaseline`: the two have to agree, and the only way
+  /// to be sure they do is for both to be one implementation rather than two
+  /// that look alike.
   enemies: DeltaMirror<RemoteEnemy>,
   /// The authoritative player positions, as last received: the newest thing
   /// this client knows, which makes it the **future** relative to the instant

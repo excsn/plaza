@@ -1,9 +1,7 @@
 //! Server-side support for client-side prediction and server reconciliation.
 //!
-//! The client half lives in the `plaza_client_utils` crate. The rewind buffer
-//! for lag compensation (`HistoricalStateBuffer`) now lives in the wasm-friendly
-//! `plaza_server_utils` crate, so a server sim can share it with wasm clients;
-//! it was pure and unused here.
+//! The client half lives in `plaza_client_utils`; the rewind buffer for lag
+//! compensation (`HistoricalStateBuffer`) lives in `plaza_server_utils`.
 
 pub mod client_input_tracker;
 pub mod delayed_input_processing;

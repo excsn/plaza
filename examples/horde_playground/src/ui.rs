@@ -72,9 +72,8 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls) {
   // though it were not. Latency and jitter are properties of a network you do
   // not control; the delays and rates under them are policy you choose to cover
   // it. Keeping them in one section, above the things they constrain, is the
-  // whole point of this grouping: the terms of a budget used to live in
-  // different sections, so the relationship between them was invisible while
-  // you were editing it.
+  // whole point of this grouping: split across sections, the terms of a budget
+  // hide their relationship exactly while you are editing it.
   section(ui, "simulated link", true, |ui| {
     ui.add(egui::Slider::new(&mut controls.latency_ms, 0..=400).text("latency ms"))
       .on_hover_text("One way, each direction, applied to traffic leaving the host and to traffic arriving from a client. Not a setting a real deployment has: the host runs the server in this process, so the real link is microseconds and this is what stands in for one. The two budgets below are sized to cover it.");

@@ -4,9 +4,9 @@
 
 `plaza_server_utils` is the **server half** of the pure netcode primitives, mirroring `plaza_client_utils`. It is pure logic with no async runtime, so a server simulation compiles to wasm alongside its clients, and it shares the client crate's `Interpolatable` and `ToF32` traits so one state type serves both sides.
 
-It provides the building block lag compensation rests on (a rewind of past entity state), the `relevance` building blocks for interest management (deciding what each client needs to see), `aggregate` for the entities a client must compute with rather than merely draw, `delta` for streaming that set to a subscriber reliably, and the two small blocks a real server writes anyway: `seats` and `meter`.
+It provides the building block lag compensation rests on (a rewind of past entity state), the `relevance` building blocks for interest management (deciding what each client needs to see), `aggregate` for the entities a client must compute with rather than merely draw, `delta` for streaming that set to a subscriber reliably, `input_schedule` for tick-addressed input buffering (two players who pressed together execute together, whatever their ping), and the two small blocks a real server writes anyway: `seats` and `meter`.
 
-**What is re-exported rather than defined here.** `SetDigest`, `SlotKey`, `SlotAllocator` and `DeltaMirror` come from `plaza_client_utils`. Both sides of a delta stream have to agree about them exactly, and a second implementation that agrees today is a disagreement waiting to happen, whose failure would present as a divergence about the *world* rather than about the arithmetic. The direction is not arbitrary: the client crate is the lower one, and a browser client needs all four and must not inherit a server to get them.
+**What is re-exported rather than defined here.** `SetDigest`, `SlotKey`, `SlotAllocator`, `ReusePolicy`, `DeltaMirror`, `Agreement`, and `Divergence` come from `plaza_client_utils`, as do the shared `Interpolatable` and `ToF32` traits. Both sides of a delta stream have to agree about them exactly, and a second implementation that agrees today is a disagreement waiting to happen, whose failure would present as a divergence about the *world* rather than about the arithmetic. The direction is not arbitrary: the client crate is the lower one, and a browser client needs these types and must not inherit a server to get them.
 
 ## 2. Error Handling
 
@@ -18,10 +18,10 @@ This crate defines no error type. `HistoricalStateBuffer::get_state_at_or_before
 
 A rolling per-entity history of states, queryable by time, so the server can reconstruct the world as a client saw it.
 
-Bounds: `EntityId: Eq + Hash + Clone + Debug`; `EntityStateSnapshot: Clone + Debug` (and `Interpolatable<ServerTime>` when queried between two times); `ServerTime: Copy + Debug + Default + PartialOrd + Ord + Sub<Output = Self> + ToF32`. Because `ToF32` covers `u64` and `Duration`, millisecond or tick time works directly, this is the difference from the earlier `plaza` version, whose `TryInto<f32>` bound `u64` could not satisfy.
+Bounds: `EntityId: Eq + Hash + Clone + Debug`; `EntityStateSnapshot: Clone + Debug` (and `Interpolatable<ServerTime>` when queried between two times); `ServerTime: Copy + Debug + Default + PartialOrd + Ord + Sub<Output = ServerTime> + ToF32`. Because `ToF32` covers `u64` and `Duration`, millisecond or tick time works directly, with no custom time type.
 
 *   **`new(max_snapshots_per_entity: usize) -> Self`**: keeps at most this many states per entity. **Panics if 0.**
-*   **`record_state(&mut self, entity_id, server_time, state)`**: record one entity's state for a tick. A state not newer than the last recorded is ignored, so history stays strictly increasing.
+*   **`record_state(&mut self, entity_id, server_time, state)`**: record one entity's state for a tick. A state not newer than the last recorded is ignored (with a `tracing` warning), so history stays strictly increasing.
 *   **`get_state_at_or_before(&self, entity_id, target_server_time) -> Option<EntityStateSnapshot>`**: the rewind. Interpolates between the two recorded states bracketing the target; clamps to the oldest or newest when the target is outside the retained range; `None` if the entity is unknown. Requires `EntityStateSnapshot: Interpolatable<ServerTime>`.
 *   **`remove_entity_history(&mut self, entity_id)`**, **`clear_all_history(&mut self)`**
 
@@ -60,15 +60,24 @@ Maps continuous world coordinates onto a uniform integer grid.
 Buckets entity ids into cells for range queries. Rebuild each tick.
 
 *   **`new(GridQuantizer)`**, **`clear(&mut self)`** (empties buckets, keeps capacity), **`insert(&mut self, id, x, y)`**.
-*   **`query_radius(&self, x, y, radius, out: &mut Vec<Id>)`**: appends every id in the cells overlapping the region, a cell-granular *superset*, so apply an exact distance test after. `out` is not cleared, so reuse one `Vec` to avoid per-query allocation.
+*   **`query_radius(&self, x, y, radius, out: &mut Vec<Id>)`**: appends every id in the cells overlapping the square of half-width `radius`, a cell-granular *superset*, so apply an exact distance test after. `out` is not cleared, so reuse one `Vec` to avoid per-query allocation.
 *   **`quantizer(&self) -> &GridQuantizer`**.
+
+### Struct `TierBoundary`
+
+A membership boundary with hysteresis: it takes less distance to stay in than to get in. Any threshold that switches what the wire carries (a near tier at full precision and rate against a far tier quantised and slow, a relevance radius, an aggro range) flaps when an entity loiters on it: membership changes every few frames, and every change is a precision or rate step the receiver has to absorb, visible as a peer marker twitching between two qualities of motion. The cure is two radii with a gap, judged against where the entity stood last time. The memory is the caller's own previous membership set, which it already keeps for diffing, so this costs no state: pass `was_inside` from it.
+
+*   **`const fn new(enter: f32, leave: f32)`**: `enter` is the radius that admits a newcomer; `leave`, which must not be smaller, is the one past which a member is dropped. The gap between them is the loitering band, sized to the wobble the boundary actually sees (a step or two of movement per update interval). Debug-asserts `enter <= leave` and clamps `leave` up to `enter` otherwise.
+*   **`admits(&self, was_inside: bool, distance: f32) -> bool`**: whether an entity at `distance` is a member this round, given whether it was one last round.
 
 ### Struct `VisibilitySet`
 
 A dense bitset of which entities (by `u32` index) are visible to one client, with a fast diff.
 
 *   **`new()`** / **`with_capacity(max_index: u32)`**, **`clear`**, **`insert(index)`**, **`contains(index) -> bool`**, **`count() -> usize`**, **`iter()`** (ascending).
+*   **`remove(index)`**: marks an entity not visible. Useful when an entity is destroyed rather than merely leaving range: clear it explicitly so the next diff treats a *reused* slot as a fresh arrival instead of silently carrying the old occupant's membership forward.
 *   **`diff(&self, previous, entered: &mut Vec<u32>, left: &mut Vec<u32>)`**: appends newly-visible indices to `entered` (`self & !previous`) and no-longer-visible to `left` (`previous & !self`), word at a time, the spawn/despawn stream. Vectors are not cleared, so reuse them.
+*   **`digest() -> u64`**: an order-independent digest of the visible indices, the same fold as `SetDigest` below.
 
 For sparse handles (`Uuid`), map to dense indices first, or diff two sorted lists; this is the dense-index fast path. See the [`relevance_demo`](examples/relevance_demo.rs) example.
 
@@ -117,7 +126,23 @@ Not a monotone dial. Below roughly `0.7` it is sound and trades accuracy for wor
 
 ## 7. Delta streaming (module `delta`)
 
-`relevance` tells you what changed; this owns the bookkeeping that gets it to a subscriber and keeps it there. One `DeltaBaseline` per subscriber. The client's half is `plaza_client_utils::DeltaMirror`, and the two are keyed by the same `SlotKey` and checked by the same `SetDigest`.
+`relevance` tells you what changed; this owns the bookkeeping that gets it to a subscriber and keeps it there. One `DeltaBaseline` per subscriber. It is deliberately set-theoretic and knows nothing about what a key means: keys are `u64`, entering and leaving are the only events, and mapping a key back to a spawn payload or a despawn reason is the application's job. The client's half is `plaza_client_utils::DeltaMirror`, and the two are keyed by the same `SlotKey` and checked by the same `SetDigest`.
+
+### The two failure modes this exists to prevent
+
+Both were shipped, in a real example, and both took days to find because the symptom was far from the cause.
+
+*   **A subscriber that joins mid-session.** Servers usually track relevance for every slot from startup, occupied or not. When a real client finally arrives, that slot's baseline already describes most of the world, so the client's first packet is a difference against a state it never received: it is sent almost nothing and converges only as pieces of the world happen to become newly relevant. Call `reset` when a subscriber takes the slot and the first packet is a full baseline instead.
+*   **A mirror that diverges for any reason at all.** Once the server believes a subscriber holds a key, that key is only ever sent as an update, and an update for something you do not have is discarded. There is no path back, so a single divergence is permanent no matter how much traffic follows. Carrying the subscriber's own digest on its acknowledgement (see `observe_ack`) lets the server notice that the two disagree and rebuild from nothing.
+
+### The digest is also the resume story
+
+The drift check has a second reading that matters as much as the first: it is a **permission the client side builds on**. A client may discard any stretch of the stream unread (a backgrounded tab's backlog, most commonly) provided it also drops its mirror, because its next acknowledgement then carries the digest of nothing and this type answers with a full baseline. No resync-request message exists anywhere, and none is needed: dropping the mirror is the request. The client half of that bargain is `plaza_client_utils`' playout buffer and `plaza_ws`' backlog trim; the server half is `DeltaBaseline` plus `with_flow`, which stops streaming full-rate full baselines to a subscriber that has provably stopped reading.
+
+### Two invariants, both load bearing
+
+*   **The key must be the key the digest hashes.** If the application digests `(index, generation)` pairs, that is what it must hand to this type, or the drift check compares two unrelated numbers and either never fires or always does. Encoding both into one `u64` is the usual answer; this is why `SlotKey` exists rather than a bare index, and why the key space is documented as `(index << 16) | generation`. A retraction re-derived after a slot has been recycled would otherwise name the slot's *current* occupant, and the entity the subscriber actually holds is never mentioned again.
+*   **Acknowledge states, not packets.** The frontier this walks is the newest *contiguous* acknowledged sequence, not the newest bit set. Receiving packet N+1 after losing N does not put a subscriber in the state N+1 implies, because whatever N announced and N+1 had no reason to repeat is simply gone. Taking the newest set bit hands the diff a state that never existed, and it made recovery statistically indistinguishable from no recovery at every loss rate. That walk is `AckWindow::contiguous_base` (from `plaza_client_utils::ack`), not something re-derived here: it was re-derived here once, and wrongly, which is how the primitive came to exist.
 
 ### Enum `RecoveryPolicy`
 
@@ -126,22 +151,29 @@ Not a monotone dial. Below roughly `0.7` it is sound and trades accuracy for wor
 
 ### Struct `DeltaPlan`
 
-What to send this round. `full_baseline: bool` (the subscriber must clear its mirror first, because what follows is the whole visible set), `baseline_seq: Option<u64>` (the sequence the differences were computed against, worth putting on the wire), `entered: Vec<u64>`, `left: Vec<u64>`.
+What to send this round. `full_baseline: bool` (the subscriber must clear its mirror first, because what follows is the whole visible set; set when a subscriber is new, when its acknowledged baseline has aged out of history, or when its digest proved the mirror had drifted), `baseline_seq: Option<u64>` (the sequence the differences were computed against, or `None` for a difference from nothing, worth putting on the wire), `entered: Vec<u64>` (keys the subscriber does not hold and should), `left: Vec<u64>` (keys the subscriber may hold and should not).
 
 ### Struct `DeltaBaseline`
 
-*   **`new(history)`**: how many recent sent states to retain. An acknowledgement older than the window forces a full rebuild rather than a wrong diff, so size it past the worst round trip you intend to survive.
-*   **`with_policy(policy)`** / **`set_policy(policy)`**, **`reset()`** (a fresh subscriber took this slot: the next plan is a full baseline).
-*   **`plan(&mut self, current: &BTreeSet<u64>, seq) -> DeltaPlan`**: what to send, given the visible set now.
-*   **`observe_ack(&mut self, newest, mask, digest)`**: the return path. Passing the digest of an empty set disables the drift check.
-*   **`request_full_baseline(&mut self)`**, **`full_rebuilds()`**, **`unacked()`**, **`acked_seq()`**.
+*   **`new(history: usize)`**: how many recent sent states to retain (clamped to at least 1). Cover the most packets that can be in flight plus the acknowledgement's return trip; a state older than the window cannot be recovered by re-derivation and forces a full rebuild rather than a wrong diff.
+*   **`with_policy(policy) -> Self`** / **`set_policy(&mut self, policy)`**: selects the reliability policy; `set_policy` on a live subscriber resets, forgetting any state the new policy cannot honour.
+*   **`with_flow(stalled_after: u64, keepalive_every: u64) -> Self`**: enables flow control, in the application's own clock units: a subscriber silent for `stalled_after` is throttled to one send every `keepalive_every` until it acknowledges again. This belongs to the delta stream and not to the transport: once a subscriber's acknowledged baseline ages out of history, **every** plan for it is a full baseline, so a reader that has stopped reading (a background browser tab: its socket keeps receiving while its frame loop does not run) is streamed the whole visible set at full rate, into a buffer it must pay for all at once on resume; measured in the horde example that was tens of megabytes a minute and a several-second freeze on refocus. The keepalive keeps the stream discoverable: the resumed client applies it, acknowledges it, and full rate resumes on the next round. Choose `stalled_after` to match the client side's own discontinuity threshold, and keep it several times the acknowledgement interval so ordinary loss cannot trip it.
+*   **`stalled(&self, now: u64) -> bool`**: whether the subscriber has stopped acknowledging. Always `false` without `with_flow`, and during a fresh subscriber's grace period (silence is measured from the first send decision, so a joiner is not born stalled).
+*   **`should_send(&mut self, now: u64) -> bool`**: whether to build and send a packet this round. `true` for a live subscriber; for a stalled one, `true` once per `keepalive_every` and `false` otherwise, in which case skip the `plan` call entirely: not planning also leaves the sent history exactly where the last acknowledgement can still name it.
+*   **`reset(&mut self)`**: forgets everything and makes the next plan a full baseline. **Call this when a subscriber takes the slot.** A slot nobody has ever acknowledged is covered anyway, because an unacknowledged baseline is treated as unknown and sent in full; the case that still needs this call is a **reused** slot, where the previous occupant's acknowledged state is a perfectly plausible baseline for a subscriber that has never seen any of it. Also restarts the flow-control grace period: the new occupant's silence starts now.
+*   **`plan(&mut self, current: &BTreeSet<u64>, seq: u64) -> DeltaPlan`**: what to send, given the visible set now. `seq` numbers this packet and must be what the subscriber acknowledges.
+*   **`observe_ack(&mut self, newest: u64, mask: u64, digest: u64)`**: the return path. A no-op under `Naive`. `digest` is the subscriber's own `SetDigest` over the keys it is actually holding; when it disagrees with the digest of the state the server believes it reached, the next plan is a full rebuild. Passing the digest of an empty set disables the drift check. The digest is only compared when the frontier has reached the newest packet the subscriber reports, so a disagreement means "wrong" rather than "further ahead", and ordinary packet loss does not trigger rebuilds.
+*   **`observe_ack_at(&mut self, newest: u64, mask: u64, digest: u64, now: u64)`**: `observe_ack`, plus the acknowledgement's arrival time for flow control. Use this form whenever `with_flow` is on; the timestamp records under **either** policy, because liveness is a property of the subscriber, not of the recovery arithmetic. An ack from a subscriber currently stalled is **the resume signal**, and it starts a fresh epoch (a `reset`) instead of being folded in: its window spans the silence, and the keepalives inside the silence are sparse in the sequence space, so folding it in pins the baseline at the first keepalive and every plan after resume diffs against a state as old as the stall, until staleness notices a second time (measured as ~25 consecutive full baselines over 1.5 s). Resetting makes the next plan one full baseline in a clean epoch, and the stream is deltas again after a single round trip.
+*   **`request_full_baseline(&mut self)`**: forces the next plan to be a full baseline; the application's own escape hatch for a divergence it detected by some other means.
+*   **`full_rebuilds() -> u64`**: how many times this subscriber has needed a full rebuild; the cost of recovery, and the number that says whether the history window is long enough for the loss and latency actually being seen.
+*   **`unacked() -> usize`**: packets sent whose fate is still unknown, the true in-flight count whether the last event was a plan or an acknowledgement.
+*   **`acked_seq() -> Option<u64>`**: the newest sequence the subscriber has acknowledged reaching the state of.
 
-**Four details in here are load-bearing, and three were wrong in the first working version.** They are the content of the block:
+**Three more details in here are load-bearing**, and each was wrong in a shipped version:
 
-- **The baseline is the newest *contiguous* acknowledgement, not the newest bit set.** A bitmask answers "what arrived", which is what a *retransmitting* protocol wants: it names the holes to refill. A protocol that *re-derives* needs a state the subscriber provably reached, and receiving packet N+1 after losing N does not put it in the state N+1 implies. Taking the newest set bit hands the diff a state that never existed, and it made recovery statistically indistinguishable from no recovery at every loss rate. `observe_ack` calls `AckWindow::contiguous_base`, which exists because this walk was re-derived here once, and wrongly.
-- **The keys must carry generations.** A retraction re-derived after a slot has been recycled names the slot's *current* occupant, so the subscriber's lookup misses and the entity it actually holds is never mentioned again. Keying the baseline the way the digest is keyed makes recovery and verification answer the same question. This is why `SlotKey` exists rather than a bare index, and why the key space is documented as `(index << 16) | generation`.
 - **The two halves of the diff need baselines built by opposite operations.** What to *send* must assume the least the subscriber holds: the acknowledged state **intersected** with every state sent since, because anything a later packet may have retracted might already be gone. What to *retract* must assume the most: the acknowledged state **unioned** with everything announced since, because an entity that entered and left inside that gap appears in neither the baseline nor the current set and a single diff never mentions it. Getting the union right and leaving the other half as the raw acknowledged state trades one silent failure for its mirror image, and did: the corpses became omissions.
-- **Cold start is a decision, not an accident.** Recovery diffs against the acknowledged state, and there is no acknowledged state before the first acknowledgement, so a mechanism defined in terms of accumulated state has undefined behaviour before that state exists, and the accidental fallback here was silently the naive behaviour it exists to replace.
+- **Cold start is a decision, not an accident.** Recovery diffs against the acknowledged state, and there is no acknowledged state before the first acknowledgement, so under `AckRecovery` an unknown baseline means full sets for the first round trip, then incremental for the rest of the session. The accidental fallback here was silently the naive behaviour it exists to replace.
+- **A rebuild starts a new epoch.** A rebuild drops the acknowledged baseline, the last-sent state, *and* the sent history, because the history is part of the old epoch twice over: a stale in-flight acknowledgement could name a pre-rebuild state as the baseline for a subscriber about to hold something else entirely, and after a subscriber restart its acknowledgement window has a gap at the stall boundary that `contiguous_base` can never cross, so with the old history in place the baseline stayed unknown and unknown means a full set every round until the gap aged out (measured at ~25 consecutive full baselines over 1.5 s). Cleared, the frontier restarts at the next packet and one acknowledgement round trip ends the full sets.
 
 **Measured**, `horde_playground`, 3000 enemies over a real socket:
 
@@ -155,7 +187,45 @@ What to send this round. `full_baseline: bool` (the subscriber must clear its mi
 
 **A phantom count alone cannot verify any of this**, which is why the `missing` column is there. A starved mirror agrees with everything: zero corpses, digest agreement, and a flattering render error, because error only averages over entities both sides have. Every metric of the form "wrong things present" needs its "right things absent" twin, or a change is free to satisfy one by breaking the other. `missing` never reaches zero, because entities that just became relevant are still in flight; the number to watch is whether it stays at that floor.
 
-## 8. Seats (module `seats`)
+## 8. Input scheduling (module `input_schedule`)
+
+Tick-addressed input buffering: the server side of "two players who pressed together execute together, whatever their ping". A client does not send "move now". It names **the server's own tick** its input is meant for, computed from its clock estimate plus the playout depth the server advertised, and the server buffers the input until that tick runs. Applied on arrival instead, the nearer player gets its ping difference as free head start, and anything decided by who-was-where-first is decided by the network.
+
+Why a tick and not a timestamp: authority. A timestamp is the client naming a moment, which the server then has to judge plausible, and the judgement needs a shared clock whose error is exactly the slack a liar hides in. A tick is the client naming the server's own unit of time, which is either still open or is not.
+
+**The window rejects; it never corrects.** An input for a tick already simulated is **dropped**, not shifted into the window. Correcting a backdated tick still executes the input, so a lag switch loses the lie and keeps the steering; dropping it means backdating costs the input, and it replaces "how much lying is tolerable" (no good answer) with "is this tick open" (a setting). The cost is real and lands on honest clients too: a link slower than the window loses inputs and rubber-bands, which is why the window is a parameter and `late` is a counter worth watching, not a curiosity.
+
+**Which input model**, because there are two and this block is one of them. Mirroring the "which predictor" table in `plaza_client_utils`: how the server consumes input decides the machinery, and choosing wrong is silent.
+
+| the server | use |
+|---|---|
+| executes inputs on the tick the client *named* (fairness across pings) | this block |
+| applies inputs as they arrive, newest sequence wins | a sequence frontier and a bound, not this block |
+
+The second model is what plain client-side prediction demos run (plaza's netcode and blackhole examples both do): commands carry a sequence number only, the server applies anything newer than the last applied and echoes the frontier back for reconciliation. It was deliberately not absorbed here, because tick addressing is the entire point of this type. What that model does share with this one is the obligation to bound its inbox.
+
+**Derive the current tick, never count it.** Everything here takes `current` as a parameter because the schedule must not own a tick counter. A counter kept beside a clock has to be kept in step through every path that touches either, and a world rebuild is such a path: the example this was extracted from preserved the clock and reset the counter, after which every input any client aimed was hundreds of ticks stale and silently refused, permanently. Derive `current` from the simulation clock at the call site.
+
+### Struct `InputWindow`
+
+The accepting window, in ticks either side of the current one: public fields `max_late: u64` (how many ticks past its named tick an input is still accepted; it then executes on the next tick to run, and is counted late) and `max_early: u64` (how far ahead of the current tick an input may aim before it reads as parking inputs in the future). A live setting rather than a construction-time constant, because tuning it *is* the experiment: tighter is fairer and rubber-bands slow links sooner.
+
+### Enum `Submission`
+
+What `submit` decided: **`Scheduled`** (buffered for its tick), **`Late`** (buffered, but its tick has already passed inside the window: it executes on the next tick to run; a steady stream of these says the window is too tight for whoever is connected), **`TickClosed`** (named a tick already simulated and outside the window; dropped, because reopening a closed tick is exactly the rewrite of history a lag switch is trying to buy), **`TooFarAhead`** (named a tick too far ahead; dropped). Plus **`accepted(&self) -> bool`**: whether the input was buffered at all.
+
+### Struct `InputSchedule<Input>`
+
+One seat's buffered inputs and the counters that judge the window. Keep one per seat, like `DeltaBaseline`.
+
+*   **`new()`**.
+*   **`submit(&mut self, tick: u64, input: Input, current: u64, window: InputWindow) -> Submission`**: offers an input naming `tick`, judged against `current` (the tick the simulation is on now, derived from its clock) and the window. The execution tick is clamped to never fall behind anything already executed for this seat, so a client cannot reorder its own history by walking its named ticks backwards.
+*   **`execute_due(&mut self, current: u64) -> Option<Input>`**: the input to apply on tick `current`, if any has come due: **level semantics**, for an input that is a held state (a direction, a throttle). Call once per simulation step, **per step and not per network frame**: consuming the queue once per frame collapses everything that arrived between two ticks onto whichever one happened to run next. Within one step the newest due input wins, because a held direction is a level rather than an edge. **Wrong for discrete actions**: a "fire" and a "jump" coming due on the same step would collapse to one here.
+*   **`drain_due(&mut self, current: u64) -> impl Iterator<Item = Input> + '_`**: every input due on tick `current`, in scheduled order: **event semantics**, for inputs that are discrete actions where each one matters. The counterpart of `execute_due`. A game with both kinds keeps two schedules, because the two kinds have different loss semantics and mixing them in one queue forces one of them to be wrong.
+*   **`clear(&mut self)`**: drops everything buffered, for a seat being vacated. Counters survive: they describe the session, not the occupant.
+*   **`accepted() -> u64`** (inputs buffered, scheduled plus late; the denominator every other count needs), **`late() -> u64`** (inputs accepted after their tick had passed), **`rejected() -> u64`** (inputs dropped for naming a closed or far-future tick).
+
+## 9. Seats (module `seats`)
 
 ### Enum `Seating`
 
@@ -165,19 +235,22 @@ Returning this rather than a bare index is the entire reason the type exists. `F
 
 ### Struct `SeatTable<Key>`
 
-*   **`new(capacity)`**, **`seat(key) -> Seating`**, **`unseat(&key) -> Option<usize>`**, **`seat_of(&key)`**.
+*   **`new(capacity)`**, **`seat(key) -> Seating`**, **`unseat(&key) -> Option<usize>`** (idempotent: a disconnect can be reported more than once), **`seat_of(&key)`**.
 *   **`occupants()`**, **`keys()`**, **`by_seat() -> HashMap<usize, Key>`**, **`occupied_count()`**, **`capacity()`**, **`is_full()`**, **`clear()`**.
-*   **`reseat_all(capacity) -> Vec<(Key, usize)>`**: resize, returning everyone's new seat. For a world rebuilt under a changed configuration.
+*   **`reseat_all(capacity) -> Vec<(Key, usize)>`**: resize, returning everyone's new seat. For a world rebuilt under a changed configuration. Anyone who does not fit is dropped from the table and is not in the returned list; every returned seat is fresh by definition, since the world behind it is new.
 
-## 9. Rates (module `meter`)
+## 10. Rates (module `meter`)
 
 ### Struct `RateMeter`
 
-A running total, a sample count, an elapsed clock, and the three questions over them.
+A running total, a sample count, an elapsed clock, and the three questions over them. The clock is supplied rather than read, so a simulation that runs on its own time (or faster than real time in a test) measures itself honestly.
 
-*   **`new()`**, **`add(amount)`**, **`add_empty()`** (a sample carrying nothing, which still counts toward the mean), **`elapsed(elapsed_ms)`**, **`reset()`**.
-*   **`total()`**, **`samples()`**, **`elapsed_ms()`**, **`per_sec()`**, **`mean()`**, **`lifetime_per_sec()`**, **`share_of(&other) -> f64`**.
+*   **`new()`**, **`add(amount)`**, **`add_empty()`** (a sample carrying nothing, which still counts toward the mean), **`reset()`** (forgets everything, for a world that has been rebuilt: a rate is over the current world, not every world since launch).
+*   **`elapsed(&mut self, elapsed_ms: u64)`**: sets how long this has been accruing over, and rolls the window forward. Idempotent within a bucket, so call it every tick with the simulation clock. The first call after construction or a reset also marks when the meter started. Debug-asserts the clock never goes backwards.
+*   **`total()`**, **`samples()`**, **`elapsed_ms()`**, **`per_sec()`**, **`mean()`**, **`lifetime_per_sec()`**, **`share_of(&other) -> f64`**, **`running_ms()`**.
 
-**`per_sec` and `mean` are over a rolling window** (eight seconds), not over the meter's whole life; `total`, `samples` and `lifetime_per_sec` are the lifetime figures. The distinction is load bearing rather than a nicety. A lifetime average chasing a steady state that has risen converges to it asymptotically, so it climbs by less and less but never stops climbing, and on a live readout that reads as a quantity slowly increasing for ever with nothing wrong. It also makes such a readout unusable for its usual purpose, because a setting you just changed is one second of evidence against the whole session. Call `elapsed` with your clock each tick to roll the window; `lifetime_per_sec` is the right answer for a summary over a fixed run, and the wrong one for a number somebody watches.
+**`per_sec` and `mean` are over a rolling window** (sixteen buckets of 500 ms, so eight seconds), not over the meter's whole life; `total`, `samples` and `lifetime_per_sec` are the lifetime figures. The distinction is load bearing rather than a nicety. A lifetime average chasing a steady state that has risen converges to it asymptotically, so it climbs by less and less but never stops climbing, and on a live readout that reads as a quantity slowly increasing for ever with nothing wrong. It also makes such a readout unusable for its usual purpose, because a setting you just changed is one second of evidence against the whole session. Call `elapsed` with your clock each tick to roll the window; `per_sec` divides recent traffic by the span the retained buckets actually cover, so a part-filled newest bucket does not understate it, and a full window of silence decays the rate to zero. `lifetime_per_sec` is the right answer for a summary over a fixed run, and the wrong one for a number somebody watches.
+
+**A reset meter measures only what it saw.** The clock a meter is given is usually the simulation's, and that does not restart when the meter does. `lifetime_per_sec` is therefore measured from when *this meter* started, not from zero on the caller's clock: without that, a meter reset twenty minutes into a session divides its fresh total by the whole twenty minutes, reads a fraction of the truth, and then creeps up toward it for hours. **`running_ms()`** is how long the meter has been running, which is not the same as the clock it is given once it has been reset.
 
 Trivial arithmetic, and every hand-rolled copy had to remember the same divide-by-zero guard, whose absence renders as `NaN` on the first frame and looks like the thing being measured is broken. `share_of` is here because **measuring a stream's share of the packet before optimising its encoding** is the check that would have saved three separate rounds of optimising the wrong thing: despawn ids were 1.2% of horde's traffic while position samples were 86.1%.

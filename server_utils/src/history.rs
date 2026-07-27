@@ -30,10 +30,9 @@ pub struct TimedState<ServerTime: Copy + Debug, State: Clone + Debug> {
 /// - `EntityId`: identifies an entity (`Uuid`, `u64`, ...). `Eq + Hash + Clone + Debug`.
 /// - `EntityStateSnapshot`: the state to rewind (position, hitboxes). `Clone + Debug`,
 ///   and [`Interpolatable`] when queried between two recorded times.
-/// - `ServerTime`: the server clock (`u64` ms or ticks, or a `Duration`). Because
-///   the shared [`ToF32`] bound covers `u64` and `Duration`, plain millisecond
-///   time works directly, unlike the earlier core version which required a custom
-///   time type.
+/// - `ServerTime`: the server clock (`u64` ms or ticks, or a `Duration`). The
+///   shared [`ToF32`] bound covers `u64` and `Duration`, so plain millisecond
+///   time works directly, with no custom time type.
 #[derive(Debug, Clone)]
 pub struct HistoricalStateBuffer<
   EntityId: Eq + Hash + Clone + Debug,
@@ -145,9 +144,8 @@ impl<
 mod tests {
   use super::*;
 
-  // Time is plain `u64` milliseconds. That it works with no custom time type is
-  // the point: the earlier core version required one because its bound used
-  // `TryInto<f32>`, which `u64` does not implement.
+  // Time is plain `u64` milliseconds: the `ToF32` bound exists so that no
+  // custom time type is needed, and this test is where that stays true.
   #[derive(Debug, Clone, PartialEq)]
   struct TestState {
     position: f32,

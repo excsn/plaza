@@ -141,10 +141,9 @@ pub struct Server {
   /// would leave them holding, what they have acknowledged, and therefore what
   /// to send next.
   ///
-  /// This used to be four parallel vectors and a hundred lines of baseline
-  /// arithmetic here. It is set-theoretic and knows nothing about enemies, so it
-  /// belongs in `server_utils` where every game gets the same two bugs fixed for
-  /// free: a joiner sent a difference against a baseline it never held, and a
+  /// The block is set-theoretic and knows nothing about enemies, which is why
+  /// it lives in `server_utils`: every game gets the same two bugs fixed for
+  /// free, a joiner sent a difference against a baseline it never held, and a
   /// mirror that drifts and can never recover.
   baselines: Vec<DeltaBaseline>,
   /// Currency on the ground, and what each player has banked and bought.
@@ -997,11 +996,10 @@ impl Server {
       }
     }
 
-    // Positions, health and shields are the player stream's business now, not
-    // this one's. They used to ride here as well, which meant every packet
-    // carried every player twice over: the single largest line in the budget at
-    // a large count, and none of it anything the other stream was not already
-    // saying.
+    // Positions, health and shields are the player stream's business, not this
+    // one's. Carried on both streams, every packet holds every player twice
+    // over: the single largest line in the budget at a large count, and none of
+    // it anything the other stream is not already saying.
     let mut out = Vec::with_capacity(self.players.len());
 
     let seq = self.next_seq;

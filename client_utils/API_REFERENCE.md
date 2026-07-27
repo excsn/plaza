@@ -15,6 +15,8 @@ It addresses these problems, usable independently:
 | Updates stop arriving for a moment | [`ExtrapolationBase`](#struct-extrapolationbasestatetype-velocitytype-servertimestamp) |
 | A variable frame has to drive a fixed-step simulation | [`FixedTimestep`](#7d-module-timestep) |
 | Holding the client side of a streamed entity set, and proving it agrees | [`DeltaMirror`](#7e-module-mirror-the-client-half-of-a-delta-stream) |
+| A resumed tab faces minutes of backlog it can never play | [`PlayoutBuffer`](#7i-module-playout-the-playout-queue-and-the-resume-verdict) |
+| Nothing tells a real client the send rate or the delay its buffer must cover | [`ArrivalMonitor`](#7j-module-arrival-measuring-how-a-stream-actually-arrives) |
 | Peers run one deterministic sim and cannot wait for each other's input | [`RollbackSession`](#3b-rollback-netcode-deterministic-lockstep) |
 
 All but the last serve the *server-authoritative* model (an authority decides, a client predicts its own entity and is reconciled). The last serves the other family, *peer-to-peer deterministic lockstep* (rollback), covered in [section 3b](#3b-rollback-netcode-deterministic-lockstep).
@@ -30,6 +32,12 @@ None is enforceable by a type, and between them they account for every netcode b
 **One instant per frame.** A client that renders in the past picks a single instant T for the whole frame, and everything is evaluated at T: not only where entities are drawn, but everything a behaviour rule reads while producing the frame, aim targets and chase context included. An entity simulated to T while reading a target from the newest packet is two timelines in one scene, and the seam between them is a bug whether or not it is visible yet. [`InterpolationClock`](#struct-interpolationclockt) supplies T; the discipline of feeding every read from it is the application's.
 
 **The timeline comes from declaration, not arrival.** Transport facts, round trips and jitter and arrival times, may size buffers and admit or refuse connections. They never decide which moment is on screen or when an input executes; those are declared numbers the server chooses and publishes. A render clock steered by packet arrival hides bad links instead of reporting them, lets every client pick a different "now", and quietly makes ping an input to the game.
+
+### The resume contract
+
+Every long-lived client eventually stops reading: a browser tab goes to the background, a laptop sleeps, a frame loop stalls. The socket keeps receiving the whole time, so what a resumed client faces is not a slow stream but a *lump*: minutes of packets, delivered at once, describing moments it can never play. The recovery that works is built from one invariant, stated here because each half lives in a different crate: **a client may discard any stretch of the stream unread, provided it also drops the state derived from it, because an acknowledgement carrying the digest of nothing obligates the server to answer with a full baseline.** That is the digest-and-rebuild machinery of `plaza_server_utils::DeltaBaseline` and [`DeltaMirror`](#7e-module-mirror-the-client-half-of-a-delta-stream), read as a permission, and it is why there is no "resync request" message anywhere: dropping the mirror *is* the request.
+
+On top of it, resume is three verdicts at three layers, each owned by a block: the **transport** discards the backlog before parsing it (`plaza_ws::trim_backlog`), because none of it survives what follows; the **playout queue** treats the gap as a discontinuity and restarts once, keeping only the newest packet ([`PlayoutBuffer`](#7i-module-playout-the-playout-queue-and-the-resume-verdict)); and the **server** stops streaming to a subscriber that has provably stopped reading (`DeltaBaseline::with_flow`), so the lump never grows to megabytes in the first place. The application's remaining job is small and cannot be taken from it: on `Admission::TimelineLost`, drop the mirror and re-anchor the render clock on what just arrived.
 
 ### Which predictor
 
@@ -120,7 +128,7 @@ Your controlled entity when the server **holds an input and integrates it every 
 *   **`reconcile(&mut self, authoritative, age_secs) -> Correction<State>`**: project the sample forward by its own age (the server's state is one one-way delay old), then ease toward it.
 *   **`render()`**, **`logical()`**, **`set_active`**, **`is_active`**, **`teleport`**, **`set_context`**, **`context`**: as above.
 
-**`HeldInputConfig`**: `blend` alone, the fraction of the remaining gap closed on each `reconcile`. `1.0` snaps, `0.0` is pure dead reckoning and drifts without bound.
+**`HeldInputConfig`**: `blend` alone, the fraction of the remaining gap closed on each `reconcile`. `1.0` snaps, `0.0` is pure dead reckoning and drifts without bound. `Default` is `0.25`.
 
 **A fraction rather than a duration, and that is the design.** A fixed-duration ease has a correction rate above which it never finishes, so corrections pile up and the smoother becomes the dominant error. Measured in `horde_playground`, that made locally simulated enemies get *worse* as the send rate rose (10, 16, then 20 px at 4, 10 and 30 Hz) and was mistaken for a limit of the technique; on `blend` the same entities sit at 9 to 10 px at every rate. Use `ErrorSmoother` when you need the logical state left exact and only the *drawing* eased, which is what `PredictedPlayer` requires because replay depends on it.
 
@@ -192,20 +200,20 @@ The `rollback_playground` example wires two full peers over a simulated wire and
 The client's own entity: a predicted state that runs ahead of the server, and the last authoritative state received.
 
 *   **`new(initial_state: StateType) -> Self`**
-*   **`apply_local_input_and_predict(&mut self, op: &Op, sequence_number: SequenceNumber, input_buffer: &mut ClientInputBuffer<Op, StateType>, apply_fn: impl Fn(&mut StateType, &Op))`** Applies an input immediately and records it as unacknowledged.
-*   **`reconcile_with_server_state(&mut self, authoritative_state: StateType, last_processed_sequence: SequenceNumber, input_buffer: &mut ClientInputBuffer<Op, StateType>, apply_fn: impl Fn(&mut StateType, &Op))`** Snaps to the server's state, drops acknowledged inputs, and replays the rest.
-*   **Fields**: the current predicted state and the last acknowledged sequence number are readable for rendering and diagnostics.
+*   **`apply_local_input_and_predict(&mut self, op: &Op, sequence_number: SequenceNumber, input_buffer: &mut ClientInputBuffer<Op, StateType>, apply_op_fn: &impl Fn(&mut StateType, &Op))`** Applies an input immediately and records it as unacknowledged.
+*   **`reconcile_with_server_state(&mut self, new_authoritative_state: StateType, server_ack_input_seq: SequenceNumber, input_buffer: &mut ClientInputBuffer<Op, StateType>, apply_op_fn: &impl Fn(&mut StateType, &Op))`** Snaps to the server's state, drops acknowledged inputs, and replays the rest.
+*   **Public fields**: `current_predicted_state: StateType`, `last_authoritative_state: StateType`, `last_server_acknowledged_input_seq: SequenceNumber`, readable (and writable) for rendering and diagnostics. `Clone` whenever `StateType: Clone`, with no bound on `Op`.
 
-`apply_fn` is the shared simulation step, the same rule the server applies. Both sides must agree, or prediction fights the server every frame.
+`apply_op_fn` is the shared simulation step, the same rule the server applies. Both sides must agree, or prediction fights the server every frame.
 
 ### Struct `ClientInputBuffer<Op, PredictedStateSnapshot>`
 
 Unacknowledged inputs, kept for replay.
 
-*   **`new(max_size: usize) -> Self`**
-*   **`record_input(&mut self, sequence_number, op, state_before)`**: stores an input and the state it was applied to. At capacity the oldest is discarded.
+*   **`new(max_size: usize) -> Self`**: **panics if `max_size` is 0.**
+*   **`record_input(&mut self, sequence_number, op, state_before_op_predicted)`**: stores an input and the state it was applied to. At capacity the oldest is discarded (with a `warn`).
 *   **`acknowledge_inputs_up_to(&mut self, ack_sequence_number)`**: drops everything the server has processed.
-*   **`get_unacknowledged_inputs(&self) -> impl Iterator`**: what to replay, in order.
+*   **`get_unacknowledged_inputs(&self, last_acknowledged_sequence_number: SequenceNumber) -> impl Iterator`**: every buffered input with a sequence number greater than the argument, in order. What to replay.
 *   **`get_predicted_state_before_input(&self, sequence_number) -> Option<&PredictedStateSnapshot>`** Useful for diagnosing how far a prediction diverged.
 *   **`len`**, **`is_empty`**, **`clear`**
 
@@ -298,8 +306,9 @@ When snapshots stop arriving, continue an entity along its last known velocity r
 
 ### Struct `ExtrapolationBase<StateType, VelocityType, ServerTimestamp>`
 
-*   **`new(state, velocity, timestamp) -> Self`**: the last authoritative state.
-*   **`get_extrapolated_state(&self, target_time, max_extrapolation) -> StateType`** Projects forward, capping the **duration** by `max_extrapolation` so an entity coasts to the limit and stops there rather than running off into the distance.
+*   **`new(state, velocity, server_timestamp, client_receipt_time_ms: ClientTimeMs) -> Self`**: the last authoritative state, plus when the client processed it (which is what the extrapolation duration is measured from).
+*   **Public fields**: `state`, `velocity`, `server_timestamp`, `client_receipt_time_ms`.
+*   **`get_extrapolated_state<TimeDelta>(&self, target_client_render_time_ms: ClientTimeMs, max_extrapolation_duration_ms: u64, convert_ms_to_time_delta: impl Fn(u64) -> TimeDelta) -> Option<StateType>`** Projects forward, capping the **duration** by `max_extrapolation_duration_ms` so an entity coasts to the limit and stops there rather than running off into the distance. A target before `client_receipt_time_ms` returns the un-extrapolated base state (extrapolation is for the future; use interpolation for the past). `convert_ms_to_time_delta` turns the capped millisecond duration into whatever `TimeDelta` your `Extrapolatable` impl takes (`|ms| ms as f32 / 1000.0` for seconds, `Duration::from_millis` for a `Duration`).
 
 Capping the duration rather than discarding the result is the fix to a real bug worth knowing about, because "clamp" reads naturally as the other thing. Returning the *un-extrapolated* state past the cap is a discontinuity: at the limit an entity has coasted `velocity * max_ms` forward, and one millisecond later it was drawn back at the raw sample, a jump of the entire window in the wrong direction, flickering whenever a jittery target crossed the boundary. Two tests had asserted the old behaviour, so they were pinning the bug rather than the requirement.
 
@@ -308,8 +317,9 @@ The cap logs at `warn`, and a *steady* occurrence usually means a render target 
 ### Trait `Extrapolatable<VelocityType, TimeDelta>`
 
 ```rust,ignore
-pub trait Extrapolatable<VelocityType, TimeDelta> {
-  fn extrapolate(&self, velocity: &VelocityType, delta_time: TimeDelta) -> Self;
+pub trait Extrapolatable<VelocityType, TimeDelta>
+where Self: Sized + Clone, VelocityType: Debug, TimeDelta: Copy + Debug {
+  fn extrapolate_with_velocity(&self, velocity: &VelocityType, delta_time: TimeDelta) -> Self;
 }
 ```
 
@@ -476,6 +486,41 @@ Send an input on change, plus a keepalive. **`new(keepalive_ms)`**, **`should_se
 **The keepalive is the content.** Sending purely on change means a *dropped* direction change is not a missing update but a **wrong state that persists**, because the server holds the last direction it received: the player keeps gliding until they press something else. It is intermittent and it reads as the controls sticking rather than as packet loss.
 
 Pairs with [`HeldInputPredictor`](#struct-heldinputpredictorstate-input-ctx) and explicitly **not** with `PredictedPlayer`, whose server consumes one input per step and therefore needs every one of them.
+
+## 7i. Module `playout`: the playout queue and the resume verdict
+
+A client that renders in the past does not apply packets on arrival: it queues them and plays each one out when the render clock reaches the instant it describes. That queue is fed by a remote peer and drained by a local clock, and the two disagree in exactly three ways, each of which this module answers: a packet a little late (an underrun, counted and still delivered, because late is better than starved), a packet absurdly ahead or a queue overflowing (a discontinuity: the local clock stopped while the world kept going, and the only honest move is to snap), and the transport's own verdict that the timeline is lost (a discarded resume backlog).
+
+Two counting rules live here because each was learned from a misleading panel. An underrun is jitter-scale lateness only; a packet late by more than the discontinuity threshold belongs to a lost timeline, which `restarts` accounts for, and charging it as an underrun made one stall read as a thousand link faults. And a restart is counted once per discontinuity, wherever it was detected, so the panel's number is stalls survived rather than a function of how large each backlog happened to be.
+
+### Enum `Admission`
+
+What `push` concluded. **`Queued`** (nothing to do until the clock reaches it) or **`TimelineLost`**. `#[must_use]`: `TimelineLost` obliges the caller to restart its own timeline, re-anchor its render clock on what just arrived, and drop derived state (its entity mirror above all), so the stream's own recovery rebuilds it; see the resume contract in section 1.
+
+### Struct `PlayoutBuffer<T>`
+
+*   **`new(max_queued: usize, lost_ahead: u64) -> Self`**: `max_queued` bounds the queue absolutely; size it several times past what an honest buffer holds at the deepest render delay and fastest send rate, so reaching it means something is wrong rather than merely slow. `lost_ahead` is the discontinuity threshold, how far past the render instant an arrival may reach before the client is lost rather than buffering; match it with the server's stalled-subscriber threshold so both sides agree on when a gap stops being jitter.
+*   **`push(&mut self, stamp: u64, order: u64, item: T, render_at: Option<u64>) -> Admission`**: takes delivery. `stamp` is the instant the packet describes, `order` its sequence number (play-out is ordered by sequence, so deltas compose in the order the server built them even when arrivals interleave), `render_at` the instant currently being drawn, `None` before the timeline has started (a join burst must be admitted whole: nothing can be late and nothing can be a discontinuity).
+*   **`pop_due(&mut self, render_at: u64) -> Option<T>`**: the oldest packet whose instant the clock has reached, in sequence order. Call in a loop each tick until `None`.
+*   **`timeline_lost(&mut self)`**: the transport's verdict arriving from outside (a resume backlog discarded unread, a reconnect). Drops everything but the newest packet, which is what the caller's restarted clock anchors on.
+*   **`iter(&self) -> impl Iterator<Item = &T>`**: the packets held but not yet due, in sequence order, for readouts that look into the future the buffer holds (a ghost overlay, a queue panel).
+*   **`underruns() -> u64`** (packets that arrived after their instant had been drawn, by a margin jitter produces: the number that says the render delay is too small for this link), **`restarts() -> u64`** (discontinuities survived, one per stall however large the backlog), **`len()`**, **`is_empty()`**.
+
+## 7j. Module `arrival`: measuring how a stream actually arrives
+
+The render-delay budget has three terms: the link's one-way delay, the spread in it, and one send interval (so two samples always bracket the interpolation target). A host that simulates its own link can compute that from its sliders; a real client cannot, because nothing tells it the send rate or the delay. It can only measure, and measuring is better anyway: the server is then free to change its rate live, and a client that trusts a configured rate is wrong exactly when the rate is being changed, which is when it matters.
+
+Two measurement decisions are load bearing. **The buffer covers irregularity, not delay**: a steady 200 ms link needs no more buffer than a steady 20 ms one, because a constant delay just shifts the whole timeline, so the jitter term is the smoothed mean deviation of lateness (what RFC 6298 uses for the same job), not the lateness itself. **The interval is measured between declared stamps, not arrivals**: two packets can arrive in one poll and still describe moments an interval apart, and gaps between their declared times are stable where gaps between their arrivals are noise. Keep one monitor per interpolated stream: it is the streams peers are interpolated between that size the buffer, not the ones simulated forward from single samples.
+
+### Struct `ArrivalMonitor`
+
+*   **`new(smoothing: f32) -> Self`**: the EWMA weight for new observations, `0..=1`; around `0.05` follows a link's drift without chasing individual packets.
+*   **`observe(&mut self, stamp: u64, recv: u64)`**: notes one arrival. `stamp` is the declared server time the packet describes; `recv` is the client's synced estimate of server time at arrival (the same clock its render delay is subtracted from, which is what makes the readings commensurable with the delay). Call for every packet of the stream, reordered or not: a stamp older than the newest seen still updates lateness (it is late, that is data) but never the interval, which is measured forward only.
+*   **`interval_ms() -> f32`**: the smoothed gap between declared stamps, the send interval as it actually is.
+*   **`lateness_ms() -> f32`**: the smoothed mean lateness; with an honest clock sync, the link's one-way delay plus whatever error the sync carries, which is exactly what the budget must absorb anyway.
+*   **`jitter_ms() -> f32`**: the smoothed mean deviation of lateness, the irregularity the buffer exists to cover.
+*   **`needed_delay_ms() -> f32`**: the render delay this stream needs, measured: lateness plus jitter plus one interval. Compare against the delay in force and warn when short; whether to *adapt* to it is the application's decision, because a delay that follows the link hides bad links instead of reporting them (the timeline should come from declaration, not arrival).
+*   **`warmed_up() -> bool`**: whether at least two forward stamps have been seen, so an interval exists and the readings mean anything.
 
 ## 8. Module `math`
 
