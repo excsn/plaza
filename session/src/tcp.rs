@@ -21,6 +21,7 @@ use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tracing::{debug, error, info, warn};
 
 use crate::codec::{JsonCodec, WireCodec};
+use plaza_wire::frame::ProtocolVersion;
 use crate::error::SessionLayerError;
 use crate::manager::{ConnectionManager, OutboundFrame, TransportSession, DEFAULT_BROADCAST_CAPACITY, DEFAULT_CLIENT_QUEUE_CAPACITY};
 
@@ -70,6 +71,20 @@ where
     agent_factory: AgentFactory<ID>,
     codec: C,
   ) -> Result<Arc<Self>, SessionLayerError> {
+    Self::bind_with_protocol(addr, agent_factory, codec, ProtocolVersion::UNKNOWN).await
+  }
+
+  /// Binds and declares the protocol version this build speaks.
+  ///
+  /// A client's `Hello` is compared against it and a mismatch is logged, not
+  /// refused: the number is a build hash, so a peer that merely recompiled
+  /// cannot be told apart from one that changed shape.
+  pub async fn bind_with_protocol(
+    addr: impl Into<String>,
+    agent_factory: AgentFactory<ID>,
+    codec: C,
+    protocol: ProtocolVersion,
+  ) -> Result<Arc<Self>, SessionLayerError> {
     let addr = addr.into();
     let listener = TcpListener::bind(&addr)
       .await
@@ -81,7 +96,7 @@ where
       .local_addr()
       .map_err(|source| SessionLayerError::Bind { addr, source })?;
 
-    let inner = TransportSession::new(TRANSPORT, codec.clone(), DEFAULT_BROADCAST_CAPACITY);
+    let inner = TransportSession::with_protocol(TRANSPORT, codec.clone(), DEFAULT_BROADCAST_CAPACITY, protocol);
     let manager = inner.manager().clone();
 
     let listener_handle = tokio::spawn(accept_loop::<ID, C>(listener, manager, agent_factory, codec));
@@ -96,6 +111,12 @@ where
 
   pub fn local_addr(&self) -> SocketAddr {
     self.local_addr
+  }
+
+  /// The connection registry, for the protocol version a client declared and
+  /// the round trips this transport measured.
+  pub fn manager(&self) -> &Arc<ConnectionManager<ID>> {
+    self.inner.manager()
   }
 }
 

@@ -28,7 +28,7 @@ use fibre::mpsc;
 use tracing::{debug, trace, warn};
 
 use crate::codec::WireCodec;
-use plaza_wire::frame;
+use plaza_wire::frame::{self, ProtocolVersion};
 use crate::error::SessionLayerError;
 use crate::stats::TransportStats;
 
@@ -83,6 +83,9 @@ struct ClientHandle<ID: AgentId> {
   /// against: a mean flatters a link that is usually fine and occasionally awful.
   min_rtt_us: AtomicU64,
   samples: AtomicU64,
+  /// What this client said it speaks, `0` until its `Hello` arrives (or for
+  /// ever, if it is old enough not to send one).
+  protocol: AtomicU64,
 }
 
 /// Hands out a single-consumer stream, or panics if it was already taken.
@@ -170,6 +173,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
         rtt_us: AtomicU64::new(0),
         min_rtt_us: AtomicU64::new(0),
         samples: AtomicU64::new(0),
+        protocol: AtomicU64::new(0),
       },
     );
     debug!(transport = self.transport, conn_id, agent = %agent, "Connection registered.");
@@ -267,6 +271,31 @@ impl<ID: AgentId> ConnectionManager<ID> {
   /// consumer: the controller.
   pub fn take_presence(&self) -> SessionReceiver<PresenceEvent<ID>> {
     take_stream(&self.presence_rx, "presence")
+  }
+
+  /// Records the protocol version a client declared in its `Hello`.
+  ///
+  /// Keyed by agent rather than connection because that is what the bridge
+  /// holds: it sees the frame and the `Agent` the transport attached, not the
+  /// socket it came in on.
+  pub fn record_protocol(&self, agent: &Agent<ID>, version: ProtocolVersion) {
+    let Some(id) = agent.id() else { return };
+    let connections = self.connections.read();
+    for handle in connections.values() {
+      if handle.agent.id() == Some(id) {
+        handle.protocol.store(version.0 as u64, Ordering::Relaxed);
+      }
+    }
+  }
+
+  /// What an agent declared it speaks, or `None` if it never sent a `Hello`.
+  pub fn protocol(&self, id: &ID) -> Option<ProtocolVersion> {
+    let connections = self.connections.read();
+    connections
+      .values()
+      .find(|h| h.agent.id() == Some(id))
+      .map(|h| ProtocolVersion(h.protocol.load(Ordering::Relaxed) as u32))
+      .filter(|v| *v != ProtocolVersion::UNKNOWN)
   }
 
   /// Records one round trip for a connection, measured by the transport.
@@ -380,7 +409,11 @@ where
   C: WireCodec,
 {
   /// Creates the session and spawns its deserialize bridge.
-  pub fn new(transport: &'static str, codec: C, capacity: usize) -> Arc<Self> {
+  ///
+  /// `protocol` is what this build speaks, from [`plaza_wire::build`]. Pass
+  /// [`ProtocolVersion::UNKNOWN`] to declare nothing, which disables the check
+  /// rather than failing it.
+  pub fn with_protocol(transport: &'static str, codec: C, capacity: usize, protocol: ProtocolVersion) -> Arc<Self> {
     let manager = Arc::new(ConnectionManager::new(transport, capacity));
     let (deserialized_tx, deserialized_rx) = mpsc::bounded_async(capacity);
 
@@ -395,11 +428,18 @@ where
     tokio::spawn(deserialize_bridge::<Op, ID, C>(
       transport,
       codec,
+      manager.clone(),
+      protocol,
       manager.take_raw_incoming(),
       deserialized_tx,
     ));
 
     session
+  }
+
+  /// Creates the session without declaring a protocol version.
+  pub fn new(transport: &'static str, codec: C, capacity: usize) -> Arc<Self> {
+    Self::with_protocol(transport, codec, capacity, ProtocolVersion::UNKNOWN)
   }
 
   pub fn manager(&self) -> &Arc<ConnectionManager<ID>> {
@@ -437,6 +477,8 @@ where
 async fn deserialize_bridge<Op, ID, C>(
   transport: &'static str,
   codec: C,
+  manager: Arc<ConnectionManager<ID>>,
+  expected: ProtocolVersion,
   raw_rx: mpsc::BoundedAsyncReceiver<IncomingFrame<ID>>,
   typed_tx: SessionSender<SessionMessage<Op, ID>>,
 ) where
@@ -455,8 +497,34 @@ async fn deserialize_bridge<Op, ID, C>(
       warn!(transport, agent = %from, "Discarding an empty frame.");
       continue;
     };
+    // Two-stage dispatch: the kind says what the body is, so a protocol frame
+    // decodes as a version and an ops frame as the application's ops. This is
+    // the whole reason the tag is worth a byte.
     match frame::Kind::from_byte(tag) {
       Some(frame::Kind::Ops) => {}
+      Some(frame::Kind::Hello) => {
+        match codec.decode::<ProtocolVersion>(body) {
+          Ok(theirs) => {
+            manager.record_protocol(&from, theirs);
+            if !theirs.agrees_with(expected) {
+              // Warned, not refused. The version is a build hash, and a peer
+              // that recompiled is indistinguishable from one that changed
+              // shape, so rejecting on mismatch would disconnect clients that
+              // are fine. Skipping unknown *kinds* is what actually keeps an
+              // older peer working.
+              warn!(
+                transport,
+                agent = %from,
+                theirs = theirs.0,
+                ours = expected.0,
+                "Client declared a different protocol version."
+              );
+            }
+          }
+          Err(source) => warn!(transport, error = %source, agent = %from, "Discarding a malformed Hello."),
+        }
+        continue;
+      }
       // Forward compatibility, and the reason the tag is read by hand rather
       // than through serde: a peer speaking a newer protocol may send kinds
       // this build has never heard of, and refusing them would turn every

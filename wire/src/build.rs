@@ -47,12 +47,18 @@
 //! It cannot rescue a client older than the handshake itself, which is the
 //! bootstrapping floor every protocol version has.
 //!
-//! And it hashes whole files rather than the type definitions alone, so editing
-//! a *comment* in one of them also changes the version. That is a false
-//! positive, and a deliberate one: the cost is telling a peer to reload when it
-//! did not strictly need to, which is a page load, while the opposite mistake is
-//! the silent half-working session the whole mechanism exists to prevent. Narrow
-//! the file list rather than the hash if it becomes a nuisance.
+//! And it hashes the **type definitions** in those files, not the files
+//! themselves. That distinction is the difference between a version that means
+//! something and one nobody can act on: a server gets bug fixes, and hashing
+//! whole files meant every fix bumped the version and told every client to
+//! reload, whether or not a message had changed shape. Comments, formatting,
+//! `use`, `impl` and `fn` are all discarded; a field, a variant, an explicit
+//! discriminant, a `#[serde]` attribute or a reordering all move it.
+//!
+//! It reads text and does not resolve types, so a field whose type is defined
+//! in a file you did not list can change without moving the version. List every
+//! file that defines part of your wire format. The narrowing is about noise,
+//! not about listing fewer files.
 
 use std::path::Path;
 
@@ -74,7 +80,107 @@ fn fnv1a(bytes: &[u8], mut hash: u32) -> u32 {
   hash
 }
 
+/// Extracts the type definitions from Rust source, discarding everything else.
+///
+/// This is what makes the version mean "the wire shape changed" rather than
+/// "the file changed". A server gets bug fixes, and a bug fix in a file that
+/// also happens to define a message used to bump the version and tell every
+/// client to reload. So do comments, formatting, and any helper function
+/// sharing the file.
+///
+/// Kept: `struct`, `enum` and `union` definitions, with their attributes, so a
+/// `#[serde(rename)]`, an explicit discriminant, a new field, a new variant, or
+/// a reordering all move the hash. Discarded: comments, `use`, `impl`, `fn`,
+/// `const`, and whitespace.
+///
+/// **The limit worth knowing.** This reads the text, it does not resolve types.
+/// If a field's type is defined in a file you did not list, changing that type
+/// does not move the version. List every file that defines part of your wire
+/// format, exactly as before; the narrowing here is about noise, not about
+/// letting you list fewer files.
+pub fn type_definitions(source: &[u8]) -> String {
+  let text = String::from_utf8_lossy(source);
+  let mut kept = String::new();
+  let mut pending_attrs = String::new();
+  let mut depth = 0usize;
+  let mut capturing = false;
+
+  for raw_line in text.lines() {
+    // Comments never affect the wire, and they are the biggest single source of
+    // spurious version bumps.
+    let line = match raw_line.find("//") {
+      Some(at) => &raw_line[..at],
+      None => raw_line,
+    };
+    let line = line.trim();
+    if line.is_empty() && !capturing {
+      continue;
+    }
+
+    if capturing {
+      push_normalised(&mut kept, line);
+      depth += line.matches('{').count();
+      depth = depth.saturating_sub(line.matches('}').count());
+      // A tuple or unit struct ends at a semicolon rather than a brace.
+      if depth == 0 && (line.ends_with('}') || line.ends_with(';')) {
+        capturing = false;
+      }
+      continue;
+    }
+
+    if line.starts_with("#[") || line.starts_with("#!") {
+      push_normalised(&mut pending_attrs, line);
+      continue;
+    }
+
+    if declares_type(line) {
+      kept.push_str(&pending_attrs);
+      pending_attrs.clear();
+      push_normalised(&mut kept, line);
+      depth = line.matches('{').count().saturating_sub(line.matches('}').count());
+      capturing = depth > 0;
+      continue;
+    }
+
+    // Anything else (a fn, an impl, a use) drops the attributes it had gathered.
+    pending_attrs.clear();
+  }
+  kept
+}
+
+fn declares_type(line: &str) -> bool {
+  let mut words = line.split_whitespace().peekable();
+  while let Some(word) = words.next() {
+    match word {
+      "pub" => continue,
+      w if w.starts_with("pub(") => continue,
+      "struct" | "enum" | "union" => return words.peek().is_some(),
+      _ => return false,
+    }
+  }
+  false
+}
+
+/// Appends a line with every run of whitespace removed.
+///
+/// Whitespace never reaches the wire, so `enum Op { Ping }` and a reformatted
+/// `enum Op {\n  Ping,\n}` have to hash the same. The trailing comma before a
+/// closing brace goes too, since rustfmt adds and removes it freely.
+fn push_normalised(out: &mut String, line: &str) {
+  for word in line.split_whitespace() {
+    out.push_str(word);
+  }
+}
+
+/// Drops the trailing commas rustfmt adds when it breaks a type across lines.
+fn strip_trailing_commas(text: &str) -> String {
+  text.replace(",}", "}").replace(",)", ")")
+}
+
 /// Hashes some already-read source text into a version.
+///
+/// Only the type definitions count; see [`type_definitions`] for what that
+/// means and what it does not catch.
 ///
 /// Carriage returns are stripped, so a checkout with CRLF line endings agrees
 /// with one without. Order matters: the same files hashed in a different order
@@ -91,7 +197,7 @@ where
   let mut hash = BASIS;
   for source in sources {
     let text: Vec<u8> = source.as_ref().iter().copied().filter(|b| *b != b'\r').collect();
-    hash = fnv1a(&text, hash);
+    hash = fnv1a(strip_trailing_commas(&type_definitions(&text)).as_bytes(), hash);
   }
   hash.max(1)
 }
@@ -158,10 +264,57 @@ mod tests {
   }
 
   #[test]
-  fn changing_a_source_changes_the_version() {
+  fn a_shape_change_moves_the_version() {
     let before = version_of_sources([&b"enum Op { Ping }"[..]]);
-    let after = version_of_sources([&b"enum Op { Ping, Pong }"[..]]);
-    assert_ne!(before, after, "a wire change that did not move the version is the bug this prevents");
+    assert_ne!(before, version_of_sources([&b"enum Op { Ping, Pong }"[..]]), "a new variant");
+    assert_ne!(before, version_of_sources([&b"enum Op { Pong }"[..]]), "a renamed variant");
+    let s = &b"struct P { a: u8, b: u8 }"[..];
+    assert_ne!(
+      version_of_sources([s]),
+      version_of_sources([&b"struct P { b: u8, a: u8 }"[..]]),
+      "reordering, which changes any positional encoding"
+    );
+    assert_ne!(
+      version_of_sources([s]),
+      version_of_sources([&b"struct P { a: u8, b: u16 }"[..]]),
+      "a field's type"
+    );
+    assert_ne!(
+      version_of_sources([&b"enum Op { A = 0 }"[..]]),
+      version_of_sources([&b"enum Op { A = 7 }"[..]]),
+      "an explicit discriminant"
+    );
+    assert_ne!(
+      version_of_sources([&b"struct P { #[serde(rename = \"a\")] alpha: u8 }"[..]]),
+      version_of_sources([&b"struct P { #[serde(rename = \"z\")] alpha: u8 }"[..]]),
+      "a serde attribute, which changes the wire without changing the type"
+    );
+  }
+
+  #[test]
+  fn a_bug_fix_does_not_move_the_version() {
+    // The reason this hashes definitions rather than files. A server ships
+    // fixes; hashing whole files told every client to reload on each one.
+    let before = version_of_sources([&b"enum Op { Ping }\nfn apply(x: u8) -> u8 { x + 1 }\n"[..]]);
+    let after = version_of_sources([&b"enum Op { Ping }\nfn apply(x: u8) -> u8 { x.saturating_add(1) }\n"[..]]);
+    assert_eq!(before, after, "a fix to a function sharing the file");
+  }
+
+  #[test]
+  fn comments_and_formatting_do_not_move_the_version() {
+    let plain = version_of_sources([&b"enum Op { Ping }"[..]]);
+    assert_eq!(plain, version_of_sources([&b"/// Docs.\nenum Op { Ping }"[..]]), "a doc comment");
+    assert_eq!(plain, version_of_sources([&b"enum Op {\n  Ping,\n}"[..]].map(|s| s)), "reformatting");
+    assert_eq!(plain, version_of_sources([&b"enum Op { Ping } // trailing"[..]]), "a trailing comment");
+    assert_eq!(plain, version_of_sources([&b"use std::fmt;\nenum Op { Ping }"[..]]), "an added import");
+  }
+
+  #[test]
+  fn impls_are_not_part_of_the_shape() {
+    // Methods do not serialize, so adding one must not tell clients to reload.
+    let before = version_of_sources([&b"struct P { a: u8 }"[..]]);
+    let after = version_of_sources([&b"struct P { a: u8 }\nimpl P { fn a(&self) -> u8 { self.a } }"[..]]);
+    assert_eq!(before, after);
   }
 
   #[test]

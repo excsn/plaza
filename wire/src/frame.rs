@@ -35,6 +35,12 @@
 pub enum Kind {
   /// A batch of application operations. The body is `Vec<Op>`.
   Ops = 0,
+  /// The protocol version this peer speaks. The body is a [`ProtocolVersion`].
+  ///
+  /// Sent once when a connection opens, by both ends, rather than on every
+  /// frame: it cannot change mid-connection, and carrying it per frame measured
+  /// 53 bytes against 42 under JSON for no information gained.
+  Hello = 1,
 }
 
 impl Kind {
@@ -51,8 +57,30 @@ impl Kind {
   pub const fn from_byte(byte: u8) -> Option<Self> {
     match byte {
       0 => Some(Kind::Ops),
+      1 => Some(Kind::Hello),
       _ => None,
     }
+  }
+}
+
+/// What a peer says it speaks, sent as the body of a [`Kind::Hello`] frame.
+///
+/// The number comes from [`crate::build`], which hashes the type definitions
+/// that make up your wire format. Zero means "unknown": a peer that could not
+/// compute one is never mistaken for a peer that agrees.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ProtocolVersion(pub u32);
+
+impl ProtocolVersion {
+  pub const UNKNOWN: ProtocolVersion = ProtocolVersion(0);
+
+  /// Whether two peers agree well enough to talk.
+  ///
+  /// An unknown version on either side is treated as agreement, because a peer
+  /// that declares nothing is the pre-handshake case rather than a wrong one,
+  /// and refusing it would break every client built before this frame existed.
+  pub const fn agrees_with(self, other: ProtocolVersion) -> bool {
+    self.0 == 0 || other.0 == 0 || self.0 == other.0
   }
 }
 
@@ -100,6 +128,24 @@ mod tests {
     let (kind, body) = split(&frame).expect("still a well-formed frame");
     assert_eq!(Kind::from_byte(kind), None, "unknown, so the frame is skipped");
     assert_eq!(body, &[1, 2, 3], "and its body is still delimited");
+  }
+
+  #[test]
+  fn a_hello_dispatches_to_a_different_body_than_ops() {
+    // The reason the tag is worth its byte: the body type follows from the
+    // kind, so a protocol frame is not squeezed into the application's ops.
+    assert_eq!(Kind::from_byte(Kind::Hello.as_byte()), Some(Kind::Hello));
+    assert_ne!(Kind::Ops.as_byte(), Kind::Hello.as_byte());
+  }
+
+  #[test]
+  fn an_undeclared_version_agrees_with_everything() {
+    // A peer built before the handshake existed sends no Hello at all, so it
+    // must not be refused for failing to match.
+    assert!(ProtocolVersion::UNKNOWN.agrees_with(ProtocolVersion(7)));
+    assert!(ProtocolVersion(7).agrees_with(ProtocolVersion::UNKNOWN));
+    assert!(ProtocolVersion(7).agrees_with(ProtocolVersion(7)));
+    assert!(!ProtocolVersion(7).agrees_with(ProtocolVersion(8)));
   }
 
   #[test]
