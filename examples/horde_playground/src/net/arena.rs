@@ -1472,3 +1472,56 @@ mod tests {
   // is covered by `an_ordered_link_delays_but_never_reorders` in
   // `plaza_client_utils::net_sim`.
 }
+
+#[cfg(test)]
+mod wire_size {
+  use super::*;
+  use plaza_wire::{frame, JsonCodec, MsgPackCodec, WireCodec};
+
+  /// What the codec is worth on this game's real traffic.
+  ///
+  /// Every earlier figure in this project was measured on invented op types.
+  /// This one encodes the `Packet` the arena actually sends, so the claim is
+  /// about horde rather than about a benchmark's imagination.
+  #[test]
+  fn msgpack_against_json_on_a_real_frame() {
+    let controls = Controls::default();
+    let mut server = crate::sim::server::Server::new(controls.enemy_count, 4, controls.spread_players);
+    let mut json_total = 0usize;
+    let mut mp_total = 0usize;
+    let mut frames = 0usize;
+
+    for i in 0..600 {
+      let t = i as f32 * 0.05;
+      for (_, packet) in server.advance(16, Vec2::new(t.cos(), t.sin()), &controls) {
+        let ops = vec![Op::Frame(Box::new(packet.clone()))];
+        let mut j = Vec::new();
+        frame::begin(frame::Kind::Ops, &mut j);
+        JsonCodec.encode_into(&ops, &mut j).expect("json");
+        let mut m = Vec::new();
+        frame::begin(frame::Kind::Ops, &mut m);
+        MsgPackCodec.encode_into(&ops, &mut m).expect("msgpack");
+
+        // Same frame, same ops, both ends of the codec choice.
+        let back: Vec<Op> = MsgPackCodec.decode(frame::split(&m).unwrap().1).expect("round trip");
+        assert_eq!(back.len(), 1, "msgpack round-trips the real packet");
+
+        json_total += j.len();
+        mp_total += m.len();
+        frames += 1;
+      }
+    }
+
+    assert!(frames > 0, "the arena produced no frames to measure");
+    let json_avg = json_total / frames;
+    let mp_avg = mp_total / frames;
+    eprintln!(
+      "PACKET_WIRE frames={frames} json={json_avg} B/frame msgpack={mp_avg} B/frame ({}% of json)",
+      mp_total * 100 / json_total
+    );
+    assert!(
+      mp_total < json_total,
+      "the codec swap has to pay on real traffic, not only on a benchmark's toy ops"
+    );
+  }
+}

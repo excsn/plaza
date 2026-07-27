@@ -49,6 +49,18 @@ where
   Op: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static,
   ID: AgentId,
 {
+  /// Creates a session that speaks JSON, the usual choice for browser clients.
+  pub fn new() -> Arc<Self> {
+    Self::with_codec(JsonCodec)
+  }
+}
+
+impl<Op, ID, C> ActixWsPlazaSession<Op, ID, C>
+where
+  Op: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static,
+  ID: AgentId,
+  C: WireCodec,
+{
   /// The measured round trip to one connection, and how many samples it rests on.
   ///
   /// Measured by this transport timing its own WebSocket ping, so it costs the
@@ -77,18 +89,6 @@ where
     self.inner.manager().stats()
   }
 
-  /// Creates a session that speaks JSON, the usual choice for browser clients.
-  pub fn new() -> Arc<Self> {
-    Self::with_codec(JsonCodec)
-  }
-}
-
-impl<Op, ID, C> ActixWsPlazaSession<Op, ID, C>
-where
-  Op: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static,
-  ID: AgentId,
-  C: WireCodec,
-{
   /// Creates a session with an explicit wire codec (e.g. MessagePack).
   pub fn with_codec(codec: C) -> Arc<Self> {
     Arc::new(Self {

@@ -15,6 +15,7 @@ use actix_web::{web, HttpRequest, HttpResponse};
 use parking_lot::Mutex;
 use plaza::{Agent, StateControllerBuilder, TickDriver};
 use plaza_session::actix_ws::ActixWsPlazaSession;
+use plaza_wire::MsgPackCodec;
 use plaza_session::host::{init_logging, Host};
 
 use plaza_lobby::{RoomId, RoomMetadata};
@@ -25,7 +26,7 @@ use crate::sim::types::MAX_PLAYERS;
 use crate::sim::protocol::Op;
 use crate::sim::types::Controls;
 
-type ArenaSession = ActixWsPlazaSession<Op, PlayerKey>;
+type ArenaSession = ActixWsPlazaSession<Op, PlayerKey, MsgPackCodec>;
 
 /// The tick rate the simulation is advanced at. Distinct from the *send* rate,
 /// which is `Controls::sync_hz` and is usually far lower: simulating often and
@@ -119,7 +120,9 @@ pub async fn serve(
   };
 
   for room in active.iter() {
-    let session: Arc<ArenaSession> = ActixWsPlazaSession::new();
+    // MessagePack, not JSON: the same codec the client names, so neither end
+    // can drift onto a format the other does not speak.
+    let session: Arc<ArenaSession> = ActixWsPlazaSession::with_codec(MsgPackCodec);
     // Only the arena the host plays in reads the shared panel; the others run on
     // their own settings, or a slider drag would rewrite every room's schedule
     // and undo the thing that makes them different.

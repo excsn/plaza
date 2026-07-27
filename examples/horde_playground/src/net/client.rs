@@ -19,6 +19,13 @@
 
 use plaza_client_utils::clock_sync::ClockSyncEstimator;
 use plaza_client_utils::{InputCoalescer, RttEstimator};
+use plaza_wire::frame;
+use plaza_wire::{MsgPackCodec, WireCodec};
+
+/// One codec for the whole client. Zero-sized, so naming it costs nothing, and
+/// naming it *once* is the point: the server is built with the same type, so
+/// the two ends cannot drift onto different formats.
+const WIRE: MsgPackCodec = MsgPackCodec;
 use plaza_ws::{CloseReason, Event, Socket, State};
 
 use crate::sim::client::Client as SimClient;
@@ -98,6 +105,8 @@ pub struct NetClient {
   /// accident. Upstream is small but it is not nothing: an input every tick
   /// unless coalescing is on, plus an acknowledgement per applied frame.
   sent: plaza_server_utils::RateMeter,
+  /// Reused for every outbound frame, so sending an op allocates nothing.
+  out: Vec<u8>,
   packets: plaza_server_utils::RateMeter,
   events: Vec<Event>,
   last_ping_ms: u64,
@@ -134,6 +143,7 @@ impl NetClient {
       traffic: plaza_server_utils::RateMeter::new(),
       modelled: plaza_server_utils::RateMeter::new(),
       sent: plaza_server_utils::RateMeter::new(),
+      out: Vec::with_capacity(512),
       packets: plaza_server_utils::RateMeter::new(),
       events: Vec::new(),
       last_ping_ms: 0,
@@ -364,13 +374,14 @@ impl NetClient {
   /// so the same work happens here where the length is visible, and the frame's
   /// kind tag has to be written ahead of the body regardless.
   fn send_op(&mut self, op: &Op) {
-    match serde_json::to_string(std::slice::from_ref(op)) {
-      Ok(body) => {
-        let mut text = String::with_capacity(1 + body.len());
-        text.push(plaza_wire::frame::Kind::Ops.as_byte() as char);
-        text.push_str(&body);
-        self.sent.add(text.len() as u64);
-        let _ = self.socket.send_text(&text);
+    // The codec, not a hand-rolled `serde_json` call, so the client and the
+    // server cannot drift apart on format: both name `MsgPackCodec`.
+    self.out.clear();
+    frame::begin(frame::Kind::Ops, &mut self.out);
+    match WIRE.encode_into(&std::slice::from_ref(op), &mut self.out) {
+      Ok(()) => {
+        self.sent.add(self.out.len() as u64);
+        let _ = self.socket.send(&self.out);
       }
       // Nowhere to log on wasm, and an op that will not serialise is a bug in
       // this build rather than a runtime condition to report.
@@ -386,13 +397,13 @@ impl NetClient {
     // One tag byte, then the body. An unknown kind is skipped rather than
     // treated as an error: a server speaking a newer protocol may send frames
     // this build has never heard of.
-    let Some((tag, body)) = plaza_wire::frame::split(bytes) else {
+    let Some((tag, body)) = frame::split(bytes) else {
       return false;
     };
-    if plaza_wire::frame::Kind::from_byte(tag) != Some(plaza_wire::frame::Kind::Ops) {
+    if frame::Kind::from_byte(tag) != Some(frame::Kind::Ops) {
       return false;
     }
-    let Ok(ops) = serde_json::from_slice::<Vec<Op>>(body) else {
+    let Ok(ops) = WIRE.decode::<Vec<Op>>(body) else {
       return false;
     };
     let mut applied_frame = false;
@@ -523,8 +534,7 @@ mod tests {
   use std::sync::Arc;
 
   use parking_lot::Mutex;
-  use plaza_wire::frame;
-
+  
   use super::*;
   use crate::sim::types::Packet;
 
@@ -550,12 +560,12 @@ mod tests {
   }
 
   fn envelope(ops: Vec<Op>) -> Event {
-    // A frame is the kind tag then the body, so a test builds one the same way
-    // the transport does.
+    // Built through the same codec the client decodes with, so the test cannot
+    // pass while the two ends disagree about the format.
     let mut bytes = Vec::new();
     frame::begin(frame::Kind::Ops, &mut bytes);
-    bytes.extend_from_slice(serde_json::to_string(&ops).unwrap().as_bytes());
-    Event::Text(String::from_utf8(bytes).unwrap())
+    WIRE.encode_into(&ops, &mut bytes).unwrap();
+    Event::Message(bytes)
   }
 
   fn frame(seq: u64, server_time_ms: u64) -> Event {

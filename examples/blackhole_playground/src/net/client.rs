@@ -17,7 +17,12 @@
 
 use plaza_client_utils::clock_sync::ClockSyncEstimator;
 use plaza_client_utils::{CorrectionMonitor, PlayerConfig, PredictedPlayer, RttEstimator};
+use plaza_wire::frame;
+use plaza_wire::{MsgPackCodec, WireCodec};
 use plaza_ws::{CloseReason, Event, Socket, State};
+
+/// One codec for the whole client, matching the one the host is built with.
+const WIRE: MsgPackCodec = MsgPackCodec;
 
 use crate::sim::client::Client as SimClient;
 use crate::sim::protocol::{Op, ServerPolicy, PROTOCOL};
@@ -161,15 +166,18 @@ pub struct NetClient {
 }
 
 /// Frames one op the way the transport expects: a kind tag, then the body.
+/// Frames one op the way the transport expects: a kind tag, then the body.
+///
+/// Through the codec rather than a hand-rolled `serde_json` call, so this end
+/// and the server cannot drift onto different formats: both name `WIRE`.
 fn send_framed(socket: &dyn Socket, op: &Op) {
-  let Ok(body) = serde_json::to_string(std::slice::from_ref(op)) else {
+  let mut buf = Vec::with_capacity(128);
+  frame::begin(frame::Kind::Ops, &mut buf);
+  if WIRE.encode_into(&std::slice::from_ref(op), &mut buf).is_err() {
     debug_assert!(false, "an op failed to serialise");
     return;
-  };
-  let mut text = String::with_capacity(1 + body.len());
-  text.push(plaza_wire::frame::Kind::Ops.as_byte() as char);
-  text.push_str(&body);
-  let _ = socket.send_text(&text);
+  }
+  let _ = socket.send(&buf);
 }
 
 impl NetClient {
@@ -345,13 +353,13 @@ impl NetClient {
   fn on_frame(&mut self, bytes: &[u8], now_ms: u64, controls: &Controls) {
     // The envelope is whatever `plaza_session` sends; only `Ops` matters here,
     // since the arena is built with join snapshots off.
-    let Some((tag, body)) = plaza_wire::frame::split(bytes) else {
+    let Some((tag, body)) = frame::split(bytes) else {
       return;
     };
-    if plaza_wire::frame::Kind::from_byte(tag) != Some(plaza_wire::frame::Kind::Ops) {
+    if frame::Kind::from_byte(tag) != Some(frame::Kind::Ops) {
       return;
     }
-    let Ok(ops) = serde_json::from_slice::<Vec<Op>>(body) else {
+    let Ok(ops) = WIRE.decode::<Vec<Op>>(body) else {
       return;
     };
     for op in ops {

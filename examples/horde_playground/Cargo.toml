@@ -21,7 +21,7 @@ serde = { workspace = true }
 serde_json = { version = "^1", optional = true }
 
 plaza_ws = { workspace = true, optional = true }
-plaza_wire = { workspace = true, optional = true, features = ["default"] }
+plaza_wire = { workspace = true, optional = true, features = ["default", "msgpack"] }
 plaza = { workspace = true, optional = true }
 plaza_session = { workspace = true, features = ["default", "actix_host"], optional = true }
 plaza_lobby = { workspace = true, optional = true }
