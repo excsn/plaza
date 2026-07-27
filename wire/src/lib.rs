@@ -116,12 +116,21 @@ impl WireCodec for JsonCodec {
 /// protocol has stopped changing shape every day.
 ///
 /// **Compact, not named.** `rmp_serde` offers two encodings: `to_vec_named`
-/// keeps struct field names, `to_vec` drops them and encodes positionally. Both
-/// compile, both round-trip, and picking the wrong one silently costs most of
-/// the benefit: measured on a ten-op message, named came out at 67% of JSON and
-/// compact at 40%. This uses compact, so a peer decoding it must be built from
-/// the same struct definitions, which is what the protocol version exists to
-/// enforce.
+/// keeps struct field names, `to_vec` drops them and encodes structs
+/// positionally. Both compile, both round-trip, and picking the wrong one
+/// silently costs most of the benefit: measured on a ten-op message, named came
+/// out at 67% of JSON and compact at 40%. This uses compact, so a peer decoding
+/// it must be built from the same struct definitions, which is what the
+/// protocol version exists to enforce.
+///
+/// **What compact does not drop: enum variant names.** A struct becomes an
+/// array, but a variant is still a map keyed by its name, so
+/// `Op::Hello { protocol }` goes out as `{"Hello": [protocol]}` rather than as
+/// an index. Short variant names are therefore worth something on the wire and
+/// long ones cost on every frame carrying them, which is not obvious from the
+/// format's reputation for compactness. Measured on horde's real traffic the
+/// codec is still worth 4.2x against JSON, so this is a refinement rather than
+/// a reason to hesitate.
 #[cfg(feature = "msgpack")]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MsgPackCodec;

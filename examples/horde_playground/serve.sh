@@ -27,6 +27,12 @@ echo "==> building browser client (release wasm)"
 # 3. Place the artifact next to index.html. It is gitignored: a build product.
 cp "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/horde_playground.wasm" "$here/static/horde_playground.wasm"
 
+# 3b. Fail loudly if the page's JS does not satisfy every import the wasm asks
+#    for. miniquad's loader stubs a missing import instead of erroring, so a
+#    renamed function or a forgotten <script> tag produces a page that loads and
+#    silently does nothing, which is exactly the bug this check exists to catch.
+python3 "$root/../ws_client/check_js_imports.py" "$here/static/horde_playground.wasm" "$root/../ws_client/js/plaza_ws.js"
+
 # 4. Shrink it if binaryen is available (optional; skipped silently otherwise).
 if command -v wasm-opt >/dev/null 2>&1; then
   echo "==> optimising with wasm-opt"

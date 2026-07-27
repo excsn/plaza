@@ -1525,3 +1525,60 @@ mod wire_size {
     );
   }
 }
+
+#[cfg(test)]
+mod client_server_wire {
+  use super::*;
+  use plaza_wire::{frame, MsgPackCodec, WireCodec};
+
+  /// The client's outbound bytes, decoded exactly the way the server's
+  /// deserialize bridge does. A black screen in the browser is what happens
+  /// when these two disagree, so the agreement is a test rather than a hope.
+  #[test]
+  fn what_the_client_sends_is_what_the_server_reads() {
+    for op in [
+      Op::Hello { protocol: PROTOCOL },
+      Op::Input { seq: 7, dx: -0.5, dy: 0.5, tick: 3 },
+      Op::Ack { newest: 9, mask: 0xff, digest: 1234 },
+      Op::Ping { origin_ms: 42 },
+    ] {
+      // Exactly `Client::send_op`.
+      let mut out = Vec::new();
+      frame::begin(frame::Kind::Ops, &mut out);
+      MsgPackCodec.encode_into(&std::slice::from_ref(&op), &mut out).expect("client encode");
+
+      // Exactly the server bridge.
+      let (tag, body) = frame::split(&out).expect("non-empty");
+      assert_eq!(frame::Kind::from_byte(tag), Some(frame::Kind::Ops));
+      let ops: Vec<Op> = MsgPackCodec.decode(body).expect("server decode");
+      assert_eq!(ops.len(), 1, "one op in, one op out: {op:?}");
+    }
+  }
+
+  /// And the other direction: what the server broadcasts is what the client
+  /// reads, which is the half that decides whether anything renders.
+  #[test]
+  fn what_the_server_sends_is_what_the_client_reads() {
+    let controls = Controls::default();
+    let mut server = crate::sim::server::Server::new(controls.enemy_count, 4, controls.spread_players);
+    let mut checked = 0;
+    for i in 0..60 {
+      let t = i as f32 * 0.05;
+      for (_, packet) in server.advance(16, Vec2::new(t.cos(), t.sin()), &controls) {
+        let ops = vec![Op::Frame(Box::new(packet.clone()))];
+        // Exactly `TransportSession::encode_message`.
+        let mut out = Vec::new();
+        frame::begin(frame::Kind::Ops, &mut out);
+        MsgPackCodec.encode_into(&ops, &mut out).expect("server encode");
+
+        // Exactly `Client::on_frame`.
+        let (tag, body) = frame::split(&out).expect("non-empty");
+        assert_eq!(frame::Kind::from_byte(tag), Some(frame::Kind::Ops));
+        let back: Vec<Op> = MsgPackCodec.decode(body).expect("client decode");
+        assert!(matches!(back.first(), Some(Op::Frame(_))), "a frame survived the round trip");
+        checked += 1;
+      }
+    }
+    assert!(checked > 0, "no frames were produced to check");
+  }
+}
