@@ -13,7 +13,7 @@ use std::collections::BTreeSet;
 use plaza_server_utils::aggregate::{AggregateTree, WeightedPoint};
 use plaza_server_utils::delta::{DeltaBaseline, RecoveryPolicy};
 use plaza_server_utils::input_schedule::{InputSchedule, InputWindow};
-use plaza_server_utils::relevance::{GridQuantizer, SetDigest, SpatialGrid, VisibilitySet};
+use plaza_server_utils::relevance::{GridQuantizer, SetDigest, SpatialGrid, TierBoundary, VisibilitySet};
 
 use crate::sim::types::{PlayerFrame, 
   coin_pull, difficulty, step_player, enemy_speed_scale, repulsor_pulse, quantize_far, step_coin, step_enemy, Coin, CoinId, Controls, Crowd, Enemy, EnemyKind, EntityIndex, Handle, LeaveReason, Packet, PlayerId, Projectile, Sample, Shot, ShotId, Spawn, Upgrade, Vec2, Wallet, COIN_PICKUP_RADIUS, COIN_DROP_IN, COIN_TTL_MS, ARENA_H, ARENA_W, CELL_SIZE, CONTACT_HIT_DAMAGE, FIRE_INTERVAL_MS, HIT_INVULN_MS, HIT_RADIUS, NOVA_INTERVAL_MS,
@@ -22,11 +22,10 @@ use crate::sim::types::{PlayerFrame,
 
 const RETARGET_INTERVAL_MS: u64 = 1000;
 
-/// How close a player must come to enter the near tier, and how far they must
-/// go to leave it. The gap is hysteresis: without it a peer loitering on the
-/// boundary changes tier every few frames.
-const NEAR_TIER_ENTER: f32 = VIEW_RADIUS * 1.3;
-const NEAR_TIER_LEAVE: f32 = VIEW_RADIUS * 1.5;
+/// The near tier's boundary, with hysteresis: see
+/// [`TierBoundary`](plaza_server_utils::relevance::TierBoundary) for why the
+/// two radii differ.
+const NEAR_TIER: TierBoundary = TierBoundary::new(VIEW_RADIUS * 1.3, VIEW_RADIUS * 1.5);
 /// One far-tier update every this many player frames. At the default 8 Hz
 /// player rate that is one every two seconds, which is a marker gliding on a
 /// map rather than a position anybody aims with.
@@ -947,15 +946,10 @@ impl Server {
     needed.insert(c as PlayerId);
     for (p, pos) in self.players.iter().enumerate() {
       // The threshold the renderer draws a peer at, so the wire carries exactly
-      // what the screen can use, with **hysteresis**: it takes less distance to
-      // stay in the near tier than to enter it. Without the gap, a peer walking
-      // along the boundary flips tier every few frames, and every flip is a
-      // precision change the client has to absorb.
-      //
-      // The previous set is the memory, so this costs no extra state.
+      // what the screen can use. The previous set is the hysteresis memory, so
+      // this costs no extra state.
       let was_near = self.relevant_players[c].contains(&(p as PlayerId));
-      let radius = if was_near { NEAR_TIER_LEAVE } else { NEAR_TIER_ENTER };
-      if pos.dist(eye) <= radius {
+      if NEAR_TIER.admits(was_near, pos.dist(eye)) {
         needed.insert(p as PlayerId);
       }
     }

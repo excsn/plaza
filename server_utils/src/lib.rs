@@ -38,7 +38,7 @@ pub use delta::{DeltaBaseline, DeltaPlan, RecoveryPolicy};
 pub use history::{HistoricalStateBuffer, TimedState};
 pub use input_schedule::{InputSchedule, InputWindow, Submission};
 pub use meter::RateMeter;
-pub use relevance::{GridQuantizer, SetDigest, SpatialGrid, VisibilitySet};
+pub use relevance::{GridQuantizer, SetDigest, SpatialGrid, TierBoundary, VisibilitySet};
 // The key space `DeltaBaseline` works in, and the client-side mirror that has to
 // agree with it. Both live in the client crate, because a browser client needs
 // them and must not inherit a server to get them.

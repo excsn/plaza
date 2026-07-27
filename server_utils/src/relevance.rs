@@ -219,6 +219,53 @@ impl<Id: Copy> SpatialGrid<Id> {
 /// A dense bitset of which entities are visible to one client, with a fast diff
 /// against the previous tick.
 ///
+/// A membership boundary with hysteresis: it takes less distance to stay in
+/// than to get in.
+///
+/// Any threshold that switches what the wire carries (a near tier at full
+/// precision and rate against a far tier quantised and slow, a relevance
+/// radius, an aggro range) flaps when an entity loiters on it: membership
+/// changes every few frames, and every change is a precision or rate step the
+/// receiver has to absorb, visible as a peer marker twitching between two
+/// qualities of motion. The cure is two radii with a gap, judged against
+/// where the entity stood last time.
+///
+/// The memory is the caller's own previous membership set, which it already
+/// keeps for diffing, so this costs no state: pass `was_inside` from it.
+///
+/// ```ignore
+/// let tier = TierBoundary::new(VIEW_RADIUS * 1.3, VIEW_RADIUS * 1.5);
+/// let was_near = previous.contains(&peer);
+/// if tier.admits(was_near, peer_pos.dist(eye)) {
+///   near.insert(peer);
+/// }
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub struct TierBoundary {
+  enter: f32,
+  leave: f32,
+}
+
+impl TierBoundary {
+  /// `enter` is the radius that admits a newcomer; `leave`, which must not be
+  /// smaller, is the one past which a member is dropped. The gap between them
+  /// is the loitering band, sized to the wobble the boundary actually sees
+  /// (a step or two of movement per update interval).
+  pub const fn new(enter: f32, leave: f32) -> Self {
+    debug_assert!(enter <= leave, "hysteresis needs enter <= leave");
+    Self {
+      enter,
+      leave: if leave < enter { enter } else { leave },
+    }
+  }
+
+  /// Whether an entity at `distance` is a member this round, given whether it
+  /// was one last round.
+  pub fn admits(&self, was_inside: bool, distance: f32) -> bool {
+    distance <= if was_inside { self.leave } else { self.enter }
+  }
+}
+
 /// Interest management needs, per client, the set of entities in view and the
 /// *change* since last tick: who [`entered`](Self::diff) (spawn it) and who
 /// [`left`](Self::diff) (despawn it). With entities addressed by a dense `u32`
@@ -563,5 +610,23 @@ mod tests {
       .collect();
 
     assert_eq!(grid_result, brute, "grid + exact test equals brute force");
+  }
+
+  #[test]
+  fn a_peer_loitering_on_the_boundary_does_not_flap() {
+    // The pathology hysteresis exists for: wobbling a step either side of one
+    // radius must not change membership at all.
+    let tier = TierBoundary::new(100.0, 120.0);
+
+    // A member wobbling between the two radii stays a member...
+    assert!(tier.admits(true, 110.0));
+    assert!(tier.admits(true, 119.0));
+    // ...and a non-member in the same band stays out.
+    assert!(!tier.admits(false, 110.0));
+    assert!(!tier.admits(false, 101.0));
+
+    // Only a real approach admits, and only a real departure drops.
+    assert!(tier.admits(false, 99.0));
+    assert!(!tier.admits(true, 121.0));
   }
 }
