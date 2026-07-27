@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
-# Build the browser client to wasm and host it. Unlike a plain static server, the
-# host binary serves the page, the wasm, *and* the WebSocket arena on one port, so
-# a joiner gets a single URL and there is a real server to connect to. That is the
-# whole point of the listen-server shape.
+# Build the browser client to wasm and put it next to index.html.
 #
-# Usage: ./serve.sh [port]   (default 8080)
+# Separate from wasm-serve.sh because a rebuild and a running server are two
+# different things to want, and welding them together means you cannot do the
+# first without the second. That matters more than it sounds: skip the combined
+# script because you already have a server, and you are now debugging a stale
+# artifact against new code, which reads as a protocol bug and is not one.
+#
+# Usage: ./wasm-build.sh
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/.." && pwd)"
 export CARGO_TARGET_DIR="$(cd "$here/../.." && pwd)/target"
-port="${1:-8080}"
 
 # 1. Ensure the wasm target is present.
 if ! rustup target list --installed 2>/dev/null | grep -q '^wasm32-unknown-unknown$'; then
@@ -39,10 +41,5 @@ if command -v wasm-opt >/dev/null 2>&1; then
   wasm-opt -Oz "$here/static/blackhole_playground.wasm" -o "$here/static/blackhole_playground.wasm"
 fi
 
-# 5. Host it. One process serves the page, the wasm, and /ws, and prints the local
-#    and LAN URLs. actix serves .wasm with the right MIME type itself, so there is
-#    no static-server ceremony to get wrong.
 echo
-echo "==> hosting on port $port   (Ctrl-C to stop)"
-exec cargo run -p blackhole_playground --release --manifest-path "$root/Cargo.toml" -- \
-  --role headless --bind "0.0.0.0:$port" --serve "$here/static"
+echo "==> built ${here}/static"

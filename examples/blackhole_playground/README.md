@@ -14,12 +14,13 @@ It is deliberately the **hard** case. The [`horde_playground`](../horde_playgrou
 ./run-native.sh                                                  # --role host: play, and serve joiners
 ./run-native.sh -- --role observer                               # watch and drive the settings, no hole of your own
 ./run-native.sh -- --role client --connect ws://<host>:8080/ws   # join someone else's arena
-./serve.sh                                                       # build the browser client and host it; open the printed URL
+./wasm-build.sh                                                  # build the browser client only
+./wasm-serve.sh                                                  # build it and host it; open the printed URL
 ```
 
 | `--role` | server | window | your own hole |
 |---|---|---|---|
-| `headless` | yes | no | no | the windowless deployable, and what `serve.sh` runs |
+| `headless` | yes | no | no | the windowless deployable, and what `wasm-serve.sh` runs |
 | `observer` | yes | yes | no | full control panel, watching; a free camera (drag / WASD / wheel, `C` recenters) |
 | `host` | yes | yes | yes | plays and serves. **The default** |
 | `client` | no | yes | yes | join only. The only role a browser can take |
@@ -134,8 +135,8 @@ The simulation is headless and is where the tests live (`cargo test -p blackhole
 
 ## Notes
 
-- Excluded from `default-members`, so a bare `cargo build` / `test` skips macroquad's dependency tree. Building for wasm needs `--no-default-features --features web`, because the default set includes the native socket and the actix server, neither of which targets the browser; `serve.sh` does this.
-- The compiled `static/*.wasm` is a build artifact and is gitignored. Run `serve.sh` (or the `cargo build --target wasm32-unknown-unknown --features web` it wraps) to produce it before serving a fresh checkout.
+- Excluded from `default-members`, so a bare `cargo build` / `test` skips macroquad's dependency tree. Building for wasm needs `--no-default-features --features web`, because the default set includes the native socket and the actix server, neither of which targets the browser; `wasm-build.sh` does this.
+- The compiled `static/*.wasm` is a build artifact and is gitignored. Run `wasm-build.sh` (or the `cargo build --target wasm32-unknown-unknown --features web` it wraps) to produce it before serving a fresh checkout.
 - A physics engine (Rapier and friends) would be the wrong tool here: pellets are non-colliding point masses in a force field, so rigid bodies, contacts, and joints go unused, and the gravity loop is still yours to write. The interesting consequence is the other way round, a heavy simulation makes client-side re-integration expensive and cross-platform determinism fragile, which pushes a game away from this technique and toward streaming state with interpolation.
 
 A frame counter sits bottom right: with these entity counts, telling a client-side stall apart from a network effect matters.

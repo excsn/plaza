@@ -25,9 +25,9 @@ For example:
 cargo run -p plaza-example-shared-counter
 ```
 
-The four playgrounds (`netcode`, `rollback`, `horde`, `blackhole`) pull in a large graphics dependency, so they are excluded from the default workspace build; a bare `cargo build`/`test` skips them. Run each via its own `run-native.sh` or `serve.sh`.
+The four playgrounds (`netcode`, `rollback`, `horde`, `blackhole`) pull in a large graphics dependency, so they are excluded from the default workspace build; a bare `cargo build`/`test` skips them. Run each via its own `run-native.sh`, or `wasm-build.sh` / `wasm-serve.sh` for the browser client (`netcode` and `rollback` still use a single `serve.sh`).
 
-`horde` and `blackhole` are genuine multiplayer over a real socket (built on `plaza`, `plaza_session`, and `plaza_ws`), not scripted single-player. `./run-native.sh` hosts and plays by default; a `--role` argument switches between `headless` (deploy), `observer` (watch), `host`, and `client` (join). Their `static/*.wasm` are gitignored build artifacts, so run `serve.sh` to produce and host the browser client on a fresh checkout. The other two (`netcode`, `rollback`) remain single-process browser demos.
+`horde` and `blackhole` are genuine multiplayer over a real socket (built on `plaza`, `plaza_session`, and `plaza_ws`), not scripted single-player. `./run-native.sh` hosts and plays by default; a `--role` argument switches between `headless` (deploy), `observer` (watch), `host`, and `client` (join). Their `static/*.wasm` are gitignored build artifacts, so run `wasm-build.sh` to produce the browser client on a fresh checkout, or `wasm-serve.sh` to build and host it in one step. The other two (`netcode`, `rollback`) remain single-process browser demos.
 
 Both keep a **single-process teaching build** with no networking compiled in (`--no-default-features --features native,client`), which is where most of the measurements in their READMEs come from and which is the fastest way to isolate a fault: a counter that reads zero there and non-zero over a socket has removed a very large search space for free.
 

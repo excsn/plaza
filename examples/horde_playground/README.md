@@ -16,17 +16,18 @@ You are a target, not an invulnerable camera. Enemies pressed against you deal a
 ./run-native.sh                                                  # --role host: play, and serve joiners
 ./run-native.sh -- --role observer                               # watch and drive the settings, no player of your own
 ./run-native.sh -- --role client --connect ws://<host>:8080/ws   # join someone else's arena
-./serve.sh                                                       # build the browser client and host it; open the printed URL
+./wasm-build.sh                                                  # build the browser client only
+./wasm-serve.sh                                                  # build it and host it; open the printed URL
 ```
 
 | `--role` | server | window | your own player |
 |---|---|---|---|
-| `headless` | yes | no | no | the windowless deployable, and what `serve.sh` runs |
+| `headless` | yes | no | no | the windowless deployable, and what `wasm-serve.sh` runs |
 | `observer` | yes | yes | no | full control panel, watching; a free camera (drag / WASD / wheel, `C` recenters) |
 | `host` | yes | yes | yes | plays and serves. **The default** |
 | `client` | no | yes | yes | join only. The only role a browser can take |
 
-A host prints a local URL and a LAN URL; open either in a browser to join, or send the LAN one to a friend. The browser client connects back to whoever served it (over `wss://` if the page was secure), so a `--role headless` deploy behind a TLS terminator works the same way. `serve.sh` builds the wasm and hosts it in one step. The arena seats four by default, up to 128 on the panel's **players** slider; joiners fill the seats and bots drive whatever is empty. Lowering the count never evicts anyone already playing: it applies as people leave, and a joiner who finds no seat is told so rather than left on a black screen.
+A host prints a local URL and a LAN URL; open either in a browser to join, or send the LAN one to a friend. The browser client connects back to whoever served it (over `wss://` if the page was secure), so a `--role headless` deploy behind a TLS terminator works the same way. `wasm-serve.sh` builds the wasm and hosts it in one step; `wasm-build.sh` is the build alone, for when a server is already running. The arena seats four by default, up to 128 on the panel's **players** slider; joiners fill the seats and bots drive whatever is empty. Lowering the count never evicts anyone already playing: it applies as people leave, and a joiner who finds no seat is told so rather than left on a black screen.
 
 The pure single-process teaching build, with no networking compiled in at all, is still here and is where the measurements below come from: `cargo run -p horde_playground --no-default-features --features native,client`.
 
@@ -383,5 +384,5 @@ The simulation is headless and is where the tests live (`cargo test -p horde_pla
 
 ## Notes
 
-- Excluded from `default-members`, so a bare `cargo build` / `test` skips macroquad's dependency tree. `cargo <cmd> --workspace` includes it. Building for wasm needs `--no-default-features --features web`, because the default set pulls in the native socket and the actix server; `serve.sh` does this.
-- The compiled `static/*.wasm` is a build artifact and is gitignored. Run `serve.sh` before serving a fresh checkout.
+- Excluded from `default-members`, so a bare `cargo build` / `test` skips macroquad's dependency tree. `cargo <cmd> --workspace` includes it. Building for wasm needs `--no-default-features --features web`, because the default set pulls in the native socket and the actix server; `wasm-build.sh` does this.
+- The compiled `static/*.wasm` is a build artifact and is gitignored. Run `wasm-build.sh` before serving a fresh checkout.
