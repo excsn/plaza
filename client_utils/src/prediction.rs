@@ -3,7 +3,7 @@
 use crate::input_buffer::ClientInputBuffer;
 use crate::types::SequenceNumber;
 use std::fmt::Debug;
-use std::marker::PhantomData; // Import PhantomData
+use std::marker::PhantomData;
 use tracing::{debug, trace};
 
 /// Represents an entity whose state is being predicted on the client-side.

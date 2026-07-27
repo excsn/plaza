@@ -422,7 +422,7 @@ impl InterpolationClock<u64> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::types::ClientTimeMs; // u64
+  use crate::types::ClientTimeMs;
 
   #[derive(Debug, Clone, PartialEq)]
   struct TestRenderState {

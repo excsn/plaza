@@ -1,7 +1,6 @@
-// plaza::app_common::ordered_collection_ops::op_payloads.rs
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
-use std::hash::Hash; // For CollectionKey and ItemId
+use std::hash::Hash;
 
 /// Payload for an Op to insert an item into an ordered collection.
 #[derive(Serialize, Deserialize, Debug, Clone)]

@@ -210,7 +210,7 @@ mod tests {
     assert_eq!(at(5000), limit);
     assert!((limit.0 - 12.0).abs() < 1e-4, "held at the limit's position: {limit:?}");
   }
-  use std::time::Duration; // For a concrete TimeDelta in tests
+  use std::time::Duration;
 
   #[derive(Debug, Clone, PartialEq)]
   struct TestExtrapState {

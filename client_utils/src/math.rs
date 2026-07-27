@@ -336,7 +336,7 @@ impl Extrapolatable<Quat, f32> for Quat {
 mod tests {
   use super::*;
   
-  use crate::types::ClientTimeMs; // u64 // For tests
+  use crate::types::ClientTimeMs;
 
   #[test]
   fn vec2_ops() {

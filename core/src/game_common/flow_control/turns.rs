@@ -45,12 +45,10 @@ pub trait TurnManager<Op, AppID: AgentId, TurnActorId> {
 /// turns.end_current_turn_and_advance(&mut ctx)?; // hand off, emitting a notice
 /// ```
 ///
-/// That is a plain `fn` pointer rather than a boxed closure, which keeps this
-/// type `Clone`: a game that searches ahead clones its whole state and re-runs
-/// turns in simulation, and a boxed closure would make that impossible. A
-/// non-capturing closure such as `|n| MyOp::TurnChanged(n)` coerces to one, so
-/// the only thing ruled out is capturing state, which is what writing your own
-/// [`TurnManager`] is for.
+/// That is a plain `fn` pointer rather than a boxed closure, deliberately: a
+/// boxed closure would cost this type `Clone`. A non-capturing closure such as
+/// `|n| MyOp::TurnChanged(n)` coerces to one, so the only thing ruled out is
+/// capturing state, which is what writing your own [`TurnManager`] is for.
 pub struct RoundRobinTurnManager<Op, AppID: AgentId, TurnActorId: Clone + Debug> {
   actors: Vec<TurnActorId>,
   /// Index into `actors`; `None` before the first turn begins.
@@ -245,7 +243,7 @@ where
 
 /// Defines common operation payloads related to game turns.
 pub mod op_payloads {
-  use super::*; // Imports TurnActorId, Duration, AgentId (via AppID in TurnManager)
+  use super::*;
 
   /// Payload for an Op sent by a client to indicate they are ending their turn.
   #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

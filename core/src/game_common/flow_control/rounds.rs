@@ -48,12 +48,10 @@ pub trait RoundManager<Op, AppID: AgentId> {
 /// rounds.end_round_with(&mut ctx, "all players folded", Some(summary));
 /// ```
 ///
-/// Those are plain `fn` pointers rather than boxed closures, which keeps this
-/// type `Clone`: a game that searches ahead clones its whole state and re-runs
-/// rounds in simulation, and a boxed closure would make that impossible. A
-/// non-capturing closure such as `|n| MyOp::RoundStarted(n)` coerces to one, so
-/// the only thing ruled out is capturing state, which is what writing your own
-/// [`RoundManager`] is for.
+/// Those are plain `fn` pointers rather than boxed closures, deliberately: a
+/// boxed closure would cost this type `Clone`. A non-capturing closure such as
+/// `|n| MyOp::RoundStarted(n)` coerces to one, so the only thing ruled out is
+/// capturing state, which is what writing your own [`RoundManager`] is for.
 pub struct SequentialRoundManager<Op, AppID: AgentId, Summary: Clone + Debug> {
   current_round: u32,
   max_rounds: Option<u32>,
@@ -182,7 +180,7 @@ impl<Op, AppID: AgentId, Summary: Clone + Debug> RoundManager<Op, AppID> for Seq
 
 /// Defines common operation payloads related to game rounds.
 pub mod op_payloads {
-  use super::*; // Imports AgentId (via AppID in RoundManager)
+  use super::*;
                 // use std::any::Any; // If AppSpecificRoundSummaryData is truly generic via dyn Any + serde attributes
 
   /// Payload for an Op that signals the start of a new round.

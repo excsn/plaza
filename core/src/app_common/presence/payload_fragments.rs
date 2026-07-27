@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
-use std::hash::Hash; // For ItemID in SelectionPayload
+use std::hash::Hash;
 
 /// Represents a 2D cursor position.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq)] // PartialEq for easy comparison

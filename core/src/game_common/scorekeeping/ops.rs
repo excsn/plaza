@@ -1,7 +1,6 @@
-// plaza::game_common::scorekeeping::op_payloads.rs
 use crate::agent::AgentId;
 use serde::{Deserialize, Serialize};
-use std::fmt::Debug; // For ScoreType bound
+use std::fmt::Debug;
 
 // And often numerical traits for IncrementScorePayload.
 pub trait ScoreValue:

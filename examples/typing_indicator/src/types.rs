@@ -2,7 +2,7 @@ use plaza::common::scheduler::{ScheduledEventId, TimeEventScheduler};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::time::Duration; // For time-based scheduling
+use std::time::Duration;
 use uuid::Uuid;
 
 pub type UserId = Uuid;

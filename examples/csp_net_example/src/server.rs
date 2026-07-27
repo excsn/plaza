@@ -29,7 +29,7 @@ use plaza::{
 
 use async_trait::async_trait;
 use fibre::mpsc;
-use rand::Rng; // For simulating slight server-side deviations
+use rand::Rng;
 use std::{
   collections::HashMap,
   fmt::Debug,

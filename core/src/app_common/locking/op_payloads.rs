@@ -1,8 +1,7 @@
-// plaza::app_common::locking::op_payloads.rs
 use crate::agent::AgentId;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
-use std::hash::Hash; // For ResourceId if used as a key
+use std::hash::Hash;
 
 /// Payload for an Op where a client requests to acquire a lock on a resource.
 /// The `agent_id` of the requester is typically derived from the `source` of the `LogicInput::AgentOps`.

@@ -1,8 +1,7 @@
-// plaza::app_common::object_property_ops::op_payloads.rs
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap; // For initial_properties
+use std::collections::HashMap;
 use std::fmt::Debug;
-use std::hash::Hash; // For ObjectId and PropertyKey
+use std::hash::Hash;
 
 /// Payload for an Op to create a new object with initial properties.
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -60,8 +59,3 @@ where
     pub object_id: ObjectId,
     pub property_key: PropertyKey,
 }
-
-// Notice/Event Payloads (Server -> Client)
-// e.g., ObjectCreatedNoticePayload, PropertySetNoticePayload, etc.
-// These would typically mirror the request payloads but include the agent_id
-// who performed the action, or be simplified echos.

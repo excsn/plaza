@@ -1,6 +1,6 @@
 //! Generic operation payloads for presence updates.
 
-use crate::agent::AgentId; // Ensure correct path to AgentId
+use crate::agent::AgentId;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
