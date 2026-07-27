@@ -94,6 +94,20 @@ pub struct DeltaPlan {
   pub left: Vec<u64>,
 }
 
+/// The liveness half of flow control: when the subscriber last spoke, and when
+/// it was last probed. Opt-in via [`DeltaBaseline::with_flow`]; time is in
+/// whatever unit the application's clock uses.
+#[derive(Clone, Debug)]
+struct FlowControl {
+  stalled_after: u64,
+  keepalive_every: u64,
+  /// When the subscriber last acknowledged, `None` until it first has (or after
+  /// a [`reset`](DeltaBaseline::reset)): a fresh occupant gets its grace period
+  /// measured from the first send decision, not from an epoch it never saw.
+  last_ack: Option<u64>,
+  last_keepalive: u64,
+}
+
 /// One subscriber's view of a streamed set: what it has been sent, what it has
 /// acknowledged, and therefore what to send next.
 ///
@@ -105,13 +119,16 @@ pub struct DeltaPlan {
 /// baseline.reset();
 ///
 /// // Every send round:
+/// if !baseline.should_send(now_ms) {
+///   continue; // stalled, and not due a keepalive: send nothing
+/// }
 /// let plan = baseline.plan(&visible_keys, seq);
 /// packet.full_baseline = plan.full_baseline;
 /// packet.entered = plan.entered.iter().map(|k| spawn_payload(*k)).collect();
 /// packet.left = plan.left.iter().map(|k| (handle(*k), reason(*k))).collect();
 ///
 /// // When an acknowledgement comes back:
-/// baseline.observe_ack(ack.newest, ack.mask, ack.digest);
+/// baseline.observe_ack_at(ack.newest, ack.mask, ack.digest, now_ms);
 /// ```
 #[derive(Clone, Debug)]
 pub struct DeltaBaseline {
@@ -130,6 +147,7 @@ pub struct DeltaBaseline {
   needs_full: bool,
   full_rebuilds: u64,
   unacked: usize,
+  flow: Option<FlowControl>,
 }
 
 impl DeltaBaseline {
@@ -151,6 +169,7 @@ impl DeltaBaseline {
       needs_full: true,
       full_rebuilds: 0,
       unacked: 0,
+      flow: None,
     }
   }
 
@@ -158,6 +177,76 @@ impl DeltaBaseline {
   pub fn with_policy(mut self, policy: RecoveryPolicy) -> Self {
     self.policy = policy;
     self
+  }
+
+  /// Enables flow control: a subscriber silent for `stalled_after` is throttled
+  /// to one send every `keepalive_every`, both in the application's own clock
+  /// units, until it acknowledges again.
+  ///
+  /// Why this belongs to the delta stream and not to the transport. Once a
+  /// subscriber's acknowledged baseline ages out of history, **every** plan for
+  /// it is a full baseline, so a reader that has stopped reading (a browser tab
+  /// in the background: its socket keeps receiving while its frame loop does
+  /// not run) is streamed the whole visible set at full rate, into a buffer it
+  /// must pay for all at once on resume. Measured in the horde example that was
+  /// tens of megabytes a minute, and a several-second freeze on refocus. The
+  /// keepalive is what keeps the stream discoverable: the resumed client
+  /// applies it, acknowledges it, and full rate resumes on the next round.
+  ///
+  /// Choosing `stalled_after`: match the client side's own discontinuity
+  /// threshold (the point past which it restarts its timeline rather than
+  /// playing through), and keep it several times the acknowledgement interval,
+  /// so ordinary loss cannot trip it. A healthy subscriber acknowledges every
+  /// applied packet, so silence at this scale means stopped, not unlucky.
+  pub fn with_flow(mut self, stalled_after: u64, keepalive_every: u64) -> Self {
+    self.flow = Some(FlowControl {
+      stalled_after,
+      keepalive_every: keepalive_every.max(1),
+      last_ack: None,
+      last_keepalive: 0,
+    });
+    self
+  }
+
+  /// Whether the subscriber has stopped acknowledging. Always `false` without
+  /// [`with_flow`](Self::with_flow), and during a fresh subscriber's grace
+  /// period (silence is measured from the first send decision, so a joiner is
+  /// not born stalled).
+  pub fn stalled(&self, now: u64) -> bool {
+    let Some(flow) = &self.flow else {
+      return false;
+    };
+    let Some(last_ack) = flow.last_ack else {
+      return false;
+    };
+    now.saturating_sub(last_ack) > flow.stalled_after
+  }
+
+  /// Whether to build and send a packet to this subscriber this round.
+  ///
+  /// `true` for a live subscriber. For a stalled one, `true` once per
+  /// `keepalive_every` and `false` otherwise, in which case skip the
+  /// [`plan`](Self::plan) call entirely: not planning also leaves the sent
+  /// history exactly where the last acknowledgement can still name it.
+  pub fn should_send(&mut self, now: u64) -> bool {
+    let Some(flow) = &mut self.flow else {
+      return true;
+    };
+    // The grace period starts at the first decision, because construction and
+    // reset have no clock: this is the first moment the stream knows the time.
+    if flow.last_ack.is_none() {
+      flow.last_ack = Some(now);
+      return true;
+    }
+    if !self.stalled(now) {
+      return true;
+    }
+    let flow = self.flow.as_mut().expect("checked above");
+    if now.saturating_sub(flow.last_keepalive) >= flow.keepalive_every {
+      flow.last_keepalive = now;
+      return true;
+    }
+    false
   }
 
   /// Changes the policy on a live subscriber, forgetting any state the new
@@ -192,6 +281,11 @@ impl DeltaBaseline {
     self.last_sent_seq = None;
     self.needs_full = true;
     self.unacked = 0;
+    // The new occupant's silence starts now, not where the old one's ended.
+    if let Some(flow) = &mut self.flow {
+      flow.last_ack = None;
+      flow.last_keepalive = 0;
+    }
   }
 
   /// Works out what to send, given the keys the subscriber should hold now.
@@ -341,6 +435,17 @@ impl DeltaBaseline {
     self.unacked = self.sent.iter().filter(|(seq, _)| !window.contains(*seq)).count();
   }
 
+  /// [`observe_ack`](Self::observe_ack), and the acknowledgement's arrival time
+  /// for flow control. Use this form whenever [`with_flow`](Self::with_flow) is
+  /// on; the timestamp records under **either** policy, because liveness is a
+  /// property of the subscriber, not of the recovery arithmetic.
+  pub fn observe_ack_at(&mut self, newest: u64, mask: u64, digest: u64, now: u64) {
+    if let Some(flow) = &mut self.flow {
+      flow.last_ack = Some(now);
+    }
+    self.observe_ack(newest, mask, digest);
+  }
+
   /// Forces the next plan to be a full baseline. The application's own escape
   /// hatch, for a divergence it detected by some other means.
   pub fn request_full_baseline(&mut self) {
@@ -403,6 +508,70 @@ mod tests {
         self.held.insert(*key);
       }
     }
+  }
+
+  #[test]
+  fn a_silent_subscriber_is_throttled_to_keepalives_and_one_ack_restores_it() {
+    // The hidden-tab pathology. Once the acknowledged baseline ages out of
+    // history every plan is a full baseline, so without this a reader that has
+    // stopped reading is streamed the whole visible set at full rate into a
+    // buffer it pays for on resume.
+    let mut b = DeltaBaseline::new(24).with_flow(3_000, 1_000);
+    let world = keys(&[1, 2, 3]);
+    let digest = SetDigest::from_keys(world.iter().copied()).digest();
+
+    let mut now = 0u64;
+    let mut seq = 0u64;
+    let mut sent_while_stalled = 0;
+    // Ten seconds of 62 ms rounds: acknowledged for the first second, silent after.
+    for _ in 0..160 {
+      now += 62;
+      if b.should_send(now) {
+        seq += 1;
+        b.plan(&world, seq);
+        if now <= 1_000 {
+          b.observe_ack_at(seq, u64::MAX, digest, now);
+        } else if now > 5_000 {
+          sent_while_stalled += 1;
+        }
+      }
+    }
+
+    assert!(b.stalled(now), "three silent seconds is stalled");
+    assert!(
+      (3..=7).contains(&sent_while_stalled),
+      "a stalled subscriber gets about one keepalive a second: {sent_while_stalled} in 5 s"
+    );
+
+    // One acknowledgement ends the throttle.
+    b.observe_ack_at(seq, u64::MAX, digest, now);
+    assert!(!b.stalled(now));
+    assert!(b.should_send(now + 62), "an acknowledged subscriber is streamed to again");
+  }
+
+  #[test]
+  fn without_flow_control_every_round_sends() {
+    let mut b = DeltaBaseline::new(24);
+    for round in 0..100u64 {
+      assert!(b.should_send(round * 62), "flow control is opt-in");
+    }
+  }
+
+  #[test]
+  fn a_fresh_subscriber_is_not_born_stalled() {
+    // Construction and reset have no clock, so silence is measured from the
+    // first send decision: a joiner on a server whose clock reads an hour must
+    // not start life throttled.
+    let mut b = DeltaBaseline::new(24).with_flow(3_000, 1_000);
+    assert!(b.should_send(3_600_000));
+    assert!(!b.stalled(3_600_000));
+    assert!(b.should_send(3_600_062), "full rate through the grace period");
+
+    // The same grace applies to a reused slot.
+    b.observe_ack_at(1, u64::MAX, 0, 3_600_062);
+    b.reset();
+    assert!(b.should_send(7_200_000), "the new occupant's silence starts now");
+    assert!(!b.stalled(7_200_000));
   }
 
   #[test]

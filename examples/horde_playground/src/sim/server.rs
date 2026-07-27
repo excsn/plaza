@@ -159,13 +159,6 @@ pub struct Server {
   /// free: a joiner sent a difference against a baseline it never held, and a
   /// mirror that drifts and can never recover.
   baselines: Vec<DeltaBaseline>,
-  /// When each seat last acknowledged, on the server clock. The liveness signal
-  /// the send loop throttles on: a seat that has stopped acknowledging has
-  /// stopped *reading*, and streaming to it only fills a buffer somewhere.
-  last_ack_ms: Vec<u64>,
-  /// Entity rounds until stalled seats next get a packet, in the same countdown
-  /// idiom as `far_tier_countdown`.
-  stall_keepalive_countdown: u32,
   /// Currency on the ground, and what each player has banked and bought.
   pub coins: Vec<Coin>,
   next_coin_id: CoinId,
@@ -205,26 +198,16 @@ pub struct Server {
 /// re-derived and forces a full rebuild.
 const SENT_HISTORY: usize = 24;
 
-/// How long a seat may go without acknowledging before it is treated as
-/// stalled and throttled to a keepalive.
-///
-/// Why throttle at all: once a client's acknowledged baseline falls out of the
-/// history (1.5 s at 16 Hz), every plan for it is a full baseline, and a client
-/// that has stopped reading (a hidden browser tab; its socket keeps receiving
-/// while its frame loop does not run) accumulates the entire full-rate stream:
-/// measured at roughly 25 KB a packet, 16 a second, tens of megabytes a minute,
-/// all of which the tab must parse in its first frame back. The client's own
-/// bounds cannot help; the damage is buffered before its code runs again.
-///
-/// The threshold matches the client's own discontinuity rule (its
-/// `LOST_AHEAD_MS` is also 3 s): both sides agree on when a gap stops being
-/// jitter. A healthy client acknowledges every applied frame, so even at heavy
-/// simulated loss three silent seconds means stopped, not unlucky.
+/// How long a seat may go silent before [`DeltaBaseline`]'s flow control
+/// throttles it: see [`DeltaBaseline::with_flow`] for the pathology this
+/// prevents (a hidden tab streamed full baselines at full rate). Matches the
+/// client's own discontinuity rule (its `LOST_AHEAD_MS` is also 3 s), so both
+/// sides agree on when a gap stops being jitter.
 const STALLED_AFTER_MS: u64 = 3_000;
-/// One packet out of this many entity rounds still goes to a stalled seat
-/// (about one a second at the 16 Hz default): the probe that lets a client
-/// which quietly resumes reading discover the stream and re-acknowledge.
-const STALL_KEEPALIVE_EVERY: u32 = 16;
+/// A stalled seat still gets one packet this often: the probe that lets a
+/// client which quietly resumes reading rediscover the stream and
+/// re-acknowledge.
+const STALL_KEEPALIVE_MS: u64 = 1_000;
 
 impl Server {
   pub fn new(enemy_count: usize, player_count: usize, spread: bool) -> Self {
@@ -282,9 +265,9 @@ impl Server {
       shots_ended_since_send: Vec::new(),
       next_shot_id: 0,
       next_seq: 0,
-      baselines: (0..player_count).map(|_| DeltaBaseline::new(SENT_HISTORY)).collect(),
-      last_ack_ms: vec![0; player_count],
-      stall_keepalive_countdown: 1,
+      baselines: (0..player_count)
+        .map(|_| DeltaBaseline::new(SENT_HISTORY).with_flow(STALLED_AFTER_MS, STALL_KEEPALIVE_MS))
+        .collect(),
       coins: Vec::new(),
       next_coin_id: 0,
       wallets: vec![Wallet::default(); player_count],
@@ -776,8 +759,7 @@ impl Server {
   /// drifted entity stays in view, is only ever sampled, and a sample for an
   /// entity you do not hold is discarded.
   pub fn receive_ack(&mut self, player: usize, newest: u64, mask: u64, digest: u64) {
-    self.baselines[player].observe_ack(newest, mask, digest);
-    self.last_ack_ms[player] = self.clock_ms;
+    self.baselines[player].observe_ack_at(newest, mask, digest, self.clock_ms);
   }
 
   /// Resets one seat's relevance baseline so the next packet to it is a full
@@ -790,15 +772,14 @@ impl Server {
   /// never held, and the visible world arrives only as the slow trickle of
   /// whatever happens to become newly relevant.
   pub fn reset_seat(&mut self, seat: usize) {
+    // Also restarts the flow-control grace period: the joiner has acknowledged
+    // nothing yet, and must not start life throttled for it.
     self.baselines[seat].reset();
-    // A grace period, not a fact: the joiner has acknowledged nothing yet, and
-    // must not start life throttled for it.
-    self.last_ack_ms[seat] = self.clock_ms;
   }
 
   /// Whether a seat has stopped acknowledging: see [`STALLED_AFTER_MS`].
   pub fn seat_stalled(&self, seat: usize) -> bool {
-    self.clock_ms.saturating_sub(self.last_ack_ms[seat]) > STALLED_AFTER_MS
+    self.baselines[seat].stalled(self.clock_ms)
   }
 
   /// How many seats are currently throttled for silence. On a healthy arena
@@ -1101,14 +1082,6 @@ impl Server {
     let seq = self.next_seq;
     self.next_seq += 1;
 
-    // Whether this round is the one stalled seats still get: see
-    // [`STALL_KEEPALIVE_EVERY`].
-    self.stall_keepalive_countdown = self.stall_keepalive_countdown.saturating_sub(1);
-    let keepalive_due = self.stall_keepalive_countdown == 0;
-    if keepalive_due {
-      self.stall_keepalive_countdown = STALL_KEEPALIVE_EVERY;
-    }
-
     // One tree over the whole live population, walked once per player. The build
     // is the expensive half and it is viewer independent, which is what makes
     // this affordable for a crowd this size.
@@ -1128,15 +1101,11 @@ impl Server {
     let mut summaries: Vec<plaza_server_utils::aggregate::Summary> = Vec::new();
 
     for p in 0..self.players.len() {
-      // Flow control. A seat that has stopped acknowledging cannot use what it
-      // is sent; its baseline is unreachable, so every packet would be a full
-      // dump, and every packet lands in a buffer the client will have to pay
-      // for on resume. Skipping the plan() call also leaves the baseline's
-      // history exactly where the last acknowledgement could still name it.
-      // What a skipped seat misses forever is only the per-round events (shots,
+      // Flow control: the block decides whether this seat is read at all. What
+      // a skipped seat misses forever is only the per-round events (shots,
       // hits): cosmetic by construction, and describing moments the stalled
       // client will never render.
-      if self.seat_stalled(p) && !keepalive_due {
+      if !self.baselines[p].should_send(self.clock_ms) {
         continue;
       }
       let eye = self.players[p];
