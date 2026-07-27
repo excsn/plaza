@@ -159,6 +159,13 @@ pub struct Server {
   /// free: a joiner sent a difference against a baseline it never held, and a
   /// mirror that drifts and can never recover.
   baselines: Vec<DeltaBaseline>,
+  /// When each seat last acknowledged, on the server clock. The liveness signal
+  /// the send loop throttles on: a seat that has stopped acknowledging has
+  /// stopped *reading*, and streaming to it only fills a buffer somewhere.
+  last_ack_ms: Vec<u64>,
+  /// Entity rounds until stalled seats next get a packet, in the same countdown
+  /// idiom as `far_tier_countdown`.
+  stall_keepalive_countdown: u32,
   /// Currency on the ground, and what each player has banked and bought.
   pub coins: Vec<Coin>,
   next_coin_id: CoinId,
@@ -197,6 +204,27 @@ pub struct Server {
 /// in flight plus the acknowledgement's return trip; older than this cannot be
 /// re-derived and forces a full rebuild.
 const SENT_HISTORY: usize = 24;
+
+/// How long a seat may go without acknowledging before it is treated as
+/// stalled and throttled to a keepalive.
+///
+/// Why throttle at all: once a client's acknowledged baseline falls out of the
+/// history (1.5 s at 16 Hz), every plan for it is a full baseline, and a client
+/// that has stopped reading (a hidden browser tab; its socket keeps receiving
+/// while its frame loop does not run) accumulates the entire full-rate stream:
+/// measured at roughly 25 KB a packet, 16 a second, tens of megabytes a minute,
+/// all of which the tab must parse in its first frame back. The client's own
+/// bounds cannot help; the damage is buffered before its code runs again.
+///
+/// The threshold matches the client's own discontinuity rule (its
+/// `LOST_AHEAD_MS` is also 3 s): both sides agree on when a gap stops being
+/// jitter. A healthy client acknowledges every applied frame, so even at heavy
+/// simulated loss three silent seconds means stopped, not unlucky.
+const STALLED_AFTER_MS: u64 = 3_000;
+/// One packet out of this many entity rounds still goes to a stalled seat
+/// (about one a second at the 16 Hz default): the probe that lets a client
+/// which quietly resumes reading discover the stream and re-acknowledge.
+const STALL_KEEPALIVE_EVERY: u32 = 16;
 
 impl Server {
   pub fn new(enemy_count: usize, player_count: usize, spread: bool) -> Self {
@@ -255,6 +283,8 @@ impl Server {
       next_shot_id: 0,
       next_seq: 0,
       baselines: (0..player_count).map(|_| DeltaBaseline::new(SENT_HISTORY)).collect(),
+      last_ack_ms: vec![0; player_count],
+      stall_keepalive_countdown: 1,
       coins: Vec::new(),
       next_coin_id: 0,
       wallets: vec![Wallet::default(); player_count],
@@ -375,7 +405,15 @@ impl Server {
       if far_due {
         self.far_tier_countdown = FAR_TIER_EVERY;
       }
-      self.pending_players = Some((0..self.players.len()).map(|c| (c as PlayerId, self.build_player_frame(c, far_due))).collect());
+      // Stalled seats get no player frames at all: unlike the entity stream
+      // there is no baseline to probe, and the resumed client rebuilds its peer
+      // views from the first frames after its acknowledgements return.
+      self.pending_players = Some(
+        (0..self.players.len())
+          .filter(|&c| !self.seat_stalled(c))
+          .map(|c| (c as PlayerId, self.build_player_frame(c, far_due)))
+          .collect(),
+      );
     }
 
     self.sync.set_interval_ms(controls.sync_interval_ms());
@@ -739,6 +777,7 @@ impl Server {
   /// entity you do not hold is discarded.
   pub fn receive_ack(&mut self, player: usize, newest: u64, mask: u64, digest: u64) {
     self.baselines[player].observe_ack(newest, mask, digest);
+    self.last_ack_ms[player] = self.clock_ms;
   }
 
   /// Resets one seat's relevance baseline so the next packet to it is a full
@@ -752,6 +791,22 @@ impl Server {
   /// whatever happens to become newly relevant.
   pub fn reset_seat(&mut self, seat: usize) {
     self.baselines[seat].reset();
+    // A grace period, not a fact: the joiner has acknowledged nothing yet, and
+    // must not start life throttled for it.
+    self.last_ack_ms[seat] = self.clock_ms;
+  }
+
+  /// Whether a seat has stopped acknowledging: see [`STALLED_AFTER_MS`].
+  pub fn seat_stalled(&self, seat: usize) -> bool {
+    self.clock_ms.saturating_sub(self.last_ack_ms[seat]) > STALLED_AFTER_MS
+  }
+
+  /// How many seats are currently throttled for silence. On a healthy arena
+  /// this is zero: bots are acknowledged by the arena and humans acknowledge
+  /// every applied frame, so a nonzero reading names a client that stopped
+  /// reading (a hidden tab, a stalled machine).
+  pub fn stalled_seats(&self) -> usize {
+    (0..self.players.len()).filter(|&p| self.seat_stalled(p)).count()
   }
 
   /// How often a client's baseline had to be rebuilt from nothing. The cost of
@@ -1046,6 +1101,14 @@ impl Server {
     let seq = self.next_seq;
     self.next_seq += 1;
 
+    // Whether this round is the one stalled seats still get: see
+    // [`STALL_KEEPALIVE_EVERY`].
+    self.stall_keepalive_countdown = self.stall_keepalive_countdown.saturating_sub(1);
+    let keepalive_due = self.stall_keepalive_countdown == 0;
+    if keepalive_due {
+      self.stall_keepalive_countdown = STALL_KEEPALIVE_EVERY;
+    }
+
     // One tree over the whole live population, walked once per player. The build
     // is the expensive half and it is viewer independent, which is what makes
     // this affordable for a crowd this size.
@@ -1065,6 +1128,17 @@ impl Server {
     let mut summaries: Vec<plaza_server_utils::aggregate::Summary> = Vec::new();
 
     for p in 0..self.players.len() {
+      // Flow control. A seat that has stopped acknowledging cannot use what it
+      // is sent; its baseline is unreachable, so every packet would be a full
+      // dump, and every packet lands in a buffer the client will have to pay
+      // for on resume. Skipping the plan() call also leaves the baseline's
+      // history exactly where the last acknowledgement could still name it.
+      // What a skipped seat misses forever is only the per-round events (shots,
+      // hits): cosmetic by construction, and describing moments the stalled
+      // client will never render.
+      if self.seat_stalled(p) && !keepalive_due {
+        continue;
+      }
       let eye = self.players[p];
 
       // What this client should hold after applying, in the key space the digest
@@ -1375,6 +1449,70 @@ mod tests {
   /// playout depth it advertised, which is the same arithmetic every client does.
   fn aimed_tick(server: &Server, controls: &Controls) -> u64 {
     server.tick() + controls.playout_delay_ms / (SIM_DT * 1000.0) as u64
+  }
+
+  #[test]
+  fn a_seat_that_stops_acknowledging_is_throttled_to_a_keepalive() {
+    // The hidden-tab pathology, cut off at its source. A silent seat's
+    // baseline goes stale within the history window, after which every plan
+    // for it is a full baseline: the whole visible set, sixteen times a
+    // second, into a buffer the client must parse in its first frame back.
+    // Throttled, a stalled seat costs about a packet a second instead.
+    let controls = Controls::default();
+    let mut server = Server::new(200, 2, false);
+    let seats = vec![Seat::Bot; 2];
+
+    let mut counts = [0usize; 2];
+    let mut last_to_1 = None;
+    let mut elapsed = 0u64;
+    while elapsed < 12_000 {
+      let packets = server.advance_seats(16, &seats, &controls);
+      elapsed += 16;
+      for (p, packet) in &packets {
+        let seat = *p as usize;
+        // Seat 0 acknowledges everything, like a live client. Seat 1 falls
+        // silent after the first second, like a tab going to the background.
+        if seat == 0 || elapsed <= 1_000 {
+          server.receive_ack(seat, packet.seq, u64::MAX, packet.visible_digest);
+        }
+        if seat == 1 {
+          last_to_1 = Some((packet.seq, packet.visible_digest));
+        }
+        if elapsed > 6_000 {
+          counts[seat] += 1;
+        }
+      }
+    }
+
+    assert!(server.seat_stalled(1), "three silent seconds is stalled");
+    assert!(!server.seat_stalled(0), "an acknowledging seat is not");
+    assert!(counts[0] >= 80, "the live seat streams at full rate: {} packets in 6 s", counts[0]);
+    assert!(
+      (2..=8).contains(&counts[1]),
+      "the silent seat gets about one keepalive a second: {} packets in 6 s",
+      counts[1]
+    );
+
+    // The player stream skips a stalled seat outright: there is no baseline to
+    // probe, and the resumed client rebuilds its peer views from first frames.
+    let frames = server.take_player_frames().expect("the player stream was due within the last interval");
+    assert!(frames.iter().all(|(p, _)| *p != 1), "no player frames for a stalled seat");
+
+    // One acknowledgement ends the throttle: the keepalive is what makes the
+    // stream discoverable again, and acknowledging it resumes full rate.
+    let (seq, digest) = last_to_1.expect("the keepalive reached the silent seat");
+    server.receive_ack(1, seq, u64::MAX, digest);
+    assert!(!server.seat_stalled(1));
+    let mut resumed = 0usize;
+    for _ in 0..62 {
+      for (p, packet) in server.advance_seats(16, &seats, &controls) {
+        server.receive_ack(p as usize, packet.seq, u64::MAX, packet.visible_digest);
+        if p == 1 {
+          resumed += 1;
+        }
+      }
+    }
+    assert!(resumed >= 12, "an acknowledged seat is streamed to again: {resumed} packets in a second");
   }
 
   #[test]

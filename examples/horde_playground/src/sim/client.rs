@@ -981,8 +981,13 @@ impl Client {
     self.now_ms = recv_ms;
     self.observe_arrival(packet.server_time_ms, recv_ms);
     // Late: its instant has passed, so it can never be played at the right
-    // moment. Counted rather than compensated for.
-    if self.render_at().is_some_and(|at| packet.server_time_ms < at.server_time_ms()) {
+    // moment. Counted rather than compensated for. Only jitter-scale lateness
+    // counts: a packet late by more than the discontinuity threshold is part of
+    // a lost timeline (a resumed tab draining its backlog), which `resyncs`
+    // accounts for, and charging it here too made one stall read as a thousand
+    // link faults.
+    let late_by = self.render_at().map_or(0, |at| at.server_time_ms().saturating_sub(packet.server_time_ms));
+    if late_by > 0 && late_by < LOST_AHEAD_MS {
       self.underruns += 1;
     }
     let arrived_at = packet.server_time_ms;
@@ -1013,6 +1018,18 @@ impl Client {
   /// Dropping the mirror is what makes the server rebuild it. Its next digest
   /// check finds a client holding nothing where it expected a world, and sends a
   /// full baseline, which is the same path a drifted mirror already takes.
+  /// The transport's word that this client stopped draining and the gap was
+  /// discarded unread: restart, once, deliberately.
+  ///
+  /// The net client calls this when one poll hands back a resume backlog (a
+  /// tab coming out of the background) and it drops everything but the tail.
+  /// Without this entry point the same restart still happened, but by the
+  /// queue bound tripping repeatedly as the backlog played in, tearing down
+  /// each partial rebuild the previous trip had paid for.
+  pub fn timeline_lost(&mut self, recv_ms: u64) {
+    self.restart_timeline(recv_ms);
+  }
+
   fn restart_timeline(&mut self, recv_ms: u64) {
     self.resyncs += 1;
     // Keep only the newest packet: it is the one the clock is about to be
@@ -1903,6 +1920,30 @@ mod tests {
       client.receive_packet(Packet { server_time_ms: at + 1, seq, ..Default::default() }, at + 1);
     }
     assert!(client.queued.len() <= MAX_QUEUED_PACKETS + 1, "held {} packets", client.queued.len());
+  }
+
+  #[test]
+  fn lateness_past_the_discontinuity_threshold_is_not_an_underrun() {
+    // A resumed tab's backlog is late by the whole stall. Charging each of
+    // those packets as an underrun read one stall as a thousand link faults;
+    // the stall is `resyncs`' business, and underruns are the link's.
+    let controls = Controls::default();
+    let mut client = client_with_a_moving_player(150);
+
+    // Jump the timeline far forward, as the restart after a stall does, so
+    // there is room below the render instant for both scales of lateness.
+    client.receive_packet(Packet { server_time_ms: 100_000, seq: 50, ..Default::default() }, 100_000);
+    client.tick(16, &controls);
+    let at = client.render_at().expect("timeline running").server_time_ms();
+    let before = client.underruns();
+
+    // Late on the scale jitter produces: an underrun.
+    client.receive_packet(Packet { server_time_ms: at - 20, seq: 51, ..Default::default() }, at + 150);
+    assert_eq!(client.underruns(), before + 1, "jitter-scale lateness is an underrun");
+
+    // Late by a stall: a discontinuity, not a thousand link faults.
+    client.receive_packet(Packet { server_time_ms: at - 60_000, seq: 52, ..Default::default() }, at + 150);
+    assert_eq!(client.underruns(), before + 1, "a packet from a lost timeline is not an underrun");
   }
 
   #[test]

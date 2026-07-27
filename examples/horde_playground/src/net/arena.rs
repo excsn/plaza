@@ -97,6 +97,9 @@ pub struct HostView {
   pub coins_expired: u64,
   pub denied_purchases: u64,
   pub full_resends: u64,
+  /// Seats currently throttled because they stopped acknowledging: a hidden
+  /// tab, a stalled machine. Zero on a healthy arena.
+  pub stalled_seats: usize,
 
   bytes: RateMeter,
   naive_bytes: RateMeter,
@@ -409,6 +412,7 @@ impl Arena {
       coins_expired: self.sim.coins_expired,
       denied_purchases: self.sim.denied_purchases,
       full_resends: self.sim.full_resends(),
+      stalled_seats: self.sim.stalled_seats(),
       bytes: self.bytes,
       naive_bytes: self.naive_bytes,
       crowd_bytes: self.crowd_bytes,

@@ -309,6 +309,10 @@ pub fn draw_net_ui(client: &horde_playground::net::client::NetClient, url: &str,
           client.sim.resyncs
         ))
           .on_hover_text("An underrun is a packet that arrived after the instant it describes had already gone past, so it could never be played at the right moment. A view fallback is a player drawn from its newest sample because its buffer could not produce the render instant. A timeline restart is this client having fallen so far behind that playing its way out was hopeless (a backgrounded tab, a stalled frame loop), so it dropped its queue and its mirror and started again from what had just arrived. All three are the same honesty applied to different failures: report them rather than absorb them.");
+        if let Some((msgs, bytes)) = client.last_resume_drop() {
+          ui.label(format!("resume drops: {} (last discarded {} msgs, {:.1} KiB unread)", client.resume_drops(), msgs, bytes as f64 / 1024.0))
+            .on_hover_text("While this tab was not running frames, its socket kept receiving. On the first poll back, everything but the newest few messages was discarded without being parsed: none of it described a moment the restarted timeline could still play, and parsing it is what used to freeze the tab for seconds on refocus.");
+        }
         ui.label(format!("enemies held: {}", client.sim.known_entities()));
         ui.label(format!("difficulty: x{:.1}   your health: {}", client.sim.difficulty(), client.my_health()));
         ui.label(format!("coins: {}   pickups taken back: {}", client.sim.believed_balance, client.sim.denied_claims));
@@ -423,6 +427,9 @@ pub fn draw_host_ui(
         ui.label(format!("relevant entities not held: {missing}"));
         if view.full_resends > 0 {
         ui.label(format!("full resyncs: {}", view.full_resends));
+        }
+        if view.stalled_seats > 0 {
+        warn_line_amber(ui, format!("seats throttled for silence: {}", view.stalled_seats), true);
         }
         ui.separator();
         ui.label(format!("render error: {mean_err:.0} px mean, {worst_err:.0} px worst"));

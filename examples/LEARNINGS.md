@@ -169,6 +169,20 @@ Reading the shape of a counter rather than its value: a count climbing without b
 
 **The general form.** "How much time has passed" and "how much work may I do about it" are different questions, and a frame loop that answers both with one number will lose time whenever it is throttled. Cap the work, never the clock. And the discontinuity rule already established for position applies to time: there are no intermediate states between a minute ago and now to ease through, so snap.
 
+### The recovery that was worse than the stall (horde)
+
+**Symptom.** With the timeline restart in place and its unit tests green, a real backgrounded tab was tried, and the recovery was shit: a freeze of several seconds on refocus, then a stuttering settle.
+
+**Why the tests missed it.** They tested the *decision* (snap rather than crawl) by feeding packets one at a time. What they never modelled was the *delivery*: the browser's socket keeps receiving while the frame loop is stopped, so the entire stall arrives as one pre-buffered lump that must be handed over, and the server had spent the whole stall escalating. Three mechanisms stacked:
+
+1. **The server shouted full baselines at a deaf client.** A silent seat's acknowledged baseline ages out of the 24-packet history in 1.5 s, after which every plan is the full visible set: roughly 25 KB of JSON, 16 times a second, tens of megabytes a minute, none of which the client would ever play.
+2. **All of it was parsed in one frame.** The JS-side queue is unbounded (correctly: it is a pipe), and the first poll back drained and `serde_json`-parsed the lot before the frame could render. That is the freeze.
+3. **The restart fired on the wrong trigger, repeatedly.** The render clock snaps to the present on the first drained packet, so the 3 s rule never saw the backlog as "ahead"; only the 256-packet queue bound tripped, once per 256 packets, tearing down each partial rebuild the previous trip had paid for. Meanwhile every backlog packet was counted as an underrun, so one stall read as a thousand link faults.
+
+**Fix, at each layer.** The server throttles a seat that has stopped acknowledging (3 s, the same threshold as the client's own discontinuity rule) to about one packet a second: the keepalive that lets a resumed client rediscover the stream, at a thousandth of the cost. The client drops a resume backlog **before parsing it**, on message lengths alone, keeping only the tail, and restarts the timeline once, deliberately; the drop is reported in the panel ("resume drops"), and the host panel shows "seats throttled for silence". And underruns only count lateness on the scale jitter produces; past the discontinuity threshold the packet belongs to a lost timeline, which `resyncs` already accounts for.
+
+**The general form.** Flow control is part of reliability, not an optimization: a protocol that keeps sending to a reader that has provably stopped reading is choosing where the damage lands, and it lands on the reader at the worst moment, resume. And a unit test that feeds a component its input one piece at a time has not tested arrival; the transport's actual failure shape (a burst, a lump, a reorder) has to appear in a test or the first real exercise of it is the user's.
+
 ### Bandwidth that climbed for ever, and was the meter (horde)
 
 **Symptom.** A player reported, repeatedly, that bandwidth crept upward the longer a session ran and never settled: standing still, moving about, at 128 players and again at 10. Two screenshots three minutes apart showed 127.6 then 143.9 KiB/s while the live enemy count *fell* from 2311 to 1751.

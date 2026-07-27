@@ -55,6 +55,16 @@ const INPUT_KEEPALIVE_MS: u64 = 120;
 /// How long the red damage flash is drawn for after a hit.
 const HIT_FLASH_SECS: f32 = 0.35;
 
+/// More payload messages than this in one poll means the frame loop was
+/// stopped while the socket kept receiving: a hidden browser tab, a machine
+/// that slept. The two streams together arrive at under thirty messages a
+/// second, so this is several seconds of backlog, far past anything a running
+/// frame loop can accumulate between two polls.
+const BACKLOG_TRIGGER: usize = 128;
+/// What survives a backlog drop: the newest messages, which describe the only
+/// moments a restarted timeline can still play.
+const BACKLOG_KEEP: usize = 32;
+
 pub struct NetClient {
   socket: Box<dyn Socket>,
   /// The same client the offline build runs. Everything it does is unchanged.
@@ -97,12 +107,21 @@ pub struct NetClient {
   prev_health: u8,
   /// Seconds of red damage flash left to draw, refreshed when you take a hit.
   hit_flash_secs: f32,
+  /// Times a resume backlog was dropped unread, and what the last drop
+  /// discarded. The record of every stall this client came back from, for the
+  /// panel: without it a recovery is indistinguishable from a link fault.
+  resume_drops: u64,
+  last_drop_msgs: u64,
+  last_drop_bytes: u64,
 }
 
 impl NetClient {
   pub fn connect(url: &str) -> Result<Self, String> {
-    let socket = open(url)?;
-    Ok(Self {
+    Ok(Self::from_socket(open(url)?))
+  }
+
+  fn from_socket(socket: Box<dyn Socket>) -> Self {
+    Self {
       socket,
       sim: SimClient::new(0, 1),
       status: Status::Connecting,
@@ -122,7 +141,10 @@ impl NetClient {
       now_ms: 0,
       prev_health: crate::sim::types::PLAYER_MAX_HEALTH as u8,
       hit_flash_secs: 0.0,
-    })
+      resume_drops: 0,
+      last_drop_msgs: 0,
+      last_drop_bytes: 0,
+    }
   }
 
   /// Your own health, `0..=PLAYER_MAX_HEALTH`, or full before a seat is known.
@@ -231,7 +253,8 @@ impl NetClient {
     }
 
     self.socket.poll(&mut self.events);
-    let events = std::mem::take(&mut self.events);
+    let mut events = std::mem::take(&mut self.events);
+    self.drop_resume_backlog(&mut events, now_ms);
     let mut applied_a_frame = false;
     for event in events {
       match event {
@@ -273,6 +296,70 @@ impl NetClient {
     {
       self.send_op(&Op::Buy(upgrade));
     }
+  }
+
+  /// Discards all but the tail of a resume backlog, **before any of it is
+  /// parsed**.
+  ///
+  /// A hidden tab stops running frames while its socket keeps receiving, so
+  /// the first poll after refocus can hand back minutes of traffic at once.
+  /// None of it is playable: the timeline restart is going to discard whatever
+  /// those messages would have built. Parsing it anyway is where the
+  /// several-second freeze on refocus came from, so the drop happens here, on
+  /// message lengths alone.
+  ///
+  /// Everything dropped is repaired by machinery that already exists: the
+  /// restarted mirror's next acknowledgement carries the digest of nothing,
+  /// which the server answers with a full baseline. The one thing not repaired
+  /// is a policy change made mid-stall, which stands until the host next edits
+  /// a setting; accepted, since the alternative is parsing the backlog to look
+  /// for it.
+  fn drop_resume_backlog(&mut self, events: &mut Vec<Event>, now_ms: u64) {
+    let payload_len = |e: &Event| match e {
+      Event::Message(bytes) => Some(bytes.len()),
+      Event::Text(text) => Some(text.len()),
+      _ => None,
+    };
+    let backlog = events.iter().filter(|e| payload_len(e).is_some()).count();
+    // Before the first frame this is a join, not a resume, and a join's burst
+    // (the welcome, a warm world's first baseline) must arrive whole.
+    if backlog <= BACKLOG_TRIGGER || self.frames_seen == 0 {
+      return;
+    }
+    let drop_first = backlog - BACKLOG_KEEP;
+    let mut dropped_bytes = 0u64;
+    let mut seen = 0usize;
+    events.retain(|e| {
+      let Some(len) = payload_len(e) else {
+        // Open and Closed carry the connection's own state; never dropped.
+        return true;
+      };
+      seen += 1;
+      if seen > drop_first {
+        return true;
+      }
+      dropped_bytes += len as u64;
+      false
+    });
+    // The dropped messages still crossed the wire. The meters measure the
+    // link, not what this client chose to read, so they count in full.
+    self.traffic.add(dropped_bytes);
+    self.packets.add(drop_first as u64);
+    self.resume_drops += 1;
+    self.last_drop_msgs = drop_first as u64;
+    self.last_drop_bytes = dropped_bytes;
+    let server_now = self.clock.server_time_at(now_ms as f64).unwrap_or(now_ms as f64).max(0.0) as u64;
+    self.sim.timeline_lost(server_now);
+  }
+
+  /// Times a resume backlog was dropped unread.
+  pub fn resume_drops(&self) -> u64 {
+    self.resume_drops
+  }
+
+  /// What the last resume drop discarded: `(messages, bytes)`.
+  pub fn last_resume_drop(&self) -> Option<(u64, u64)> {
+    (self.resume_drops > 0).then_some((self.last_drop_msgs, self.last_drop_bytes))
   }
 
   /// Bytes a second arriving at this client, over a rolling window and over the
@@ -446,4 +533,105 @@ fn open(url: &str) -> Result<Box<dyn Socket>, String> {
 #[cfg(all(feature = "web", target_arch = "wasm32"))]
 fn open(url: &str) -> Result<Box<dyn Socket>, String> {
   plaza_ws::miniquad::connect(url).map(|s| Box::new(s) as Box<dyn Socket>).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+  use std::collections::VecDeque;
+  use std::sync::Arc;
+
+  use parking_lot::Mutex;
+  use plaza_wire::{Agent, SessionMessage};
+
+  use super::*;
+  use crate::sim::types::Packet;
+
+  /// A socket whose arrivals the test scripts: what a hidden tab's receive
+  /// queue looks like from the Rust side, without a browser.
+  #[derive(Clone)]
+  struct ScriptedSocket(Arc<Mutex<VecDeque<Event>>>);
+
+  impl Socket for ScriptedSocket {
+    fn send(&self, _bytes: &[u8]) -> Result<(), plaza_ws::WsError> {
+      Ok(())
+    }
+    fn send_text(&self, _text: &str) -> Result<(), plaza_ws::WsError> {
+      Ok(())
+    }
+    fn poll(&mut self, out: &mut Vec<Event>) {
+      out.extend(self.0.lock().drain(..));
+    }
+    fn state(&self) -> State {
+      State::Open
+    }
+    fn close(&mut self) {}
+  }
+
+  fn envelope(ops: Vec<Op>) -> Event {
+    let msg: SessionMessage<Op, u64, ()> = SessionMessage::Ops { from: Agent::System, ops };
+    Event::Text(serde_json::to_string(&msg).unwrap())
+  }
+
+  fn frame(seq: u64, server_time_ms: u64) -> Event {
+    envelope(vec![Op::Frame(Box::new(Packet {
+      seq,
+      server_time_ms,
+      ..Default::default()
+    }))])
+  }
+
+  fn policy() -> ServerPolicy {
+    ServerPolicy {
+      sync_hz: 16,
+      playout_delay_ms: 100,
+      render_delay_ms: 150,
+      player_sync_hz: 10,
+      allow_ghost: false,
+      coins: true,
+      generational_ids: true,
+      crowd_lod_theta: 0.0,
+      relevance: true,
+      enemy_count: 50,
+      player_count: 4,
+    }
+  }
+
+  #[test]
+  fn a_resume_backlog_is_dropped_unread_and_the_timeline_restarts_once() {
+    // The recovery a hidden tab actually needs. Its socket keeps receiving
+    // while its frame loop does not run, so the first poll back hands over
+    // minutes of traffic at once. None of it is playable, so none of it is
+    // parsed: everything but the tail is dropped on message lengths alone,
+    // and the timeline restarts once, deliberately, rather than by the queue
+    // bound tripping every 256 packets of backlog.
+    let controls = Controls::default();
+    let feed = ScriptedSocket(Arc::new(Mutex::new(VecDeque::new())));
+    feed.0.lock().push_back(envelope(vec![Op::Welcome { player: 0, policy: policy() }]));
+    feed.0.lock().push_back(frame(1, 100));
+
+    let mut client = NetClient::from_socket(Box::new(feed.clone()));
+    client.poll(120, &controls);
+    assert_eq!(client.frames_seen, 1, "the join burst is read in full");
+    assert_eq!(client.resume_drops(), 0, "a join is not a resume");
+
+    // The stall: 400 send intervals arrive in one poll.
+    {
+      let mut queue = feed.0.lock();
+      for i in 0..400u64 {
+        queue.push_back(frame(2 + i, 200 + i * 62));
+      }
+    }
+    client.poll(40_000, &controls);
+
+    assert_eq!(client.resume_drops(), 1, "the backlog was recognised as a resume");
+    let (msgs, bytes) = client.last_resume_drop().expect("the drop is on record");
+    assert_eq!(msgs, 400 - BACKLOG_KEEP as u64, "everything but the tail went unread");
+    assert!(bytes > 0, "and its cost was still counted");
+    assert_eq!(
+      client.frames_seen,
+      1 + BACKLOG_KEEP as u64,
+      "only the tail was parsed"
+    );
+    assert_eq!(client.sim.resyncs, 1, "one deliberate restart, not one per queue-bound trip");
+  }
 }
