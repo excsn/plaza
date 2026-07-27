@@ -66,7 +66,7 @@ The connection registry plus the notification channels a `StateController` consu
 *   **`new(transport: &'static str, capacity: usize) -> Self`**
 *   **`register(&self, agent: Agent<ID>, to_client_tx) -> ConnectionId`**: records a connected client and announces the join.
 *   **`deregister(&self, conn_id: ConnectionId)`**: removes it and announces the departure.
-*   **`forward_incoming(&self, from: Agent<ID>, serialized_ops: Vec<Vec<u8>>)`**: publishes a client's raw bytes toward the controller. Non-blocking; drops under load rather than stalling a connection task.
+*   **`forward_incoming(&self, from: Agent<ID>, serialized_ops: Vec<Bytes>)`**: publishes a client's raw bytes toward the controller. Non-blocking; drops under load rather than stalling a connection task. Takes `Bytes` because both transports hand over a buffer they already own, so a frame reaches the deserialize bridge without being copied out.
 *   **`broadcast(&self, target: &MessageTarget<ID>, frame: OutboundFrame) -> Result<(), SessionLayerError>`**: fans one already-encoded frame out to the matching connections. It takes bytes, not a message, because a `SessionMessage` is encoded **once** by [`encode_message`](#struct-transportsessionop-id-snapshotpayload-c-wirecodec) and the same buffer is shared with every recipient, at the cost of a refcount bump each.
 *   **`take_raw_incoming(&self) -> mpsc::BoundedAsyncReceiver<SerializedSessionMessage<ID>>`**: the inbound stream, whose payloads are still encoded bytes for the deserialize bridge to decode.
 *   **`take_presence(&self) -> SessionReceiver<PresenceEvent<ID>>`**
@@ -101,7 +101,7 @@ The single implementation of the targeting rules. Agents without an ID (the syst
 
 ### Type Alias `SerializedSessionMessage<ID>`
 
-`SessionMessage<Vec<u8>, ID, Vec<u8>>`: a message whose payloads are still encoded bytes. It survives on the **inbound** path only, where the deserialize bridge decodes a client's raw ops before handing them to the controller; the outbound path encodes once to an [`OutboundFrame`](#type-alias-outboundframe) and never builds one of these.
+`SessionMessage<Bytes, ID, Bytes>`: a message whose payloads are still encoded bytes, refcounted rather than copied out of whatever the socket produced. It survives on the **inbound** path only, where the deserialize bridge decodes a client's raw ops before handing them to the controller; the outbound path encodes once to an [`OutboundFrame`](#type-alias-outboundframe) and never builds one of these.
 
 ### Constants
 

@@ -196,10 +196,10 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
       incoming = msg_stream.next() => {
         match incoming {
           Some(Ok(AggregatedMessage::Binary(bytes))) => {
-            manager.forward_incoming(agent.clone(), vec![bytes.to_vec()]);
+            manager.forward_incoming(agent.clone(), vec![bytes]);
           }
           Some(Ok(AggregatedMessage::Text(text))) => {
-            manager.forward_incoming(agent.clone(), vec![text.as_bytes().to_vec()]);
+            manager.forward_incoming(agent.clone(), vec![text.into_bytes()]);
           }
           Some(Ok(AggregatedMessage::Ping(payload))) => {
             if ws_session.pong(&payload).await.is_err() {

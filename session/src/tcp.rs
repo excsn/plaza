@@ -156,7 +156,7 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
         match frame {
           Some(Ok(bytes)) => {
             // Each frame is one already-encoded op; the manager's bridge decodes it.
-            manager.forward_incoming(agent.clone(), vec![bytes.to_vec()]);
+            manager.forward_incoming(agent.clone(), vec![bytes.freeze()]);
           }
           Some(Err(e)) => {
             warn!(transport = TRANSPORT, conn_id, error = %e, "Read failed; closing connection.");

@@ -46,7 +46,13 @@ pub const DEFAULT_CLIENT_QUEUE_CAPACITY: usize = 64;
 ///
 /// Outbound needs no equivalent: a whole `SessionMessage` is encoded once, and
 /// what the transport moves is a finished frame.
-pub type SerializedSessionMessage<ID> = SessionMessage<Vec<u8>, ID, Vec<u8>>;
+///
+/// The payloads are `Bytes` because both transports hand over a buffer they
+/// already own: actix-ws yields a `Bytes`, and `LengthDelimitedCodec` a
+/// `BytesMut` that freezes into one. Copying them out into a `Vec` cost a
+/// memcpy of every inbound frame, per player per tick, to arrive at a buffer
+/// nothing needed to own more than the original did.
+pub type SerializedSessionMessage<ID> = SessionMessage<Bytes, ID, Bytes>;
 
 /// One connection's outbound queue.
 ///
@@ -199,7 +205,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
   }
 
   /// Publishes a client's raw operation bytes toward the controller.
-  pub fn forward_incoming(&self, from: Agent<ID>, serialized_ops: Vec<Vec<u8>>) {
+  pub fn forward_incoming(&self, from: Agent<ID>, serialized_ops: Vec<Bytes>) {
     // Dropping under load is the right failure here: blocking a connection task
     // on a backed-up controller would stall that client's socket reads.
     if self
