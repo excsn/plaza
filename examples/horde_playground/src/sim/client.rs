@@ -11,7 +11,9 @@
 use std::collections::HashMap;
 
 use plaza_client_utils::mirror::{Agreement, DeltaMirror};
-use plaza_client_utils::{ease_in_quad, AckWindow, HeldInputConfig, HeldInputPredictor, InterpolationClock, RemoteView, RenderOpts, SlotKey};
+use plaza_client_utils::{
+  ease_in_quad, AckWindow, Admission, HeldInputConfig, HeldInputPredictor, InterpolationClock, PlayoutBuffer, RemoteView, RenderOpts, SlotKey,
+};
 
 use crate::sim::types::{PlayerFrame, dequantize_far, coin_pull, difficulty, enemy_speed_scale, repulsor_pulse, step_coin, Coin, CoinId, Crowd, Upgrade, Wallet, COIN_FLIGHT_MS, COIN_PICKUP_RADIUS, step_enemy, Controls, Enemy, EnemyKind, Handle, LeaveReason, Packet, PlayerId, RemoteMode, Shot, Vec2, PLAYER_MAX_HEALTH};
 
@@ -317,11 +319,8 @@ pub struct Client {
   /// How far behind the server clock this client displays the world. Declared by
   /// the server, identical on every client, and never moved by the link.
   render_delay_ms: u64,
-  /// Packets that arrived after the instant they describe had already gone past.
-  /// The honest form of what an adaptive buffer used to hide by widening the
-  /// delay until late packets fitted.
-  underruns: u64,
-  /// Packets that have arrived but whose moment has not come.
+  /// Packets that have arrived but whose moment has not come, plus the
+  /// underrun and restart accounting that used to be hand-rolled here.
   ///
   /// **Nothing is applied on arrival.** A packet describes the world at its own
   /// `server_time_ms`, and it is applied when the render clock reaches that
@@ -331,7 +330,7 @@ pub struct Client {
   /// timeline and everything else was ahead of it, which means there is no single
   /// instant the world can be asked about, and a replay camera has nothing to
   /// drive.
-  queued: Vec<Packet>,
+  playout: PlayoutBuffer<Packet>,
   /// Shots in flight, as **events**: an origin, a velocity and a fire time each.
   ///
   /// The client flies them itself, which is what puts them on the same delayed
@@ -343,10 +342,6 @@ pub struct Client {
   shots: Vec<Shot>,
   now_ms: u64,
 
-  /// Times the timeline was abandoned and rebuilt because the client had fallen
-  /// too far behind to play its way out. Zero on a healthy client; anything else
-  /// is a stall worth knowing about.
-  pub resyncs: u64,
   pub deaths_seen: u64,
   /// When the most recent area pulse fired, on the server clock, as the last
   /// applied packet declared it. The ring is derived from this and the frame
@@ -468,11 +463,9 @@ impl Client {
       arrival_mean_ms: 0.0,
       render_clock: InterpolationClock::new(0),
       render_delay_ms: 100,
-      underruns: 0,
-      queued: Vec::new(),
+      playout: PlayoutBuffer::new(MAX_QUEUED_PACKETS, LOST_AHEAD_MS),
       shots: Vec::new(),
       now_ms: 0,
-      resyncs: 0,
       deaths_seen: 0,
       nova_at_ms: None,
       crowds: Vec::new(),
@@ -701,7 +694,7 @@ impl Client {
   /// empty ghost means the buffer has run dry.
   pub fn ghost_enemies(&self) -> Vec<(Vec2, EnemyKind)> {
     let mut newest: HashMap<u64, (u64, Vec2)> = HashMap::new();
-    for packet in &self.queued {
+    for packet in self.playout.iter() {
       for sample in &packet.samples {
         let key = SlotKey::from(sample.handle).encode();
         let slot = newest.entry(key).or_insert((0, sample.pos));
@@ -728,7 +721,14 @@ impl Client {
 
   /// How many packets arrived too late to be played at the instant they describe.
   pub fn underruns(&self) -> u64 {
-    self.underruns
+    self.playout.underruns()
+  }
+
+  /// Times the timeline was abandoned and rebuilt because the client had fallen
+  /// too far behind to play its way out. Zero on a healthy client; anything else
+  /// is a stall worth knowing about.
+  pub fn resyncs(&self) -> u64 {
+    self.playout.restarts()
   }
 
   /// Every player at the instant this frame is drawn at: the interpolated
@@ -973,51 +973,24 @@ impl Client {
     }
   }
 
-  /// Takes delivery of a packet. Does **not** apply it: see [`Client::queued`].
+  /// Takes delivery of a packet. Does **not** apply it: see [`Client::playout`].
   ///
   /// The render clock is steered here rather than at apply time, because it has
   /// to track what has *arrived* in order to decide how far behind to sit.
+  /// Lateness, overflow and the buffering-or-lost decision are the
+  /// [`PlayoutBuffer`]'s; what stays here is what a restart means for *this*
+  /// client's state.
   pub fn receive_packet(&mut self, packet: Packet, recv_ms: u64) {
     self.now_ms = recv_ms;
     self.observe_arrival(packet.server_time_ms, recv_ms);
-    // Late: its instant has passed, so it can never be played at the right
-    // moment. Counted rather than compensated for. Only jitter-scale lateness
-    // counts: a packet late by more than the discontinuity threshold is part of
-    // a lost timeline (a resumed tab draining its backlog), which `resyncs`
-    // accounts for, and charging it here too made one stall read as a thousand
-    // link faults.
-    let late_by = self.render_at().map_or(0, |at| at.server_time_ms().saturating_sub(packet.server_time_ms));
-    if late_by > 0 && late_by < LOST_AHEAD_MS {
-      self.underruns += 1;
-    }
-    let arrived_at = packet.server_time_ms;
-    self.queued.push(packet);
-
-    // Buffering or lost? A queue reaching far past the instant being drawn is
-    // not a client waiting for a moment to arrive, it is one whose clock stopped
-    // while the world kept going: a backgrounded tab, a stalled frame loop, a
-    // machine that slept. Playing out of that is hopeless, because the packets
-    // describe moments the client can only reach by simulating through all of
-    // them at once.
-    let behind = self
-      .render_at()
-      .map(|at| arrived_at.saturating_sub(at.server_time_ms()))
-      .unwrap_or(0);
-    if behind > LOST_AHEAD_MS || self.queued.len() > MAX_QUEUED_PACKETS {
-      self.restart_timeline(recv_ms);
+    let render_at = self.render_at().map(|at| at.server_time_ms());
+    let (stamp, seq) = (packet.server_time_ms, packet.seq);
+    match self.playout.push(stamp, seq, packet, render_at) {
+      Admission::Queued => {}
+      Admission::TimelineLost => self.restart_timeline(recv_ms),
     }
   }
 
-  /// Abandons the timeline and starts again from the newest thing received.
-  ///
-  /// The discontinuity rule, applied to time rather than to a position: there
-  /// are no intermediate states between "a minute ago" and "now" to ease
-  /// through, so the only honest move is to snap. The queue goes, the mirror
-  /// goes, and the render clock re-anchors on what just arrived.
-  ///
-  /// Dropping the mirror is what makes the server rebuild it. Its next digest
-  /// check finds a client holding nothing where it expected a world, and sends a
-  /// full baseline, which is the same path a drifted mirror already takes.
   /// The transport's word that this client stopped draining and the gap was
   /// discarded unread: restart, once, deliberately.
   ///
@@ -1027,16 +1000,19 @@ impl Client {
   /// queue bound tripping repeatedly as the backlog played in, tearing down
   /// each partial rebuild the previous trip had paid for.
   pub fn timeline_lost(&mut self, recv_ms: u64) {
+    self.playout.timeline_lost();
     self.restart_timeline(recv_ms);
   }
 
+  /// What a lost timeline means for this client's own state. The queue is the
+  /// buffer's business and has already been dropped to its newest packet; what
+  /// goes with it here is everything derived from played-out packets, and the
+  /// render clock re-anchors on what just arrived.
+  ///
+  /// Dropping the mirror is what makes the server rebuild it. Its next digest
+  /// check finds a client holding nothing where it expected a world, and sends a
+  /// full baseline, which is the same path a drifted mirror already takes.
   fn restart_timeline(&mut self, recv_ms: u64) {
-    self.resyncs += 1;
-    // Keep only the newest packet: it is the one the clock is about to be
-    // anchored on, and everything older describes moments that are now past.
-    let newest = self.queued.pop();
-    self.queued.clear();
-    self.queued.extend(newest);
     self.enemies.clear();
     self.shots.clear();
     self.health_queue.clear();
@@ -1044,7 +1020,8 @@ impl Client {
     self.render_clock.resync(recv_ms, 1.0);
   }
 
-  /// Applies every queued packet whose moment has arrived, oldest first.
+  /// Applies every queued packet whose moment has arrived, oldest first, so
+  /// deltas compose in the order the server built them.
   ///
   /// Returns whether anything was applied, which is when a client has something
   /// new to acknowledge: the acknowledgement carries the digest of the mirror,
@@ -1055,16 +1032,12 @@ impl Client {
       return false;
     };
     let now = at.server_time_ms();
-    // Oldest first, so deltas compose in the order the server built them.
-    self.queued.sort_by_key(|p| p.seq);
-    let due = self.queued.iter().take_while(|p| p.server_time_ms <= now).count();
-    if due == 0 {
-      return false;
-    }
-    for packet in self.queued.drain(..due).collect::<Vec<_>>() {
+    let mut applied = false;
+    while let Some(packet) = self.playout.pop_due(now) {
       self.apply_packet(&packet, now, controls);
+      applied = true;
     }
-    true
+    applied
   }
 
   fn apply_packet(&mut self, packet: &Packet, recv_ms: u64, controls: &Controls) {
@@ -1898,8 +1871,8 @@ mod tests {
       client.receive_packet(Packet { server_time_ms: t, seq: step, ..Default::default() }, stalled_clock);
     }
 
-    assert!(client.resyncs > 0, "a minute ahead is a discontinuity, not a buffer");
-    assert!(client.queued.len() <= 2, "the queue is dropped rather than played through: {}", client.queued.len());
+    assert!(client.resyncs() > 0, "a minute ahead is a discontinuity, not a buffer");
+    assert!(client.playout.len() <= 2, "the queue is dropped rather than played through: {}", client.playout.len());
     assert_eq!(client.known_entities(), 0, "and the mirror goes too, so the server rebuilds it");
 
     // And it is playing again rather than stuck: the clock is anchored on what
@@ -1919,7 +1892,7 @@ mod tests {
     for seq in 1..=(MAX_QUEUED_PACKETS as u64 * 2) {
       client.receive_packet(Packet { server_time_ms: at + 1, seq, ..Default::default() }, at + 1);
     }
-    assert!(client.queued.len() <= MAX_QUEUED_PACKETS + 1, "held {} packets", client.queued.len());
+    assert!(client.playout.len() <= MAX_QUEUED_PACKETS + 1, "held {} packets", client.playout.len());
   }
 
   #[test]

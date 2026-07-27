@@ -306,7 +306,7 @@ pub fn draw_net_ui(client: &horde_playground::net::client::NetClient, url: &str,
           client.sim.render_delay_ms(),
           client.sim.underruns(),
           client.sim.view_fallbacks(),
-          client.sim.resyncs
+          client.sim.resyncs()
         ))
           .on_hover_text("An underrun is a packet that arrived after the instant it describes had already gone past, so it could never be played at the right moment. A view fallback is a player drawn from its newest sample because its buffer could not produce the render instant. A timeline restart is this client having fallen so far behind that playing its way out was hopeless (a backgrounded tab, a stalled frame loop), so it dropped its queue and its mirror and started again from what had just arrived. All three are the same honesty applied to different failures: report them rather than absorb them.");
         if let Some((msgs, bytes)) = client.last_resume_drop() {

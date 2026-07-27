@@ -632,6 +632,6 @@ mod tests {
       1 + BACKLOG_KEEP as u64,
       "only the tail was parsed"
     );
-    assert_eq!(client.sim.resyncs, 1, "one deliberate restart, not one per queue-bound trip");
+    assert_eq!(client.sim.resyncs(), 1, "one deliberate restart, not one per queue-bound trip");
   }
 }
