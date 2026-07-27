@@ -190,7 +190,6 @@ where
       return Some(newest_snapshot.state.clone());
     }
 
-    // ... (rest of the interpolation logic for bracketing snapshots as before) ...
     // This part should now only be reached if target_time is strictly between oldest and newest
     // and num_snapshots >= 2.
 
@@ -209,9 +208,6 @@ where
     let before_snapshot = &self.snapshots[idx_after - 1];
     let after_snapshot = &self.snapshots[idx_after];
 
-    // ... (the rest of the t calculation and .interpolate() call as before) ...
-    // (Ensure this part correctly handles if target_render_time_on_server_timeline == after_snapshot.server_timestamp,
-    // though the earlier >= newest_snapshot check should catch the case where after_snapshot is the newest).
     // If target == after.time, and after is not the newest in buffer, t will be 1.0.
     // If target == before.time, t will be 0.0.
 

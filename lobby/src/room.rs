@@ -160,7 +160,8 @@ where
 
   fn is_finished(&self) -> bool {
     // A plain lock, not try_lock: treating lock contention as "finished" would
-    // held across an await, so this cannot deadlock.
+    // reap a live room. The lock is never held across an await, so this cannot
+    // deadlock.
     match &*self.task_join_handle.lock() {
       Some(handle) => handle.is_finished(),
       None => true,

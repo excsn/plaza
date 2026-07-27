@@ -21,7 +21,7 @@ pub struct PlayerAttributes {
 pub struct PlayerState {
   pub id: PlayerId,
   pub name: String,
-  pub active_debuffs: HashSet<DebuffType>, // Just track which debuffs are active
+  pub active_debuffs: HashSet<DebuffType>,
   pub attributes: PlayerAttributes,
   pub health: i32, // For DamageOverTime
 }
@@ -56,10 +56,10 @@ pub enum GameOp {
     name: String,
   },
   ApplyDebuff {
-    caster_id: Option<PlayerId>, // Who applied it (optional)
+    caster_id: Option<PlayerId>,
     target_id: PlayerId,
     debuff: DebuffType,
-    duration_ticks: u64, // How long the debuff lasts in game ticks
+    duration_ticks: u64,
   },
   // Client notifications (optional, for UI updates)
   DebuffApplied {
@@ -75,7 +75,7 @@ pub enum GameOp {
     player_id: PlayerId,
     new_health: i32,
     new_attributes: PlayerAttributes,
-  }, // Example
+  },
 }
 
 pub type DebuffSnapshotPayload = GameState;

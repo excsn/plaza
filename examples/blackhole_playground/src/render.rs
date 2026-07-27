@@ -80,7 +80,6 @@ mod tests {
     let dt = 1.0 / 60.0;
     let mut fx = DashFx::new();
 
-    // While dashing, full intensity.
     assert_eq!(fx.advance(0, true, dt), 1.0, "a dash lights the burst fully");
 
     // After it ends it decays rather than snapping off, and reaches zero within

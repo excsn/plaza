@@ -25,7 +25,7 @@ pub trait TurnManager<Op, AppID: AgentId, TurnActorId> {
   fn end_current_turn_and_advance(
     &mut self,
     context: &mut dyn FsmContext<Op, AppID>,
-  ) -> Result<Option<TurnActorId>, String>; // String is error reason
+  ) -> Result<Option<TurnActorId>, String>;
 
 }
 
@@ -249,7 +249,6 @@ pub mod op_payloads {
   #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
   #[serde(bound = "")]
   pub struct EndTurnRequestPayload<AppID: AgentId> {
-    // AppID from TurnManager
     pub player_id: AppID, // The player making the request (for validation)
   }
 
@@ -266,7 +265,7 @@ pub mod op_payloads {
     /// you keep one manager: a per-round manager counts per round, a match-long
     /// one counts the match.
     pub turn_number: u32,
-    pub time_limit_for_turn: Option<Duration>, // Optional time limit for the new turn
+    pub time_limit_for_turn: Option<Duration>,
   }
 }
 

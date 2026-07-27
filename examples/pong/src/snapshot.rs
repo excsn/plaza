@@ -15,8 +15,8 @@ impl SnapshotProvider<PlayerId, PongGameState, PongSnapshotPayload> for PongSnap
     async fn create_snapshot_data(
         &self,
         full_state: &PongGameState,
-        target_agent: Option<&Agent<PlayerId>>, // The agent this snapshot is for
-        context: Option<SnapshotContext>,       // Additional context (e.g., full, delta)
+        target_agent: Option<&Agent<PlayerId>>,
+        context: Option<SnapshotContext>,
     ) -> Result<SnapshotData<PongSnapshotPayload>, SnapshotError<PlayerId>> {
         let agent_id_str = target_agent.and_then(|a| a.id().map(|id| id.to_string())).unwrap_or_else(|| "N/A".to_string());
         debug!(
@@ -27,15 +27,10 @@ impl SnapshotProvider<PlayerId, PongGameState, PongSnapshotPayload> for PongSnap
             "Creating Pong snapshot"
         );
 
-        // For Pong, the snapshot payload is a direct clone of the current game state.
-        // No special handling for target_agent or context is implemented in this simple version.
-        // or provide delta snapshots based on the context.
-
         let snapshot_payload = full_state.clone();
 
         Ok(SnapshotData {
             payload: snapshot_payload,
-            // version: full_state.version, // If SnapshotData struct had a version field
         })
     }
 }

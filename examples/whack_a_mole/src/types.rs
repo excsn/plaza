@@ -17,16 +17,16 @@ pub enum MoleOp {
   Whack {
     slot: usize,
     client_input_seq: u64,
-  }, // Client reports a whack attempt
+  },
 
   // Server -> Client (or internal state changes)
   MoleSpawned {
     slot: usize,
     server_tick: u64,
-  }, // Mole appears
+  },
   MoleHidden {
     server_tick: u64,
-  }, // Mole disappears (either by whack or timeout)
+  },
   ScoreUpdate {
     player_id: PlayerId,
     new_score: u32,
@@ -40,7 +40,6 @@ pub enum MoleOp {
     player_id: PlayerId,
   },
   GameSnapshotPart {
-    // For sending parts of state, like current scores
     scores: HashMap<PlayerId, u32>,
     current_mole_slot: Option<usize>,
     server_tick: u64,
@@ -49,8 +48,8 @@ pub enum MoleOp {
 
 #[derive(Clone, Debug)]
 pub enum MoleGameEvent {
-  SpawnMoleRequest, // Request to pick a slot and spawn
-  HideMoleRequest,  // Request to hide current mole due to timeout
+  SpawnMoleRequest,
+  HideMoleRequest,
 }
 
 #[derive(Debug, Clone)]
@@ -70,7 +69,7 @@ pub struct MoleGameState {
   /// Server's current tick.
   pub current_tick: u64,
   /// Scheduler for game events like mole spawning/hiding.
-  pub scheduler: TickEventScheduler<MoleGameEvent>, // Owned by GameState
+  pub scheduler: TickEventScheduler<MoleGameEvent>,
   pub version: u64,
 }
 
@@ -93,11 +92,10 @@ impl Default for MoleGameState {
 }
 
 // The MoleOp::GameSnapshotPart is used for frequent updates.
-// A full snapshot might be simpler for join.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MoleSnapshotPayload {
   pub current_mole_slot: Option<usize>,
   pub scores: HashMap<PlayerId, u32>, // Send scores, not full PlayerSessionInfo
-  pub player_names: HashMap<PlayerId, String>, // Send names separately
+  pub player_names: HashMap<PlayerId, String>,
   pub server_tick: u64,
 }

@@ -14,12 +14,9 @@ pub enum Ability {
 
 // The event payload needs to be Clone, Debug, Send, 'static.
 // Serialize/Deserialize are only needed if you plan to persist/send the *scheduled events themselves*.
-// For runtime use with the scheduler, these are not strictly required by TickEventScheduler's E bounds.
-#[derive(Clone, Debug)] // Added Send, 'static is implied by no lifetimes
+#[derive(Clone, Debug)]
 pub enum ScheduledGameEvent {
   AbilityCooldownReady { player_id: PlayerId, ability: Ability },
-
-  // PeriodicGlobalEffect { effect_name: String },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -52,13 +49,6 @@ impl Default for GameState {
   }
 }
 
-
-// If GameState needed to be fully Serialize/Deserialize for snapshots AND include scheduler state:
-//    This is complex for BinaryHeap and Box<dyn FnMut> for callback schedulers.
-// For event schedulers, if E is S/D, then ScheduledItem<E> can be S/D, and then
-// Vec<ScheduledItem<E>> can be S/D. BinaryHeap can be converted to/from Vec.
-// So, it's *possible* but adds complexity. Skipping serde for the live scheduler is common.
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum GameOp {
   /// Client informs server they are joining.
@@ -67,19 +57,15 @@ pub enum GameOp {
   UseAbility {
     player_id: PlayerId, // Implicitly the sender, but good to have for clarity/validation
     ability: Ability,
-    target_id: Option<PlayerId>, // Optional target for abilities like Fireball
+    target_id: Option<PlayerId>,
   },
   /// Server informs client that an ability is now ready for use (off cooldown).
   ClientNotifyAbilityReady { ability: Ability },
-  // SimulateTick Op is removed; LogicInput::TimeStep is the canonical way to advance time.
+  // LogicInput::TimeStep is the canonical way to advance time.
 }
 
-// When cloned, the scheduler inside GameState will also be cloned (it's a struct with a BinaryHeap).
-// If GameState were sent over network as snapshot, and scheduler is #[serde(skip)],
-// the receiving end would get a GameState with a default/empty scheduler.
 pub type CooldownSnapshotPayload = GameState;
 
-// Helper to get cooldown duration for an ability (in ticks)
 pub fn get_ability_cooldown_duration(ability: Ability) -> u64 {
   match ability {
     Ability::Fireball => 300, // e.g., 5 seconds at 60 TPS

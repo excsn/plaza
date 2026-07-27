@@ -26,14 +26,14 @@ pub struct CooldownLogic;
 impl StateLogic<GameOp, PlayerId, GameState> for CooldownLogic {
   async fn process_input(
     &self,
-    state: &mut GameState, // GameState now contains the scheduler
+    state: &mut GameState,
     input: LogicInput<GameOp, PlayerId>,
   ) -> Result<LogicOutput<GameOp, PlayerId>, StateLogicError> {
     let mut ops_to_broadcast: Vec<TargetedOp<GameOp, PlayerId>> = Vec::new();
 
     match input {
       LogicInput::AgentOps { source, ops } => {
-        let agent_id_of_op_source = source.id().cloned(); // Get the ID if it exists
+        let agent_id_of_op_source = source.id().cloned();
 
         for op in ops {
           match op {
@@ -77,7 +77,7 @@ impl StateLogic<GameOp, PlayerId, GameState> for CooldownLogic {
                 } else {
                   warn!(player_id = %player_id, ?ability, "Attempted to use ability but player not found (should not happen if previous check passed).");
                 }
-                continue; // Skip to next op
+                continue;
               }
 
               info!(player_id = %player_id, ?ability, ?target_id, tick = state.current_tick, "Player will use ability");
@@ -102,7 +102,6 @@ impl StateLogic<GameOp, PlayerId, GameState> for CooldownLogic {
                   }
                 }
                 Ability::Heal => {
-                  // Heal logic needs mutable access to the current player.
                   // It's safe because it's the *same* player we initially checked.
                   if let Some(player_to_heal) = state.players.get_mut(&player_id) {
                     player_to_heal.health = (player_to_heal.health + 30).min(100);
@@ -113,7 +112,6 @@ impl StateLogic<GameOp, PlayerId, GameState> for CooldownLogic {
                 }
                 Ability::Dash => {
                   info!(player_id=%player_id, "Player dashed! (Effect not implemented)");
-                  // If dash modified the player's own state (e.g. position), get_mut here too.
                 }
               }
 
@@ -134,7 +132,6 @@ impl StateLogic<GameOp, PlayerId, GameState> for CooldownLogic {
                   );
                 }
 
-                // Echo successful ability use to all clients
                 ops_to_broadcast.push(TargetedOp {
                   from_agent: source.clone(),
                   target: MessageTarget::All,
@@ -154,9 +151,7 @@ impl StateLogic<GameOp, PlayerId, GameState> for CooldownLogic {
         }
       }
       LogicInput::TimeStep { delta_time: _ } => {
-        // delta_time from controller is available if needed
         state.current_tick += 1;
-        // info!("Game tick: {}", state.current_tick); // Can be very verbose
 
         let due_events = state.scheduler.tick(state.current_tick);
         for event in due_events {
@@ -173,7 +168,6 @@ impl StateLogic<GameOp, PlayerId, GameState> for CooldownLogic {
                   .get(&ability)
                   .map_or(false, |&end_tick| end_tick <= state.current_tick)
                 {
-                  // Cooldown has indeed expired for this instance.
                   // We could remove it from the map, but it's also fine to let the
                   // `UseAbility` logic just check `current_tick >= end_tick`.
                   // Removing it makes the state cleaner if not re-used immediately.
@@ -181,7 +175,7 @@ impl StateLogic<GameOp, PlayerId, GameState> for CooldownLogic {
                   info!(player_id = %player_id, ?ability, tick = state.current_tick, "Ability cooldown officially finished & cleared from map.");
 
                   ops_to_broadcast.push(TargetedOp {
-                    from_agent: Agent::system(), // System is notifying
+                    from_agent: Agent::system(),
                     target: MessageTarget::Agent(player_id),
                     ops: vec![GameOp::ClientNotifyAbilityReady { ability }],
                   });

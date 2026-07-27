@@ -19,8 +19,6 @@ impl SnapshotProvider<CounterId, CounterStateData, CounterSnapshotPayload> for C
     context: Option<SnapshotContext>,
   ) -> Result<SnapshotData<CounterSnapshotPayload>, SnapshotError<CounterId>> {
     debug!(?target_agent, ?context, "Creating snapshot for counter");
-    // For the counter, the payload is just a clone of the state.
-    // Context and target_agent are ignored for this simple provider.
     Ok(SnapshotData {
       payload: full_state.clone(),
     })

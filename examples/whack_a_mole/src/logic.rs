@@ -41,14 +41,12 @@ impl StateLogic<MoleOp, PlayerId, MoleGameState> for MoleLogic {
               slot,
               client_input_seq: _,
             } => {
-              // client_input_seq not used in this simple version
               if !state.player_info.contains_key(&player_id) {
                 warn!("Whack from unknown player {}", player_id);
                 continue;
               }
               debug!(player_id = %player_id, whack_slot = slot, current_mole = ?state.current_mole_slot, "Processing Whack op");
               if state.current_mole_slot == Some(slot) {
-                // Successful whack!
                 let player_info = state.player_info.get_mut(&player_id).unwrap();
                 player_info.score += 1;
                 info!(player_id = %player_id, new_score = player_info.score, "Player scored!");
@@ -63,7 +61,6 @@ impl StateLogic<MoleOp, PlayerId, MoleGameState> for MoleLogic {
                   }],
                 ));
 
-                // Hide the mole immediately and schedule next spawn
                 state.current_mole_slot = None;
                 state.mole_spawn_tick = None;
                 ops_to_broadcast.push(TargetedOp::new(
@@ -86,7 +83,6 @@ impl StateLogic<MoleOp, PlayerId, MoleGameState> for MoleLogic {
                 debug!("Mole whacked, hidden. Next spawn scheduled.");
               } else {
                 debug!(player_id = %player_id, "Player missed or whacked empty slot.");
-                // player_info.score = player_info.score.saturating_sub(1);
               }
             }
             _ => warn!("MoleLogic: Received unexpected client Op: {:?}", op),
@@ -96,7 +92,6 @@ impl StateLogic<MoleOp, PlayerId, MoleGameState> for MoleLogic {
       LogicInput::TimeStep { delta_time: _ } => {
         state.current_tick += 1;
 
-        // Process scheduled game events
         let due_game_events = state.scheduler.tick(state.current_tick);
         for event in due_game_events {
           match event {
@@ -128,7 +123,6 @@ impl StateLogic<MoleOp, PlayerId, MoleGameState> for MoleLogic {
                 }],
               ));
 
-              // Schedule it to hide after a duration
               state.scheduler.schedule_after(
                 state.current_tick,
                 MOLE_VISIBLE_DURATION_TICKS,
@@ -141,7 +135,6 @@ impl StateLogic<MoleOp, PlayerId, MoleGameState> for MoleLogic {
                 // And check if it's the *same* mole that was scheduled to hide (by comparing spawn tick)
                 // For this simple scheduler, we don't have IDs on scheduled Hide requests tied to specific spawns.
                 // So, if a mole was whacked and a new one spawned quickly, an old Hide event might hide the new one.
-                // For now, simple hide:
                 info!(
                   slot = state.current_mole_slot.unwrap(),
                   tick = state.current_tick,
@@ -156,7 +149,6 @@ impl StateLogic<MoleOp, PlayerId, MoleGameState> for MoleLogic {
                     server_tick: state.current_tick,
                   }],
                 ));
-                // Schedule the next spawn cycle
                 state.scheduler.schedule_after(
                   state.current_tick,
                   MOLE_SPAWN_INTERVAL_TICKS,
@@ -166,8 +158,6 @@ impl StateLogic<MoleOp, PlayerId, MoleGameState> for MoleLogic {
                 debug!("HideMoleRequest: No mole currently visible to hide (already whacked or hidden).");
                 // Still schedule next spawn if no other spawn is pending.
                 // This needs care to avoid duplicate spawn schedules.
-                // If the current logic always reschedules spawn on whack/hide, this might be redundant.
-                // Let's ensure spawn is always on a cycle:
                 if !state
                   .scheduler
                   .any_pending(|event| matches!(event, MoleGameEvent::SpawnMoleRequest))
@@ -210,7 +200,6 @@ impl StateLogic<MoleOp, PlayerId, MoleGameState> for MoleLogic {
                 score: 0,
               },
             );
-            // Notify all (including new player for their own info, or specific welcome message)
             ops_to_broadcast.push(TargetedOp::new(
               Agent::system(),
               MessageTarget::All,

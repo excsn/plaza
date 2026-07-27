@@ -359,8 +359,8 @@ impl Server {
       }
     }
 
-    // The player stream, on its own clock and now built per recipient, because
-    // it carries a different subset to each one.
+    // The player stream, on its own clock and built per recipient, because it
+    // carries a different subset to each one.
     self.player_sync.set_interval_ms(controls.player_sync_interval_ms());
     if self.player_sync.due(dt_ms) {
       // The far tier rides a slower clock than the near one. A distant peer is a

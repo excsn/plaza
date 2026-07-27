@@ -16,7 +16,7 @@ where
     PropertyKey: Clone + Debug + Eq + Hash,
     PropertyValue: Clone + Debug,
 {
-    pub object_id: ObjectId, // Usually client-generated for optimistic updates, or server-assigned
+    pub object_id: ObjectId,
     pub initial_properties: HashMap<PropertyKey, PropertyValue>,
 }
 

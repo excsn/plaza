@@ -140,7 +140,6 @@
 //!   to send `ClientOp`s and receive server state updates.
 //! - Driving the rendering loop and using the predicted/interpolated states.
 
-// Main module declarations
 pub mod ack;
 pub mod arrival;
 pub mod clock_sync;

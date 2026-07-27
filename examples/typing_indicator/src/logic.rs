@@ -2,14 +2,13 @@ use crate::types::{AppOp, AppState, ScheduledAppEvent, TypingState, UserId, User
 use async_trait::async_trait;
 use plaza::{
   agent::Agent,
-  // TimeEventScheduler is in AppState
   error::StateLogicError,
   session::{MessageTarget, TargetedOp},
   state_logic::{LogicInput, LogicOutput, StateLogic},
 };
 use tracing::{debug, info, warn};
 
-#[derive(Debug, Default)] // Logic is stateless, scheduler is in AppState
+#[derive(Debug, Default)]
 pub struct TypingLogic;
 
 #[async_trait]
@@ -38,7 +37,6 @@ impl StateLogic<AppOp, UserId, AppState> for TypingLogic {
                     last_typing_timeout_event_id: None,
                   },
                 );
-                // Notify others about the new user's (idle) presence
                 ops_to_broadcast.push(TargetedOp {
                   from_agent: Agent::system(),
                   target: MessageTarget::AllExcept(user_id),
@@ -51,10 +49,8 @@ impl StateLogic<AppOp, UserId, AppState> for TypingLogic {
             }
             AppOp::UserLeft { user_id } => {
               if source_user_id == Some(user_id) || source.is_system() {
-                // Allow user to signal their own leave, or system to force it
                 if let Some(removed_presence) = state.users_presence.remove(&user_id) {
                   info!(user_id = %user_id, "User left");
-                  // Cancel any pending typing timeout for this user
                   if let Some(event_id) = removed_presence.last_typing_timeout_event_id {
                     if state.scheduler.cancel(event_id) {
                       debug!(user_id = %user_id, ?event_id, "Cancelled pending typing timeout for leaving user.");
@@ -62,8 +58,8 @@ impl StateLogic<AppOp, UserId, AppState> for TypingLogic {
                   }
                   ops_to_broadcast.push(TargetedOp {
                     from_agent: Agent::system(),
-                    target: MessageTarget::All, // Notify everyone user left (client handles removal)
-                    ops: vec![AppOp::UserLeft { user_id }], // Echo or specific "PresenceRemoved"
+                    target: MessageTarget::All,
+                    ops: vec![AppOp::UserLeft { user_id }],
                   });
                 }
               }
@@ -86,15 +82,13 @@ impl StateLogic<AppOp, UserId, AppState> for TypingLogic {
                   debug!(user_id = %user_id, "User continues typing (refreshed timeout).");
                 }
 
-                // Cancel previous timeout event, if any
                 if let Some(old_event_id) = presence.last_typing_timeout_event_id.take() {
                   state.scheduler.cancel(old_event_id);
                   debug!(user_id = %user_id, ?old_event_id, "Cancelled previous typing timeout.");
                 }
 
-                // Schedule new timeout event
                 let new_event_id = state.scheduler.schedule_after(
-                  state.current_game_time, // Use current_game_time from AppState
+                  state.current_game_time,
                   TYPING_TIMEOUT_DURATION,
                   ScheduledAppEvent::UserTypingTimeout { user_id },
                 );
@@ -103,8 +97,8 @@ impl StateLogic<AppOp, UserId, AppState> for TypingLogic {
 
                 if changed_to_typing {
                   ops_to_broadcast.push(TargetedOp {
-                    from_agent: Agent::system(), // Or source agent
-                    target: MessageTarget::All,  // Or AllExcept self
+                    from_agent: Agent::system(),
+                    target: MessageTarget::All,
                     ops: vec![AppOp::PresenceUpdate {
                       user_id,
                       status: TypingState::Typing,
@@ -121,7 +115,7 @@ impl StateLogic<AppOp, UserId, AppState> for TypingLogic {
         }
       }
       LogicInput::TimeStep { delta_time } => {
-        state.current_game_time += delta_time; // Accumulate game time
+        state.current_game_time += delta_time;
 
         let due_events = state.scheduler.tick(state.current_game_time);
         for event in due_events {
@@ -132,10 +126,9 @@ impl StateLogic<AppOp, UserId, AppState> for TypingLogic {
                 // Only change to Idle if this specific timeout event is still the active one
                 // and they haven't typed again since it was scheduled.
                 if presence.last_typing_timeout_event_id.is_some() {
-                  // Check if a timeout was expected
                   if presence.status == TypingState::Typing {
                     presence.status = TypingState::Idle;
-                    presence.last_typing_timeout_event_id = None; // Clear the event ID
+                    presence.last_typing_timeout_event_id = None;
                     info!(user_id = %user_id, "User typing timed out, set to Idle.");
                     ops_to_broadcast.push(TargetedOp {
                       from_agent: Agent::system(),
@@ -147,7 +140,7 @@ impl StateLogic<AppOp, UserId, AppState> for TypingLogic {
                     });
                   } else {
                     debug!(user_id = %user_id, "TypingTimeout event, but user already Idle. Ignoring stale event.");
-                    presence.last_typing_timeout_event_id = None; // Still clear it
+                    presence.last_typing_timeout_event_id = None;
                   }
                 } else {
                   debug!(user_id = %user_id, "TypingTimeout event, but no active timeout ID was stored. Possible race or manual clear. Ignoring.");

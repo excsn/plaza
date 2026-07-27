@@ -4,7 +4,7 @@
 
 use crate::common_types::{
   BoxState,
-  CspSnapshotPayload, // Use this for snapshot
+  CspSnapshotPayload,
   GameOp,
   MoveInput,
   PlayerId,
@@ -12,7 +12,7 @@ use crate::common_types::{
   Vec2,
 };
 use plaza::{
-  agent::Agent, // Import the trait
+  agent::Agent,
   game_common::reconciliation::{
     client_input_tracker::ClientInputTracker,
     op_payloads::{AuthoritativeStateUpdate, RemoteEntitySnapshot, SequencedClientInput},
@@ -50,7 +50,7 @@ fn take_once<T: Send + 'static>(slot: &Arc<StdMutex<Option<T>>>, name: &str) -> 
 #[derive(Debug, Clone, Default)]
 pub struct ServerGameState {
   pub boxes: HashMap<PlayerId, BoxState>,
-  pub input_tracker: ClientInputTracker<PlayerId>, // Tracks last processed input sequence for each player
+  pub input_tracker: ClientInputTracker<PlayerId>,
   pub current_server_tick: ServerTick,
   pub version: u64,
 }
@@ -110,16 +110,13 @@ impl StateLogic<GameOp, PlayerId, ServerGameState> for ServerLogic {
                   move_vec.y /= mag;
                 }
 
-                // Scale by speed and delta_time (from server tick interval)
                 let effective_speed = MAX_PLAYER_SPEED / SERVER_TICK_RATE_HZ as f32;
                 player_box_state.position.x += move_vec.x * effective_speed;
                 player_box_state.position.y += move_vec.y * effective_speed;
 
-                // Clamp to world bounds
                 player_box_state.position.x = player_box_state.position.x.clamp(WORLD_BOUNDS_X.0, WORLD_BOUNDS_X.1);
                 player_box_state.position.y = player_box_state.position.y.clamp(WORLD_BOUNDS_Y.0, WORLD_BOUNDS_Y.1);
 
-                // Update velocity (simple direct assignment from input for this example)
                 player_box_state.velocity = Vec2 {
                   x: move_vec.x * MAX_PLAYER_SPEED,
                   y: move_vec.y * MAX_PLAYER_SPEED,
@@ -135,7 +132,7 @@ impl StateLogic<GameOp, PlayerId, ServerGameState> for ServerLogic {
 
                 let auth_update = AuthoritativeStateUpdate {
                   last_processed_input_seq: sequence_number,
-                  authoritative_player_state: *player_box_state, // BoxState is Copy
+                  authoritative_player_state: *player_box_state,
                   server_time_at_state: state.current_server_tick,
                 };
                 ops_to_broadcast.push(TargetedOp::new(
@@ -154,10 +151,7 @@ impl StateLogic<GameOp, PlayerId, ServerGameState> for ServerLogic {
       LogicInput::TimeStep { delta_time: _ } => {
         // We use our fixed server tick interval
         state.current_server_tick += 1;
-        // info!("Server Tick: {}", state.current_server_tick); // Can be verbose
 
-
-        // Periodically broadcast remote entity snapshots to all clients
         if state.current_server_tick % 1 == 0 {
           // Send every tick for this demo (can be less frequent)
           let mut remote_snapshots = Vec::new();
@@ -173,11 +167,10 @@ impl StateLogic<GameOp, PlayerId, ServerGameState> for ServerLogic {
           }
 
           if !remote_snapshots.is_empty() {
-            // For each player, send snapshots of *other* players
             for player_id_receiver in state.boxes.keys() {
               let snapshots_for_this_player: Vec<_> = remote_snapshots
                 .iter()
-                .filter(|rs| rs.entity_id != *player_id_receiver) // Exclude self
+                .filter(|rs| rs.entity_id != *player_id_receiver)
                 .cloned()
                 .collect();
 
@@ -193,7 +186,6 @@ impl StateLogic<GameOp, PlayerId, ServerGameState> for ServerLogic {
         }
       }
       LogicInput::AgentJoined { agent } => {
-        // by creating a System Op. This is a good place to add the player.
         if let Some(player_id) = agent.id_cloned() {
           if !state.boxes.contains_key(&player_id) {
             let initial_pos = Vec2 {
@@ -209,7 +201,6 @@ impl StateLogic<GameOp, PlayerId, ServerGameState> for ServerLogic {
 
             info!(player_id = %player_id, pos = ?initial_pos, "Player box added to game state via AgentJoinedPlaza.");
 
-            // Notify all *other* existing players about the new player
             let joined_notice = GameOp::SC_PlayerJoined {
               player_id,
               initial_state: initial_box_state,
@@ -217,7 +208,7 @@ impl StateLogic<GameOp, PlayerId, ServerGameState> for ServerLogic {
             };
             ops_to_broadcast.push(TargetedOp::new(
               Agent::system(),
-              MessageTarget::AllExcept(player_id), // Send to everyone else
+              MessageTarget::AllExcept(player_id),
               vec![joined_notice],
             ));
             // The new player gets the full state via snapshot from SnapshotProvider shortly.
@@ -230,7 +221,7 @@ impl StateLogic<GameOp, PlayerId, ServerGameState> for ServerLogic {
           info!(player_id = %agent_id, "Player box removed from game state.");
           ops_to_broadcast.push(TargetedOp::new(
             Agent::system(),
-            MessageTarget::All, // Notify everyone
+            MessageTarget::All,
             vec![GameOp::SC_PlayerLeft { player_id: agent_id }],
           ));
         }
@@ -241,21 +232,16 @@ impl StateLogic<GameOp, PlayerId, ServerGameState> for ServerLogic {
   }
 }
 
-// ClientConnections will store a way to send messages back to each "client task"
 type ClientTx = mpsc::BoundedAsyncSender<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>;
 
 #[derive(Debug, Clone)]
 struct DummyServerSession {
-  // For messages from clients to StateController (via Session trait)
   incoming_messages_tx: SessionSender<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>,
   incoming_messages_rx: Arc<StdMutex<Option<SessionReceiver<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>>>>,
-  // For StateController to know about joins/leaves
   presence_tx: SessionSender<PresenceEvent<PlayerId>>,
   presence_rx: Arc<StdMutex<Option<SessionReceiver<PresenceEvent<PlayerId>>>>>,
 
   // Store Senders to connected clients (simulates server sending to specific sockets)
-  // Key: ConnectionId (assigned by this session)
-  // Value: (PlayerId, Sender to that client's simulated network receiver)
   clients: Arc<StdMutex<HashMap<PlazaConnectionId, (PlayerId, ClientTx)>>>,
   next_conn_id: Arc<StdMutex<u64>>,
 }
@@ -362,14 +348,12 @@ impl Session<GameOp, PlayerId, CspSnapshotPayload> for DummyServerSession {
     if targeted_players.is_empty() && !matches!(target, MessageTarget::All | MessageTarget::AllExceptThese(_)) {
       // Avoid warning if genuinely no one to send to for broad targets
       warn!("send_message: No clients matched target: {:?}", target);
-      // return Ok(()); // Or an error depending on strictness
     }
 
     for (conn_id, (client_player_id, client_tx)) in clients_guard.iter() {
       if targeted_players.contains(client_player_id) {
         debug!(target_player_id = %client_player_id, conn_id = %conn_id, "DummySession: Sending message.");
         if client_tx.try_send(msg.clone()).is_err() {
-          // Clone msg for each send
           // The client is left in the map: this example never reaps dead
           // connections, unlike `plaza_session`, which deregisters on pump exit.
           warn!(conn_id = %conn_id, player_id = %client_player_id, "DummySession: send failed; channel closed or full.");
@@ -403,7 +387,7 @@ impl SnapshotProvider<PlayerId, ServerGameState, CspSnapshotPayload> for DummySn
   async fn create_snapshot_data(
     &self,
     state: &ServerGameState,
-    target_agent: Option<&Agent<PlayerId>>, // For whom is this snapshot?
+    target_agent: Option<&Agent<PlayerId>>,
     _context: Option<SnapshotContext>,
   ) -> Result<SnapshotData<CspSnapshotPayload>, PlazaSnapshotError<PlayerId>> {
     info!("Creating snapshot for target: {:?}", target_agent.and_then(|a| a.id()));

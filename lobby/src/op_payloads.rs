@@ -8,12 +8,12 @@ pub struct RoomSettings<CustomGameSettings>
 where
   CustomGameSettings: Clone + Debug,
 {
-  pub name: Option<String>, // Optional, can be auto-generated if None
+  pub name: Option<String>,
   pub game_mode: GameMode,
   pub max_players: u32,
   pub is_private: bool,
   pub password_hash: Option<String>, // Server should only store/compare hashes
-  pub custom_game_settings: CustomGameSettings, // Game-specific settings
+  pub custom_game_settings: CustomGameSettings,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -26,7 +26,7 @@ where
   pub game_mode: GameMode,
   pub current_players: u32,
   pub max_players: u32,
-  pub has_password: bool, // So client knows to prompt if needed
+  pub has_password: bool,
   /// The worst one-way delay this room can carry, if it has a limit.
   ///
   /// Stated by the room rather than assumed by the lobby, because it is a

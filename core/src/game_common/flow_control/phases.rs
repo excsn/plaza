@@ -282,9 +282,9 @@ pub mod op_payloads {
   /// Payload for an Op to update clients about countdown progress within a phase.
   #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
   pub struct CountdownTickNoticePayload {
-    pub remaining_seconds: u32, // Or Duration
+    pub remaining_seconds: u32,
     /// Optional: An identifier for the phase this countdown belongs to, for client context.
-    pub phase_context_id: Option<String>, // Could be PhaseId.to_string() or a custom string
+    pub phase_context_id: Option<String>,
   }
 }
 

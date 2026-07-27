@@ -34,7 +34,7 @@ where
   fn decrement_score(&mut self, player_id: &ID, delta: ScoreType) -> ScoreType;
 
   /// Gets the score for a given player.
-  fn get_score(&self, player_id: &ID) -> Option<ScoreType>; // Returns ScoreType by Copy
+  fn get_score(&self, player_id: &ID) -> Option<ScoreType>;
 
   /// Resets a specific player's score to the default value for `ScoreType`.
   /// Returns the old score if the player existed.
@@ -45,5 +45,5 @@ where
 
   /// Gets all scores, perhaps for display or snapshotting.
   /// The return type can vary; a Vec of tuples is common for leaderboards.
-  fn get_all_scores_sorted(&self) -> Vec<(ID, ScoreType)>; // Example for leaderboard
+  fn get_all_scores_sorted(&self) -> Vec<(ID, ScoreType)>;
 }

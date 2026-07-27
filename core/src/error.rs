@@ -2,10 +2,7 @@ use crate::agent::AgentId;
 use std::fmt::Debug;
 use thiserror::Error;
 
-// Specific error types for different modules/operations
-// These can be more detailed and then wrapped by PlazaError.
-
-#[derive(Error, Debug, Clone)] // Clone if errors need to be passed around
+#[derive(Error, Debug, Clone)]
 pub enum SessionError<ID: AgentId> {
   #[error("Agent with ID {id:?} not found in session")]
   AgentNotFound { id: ID },
@@ -22,7 +19,7 @@ pub enum SessionError<ID: AgentId> {
   #[error("Permission denied for agent {id:?} to perform action: {action}")]
   PermissionDenied { id: Option<ID>, action: String },
   #[error("Underlying transport error: {0}")]
-  TransportError(String), // Generic transport error
+  TransportError(String),
 }
 
 #[derive(Error, Debug, Clone)]
@@ -51,7 +48,7 @@ pub enum SnapshotError<ID: AgentId> {
 
 /// The main error type for the Plaza library.
 /// It's generic over the AgentId type used by the application.
-#[derive(Error, Debug)] // Not cloning PlazaError by default unless specific variants are easily cloneable
+#[derive(Error, Debug)]
 pub enum PlazaError<ID: AgentId> {
   #[error("Session error: {0}")]
   Session(#[from] SessionError<ID>),
@@ -83,7 +80,7 @@ pub enum PlazaError<ID: AgentId> {
   InvalidArgument(String),
 
   #[error("Resource not found for ID: {id:?}")]
-  NotFoundById { id: ID }, // More specific than a generic string
+  NotFoundById { id: ID },
 
   #[error("An I/O error occurred")]
   Io(#[from] std::io::Error),
@@ -94,14 +91,10 @@ pub enum PlazaError<ID: AgentId> {
   #[error("Feature not implemented: {0}")]
   NotImplemented(String),
 
-  // Catch-all for application-defined errors if they don't fit elsewhere.
-  // It's often better for applications to define their own error enums
-  // that can be converted into a PlazaError::Application variant.
   #[error("Application-specific error: {0}")]
   Application(Box<dyn std::error::Error + Send + Sync>),
 }
 
-// Helper for creating serialization/deserialization errors more easily
 impl<ID: AgentId> PlazaError<ID> {
   pub fn ser<E: std::error::Error + Send + Sync + 'static>(message: impl Into<String>, source: E) -> Self {
     PlazaError::Serialization {

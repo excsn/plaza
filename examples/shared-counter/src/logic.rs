@@ -23,7 +23,7 @@ impl StateLogic<CounterOp, CounterId, CounterStateData> for CounterLogic {
       LogicInput::AgentOps { source, ops } => {
         debug!(agent = %source.label(), num_ops = ops.len(), "Processing agent ops for counter");
         for op in ops {
-          let applied_op = op.clone(); // The op that was actually applied
+          let applied_op = op.clone();
           match op {
             CounterOp::Increment(n) => {
               current_state.value += n;
@@ -36,9 +36,8 @@ impl StateLogic<CounterOp, CounterId, CounterStateData> for CounterLogic {
           }
           current_state.version += 1;
 
-          // For a counter, every change is broadcast to everyone.
           ops_to_broadcast.push(TargetedOp {
-            from_agent: source.clone(), // Attribute to the original source
+            from_agent: source.clone(),
             target: MessageTarget::All,
             ops: vec![applied_op],
           });

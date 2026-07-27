@@ -42,7 +42,6 @@ impl<ID: AgentId, Data: ParticipantAppSpecificData> ParticipantTracker<ID, Data>
   pub fn add_participant(&mut self, agent: Agent<ID>, initial_app_data: Data) -> bool {
     if let Some(id) = agent.id_cloned() {
       if self.participants.contains_key(&id) {
-        // log::warn!("Participant with ID {:?} already exists.", id);
         return false;
       }
       self.participants.insert(
@@ -54,8 +53,7 @@ impl<ID: AgentId, Data: ParticipantAppSpecificData> ParticipantTracker<ID, Data>
       );
       true
     } else {
-      // log::warn!("Attempted to add a System agent or agent without ID to participant tracker.");
-      false // System agents typically not tracked this way
+      false
     }
   }
 

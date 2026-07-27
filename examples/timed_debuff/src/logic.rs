@@ -28,7 +28,7 @@ impl DebuffLogic {
 #[async_trait]
 impl StateLogic<GameOp, PlayerId, GameState> for DebuffLogic {
   async fn process_input(
-    &self, // &self is fine now
+    &self,
     state: &mut GameState,
     input: LogicInput<GameOp, PlayerId>,
   ) -> Result<LogicOutput<GameOp, PlayerId>, StateLogicError> {
@@ -66,7 +66,7 @@ impl StateLogic<GameOp, PlayerId, GameState> for DebuffLogic {
                 info!(target_id = %target_id, ?debuff, duration = duration_ticks, tick = state.current_tick, "Applying debuff");
 
                 target_player.active_debuffs.insert(debuff);
-                // (Refresh logic omitted for brevity, assume it's handled or not needed)
+                // (Refresh logic omitted for brevity)
 
                 match debuff {
                   DebuffType::Slow => target_player.attributes.speed_modifier = 0.5,
@@ -121,10 +121,8 @@ impl StateLogic<GameOp, PlayerId, GameState> for DebuffLogic {
                   },
                 );
 
-                // Lock the scheduler to get mutable access
                 let mut scheduler = self.scheduler.lock();
                 scheduler.schedule_after(state.current_tick, duration_ticks, action);
-                // MutexGuard for scheduler is dropped here, releasing the lock.
               } else {
                 warn!(target_id = %target_id, "ApplyDebuff op for non-existent player.");
               }
@@ -136,10 +134,8 @@ impl StateLogic<GameOp, PlayerId, GameState> for DebuffLogic {
       LogicInput::TimeStep { delta_time: _ } => {
         state.current_tick += 1;
 
-        // Lock the scheduler to get mutable access for ticking
         let mut scheduler = self.scheduler.lock();
         scheduler.tick(state.current_tick, state, &mut ops_to_broadcast);
-        // MutexGuard for scheduler is dropped here.
 
         for player_id_key in state.players.keys().cloned().collect::<Vec<_>>() {
           // Avoid borrowing issues

@@ -110,7 +110,7 @@ where
         self.inputs.pop_front();
         ack_count += 1;
       } else {
-        break; // Stop when we find an input newer than the ack
+        break;
       }
     }
     if ack_count > 0 {
@@ -132,7 +132,6 @@ where
     &self,
     last_acknowledged_sequence_number: SequenceNumber,
   ) -> impl Iterator<Item = &BufferedInput<Op, PredictedStateSnapshot>> + DoubleEndedIterator + ExactSizeIterator {
-    // Find the first index of an unacknowledged input
     let start_index = self
       .inputs
       .iter()
@@ -182,10 +181,10 @@ mod tests {
   use super::*;
 
   #[derive(Debug, Clone, PartialEq)]
-  struct TestOp(u64); // Simple op for testing
+  struct TestOp(u64);
 
   #[derive(Debug, Clone, PartialEq)]
-  struct TestState(u64); // Simple state for testing
+  struct TestState(u64);
 
   const BUFFER_MAX_SIZE: usize = 3;
 

@@ -15,7 +15,6 @@ pub struct PredictedEntity<StateType, Op> {
   _op_marker: PhantomData<Op>,
 }
 
-// Manual Clone implementation for PredictedEntity
 impl<StateType, Op> Clone for PredictedEntity<StateType, Op>
 where
   StateType: Clone,
@@ -27,7 +26,7 @@ where
       current_predicted_state: self.current_predicted_state.clone(),
       last_authoritative_state: self.last_authoritative_state.clone(),
       last_server_acknowledged_input_seq: self.last_server_acknowledged_input_seq,
-      _op_marker: PhantomData, // PhantomData is a ZST (zero-sized type)
+      _op_marker: PhantomData,
     }
   }
 }
@@ -46,7 +45,6 @@ where
     }
   }
 
-  // apply_local_input_and_predict method remains the same
   pub fn apply_local_input_and_predict(
     &mut self,
     op: &Op,
@@ -64,7 +62,6 @@ where
     );
   }
 
-  // reconcile_with_server_state method remains the same
   pub fn reconcile_with_server_state(
     &mut self,
     new_authoritative_state: StateType,
@@ -112,7 +109,6 @@ where
   }
 }
 
-// (Tests remain the same, they will use the turbofish syntax for ::new)
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -149,7 +145,6 @@ mod tests {
     assert_eq!(entity.last_server_acknowledged_input_seq, 0);
   }
 
-  // ... other tests remain the same, using PredictedEntity::<TestPlayerState, TestPlayerOp>::new(...) ...
   #[test]
   fn test_apply_local_input() {
     let initial_state = TestPlayerState { x: 0, y: 0 };

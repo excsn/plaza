@@ -126,7 +126,7 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
                 ball.x = paddle1.x + paddle1.width + ball.radius;
                 ball.vx *= -1.05; // Reverse and speed up slightly
                 let hit_factor = (ball.y - paddle1.y) / (paddle1.height / 2.0);
-                ball.vy += hit_factor * PADDLE_SPEED * 0.5; // More influence
+                ball.vy += hit_factor * PADDLE_SPEED * 0.5;
                 ball.vy = ball.vy.clamp(-PADDLE_SPEED * 1.2, PADDLE_SPEED * 1.2);
                 collided_with_paddle_this_step = true;
                 debug!(
@@ -149,7 +149,7 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
                   ball.x = paddle2.x - ball.radius;
                   ball.vx *= -1.05; // Reverse and speed up slightly
                   let hit_factor = (ball.y - paddle2.y) / (paddle2.height / 2.0);
-                  ball.vy += hit_factor * PADDLE_SPEED * 0.5; // More influence
+                  ball.vy += hit_factor * PADDLE_SPEED * 0.5;
                   ball.vy = ball.vy.clamp(-PADDLE_SPEED * 1.2, PADDLE_SPEED * 1.2);
                   debug!(
                     "Ball collided with right paddle (P2). New vx: {}, vy: {}",
@@ -160,14 +160,12 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
             }
           }
 
-          let mut scored_this_frame: Option<PlayerId> = None; // Player who gets the point
+          let mut scored_this_frame: Option<PlayerId> = None;
           if ball.x + ball.radius < 0.0 {
-            // Ball went off left edge
             if let Some(p2_id) = current_state.player2_id {
               scored_this_frame = Some(p2_id);
             }
           } else if ball.x - ball.radius > SCREEN_WIDTH {
-            // Ball went off right edge
             if let Some(p1_id) = current_state.player1_id {
               scored_this_frame = Some(p1_id);
             }
@@ -205,7 +203,7 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
               });
               // Ball is reset by ReadyToPlay or if logic auto-resumes
             }
-            current_state.last_update_time = Some(std::time::Instant::now()); // Reset timer for next phase
+            current_state.last_update_time = Some(std::time::Instant::now());
           }
         } else if current_state.phase == GamePhase::WaitingForPlayers {
           if current_state.player1_id.is_some() && current_state.player2_id.is_some() {

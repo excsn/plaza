@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 
-#[derive(Debug, Clone)] // If ScoreType is Clone
+#[derive(Debug, Clone)]
 pub struct HashMapScorekeeper<ID: AgentId, ScoreType>
 where
   ScoreType:
@@ -40,13 +40,13 @@ where
     Clone + Debug + Default + Send + Sync + 'static + std::ops::AddAssign + std::ops::SubAssign + PartialOrd + Copy,
 {
   fn set_score(&mut self, player_id: &ID, score: ScoreType) -> Option<ScoreType> {
-    self.scores.insert(player_id.clone(), score) // Clone player_id if map owns it
+    self.scores.insert(player_id.clone(), score)
   }
 
   fn increment_score(&mut self, player_id: &ID, delta: ScoreType) -> ScoreType {
     let entry = self.scores.entry(player_id.clone()).or_insert_with(Default::default);
     *entry += delta;
-    *entry // Return the new score
+    *entry
   }
 
   fn decrement_score(&mut self, player_id: &ID, delta: ScoreType) -> ScoreType {
@@ -71,12 +71,10 @@ where
     for score_val in self.scores.values_mut() {
       *score_val = ScoreType::default();
     }
-    // Or simply: self.scores.clear(); and let them be re-added with default on next increment.
   }
 
   fn get_all_scores_sorted(&self) -> Vec<(ID, ScoreType)> {
     let mut sorted_scores: Vec<(ID, ScoreType)> = self.scores.iter().map(|(id, score)| (id.clone(), *score)).collect();
-    // Sort descending by score, then by ID for tie-breaking (optional)
     sorted_scores.sort_by(|a, b| {
       b.1
         .partial_cmp(&a.1)

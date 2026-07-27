@@ -1150,7 +1150,6 @@ impl Client {
     // the server's list no longer carries it, it is settled one way or another
     // and the prediction has to be retired, or the outstanding count grows
     // without bound.
-    //
     let still_there: std::collections::BTreeSet<CoinId> = packet.coins.iter().map(|c| c.id).collect();
     self.predicted_claims.retain(|c| still_there.contains(c));
     // Hide coins already predicted, or the next tick predicts them again. The

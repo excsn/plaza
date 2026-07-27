@@ -1,9 +1,7 @@
-// plaza::app_common::locking::state.rs (or in mod.rs)
 use crate::agent::AgentId;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
-// use std::time::{Duration, Instant}; // If locks are timed
 
 #[derive(Debug, Clone)]
 pub struct LockInfo<ID: AgentId> {
@@ -27,21 +25,17 @@ impl<R: Eq + Hash + Clone + Debug, ID: AgentId> LockManager<R, ID> {
     Self { locks: HashMap::new() }
   }
 
-  /// Attempts to acquire a lock. Returns Ok(true) if acquired, Ok(false) if already locked by another,
-  /// Err(reason) for other failures (e.g. self-lock not allowed if that's a rule).
-  /// For simplicity, let's return Option<current_owner_id> if locked by someone else.
   /// Returns `None` if successfully locked by `requester_id`.
   /// Returns `Some(current_owner_id)` if already locked by `current_owner_id`.
   pub fn try_acquire_lock(&mut self, resource_id: &R, requester_id: ID) -> Option<ID /* current owner */> {
     if let Some(lock_info) = self.locks.get(resource_id) {
       if lock_info.owner_id == requester_id {
-        // Already locked by the same user, treat as success or refresh lock
+        // Already locked by the same user, treat as success
         return None;
       } else {
-        return Some(lock_info.owner_id.clone()); // Locked by someone else
+        return Some(lock_info.owner_id.clone());
       }
     }
-    // Not locked, acquire it
     self
       .locks
       .insert(resource_id.clone(), LockInfo { owner_id: requester_id });

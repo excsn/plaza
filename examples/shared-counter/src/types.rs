@@ -11,7 +11,7 @@ impl fmt::Display for CounterUser {
 }
 pub type CounterId = CounterUser;
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)] // Default for initial state
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct CounterStateData {
   pub value: i64,
   pub version: u64,
@@ -23,4 +23,4 @@ pub enum CounterOp {
   Set(i64),
 }
 
-pub type CounterSnapshotPayload = CounterStateData; // Snapshot is the full state data
+pub type CounterSnapshotPayload = CounterStateData;

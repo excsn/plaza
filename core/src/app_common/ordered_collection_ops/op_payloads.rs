@@ -37,7 +37,7 @@ where
     ItemId: Clone + Debug + Eq + Hash,
 {
     pub collection_key: CollectionKey,
-    pub item_id_to_remove: ItemId, // Identify item by its unique ID
+    pub item_id_to_remove: ItemId,
 }
 
 /// Payload for an Op to update the data of an existing item in an ordered collection.
@@ -55,7 +55,7 @@ where
 {
     pub collection_key: CollectionKey,
     pub item_id_to_update: ItemId,
-    pub new_item_payload: ItemPayload, // Could also be a partial update payload
+    pub new_item_payload: ItemPayload,
 }
 
 /// Payload for an Op to move/reorder an item within an ordered collection.
@@ -77,8 +77,3 @@ where
     /// Application defines precedence if both are provided.
     pub new_index: Option<usize>,
 }
-
-// Notice/Event Payloads (Server -> Client)
-// These would mirror the structure of the request payloads but might include more context,
-// like the agent_id who performed the action, if not already part of the TargetedOp.
-// For example: ItemWasInsertedPayload, ItemWasRemovedPayload, etc.

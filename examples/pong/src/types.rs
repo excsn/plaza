@@ -12,15 +12,13 @@ pub const BALL_INITIAL_SPEED_X: f32 = 250.0;
 pub const BALL_INITIAL_SPEED_Y: f32 = 250.0;
 pub const MAX_SCORE: u32 = 5;
 
-// Using Uuid for player identification.
-// AgentId trait is already `Clone + Debug + Eq + Hash + Send + Sync + 'static`.
 pub type PlayerId = Uuid;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum GamePhase {
-  WaitingForPlayers, // Game waiting for two players to connect
+  WaitingForPlayers,
   Starting,          // Brief countdown or ready phase before play
-  Playing,           // Ball is in motion
+  Playing,
   Paused,            // Game is paused (e.g., after a score)
   GameOver,          // One player has reached MAX_SCORE
 }
@@ -37,8 +35,8 @@ pub struct Paddle {
 impl Paddle {
   pub fn new(player_id: PlayerId, side: PlayerSide) -> Self {
     let x_pos = match side {
-      PlayerSide::Left => PADDLE_WIDTH,                       // Offset from edge
-      PlayerSide::Right => SCREEN_WIDTH - PADDLE_WIDTH * 2.0, // Offset from edge
+      PlayerSide::Left => PADDLE_WIDTH,
+      PlayerSide::Right => SCREEN_WIDTH - PADDLE_WIDTH * 2.0,
     };
     Self {
       player_id,
@@ -86,7 +84,6 @@ impl Ball {
     } else {
       -BALL_INITIAL_SPEED_X
     };
-    // Randomize Y speed direction slightly as well for variety
     let random_y_factor = if rand::random() { 1.0 } else { -1.0 };
     self.vy = BALL_INITIAL_SPEED_Y * random_y_factor * (0.8 + rand::random::<f32>() * 0.4);
     // +/- 20% speed variation
@@ -95,7 +92,7 @@ impl Ball {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PongGameState {
-  pub game_id: Uuid, // To identify this specific game instance
+  pub game_id: Uuid,
   pub phase: GamePhase,
   pub paddles: HashMap<PlayerId, Paddle>,
   pub ball: Ball,
@@ -104,7 +101,7 @@ pub struct PongGameState {
   pub player2_id: Option<PlayerId>,
   #[serde(skip)] // Don't send this over network, used for server-side logic
   pub last_update_time: Option<std::time::Instant>,
-  pub version: u64, // For state versioning, useful for delta updates or client prediction
+  pub version: u64,
 }
 
 impl Default for PongGameState {
@@ -125,15 +122,14 @@ impl Default for PongGameState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PlayerSide {
-  Left,  // Player 1
-  Right, // Player 2
+  Left,
+  Right,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum PongOp {
   // Client to Server
   MovePaddle {
-    // normalized_y_delta: f32, // e.g., -1.0 to 1.0, representing direction and speed factor
     target_y: f32, // Client sends desired absolute Y position for their paddle center
   },
   ReadyToPlay, // Client signals they are ready after joining or a score
@@ -141,16 +137,14 @@ pub enum PongOp {
   // Server to Client (or internal state update events)
   AssignPlayer {
     player_id: PlayerId,
-    side: PlayerSide, // Tells client which side they are on
+    side: PlayerSide,
   },
-  GameUpdate(Box<PongGameState>), // Send the whole state
+  GameUpdate(Box<PongGameState>),
   ScoreUpdate {
     player_id: PlayerId,
     new_score: u32,
   },
   PhaseChange(GamePhase),
-  // Could have more granular ops like BallPosition, PaddlePosition if state is large
 }
 
-// For Pong, the full game state is a reasonable snapshot.
 pub type PongSnapshotPayload = PongGameState;

@@ -101,7 +101,6 @@ fn main() {
       );
     }
 
-    // Sample once a simulated second.
     let elapsed_ms = (i + 1) * STEP_MS;
     if elapsed_ms / 1000 > last_report {
       last_report = elapsed_ms / 1000;

@@ -155,7 +155,6 @@ impl World {
     }
     self.client.tick(dt_ms);
 
-    // Age the shot marker and drop it once it has faded.
     if let Some(shot) = self.recent_shot.as_mut() {
       shot.age_secs += dt_ms as f32 / 1000.0;
       if shot.age_secs > 1.2 {

@@ -314,7 +314,6 @@ where
     loop {
       tokio::select! {
 
-        // Listen for commands sent to the controller
         Ok(command) = self.command_rx.recv() => {
           debug!(?command, "Received command");
           // Sampled here rather than continuously: this is what the loop saw when
@@ -356,7 +355,6 @@ where
           }
         }
 
-        // Listen for incoming ops from the session directly
         Ok(session_msg) = session_incoming_ops_rx.recv() => {
           debug!(?session_msg, "Received message from session subscription");
           match session_msg {

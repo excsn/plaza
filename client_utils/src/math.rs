@@ -100,7 +100,7 @@ impl Vec3 {
   pub fn new(x: f32, y: f32, z: f32) -> Self {
     Self { x, y, z }
   }
-  // ... (length_squared, length, normalize - similar to Vec2) ...
+
   pub fn length_squared(self) -> f32 {
     self.x * self.x + self.y * self.y + self.z * self.z
   }
@@ -203,7 +203,6 @@ impl Quat {
     }
   }
 
-  // Basic slerp implementation
   pub fn slerp(self, mut end: Self, t: f32) -> Self {
     let mut dot = self.dot(end);
 
@@ -300,23 +299,12 @@ where
   }
 }
 
-// Velocity types will be Vec2 for Vec2 position, Vec3 for Vec3 position.
-
-// Example: Extrapolating Vec3 position with Vec3 linear velocity
-// TimeDelta is assumed to be f32 seconds here for simplicity.
 impl Extrapolatable<Vec3, f32> for Vec3 {
   fn extrapolate_with_velocity(&self, velocity: &Vec3, delta_time_secs: f32) -> Self {
     *self + (*velocity * delta_time_secs)
   }
 }
 
-// Example: Extrapolating Quat rotation.
-// This is more complex. A common way is to treat angular_velocity as an axis-angle vector
-// (axis is direction, magnitude is radians per second). Convert this to a delta quaternion
-// for the delta_time_secs, then multiply the current rotation by this delta.
-// Or that angular_velocity is represented as another Quat (a small rotation).
-
-// This is a very simplified angular extrapolation, assuming Velocity is a delta Quat for that step.
 // Deliberately minimal: the "velocity" is taken as a per-second delta rotation
 // and slerped toward by `delta_time_secs`. Real angular velocity is a Vec3
 // axis-angle, which this minimal Quat cannot express; for real rotational
@@ -353,7 +341,6 @@ mod tests {
     let v1 = Vec3::new(1.0, 2.0, 3.0);
     let v2 = Vec3::new(4.0, 5.0, 6.0);
     assert_eq!(v1 + v2, Vec3::new(5.0, 7.0, 9.0));
-    // ... more tests ...
   }
 
   #[test]

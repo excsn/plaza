@@ -6,14 +6,14 @@
 use crate::common_types::{BoxState, CspSnapshotPayload, GameOp, MoveInput, PlayerId, ServerTick, Vec2};
 use plaza_client_utils::{
   input_buffer::ClientInputBuffer,
-  interpolation::{Interpolatable, SnapshotBuffer}, // Added ToF32
+  interpolation::{Interpolatable, SnapshotBuffer},
   prediction::PredictedEntity,
   types::{ClientTimeMs, SequenceNumber},
 };
 use plaza::{
-  agent::Agent, // For constructing the Agent struct
-  game_common::reconciliation::op_payloads::SequencedClientInput, // For constructing Ops
-  session::SessionMessage, // For wrapping Ops to send via MPSC "network"
+  agent::Agent,
+  game_common::reconciliation::op_payloads::SequencedClientInput,
+  session::SessionMessage,
 };
 
 use std::collections::HashMap;
@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use fibre::mpsc;
 use tracing::{debug, error, info, warn};
 
-const CLIENT_TICK_RATE_HZ: u64 = 60; // Client tries to run its logic loop at this rate
+const CLIENT_TICK_RATE_HZ: u64 = 60;
 const CLIENT_TICK_INTERVAL: Duration = Duration::from_millis(1000 / CLIENT_TICK_RATE_HZ);
 const INPUT_SEND_INTERVAL_TICKS: u64 = 2; // Send input packet every 2 client ticks (~30hz)
 const CLIENT_INPUT_BUFFER_SIZE: usize = 128;
@@ -31,29 +31,25 @@ const INTERPOLATION_DELAY_MS: u64 = 100; // Render remote entities 100ms in the 
 struct ClientApp {
   client_name: String,
   my_player_id: Option<PlayerId>,
-  server_tick_on_join_ack: ServerTick, // Server tick when SC_JoinAck was received
+  server_tick_on_join_ack: ServerTick,
 
-  // For CSP of own entity
   predicted_box: Option<PredictedEntity<BoxState, MoveInput>>,
   input_buffer: ClientInputBuffer<MoveInput, BoxState>,
   next_input_seq: SequenceNumber,
 
-  // For remote entities
   remote_boxes: HashMap<PlayerId, RemoteClientBox>,
 
-  // Simulated network
-  to_server_tx: mpsc::BoundedAsyncSender<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>, // Client -> Server
-  from_server_rx: mpsc::BoundedAsyncReceiver<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>, // Server -> Client
+  to_server_tx: mpsc::BoundedAsyncSender<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>,
+  from_server_rx: mpsc::BoundedAsyncReceiver<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>,
 
-  // Local timing
   last_input_send_tick: u64,
   client_tick_counter: u64,
-  client_current_time_ms: ClientTimeMs, // For interpolation target time
+  client_current_time_ms: ClientTimeMs,
 }
 
 struct RemoteClientBox {
-  current_display_state: BoxState, // The state to render (interpolated)
-  snapshot_buffer: SnapshotBuffer<ServerTick, BoxState>, // ServerTick is the Timestamp
+  current_display_state: BoxState,
+  snapshot_buffer: SnapshotBuffer<ServerTick, BoxState>,
 }
 
 // ServerTick is u64, for which plaza_client_utils already provides `ToF32`,
@@ -80,7 +76,7 @@ impl ClientApp {
       server_tick_on_join_ack: 0,
       predicted_box: None,
       input_buffer: ClientInputBuffer::new(CLIENT_INPUT_BUFFER_SIZE),
-      next_input_seq: 1, // Start sequence numbers at 1
+      next_input_seq: 1,
       remote_boxes: HashMap::new(),
       to_server_tx,
       from_server_rx,
@@ -90,12 +86,11 @@ impl ClientApp {
     }
   }
 
-  // Client-side simulation logic for applying a MoveInput to BoxState
   fn apply_move_to_box_state(state: &mut BoxState, input: &MoveInput) {
-    let move_vec = input_to_velocity_vector(input); // Get normalized direction
+    let move_vec = input_to_velocity_vector(input);
 
     // Client predicts movement based on its own tick interval
-    let effective_speed = super::server::MAX_PLAYER_SPEED / CLIENT_TICK_RATE_HZ as f32; // Use same speed constants
+    let effective_speed = super::server::MAX_PLAYER_SPEED / CLIENT_TICK_RATE_HZ as f32;
 
     state.position.x += move_vec.x * effective_speed;
     state.position.y += move_vec.y * effective_speed;
@@ -122,7 +117,7 @@ impl ClientApp {
 
     info!("[{}] Sending Join Request", self.client_name);
     let join_op = GameOp::CS_RequestJoin;
-    let temp_dummy_id_for_sending = PlayerId::new_v4(); // Server will assign real one or use this
+    let temp_dummy_id_for_sending = PlayerId::new_v4();
     let agent_for_sending = Agent::new_human(temp_dummy_id_for_sending, self.client_name.clone());
 
     self
@@ -141,7 +136,7 @@ impl ClientApp {
 
               if self.my_player_id.is_some() && self.predicted_box.is_some() {
                   // Simulate some input every few ticks
-                  if self.client_tick_counter % 5 == 0 { // Generate input less frequently
+                  if self.client_tick_counter % 5 == 0 {
                       let dx = if self.client_tick_counter % 10 == 0 { -5.0 } else { 5.0 };
                       let local_input = MoveInput { dx, dy: 0.0 };
                       self.next_input_seq += 1;
@@ -153,14 +148,13 @@ impl ClientApp {
 
                       if let Some(pb) = self.predicted_box.as_mut() {
                           pb.apply_local_input_and_predict(
-                              &local_input, // This should be MoveInput, not GameOp
+                              &local_input,
                               self.next_input_seq,
                               &mut self.input_buffer,
-                              &Self::apply_move_to_box_state, // Pass the static method
+                              &Self::apply_move_to_box_state,
                           );
                       }
 
-                      // Send input to server if it's time
                       if self.client_tick_counter - self.last_input_send_tick >= INPUT_SEND_INTERVAL_TICKS {
                           let op_to_send = GameOp::CS_PlayerInput(SequencedClientInput {
                               sequence_number: self.next_input_seq,
@@ -169,7 +163,7 @@ impl ClientApp {
                           info!("[{}] Sending to Server: Op Seq {}", self.client_name, self.next_input_seq);
                           if self.to_server_tx.send(SessionMessage::Ops { from: agent_for_sending.clone(), ops: vec![op_to_send] }).await.is_err() {
                               error!("[{}] Failed to send input to server. Server down?", self.client_name);
-                              return Ok(()); // Exit loop
+                              return Ok(());
                           }
                           self.last_input_send_tick = self.client_tick_counter;
                       }
@@ -210,7 +204,7 @@ impl ClientApp {
           }
           else => {
               info!("[{}] Server connection closed or error. Exiting.", self.client_name);
-              break; // Exit loop if server channel closes
+              break;
           }
       }
     }
@@ -240,7 +234,7 @@ impl ClientApp {
             self.predicted_box = Some(PredictedEntity::<BoxState, MoveInput>::new(box_state));
           } else {
             let mut sb = SnapshotBuffer::new(REMOTE_SNAPSHOT_BUFFER_SIZE);
-            sb.add_snapshot(server_tick, box_state); // Prime with initial state
+            sb.add_snapshot(server_tick, box_state);
             self.remote_boxes.insert(
               id,
               RemoteClientBox {
@@ -250,10 +244,8 @@ impl ClientApp {
             );
           }
         }
-        // Adjust PredictedEntity generics
         if let Some(my_id) = self.my_player_id {
           if let Some(my_box_initial_state) = self.predicted_box.as_ref().map(|pb| pb.last_authoritative_state) {
-            // If predicted_box was already initialized with a BoxState from initial_boxes
             self.predicted_box = Some(PredictedEntity::<BoxState, MoveInput>::new(my_box_initial_state));
             self.input_buffer = ClientInputBuffer::<MoveInput, BoxState>::new(CLIENT_INPUT_BUFFER_SIZE);
           } else {
@@ -290,7 +282,6 @@ impl ClientApp {
           info!("[{}] Remote player {} left", self.client_name, player_id);
           self.remote_boxes.remove(&player_id);
         } else {
-          // Should not happen if server handles it, but good to log
           warn!(
             "[{}] Received PlayerLeft for myself. Server might have disconnected me.",
             self.client_name
@@ -310,15 +301,13 @@ impl ClientApp {
           pb.reconcile_with_server_state(
             auth_update.authoritative_player_state,
             auth_update.last_processed_input_seq,
-            &mut self.input_buffer, // This needs to be ClientInputBuffer<MoveInput, BoxState>
+            &mut self.input_buffer,
             &Self::apply_move_to_box_state,
           );
         }
       }
       GameOp::SC_RemoteEntitiesUpdate(snapshots) => {
         for remote_snapshot_data in snapshots {
-          // The snapshot data from server: RemoteEntitySnapshot<PlayerId, ServerTick, Vec2, ()>
-          // We need to convert it to what SnapshotBuffer expects: ServerSnapshot<ServerTick, BoxState>
           if Some(remote_snapshot_data.entity_id) != self.my_player_id {
             if let Some(remote_box) = self.remote_boxes.get_mut(&remote_snapshot_data.entity_id) {
               debug!(
@@ -331,13 +320,11 @@ impl ClientApp {
               remote_box.snapshot_buffer.add_snapshot(
                 remote_snapshot_data.server_time,
                 BoxState {
-                  // Construct BoxState from RemoteEntitySnapshot
                   position: remote_snapshot_data.position,
                   velocity: remote_snapshot_data.linear_velocity.unwrap_or_default(),
                 },
               );
             } else {
-              // New remote entity we haven't seen before
               warn!(
                 "[{}] Received update for unknown remote entity {}. Adding.",
                 self.client_name, remote_snapshot_data.entity_id
@@ -354,7 +341,6 @@ impl ClientApp {
                 remote_snapshot_data.entity_id,
                 RemoteClientBox {
                   current_display_state: BoxState {
-                    // Initial display state
                     position: remote_snapshot_data.position,
                     velocity: remote_snapshot_data.linear_velocity.unwrap_or_default(),
                   },
@@ -406,8 +392,6 @@ impl ClientApp {
   }
 }
 
-// Helper to convert MoveInput to a normalized direction vector for prediction
-// This function would be part of the client's game logic interpretation
 fn input_to_velocity_vector(input: &MoveInput) -> Vec2 {
   let mut move_vec = Vec2 {
     x: input.dx,
@@ -421,23 +405,20 @@ fn input_to_velocity_vector(input: &MoveInput) -> Vec2 {
       move_vec.x /= mag;
       move_vec.y /= mag;
     } else {
-      return Vec2::default(); // Zero vector if magnitude is zero
+      return Vec2::default();
     }
   }
   move_vec
 }
 
-// This function will be called by main.rs for each client instance
 pub async fn run_client(
   client_name: String,
-  // These are the "network" channels for this specific client.
   to_server_tx: mpsc::BoundedAsyncSender<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>,
   from_server_rx: mpsc::BoundedAsyncReceiver<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
   info!("[{}] Client task starting.", client_name);
   let mut app = ClientApp::new(client_name.clone(), to_server_tx, from_server_rx).await;
 
-  // Start the client's main simulation loop
   if let Err(e) = app.run_loop().await {
     error!("[{}] Client loop error: {}", client_name, e);
     return Err(e);

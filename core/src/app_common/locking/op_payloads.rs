@@ -8,7 +8,6 @@ use std::hash::Hash;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(bound = "R: Serialize + for<'de2> Deserialize<'de2>")]
 pub struct RequestLockPayload<R: Clone + Debug + Eq + Hash> {
-  // Functional bounds for R
   pub resource_id: R,
 }
 
@@ -47,5 +46,4 @@ pub struct LockDeniedNoticePayload<R: Clone + Debug + Eq + Hash> {
 pub struct LockReleasedNoticePayload<R: Clone + Debug + Eq + Hash, ID: AgentId> {
   pub resource_id: R,
   pub by_agent_id: Option<ID>, // Who released it (None if system/timeout released it)
-                               // Could also be `released_by_agent_id` and a separate `system_released: bool`
 }

@@ -26,7 +26,6 @@ impl std::ops::AddAssign for Vec2 {
   }
 }
 
-// Make Vec2 usable with plaza_client_utils::Interpolatable
 // The Timestamp type here should match what the client's SnapshotBuffer will use
 // for snapshots coming from the server (which use ServerTick).
 impl plaza_client_utils::interpolation::Interpolatable<ServerTick> for Vec2 {
@@ -37,7 +36,6 @@ impl plaza_client_utils::interpolation::Interpolatable<ServerTick> for Vec2 {
     }
   }
 }
-// And Extrapolatable (Velocity is Vec2, TimeDelta is f32 secs for game physics)
 impl plaza_client_utils::extrapolation::Extrapolatable<Vec2, f32> for Vec2 {
   fn extrapolate_with_velocity(&self, velocity: &Vec2, delta_time_secs: f32) -> Self {
     Vec2 {
@@ -49,7 +47,7 @@ impl plaza_client_utils::extrapolation::Extrapolatable<Vec2, f32> for Vec2 {
 
 pub type PlayerId = Uuid;
 
-pub type ServerTick = u64; // For server-side time
+pub type ServerTick = u64;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub struct MoveInput {
@@ -74,14 +72,12 @@ pub struct CspSnapshotPayload {
 #[allow(non_camel_case_types)]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum GameOp {
-  // Client -> Server
-  CS_PlayerInput(SequencedClientInput<MoveInput>), // Client sends its sequenced input
-  CS_RequestJoin,                                  // Simple join request
+  CS_PlayerInput(SequencedClientInput<MoveInput>),
+  CS_RequestJoin,
 
-  // Server -> Client
   SC_JoinAck {
     your_id: PlayerId,
-    initial_boxes: Vec<(PlayerId, BoxState)>, // All current boxes
+    initial_boxes: Vec<(PlayerId, BoxState)>,
     server_tick: ServerTick,
   },
   SC_PlayerJoined {

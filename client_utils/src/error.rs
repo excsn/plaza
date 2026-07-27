@@ -20,7 +20,7 @@ pub enum ClientUtilError {
   #[error("Cannot reconcile: Server acknowledged input sequence {server_ack_sequence} which was not found or is inconsistent with client's input history (last known client sequence: {client_last_known_sequence:?}).")]
   ReconciliationInconsistency {
     server_ack_sequence: SequenceNumber,
-    client_last_known_sequence: Option<SequenceNumber>, // Debug formatting handles Option
+    client_last_known_sequence: Option<SequenceNumber>,
   },
 
   #[error("Interpolation error: {details}")]

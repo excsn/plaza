@@ -31,7 +31,6 @@ pub trait RoomFactory: Send + Sync + 'static {
     &self,
     room_id: RoomId,
     room_settings: &RoomSettings<Self::CustomGameSettings>,
-    // creator_id: &LobbyAgentID, // If factory needs to know who created it
   ) -> Result<
     InProcessRoomHandle<Self::GameOp, Self::GameID, Self::GameStateType, Self::CustomGameSettings>,
     LobbyError,

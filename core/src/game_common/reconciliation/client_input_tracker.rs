@@ -12,7 +12,7 @@ use std::fmt::Debug;
 /// and will query it when sending authoritative state updates back to clients.
 ///
 /// - `ID`: The `AgentId` type used to identify clients.
-#[derive(Debug, Clone)] // Clone is useful if StateType is Clone
+#[derive(Debug, Clone)]
 pub struct ClientInputTracker<ID: AgentId> {
   // We need Eq + Hash for ID because it's a HashMap key. AgentId already provides these.
   last_processed_input_seq: HashMap<ID, u64>,
@@ -37,8 +37,7 @@ impl<ID: AgentId> ClientInputTracker<ID> {
   /// Typically, this should only update if `input_seq_num` is greater than
   /// any previously recorded sequence number for this client to avoid issues
   /// with out-of-order packet processing on the server if inputs aren't strictly
-  /// ordered before reaching this point. However, for simplicity in this basic tracker,
-  /// it just overwrites. More advanced logic could be added here.
+  /// ordered before reaching this point. This tracker just overwrites.
   ///
   /// It's generally assumed that the `StateLogic` processes inputs for a given client
   /// in their sequence order.
@@ -73,11 +72,7 @@ mod tests {
   use super::*;
   use uuid::Uuid;
 
-  // Dummy AgentId for testing (Uuid is a common choice)
   type TestPlayerId = Uuid;
-  // Ensure Uuid satisfies AgentId for tests (normally done by plaza_core's blanket impl)
-  // For test module, we might need to define a simple AgentId impl if not linking full core.
-  // However, since AgentId comes from `crate::agent::AgentId`, it should work if plaza_core compiles.
 
   #[test]
   fn test_record_and_get_input_seq() {
@@ -92,7 +87,7 @@ mod tests {
     tracker.record_processed_input(player1, 12);
     assert_eq!(tracker.get_last_processed_input_seq(&player1), Some(12));
 
-    // Test overwrite (current simple behavior)
+    // Test overwrite
     tracker.record_processed_input(player1, 11);
     assert_eq!(tracker.get_last_processed_input_seq(&player1), Some(11));
   }
@@ -123,7 +118,7 @@ mod tests {
 
     // Disconnecting non-existent client should be fine
     let player_never_tracked = Uuid::new_v4();
-    tracker.on_client_disconnect(&player_never_tracked); // Should not panic
+    tracker.on_client_disconnect(&player_never_tracked);
   }
 
   #[test]

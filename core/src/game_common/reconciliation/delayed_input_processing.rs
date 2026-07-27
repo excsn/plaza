@@ -33,7 +33,6 @@ pub struct ServerInputBuffer<
   ServerTime: Copy + Debug + PartialOrd, // PartialOrd for comparing times
 > {
   // For each client, a queue of their inputs, ordered by arrival (or client sequence).
-  // Using VecDeque to easily pop from the front (oldest).
   inputs_by_client: HashMap<ID, VecDeque<BufferedInput<InputData, ServerTime>>>,
 }
 
@@ -62,8 +61,6 @@ impl<ID: AgentId, InputData: Clone + Debug, ServerTime: Copy + Debug + PartialOr
   /// - `server_received_time`: The current server time when this input is being added to the buffer.
   pub fn add_input(&mut self, client_id: ID, input: SequencedClientInput<InputData>, server_received_time: ServerTime) {
     let client_queue = self.inputs_by_client.entry(client_id).or_insert_with(VecDeque::new);
-    // This helps handle out-of-order packets from a single client if the transport allows it
-    // and they arrive at the buffer out of sequence. For simplicity, just push.
     client_queue.push_back(BufferedInput {
       client_input: input,
       server_received_time,
@@ -97,14 +94,11 @@ impl<ID: AgentId, InputData: Clone + Debug, ServerTime: Copy + Debug + PartialOr
     let cutoff_time = current_server_time - processing_delay;
 
     for (client_id, client_queue) in self.inputs_by_client.iter_mut() {
-      // Pop from the front (oldest) of the queue as long as server_received_time is <= cutoff_time
       while let Some(buffered_input) = client_queue.front() {
         if buffered_input.server_received_time <= cutoff_time {
-          // This input is old enough to be processed. Remove it from queue.
           let input_to_process = client_queue.pop_front().unwrap();
           processable_inputs.push((client_id.clone(), input_to_process.client_input));
         } else {
-          // Oldest input for this client is not yet old enough.
           break;
         }
       }
@@ -141,7 +135,7 @@ mod tests {
   use uuid::Uuid;
 
   type TestPlayerId = Uuid;
-  #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)] // For SequencedClientInput
+  #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
   struct TestInputData {
     value: i32,
   }
@@ -238,7 +232,7 @@ mod tests {
   fn test_add_and_drain_inputs_duration_based() {
     let mut buffer = ServerInputBuffer::<TestPlayerId, TestInputData, Duration>::new();
     let player1 = Uuid::new_v4();
-    let processing_delay = Duration::from_millis(200); // 200ms delay
+    let processing_delay = Duration::from_millis(200);
 
     buffer.add_input(
       player1,
@@ -272,8 +266,6 @@ mod tests {
     assert_eq!(inputs_to_process[0].1.sequence_number, 1);
 
     // Current server time is 1250ms. Cutoff is 1250 - 200 = 1050ms.
-    // Still only input seq 1 should have been processed (as it was the only one <= 1050 when drained before).
-    // Oh wait, the previous drain removed it. So now the queue for player1 is seq2 (@1100), seq3 (@1200).
     // No inputs are <= 1050ms.
     let inputs_to_process2 = buffer.drain_delayed_inputs(Duration::from_millis(1250), processing_delay);
     assert_eq!(inputs_to_process2.len(), 0);

@@ -6,12 +6,12 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 /// Represents a 2D cursor position.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq)] // PartialEq for easy comparison
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq)]
 pub struct CursorPositionPayload {
   pub x: f32,
   pub y: f32,
   /// Optional: Identifier for the screen, document, or context this cursor position refers to.
-  pub context_id: Option<u32>, // Or String, or generic
+  pub context_id: Option<u32>,
 }
 
 /// Represents a set of selected item IDs.
@@ -19,7 +19,6 @@ pub struct CursorPositionPayload {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(bound = "ItemID: Serialize + for<'de2> Deserialize<'de2>")]
 pub struct SelectionPayload<ItemID: Clone + Debug + Eq + Hash> {
-  // Functional bounds
   pub selected_item_ids: Vec<ItemID>,
 }
 

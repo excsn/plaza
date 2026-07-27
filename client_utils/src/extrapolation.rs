@@ -5,7 +5,6 @@
 //! It typically relies on the last known state and velocities.
 
 use std::fmt::Debug;
- // For calculating time deltas
 use crate::types::ClientTimeMs;
 
 /// Trait for types whose state can be extrapolated forward given a velocity and a time delta.
@@ -94,16 +93,14 @@ where
       // Target render time is in the past relative to when we received this base state.
       // Extrapolation is for predicting the future from this base state.
       // For past states, interpolation should be used.
-      // We could return self.state (clamped) or None.
       tracing::trace!(
         target_render_ms = target_client_render_time_ms,
         receipt_ms = self.client_receipt_time_ms,
         "Target render time is before last update receipt; extrapolation not applicable. Returning last auth state."
       );
-      return Some(self.state.clone()); // Or None if strict
+      return Some(self.state.clone());
     }
 
-    // Calculate how long ago (in client's time) this server state was received.
     let time_since_receipt_ms: u64 = target_client_render_time_ms - self.client_receipt_time_ms;
 
     // Cap the *duration*, do not discard the extrapolation.
@@ -146,7 +143,6 @@ where
       );
     }
 
-    // Convert the client-time extrapolation duration to the TimeDelta type for the state.
     let extrapolation_delta: TimeDelta = convert_ms_to_time_delta(capped_ms);
 
     let extrapolated_state = self
@@ -230,7 +226,6 @@ mod tests {
     }
   }
 
-  // Helper for tests to convert u64 ms to Duration
   fn ms_to_duration(ms: u64) -> Duration {
     Duration::from_millis(ms)
   }

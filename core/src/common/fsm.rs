@@ -149,7 +149,7 @@ impl<Op: 'static, AppID: AgentId, StateIdEnum: Clone + Debug + PartialEq + Eq + 
 
   pub fn set_initial_state(
     &mut self,
-    context: &mut dyn FsmContext<Op, AppID>, // Op and AppID here are constrained by impl block
+    context: &mut dyn FsmContext<Op, AppID>,
     state_id: StateIdEnum,
   ) {
     if !self.states.contains_key(&state_id) {

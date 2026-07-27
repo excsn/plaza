@@ -11,7 +11,6 @@ use std::fmt::Debug;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(bound = "P: Serialize + for<'de2> Deserialize<'de2>")]
 pub struct UpdatePresencePayload<P: Clone + Debug> {
-  // Functional bounds
   pub details: P,
 }
 
@@ -20,7 +19,6 @@ pub struct UpdatePresencePayload<P: Clone + Debug> {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(bound = "P: Serialize + for<'de2> Deserialize<'de2>")]
 pub struct PresenceChangedNoticePayload<ID: AgentId, P: Clone + Debug> {
-  // Functional bounds
   pub agent_id: ID,
   pub new_details: P,
 }

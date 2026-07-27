@@ -14,8 +14,3 @@ pub type SequenceNumber = u64;
 /// Used for timestamping client-generated inputs or for managing client-side
 /// timed events. Its exact meaning and resolution are up to the client application.
 pub type ClientTimeMs = u64;
-
-// If we find other very common, simple types needed across modules, they can be added here.
-// For example, if dealing with 2D/3D coordinates frequently and not wanting to pull in a full
-// math library as a direct dependency of plaza_client_utils itself, simple Vec2/Vec3 structs
-// and let the application provide them from its chosen math library).
