@@ -172,7 +172,7 @@ async fn offline() {
   // Real frame time, spent in whole fixed steps. The cap is what keeps a
   // backgrounded tab from dumping the minutes it was asleep into one frame.
   let mut timestep = FixedTimestep::from_step_ms(STEP_MS).with_max_frame_ms(100);
-  let mut fps = 60.0f32;
+  let mut fps = Perf::default();
   let mut fx = render::DashFx::new();
 
   loop {
@@ -257,7 +257,7 @@ async fn networked(options: role::Options, controls: std::sync::Arc<parking_lot:
 
   let mut now_ms: u64 = 0;
   let mut timestep = FixedTimestep::from_step_ms(STEP_MS).with_max_frame_ms(100);
-  let mut fps = 60.0f32;
+  let mut fps = Perf::default();
   let plays = options.role.plays();
   let mut fx = render::DashFx::new();
   let mut touch = TouchSteer::default();
@@ -348,7 +348,7 @@ async fn networked(options: role::Options, controls: std::sync::Arc<parking_lot:
 /// camera drifts to wherever the holes are so there is always something in frame.
 #[cfg(feature = "server")]
 async fn observe(controls: std::sync::Arc<parking_lot::Mutex<Controls>>, view: std::sync::Arc<parking_lot::Mutex<blackhole_playground::net::arena::HostView>>) {
-  let mut fps = 60.0f32;
+  let mut fps = Perf::default();
   // The free camera's state, kept across frames. It starts following the crowd;
   // the moment you pan it stops, so it does not fight you, and `C` gives it back.
   let mut center = SimVec2::new(ARENA_W * 0.5, ARENA_H * 0.5);
@@ -502,15 +502,77 @@ fn read_input() -> SimVec2 {
 /// question, and without a frame counter the two are indistinguishable. Smoothed,
 /// because raw per-frame values are unreadable, and it turns red when a frame is
 /// slow enough to feel.
-fn draw_perf(smoothed: &mut f32) {
-  let dt = get_frame_time();
-  if dt > 0.0 {
-    *smoothed += (1.0 / dt - *smoothed) * 0.08;
+/// A frame-time readout, rather than an fps one.
+///
+/// **Frame time is the number that maps onto what a player feels**, and fps is a
+/// reciprocal that compresses exactly the region worth seeing: 8ms to 16ms reads
+/// as a dramatic 120 to 60, while 33ms to 50ms, which is the difference between
+/// rough and unplayable, reads as a modest 30 to 20.
+///
+/// **The worst frame in the window is kept beside the mean** because a hitch is
+/// one long frame. An average over a second is the instrument that hides it,
+/// which is the same reason the wire readout tracks a worst frame rather than a
+/// rate.
+///
+/// The mean smooths *frame time* and reciprocates at the end. The previous
+/// version averaged `1.0 / dt` directly, which is biased toward fast frames: a
+/// single 100ms stall contributes 10 to that average while the ten 8ms frames
+/// around it contribute 125 each, so the stall is almost invisible in the very
+/// number meant to reveal it.
+#[derive(Default)]
+pub struct Perf {
+  /// Smoothed frame time in seconds. Zero until the first frame.
+  mean_dt: f32,
+  /// Recent frame times, so the worst can fall again once it leaves the window.
+  window: std::collections::VecDeque<f32>,
+}
+
+impl Perf {
+  /// About two seconds at 60fps, one at 120: long enough that a spike does not
+  /// scroll away before it is read, short enough to be about *now*.
+  const WINDOW: usize = 120;
+
+  /// A ~50-frame time constant: half a second at 120fps, most of a second at 60.
+  ///
+  /// Deliberately slower than it looks like it should be. Frame time is noisy
+  /// even on an idle machine (7ms to 10ms is ordinary vsync jitter), and a fast
+  /// filter on a noisy signal, printed to a couple of digits, churns constantly
+  /// and reads as instability that is not there. The mean exists to be *stable
+  /// enough to compare against*; the worst-frame figure beside it is what reacts.
+  const SMOOTHING: f32 = 0.02;
+
+  fn observe(&mut self, dt: f32) {
+    if dt <= 0.0 {
+      return;
+    }
+    // Smoothing the duration, then reciprocating, so the average is not skewed
+    // by the fast frames.
+    self.mean_dt = if self.mean_dt == 0.0 { dt } else { self.mean_dt + (dt - self.mean_dt) * Self::SMOOTHING };
+    self.window.push_back(dt);
+    if self.window.len() > Self::WINDOW {
+      self.window.pop_front();
+    }
   }
-  let text = format!("{:.0} fps   {:.1} ms", *smoothed, dt * 1000.0);
+
+  fn worst_dt(&self) -> f32 {
+    self.window.iter().copied().fold(0.0, f32::max)
+  }
+}
+
+fn draw_perf(perf: &mut Perf) {
+  let dt = get_frame_time();
+  perf.observe(dt);
+  let mean_ms = perf.mean_dt * 1000.0;
+  let worst_ms = perf.worst_dt() * 1000.0;
+  let fps = if perf.mean_dt > 0.0 { 1.0 / perf.mean_dt } else { 0.0 };
+  let text = format!("{mean_ms:.1} ms  (worst {worst_ms:.1})   {fps:.0} fps");
   let dims = measure_text(&text, None, 18, 1.0);
-  let color = if *smoothed < 45.0 {
+  // Judged on the worst frame, not the mean: a run that averages well and
+  // stalls regularly is the case this readout exists to catch.
+  let color = if worst_ms > 33.0 {
     Color::new(1.0, 0.5, 0.4, 0.95)
+  } else if worst_ms > 20.0 {
+    Color::new(0.95, 0.8, 0.45, 0.95)
   } else {
     Color::new(0.7, 0.75, 0.8, 0.9)
   };
