@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use plaza_client_utils::interpolation::InterpolationClock;
 use plaza_client_utils::types::SequenceNumber;
 use plaza_client_utils::trajectory::TrajectoryPredictor;
-use plaza_client_utils::{smoothstep, PlayerConfig, PredictedPlayer, RemoteView, RenderOpts, RttEstimator};
+use plaza_client_utils::{smoothstep, ArrivalMonitor, PlayerConfig, PredictedPlayer, RemoteView, RenderOpts, RttEstimator};
 
 use crate::sim::types::{
   apply_input, BoxState, ClientCmd, Controls, EntityId, MoveInput, ServerPacket, Vec2, BASE_DELAY_STEPS, EXTRAP_MAX_MS, INTERP_DELAY_MS, JITTER_FACTOR, MAX_DELAY_MS, PLAYBACK_RATE_ADJUST, SYNC_STRENGTH,
@@ -55,6 +55,12 @@ pub struct Client {
 
   /// The client's measured round trip to the server.
   rtt: RttEstimator,
+  /// How the snapshot stream actually arrives. The adaptive buffer sizes
+  /// itself from this rather than from ping jitter: the buffer's job is to
+  /// cover the spread in *snapshot arrivals*, and ping spread is a proxy that
+  /// diverges from it exactly when delivery is bursty or the server rate
+  /// changes, which is when the buffer matters.
+  arrivals: ArrivalMonitor,
 }
 
 impl Client {
@@ -74,6 +80,7 @@ impl Client {
       clock: InterpolationClock::new(INTERP_DELAY_MS),
       rate_synced: false,
       rtt: RttEstimator::default(),
+      arrivals: ArrivalMonitor::new(0.05),
     }
   }
 
@@ -104,7 +111,12 @@ impl Client {
     ClientCmd { seq, input }
   }
 
-  pub fn on_packet(&mut self, packet: ServerPacket, controls: &Controls) {
+  pub fn on_packet(&mut self, packet: ServerPacket, now_ms: u64, controls: &Controls) {
+    // `now_ms` is the local clock, so the lateness mean absorbs the unknown
+    // clock offset and only the terms this client consumes (interval, jitter)
+    // are meaningful. That is enough: the offset is constant and the buffer
+    // covers spread, not delay.
+    self.arrivals.observe(packet.server_time_ms, now_ms);
     let (auth_you, acked_seq) = packet.you;
     self.auth_you = auth_you;
 
@@ -115,13 +127,15 @@ impl Client {
     }
 
     // Size the interpolation delay from the server rate (need at least a step or
-    // two of history) plus the measured jitter, or hold a fixed delay. This is
-    // the buffering *policy*; plaza supplies the jitter and the settable delay.
+    // two of history) plus the measured spread in snapshot arrivals, or hold a
+    // fixed delay. This is the buffering *policy*; plaza supplies the arrival
+    // statistics and the settable delay. The jitter term used to come from ping
+    // spread, which is a proxy: the buffer exists to cover the irregularity of
+    // the interpolated stream, so it is sized from that stream's own arrivals.
     // Set it before syncing: the rate model scales its drift by this delay.
     let delay = if controls.adaptive_buffer {
       let base = BASE_DELAY_STEPS * controls.server_step_ms() as f32;
-      let jitter = self.rtt.jitter_ms().unwrap_or(0.0);
-      ((base + JITTER_FACTOR * jitter) as u64).min(MAX_DELAY_MS)
+      ((base + JITTER_FACTOR * self.arrivals.jitter_ms()) as u64).min(MAX_DELAY_MS)
     } else {
       INTERP_DELAY_MS
     };

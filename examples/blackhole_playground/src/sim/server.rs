@@ -7,6 +7,7 @@
 
 use plaza_client_utils::{FixedTimestep, Periodic};
 use plaza_server_utils::aggregate::{AggregateTree, WeightedPoint};
+use plaza_server_utils::relevance::{TierBoundary, VisibilitySet};
 
 use crate::sim::types::{
   exact_field, step_pellet, Attractor, BlackHole, Controls, Packet, Pellet, PelletCorrection, PelletId, PelletSpawn, PlayerId, SyncMode, Vec2, ARENA_H, ARENA_W, CONTACT_DRAIN_BASE, CONTACT_DRAIN_PRESS,
@@ -50,6 +51,11 @@ pub struct Server {
   contact_with: Vec<Option<usize>>,
   pub eliminations: u64,
 
+  /// Which pellets each player's correction stream currently covers, in
+  /// `SyncMode::Particles`: the memory the near boundary's hysteresis judges
+  /// against. Keyed by pellet slot, which is stable (slots are recycled in
+  /// place, never removed).
+  near_pellets: Vec<VisibilitySet>,
   swallowed: Vec<PelletId>,
   spawned: Vec<PelletSpawn>,
   pub swallow_count: u64,
@@ -63,6 +69,13 @@ pub struct Server {
   /// has nothing left to play for.
   pub scores: Vec<u32>,
 }
+
+/// The correction stream's near boundary in [`SyncMode::Particles`], with
+/// hysteresis: admitted at the view radius, kept until the pellet draw cutoff
+/// (`render.rs` draws pellets to 1.15x the radius), so a pellet wobbling on
+/// the screen edge does not pop in and out of the stream every packet. The
+/// band also means everything actually being drawn keeps its corrections.
+const PELLET_NEAR: TierBoundary = TierBoundary::new(VIEW_RADIUS, VIEW_RADIUS * 1.15);
 
 impl Server {
   pub fn new(pellet_count: usize, player_count: usize) -> Self {
@@ -87,6 +100,7 @@ impl Server {
       respawn_at_ms: vec![None; player_count],
       contact_with: vec![None; player_count],
       eliminations: 0,
+      near_pellets: (0..player_count).map(|_| VisibilitySet::with_capacity(pellet_count as u32)).collect(),
       swallowed: Vec::new(),
       spawned: Vec::new(),
       swallow_count: 0,
@@ -476,15 +490,21 @@ impl Server {
             });
           }
         }
-        // Send every pellet the player can see, every packet.
+        // Send every pellet the player can see, every packet, with hysteresis
+        // on the boundary so edge pellets do not flap in and out of the stream.
         SyncMode::Particles => {
+          let near = &mut self.near_pellets[p];
           for (id, pellet) in self.pellets.iter().enumerate() {
-            if pellet.pos.dist(eye) <= VIEW_RADIUS {
+            let was_near = near.contains(id as u32);
+            if PELLET_NEAR.admits(was_near, pellet.pos.dist(eye)) {
+              near.insert(id as u32);
               packet.corrections.push(PelletCorrection {
                 id: id as PelletId,
                 pos: pellet.pos,
                 vel: pellet.vel,
               });
+            } else if was_near {
+              near.remove(id as u32);
             }
           }
         }

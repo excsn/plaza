@@ -26,6 +26,25 @@
 //! which is why the window is a parameter and [`late`](InputSchedule::late) is
 //! a counter worth watching, not a curiosity.
 //!
+//! # Which input model, because there are two and this block is one of them
+//!
+//! Mirroring the "which predictor" table in `plaza_client_utils`: how the
+//! server consumes input decides the machinery, and choosing wrong is silent.
+//!
+//! | the server | use |
+//! |---|---|
+//! | executes inputs on the tick the client *named* (fairness across pings) | this block |
+//! | applies inputs as they arrive, newest sequence wins | a sequence frontier and a bound, not this block |
+//!
+//! The second model is what plain client-side prediction demos run (plaza's
+//! netcode and blackhole examples both do): commands carry a sequence number
+//! only, the server applies anything newer than the last applied and echoes
+//! the frontier back for reconciliation. It was deliberately **not** absorbed
+//! here, because tick addressing is the entire point of this type, and bolting
+//! it onto a wire that carries no tick would change what those servers mean,
+//! not just how they are written. What that model does share with this one is
+//! the obligation to bound its inbox.
+//!
 //! # One warning from production: derive the current tick, never count it
 //!
 //! Everything here takes `current` as a parameter because the schedule must
@@ -135,7 +154,8 @@ impl<Input> InputSchedule<Input> {
     Submission::Scheduled
   }
 
-  /// The input to apply on tick `current`, if any has come due.
+  /// The input to apply on tick `current`, if any has come due: **level
+  /// semantics**, for an input that is a held state (a direction, a throttle).
   ///
   /// Call once per simulation step, **per step and not per network frame**:
   /// consuming the queue once per frame collapses everything that arrived
@@ -143,21 +163,32 @@ impl<Input> InputSchedule<Input> {
   /// step the newest due input wins, because a held direction is a level
   /// rather than an edge: the older ones it supersedes were never going to be
   /// observable for less than a tick anyway.
+  ///
+  /// **Wrong for discrete actions.** A "fire" and a "jump" coming due on the
+  /// same step would collapse to one here. Actions are events, and events go
+  /// through [`drain_due`](Self::drain_due), which delivers every due input in
+  /// scheduled order. A game with both kinds keeps two schedules, because the
+  /// two kinds have different loss semantics and mixing them in one queue
+  /// forces one of them to be wrong.
   pub fn execute_due(&mut self, current: u64) -> Option<Input> {
-    if self.queue.is_empty() {
-      return None;
+    let mut newest = None;
+    for input in self.drain_due(current) {
+      newest = Some(input);
     }
+    newest
+  }
+
+  /// Every input due on tick `current`, in scheduled order: **event
+  /// semantics**, for inputs that are discrete actions where each one matters.
+  /// The counterpart of [`execute_due`](Self::execute_due); see there for
+  /// which to use.
+  pub fn drain_due(&mut self, current: u64) -> impl Iterator<Item = Input> + '_ {
     self.queue.sort_by_key(|(at, _)| *at);
     let due = self.queue.iter().take_while(|(at, _)| *at <= current).count();
-    if due == 0 {
-      return None;
+    if due > 0 {
+      self.last_executed = Some(current);
     }
-    let mut applied = None;
-    for (_, input) in self.queue.drain(..due) {
-      applied = Some(input);
-    }
-    self.last_executed = Some(current);
-    applied
+    self.queue.drain(..due).map(|(_, input)| input)
   }
 
   /// Drops everything buffered, for a seat being vacated. Counters survive:
@@ -249,6 +280,24 @@ mod tests {
     let _ = s.submit(12, "c", 9, WINDOW);
     assert_eq!(s.execute_due(12), Some("c"));
     assert_eq!(s.execute_due(13), None, "the superseded ones are gone, not deferred");
+  }
+
+  #[test]
+  fn discrete_actions_due_together_are_all_delivered_in_order() {
+    // The event path. Level semantics would collapse a fire and a jump coming
+    // due on the same step into one, which for actions is a lost input.
+    let mut s = InputSchedule::new();
+    let _ = s.submit(10, "fire", 9, WINDOW);
+    let _ = s.submit(11, "jump", 9, WINDOW);
+    let _ = s.submit(12, "fire", 9, WINDOW);
+    let due: Vec<_> = s.drain_due(12).collect();
+    assert_eq!(due, ["fire", "jump", "fire"], "every action, in the order intended");
+    assert_eq!(s.drain_due(13).count(), 0);
+
+    // The reorder clamp still applies across a drain.
+    let _ = s.submit(10, "rewound", 12, WINDOW);
+    let late: Vec<_> = s.drain_due(12).collect();
+    assert_eq!(late, ["rewound"], "clamped to the executed frontier, not replayed into the past");
   }
 
   #[test]

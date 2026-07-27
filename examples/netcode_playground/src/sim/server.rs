@@ -84,7 +84,18 @@ impl ToyServer {
   }
 
   /// Accepts a delivered client command. Applied on the next server tick.
+  ///
+  /// Bounded, because any queue fed by a peer and drained by a local clock has
+  /// to be: a client that floods commands between two ticks (or a server that
+  /// stops ticking) must cost itself its own oldest inputs, not this process's
+  /// memory. Oldest dropped rather than newest, because with discrete inputs
+  /// the newest intent is the one that still matters.
   pub fn receive(&mut self, cmd: ClientCmd) {
+    const PENDING_CAP: usize = 256;
+    if self.pending.len() >= PENDING_CAP {
+      self.pending.sort_by_key(|c| c.seq);
+      self.pending.remove(0);
+    }
     self.pending.push(cmd);
   }
 

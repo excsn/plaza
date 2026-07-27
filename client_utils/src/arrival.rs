@@ -39,6 +39,11 @@ pub struct ArrivalMonitor {
   newest_stamp: u64,
   lateness_mean_ms: f32,
   jitter_ms: f32,
+  /// Whether the lateness statistics have their first sample. A flag rather
+  /// than a zero sentinel, because zero is a *legitimate mean* (a loopback
+  /// client's lateness is genuinely 0 ms), and the sentinel made every such
+  /// observation a re-seed that froze the jitter at its initial value.
+  lateness_seeded: bool,
 }
 
 impl ArrivalMonitor {
@@ -51,6 +56,7 @@ impl ArrivalMonitor {
       newest_stamp: 0,
       lateness_mean_ms: 0.0,
       jitter_ms: 0.0,
+      lateness_seeded: false,
     }
   }
 
@@ -70,7 +76,8 @@ impl ArrivalMonitor {
     if stamp > self.newest_stamp {
       self.newest_stamp = stamp;
     }
-    if self.lateness_mean_ms == 0.0 {
+    if !self.lateness_seeded {
+      self.lateness_seeded = true;
       self.lateness_mean_ms = lateness;
     } else {
       let deviation = (lateness - self.lateness_mean_ms).abs();
@@ -167,6 +174,22 @@ mod tests {
       bursty.needed_delay_ms(),
       steady.needed_delay_ms()
     );
+  }
+
+  #[test]
+  fn a_loopback_stream_with_zero_lateness_still_measures_its_jitter() {
+    // Zero is a legitimate mean, not an unseeded sentinel: on a loopback host
+    // lateness really is 0 ms, and treating it as "not seeded yet" re-seeded
+    // on every packet and froze the jitter at its initial value.
+    let mut m = ArrivalMonitor::new(0.2);
+    for i in 0..100u64 {
+      let stamp = i * 100;
+      // Mostly instant, with the occasional late one: exactly the shape that
+      // must register as spread.
+      let late = if i % 10 == 9 { 40 } else { 0 };
+      m.observe(stamp, stamp + late);
+    }
+    assert!(m.jitter_ms() > 2.0, "the occasional straggler is spread, and spread must register: {}", m.jitter_ms());
   }
 
   #[test]

@@ -161,6 +161,12 @@ pub struct DeltaBaseline {
   needs_full: bool,
   full_rebuilds: u64,
   unacked: usize,
+  /// The newest acknowledgement window seen, as `(newest, mask)`, kept so
+  /// `unacked` can be recomputed when a plan adds to the history instead of
+  /// being stamped to the whole history length: the readout used to flap
+  /// between the true in-flight count and `history` depending on whether a
+  /// plan or an ack ran last.
+  last_ack_window: Option<(u64, u64)>,
   flow: Option<FlowControl>,
 }
 
@@ -183,6 +189,7 @@ impl DeltaBaseline {
       needs_full: true,
       full_rebuilds: 0,
       unacked: 0,
+      last_ack_window: None,
       flow: None,
     }
   }
@@ -295,6 +302,7 @@ impl DeltaBaseline {
     self.last_sent_seq = None;
     self.needs_full = true;
     self.unacked = 0;
+    self.last_ack_window = None;
     // The new occupant's silence starts now, not where the old one's ended.
     if let Some(flow) = &mut self.flow {
       flow.last_ack = None;
@@ -401,7 +409,7 @@ impl DeltaBaseline {
     }
     self.last_sent.clone_from(current);
     self.last_sent_seq = Some(seq);
-    self.unacked = self.sent.len();
+    self.recount_unacked();
     plan
   }
 
@@ -457,7 +465,20 @@ impl DeltaBaseline {
     {
       self.needs_full = true;
     }
-    self.unacked = self.sent.iter().filter(|(seq, _)| !window.contains(*seq)).count();
+    self.last_ack_window = Some((newest, mask));
+    self.recount_unacked();
+  }
+
+  /// Sent states the newest window did not cover: the true in-flight count,
+  /// whether the last event was a plan or an acknowledgement.
+  fn recount_unacked(&mut self) {
+    self.unacked = match self.last_ack_window {
+      Some((newest, mask)) => {
+        let window = AckWindow::from_encoded(newest, mask);
+        self.sent.iter().filter(|(seq, _)| !window.contains(*seq)).count()
+      }
+      None => self.sent.len(),
+    };
   }
 
   /// [`observe_ack`](Self::observe_ack), and the acknowledgement's arrival time

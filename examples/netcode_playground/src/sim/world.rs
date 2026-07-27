@@ -143,7 +143,7 @@ impl World {
 
     for msg in self.down.drain_due(self.wall_ms) {
       match msg {
-        ServerMsg::State(packet) => self.client.on_packet(packet, controls),
+        ServerMsg::State(packet) => self.client.on_packet(packet, self.wall_ms, controls),
         ServerMsg::ShotResult(result) => {
           if let Some(shot) = self.recent_shot.as_mut() {
             shot.hit = Some(result.hit);
