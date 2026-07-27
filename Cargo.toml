@@ -1,4 +1,6 @@
 [workspace]
+# The publishable set. Examples are a separate workspace (examples/Cargo.toml);
+# run ./check.sh to verify both.
 members = [
   "core",
   "lobby",
@@ -7,42 +9,8 @@ members = [
   "wire",
   "server_utils",
   "ws_client",
-  "examples/ability_cooldowns",
-  "examples/playground_common",
-  "examples/card_table",
-  "examples/blackhole_playground",
-  "examples/csp_net_example",
-  "examples/horde_playground",
-  "examples/netcode_playground",
-  "examples/pong",
-  "examples/rollback_playground",
-  "examples/shared-counter",
-  "examples/timed_debuff",
-  "examples/typing_indicator",
-  "examples/whack_a_mole",
 ]
-# The four playgrounds (netcode, rollback, horde, blackhole) pull in macroquad's large dependency
-# tree and target wasm, so they are kept out of the default set: a bare
-# `cargo build`/`test`/`check` skips them, while `cargo <cmd> --workspace` includes them.
-default-members = [
-  "core",
-  "lobby",
-  "session",
-  "client_utils",
-  "wire",
-  "server_utils",
-  "ws_client",
-  "examples/ability_cooldowns",
-  "examples/playground_common",
-  "examples/card_table",
-  "examples/blackhole_playground",
-  "examples/csp_net_example",
-  "examples/pong",
-  "examples/shared-counter",
-  "examples/timed_debuff",
-  "examples/typing_indicator",
-  "examples/whack_a_mole",
-]
+exclude = ["examples"]
 resolver = "2"
 
 [workspace.package]

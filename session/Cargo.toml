@@ -23,7 +23,6 @@ actix_host = ["actix_ws", "dep:actix-files", "dep:tracing-subscriber"]
 
 [dependencies]
 plaza = { version = "0.5.0", path = "../core" }
-# The wire format trait, kept in its own runtime-free crate so clients can share it.
 plaza_wire = { version = "0.5.0", path = "../wire" }
 
 # The shared connection manager is always compiled, so its dependencies are not optional.

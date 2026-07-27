@@ -2,10 +2,10 @@
 name = "plaza_example_card_table"
 version = "0.1.0"
 edition = { workspace = true }
-publish = false # It's an example
+publish = false
 
 [dependencies]
-plaza = { path = "../../core" }
+plaza = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 async-trait = { workspace = true }

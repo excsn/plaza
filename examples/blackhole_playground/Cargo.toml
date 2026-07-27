@@ -2,11 +2,10 @@
 name = "blackhole_playground"
 version = "0.1.0"
 edition = { workspace = true }
-publish = false # It's an example
+publish = false
 
 [features]
 default = ["native", "client", "server", "websocket"]
-# What a person wants to build, not the crates behind it.
 client = []
 # Not available on `web`: a browser cannot accept incoming connections.
 server = ["dep:plaza", "dep:plaza_session", "dep:actix-web", "dep:tokio", "dep:async-trait", "dep:tracing"]
@@ -15,19 +14,17 @@ web = ["client", "websocket", "plaza_ws/miniquad"]
 websocket = ["dep:plaza_ws", "plaza_ws/json", "dep:plaza_wire", "dep:serde_json"]
 
 [dependencies]
-plaza_client_utils = { path = "../../client_utils", features = ["net-sim"] }
-plaza_server_utils = { path = "../../server_utils" }
-# The listen-server roles, shared with the other playground. Unconditional and
-# dependency-free, so the wasm client and the server share one definition.
-playground_common = { path = "../playground_common" }
+plaza_client_utils = { workspace = true, features = ["net-sim"] }
+plaza_server_utils = { workspace = true }
+playground_common = { workspace = true }
 parking_lot = "0.12"
 serde = { workspace = true }
 serde_json = { version = "^1", optional = true }
 
-plaza_ws = { path = "../../ws_client", default-features = false, optional = true }
-plaza_wire = { path = "../../wire", optional = true }
-plaza = { path = "../../core", optional = true }
-plaza_session = { path = "../../session", features = ["actix_ws", "actix_host"], optional = true }
+plaza_ws = { workspace = true, optional = true }
+plaza_wire = { workspace = true, optional = true, features = ["default"] }
+plaza = { workspace = true, optional = true }
+plaza_session = { workspace = true, features = ["default", "actix_host"], optional = true }
 actix-web = { version = "^4", optional = true }
 tokio = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
@@ -40,7 +37,7 @@ egui-macroquad = "=0.17.3"
 # Not the same dependency as the optional runtime one above: this is the
 # build-script half, which only hashes source files and needs none of serde.
 [build-dependencies]
-plaza_wire = { path = "../../wire", default-features = false, features = ["build"] }
+plaza_wire = { workspace = true, features = ["build"] }
 
 [lib]
 name = "blackhole_playground"

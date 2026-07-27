@@ -9,5 +9,6 @@
 # Usage: ./run-native.sh [-- <args>]
 set -euo pipefail
 
-root="$(cd "$(dirname "$0")/../.." && pwd)"
+root="$(cd "$(dirname "$0")/.." && pwd)"
+export CARGO_TARGET_DIR="$(cd "$(dirname "$0")/../.." && pwd)/target"
 exec cargo run -p horde_playground --release --manifest-path "$root/Cargo.toml" -- "$@"

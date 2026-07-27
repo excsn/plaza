@@ -5,13 +5,13 @@ edition = { workspace = true }
 publish = false
 
 [dependencies]
-plaza = { path = "../../core" }
+plaza = { workspace = true }
 
-async-trait = { workspace = true } # If example traits are async
+async-trait = { workspace = true }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 uuid = { version = "1", features = ["v4", "serde"] }
-parking_lot = "0.12" # Add this
+parking_lot = "0.12"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # For this example, we'll show the scheduler directly in StateLogic for simplicity,

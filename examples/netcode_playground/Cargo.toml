@@ -2,15 +2,13 @@
 name = "netcode_playground"
 version = "0.1.0"
 edition = { workspace = true }
-publish = false # It's an example
+publish = false
 
 # Uses client_utils/server_utils, not plaza core: core is async and not wasm-safe.
-# net-sim provides the deterministic latency/jitter/loss link the demo runs on.
 [dependencies]
-plaza_client_utils = { path = "../../client_utils", features = ["net-sim"] }
-plaza_server_utils = { path = "../../server_utils" }
-# For the shared Ping/Pong payloads; no codec needed (in-process).
-plaza_wire = { path = "../../wire", default-features = false }
+plaza_client_utils = { workspace = true, features = ["net-sim"] }
+plaza_server_utils = { workspace = true }
+plaza_wire = { workspace = true }
 
 # egui-macroquad is a bridge crate pinned to matching macroquad/egui versions.
 macroquad = "=0.4.15"

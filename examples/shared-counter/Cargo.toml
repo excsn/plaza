@@ -2,14 +2,14 @@
 name = "plaza-example-shared-counter"
 version = "0.1.0"
 edition = { workspace = true }
-publish = false # It's an example
+publish = false
 
 [dependencies]
-plaza = { path = "../../core" } # Depends on our core library
+plaza = { workspace = true }
 tokio = { workspace = true }
-uuid = { workspace = true } # For the example's ID type
-serde = { workspace = true } # For the example's Op type
-async-trait = { workspace = true } # If example traits are async
-thiserror = { workspace = true } # If example defines custom errors
+uuid = { workspace = true }
+serde = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

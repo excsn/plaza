@@ -5,8 +5,8 @@ edition = { workspace = true }
 publish = false
 
 [dependencies]
-plaza = { path = "../../core" }
-plaza_session = { path = "../../session", default-features = false, features = ["actix_ws"] }
+plaza = { workspace = true }
+plaza_session = { workspace = true, features = ["actix_ws"] }
 
 actix-web = "^4"
 async-trait = { workspace = true }

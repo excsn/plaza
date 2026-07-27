@@ -21,8 +21,6 @@ thiserror = { workspace = true }
 tracing = "^0"
 
 [dev-dependencies]
-# For writing unit tests for this crate's utilities.
-uuid = { version = "1", features = ["v4"] } # Example for IDs in tests
-serde = { version = "1.0", features = ["derive"] } # If test structs need serde
-# tokio = { version = "1", features = ["macros", "rt-multi-thread"] } # If tests involve async (not initially)
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] } # For running tests with logs
+uuid = { version = "1", features = ["v4"] }
+serde = { version = "1.0", features = ["derive"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

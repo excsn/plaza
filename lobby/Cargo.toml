@@ -12,12 +12,12 @@ repository = { workspace = true }
 readme = "README.md"
 
 [dependencies]
-plaza = { version = "0.5.0", path = "../core" } # Dependency on plaza-core
+plaza = { version = "0.5.0", path = "../core" }
 
 async-trait = { workspace = true }
 fibre = { workspace = true }
 serde = { workspace = true }
-uuid = { version = "1", features = ["v4", "serde"] } # For RoomId
+uuid = { version = "1", features = ["v4", "serde"] }
 tokio = { version = "1", features = ["sync", "rt"] } # For Mutex, mpsc, spawn
 tracing = "0.1"
 parking_lot = "0.12"

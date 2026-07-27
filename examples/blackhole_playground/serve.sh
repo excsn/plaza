@@ -8,7 +8,8 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
-root="$(cd "$here/../.." && pwd)"
+root="$(cd "$here/.." && pwd)"
+export CARGO_TARGET_DIR="$(cd "$here/../.." && pwd)/target"
 port="${1:-8080}"
 
 # 1. Ensure the wasm target is present.
@@ -24,7 +25,7 @@ echo "==> building browser client (release wasm)"
 ( cd "$root" && cargo build -p blackhole_playground --target wasm32-unknown-unknown --release --no-default-features --features web )
 
 # 3. Place the artifact next to index.html. It is gitignored: a build product.
-cp "$root/target/wasm32-unknown-unknown/release/blackhole_playground.wasm" "$here/static/blackhole_playground.wasm"
+cp "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/blackhole_playground.wasm" "$here/static/blackhole_playground.wasm"
 
 # 4. Shrink it if binaryen is available (optional; skipped silently otherwise).
 if command -v wasm-opt >/dev/null 2>&1; then
