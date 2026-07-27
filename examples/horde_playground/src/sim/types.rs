@@ -1077,13 +1077,16 @@ impl Default for Controls {
       // the rule every client runs.
       player_sync_hz: 10,
       playout_delay_ms: 100,
-      // one_way (30) + jitter (20) + a 10 Hz player interval (100), exactly.
-      // A whole send interval is part of the budget because interpolation needs
-      // two samples bracketing the target, so lowering `player_sync_hz` without
-      // raising this draws every peer, and your own marker, off the timeline.
-      // Checked by `the_shipped_defaults_cover_each_other`, and these three are
-      // now an exact fit: moving any one of them needs another to move too.
-      render_delay_ms: 150,
+      // one_way (30) + jitter (20) + a 10 Hz player interval (100), plus 30 ms
+      // of margin. A whole send interval is part of the budget because
+      // interpolation needs two samples bracketing the target, so lowering
+      // `player_sync_hz` without raising this draws every peer, and your own
+      // marker, off the timeline. It shipped at the exact fit (150) for a
+      // while, and played as slightly iffy movement: with zero margin, every
+      // jitter spike at the tail of the distribution puts the newest sample
+      // behind the target, and the marker holds then jumps. The margin buys
+      // out the tail. Checked by `the_shipped_defaults_cover_each_other`.
+      render_delay_ms: 180,
       input_playout: true,
       // Roughly the playout depth in 16 ms steps, plus slack for jitter.
       input_max_late_ticks: 4,

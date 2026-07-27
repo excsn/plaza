@@ -332,6 +332,17 @@ impl DeltaBaseline {
       // against a stale "what I last sent" emits nothing at all while the
       // rebuild counter still ticks.
       self.last_sent.clear();
+      // A rebuild starts a new epoch, and the sent history is part of the old
+      // one, twice over. A stale in-flight acknowledgement could name a
+      // pre-rebuild state as the baseline for a subscriber that is about to
+      // hold something else entirely. And after a subscriber restart, its
+      // acknowledgement window has a gap at the stall boundary that
+      // `contiguous_base` can never cross, so with the old history in place
+      // the baseline stayed unknown, and unknown means a full set **every
+      // round**, until the gap aged out: measured at ~25 consecutive full
+      // baselines over 1.5 s. Cleared, the frontier restarts at the next
+      // packet and one acknowledgement round trip ends the full sets.
+      self.sent.clear();
       self.full_rebuilds += 1;
     }
 
@@ -453,9 +464,27 @@ impl DeltaBaseline {
   /// for flow control. Use this form whenever [`with_flow`](Self::with_flow) is
   /// on; the timestamp records under **either** policy, because liveness is a
   /// property of the subscriber, not of the recovery arithmetic.
+  ///
+  /// An ack from a subscriber currently stalled is **the resume signal**, and
+  /// it starts a fresh epoch instead of being folded in. Its window spans the
+  /// silence, and the keepalives inside the silence are sparse in the sequence
+  /// space, so the contiguous walk pins the baseline at the first keepalive
+  /// and every plan after resume diffs against a state as old as the stall,
+  /// until staleness notices a second time: measured as ~25 consecutive full
+  /// baselines over 1.5 s. Resetting instead makes the next plan one full
+  /// baseline in a clean epoch, which the subscriber acknowledges contiguously,
+  /// and the stream is deltas again after a single round trip.
   pub fn observe_ack_at(&mut self, newest: u64, mask: u64, digest: u64, now: u64) {
+    let resuming = self.stalled(now);
     if let Some(flow) = &mut self.flow {
       flow.last_ack = Some(now);
+    }
+    if resuming {
+      self.reset();
+      if let Some(flow) = &mut self.flow {
+        flow.last_ack = Some(now);
+      }
+      return;
     }
     self.observe_ack(newest, mask, digest);
   }
@@ -525,6 +554,36 @@ mod tests {
   }
 
   #[test]
+  fn a_rebuild_starts_a_new_epoch_and_one_ack_round_trip_ends_the_full_sets() {
+    // The resume churn. A restarted subscriber's ack window has a gap the
+    // contiguous walk can never cross, so with the old sent history in place
+    // the baseline stayed unknown, and unknown means a full set every round
+    // until the gap aged out of history: ~25 consecutive full baselines.
+    let mut b = DeltaBaseline::new(24);
+    let world = keys(&[1, 2, 3]);
+    let digest = SetDigest::from_keys(world.iter().copied()).digest();
+    for seq in 1..=5 {
+      b.plan(&world, seq);
+      b.observe_ack(seq, u64::MAX, digest);
+    }
+
+    // The subscriber restarts and holds nothing; the server learns it.
+    b.request_full_baseline();
+    assert!(b.plan(&world, 6).full_baseline);
+
+    // A stale in-flight ack from the old epoch must not become a baseline for
+    // a subscriber that is about to hold something else entirely.
+    b.observe_ack(5, u64::MAX, digest);
+    assert_eq!(b.acked_seq(), None, "a pre-rebuild state is not a baseline for the new epoch");
+
+    // It applies the full set, acknowledges it, and the churn is over.
+    b.observe_ack(6, u64::MAX, digest);
+    let settled = b.plan(&world, 7);
+    assert!(!settled.full_baseline, "one acknowledged round trip ends the rebuild churn");
+    assert!(settled.entered.is_empty(), "and the stream is deltas again");
+  }
+
+  #[test]
   fn a_silent_subscriber_is_throttled_to_keepalives_and_one_ack_restores_it() {
     // The hidden-tab pathology. Once the acknowledged baseline ages out of
     // history every plan is a full baseline, so without this a reader that has
@@ -557,10 +616,20 @@ mod tests {
       "a stalled subscriber gets about one keepalive a second: {sent_while_stalled} in 5 s"
     );
 
-    // One acknowledgement ends the throttle.
+    // One acknowledgement ends the throttle. It is also the resume signal, so
+    // it opens a fresh epoch rather than being folded in: its window spans the
+    // silence, and the keepalives inside the silence are sparse in sequence
+    // space, so folding it in pins the baseline at the first keepalive and
+    // every plan after resume is a full set until staleness fires again.
     b.observe_ack_at(seq, u64::MAX, digest, now);
     assert!(!b.stalled(now));
     assert!(b.should_send(now + 62), "an acknowledged subscriber is streamed to again");
+    let fresh = b.plan(&world, seq + 1);
+    assert!(fresh.full_baseline, "the resumed subscriber starts from one clean full set");
+    b.observe_ack_at(seq + 1, u64::MAX, digest, now + 62);
+    let settled = b.plan(&world, seq + 2);
+    assert!(!settled.full_baseline, "and is back to deltas one round trip later");
+    assert!(settled.entered.is_empty(), "with nothing spuriously re-sent");
   }
 
   #[test]

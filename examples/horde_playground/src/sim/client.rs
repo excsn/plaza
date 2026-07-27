@@ -866,9 +866,10 @@ impl Client {
     for (p, x, y) in &frame.distant {
       self.observe_player(*p as usize, dequantize_far(*x, *y), frame.server_time_ms);
     }
-    // Steer the render clock toward the stream rather than toward a clock
-    // estimate. Gently, so it glides instead of snapping on every frame.
-    self.observe_arrival(frame.server_time_ms, recv_ms);
+    // Steer the render clock, and feed the budget monitor: this is the
+    // interpolated stream, so its interval is the one that sizes the delay.
+    self.observe_arrival(recv_ms);
+    self.arrivals.observe(frame.server_time_ms, recv_ms);
     // Health rides the timeline like everything else. Applying it on arrival
     // put the bar one render delay ahead of the body it is drawn over, so a hit
     // showed before the contact that caused it was visible.
@@ -941,12 +942,24 @@ impl Client {
   /// how far behind to sit, and the buffer it holds is sized from how irregular
   /// arrivals are rather than from any configured rate, so the server may send at
   /// whatever rate it likes and change it live.
-  fn observe_arrival(&mut self, server_time_ms: u64, recv_ms: u64) {
+  /// Both streams steer the clock, but only the *player* stream feeds the
+  /// budget monitor: it is the interpolated one, so only its interval sizes
+  /// the render delay. Fed from both, the merged ~40 ms gap understated the
+  /// budget by most of a player interval and the readout blessed a delay the
+  /// peers could not actually be bracketed at.
+  fn observe_arrival(&mut self, recv_ms: u64) {
     // Tracks the synced server clock (`recv_ms`), not the packet's timestamp:
     // steering by the timestamp puts the estimate one trip behind and makes T
     // depend on latency, which is the conflation this design removes.
+    //
+    // Full strength is deliberate, and smooth, which is worth stating because
+    // it looks like a snap: `recv_ms` is this client's own clock estimate,
+    // which advances with frame time, so tracking it exactly tracks a smooth
+    // value. A gentler strength was tried while hunting a movement stutter
+    // (the stutter was the zero-margin render delay, not this) and it only
+    // made the clock lag arrivals by several packets, which is a starved
+    // buffer wearing a different hat.
     self.render_clock.resync(recv_ms, 1.0);
-    self.arrivals.observe(server_time_ms, recv_ms);
   }
 
   /// Takes delivery of a packet. Does **not** apply it: see [`Client::playout`].
@@ -958,7 +971,7 @@ impl Client {
   /// client's state.
   pub fn receive_packet(&mut self, packet: Packet, recv_ms: u64) {
     self.now_ms = recv_ms;
-    self.observe_arrival(packet.server_time_ms, recv_ms);
+    self.observe_arrival(recv_ms);
     let render_at = self.render_at().map(|at| at.server_time_ms());
     let (stamp, seq) = (packet.server_time_ms, packet.seq);
     match self.playout.push(stamp, seq, packet, render_at) {
