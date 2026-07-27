@@ -42,7 +42,11 @@ pub enum PresenceEvent<ID: AgentId> {
 }
 
 /// Who should receive a message.
-#[derive(Debug, Clone)]
+///
+/// `PartialEq` compares structurally, so `Agents([1, 2])` and `Agents([2, 1])`
+/// are unequal despite naming one set. That only costs a coalescing opportunity
+/// in [`LogicOutput::coalesce`], never a wrong delivery.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MessageTarget<ID: AgentId> {
   /// Every connected agent.
   All,

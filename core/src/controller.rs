@@ -442,7 +442,12 @@ where
     let kind = input.kind();
 
     match self.op_handler.process_input(&mut self.state_data, input).await {
-      Ok(output) => {
+      Ok(mut output) => {
+        // One envelope per run of same-sender, same-target ops rather than one
+        // per op: logic pushes an entry per event, and each entry was its own
+        // encode, its own fan-out, and its own frame on the wire.
+        output.coalesce();
+
         for targeted_op in output.ops {
           let msg = SessionMessage::Ops {
             from: targeted_op.from_agent,

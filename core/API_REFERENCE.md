@@ -99,7 +99,7 @@ What processing produced.
 
 *   **Fields**: `ops: Vec<TargetedOp<Op, ID>>`, `snapshots: Vec<SnapshotRequest<ID>>`.
 *   **Constructors**: `none()`, `ops(Vec<TargetedOp<..>>)`.
-*   **Methods**: `and_snapshot(SnapshotRequest<ID>) -> Self` (builder-style).
+*   **Methods**: `and_snapshot(SnapshotRequest<ID>) -> Self` (builder-style); `coalesce(&mut self)`, which merges neighbouring ops sharing a sender and a target into one entry, so a tick's events travel in one envelope instead of one each. The controller calls it before sending, so logic is free to push an entry per event. Neighbours only: merging across a gap would reorder those ops against whatever sat between them, for any recipient that receives both.
 *   **Conversions**: `From<Vec<TargetedOp<Op, ID>>>`, so ops-only logic ends with `Ok(ops.into())`.
 *   Ops are sent before snapshots, so a client sees the event explaining a change before the state reflecting it.
 

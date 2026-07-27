@@ -114,6 +114,32 @@ impl<Op, ID: AgentId> LogicOutput<Op, ID> {
     self.snapshots.push(request);
     self
   }
+
+  /// Merges neighbouring ops that share a sender and a target into one entry.
+  ///
+  /// The controller sends one envelope per `TargetedOp`, and logic naturally
+  /// pushes one per event, so a tick that hid a mole and spawned another sent
+  /// two frames to the same everyone: two encodes, two fan-outs, and two copies
+  /// of an envelope that is around 34 bytes of JSON wrapped around ops often
+  /// smaller than that. The controller calls this before sending.
+  ///
+  /// **Neighbours only, and that is the whole subtlety.** Merging across a gap
+  /// reorders: given `[A→all, B→p1, C→all]`, folding `C` into `A` moves it
+  /// ahead of `B` for the one recipient that receives both. Restricting it to
+  /// runs means any two ops that can reach a common recipient keep the order
+  /// logic emitted them in, which is the only ordering guarantee ops have.
+  pub fn coalesce(&mut self) {
+    // `dedup_by` passes the later element first and drops it when the closure
+    // says yes, which is exactly a fold into the run's surviving head.
+    self.ops.dedup_by(|current, kept| {
+      if kept.from_agent == current.from_agent && kept.target == current.target {
+        kept.ops.append(&mut current.ops);
+        true
+      } else {
+        false
+      }
+    });
+  }
 }
 
 impl<Op, ID: AgentId> Default for LogicOutput<Op, ID> {
@@ -159,6 +185,77 @@ pub trait StateLogic<Op, ID: AgentId, StateType>: Send + Sync + 'static {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::session::MessageTarget;
+
+  fn to(target: MessageTarget<u64>, ops: &[u8]) -> TargetedOp<u8, u64> {
+    TargetedOp::new(Agent::system(), target, ops.to_vec())
+  }
+
+  fn shape(output: &LogicOutput<u8, u64>) -> Vec<(MessageTarget<u64>, Vec<u8>)> {
+    output
+      .ops
+      .iter()
+      .map(|t| (t.target.clone(), t.ops.clone()))
+      .collect()
+  }
+
+  #[test]
+  fn a_run_of_same_target_ops_becomes_one_message() {
+    let mut output = LogicOutput::ops(vec![
+      to(MessageTarget::All, &[1]),
+      to(MessageTarget::All, &[2]),
+      to(MessageTarget::All, &[3]),
+    ]);
+    output.coalesce();
+    assert_eq!(shape(&output), vec![(MessageTarget::All, vec![1, 2, 3])]);
+  }
+
+  #[test]
+  fn coalescing_never_reorders_what_a_recipient_sees() {
+    // The constraint that makes this neighbours-only. `p1` receives every one
+    // of these, so folding the second `All` into the first would move op 3
+    // ahead of op 2 for them.
+    let mut output = LogicOutput::ops(vec![
+      to(MessageTarget::All, &[1]),
+      to(MessageTarget::Agent(1), &[2]),
+      to(MessageTarget::All, &[3]),
+    ]);
+    output.coalesce();
+    assert_eq!(
+      shape(&output),
+      vec![
+        (MessageTarget::All, vec![1]),
+        (MessageTarget::Agent(1), vec![2]),
+        (MessageTarget::All, vec![3]),
+      ],
+      "ops that can reach a common recipient must keep their emitted order"
+    );
+  }
+
+  #[test]
+  fn a_different_sender_breaks_the_run() {
+    // `from` is on the envelope, so two senders cannot share one.
+    let mut output = LogicOutput::ops(vec![
+      TargetedOp::new(Agent::system(), MessageTarget::All, vec![1u8]),
+      TargetedOp::new(Agent::new_human(7u64), MessageTarget::All, vec![2u8]),
+      TargetedOp::new(Agent::new_human(7u64), MessageTarget::All, vec![3u8]),
+    ]);
+    output.coalesce();
+    assert_eq!(output.ops.len(), 2);
+    assert_eq!(output.ops[0].ops, vec![1]);
+    assert_eq!(output.ops[1].ops, vec![2, 3]);
+  }
+
+  #[test]
+  fn coalescing_nothing_is_harmless() {
+    let mut empty: LogicOutput<u8, u64> = LogicOutput::none();
+    empty.coalesce();
+    assert!(empty.ops.is_empty());
+
+    let mut single = LogicOutput::ops(vec![to(MessageTarget::All, &[1])]);
+    single.coalesce();
+    assert_eq!(shape(&single), vec![(MessageTarget::All, vec![1])]);
+  }
 
   #[test]
   fn an_input_describes_itself_without_allocating_on_the_tick_path() {
