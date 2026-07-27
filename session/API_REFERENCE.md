@@ -67,7 +67,7 @@ The connection registry plus the notification channels a `StateController` consu
 *   **`register(&self, agent: Agent<ID>, to_client_tx) -> ConnectionId`**: records a connected client and announces the join.
 *   **`deregister(&self, conn_id: ConnectionId)`**: removes it and announces the departure.
 *   **`forward_incoming(&self, from: Agent<ID>, serialized_ops: Vec<Vec<u8>>)`**: publishes a client's raw bytes toward the controller. Non-blocking; drops under load rather than stalling a connection task.
-*   **`broadcast(&self, target: &MessageTarget<ID>, frame: OutboundFrame) -> Result<(), SessionLayerError>`**: fans one already-encoded frame out to the matching connections. It takes bytes, not a message, because a `SessionMessage` is encoded **once** by [`encode_message`](#struct-transportsessionop-id-snapshotpayload-c-wirecodec) and the same frame is cloned to every recipient.
+*   **`broadcast(&self, target: &MessageTarget<ID>, frame: OutboundFrame) -> Result<(), SessionLayerError>`**: fans one already-encoded frame out to the matching connections. It takes bytes, not a message, because a `SessionMessage` is encoded **once** by [`encode_message`](#struct-transportsessionop-id-snapshotpayload-c-wirecodec) and the same buffer is shared with every recipient, at the cost of a refcount bump each.
 *   **`take_raw_incoming(&self) -> mpsc::BoundedAsyncReceiver<SerializedSessionMessage<ID>>`**: the inbound stream, whose payloads are still encoded bytes for the deserialize bridge to decode.
 *   **`take_presence(&self) -> SessionReceiver<PresenceEvent<ID>>`**
 *   **`agent_rtt(&self, id: &ID) -> Option<(Duration, u64)>`**: the measured round trip for an agent and how many samples it rests on. Keyed by agent because that is what an application holds: it knows who joined, not which socket they arrived on, and a reconnecting player is a new connection but the same agent.
@@ -84,7 +84,7 @@ A complete `Session` implementation over any byte transport. Both shipped adapte
 *   **`new(transport: &'static str, codec: C, capacity: usize) -> Arc<Self>`**: also spawns the deserialize bridge task.
 *   **`manager(&self) -> &Arc<ConnectionManager<ID>>`**
 *   **`codec(&self) -> &C`**
-*   **`encode_message(&self, msg: SessionMessage<Op, ID, SnapshotPayload>) -> Result<OutboundFrame, SessionLayerError>`**: encodes a whole message to one frame in a single pass (`codec.encode(&msg)`). Hand the frame to [`broadcast`](#struct-connectionmanagerid-agentid); it is cloned per recipient rather than re-encoded.
+*   **`encode_message(&self, msg: SessionMessage<Op, ID, SnapshotPayload>) -> Result<OutboundFrame, SessionLayerError>`**: encodes a whole message to one frame in a single pass (`codec.encode(&msg)`). Hand the frame to [`broadcast`](#struct-connectionmanagerid-agentid); recipients share the buffer rather than each getting a re-encode or a copy.
 *   Implements `Session`. `agent_join` returns `PlazaError::NotImplemented`: joins are transport-implicit, happening when a client connects and the adapter calls `register`.
 
 ### Function `target_matches`
@@ -97,7 +97,7 @@ The single implementation of the targeting rules. Agents without an ID (the syst
 
 ### Type Alias `OutboundFrame`
 
-`Vec<u8>`: one fully-encoded downstream message, ready to write to a socket. What [`encode_message`](#struct-transportsessionop-id-snapshotpayload-c-wirecodec) produces and [`broadcast`](#struct-connectionmanagerid-agentid) fans out.
+`bytes::Bytes`: one fully-encoded downstream message, ready to write to a socket. What [`encode_message`](#struct-transportsessionop-id-snapshotpayload-c-wirecodec) produces and [`broadcast`](#struct-connectionmanagerid-agentid) fans out. Refcounted rather than owned, so handing the frame to N recipients shares one buffer instead of allocating and copying it N times, all of which happened under the connection registry's read lock. Both transports speak it already: actix-ws takes a `Bytes` (or a `ByteString`, which validates UTF-8 over the same buffer, for a text codec), and `LengthDelimitedCodec` takes a `Bytes`.
 
 ### Type Alias `SerializedSessionMessage<ID>`
 

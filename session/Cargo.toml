@@ -16,8 +16,8 @@ all-features = true
 
 [features]
 default = ["actix_ws", "tcp"]
-actix_ws = ["dep:actix-ws", "dep:actix-web"]
-tcp = ["dep:tokio-util", "dep:bytes", "tokio/net"]
+actix_ws = ["dep:actix-ws", "dep:actix-web", "dep:bytestring"]
+tcp = ["dep:tokio-util", "tokio/net"]
 actix_host = ["actix_ws", "dep:actix-files", "dep:tracing-subscriber"]
 
 [dependencies]
@@ -37,7 +37,8 @@ actix-web = { version = "^4", optional = true }
 actix-ws = { version = "^0.3", optional = true }
 actix-files = { version = "^0.6", optional = true }
 tracing-subscriber = { workspace = true, optional = true }
-bytes = { version = "^1", optional = true }
+bytes = "^1"
+bytestring = { version = "^1", optional = true }
 tokio-util = { version = "^0.7", features = ["codec"], optional = true }
 
 [dev-dependencies]

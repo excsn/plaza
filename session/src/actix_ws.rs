@@ -12,6 +12,7 @@ use actix_web::{web, HttpRequest, HttpResponse};
 use actix_ws::AggregatedMessage;
 use async_trait::async_trait;
 use futures_util::StreamExt;
+use bytestring::ByteString;
 use plaza::agent::{Agent, AgentId};
 use plaza::error::PlazaError;
 use plaza::session::{ConnectionId, MessageTarget, PresenceEvent, Session, SessionMessage, SessionReceiver};
@@ -156,7 +157,10 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
         // `binaryType`. Sending JSON as binary is legal and makes every browser
         // client harder to write than it needs to be.
         let sent = if send_as_text {
-          match String::from_utf8(frame) {
+          // `ByteString::try_from` validates UTF-8 in place and keeps the same
+          // buffer, so the text path (which is the default JSON one) stays as
+          // copy-free as the binary path.
+          match ByteString::try_from(frame) {
             Ok(text) => ws_session.text(text).await,
             Err(e) => {
               warn!(transport = TRANSPORT, conn_id, error = %e, "Codec claims text but produced non-UTF-8; dropping the frame.");

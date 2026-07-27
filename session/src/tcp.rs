@@ -145,7 +145,7 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
       // Server -> client. Already encoded; length delimiting is this
       // transport's whole framing job, so there is nothing else to decide.
       Ok(frame) = to_client_rx.recv() => {
-        if let Err(e) = framed.send(frame.into()).await {
+        if let Err(e) = framed.send(frame).await {
           warn!(transport = TRANSPORT, conn_id, error = %e, "Write failed; closing connection.");
           break;
         }

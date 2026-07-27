@@ -15,6 +15,7 @@ use std::time::Duration;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use parking_lot::RwLock;
 use plaza::agent::{Agent, AgentId};
 use plaza::error::PlazaError;
@@ -47,9 +48,16 @@ pub const DEFAULT_CLIENT_QUEUE_CAPACITY: usize = 64;
 /// what the transport moves is a finished frame.
 pub type SerializedSessionMessage<ID> = SessionMessage<Vec<u8>, ID, Vec<u8>>;
 
-/// One connection's outbound queue. Already encoded, so fan-out is a clone of
-/// bytes rather than a re-encode per recipient.
-pub type OutboundFrame = Vec<u8>;
+/// One connection's outbound queue.
+///
+/// Encoded once and **shared**, not copied: a broadcast to N clients hands the
+/// same buffer to each, so fan-out costs a refcount bump rather than N
+/// allocations and N memcpys of the whole frame. That matters more than the
+/// arithmetic suggests, because the copies happened inside `broadcast`'s read
+/// guard, so every one of them widened the window a register or deregister had
+/// to wait through. `Bytes` also matches what both transports already speak:
+/// actix-ws hands over one, and `LengthDelimitedCodec` accepts one.
+pub type OutboundFrame = Bytes;
 
 struct ClientHandle<ID: AgentId> {
   agent: Agent<ID>,
@@ -397,12 +405,20 @@ where
   }
 
   /// Encodes a message's payloads for the wire.
+  ///
+  /// The result is shared by every recipient, so this runs once per message
+  /// rather than once per client. `Bytes::from` takes the codec's `Vec` whole
+  /// and adds no copy.
   pub fn encode_message(&self, msg: SessionMessage<Op, ID, SnapshotPayload>) -> Result<OutboundFrame, SessionLayerError> {
-    self.codec.encode(&msg).map_err(|source| SessionLayerError::Serialization {
-      transport: self.transport,
-      context: "session message",
-      source,
-    })
+    self
+      .codec
+      .encode(&msg)
+      .map(Bytes::from)
+      .map_err(|source| SessionLayerError::Serialization {
+        transport: self.transport,
+        context: "session message",
+        source,
+      })
   }
 }
 
@@ -506,5 +522,27 @@ where
 
   fn on_presence_change(&self) -> SessionReceiver<PresenceEvent<ID>> {
     self.manager.take_presence()
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn fanning_a_frame_out_shares_one_buffer() {
+    // The property, not the type: `broadcast` hands the same encoded frame to
+    // every matching connection, and a queue that owned its bytes turned that
+    // into an allocation and a memcpy each, inside the read guard. Asserting on
+    // the pointer rather than the contents is deliberate, because a `Vec<u8>`
+    // queue passes any equality check and fails this one.
+    let frame: OutboundFrame = Bytes::from(vec![7u8; 4096]);
+
+    let queued: Vec<OutboundFrame> = (0..32).map(|_| frame.clone()).collect();
+
+    for copy in &queued {
+      assert_eq!(copy.as_ptr(), frame.as_ptr(), "a recipient got its own copy of the frame");
+      assert_eq!(copy.len(), frame.len());
+    }
   }
 }
