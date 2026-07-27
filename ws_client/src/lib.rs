@@ -69,6 +69,9 @@
 
 use std::fmt;
 
+pub use backlog::{trim_backlog, DroppedBacklog};
+
+pub mod backlog;
 #[cfg(feature = "loopback")]
 pub mod loopback;
 #[cfg(all(feature = "miniquad", target_arch = "wasm32"))]

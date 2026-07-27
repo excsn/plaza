@@ -33,6 +33,20 @@
 //! [`observe_ack`](DeltaBaseline::observe_ack)) lets the server notice that the
 //! two disagree and rebuild from nothing.
 //!
+//! # The digest is also the resume story
+//!
+//! The drift check has a second reading that matters as much as the first: it
+//! is a **permission the client side builds on**. A client may discard any
+//! stretch of the stream unread (a backgrounded tab's backlog, most commonly)
+//! provided it also drops its mirror, because its next acknowledgement then
+//! carries the digest of nothing and this type answers with a full baseline.
+//! No resync-request message exists anywhere, and none is needed: dropping the
+//! mirror is the request. The client half of that bargain is
+//! `plaza_client_utils`' playout buffer and `plaza_ws`' backlog trim; the
+//! server half is this type plus [`with_flow`](DeltaBaseline::with_flow),
+//! which stops streaming full-rate full baselines to a subscriber that has
+//! provably stopped reading.
+//!
 //! # Two invariants, both load bearing
 //!
 //! **The key must be the key the digest hashes.** If the application digests

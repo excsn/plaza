@@ -84,6 +84,37 @@
 //! of reporting them, lets every client pick a different "now", and quietly
 //! makes ping an input to the game.
 //!
+//! # The resume contract
+//!
+//! Every long-lived client eventually stops reading: a browser tab goes to the
+//! background, a laptop sleeps, a frame loop stalls. The socket keeps
+//! receiving the whole time, so what a resumed client faces is not a slow
+//! stream but a *lump*: minutes of packets, delivered at once, describing
+//! moments it can never play. The recovery that works is built from one
+//! invariant, stated here because each half lives in a different crate:
+//!
+//! **A client may discard any stretch of the stream unread, provided it also
+//! drops the state derived from it, because an acknowledgement carrying the
+//! digest of nothing obligates the server to answer with a full baseline.**
+//!
+//! That is the digest-and-rebuild machinery of `server_utils::DeltaBaseline`
+//! and [`mirror::DeltaMirror`], read as a permission. It is why there is no
+//! "resync request" message anywhere: dropping the mirror *is* the request.
+//! On top of it, resume is three verdicts at three layers, each owned by a
+//! block:
+//!
+//! - the **transport** discards the backlog before parsing it
+//!   (`plaza_ws::trim_backlog`), because none of it survives what follows;
+//! - the **playout queue** treats the gap as a discontinuity and restarts
+//!   once, keeping only the newest packet ([`PlayoutBuffer`]);
+//! - the **server** stops streaming to a subscriber that has provably stopped
+//!   reading (`DeltaBaseline::with_flow`), so the lump never grows to
+//!   megabytes in the first place.
+//!
+//! The application's remaining job is small and cannot be taken from it: on
+//! [`playout::Admission::TimelineLost`], drop the mirror and re-anchor the
+//! render clock on what just arrived.
+//!
 //! # Which predictor
 //!
 //! The two differ by how the *server* consumes input, not by how the client

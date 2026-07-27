@@ -299,55 +299,28 @@ impl NetClient {
   }
 
   /// Discards all but the tail of a resume backlog, **before any of it is
-  /// parsed**.
+  /// parsed**: see [`plaza_ws::trim_backlog`], which owns the how and the why.
   ///
-  /// A hidden tab stops running frames while its socket keeps receiving, so
-  /// the first poll after refocus can hand back minutes of traffic at once.
-  /// None of it is playable: the timeline restart is going to discard whatever
-  /// those messages would have built. Parsing it anyway is where the
-  /// several-second freeze on refocus came from, so the drop happens here, on
-  /// message lengths alone.
-  ///
-  /// Everything dropped is repaired by machinery that already exists: the
-  /// restarted mirror's next acknowledgement carries the digest of nothing,
-  /// which the server answers with a full baseline. The one thing not repaired
-  /// is a policy change made mid-stall, which stands until the host next edits
-  /// a setting; accepted, since the alternative is parsing the backlog to look
-  /// for it.
+  /// What stays here is what only this client knows. Whether the burst is a
+  /// join or a resume (before the first frame it is a join, and a join's burst
+  /// must arrive whole). What a drop means for its own state (the timeline is
+  /// lost, once, deliberately). And the accounting: the dropped bytes still
+  /// crossed the wire, so the meters count them in full. The one thing not
+  /// repaired by the recovery contract is a policy change made mid-stall,
+  /// which stands until the host next edits a setting; accepted, since the
+  /// alternative is parsing the backlog to look for it.
   fn drop_resume_backlog(&mut self, events: &mut Vec<Event>, now_ms: u64) {
-    let payload_len = |e: &Event| match e {
-      Event::Message(bytes) => Some(bytes.len()),
-      Event::Text(text) => Some(text.len()),
-      _ => None,
-    };
-    let backlog = events.iter().filter(|e| payload_len(e).is_some()).count();
-    // Before the first frame this is a join, not a resume, and a join's burst
-    // (the welcome, a warm world's first baseline) must arrive whole.
-    if backlog <= BACKLOG_TRIGGER || self.frames_seen == 0 {
+    if self.frames_seen == 0 {
       return;
     }
-    let drop_first = backlog - BACKLOG_KEEP;
-    let mut dropped_bytes = 0u64;
-    let mut seen = 0usize;
-    events.retain(|e| {
-      let Some(len) = payload_len(e) else {
-        // Open and Closed carry the connection's own state; never dropped.
-        return true;
-      };
-      seen += 1;
-      if seen > drop_first {
-        return true;
-      }
-      dropped_bytes += len as u64;
-      false
-    });
-    // The dropped messages still crossed the wire. The meters measure the
-    // link, not what this client chose to read, so they count in full.
-    self.traffic.add(dropped_bytes);
-    self.packets.add(drop_first as u64);
+    let Some(dropped) = plaza_ws::trim_backlog(events, BACKLOG_TRIGGER, BACKLOG_KEEP) else {
+      return;
+    };
+    self.traffic.add(dropped.bytes);
+    self.packets.add(dropped.messages);
     self.resume_drops += 1;
-    self.last_drop_msgs = drop_first as u64;
-    self.last_drop_bytes = dropped_bytes;
+    self.last_drop_msgs = dropped.messages;
+    self.last_drop_bytes = dropped.bytes;
     let server_now = self.clock.server_time_at(now_ms as f64).unwrap_or(now_ms as f64).max(0.0) as u64;
     self.sim.timeline_lost(server_now);
   }
