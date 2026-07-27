@@ -30,6 +30,24 @@ fn client_traffic(ui: &mut egui::Ui, client: &horde_playground::net::client::Net
     client.packets_per_sec()
   ))
   .on_hover_text("Both directions, measured on the wire: down is counted as bytes arrive before decoding, up is counted as each op is serialised. Yours alone, not the arena's, which is what makes it the number that says whether your own link is the problem. Upstream is small and asymmetric by design: an input per tick unless coalescing is on, plus an acknowledgement per applied frame, against a whole world coming the other way.");
+  // The spike, not the average. A per-second rate is exactly the instrument
+  // that hides a two-frame stall, and a two-frame stall is what a player feels.
+  let (worst_bytes, worst_us, worst_ops) = client.worst_frame();
+  let heavy = worst_us >= 4_000 || worst_bytes >= 32 * 1024;
+  let line = format!(
+    "worst frame (last 120): {:.1} KiB, {worst_ops} ops, {:.1} ms to decode",
+    worst_bytes as f64 / 1024.0,
+    worst_us as f64 / 1000.0
+  );
+  ui.label(if heavy { egui::RichText::new(line).color(egui::Color32::from_rgb(220, 160, 60)) } else { egui::RichText::new(line).weak() })
+    .on_hover_text(
+      "The most expensive single frame in the recent window, kept beside the per-second rates because they answer a different question. \
+       A hitch is one frame that cost too much; averaged over a second it barely moves. \
+       If this climbs when the horde converges on the players, the spike is downstream of the server and the frame size is the cause. \
+       Compare it against the server's worst tick: if that is flat while this climbs, the server is keeping up and the cost is arriving here. \
+       Browsers clamp timer precision, so read the milliseconds on a native run; the bytes and op count are exact everywhere.",
+    );
+
   let ratio = if modelled > 0.0 { recent / modelled } else { 0.0 };
   ui.label(
     egui::RichText::new(format!(

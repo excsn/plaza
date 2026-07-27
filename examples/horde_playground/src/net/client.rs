@@ -107,6 +107,13 @@ pub struct NetClient {
   sent: plaza_server_utils::RateMeter,
   /// Reused for every outbound frame, so sending an op allocates nothing.
   out: Vec<u8>,
+  /// The worst frame in a short window, not the average over a second.
+  ///
+  /// The rate meters beside this one answer "how much bandwidth", which is the
+  /// wrong question for a hitch: a spike lasting two frames barely moves a
+  /// per-second average and is exactly what a player feels. This keeps the
+  /// worst single frame so a stall has somewhere to show up.
+  worst: FrameCost,
   packets: plaza_server_utils::RateMeter,
   events: Vec<Event>,
   last_ping_ms: u64,
@@ -122,6 +129,72 @@ pub struct NetClient {
   resume_drops: u64,
   last_drop_msgs: u64,
   last_drop_bytes: u64,
+}
+
+/// Microseconds from whichever monotonic clock this target has.
+///
+/// Split by target rather than using macroquad's clock everywhere, because
+/// `get_time` asserts it is on the macroquad thread and so panics in a unit
+/// test, which is where most of this file is exercised.
+///
+/// **Browsers clamp timer precision** (Firefox to 1ms by default, for
+/// fingerprinting reasons), so read the microsecond figure on a native run.
+/// The byte and op counts beside it are exact everywhere and are the proximate
+/// cause anyway: decode time is a function of how much arrived.
+#[cfg(target_arch = "wasm32")]
+fn now_micros() -> u64 {
+  (macroquad::time::get_time() * 1_000_000.0) as u64
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn now_micros() -> u64 {
+  use std::sync::OnceLock;
+  use std::time::Instant;
+  static ORIGIN: OnceLock<Instant> = OnceLock::new();
+  ORIGIN.get_or_init(Instant::now).elapsed().as_micros() as u64
+}
+
+/// The most expensive frame in a rolling window: how big it was, how long it
+/// took to turn into ops, and how many ops that was.
+///
+/// Separate from the rate meters because they answer a different question. A
+/// per-second average is the wrong instrument for a hitch: a spike lasting two
+/// frames barely moves it, and is exactly what a player feels.
+#[derive(Default)]
+pub struct FrameCost {
+  window: std::collections::VecDeque<(u32, u32, u32)>,
+  bytes: u32,
+  micros: u32,
+  ops: u32,
+}
+
+impl FrameCost {
+  /// How many frames the window holds. A couple of seconds at a typical send
+  /// rate: long enough that a spike does not scroll away before it is read,
+  /// short enough that it is about *now* rather than the whole session.
+  const WINDOW: usize = 120;
+
+  fn record(&mut self, bytes: usize, micros: u64, ops: usize) {
+    self.window.push_back((bytes as u32, micros.min(u32::MAX as u64) as u32, ops as u32));
+    if self.window.len() > Self::WINDOW {
+      self.window.pop_front();
+    }
+    // Recomputed rather than kept as a running maximum, so the reading falls
+    // again once the spike leaves the window. A high-water mark that only ever
+    // rises says a stall happened, never that it stopped.
+    let (mut b, mut u, mut o) = (0, 0, 0);
+    for &(sb, su, so) in &self.window {
+      b = b.max(sb);
+      u = u.max(su);
+      o = o.max(so);
+    }
+    (self.bytes, self.micros, self.ops) = (b, u, o);
+  }
+
+  /// Worst bytes, worst decode microseconds, worst op count in the window.
+  pub fn worst(&self) -> (u32, u32, u32) {
+    (self.bytes, self.micros, self.ops)
+  }
 }
 
 impl NetClient {
@@ -144,6 +217,7 @@ impl NetClient {
       modelled: plaza_server_utils::RateMeter::new(),
       sent: plaza_server_utils::RateMeter::new(),
       out: Vec::with_capacity(512),
+      worst: FrameCost::default(),
       packets: plaza_server_utils::RateMeter::new(),
       events: Vec::new(),
       last_ping_ms: 0,
@@ -351,6 +425,14 @@ impl NetClient {
     (self.traffic.per_sec(), self.traffic.lifetime_per_sec())
   }
 
+  /// The worst frame in the recent window: bytes, decode microseconds, ops.
+  ///
+  /// Read this rather than the rate meters when something *hitched*: an average
+  /// over a second is precisely the thing that hides a two-frame stall.
+  pub fn worst_frame(&self) -> (u32, u32, u32) {
+    self.worst.worst()
+  }
+
   pub fn packets_per_sec(&self) -> f64 {
     self.packets.per_sec()
   }
@@ -403,9 +485,15 @@ impl NetClient {
     if frame::Kind::from_byte(tag) != Some(frame::Kind::Ops) {
       return false;
     }
-    let Ok(ops) = WIRE.decode::<Vec<Op>>(body) else {
+    // Timed around the decode alone: this is the work that happens between two
+    // drawn frames, so it is the part of a big packet a player can feel.
+    let started = now_micros();
+    let decoded = WIRE.decode::<Vec<Op>>(body);
+    let elapsed = now_micros().saturating_sub(started);
+    let Ok(ops) = decoded else {
       return false;
     };
+    self.worst.record(bytes.len(), elapsed, ops.len());
     let mut applied_frame = false;
     for op in ops {
       match op {
