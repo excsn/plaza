@@ -32,12 +32,13 @@ fn client_traffic(ui: &mut egui::Ui, client: &horde_playground::net::client::Net
   .on_hover_text("Both directions, measured on the wire: down is counted as bytes arrive before decoding, up is counted as each op is serialised. Yours alone, not the arena's, which is what makes it the number that says whether your own link is the problem. Upstream is small and asymmetric by design: an input per tick unless coalescing is on, plus an acknowledgement per applied frame, against a whole world coming the other way.");
   // The spike, not the average. A per-second rate is exactly the instrument
   // that hides a two-frame stall, and a two-frame stall is what a player feels.
-  let (worst_bytes, worst_us, worst_ops) = client.worst_frame();
-  let heavy = worst_us >= 4_000 || worst_bytes >= 32 * 1024;
+  let (worst_bytes, worst_ops) = client.worst_frame();
+  let decode_us = client.decode_micros();
+  let heavy = decode_us >= 2_000.0 || worst_bytes >= 32 * 1024;
   let line = format!(
-    "worst frame (last 120): {:.1} KiB, {worst_ops} ops, {:.1} ms to decode",
+    "worst frame (last 120): {:.1} KiB, {worst_ops} ops   |   decode {:.2} ms mean",
     worst_bytes as f64 / 1024.0,
-    worst_us as f64 / 1000.0
+    decode_us / 1000.0
   );
   ui.label(if heavy { egui::RichText::new(line).color(egui::Color32::from_rgb(220, 160, 60)) } else { egui::RichText::new(line).weak() })
     .on_hover_text(
@@ -45,7 +46,7 @@ fn client_traffic(ui: &mut egui::Ui, client: &horde_playground::net::client::Net
        A hitch is one frame that cost too much; averaged over a second it barely moves. \
        If this climbs when the horde converges on the players, the spike is downstream of the server and the frame size is the cause. \
        Compare it against the server's worst tick: if that is flat while this climbs, the server is keeping up and the cost is arriving here. \
-       Browsers clamp timer precision, so read the milliseconds on a native run; the bytes and op count are exact everywhere.",
+       The bytes and ops are the worst single frame and are exact. The decode figure is a mean across the window, not the worst frame, because a browser clamps timer precision (Firefox to 1ms) and a per-frame maximum would report that clamp rather than the work: summing the window and dividing back out is what makes the number comparable between a native run and a browser one.",
     );
 
   let ratio = if modelled > 0.0 { recent / modelled } else { 0.0 };

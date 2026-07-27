@@ -164,8 +164,10 @@ fn now_micros() -> u64 {
 pub struct FrameCost {
   window: std::collections::VecDeque<(u32, u32, u32)>,
   bytes: u32,
-  micros: u32,
   ops: u32,
+  /// Summed across the window rather than kept per frame, because a browser's
+  /// clock cannot resolve one frame's worth of it. See [`FrameCost::mean_micros`].
+  micros_total: u64,
 }
 
 impl FrameCost {
@@ -175,25 +177,48 @@ impl FrameCost {
   const WINDOW: usize = 120;
 
   fn record(&mut self, bytes: usize, micros: u64, ops: usize) {
-    self.window.push_back((bytes as u32, micros.min(u32::MAX as u64) as u32, ops as u32));
-    if self.window.len() > Self::WINDOW {
-      self.window.pop_front();
+    let sample = (bytes as u32, micros.min(u32::MAX as u64) as u32, ops as u32);
+    self.window.push_back(sample);
+    self.micros_total += sample.1 as u64;
+    if let Some(dropped) = (self.window.len() > Self::WINDOW).then(|| self.window.pop_front()).flatten() {
+      self.micros_total = self.micros_total.saturating_sub(dropped.1 as u64);
     }
     // Recomputed rather than kept as a running maximum, so the reading falls
     // again once the spike leaves the window. A high-water mark that only ever
     // rises says a stall happened, never that it stopped.
-    let (mut b, mut u, mut o) = (0, 0, 0);
-    for &(sb, su, so) in &self.window {
+    let (mut b, mut o) = (0, 0);
+    for &(sb, _, so) in &self.window {
       b = b.max(sb);
-      u = u.max(su);
       o = o.max(so);
     }
-    (self.bytes, self.micros, self.ops) = (b, u, o);
+    (self.bytes, self.ops) = (b, o);
   }
 
-  /// Worst bytes, worst decode microseconds, worst op count in the window.
-  pub fn worst(&self) -> (u32, u32, u32) {
-    (self.bytes, self.micros, self.ops)
+  /// Worst bytes and worst op count in the window. Both exact, both per frame.
+  pub fn worst(&self) -> (u32, u32) {
+    (self.bytes, self.ops)
+  }
+
+  /// Mean decode microseconds per frame, averaged across the whole window.
+  ///
+  /// **A mean rather than the worst, and deliberately so.** A browser clamps
+  /// timer precision for fingerprinting reasons (Firefox to 1ms by default),
+  /// and `performance.now` is what macroquad's clock reads underneath. A single
+  /// decode of a hundred microseconds therefore measures as either 0 or 1000,
+  /// and a per-frame *maximum* reads 1000 the instant one frame rounds up: it
+  /// reports the clamp, not the work, and it looks like a tenfold regression
+  /// against a native run that can see the real figure.
+  ///
+  /// Summing the window defeats that. A hundred frames of real work totals well
+  /// past the granularity, so dividing back out recovers a per-frame number
+  /// that means something in both builds. The cost is that this can no longer
+  /// show a single expensive frame, which is why `worst` keeps the byte and op
+  /// counts: those are exact everywhere and are what a spike is made of.
+  pub fn mean_micros(&self) -> f64 {
+    if self.window.is_empty() {
+      return 0.0;
+    }
+    self.micros_total as f64 / self.window.len() as f64
   }
 }
 
@@ -425,12 +450,20 @@ impl NetClient {
     (self.traffic.per_sec(), self.traffic.lifetime_per_sec())
   }
 
-  /// The worst frame in the recent window: bytes, decode microseconds, ops.
+  /// The worst frame in the recent window: bytes and ops, both exact.
   ///
   /// Read this rather than the rate meters when something *hitched*: an average
   /// over a second is precisely the thing that hides a two-frame stall.
-  pub fn worst_frame(&self) -> (u32, u32, u32) {
+  pub fn worst_frame(&self) -> (u32, u32) {
     self.worst.worst()
+  }
+
+  /// Mean microseconds spent decoding a frame, across the same window.
+  ///
+  /// A mean because a browser's clock cannot resolve one frame of it; see
+  /// [`FrameCost::mean_micros`].
+  pub fn decode_micros(&self) -> f64 {
+    self.worst.mean_micros()
   }
 
   pub fn packets_per_sec(&self) -> f64 {
