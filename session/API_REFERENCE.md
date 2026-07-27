@@ -126,7 +126,7 @@ async fn ws_route(
   session: web::Data<Arc<ActixWsPlazaSession<Op, PlayerId, Snapshot>>>,
 ) -> Result<HttpResponse, actix_web::Error> {
   let id = Uuid::new_v4();
-  session.handle_connection(&req, stream, Agent::new_human(id, "player"))
+  session.handle_connection(&req, stream, Agent::new_human(id))
 }
 ```
 

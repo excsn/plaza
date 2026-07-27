@@ -75,13 +75,15 @@ The identifier bound, blanket-implemented, so a plain `u64` or a `Uuid` qualifie
 
 ```rust
 pub enum Agent<ID: AgentId> {
-  Human { id: ID, name: String },
-  Bot   { id: ID, name: String },
+  Human(ID),
+  Bot(ID),
   System,
 }
 ```
 
-Who a message is from. Constructors `Agent::new_human(id, name)`, `Agent::new_bot(id, name)`, `Agent::system()`. Accessors: `id() -> Option<&ID>`, `id_cloned() -> Option<ID>` (`None` for `System`), `label() -> String` (the name, or `"SYSTEM"`), `is_system() -> bool`.
+Who a message is from. Constructors `Agent::new_human(id)`, `Agent::new_bot(id)`, `Agent::system()`. Accessors: `id() -> Option<&ID>`, `id_cloned() -> Option<ID>` (`None` for `System`), `is_system() -> bool`. `Display` writes `human:7` / `bot:7` / `SYSTEM` for logs, allocating nothing.
+
+Identity only, deliberately. A display name is application data: plaza never reads one, routing compares ids, and carrying a name here put it on every clone and every frame as a copy of something the application already had. Keep names in your own state or in `ParticipantTracker`'s `app_data`, and send them like any other value: as an op, or as a field in your snapshot payload. `examples/whack_a_mole` does the former. Note that a client's first op can reach the controller before its own join does (ops and presence are separate streams), so name-carrying ops should insert rather than assume a roster entry.
 
 ### Enum `SessionMessage<Op, ID: AgentId, SnapshotPayload>`
 

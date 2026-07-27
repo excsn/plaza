@@ -38,7 +38,7 @@ struct Wiring {
 
 async fn ws_route(req: HttpRequest, stream: web::Payload, wiring: web::Data<Wiring>) -> Result<HttpResponse, actix_web::Error> {
   let key = wiring.next_key.fetch_add(1, Ordering::Relaxed);
-  wiring.session.handle_connection(&req, stream, Agent::new_human(key, format!("player-{key}")))
+  wiring.session.handle_connection(&req, stream, Agent::new_human(key))
 }
 
 /// Runs the arena until the process ends.

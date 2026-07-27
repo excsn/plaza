@@ -118,7 +118,7 @@ impl ClientApp {
     info!("[{}] Sending Join Request", self.client_name);
     let join_op = GameOp::CS_RequestJoin;
     let temp_dummy_id_for_sending = PlayerId::new_v4();
-    let agent_for_sending = Agent::new_human(temp_dummy_id_for_sending, self.client_name.clone());
+    let agent_for_sending = Agent::new_human(temp_dummy_id_for_sending);
 
     self
       .to_server_tx

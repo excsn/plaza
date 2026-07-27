@@ -150,7 +150,7 @@ fn manager() -> InMemoryLobbyManager<TestRoomFactory> {
 
 fn player() -> (PlayerId, Agent<PlayerId>) {
   let id = Uuid::new_v4();
-  (id, Agent::new_human(id, "player"))
+  (id, Agent::new_human(id))
 }
 
 #[tokio::test]

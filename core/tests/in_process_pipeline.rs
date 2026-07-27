@@ -151,7 +151,7 @@ where
 async fn joining_agent_receives_a_snapshot() {
   let (session, tx) = start();
 
-  let alice = Agent::new_human(1u64, "Alice");
+  let alice = Agent::new_human(1u64);
   let (_conn_id, inbox) = session.connect(alice).await.expect("connect");
 
   let msg = recv_matching(&inbox, |m| matches!(m, SessionMessage::StateData { .. })).await;
@@ -169,7 +169,7 @@ async fn joining_agent_receives_a_snapshot() {
 async fn client_op_mutates_state_and_is_broadcast() {
   let (session, tx) = start();
 
-  let alice = Agent::new_human(1u64, "Alice");
+  let alice = Agent::new_human(1u64);
   let (_conn_id, inbox) = session.connect(alice.clone()).await.expect("connect");
   session.client_send(alice, vec![CounterOp::Increment(5)]).await;
 
@@ -195,7 +195,7 @@ async fn tick_driver_advances_simulation_time() {
 async fn agent_leaving_is_reflected_in_state() {
   let (session, tx) = start();
 
-  let alice = Agent::new_human(1u64, "Alice");
+  let alice = Agent::new_human(1u64);
   let conn_id = session.agent_join(alice).await.expect("join");
   session.agent_leave(&1u64, conn_id).await.expect("leave");
 
@@ -272,8 +272,8 @@ async fn each_agent_receives_a_snapshot_built_for_it() {
   .build();
   tokio::spawn(controller.run());
 
-  let alice = Agent::new_human(1u64, "Alice");
-  let bob = Agent::new_human(2u64, "Bob");
+  let alice = Agent::new_human(1u64);
+  let bob = Agent::new_human(2u64);
   let (_a_conn, alice_inbox) = session.connect(alice.clone()).await.expect("connect alice");
   let (_b_conn, bob_inbox) = session.connect(bob.clone()).await.expect("connect bob");
 
@@ -331,7 +331,7 @@ impl StateLogic<CounterOp, UserId, CounterState> for ResnapshottingLogic {
         let everyone: Vec<_> = state
           .members
           .iter()
-          .map(|id| Agent::new_human(*id, format!("player-{id}")))
+          .map(|id| Agent::new_human(*id))
           .collect();
         Ok(LogicOutput::none().and_snapshot(SnapshotRequest::to(everyone)))
       }
@@ -352,8 +352,8 @@ async fn logic_can_push_a_resnapshot_to_every_player() {
   .build();
   tokio::spawn(controller.run());
 
-  let alice = Agent::new_human(1u64, "Alice");
-  let bob = Agent::new_human(2u64, "Bob");
+  let alice = Agent::new_human(1u64);
+  let bob = Agent::new_human(2u64);
   let (_a, alice_inbox) = session.connect(alice.clone()).await.expect("connect alice");
   let (_b, bob_inbox) = session.connect(bob).await.expect("connect bob");
 
@@ -411,7 +411,7 @@ async fn the_join_snapshot_context_is_configurable() {
   tokio::spawn(controller.run());
 
   let (_conn, inbox) = session
-    .connect(Agent::new_human(1u64, "Watcher"))
+    .connect(Agent::new_human(1u64))
     .await
     .expect("connect");
 
@@ -438,7 +438,7 @@ async fn shutdown_drains_work_queued_before_it() {
 
   // Queue work, then immediately ask to stop. The increments were submitted
   // first, so they must be applied before the controller exits.
-  let alice = Agent::new_human(1u64, "Alice");
+  let alice = Agent::new_human(1u64);
   for _ in 0..5 {
     tx.send(ControllerCommand::SubmitAgentOps {
       agent: alice.clone(),
@@ -473,7 +473,7 @@ async fn run_returns_the_final_state_for_the_caller_to_persist() {
   .build();
   let handle = tokio::spawn(controller.run());
 
-  let alice = Agent::new_human(1u64, "Alice");
+  let alice = Agent::new_human(1u64);
   session.connect(alice.clone()).await.expect("connect");
   session.client_send(alice, vec![CounterOp::Increment(7)]).await;
 
@@ -532,7 +532,7 @@ async fn an_application_defined_context_survives_the_round_trip() {
   .build();
   tokio::spawn(controller.run());
 
-  let alice = Agent::new_human(1u64, "Alice");
+  let alice = Agent::new_human(1u64);
   let (_conn, inbox) = session.connect(alice.clone()).await.expect("connect");
   recv_matching(&inbox, |m| matches!(m, SessionMessage::StateData { .. })).await;
 

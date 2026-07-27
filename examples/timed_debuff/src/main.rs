@@ -52,8 +52,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   });
 
   let victim_id = Uuid::new_v4();
-  let victim = Agent::new_human(victim_id, "Victim".to_string());
-  let caster = Agent::new_human(Uuid::new_v4(), "Caster".to_string());
+  let victim = Agent::new_human(victim_id);
+  let caster = Agent::new_human(Uuid::new_v4());
 
   controller_tx
     .send(ControllerCommand::SubmitAgentOps {

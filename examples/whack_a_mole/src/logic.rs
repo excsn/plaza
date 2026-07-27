@@ -85,6 +85,28 @@ impl StateLogic<MoleOp, PlayerId, MoleGameState> for MoleLogic {
                 debug!(player_id = %player_id, "Player missed or whacked empty slot.");
               }
             }
+            MoleOp::SetName { name } => {
+              // Inserts rather than requiring the player to exist: ops and
+              // presence reach the controller on two different streams, so a
+              // client's first op can and does overtake its own join.
+              info!(player_id = %player_id, %name, "Player named themselves.");
+              state
+                .player_info
+                .entry(player_id)
+                .or_insert_with(|| PlayerSessionInfo {
+                  name: String::new(),
+                  score: 0,
+                })
+                .name = name.clone();
+
+              // Announced here rather than on join, because this is the moment
+              // the roster entry is complete.
+              ops_to_broadcast.push(TargetedOp::new(
+                Agent::system(),
+                MessageTarget::All,
+                vec![MoleOp::PlayerJoined { player_id, name }],
+              ));
+            }
             _ => warn!("MoleLogic: Received unexpected client Op: {:?}", op),
           }
         }
@@ -192,22 +214,17 @@ impl StateLogic<MoleOp, PlayerId, MoleGameState> for MoleLogic {
       LogicInput::AgentJoined { agent } => {
         if let Some(player_id) = agent.id_cloned() {
           if !state.player_info.contains_key(&player_id) {
-            info!(player_id = %player_id, name = %agent.label(), "Player joined game state.");
+            info!(player_id = %player_id, "Player joined game state.");
+            // Seated under a placeholder: joining establishes identity, and
+            // the name follows in the player's own `SetName`, which is also
+            // what announces them to everyone else.
             state.player_info.insert(
               player_id,
               PlayerSessionInfo {
-                name: agent.label(),
+                name: format!("player-{}", &player_id.to_string()[..8]),
                 score: 0,
               },
             );
-            ops_to_broadcast.push(TargetedOp::new(
-              Agent::system(),
-              MessageTarget::All,
-              vec![MoleOp::PlayerJoined {
-                player_id,
-                name: agent.label(),
-              }],
-            ));
             // New player will get full state via snapshot.
           }
         }

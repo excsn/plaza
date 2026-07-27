@@ -39,11 +39,19 @@ type MoleSession = InProcessSession<MoleOp, PlayerId, MoleSnapshotPayload>;
 /// one should finish with the higher score.
 fn spawn_bot_player(
   agent: Agent<PlayerId>,
+  name: &str,
   session: Arc<MoleSession>,
   inbox: ClientInbox<MoleOp, PlayerId, MoleSnapshotPayload>,
   reaction: Duration,
 ) {
+  let name = name.to_string();
   tokio::spawn(async move {
+    // The name is ours to send: `Agent` carries identity, nothing else, so the
+    // server learns what to call us the same way it learns anything, as an op.
+    session
+      .client_send(agent.clone(), vec![MoleOp::SetName { name }])
+      .await;
+
     while let Ok(msg) = inbox.recv().await {
       let SessionMessage::Ops { ops, .. } = msg else {
         continue;
@@ -88,13 +96,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
   });
 
-  let quick = Agent::new_human(Uuid::new_v4(), "Quick".to_string());
-  let slow = Agent::new_human(Uuid::new_v4(), "Slow".to_string());
+  let quick = Agent::new_human(Uuid::new_v4());
+  let slow = Agent::new_human(Uuid::new_v4());
 
   let (_quick_conn, quick_inbox) = session.connect(quick.clone()).await?;
   let (_slow_conn, slow_inbox) = session.connect(slow.clone()).await?;
-  spawn_bot_player(quick, session.clone(), quick_inbox, Duration::from_millis(2));
-  spawn_bot_player(slow, session.clone(), slow_inbox, Duration::from_millis(30));
+  spawn_bot_player(quick, "Quick", session.clone(), quick_inbox, Duration::from_millis(2));
+  spawn_bot_player(slow, "Slow", session.clone(), slow_inbox, Duration::from_millis(30));
 
   info!("--- Running the game for {} ticks ---", GAME_TICKS);
   TickDriver::new(Duration::from_millis(2))

@@ -45,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let mut client_handles = Vec::new();
   for i in 0..num_clients {
     let client_name = format!("Client-{}", i + 1);
-    let agent = Agent::new_human(Uuid::new_v4(), client_name.clone());
+    let agent = Agent::new_human(Uuid::new_v4());
     let (to_server_tx, from_server_rx) = server.connect_client(agent)?;
 
     client_handles.push(tokio::spawn(async move {

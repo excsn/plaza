@@ -43,8 +43,8 @@ async fn ws_route(
   session: web::Data<Arc<PongSession>>,
 ) -> Result<HttpResponse, actix_web::Error> {
   let player_id = Uuid::new_v4();
-  let agent = Agent::new_human(player_id, format!("Player-{}", &player_id.to_string()[..8]));
-  info!(player = %agent.label(), "WebSocket connection opening.");
+  let agent = Agent::new_human(player_id);
+  info!(player = %agent, "WebSocket connection opening.");
   session.handle_connection(&req, stream, agent)
 }
 

@@ -73,7 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   });
 
   let player1_id = Uuid::new_v4();
-  let alice = Agent::new_human(player1_id, "Alice".to_string());
+  let alice = Agent::new_human(player1_id);
 
   controller_tx
     .send(ControllerCommand::SubmitAgentOps {

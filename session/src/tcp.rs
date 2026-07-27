@@ -111,7 +111,7 @@ async fn accept_loop<ID: AgentId, C: WireCodec>(
     match listener.accept().await {
       Ok((stream, peer)) => {
         let agent = agent_factory(peer);
-        debug!(transport = TRANSPORT, %peer, agent = %agent.label(), "Accepted connection.");
+        debug!(transport = TRANSPORT, %peer, agent = %agent, "Accepted connection.");
         tokio::spawn(connection_task::<ID, C>(
           stream,
           agent,

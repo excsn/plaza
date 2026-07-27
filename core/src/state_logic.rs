@@ -2,6 +2,7 @@ use crate::agent::{Agent, AgentId};
 use crate::session::TargetedOp;
 use crate::snapshot::SnapshotContext;
 use async_trait::async_trait;
+use std::fmt;
 use std::time::Duration;
 
 pub use crate::error::StateLogicError;
@@ -18,6 +19,33 @@ pub enum LogicInput<Op, ID: AgentId> {
   AgentJoined { agent: Agent<ID> },
   /// An agent left, so it can be cleaned up.
   AgentLeft { agent_id: ID },
+}
+
+impl<Op, ID: AgentId> LogicInput<Op, ID> {
+  /// The variant name, for grouping in logs and metrics.
+  ///
+  /// A `&'static str`, so it is free to capture where a formatted description
+  /// would not be: span fields are recorded eagerly, and this runs every tick.
+  pub fn kind(&self) -> &'static str {
+    match self {
+      LogicInput::AgentOps { .. } => "AgentOps",
+      LogicInput::TimeStep { .. } => "TimeStep",
+      LogicInput::AgentJoined { .. } => "AgentJoined",
+      LogicInput::AgentLeft { .. } => "AgentLeft",
+    }
+  }
+}
+
+/// Allocation-free, so a `debug!` that is switched off costs nothing.
+impl<Op, ID: AgentId> fmt::Display for LogicInput<Op, ID> {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match self {
+      LogicInput::AgentOps { source, ops } => write!(f, "AgentOps({source}, {} ops)", ops.len()),
+      LogicInput::TimeStep { delta_time } => write!(f, "TimeStep({delta_time:?})"),
+      LogicInput::AgentJoined { agent } => write!(f, "AgentJoined({agent})"),
+      LogicInput::AgentLeft { agent_id } => write!(f, "AgentLeft({agent_id:?})"),
+    }
+  }
 }
 
 /// Asks the controller to re-send state to specific agents.
@@ -126,4 +154,35 @@ pub trait StateLogic<Op, ID: AgentId, StateType>: Send + Sync + 'static {
     current_state: &mut StateType,
     input: LogicInput<Op, ID>,
   ) -> Result<LogicOutput<Op, ID>, StateLogicError>;
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn an_input_describes_itself_without_allocating_on_the_tick_path() {
+    // Both of these used to be built eagerly, before the `debug!` that consumed
+    // them, so every tick paid for a string the log level then discarded.
+    let ops: LogicInput<u8, u64> = LogicInput::AgentOps {
+      source: Agent::new_human(7),
+      ops: vec![1, 2, 3],
+    };
+    assert_eq!(ops.to_string(), "AgentOps(human:7, 3 ops)");
+    assert_eq!(ops.kind(), "AgentOps");
+
+    let tick: LogicInput<u8, u64> = LogicInput::TimeStep {
+      delta_time: Duration::from_millis(16),
+    };
+    assert_eq!(tick.to_string(), "TimeStep(16ms)");
+    assert_eq!(tick.kind(), "TimeStep");
+
+    let joined: LogicInput<u8, u64> = LogicInput::AgentJoined {
+      agent: Agent::new_bot(2),
+    };
+    assert_eq!(joined.to_string(), "AgentJoined(bot:2)");
+
+    let left: LogicInput<u8, u64> = LogicInput::AgentLeft { agent_id: 9u64 };
+    assert_eq!(left.to_string(), "AgentLeft(9)");
+  }
 }

@@ -11,8 +11,10 @@ impl<T: Clone + Debug + Send + 'static> ParticipantAppSpecificData for T {}
 
 #[derive(Debug, Clone)]
 pub struct ParticipantInfo<ID: AgentId, Data: ParticipantAppSpecificData> {
-  /// The whole `Agent`, not just its id, so callers can reach its label.
+  /// The whole `Agent`, not just its id, so callers can reach its kind.
   pub agent: Agent<ID>,
+  /// Whatever the application attaches. A display name goes here: `Agent` is
+  /// identity, and this is the tracker's slot for everything else.
   pub app_data: Data,
 }
 

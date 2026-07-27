@@ -106,9 +106,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let tick_tx = controller_tx.clone();
   let ticker = tokio::spawn(async move { TickDriver::new(TICK).run(tick_tx).await });
 
-  let alice = Agent::new_human(PlayerId(1), "Alice");
-  let bob = Agent::new_human(PlayerId(2), "Bob");
-  let carol = Agent::new_human(PlayerId(3), "Carol");
+  let alice = Agent::new_human(PlayerId(1));
+  let bob = Agent::new_human(PlayerId(2));
+  let carol = Agent::new_human(PlayerId(3));
 
   info!("--- players arriving; the table starts once three are seated");
   let (_a_conn, alice_inbox) = session.connect(alice.clone()).await?;

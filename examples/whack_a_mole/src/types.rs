@@ -18,6 +18,11 @@ pub enum MoleOp {
     slot: usize,
     client_input_seq: u64,
   },
+  /// A display name is application data, so it travels as an op like anything
+  /// else. `Agent` carries identity only, and the server never invents a name.
+  SetName {
+    name: String,
+  },
 
   // Server -> Client (or internal state changes)
   MoleSpawned {

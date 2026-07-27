@@ -151,7 +151,7 @@ impl StateLogic<AppOp, UserId, AppState> for TypingLogic {
         }
       }
       LogicInput::AgentJoined { agent } => {
-        tracing::debug!(agent = %agent.label(), "Agent joined session.");
+        tracing::debug!(agent = %agent, "Agent joined session.");
       }
       LogicInput::AgentLeft { agent_id } => {
         tracing::debug!(?agent_id, "Agent left session.");

@@ -40,7 +40,7 @@ async fn ws_route(
   session: web::Data<Arc<ActixWsPlazaSession<Op, PlayerId, Snapshot>>>,
 ) -> Result<HttpResponse, actix_web::Error> {
   let id = Uuid::new_v4();
-  session.handle_connection(&req, stream, Agent::new_human(id, "player"))
+  session.handle_connection(&req, stream, Agent::new_human(id))
 }
 ```
 
@@ -51,7 +51,7 @@ async fn ws_route(
 ```rust,ignore
 let session = TcpPlazaSession::<Op, PlayerId, Snapshot>::bind(
   "127.0.0.1:9000",
-  Arc::new(|peer| Agent::new_human(id_for(peer), "player")),
+  Arc::new(|peer| Agent::new_human(id_for(peer))),
 ).await?;
 ```
 

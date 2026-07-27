@@ -110,7 +110,7 @@ where
         outbox,
       },
     );
-    debug!(conn_id, agent = %agent.label(), "Client connected to in-process session.");
+    debug!(conn_id, agent = %agent, "Client connected to in-process session.");
 
     if self.presence_tx.send(PresenceEvent::Joined(agent)).await.is_err() {
       warn!("No controller is consuming presence events; snapshot will not be sent.");
@@ -120,7 +120,7 @@ where
 
   /// Sends ops to the server as if `from` were a connected client.
   pub async fn client_send(&self, from: Agent<ID>, ops: Vec<Op>) {
-    trace!(agent = %from.label(), count = ops.len(), "Client sending ops.");
+    trace!(agent = %from, count = ops.len(), "Client sending ops.");
     if self.incoming_tx.send(SessionMessage::Ops { from, ops }).await.is_err() {
       warn!("No controller is consuming inbound ops; message dropped.");
     }

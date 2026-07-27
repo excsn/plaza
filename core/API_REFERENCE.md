@@ -57,13 +57,15 @@ Blanket-implemented for every type meeting the bounds; `Uuid` and `u64` qualify 
 
 ### Enum `Agent<ID: AgentId>`
 
-*   **Variants**: `Human { id, name }`, `Bot { id, name }`, `System`.
-*   **Constructors**: `new_human(id, name)`, `new_bot(id, name)`, `system()`.
+Identity only. A display name is application data; keep it in your own state or in `ParticipantInfo::app_data`.
+
+*   **Variants**: `Human(ID)`, `Bot(ID)`, `System`.
+*   **Constructors**: `new_human(id)`, `new_bot(id)`, `system()`.
 *   **Methods**:
     *   `id(&self) -> Option<&ID>`: `None` for `System`.
     *   `id_cloned(&self) -> Option<ID>`
-    *   `label(&self) -> String`: the name, or `"SYSTEM"`.
     *   `is_system(&self) -> bool`
+*   **Traits**: `Display` writes `human:7` / `bot:7` / `SYSTEM`, allocating nothing. `PartialEq`/`Hash` are by identity alone.
 
 ## 4. Application Traits
 
@@ -88,6 +90,8 @@ The only place state changes. Called one input at a time from the controller's t
 *   `TimeStep { delta_time: Duration }`
 *   `AgentJoined { agent: Agent<ID> }`: the controller sends the joiner a snapshot immediately after this returns.
 *   `AgentLeft { agent_id: ID }`
+
+**Methods**: `kind(&self) -> &'static str`, the variant name, for grouping in logs and metrics. **Traits**: `Display` describes the input in full (`AgentOps(human:7, 3 ops)`) without allocating, so a switched-off `debug!` costs nothing on the tick path; use `kind()` where the value is captured eagerly, as span fields are.
 
 #### Struct `LogicOutput<Op, ID: AgentId>`
 
@@ -297,7 +301,7 @@ Repeating schedules skip ahead past `now` after a stall rather than replaying ev
 ### `common::participants`
 
 *   **Trait `ParticipantAppSpecificData`**: blanket marker for per-participant data.
-*   **Struct `ParticipantInfo<ID, Data>`**: `agent`, `app_data`.
+*   **Struct `ParticipantInfo<ID, Data>`**: `agent`, `app_data`. A display name goes in `app_data`: `Agent` is identity, and this is the tracker's slot for everything else.
 *   **Struct `ParticipantTracker<ID, Data>`**: `add_participant`, `remove_participant`, `get_participant[_mut]`, `get_participant_app_data[_mut]`, `contains_participant`, `iter[_mut]`, `all_agent_ids`, `count`, `is_empty`.
 
 ### `common::math`

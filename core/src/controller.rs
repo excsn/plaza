@@ -345,7 +345,7 @@ where
         Ok(presence) = session_presence_rx.recv() => {
           match presence {
             PresenceEvent::Joined(agent) => {
-              debug!(agent_id = ?agent.id(), agent_label = %agent.label(), "Agent joined session");
+              debug!(agent = %agent, "Agent joined session");
               self.handle_agent_joined_event(&agent).await;
             }
             PresenceEvent::Left(agent_id) => {
@@ -433,21 +433,19 @@ where
     }
   }
 
-  #[instrument(skip(self, input), fields(input_type = std::any::type_name_of_val(&input)))]
+  #[instrument(skip(self, input), fields(input = input.kind()))]
   async fn handle_logic_input(&mut self, input: LogicInput<Op, ID>) {
-    let source_agent_for_log = match &input {
-      LogicInput::AgentOps { source, .. } => source.label(),
-      LogicInput::TimeStep { .. } => "TimeStep".to_string(),
-      LogicInput::AgentJoined { agent } => format!("AgentJoined({})", agent.label()),
-      LogicInput::AgentLeft { agent_id } => format!("AgentLeft({:?})", agent_id),
-    };
-    debug!(source = %source_agent_for_log, "Processing logic input");
+    // Formatted inside the macro, so a disabled level costs nothing. This runs
+    // on every tick and every op batch; describing it eagerly allocated there.
+    debug!(input = %input, "Processing logic input");
+    // A `&'static str`, for the error arm below, after `input` has been moved.
+    let kind = input.kind();
 
     match self.op_handler.process_input(&mut self.state_data, input).await {
       Ok(output) => {
         for targeted_op in output.ops {
           let msg = SessionMessage::Ops {
-            from: targeted_op.from_agent.clone(),
+            from: targeted_op.from_agent,
             ops: targeted_op.ops,
           };
           if let Err(e) = self.session.send_message(targeted_op.target, msg).await {
@@ -462,12 +460,12 @@ where
         }
       }
       Err(e) => {
-        error!(error = %e, source = %source_agent_for_log, "Error processing logic input");
+        error!(error = %e, input = kind, "Error processing logic input");
       }
     }
   }
 
-  #[instrument(skip(self, agent_info), fields(agent_id = ?agent_info.id(), agent_label = %agent_info.label()))]
+  #[instrument(skip(self, agent_info), fields(agent = %agent_info))]
   async fn handle_agent_joined_event(&mut self, agent_info: &Agent<ID>) {
     self.stats.record_join();
     info!("Handling agent join event");
@@ -493,7 +491,7 @@ where
   async fn send_snapshots(&self, recipients: &[Agent<ID>], context: Option<SnapshotContext>) {
     for agent in recipients {
       let Some(target_id) = agent.id_cloned() else {
-        warn!(agent = %agent.label(), "Cannot snapshot an agent without an ID; skipping.");
+        warn!(agent = %agent, "Cannot snapshot an agent without an ID; skipping.");
         continue;
       };
 
@@ -504,7 +502,7 @@ where
       {
         Ok(data) => data,
         Err(e) => {
-          error!(error = %e, agent = %agent.label(), "Failed to create snapshot; skipping agent.");
+          error!(error = %e, agent = %agent, "Failed to create snapshot; skipping agent.");
           continue;
         }
       };
@@ -514,10 +512,10 @@ where
         data: snapshot_data,
       };
       if let Err(e) = self.session.send_message(MessageTarget::Agent(target_id), msg).await {
-        error!(error = %e, agent = %agent.label(), "Failed to send snapshot.");
+        error!(error = %e, agent = %agent, "Failed to send snapshot.");
       } else {
         self.stats.record_snapshot();
-        debug!(agent = %agent.label(), "Snapshot sent.");
+        debug!(agent = %agent, "Snapshot sent.");
       }
     }
   }

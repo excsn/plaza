@@ -79,7 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   tokio::spawn(controller.run());
 
   // Connecting yields an inbox; the join snapshot arrives on it.
-  let alice = Agent::new_human(1u64, "Alice");
+  let alice = Agent::new_human(1u64);
   let (_conn_id, inbox) = session.connect(alice.clone()).await?;
 
   session.client_send(alice, vec![CounterOp::Increment(5)]).await;

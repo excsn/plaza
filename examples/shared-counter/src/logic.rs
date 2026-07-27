@@ -21,7 +21,7 @@ impl StateLogic<CounterOp, CounterId, CounterStateData> for CounterLogic {
 
     match input {
       LogicInput::AgentOps { source, ops } => {
-        debug!(agent = %source.label(), num_ops = ops.len(), "Processing agent ops for counter");
+        debug!(agent = %source, num_ops = ops.len(), "Processing agent ops for counter");
         for op in ops {
           let applied_op = op.clone();
           match op {
@@ -48,7 +48,7 @@ impl StateLogic<CounterOp, CounterId, CounterStateData> for CounterLogic {
         debug!(?delta_time, "TimeStep received for CounterLogic, no action taken.");
       }
       LogicInput::AgentJoined { agent } => {
-        debug!(agent = %agent.label(), "Agent joined; counter state needs no per-agent setup.");
+        debug!(agent = %agent, "Agent joined; counter state needs no per-agent setup.");
       }
       LogicInput::AgentLeft { agent_id } => {
         debug!(?agent_id, "Agent left; counter state needs no cleanup.");

@@ -252,7 +252,7 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
         };
 
         let Some(side) = side else {
-          info!(agent = %agent.label(), "Game is full; joining as spectator.");
+          info!(agent = %agent, "Game is full; joining as spectator.");
           ops_to_broadcast.push(TargetedOp::new_system_to(
             player_id,
             vec![PongOp::GameUpdate(Box::new(current_state.clone()))],
@@ -262,7 +262,7 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
 
         current_state.paddles.insert(player_id, Paddle::new(player_id, side));
         current_state.scores.insert(player_id, 0);
-        info!(agent = %agent.label(), ?side, "Player seated.");
+        info!(agent = %agent, ?side, "Player seated.");
 
         ops_to_broadcast.push(TargetedOp::new_system_to(
           player_id,

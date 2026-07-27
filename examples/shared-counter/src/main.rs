@@ -35,7 +35,7 @@ fn spawn_client_listener(
   tokio::spawn(async move {
     while let Ok(msg) = inbox.recv().await {
       match msg {
-        SessionMessage::Ops { from, ops } => info!("[{}] ops from {}: {:?}", name, from.label(), ops),
+        SessionMessage::Ops { from, ops } => info!("[{}] ops from {}: {:?}", name, from, ops),
         SessionMessage::StateData { data, .. } => info!("[{}] snapshot: {:?}", name, data.payload),
       }
     }
@@ -72,9 +72,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   });
 
   let alice_id = CounterUser(1);
-  let alice = Agent::new_human(alice_id.clone(), "Alice");
+  let alice = Agent::new_human(alice_id.clone());
   let bob_id = CounterUser(2);
-  let bob = Agent::new_human(bob_id.clone(), "Bob");
+  let bob = Agent::new_human(bob_id.clone());
 
   // Connecting triggers the controller to send that agent a snapshot, which
   // arrives on the inbox returned here.

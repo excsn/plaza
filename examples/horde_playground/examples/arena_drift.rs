@@ -50,7 +50,7 @@ fn main() {
   let latency: LatencySource = Arc::new(|_| Some((Duration::from_millis(20), 64)));
   let logic = ArenaLogic::new(shared, Some(view.clone())).with_latency(latency);
 
-  let agent = Agent::new_human(1u64, "watcher");
+  let agent = Agent::new_human(1u64);
   step(&logic, &mut state, LogicInput::AgentJoined { agent: agent.clone() });
 
   // A real client on the other end, so the acknowledgements are real too.

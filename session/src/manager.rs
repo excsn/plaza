@@ -153,7 +153,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
         samples: AtomicU64::new(0),
       },
     );
-    debug!(transport = self.transport, conn_id, agent = %agent.label(), "Connection registered.");
+    debug!(transport = self.transport, conn_id, agent = %agent, "Connection registered.");
 
     // try_send, not send: this is a sync path on a connection task, and a
     // controller that has not started yet must not stall the accept loop.
@@ -172,7 +172,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
     let handle = self.connections.write().remove(&conn_id);
     match handle {
       Some(handle) => {
-        debug!(transport = self.transport, conn_id, agent = %handle.agent.label(), "Connection deregistered.");
+        debug!(transport = self.transport, conn_id, agent = %handle.agent, "Connection deregistered.");
         if let Some(id) = handle.agent.id_cloned() {
           if self.presence_tx.try_send(PresenceEvent::Left(id)).is_err() {
             self.stats.record_presence_dropped();
@@ -435,7 +435,7 @@ async fn deserialize_bridge<Op, ID, SnapshotPayload, C>(
             warn!(
               transport,
               error = %source,
-              agent = %from.label(),
+              agent = %from,
               "Discarding client ops that failed to decode."
             );
             continue;

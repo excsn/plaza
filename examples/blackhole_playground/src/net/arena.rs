@@ -504,7 +504,7 @@ mod tests {
     let logic = ArenaLogic::new(cs, Some(view.clone()));
     let mut state = Arena::new(controls);
 
-    let joined = step(&logic, &mut state, LogicInput::AgentJoined { agent: Agent::new_human(1u64, "p1") });
+    let joined = step(&logic, &mut state, LogicInput::AgentJoined { agent: Agent::new_human(1u64) });
     assert!(welcomed(&joined), "a joiner is welcomed and given a seat");
 
     let mut frames = 0;
@@ -526,7 +526,7 @@ mod tests {
     let (cs, view) = slots(controls);
     let logic = ArenaLogic::new(cs, Some(view));
     let mut state = Arena::new(controls);
-    step(&logic, &mut state, LogicInput::AgentJoined { agent: Agent::new_human(1u64, "p1") });
+    step(&logic, &mut state, LogicInput::AgentJoined { agent: Agent::new_human(1u64) });
 
     let mut early = 0;
     for _ in 0..5 {
@@ -555,7 +555,7 @@ mod tests {
     let (cs, _view) = slots(controls);
     let logic = ArenaLogic::new(cs, None);
     let mut state = Arena::new(controls);
-    step(&logic, &mut state, LogicInput::AgentJoined { agent: Agent::new_human(1u64, "p1") });
+    step(&logic, &mut state, LogicInput::AgentJoined { agent: Agent::new_human(1u64) });
 
     let mut stamps: Vec<u64> = Vec::new();
     for _ in 0..200 {
@@ -579,7 +579,7 @@ mod tests {
     let (cs, view) = slots(controls);
     let logic = ArenaLogic::new(cs.clone(), Some(view.clone()));
     let mut state = Arena::new(controls);
-    step(&logic, &mut state, LogicInput::AgentJoined { agent: Agent::new_human(1u64, "p1") });
+    step(&logic, &mut state, LogicInput::AgentJoined { agent: Agent::new_human(1u64) });
     step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
     assert_eq!(view.lock().holes.len(), 8);
 

@@ -54,7 +54,7 @@ async fn ws_route(req: HttpRequest, stream: web::Payload, path: web::Path<u32>, 
     return Ok(HttpResponse::NotFound().body("no such arena"));
   };
   let key = wiring.next_key.fetch_add(1, Ordering::Relaxed);
-  session.handle_connection(&req, stream, Agent::new_human(key, format!("player-{key}")))
+  session.handle_connection(&req, stream, Agent::new_human(key))
 }
 
 /// An address with no room in it lands in the default arena, which then measures

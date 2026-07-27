@@ -875,7 +875,7 @@ mod tests {
     let mut state = Arena::new(controls);
     let logic = ArenaLogic::new(cs.clone(), None).with_latency(link(0, ADMIT_SAMPLES));
 
-    let agents: Vec<Agent<PlayerKey>> = (1..=3u64).map(|k| Agent::new_human(k, format!("p{k}"))).collect();
+    let agents: Vec<Agent<PlayerKey>> = (1..=3u64).map(|k| Agent::new_human(k)).collect();
     for agent in &agents {
       admit(&logic, &mut state, agent);
     }
@@ -905,13 +905,13 @@ mod tests {
     let mut state = Arena::new(controls);
     let logic = ArenaLogic::new(cs.clone(), None).with_latency(link(0, ADMIT_SAMPLES));
 
-    let agent = Agent::new_human(1u64, "p1");
+    let agent = Agent::new_human(1u64);
     admit(&logic, &mut state, &agent);
     cs.lock().player_count = 1;
     step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
     assert_eq!(state.sim.players.len(), 1, "one player, one seat requested, nothing to hold open");
 
-    let latecomer = Agent::new_human(2u64, "p2");
+    let latecomer = Agent::new_human(2u64);
     step(&logic, &mut state, LogicInput::AgentJoined { agent: latecomer.clone() });
     let mut told = false;
     for _ in 0..8u64 {
@@ -933,7 +933,7 @@ mod tests {
     let mut state = Arena::new(controls);
     let budget = state.admission_budget_ms();
     let logic = ArenaLogic::new(cs, None).with_latency(link(budget + 100, ADMIT_SAMPLES));
-    let agent = Agent::new_human(1u64, "p1");
+    let agent = Agent::new_human(1u64);
 
     step(&logic, &mut state, LogicInput::AgentJoined { agent: agent.clone() });
     assert!(state.seat_of(&1).is_none(), "no seat is handed out before the connection is measured");
@@ -961,7 +961,7 @@ mod tests {
     let (cs, _view) = slots(controls);
     let logic = ArenaLogic::new(cs, None).with_latency(link(10, ADMIT_SAMPLES));
     let mut state = Arena::new(controls);
-    admit(&logic, &mut state, &Agent::new_human(1u64, "p1"));
+    admit(&logic, &mut state, &Agent::new_human(1u64));
     assert!(state.seat_of(&1).is_some(), "a link inside the budget is seated once it has been measured");
   }
 
@@ -980,7 +980,7 @@ mod tests {
       .with_latency(link(budget + 100, ADMIT_SAMPLES))
       .with_router(0, elsewhere);
 
-    let agent = Agent::new_human(1u64, "p1");
+    let agent = Agent::new_human(1u64);
     step(&logic, &mut state, LogicInput::AgentJoined { agent: agent.clone() });
 
     let mut placed = None;
@@ -1011,7 +1011,7 @@ mod tests {
       .with_latency(link(budget + 100, ADMIT_SAMPLES))
       .with_router(0, nowhere);
 
-    step(&logic, &mut state, LogicInput::AgentJoined { agent: Agent::new_human(1u64, "p1") });
+    step(&logic, &mut state, LogicInput::AgentJoined { agent: Agent::new_human(1u64) });
     let mut refused = false;
     for _ in 0..8u64 {
       let out = step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
@@ -1029,7 +1029,7 @@ mod tests {
     let (cs, _view) = slots(controls);
     let logic = ArenaLogic::new(cs, None);
     let mut state = Arena::new(controls);
-    admit(&logic, &mut state, &Agent::new_human(1u64, "p1"));
+    admit(&logic, &mut state, &Agent::new_human(1u64));
     assert!(state.seat_of(&1).is_none(), "no measurement, no seat");
   }
 
@@ -1040,7 +1040,7 @@ mod tests {
     let logic = ArenaLogic::new(cs, Some(view.clone())).with_latency(link(10, ADMIT_SAMPLES));
     let mut state = Arena::new(controls);
 
-    let agent = Agent::new_human(1u64, "p1");
+    let agent = Agent::new_human(1u64);
     admit(&logic, &mut state, &agent);
     assert!(state.seat_of(&1).is_some(), "a measured joiner is welcomed and given a seat");
 
@@ -1062,7 +1062,7 @@ mod tests {
     let (cs, view) = slots(controls);
     let logic = ArenaLogic::new(cs, Some(view)).with_latency(link(10, ADMIT_SAMPLES));
     let mut state = Arena::new(controls);
-    admit(&logic, &mut state, &Agent::new_human(1u64, "p1"));
+    admit(&logic, &mut state, &Agent::new_human(1u64));
 
     let mut early = 0;
     for _ in 0..5 {
@@ -1087,7 +1087,7 @@ mod tests {
       let (cs, _view) = slots(controls);
       let logic = ArenaLogic::new(cs, None).with_latency(link(10, ADMIT_SAMPLES));
       let mut state = Arena::new(controls);
-      admit(&logic, &mut state, &Agent::new_human(1u64, "p1"));
+      admit(&logic, &mut state, &Agent::new_human(1u64));
       let mut frames = 0;
       for _ in 0..200 {
         frames += frames_in(&step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) }));
@@ -1114,7 +1114,7 @@ mod tests {
       let (cs, _view) = slots(controls);
       let logic = ArenaLogic::new(cs, None).with_latency(link(10, ADMIT_SAMPLES));
       let mut state = Arena::new(controls);
-      let agent = Agent::new_human(1u64, "p1");
+      let agent = Agent::new_human(1u64);
       admit(&logic, &mut state, &agent);
       for i in 0..400u64 {
         let tick = state.sim.tick() + controls.playout_delay_ms / 16;
@@ -1140,7 +1140,7 @@ mod tests {
     let (cs, _view) = slots(controls);
     let logic = ArenaLogic::new(cs.clone(), None).with_latency(link(10, ADMIT_SAMPLES));
     let mut state = Arena::new(controls);
-    admit(&logic, &mut state, &Agent::new_human(1u64, "p1"));
+    admit(&logic, &mut state, &Agent::new_human(1u64));
     // Let the clock run first, so the preservation across the rebuild is testable.
     for _ in 0..40 {
       step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
@@ -1169,7 +1169,7 @@ mod tests {
     let (cs, _view) = slots(controls);
     let logic = ArenaLogic::new(cs, None).with_latency(link(0, ADMIT_SAMPLES));
     let mut state = Arena::new(controls);
-    let agent = Agent::new_human(1u64, "p1");
+    let agent = Agent::new_human(1u64);
     admit(&logic, &mut state, &agent);
 
     let before = state.sim.denied_purchases;
@@ -1196,10 +1196,10 @@ mod tests {
     let (cs, _view) = slots(controls);
     let logic = ArenaLogic::new(cs, None).with_latency(link(10, ADMIT_SAMPLES));
     let mut state = Arena::new(controls);
-    admit(&logic, &mut state, &Agent::new_human(1u64, "p1"));
+    admit(&logic, &mut state, &Agent::new_human(1u64));
 
     assert_eq!(state.sim.denied_purchases, 0);
-    step(&logic, &mut state, LogicInput::AgentOps { source: Agent::new_human(1u64, "p1"), ops: vec![Op::Buy(Upgrade::Repulsor)] });
+    step(&logic, &mut state, LogicInput::AgentOps { source: Agent::new_human(1u64), ops: vec![Op::Buy(Upgrade::Repulsor)] });
     // A tick, because an op is held on the impaired uplink and acted on when its
     // delay expires rather than the instant it arrives. At zero latency that is
     // the very next tick, which is the point: the path is the same either way.
@@ -1225,7 +1225,7 @@ mod tests {
       step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
     }
 
-    admit(&logic, &mut state, &Agent::new_human(1u64, "p1"));
+    admit(&logic, &mut state, &Agent::new_human(1u64));
     let seat = state.seat_of(&1).unwrap();
     let mut client = crate::sim::client::Client::new(seat as PlayerId, 4);
 
@@ -1236,7 +1236,7 @@ mod tests {
     let mut synced_on_frame: Option<u32> = None;
     for _ in 0..60u64 {
       if let Some(ack) = pending_ack.take() {
-        step(&logic, &mut state, LogicInput::AgentOps { source: Agent::new_human(1u64, "p1"), ops: vec![ack] });
+        step(&logic, &mut state, LogicInput::AgentOps { source: Agent::new_human(1u64), ops: vec![ack] });
       }
       let out = step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
       recv += 16;
@@ -1276,7 +1276,7 @@ mod tests {
     let (cs, _view) = slots(controls);
     let logic = ArenaLogic::new(cs, None).with_latency(link(10, ADMIT_SAMPLES));
     let mut state = Arena::new(controls);
-    admit(&logic, &mut state, &Agent::new_human(1u64, "p1"));
+    admit(&logic, &mut state, &Agent::new_human(1u64));
     // The first joiner takes the top free seat.
     let seat = state.seat_of(&1).unwrap();
     let mut client = crate::sim::client::Client::new(seat as PlayerId, 4);
@@ -1289,7 +1289,7 @@ mod tests {
     for _ in 0..1200u64 {
       // The ack from the previous frame arrives before this tick's frame is built.
       if let Some(ack) = pending_ack.take() {
-        step(&logic, &mut state, LogicInput::AgentOps { source: Agent::new_human(1u64, "p1"), ops: vec![ack] });
+        step(&logic, &mut state, LogicInput::AgentOps { source: Agent::new_human(1u64), ops: vec![ack] });
       }
       let out = step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
       recv += 16;
@@ -1314,7 +1314,7 @@ mod tests {
     let (cs, _view) = slots(controls);
     let logic = ArenaLogic::new(cs, None).with_latency(link(10, ADMIT_SAMPLES));
     let mut state = Arena::new(controls);
-    admit(&logic, &mut state, &Agent::new_human(1u64, "p1"));
+    admit(&logic, &mut state, &Agent::new_human(1u64));
     let seat = state.seat_of(&1).unwrap();
     let mut client = crate::sim::client::Client::new(seat as PlayerId, 4);
     client.set_render_delay(render_delay_ms);
@@ -1330,7 +1330,7 @@ mod tests {
     let mut pending_ack: Option<Op> = None;
     for _ in 0..600u64 {
       if let Some(ack) = pending_ack.take() {
-        step(&logic, &mut state, LogicInput::AgentOps { source: Agent::new_human(1u64, "p1"), ops: vec![ack] });
+        step(&logic, &mut state, LogicInput::AgentOps { source: Agent::new_human(1u64), ops: vec![ack] });
       }
       let out = step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
       recv += 16;
@@ -1377,7 +1377,7 @@ mod tests {
     let (cs, _view) = slots(controls);
     let logic = ArenaLogic::new(cs, None).with_latency(link(10, ADMIT_SAMPLES));
     let mut state = Arena::new(controls);
-    admit(&logic, &mut state, &Agent::new_human(1u64, "p1"));
+    admit(&logic, &mut state, &Agent::new_human(1u64));
     let seat = state.seat_of(&1).unwrap();
     let mut client = crate::sim::client::Client::new(seat as PlayerId, 4);
 
@@ -1391,7 +1391,7 @@ mod tests {
     let mut mismatches_at_mark = 0u64;
     for i in 0..1200u64 {
       if let Some(ack) = pending_ack.take() {
-        step(&logic, &mut state, LogicInput::AgentOps { source: Agent::new_human(1u64, "p1"), ops: vec![ack] });
+        step(&logic, &mut state, LogicInput::AgentOps { source: Agent::new_human(1u64), ops: vec![ack] });
       }
       let out = step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
       recv += 16;

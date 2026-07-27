@@ -54,7 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   });
 
   let user1_id = Uuid::new_v4();
-  let user1 = Agent::new_human(user1_id, "User1".to_string());
+  let user1 = Agent::new_human(user1_id);
 
   controller_tx
     .send(ControllerCommand::SubmitAgentOps {

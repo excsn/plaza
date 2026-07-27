@@ -40,7 +40,7 @@ async fn with_timeout<T>(fut: impl std::future::Future<Output = T>) -> T {
 async fn tcp_client_op_reaches_controller_and_broadcast_reaches_client() {
   let player_id = Uuid::new_v4();
   let agent_factory: plaza_session::tcp::AgentFactory<PlayerId> =
-    Arc::new(move |_peer| Agent::new_human(player_id, "TestClient".to_string()));
+    Arc::new(move |_peer| Agent::new_human(player_id));
 
   let session: Arc<TcpPlazaSession<TestOp, PlayerId, TestSnapshot>> =
     TcpPlazaSession::bind("127.0.0.1:0", agent_factory)
@@ -110,7 +110,7 @@ async fn tcp_client_op_reaches_controller_and_broadcast_reaches_client() {
 #[tokio::test]
 async fn bind_failure_is_reported_to_the_caller() {
   let agent_factory: plaza_session::tcp::AgentFactory<PlayerId> =
-    Arc::new(|_peer| Agent::new_human(Uuid::new_v4(), "x".to_string()));
+    Arc::new(|_peer| Agent::new_human(Uuid::new_v4()));
 
   let first: Arc<TcpPlazaSession<TestOp, PlayerId, TestSnapshot>> =
     TcpPlazaSession::bind("127.0.0.1:0", agent_factory.clone())
