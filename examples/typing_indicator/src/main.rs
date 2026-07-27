@@ -11,7 +11,7 @@ mod types;
 use crate::{
   logic::TypingLogic,
   snapshot::TypingSnapshotter,
-  types::{AppOp, AppState, TypingIndicatorSnapshotPayload, TypingState, UserId, TYPING_TIMEOUT_DURATION},
+  types::{AppOp, AppState, TypingState, UserId, TYPING_TIMEOUT_DURATION},
 };
 use plaza::{
   agent::Agent,
@@ -37,7 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     TYPING_TIMEOUT_DURATION
   );
 
-  let session = InProcessSession::<AppOp, UserId, TypingIndicatorSnapshotPayload>::new();
+  let session = InProcessSession::<AppOp, UserId>::new();
   let (controller_tx, controller) = StateControllerBuilder::new(
     Arc::new(TypingLogic::default()),
     session.clone(),

@@ -50,6 +50,6 @@ pub use agent::{Agent, AgentId};
 pub use controller::{query_state, CommandSender, ControllerCommand, StateController, StateControllerBuilder};
 pub use error::PlazaError;
 pub use session::{InProcessSession, MessageTarget, Session, SessionMessage, TargetedOp};
-pub use snapshot::{SnapshotData, SnapshotProvider};
+pub use snapshot::SnapshotProvider;
 pub use state_logic::{LogicInput, StateLogic};
 pub use tick_driver::TickDriver;

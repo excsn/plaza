@@ -111,7 +111,10 @@ impl StateLogic<AppOp, UserId, AppState> for TypingLogic {
               // This is a server-to-client op, should not be received from client.
               warn!("LogicInput: Received PresenceUpdate from agent, ignoring.");
             }
-          }
+            // Server-originated: the snapshot provider builds these,
+            // clients never send one.
+            AppOp::Snapshot(_) => {}
+}
         }
       }
       LogicInput::TimeStep { delta_time } => {

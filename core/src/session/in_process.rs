@@ -25,11 +25,11 @@ use crate::session::{
 pub const DEFAULT_CLIENT_CAPACITY: usize = 64;
 
 /// The receiving end of a simulated client's connection.
-pub type ClientInbox<Op, ID, SnapshotPayload> = mpsc::BoundedAsyncReceiver<SessionMessage<Op, ID, SnapshotPayload>>;
+pub type ClientInbox<Op, ID> = mpsc::BoundedAsyncReceiver<SessionMessage<Op, ID>>;
 
-struct ClientHandle<Op: Send + 'static, ID: AgentId, SnapshotPayload: Send + 'static> {
+struct ClientHandle<Op: Send + 'static, ID: AgentId> {
   agent: Agent<ID>,
-  outbox: mpsc::BoundedAsyncSender<SessionMessage<Op, ID, SnapshotPayload>>,
+  outbox: mpsc::BoundedAsyncSender<SessionMessage<Op, ID>>,
 }
 
 /// An in-memory `Session`.
@@ -43,19 +43,18 @@ struct ClientHandle<Op: Send + 'static, ID: AgentId, SnapshotPayload: Send + 'st
 /// let (conn_id, mut inbox) = session.connect(alice.clone()).await?;  // snapshot arrives here
 /// session.client_send(alice, vec![Op::Increment]);
 /// ```
-pub struct InProcessSession<Op: Send + 'static, ID: AgentId, SnapshotPayload: Send + 'static> {
+pub struct InProcessSession<Op: Send + 'static, ID: AgentId> {
   next_conn_id: AtomicU64,
-  clients: Mutex<HashMap<ConnectionId, ClientHandle<Op, ID, SnapshotPayload>>>,
+  clients: Mutex<HashMap<ConnectionId, ClientHandle<Op, ID>>>,
   client_capacity: usize,
   /// Clients -> server; what the controller consumes.
-  incoming_tx: SessionSender<SessionMessage<Op, ID, SnapshotPayload>>,
-  incoming_rx: Mutex<Option<SessionReceiver<SessionMessage<Op, ID, SnapshotPayload>>>>,
+  incoming_tx: SessionSender<SessionMessage<Op, ID>>,
+  incoming_rx: Mutex<Option<SessionReceiver<SessionMessage<Op, ID>>>>,
   presence_tx: SessionSender<PresenceEvent<ID>>,
   presence_rx: Mutex<Option<SessionReceiver<PresenceEvent<ID>>>>,
 }
 
-impl<Op: Send + 'static, ID: AgentId, SnapshotPayload: Send + 'static> Debug
-  for InProcessSession<Op, ID, SnapshotPayload>
+impl<Op: Send + 'static, ID: AgentId> Debug for InProcessSession<Op, ID>
 {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.debug_struct("InProcessSession")
@@ -64,11 +63,10 @@ impl<Op: Send + 'static, ID: AgentId, SnapshotPayload: Send + 'static> Debug
   }
 }
 
-impl<Op, ID, SnapshotPayload> InProcessSession<Op, ID, SnapshotPayload>
+impl<Op, ID> InProcessSession<Op, ID>
 where
   Op: Debug + Clone + Send + Sync + 'static,
   ID: AgentId,
-  SnapshotPayload: Debug + Clone + Send + Sync + 'static,
 {
   pub fn new() -> Arc<Self> {
     Self::with_capacity(DEFAULT_SESSION_CAPACITY, DEFAULT_CLIENT_CAPACITY)
@@ -99,7 +97,7 @@ where
   pub async fn connect(
     &self,
     agent: Agent<ID>,
-  ) -> Result<(ConnectionId, ClientInbox<Op, ID, SnapshotPayload>), PlazaError<ID>> {
+  ) -> Result<(ConnectionId, ClientInbox<Op, ID>), PlazaError<ID>> {
     let (outbox, inbox) = mpsc::bounded_async(self.client_capacity);
     let conn_id = self.next_conn_id.fetch_add(1, Ordering::Relaxed);
 
@@ -121,7 +119,7 @@ where
   /// Sends ops to the server as if `from` were a connected client.
   pub async fn client_send(&self, from: Agent<ID>, ops: Vec<Op>) {
     trace!(agent = %from, count = ops.len(), "Client sending ops.");
-    if self.incoming_tx.send(SessionMessage::Ops { from, ops }).await.is_err() {
+    if self.incoming_tx.send(SessionMessage::new(from, ops)).await.is_err() {
       warn!("No controller is consuming inbound ops; message dropped.");
     }
   }
@@ -141,11 +139,10 @@ where
 }
 
 #[async_trait]
-impl<Op, ID, SnapshotPayload> Session<Op, ID, SnapshotPayload> for InProcessSession<Op, ID, SnapshotPayload>
+impl<Op, ID> Session<Op, ID> for InProcessSession<Op, ID>
 where
   Op: Debug + Clone + Send + Sync + 'static,
   ID: AgentId,
-  SnapshotPayload: Debug + Clone + Send + Sync + 'static,
 {
   /// Registers an agent without handing back an inbox.
   ///
@@ -166,7 +163,7 @@ where
   async fn send_message(
     &self,
     target: MessageTarget<ID>,
-    msg: SessionMessage<Op, ID, SnapshotPayload>,
+    msg: SessionMessage<Op, ID>,
   ) -> Result<(), PlazaError<ID>> {
     // Collect first so the lock is not held across a send.
     let recipients: Vec<_> = self
@@ -187,7 +184,7 @@ where
     Ok(())
   }
 
-  fn subscribe_to_incoming_messages(&self) -> SessionReceiver<SessionMessage<Op, ID, SnapshotPayload>> {
+  fn subscribe_to_incoming_messages(&self) -> SessionReceiver<SessionMessage<Op, ID>> {
     Self::take(&self.incoming_rx, "subscribe_to_incoming_messages")
   }
 

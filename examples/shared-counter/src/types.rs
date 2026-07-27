@@ -21,6 +21,6 @@ pub struct CounterStateData {
 pub enum CounterOp {
   Increment(i64),
   Set(i64),
+  /// A whole-state view. A snapshot is an op like any other.
+  Snapshot(Box<CounterStateData>),
 }
-
-pub type CounterSnapshotPayload = CounterStateData;

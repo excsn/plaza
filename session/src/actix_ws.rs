@@ -40,15 +40,14 @@ const MAX_CONTINUATION_SIZE: usize = 1024 * 1024;
 /// Construct one, share it with both your `StateController` and your actix
 /// `App` (via `web::Data`), then call [`Self::handle_connection`] from the
 /// WebSocket route.
-pub struct ActixWsPlazaSession<Op: Send + 'static, ID: AgentId, SnapshotPayload: Send + 'static, C: WireCodec = JsonCodec> {
-  inner: Arc<TransportSession<Op, ID, SnapshotPayload, C>>,
+pub struct ActixWsPlazaSession<Op: Send + 'static, ID: AgentId, C: WireCodec = JsonCodec> {
+  inner: Arc<TransportSession<Op, ID, C>>,
 }
 
-impl<Op, ID, SnapshotPayload> ActixWsPlazaSession<Op, ID, SnapshotPayload, JsonCodec>
+impl<Op, ID> ActixWsPlazaSession<Op, ID, JsonCodec>
 where
   Op: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static,
   ID: AgentId,
-  SnapshotPayload: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static,
 {
   /// The measured round trip to one connection, and how many samples it rests on.
   ///
@@ -84,11 +83,10 @@ where
   }
 }
 
-impl<Op, ID, SnapshotPayload, C> ActixWsPlazaSession<Op, ID, SnapshotPayload, C>
+impl<Op, ID, C> ActixWsPlazaSession<Op, ID, C>
 where
   Op: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static,
   ID: AgentId,
-  SnapshotPayload: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static,
   C: WireCodec,
 {
   /// Creates a session with an explicit wire codec (e.g. MessagePack).
@@ -232,11 +230,10 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
 }
 
 #[async_trait]
-impl<Op, ID, SnapshotPayload, C> Session<Op, ID, SnapshotPayload> for ActixWsPlazaSession<Op, ID, SnapshotPayload, C>
+impl<Op, ID, C> Session<Op, ID> for ActixWsPlazaSession<Op, ID, C>
 where
   Op: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static,
   ID: AgentId,
-  SnapshotPayload: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static,
   C: WireCodec,
 {
   async fn agent_join(&self, agent_info: Agent<ID>) -> Result<ConnectionId, PlazaError<ID>> {
@@ -250,12 +247,12 @@ where
   async fn send_message(
     &self,
     target: MessageTarget<ID>,
-    msg: SessionMessage<Op, ID, SnapshotPayload>,
+    msg: SessionMessage<Op, ID>,
   ) -> Result<(), PlazaError<ID>> {
     self.inner.send_message(target, msg).await
   }
 
-  fn subscribe_to_incoming_messages(&self) -> SessionReceiver<SessionMessage<Op, ID, SnapshotPayload>> {
+  fn subscribe_to_incoming_messages(&self) -> SessionReceiver<SessionMessage<Op, ID>> {
     self.inner.subscribe_to_incoming_messages()
   }
 

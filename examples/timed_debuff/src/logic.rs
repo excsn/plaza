@@ -128,7 +128,10 @@ impl StateLogic<GameOp, PlayerId, GameState> for DebuffLogic {
               }
             }
             _ => {}
-          }
+            // Server-originated: the snapshot provider builds these,
+            // clients never send one.
+            GameOp::Snapshot(_) => {}
+}
         }
       }
       LogicInput::TimeStep { delta_time: _ } => {

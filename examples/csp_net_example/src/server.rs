@@ -2,9 +2,8 @@
 //! This module defines the server's state, logic, and a simulated session layer
 //! using Tokio MPSC channels to mimic network communication with clients.
 
-use crate::common_types::{
+use crate::common_types::{CspSnapshotPayload, 
   BoxState,
-  CspSnapshotPayload,
   GameOp,
   MoveInput,
   PlayerId,
@@ -23,7 +22,7 @@ use plaza::{
     ConnectionId as PlazaConnectionId, MessageTarget, PresenceEvent, Session, SessionMessage, SessionReceiver,
     SessionSender, TargetedOp,
   },
-  snapshot::{SnapshotContext, SnapshotData, SnapshotError as PlazaSnapshotError, SnapshotProvider},
+  snapshot::{SnapshotContext, SnapshotError as PlazaSnapshotError, SnapshotProvider},
   state_logic::{LogicInput, LogicOutput, StateLogic, StateLogicError},
 };
 
@@ -232,12 +231,12 @@ impl StateLogic<GameOp, PlayerId, ServerGameState> for ServerLogic {
   }
 }
 
-type ClientTx = mpsc::BoundedAsyncSender<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>;
+type ClientTx = mpsc::BoundedAsyncSender<SessionMessage<GameOp, PlayerId>>;
 
 #[derive(Debug, Clone)]
 struct DummyServerSession {
-  incoming_messages_tx: SessionSender<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>,
-  incoming_messages_rx: Arc<StdMutex<Option<SessionReceiver<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>>>>,
+  incoming_messages_tx: SessionSender<SessionMessage<GameOp, PlayerId>>,
+  incoming_messages_rx: Arc<StdMutex<Option<SessionReceiver<SessionMessage<GameOp, PlayerId>>>>>,
   presence_tx: SessionSender<PresenceEvent<PlayerId>>,
   presence_rx: Arc<StdMutex<Option<SessionReceiver<PresenceEvent<PlayerId>>>>>,
 
@@ -270,7 +269,7 @@ impl DummyServerSession {
   ) -> Result<
     (
       PlazaConnectionId,
-      mpsc::BoundedAsyncReceiver<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>,
+      mpsc::BoundedAsyncReceiver<SessionMessage<GameOp, PlayerId>>,
     ),
     PlazaError<PlayerId>,
   > {
@@ -299,13 +298,13 @@ impl DummyServerSession {
   }
 
   /// The channel clients push their ops into, bridged to the controller.
-  fn incoming_sender(&self) -> SessionSender<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>> {
+  fn incoming_sender(&self) -> SessionSender<SessionMessage<GameOp, PlayerId>> {
     self.incoming_messages_tx.clone()
   }
 }
 
 #[async_trait]
-impl Session<GameOp, PlayerId, CspSnapshotPayload> for DummyServerSession {
+impl Session<GameOp, PlayerId> for DummyServerSession {
   async fn agent_join(&self, agent: Agent<PlayerId>) -> Result<PlazaConnectionId, PlazaError<PlayerId>> {
     let (conn_id, _from_server_rx) = self.connect(agent)?;
     Ok(conn_id)
@@ -326,7 +325,7 @@ impl Session<GameOp, PlayerId, CspSnapshotPayload> for DummyServerSession {
   async fn send_message(
     &self,
     target: MessageTarget<PlayerId>,
-    msg: SessionMessage<GameOp, PlayerId, CspSnapshotPayload>,
+    msg: SessionMessage<GameOp, PlayerId>,
   ) -> Result<(), PlazaError<PlayerId>> {
     let clients_guard = self.clients.lock().unwrap();
     let mut sent_to_any = false;
@@ -371,7 +370,7 @@ impl Session<GameOp, PlayerId, CspSnapshotPayload> for DummyServerSession {
     Ok(())
   }
 
-  fn subscribe_to_incoming_messages(&self) -> SessionReceiver<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>> {
+  fn subscribe_to_incoming_messages(&self) -> SessionReceiver<SessionMessage<GameOp, PlayerId>> {
     take_once(&self.incoming_messages_rx, "incoming messages")
   }
   fn on_presence_change(&self) -> SessionReceiver<PresenceEvent<PlayerId>> {
@@ -383,13 +382,13 @@ impl Session<GameOp, PlayerId, CspSnapshotPayload> for DummyServerSession {
 struct DummySnapshotProvider;
 
 #[async_trait]
-impl SnapshotProvider<PlayerId, ServerGameState, CspSnapshotPayload> for DummySnapshotProvider {
-  async fn create_snapshot_data(
+impl SnapshotProvider<PlayerId, ServerGameState, GameOp> for DummySnapshotProvider {
+  async fn create_snapshot(
     &self,
     state: &ServerGameState,
     target_agent: Option<&Agent<PlayerId>>,
     _context: Option<SnapshotContext>,
-  ) -> Result<SnapshotData<CspSnapshotPayload>, PlazaSnapshotError<PlayerId>> {
+  ) -> Result<Option<GameOp>, PlazaSnapshotError<PlayerId>> {
     info!("Creating snapshot for target: {:?}", target_agent.and_then(|a| a.id()));
     // The payload itself doesn't need last_processed_input_seq if StateController adds it.
     // The AuthoritativeStateUpdate op is responsible for player-specific ack.
@@ -397,7 +396,7 @@ impl SnapshotProvider<PlayerId, ServerGameState, CspSnapshotPayload> for DummySn
       boxes: state.boxes.iter().map(|(id, s)| (*id, *s)).collect(),
       server_tick: state.current_server_tick,
     };
-    Ok(SnapshotData { payload })
+    Ok(Some(GameOp::Snapshot(Box::new(payload))))
   }
 }
 
@@ -419,8 +418,8 @@ impl ServerHandle {
     agent: Agent<PlayerId>,
   ) -> Result<
     (
-      mpsc::BoundedAsyncSender<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>,
-      mpsc::BoundedAsyncReceiver<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>,
+      mpsc::BoundedAsyncSender<SessionMessage<GameOp, PlayerId>>,
+      mpsc::BoundedAsyncReceiver<SessionMessage<GameOp, PlayerId>>,
     ),
     PlazaError<PlayerId>,
   > {

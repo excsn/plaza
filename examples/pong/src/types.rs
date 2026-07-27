@@ -128,6 +128,9 @@ pub enum PlayerSide {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum PongOp {
+  /// A whole-state view, built per recipient. Boxed, or every `PongOp` in a
+  /// batch would be as large as a `PongSnapshotPayload`.
+  Snapshot(Box<PongSnapshotPayload>),
   // Client to Server
   MovePaddle {
     target_y: f32, // Client sends desired absolute Y position for their paddle center

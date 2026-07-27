@@ -3,7 +3,7 @@
 //! performing client-side prediction, server reconciliation, and interpolating
 //! remote entities.
 
-use crate::common_types::{BoxState, CspSnapshotPayload, GameOp, MoveInput, PlayerId, ServerTick, Vec2};
+use crate::common_types::{BoxState, GameOp, MoveInput, PlayerId, ServerTick, Vec2};
 use plaza_client_utils::{
   input_buffer::ClientInputBuffer,
   interpolation::{Interpolatable, SnapshotBuffer},
@@ -39,8 +39,8 @@ struct ClientApp {
 
   remote_boxes: HashMap<PlayerId, RemoteClientBox>,
 
-  to_server_tx: mpsc::BoundedAsyncSender<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>,
-  from_server_rx: mpsc::BoundedAsyncReceiver<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>,
+  to_server_tx: mpsc::BoundedAsyncSender<SessionMessage<GameOp, PlayerId>>,
+  from_server_rx: mpsc::BoundedAsyncReceiver<SessionMessage<GameOp, PlayerId>>,
 
   last_input_send_tick: u64,
   client_tick_counter: u64,
@@ -67,8 +67,8 @@ impl Interpolatable<ServerTick> for BoxState {
 impl ClientApp {
   async fn new(
     client_name: String,
-    to_server_tx: mpsc::BoundedAsyncSender<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>,
-    from_server_rx: mpsc::BoundedAsyncReceiver<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>,
+    to_server_tx: mpsc::BoundedAsyncSender<SessionMessage<GameOp, PlayerId>>,
+    from_server_rx: mpsc::BoundedAsyncReceiver<SessionMessage<GameOp, PlayerId>>,
   ) -> Self {
     Self {
       client_name,
@@ -122,10 +122,7 @@ impl ClientApp {
 
     self
       .to_server_tx
-      .send(SessionMessage::Ops {
-        from: agent_for_sending.clone(), // Server will use this to associate connection
-        ops: vec![join_op],
-      })
+      .send(SessionMessage::new(agent_for_sending.clone(), vec![join_op]))
       .await?;
 
     loop {
@@ -161,7 +158,7 @@ impl ClientApp {
                               input_data: local_input,
                           });
                           info!("[{}] Sending to Server: Op Seq {}", self.client_name, self.next_input_seq);
-                          if self.to_server_tx.send(SessionMessage::Ops { from: agent_for_sending.clone(), ops: vec![op_to_send] }).await.is_err() {
+                          if self.to_server_tx.send(SessionMessage::new(agent_for_sending.clone(), vec![op_to_send])).await.is_err() {
                               error!("[{}] Failed to send input to server. Server down?", self.client_name);
                               return Ok(());
                           }
@@ -190,16 +187,10 @@ impl ClientApp {
           }
 
           Ok(server_msg_package) = self.from_server_rx.recv() => {
-              match server_msg_package {
-                  SessionMessage::Ops { from: _, ops } => {
-                      for op in ops {
-                          self.handle_server_op(op);
-                      }
-                  }
-                  SessionMessage::StateData { from: _, data: _ } => {
-                      // This server sends initial state as an SC_JoinAck op instead.
-                      warn!("[{}] Received StateData, not handled in this simple client.", self.client_name);
-                  }
+              // One message kind: this server's initial state is an SC_JoinAck op,
+              // and a snapshot would arrive the same way.
+              for op in server_msg_package.ops {
+                  self.handle_server_op(op);
               }
           }
           else => {
@@ -213,6 +204,8 @@ impl ClientApp {
 
   fn handle_server_op(&mut self, op: GameOp) {
     match op {
+      // Server-originated: this client is caught up by SC_JoinAck instead.
+      GameOp::Snapshot(_) => {}
       GameOp::SC_JoinAck {
         your_id,
         initial_boxes,
@@ -413,8 +406,8 @@ fn input_to_velocity_vector(input: &MoveInput) -> Vec2 {
 
 pub async fn run_client(
   client_name: String,
-  to_server_tx: mpsc::BoundedAsyncSender<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>,
-  from_server_rx: mpsc::BoundedAsyncReceiver<SessionMessage<GameOp, PlayerId, CspSnapshotPayload>>,
+  to_server_tx: mpsc::BoundedAsyncSender<SessionMessage<GameOp, PlayerId>>,
+  from_server_rx: mpsc::BoundedAsyncReceiver<SessionMessage<GameOp, PlayerId>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
   info!("[{}] Client task starting.", client_name);
   let mut app = ClientApp::new(client_name.clone(), to_server_tx, from_server_rx).await;

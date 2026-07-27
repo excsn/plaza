@@ -72,6 +72,9 @@ pub struct CspSnapshotPayload {
 #[allow(non_camel_case_types)]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum GameOp {
+  /// A whole-state view, built per recipient. Boxed, or every `GameOp` in a
+  /// batch would be as large as a `CspSnapshotPayload`.
+  Snapshot(Box<CspSnapshotPayload>),
   CS_PlayerInput(SequencedClientInput<MoveInput>),
   CS_RequestJoin,
 

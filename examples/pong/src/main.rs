@@ -25,13 +25,13 @@ use uuid::Uuid;
 use crate::{
   logic::PongLogic,
   snapshot::PongSnapshotter,
-  types::{PlayerId, PongGameState, PongOp, PongSnapshotPayload},
+  types::{PlayerId, PongGameState, PongOp},
 };
 
 /// Simulation rate. Pong is latency-sensitive, so it runs at 60Hz.
 const TICK_HZ: u32 = 60;
 
-type PongSession = ActixWsPlazaSession<PongOp, PlayerId, PongSnapshotPayload>;
+type PongSession = ActixWsPlazaSession<PongOp, PlayerId>;
 
 /// Upgrades a request to a WebSocket and hands the connection to Plaza.
 ///

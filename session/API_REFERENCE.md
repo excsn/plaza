@@ -16,8 +16,8 @@
 
 | Feature | Default | Enables |
 |---|---|---|
-| `actix_ws` | yes | [`ActixWsPlazaSession`](#struct-actixwsplazasessionop-id-snapshotpayload-c-jsoncodec): actix-web WebSockets. |
-| `tcp` | yes | [`TcpPlazaSession`](#struct-tcpplazasessionop-id-snapshotpayload-c-jsoncodec): length-delimited TCP. |
+| `actix_ws` | yes | [`ActixWsPlazaSession`](#struct-actixwsplazasessionop-id-c-jsoncodec): actix-web WebSockets. |
+| `tcp` | yes | [`TcpPlazaSession`](#struct-tcpplazasessionop-id-c-jsoncodec): length-delimited TCP. |
 | `actix_host` | no | [`host::Host`](#7-module-host-feature-actix_host): the listen-server HTTP layer. Implies `actix_ws`. |
 
 [`manager`](#4-module-manager), [`codec`](#3-module-codec), and [`error`](#2-error-handling) compile unconditionally.
@@ -67,7 +67,7 @@ The connection registry plus the notification channels a `StateController` consu
 *   **`register(&self, agent: Agent<ID>, to_client_tx) -> ConnectionId`**: records a connected client and announces the join.
 *   **`deregister(&self, conn_id: ConnectionId)`**: removes it and announces the departure.
 *   **`forward_incoming(&self, from: Agent<ID>, serialized_ops: Vec<Bytes>)`**: publishes a client's raw bytes toward the controller. Non-blocking; drops under load rather than stalling a connection task. Takes `Bytes` because both transports hand over a buffer they already own, so a frame reaches the deserialize bridge without being copied out.
-*   **`broadcast(&self, target: &MessageTarget<ID>, frame: OutboundFrame) -> Result<(), SessionLayerError>`**: fans one already-encoded frame out to the matching connections. It takes bytes, not a message, because a `SessionMessage` is encoded **once** by [`encode_message`](#struct-transportsessionop-id-snapshotpayload-c-wirecodec) and the same buffer is shared with every recipient, at the cost of a refcount bump each.
+*   **`broadcast(&self, target: &MessageTarget<ID>, frame: OutboundFrame) -> Result<(), SessionLayerError>`**: fans one already-encoded frame out to the matching connections. It takes bytes, not a message, because a `SessionMessage` is encoded **once** by [`encode_message`](#struct-transportsessionop-id-c-wirecodec) and the same buffer is shared with every recipient, at the cost of a refcount bump each.
 *   **`take_raw_incoming(&self) -> mpsc::BoundedAsyncReceiver<SerializedSessionMessage<ID>>`**: the inbound stream, whose payloads are still encoded bytes for the deserialize bridge to decode.
 *   **`take_presence(&self) -> SessionReceiver<PresenceEvent<ID>>`**
 *   **`agent_rtt(&self, id: &ID) -> Option<(Duration, u64)>`**: the measured round trip for an agent and how many samples it rests on. Keyed by agent because that is what an application holds: it knows who joined, not which socket they arrived on, and a reconnecting player is a new connection but the same agent.
@@ -77,14 +77,14 @@ The connection registry plus the notification channels a `StateController` consu
 
 The `take_*` methods hand out single-consumer streams; calling one twice panics.
 
-### Struct `TransportSession<Op, ID, SnapshotPayload, C: WireCodec>`
+### Struct `TransportSession<Op, ID, C: WireCodec>`
 
 A complete `Session` implementation over any byte transport. Both shipped adapters wrap one and delegate to it.
 
 *   **`new(transport: &'static str, codec: C, capacity: usize) -> Arc<Self>`**: also spawns the deserialize bridge task.
 *   **`manager(&self) -> &Arc<ConnectionManager<ID>>`**
 *   **`codec(&self) -> &C`**
-*   **`encode_message(&self, msg: SessionMessage<Op, ID, SnapshotPayload>) -> Result<OutboundFrame, SessionLayerError>`**: encodes a whole message to one frame in a single pass (`codec.encode(&msg)`). Hand the frame to [`broadcast`](#struct-connectionmanagerid-agentid); recipients share the buffer rather than each getting a re-encode or a copy.
+*   **`encode_message(&self, msg: SessionMessage<Op, ID>) -> Result<OutboundFrame, SessionLayerError>`**: encodes a whole message to one frame in a single pass (`codec.encode(&msg)`). Hand the frame to [`broadcast`](#struct-connectionmanagerid-agentid); recipients share the buffer rather than each getting a re-encode or a copy.
 *   Implements `Session`. `agent_join` returns `PlazaError::NotImplemented`: joins are transport-implicit, happening when a client connects and the adapter calls `register`.
 
 ### Function `target_matches`
@@ -97,11 +97,11 @@ The single implementation of the targeting rules. Agents without an ID (the syst
 
 ### Type Alias `OutboundFrame`
 
-`bytes::Bytes`: one fully-encoded downstream message, ready to write to a socket. What [`encode_message`](#struct-transportsessionop-id-snapshotpayload-c-wirecodec) produces and [`broadcast`](#struct-connectionmanagerid-agentid) fans out. Refcounted rather than owned, so handing the frame to N recipients shares one buffer instead of allocating and copying it N times, all of which happened under the connection registry's read lock. Both transports speak it already: actix-ws takes a `Bytes` (or a `ByteString`, which validates UTF-8 over the same buffer, for a text codec), and `LengthDelimitedCodec` takes a `Bytes`.
+`bytes::Bytes`: one fully-encoded downstream message, ready to write to a socket. What [`encode_message`](#struct-transportsessionop-id-c-wirecodec) produces and [`broadcast`](#struct-connectionmanagerid-agentid) fans out. Refcounted rather than owned, so handing the frame to N recipients shares one buffer instead of allocating and copying it N times, all of which happened under the connection registry's read lock. Both transports speak it already: actix-ws takes a `Bytes` (or a `ByteString`, which validates UTF-8 over the same buffer, for a text codec), and `LengthDelimitedCodec` takes a `Bytes`.
 
 ### Type Alias `SerializedSessionMessage<ID>`
 
-`SessionMessage<Bytes, ID, Bytes>`: a message whose payloads are still encoded bytes, refcounted rather than copied out of whatever the socket produced. It survives on the **inbound** path only, where the deserialize bridge decodes a client's raw ops before handing them to the controller; the outbound path encodes once to an [`OutboundFrame`](#type-alias-outboundframe) and never builds one of these.
+`SessionMessage<Bytes, ID>`: a message whose payloads are still encoded bytes, refcounted rather than copied out of whatever the socket produced. It survives on the **inbound** path only, where the deserialize bridge decodes a client's raw ops before handing them to the controller; the outbound path encodes once to an [`OutboundFrame`](#type-alias-outboundframe) and never builds one of these.
 
 ### Constants
 
@@ -110,7 +110,7 @@ The single implementation of the targeting rules. Agents without an ID (the syst
 
 ## 5. Module `actix_ws` (feature `actix_ws`)
 
-### Struct `ActixWsPlazaSession<Op, ID, SnapshotPayload, C = JsonCodec>`
+### Struct `ActixWsPlazaSession<Op, ID, C = JsonCodec>`
 
 *   **`new() -> Arc<Self>`**: JSON on the wire, the usual choice for browsers.
 *   **`with_codec(codec: C) -> Arc<Self>`**
@@ -123,7 +123,7 @@ Usage is a five-line route:
 async fn ws_route(
   req: HttpRequest,
   stream: web::Payload,
-  session: web::Data<Arc<ActixWsPlazaSession<Op, PlayerId, Snapshot>>>,
+  session: web::Data<Arc<ActixWsPlazaSession<Op, PlayerId>>>,
 ) -> Result<HttpResponse, actix_web::Error> {
   let id = Uuid::new_v4();
   session.handle_connection(&req, stream, Agent::new_human(id))
@@ -134,7 +134,7 @@ Inbound, text and binary frames are both accepted. Outbound, the frame type foll
 
 ## 6. Module `tcp` (feature `tcp`)
 
-### Struct `TcpPlazaSession<Op, ID, SnapshotPayload, C = JsonCodec>`
+### Struct `TcpPlazaSession<Op, ID, C = JsonCodec>`
 
 Length-delimited framing over TCP (`tokio_util::codec::LengthDelimitedCodec`). Each frame carries one encoded value.
 

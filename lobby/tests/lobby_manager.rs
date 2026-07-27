@@ -10,7 +10,7 @@ use plaza::agent::Agent;
 use plaza::controller::StateControllerBuilder;
 use plaza::error::SnapshotError;
 use plaza::session::InProcessSession;
-use plaza::snapshot::{SnapshotContext, SnapshotData, SnapshotProvider};
+use plaza::snapshot::{SnapshotContext, SnapshotProvider};
 use plaza::state_logic::{LogicInput, LogicOutput, StateLogic, StateLogicError};
 use plaza_lobby::{
   InMemoryLobbyManager, InProcessRoomHandle, JoinRoomRequestPayload, LobbyError, RoomFactory, RoomFilters, RoomHandle,
@@ -24,9 +24,10 @@ type PlayerId = Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum GameOp {
   Noop,
+  Snapshot(Box<GameState>),
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct GameState {
   ticks: u64,
 }
@@ -60,14 +61,14 @@ impl StateLogic<GameOp, PlayerId, GameState> for GameLogic {
 struct GameSnapshotter;
 
 #[async_trait]
-impl SnapshotProvider<PlayerId, GameState, GameState> for GameSnapshotter {
-  async fn create_snapshot_data(
+impl SnapshotProvider<PlayerId, GameState, GameOp> for GameSnapshotter {
+  async fn create_snapshot(
     &self,
     state: &GameState,
     _target: Option<&Agent<PlayerId>>,
     _context: Option<SnapshotContext>,
-  ) -> Result<SnapshotData<GameState>, SnapshotError<PlayerId>> {
-    Ok(SnapshotData { payload: state.clone() })
+  ) -> Result<Option<GameOp>, SnapshotError<PlayerId>> {
+    Ok(Some(GameOp::Snapshot(Box::new(state.clone()))))
   }
 }
 
@@ -94,7 +95,7 @@ impl RoomFactory for TestRoomFactory {
       return Err(LobbyError::RoomSpawnFailed("factory told to fail".into()));
     }
 
-    let session = InProcessSession::<GameOp, PlayerId, GameState>::new();
+    let session = InProcessSession::<GameOp, PlayerId>::new();
     let (command_tx, controller) = StateControllerBuilder::new(
       Arc::new(GameLogic),
       session,

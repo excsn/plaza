@@ -380,12 +380,10 @@ impl NetClient {
     // the transport rather than of the model behind it.
     self.traffic.add(bytes.len() as u64);
     self.packets.add(1);
-    let Ok(message) = serde_json::from_slice::<plaza_wire::SessionMessage<Op, u64, ()>>(bytes) else {
+    let Ok(message) = serde_json::from_slice::<plaza_wire::SessionMessage<Op, u64>>(bytes) else {
       return false;
     };
-    let plaza_wire::SessionMessage::Ops { ops, .. } = message else {
-      return false;
-    };
+    let ops = message.ops;
     let mut applied_frame = false;
     for op in ops {
       match op {
@@ -541,7 +539,7 @@ mod tests {
   }
 
   fn envelope(ops: Vec<Op>) -> Event {
-    let msg: SessionMessage<Op, u64, ()> = SessionMessage::Ops { from: Agent::System, ops };
+    let msg: SessionMessage<Op, u64> = SessionMessage::new(Agent::System, ops);
     Event::Text(serde_json::to_string(&msg).unwrap())
   }
 

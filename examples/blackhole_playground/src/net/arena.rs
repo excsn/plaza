@@ -456,14 +456,16 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
 pub struct NoSnapshots;
 
 #[async_trait]
-impl plaza::snapshot::SnapshotProvider<PlayerKey, Arena, ()> for NoSnapshots {
-  async fn create_snapshot_data(
+impl plaza::snapshot::SnapshotProvider<PlayerKey, Arena, Op> for NoSnapshots {
+  async fn create_snapshot(
     &self,
     _full_state: &Arena,
     _target_agent: Option<&Agent<PlayerKey>>,
     _context: Option<plaza::snapshot::SnapshotContext>,
-  ) -> Result<plaza::SnapshotData<()>, plaza::snapshot::SnapshotError<PlayerKey>> {
-    Ok(plaza::SnapshotData { payload: () })
+  ) -> Result<Option<Op>, plaza::snapshot::SnapshotError<PlayerKey>> {
+    // No snapshot concept: this arena streams deltas, and a joiner is caught
+    // up by the relevance stream rather than by a whole-state message.
+    Ok(None)
   }
 }
 

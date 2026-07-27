@@ -5,7 +5,7 @@ use plaza::{
   session::{MessageTarget, TargetedOp},
   state_logic::{LogicInput, LogicOutput, StateLogic},
 };
-use tracing::debug;
+use tracing::{debug, warn};
 
 #[derive(Clone, Debug, Default)]
 pub struct CounterLogic;
@@ -32,6 +32,12 @@ impl StateLogic<CounterOp, CounterId, CounterStateData> for CounterLogic {
             CounterOp::Set(n) => {
               current_state.value = n;
               debug!(new_value = current_state.value, "Counter set");
+            }
+            // Server-originated: the snapshot provider builds these, clients
+            // never send one.
+            CounterOp::Snapshot(_) => {
+              warn!("Ignoring a snapshot op sent by a client.");
+              continue;
             }
           }
           current_state.version += 1;

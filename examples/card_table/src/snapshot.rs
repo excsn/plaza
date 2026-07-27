@@ -1,10 +1,10 @@
-use crate::types::{PlayerId, PlayerView, TableState};
+use crate::types::{CardOp, PlayerId, PlayerView, TableState};
 use async_trait::async_trait;
 use plaza::agent::Agent;
 use plaza::error::SnapshotError;
 use plaza::game_common::flow_control::{RoundManager, TurnManager};
 use plaza::game_common::scorekeeping::Scorekeeper;
-use plaza::snapshot::{SnapshotContext, SnapshotData, SnapshotProvider};
+use plaza::snapshot::{SnapshotContext, SnapshotProvider};
 
 /// Builds one player's view of the table.
 ///
@@ -19,13 +19,13 @@ use plaza::snapshot::{SnapshotContext, SnapshotData, SnapshotProvider};
 pub struct TableSnapshotter;
 
 #[async_trait]
-impl SnapshotProvider<PlayerId, TableState, PlayerView> for TableSnapshotter {
-  async fn create_snapshot_data(
+impl SnapshotProvider<PlayerId, TableState, CardOp> for TableSnapshotter {
+  async fn create_snapshot(
     &self,
     state: &TableState,
     target_agent: Option<&Agent<PlayerId>>,
     _context: Option<SnapshotContext>,
-  ) -> Result<SnapshotData<PlayerView>, SnapshotError<PlayerId>> {
+  ) -> Result<Option<CardOp>, SnapshotError<PlayerId>> {
     let me = target_agent.and_then(|a| a.id_cloned());
 
     let my_hand = me
@@ -42,8 +42,7 @@ impl SnapshotProvider<PlayerId, TableState, PlayerView> for TableSnapshotter {
       .map(|id| (*id, state.hands.get(id).map_or(0, Vec::len)))
       .collect();
 
-    Ok(SnapshotData {
-      payload: PlayerView {
+    Ok(Some(CardOp::Snapshot(Box::new(PlayerView {
         phase: *state.phase.current(),
         round: state.rounds.current_round(),
         total_rounds: state.rounds.max_rounds(),
@@ -52,7 +51,6 @@ impl SnapshotProvider<PlayerId, TableState, PlayerView> for TableSnapshotter {
         opponents,
         table: state.table.clone(),
         scores: state.scores.get_all_scores_sorted(),
-      },
-    })
+      }))))
   }
 }

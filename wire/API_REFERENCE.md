@@ -85,26 +85,20 @@ Who a message is from. Constructors `Agent::new_human(id)`, `Agent::new_bot(id)`
 
 Identity only, deliberately. A display name is application data: plaza never reads one, routing compares ids, and carrying a name here put it on every clone and every frame as a copy of something the application already had. Keep names in your own state or in `ParticipantTracker`'s `app_data`, and send them like any other value: as an op, or as a field in your snapshot payload. `examples/whack_a_mole` does the former. Note that a client's first op can reach the controller before its own join does (ops and presence are separate streams), so name-carrying ops should insert rather than assume a roster entry.
 
-### Enum `SessionMessage<Op, ID: AgentId, SnapshotPayload>`
+### Struct `SessionMessage<Op, ID: AgentId>`
 
 ```rust
-pub enum SessionMessage<Op, ID: AgentId, SnapshotPayload> {
-  Ops       { from: Agent<ID>, ops: Vec<Op> },
-  StateData { from: Agent<ID>, data: SnapshotData<SnapshotPayload> },
+pub struct SessionMessage<Op, ID: AgentId> {
+  pub from: Agent<ID>,
+  pub ops: Vec<Op>,
 }
 ```
 
-Everything the two ends exchange downstream. It is encoded **once, as a whole**: `codec.encode(&msg)`. An earlier design encoded each `Op` to bytes and then encoded the envelope around those byte arrays, which under JSON put `ops: [[123,34,...]]` on the wire, unreadable to anything but Rust and decoded twice on receipt. Inbound is deliberately asymmetric: a client sends a bare `Op`, never an envelope, and the transport attaches the `Agent` from the connection, because who a message is from is the server's fact and not the client's claim.
+Everything the two ends exchange downstream. Constructors: `SessionMessage::new(from, ops)`, `SessionMessage::system(ops)`.
 
-### Struct `SnapshotData<SnapshotPayload>`
+**One shape, not two.** A snapshot used to be a second variant carrying the application's whole state payload by value, which made every message the size of the largest one: an op batch needing 40 bytes occupied 4112 when the snapshot type was 4KB, in every queue slot and on every move. A snapshot is an `Op` now, so the union is gone and this type's size no longer depends on what an application snapshots. The distinction between "replace everything" and "apply increments" is real and now belongs to your `Op`, which is also where you can make it cheap: **box the variant carrying a full state**, measured at 4100 bytes per `Op` unboxed against 24 boxed.
 
-```rust
-pub struct SnapshotData<SnapshotPayload> { pub payload: SnapshotPayload }
-```
-
-The per-recipient state a `SnapshotProvider` produces, carried by `SessionMessage::StateData`.
-
-Note what is **not** here: `MessageTarget`, `PresenceEvent`, and `TargetedOp` stay in `plaza` core. They are server-side routing and stream plumbing, they are not `Serialize`, and no client ever sees one. This crate is the wire vocabulary, not everything the server happens to name.
+It is encoded **once, as a whole**: `codec.encode(&msg)`. An earlier design encoded each `Op` to bytes and then encoded the envelope around those byte arrays, which under JSON put `ops: [[123,34,...]]` on the wire, unreadable to anything but Rust and decoded twice on receipt. Inbound is deliberately asymmetric: a client sends a bare `Op`, never an envelope, and the transport attaches the `Agent` from the connection, because who a message is from is the server's fact and not the client's claim.
 
 ## 5. Module `payloads`
 

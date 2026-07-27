@@ -6,7 +6,7 @@ use plaza::{
   agent::Agent,
   controller::{query_state, StateControllerBuilder},
   session::{InProcessSession, SessionMessage, TargetedOp},
-  snapshot::{SnapshotContext, SnapshotData, SnapshotError, SnapshotProvider},
+  snapshot::{SnapshotContext, SnapshotError, SnapshotProvider},
   state_logic::{LogicInput, LogicOutput, StateLogic, StateLogicError},
 };
 use async_trait::async_trait;
@@ -19,7 +19,7 @@ type UserId = u64;
 struct CounterState { value: i64 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-enum CounterOp { Increment(i64), Changed(i64) }
+enum CounterOp { Increment(i64), Changed(i64), Snapshot(i64) }
 
 // The rules. The only place state is mutated.
 #[derive(Debug, Default)]
@@ -52,20 +52,22 @@ impl StateLogic<CounterOp, UserId, CounterState> for CounterLogic {
 struct CounterSnapshotter;
 
 #[async_trait]
-impl SnapshotProvider<UserId, CounterState, i64> for CounterSnapshotter {
-  async fn create_snapshot_data(
+impl SnapshotProvider<UserId, CounterState, CounterOp> for CounterSnapshotter {
+  async fn create_snapshot(
     &self,
     state: &CounterState,
     _target: Option<&Agent<UserId>>,
     _context: Option<SnapshotContext>,
-  ) -> Result<SnapshotData<i64>, SnapshotError<UserId>> {
-    Ok(SnapshotData { payload: state.value })
+  ) -> Result<Option<CounterOp>, SnapshotError<UserId>> {
+    // A snapshot is an op. Box the variant if it carries a whole state view;
+    // this one is an i64, so it does not need it.
+    Ok(Some(CounterOp::Snapshot(state.value)))
   }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-  let session = InProcessSession::<CounterOp, UserId, i64>::new();
+  let session = InProcessSession::<CounterOp, UserId>::new();
 
   let (tx, controller) = StateControllerBuilder::new(
     Arc::new(CounterLogic),
@@ -85,9 +87,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   session.client_send(alice, vec![CounterOp::Increment(5)]).await;
 
   while let Ok(msg) = inbox.recv().await {
-    match msg {
-      SessionMessage::StateData { data, .. } => println!("snapshot: {}", data.payload),
-      SessionMessage::Ops { ops, .. } => println!("ops: {ops:?}"),
+    // A snapshot arrives as an op, so there is one message kind to handle.
+    for op in &msg.ops {
+      match op {
+        CounterOp::Snapshot(value) => println!("snapshot: {value}"),
+        other => println!("op: {other:?}"),
+      }
     }
     if query_state(&tx).await?.value == 5 {
       break;

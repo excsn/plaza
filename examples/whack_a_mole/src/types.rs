@@ -13,6 +13,9 @@ pub const MOLE_VISIBLE_DURATION_TICKS: u64 = 40; // e.g., 0.8 seconds
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub enum MoleOp {
+  /// A whole-state view, built per recipient. Boxed, or every `MoleOp` in a
+  /// batch would be as large as a `MoleSnapshotPayload`.
+  Snapshot(Box<MoleSnapshotPayload>),
   // Client -> Server
   Whack {
     slot: usize,

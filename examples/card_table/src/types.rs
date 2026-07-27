@@ -57,6 +57,9 @@ pub enum TablePhase {
 /// handed the constructor.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum CardOp {
+  /// A whole-state view, built per recipient. Boxed, or every `CardOp` in a
+  /// batch would be as large as a `PlayerView`.
+  Snapshot(Box<PlayerView>),
   /// A client asking to play one of its cards.
   PlayCard(Card),
 

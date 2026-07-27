@@ -46,6 +46,9 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
 
         for op in ops {
           match op {
+            // Server-originated: the snapshot provider builds these, clients
+            // never send one.
+            PongOp::Snapshot(_) => {}
             PongOp::MovePaddle { target_y } => {
               if current_state.phase == GamePhase::Playing
                 || current_state.phase == GamePhase::Starting

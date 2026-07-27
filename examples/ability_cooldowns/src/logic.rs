@@ -147,7 +147,10 @@ impl StateLogic<GameOp, PlayerId, GameState> for CooldownLogic {
               // This is a server-to-client op, should not be received from client.
               warn!("LogicInput: Received ClientNotifyAbilityReady from agent, ignoring.");
             }
-          }
+            // Server-originated: the snapshot provider builds these,
+            // clients never send one.
+            GameOp::Snapshot(_) => {}
+}
         }
       }
       LogicInput::TimeStep { delta_time: _ } => {

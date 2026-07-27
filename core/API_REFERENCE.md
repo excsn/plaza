@@ -11,11 +11,11 @@ An application supplies four things; `plaza` runs the loop around them.
 *   **[`StateLogic`](#trait-statelogic)**: the rules. The only place state is mutated.
 *   **[`SnapshotProvider`](#trait-snapshotprovider)**: what a client is sent, built per recipient.
 
-**Single-actor model.** A [`StateController`](#struct-statecontrollerop-id-statetype-snapshotpayload-sl-sess-sp) owns the state and mutates it only from its own task, processing one input at a time. Application logic therefore needs no locking. Nothing in this crate spawns a task except [`TickDriver`](#struct-tickdriver) and the caller's own `controller.run()`.
+**Single-actor model.** A [`StateController`](#struct-statecontrollerop-id-statetype-sl-sess-sp) owns the state and mutates it only from its own task, processing one input at a time. Application logic therefore needs no locking. Nothing in this crate spawns a task except [`TickDriver`](#struct-tickdriver) and the caller's own `controller.run()`.
 
 **Identity.** `ID` is the application's identifier type. Anything satisfying [`AgentId`](#trait-agentid) qualifies through a blanket impl, so it is rarely implemented by hand. [`Agent<ID>`](#enum-agentid-agentid) wraps it and distinguishes humans, bots, and the system.
 
-**Transport is a trait.** [`Session`](#trait-session) abstracts the network. [`InProcessSession`](#struct-inprocesssessionop-id-agentid-snapshotpayload) ships here for tests and local play; the `plaza_session` crate provides WebSocket and TCP implementations.
+**Transport is a trait.** [`Session`](#trait-session) abstracts the network. [`InProcessSession`](#struct-inprocesssessionop-id-agentid) ships here for tests and local play; the `plaza_session` crate provides WebSocket and TCP implementations.
 
 ## 2. Error Handling
 
@@ -44,7 +44,7 @@ Returned by `StateLogic::process_input` when an input cannot be applied: `Invali
 
 ## 3. Agents
 
-`AgentId`, `Agent`, `SessionMessage`, and `SnapshotData` are **defined in [`plaza_wire`](../wire/) and re-exported here**, so a wasm client (which cannot depend on core) and a server name the same types. The paths below (`plaza::AgentId`, `plaza::Agent`, ...) resolve exactly as documented.
+`AgentId`, `Agent`, and `SessionMessage` are **defined in [`plaza_wire`](../wire/) and re-exported here**, so a wasm client (which cannot depend on core) and a server name the same types. The paths below (`plaza::AgentId`, `plaza::Agent`, ...) resolve exactly as documented.
 
 ### Trait `AgentId`
 
@@ -112,21 +112,19 @@ What processing produced.
 
 ```rust,ignore
 #[async_trait]
-pub trait SnapshotProvider<ID: AgentId, StateType, SnapshotPayload>: Send + Sync + 'static {
-  async fn create_snapshot_data(
+pub trait SnapshotProvider<ID: AgentId, StateType, Op>: Send + Sync + 'static {
+  async fn create_snapshot(
     &self,
     full_state: &StateType,
     target_agent: Option<&Agent<ID>>,
     context: Option<SnapshotContext>,
-  ) -> Result<SnapshotData<SnapshotPayload>, SnapshotError<ID>>;
+  ) -> Result<Option<Op>, SnapshotError<ID>>;
 }
 ```
 
 **The seam for hidden information.** `target_agent` is who the snapshot is *for*, and the controller calls this once per recipient, so returning a different payload per agent (each player sees their own hand) is the normal path.
 
-#### Struct `SnapshotData<SnapshotPayload>`
-
-Wrapper with one field, `payload`, so versioning can be added later without changing the trait signature.
+**A snapshot is an `Op`.** The envelope has one message kind, so "replace everything" is a variant of your own op type rather than a wire concept. **Box it** if it carries a whole state view: unboxed, every op in every batch is sized to it. Return `Ok(None)` to send a recipient nothing, which is how an application with no snapshot concept opts out rather than inventing an empty op.
 
 #### Enum `SnapshotContext`
 
@@ -138,14 +136,14 @@ Which snapshot is wanted. **Plaza never reads this**: it carries it from caller 
 
 ## 5. The Controller
 
-### Struct `StateControllerBuilder<Op, ID, StateType, SnapshotPayload, SL, Sess, SP>`
+### Struct `StateControllerBuilder<Op, ID, StateType, SL, Sess, SP>`
 
 *   **`new(op_handler: Arc<SL>, session: Arc<Sess>, snapshot_provider: Arc<SP>, initial_state: StateType) -> Self`** All components are required, which is why `build` is infallible.
 *   **`command_buffer(size: usize) -> Self`**: command channel depth. Default [`DEFAULT_COMMAND_BUFFER`](#constants) (32).
 *   **`snapshot_context_on_join(context: Option<SnapshotContext>) -> Self`**: context for the snapshot a joining agent receives. Defaults to `Full`.
 *   **`build(self) -> (CommandSender<Op, ID, StateType>, StateController<..>)`**
 
-### Struct `StateController<Op, ID, StateType, SnapshotPayload, SL, Sess, SP>`
+### Struct `StateController<Op, ID, StateType, SL, Sess, SP>`
 
 *   **`async run(self) -> Result<StateType, PlazaError<ID>>`** Runs until `Shutdown` or its channels close, then returns the final state for the caller to persist. Commands already queued when `Shutdown` arrives are processed first; only what is already buffered is drained, so a producer that keeps sending cannot keep the controller alive.
 
@@ -183,7 +181,7 @@ Wraps the request/response channel dance for `QueryCurrentState`.
 
 ```rust,ignore
 #[async_trait]
-pub trait Session<Op: Send + 'static, ID: AgentId, SnapshotPayload: Send + 'static>:
+pub trait Session<Op: Send + 'static, ID: AgentId>:
   Send + Sync + 'static
 {
   async fn agent_join(&self, agent_info: Agent<ID>) -> Result<ConnectionId, PlazaError<ID>>;
@@ -207,16 +205,16 @@ One stream rather than two **because order between them matters**: separate chan
 
 `All`, `Agent(ID)`, `Agents(Vec<ID>)`, `AllExcept(ID)`, `AllExceptThese(Vec<ID>)`.
 
-### Enum `SessionMessage<Op, ID: AgentId, SnapshotPayload>`
+### Struct `SessionMessage<Op, ID: AgentId>`
 
-`Ops { from: Agent<ID>, ops: Vec<Op> }` | `StateData { from, data: SnapshotData<..> }`. `Serialize`/`Deserialize` when its parameters are.
+`{ from: Agent<ID>, ops: Vec<Op> }`, with `new(from, ops)` and `system(ops)`. One shape rather than two: a snapshot is an `Op`, so this type's size does not depend on what an application snapshots. `Serialize`/`Deserialize` when `Op` is.
 
 ### Struct `TargetedOp<Op, ID: AgentId>`
 
 *   **Fields**: `from_agent`, `target`, `ops`.
 *   **Constructors**: `new(from_agent, target, ops)`, `new_system_all(ops)`, `new_system_to(agent_id, ops)`.
 
-### Struct `InProcessSession<Op, ID: AgentId, SnapshotPayload>`
+### Struct `InProcessSession<Op, ID: AgentId>`
 
 Loopback transport for tests, demos, and local play. Each client gets its own inbox and `MessageTarget` is resolved server-side, exactly as a real transport would.
 
@@ -229,7 +227,7 @@ Loopback transport for tests, demos, and local play. Each client gets its own in
 
 *   `ConnectionId = u64`
 *   `SessionReceiver<T>` / `SessionSender<T>`: `fibre::mpsc` bounded async handles.
-*   `ClientInbox<Op, ID, SnapshotPayload>`: the receiving end of a simulated client.
+*   `ClientInbox<Op, ID>`: the receiving end of a simulated client.
 
 ### Constants
 
@@ -359,4 +357,4 @@ Op shapes for non-game applications. These are payload definitions, not engines;
 
 ## 12. Crate Re-exports
 
-For convenience, the crate root re-exports: `Agent`, `AgentId`, `CommandSender`, `ControllerCommand`, `StateController`, `StateControllerBuilder`, `query_state`, `PlazaError`, `InProcessSession`, `MessageTarget`, `Session`, `SessionMessage`, `TargetedOp`, `SnapshotData`, `SnapshotProvider`, `LogicInput`, `StateLogic`, `TickDriver`.
+For convenience, the crate root re-exports: `Agent`, `AgentId`, `CommandSender`, `ControllerCommand`, `StateController`, `StateControllerBuilder`, `query_state`, `PlazaError`, `InProcessSession`, `MessageTarget`, `Session`, `SessionMessage`, `TargetedOp`, `SnapshotProvider`, `LogicInput`, `StateLogic`, `TickDriver`.

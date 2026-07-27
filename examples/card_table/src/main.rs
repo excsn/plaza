@@ -37,36 +37,32 @@ use std::time::Duration;
 use tracing::{error, info, Level};
 use tracing_subscriber::EnvFilter;
 
-type TableSession = InProcessSession<CardOp, PlayerId, PlayerView>;
+type TableSession = InProcessSession<CardOp, PlayerId>;
 
 const TICK: Duration = Duration::from_millis(20);
 
 /// Logs what one player receives, so the hidden-information split is visible in
 /// the output: each player's snapshot shows a different hand.
-fn spawn_player_listener(name: &'static str, inbox: ClientInbox<CardOp, PlayerId, PlayerView>) -> tokio::task::JoinHandle<()> {
+fn spawn_player_listener(name: &'static str, inbox: ClientInbox<CardOp, PlayerId>) -> tokio::task::JoinHandle<()> {
   tokio::spawn(async move {
     while let Ok(msg) = inbox.recv().await {
-      match msg {
-        SessionMessage::Ops { ops, .. } => {
-          for op in ops {
-            match op {
-              CardOp::CardPlayed { player, card } => info!("[{name}] saw {player} play {card}"),
-              CardOp::PlayedForYou { player, card } => info!("[{name}] {player} timed out, table played {card}"),
-              CardOp::TrickWon { player, card } => info!("[{name}] {player} took the trick with {card}"),
-              CardOp::PhaseChanged(n) => info!("[{name}] phase -> {:?}", n.new_phase),
-              CardOp::RoundStarted(n) => info!("[{name}] round {} of {:?} begins", n.round_number, n.total_rounds),
-              CardOp::RoundEnded(n) => info!("[{name}] round {} ended: {:?}", n.round_number, n.summary_data),
-              CardOp::TurnChanged(n) => info!("[{name}] turn -> {:?}", n.new_turn_actor),
-              CardOp::PlayCard(_) => {}
-            }
-          }
-        }
-        SessionMessage::StateData { data, .. } => {
-          let v: PlayerView = data.payload;
-          info!(
+      // One message kind: the per-recipient view arrives as an op alongside
+      // everything else, so there is a single loop rather than a match on
+      // ops-versus-snapshot.
+      for op in msg.ops {
+        match op {
+          CardOp::Snapshot(v) => info!(
             "[{name}] my hand {:?}, opponents hold {:?}, scores {:?}",
             v.my_hand, v.opponents, v.scores
-          );
+          ),
+          CardOp::CardPlayed { player, card } => info!("[{name}] saw {player} play {card}"),
+          CardOp::PlayedForYou { player, card } => info!("[{name}] {player} timed out, table played {card}"),
+          CardOp::TrickWon { player, card } => info!("[{name}] {player} took the trick with {card}"),
+          CardOp::PhaseChanged(n) => info!("[{name}] phase -> {:?}", n.new_phase),
+          CardOp::RoundStarted(n) => info!("[{name}] round {} of {:?} begins", n.round_number, n.total_rounds),
+          CardOp::RoundEnded(n) => info!("[{name}] round {} ended: {:?}", n.round_number, n.summary_data),
+          CardOp::TurnChanged(n) => info!("[{name}] turn -> {:?}", n.new_turn_actor),
+          CardOp::PlayCard(_) => {}
         }
       }
     }

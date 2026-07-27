@@ -11,7 +11,7 @@ mod types;
 use crate::{
   logic::DebuffLogic,
   snapshot::DebuffSnapshotter,
-  types::{DebuffSnapshotPayload, DebuffType, GameOp, GameState, PlayerId},
+  types::{DebuffType, GameOp, GameState, PlayerId},
 };
 use plaza::{
   agent::Agent,
@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   tracing_subscriber::fmt().with_max_level(Level::INFO).init();
   info!("Plaza Timed Debuff Example - Starting");
 
-  let session = InProcessSession::<GameOp, PlayerId, DebuffSnapshotPayload>::new();
+  let session = InProcessSession::<GameOp, PlayerId>::new();
   let (controller_tx, controller) = StateControllerBuilder::new(
     Arc::new(DebuffLogic::new()),
     session.clone(),

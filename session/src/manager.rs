@@ -22,7 +22,6 @@ use plaza::error::PlazaError;
 use plaza::session::{
   ConnectionId, MessageTarget, PresenceEvent, Session, SessionMessage, SessionReceiver, SessionSender,
 };
-use plaza::snapshot::SnapshotData;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use fibre::mpsc;
@@ -52,7 +51,7 @@ pub const DEFAULT_CLIENT_QUEUE_CAPACITY: usize = 64;
 /// `BytesMut` that freezes into one. Copying them out into a `Vec` cost a
 /// memcpy of every inbound frame, per player per tick, to arrive at a buffer
 /// nothing needed to own more than the original did.
-pub type SerializedSessionMessage<ID> = SessionMessage<Bytes, ID, Bytes>;
+pub type SerializedSessionMessage<ID> = SessionMessage<Bytes, ID>;
 
 /// One connection's outbound queue.
 ///
@@ -210,10 +209,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
     // on a backed-up controller would stall that client's socket reads.
     if self
       .raw_incoming_tx
-      .try_send(SessionMessage::Ops {
-        from,
-        ops: serialized_ops,
-      })
+      .try_send(SessionMessage::new(from, serialized_ops))
       .is_err()
     {
       self.stats.record_inbound(true);
@@ -346,21 +342,20 @@ impl<ID: AgentId> ConnectionManager<ID> {
 ///
 /// Transport adapters wrap one of these and delegate the `Session` trait to it,
 /// which is why `actix_ws` and `tcp` share essentially all of their logic.
-pub struct TransportSession<Op: Send + 'static, ID: AgentId, SnapshotPayload: Send + 'static, C: WireCodec> {
+pub struct TransportSession<Op: Send + 'static, ID: AgentId, C: WireCodec> {
   transport: &'static str,
   codec: C,
   manager: Arc<ConnectionManager<ID>>,
   /// Typed inbound messages, filled by the deserialize bridge task. Held as an
   /// `Option` because the controller takes the receiver exactly once.
-  deserialized_rx: RwLock<Option<SessionReceiver<SessionMessage<Op, ID, SnapshotPayload>>>>,
-  _phantom: PhantomData<fn() -> (Op, SnapshotPayload)>,
+  deserialized_rx: RwLock<Option<SessionReceiver<SessionMessage<Op, ID>>>>,
+  _phantom: PhantomData<fn() -> Op>,
 }
 
-impl<Op, ID, SnapshotPayload, C> Debug for TransportSession<Op, ID, SnapshotPayload, C>
+impl<Op, ID, C> Debug for TransportSession<Op, ID, C>
 where
   Op: Send + 'static,
   ID: AgentId,
-  SnapshotPayload: Send + 'static,
   C: WireCodec,
 {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -372,11 +367,10 @@ where
   }
 }
 
-impl<Op, ID, SnapshotPayload, C> TransportSession<Op, ID, SnapshotPayload, C>
+impl<Op, ID, C> TransportSession<Op, ID, C>
 where
   Op: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static,
   ID: AgentId,
-  SnapshotPayload: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static,
   C: WireCodec,
 {
   /// Creates the session and spawns its deserialize bridge.
@@ -392,7 +386,7 @@ where
       _phantom: PhantomData,
     });
 
-    tokio::spawn(deserialize_bridge::<Op, ID, SnapshotPayload, C>(
+    tokio::spawn(deserialize_bridge::<Op, ID, C>(
       transport,
       codec,
       manager.take_raw_incoming(),
@@ -415,7 +409,7 @@ where
   /// The result is shared by every recipient, so this runs once per message
   /// rather than once per client. `Bytes::from` takes the codec's `Vec` whole
   /// and adds no copy.
-  pub fn encode_message(&self, msg: SessionMessage<Op, ID, SnapshotPayload>) -> Result<OutboundFrame, SessionLayerError> {
+  pub fn encode_message(&self, msg: SessionMessage<Op, ID>) -> Result<OutboundFrame, SessionLayerError> {
     self
       .codec
       .encode(&msg)
@@ -431,15 +425,14 @@ where
 /// Turns raw inbound bytes into typed `SessionMessage`s for the controller.
 ///
 /// One task per session, shared by every transport.
-async fn deserialize_bridge<Op, ID, SnapshotPayload, C>(
+async fn deserialize_bridge<Op, ID, C>(
   transport: &'static str,
   codec: C,
   raw_rx: mpsc::BoundedAsyncReceiver<SerializedSessionMessage<ID>>,
-  typed_tx: SessionSender<SessionMessage<Op, ID, SnapshotPayload>>,
+  typed_tx: SessionSender<SessionMessage<Op, ID>>,
 ) where
   Op: DeserializeOwned + Clone + Debug + Send + 'static,
   ID: AgentId,
-  SnapshotPayload: DeserializeOwned + Clone + Debug + Send + 'static,
   C: WireCodec,
 {
   loop {
@@ -448,33 +441,19 @@ async fn deserialize_bridge<Op, ID, SnapshotPayload, C>(
       return;
     };
 
-    let typed = match raw {
-      SessionMessage::Ops { from, ops } => {
-        let decoded: Result<Vec<Op>, _> = ops.iter().map(|bytes| codec.decode::<Op>(bytes)).collect();
-        match decoded {
-          Ok(ops) => SessionMessage::Ops { from, ops },
-          Err(source) => {
-            warn!(
-              transport,
-              error = %source,
-              agent = %from,
-              "Discarding client ops that failed to decode."
-            );
-            continue;
-          }
-        }
+    let SessionMessage { from, ops } = raw;
+    let decoded: Result<Vec<Op>, _> = ops.iter().map(|bytes| codec.decode::<Op>(bytes)).collect();
+    let typed = match decoded {
+      Ok(ops) => SessionMessage::new(from, ops),
+      Err(source) => {
+        warn!(
+          transport,
+          error = %source,
+          agent = %from,
+          "Discarding client ops that failed to decode."
+        );
+        continue;
       }
-      // Clients are not supposed to send snapshots upstream; decode defensively.
-      SessionMessage::StateData { from, data } => match codec.decode::<SnapshotPayload>(&data.payload) {
-        Ok(payload) => SessionMessage::StateData {
-          from,
-          data: SnapshotData { payload },
-        },
-        Err(source) => {
-          warn!(transport, error = %source, "Discarding inbound snapshot that failed to decode.");
-          continue;
-        }
-      },
     };
 
     // Awaited: the bridge is its own task, so backpressure here throttles
@@ -487,11 +466,10 @@ async fn deserialize_bridge<Op, ID, SnapshotPayload, C>(
 }
 
 #[async_trait]
-impl<Op, ID, SnapshotPayload, C> Session<Op, ID, SnapshotPayload> for TransportSession<Op, ID, SnapshotPayload, C>
+impl<Op, ID, C> Session<Op, ID> for TransportSession<Op, ID, C>
 where
   Op: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static,
   ID: AgentId,
-  SnapshotPayload: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static,
   C: WireCodec,
 {
   /// Not supported: joins are implicit for networked transports.
@@ -515,14 +493,14 @@ where
   async fn send_message(
     &self,
     target: MessageTarget<ID>,
-    msg: SessionMessage<Op, ID, SnapshotPayload>,
+    msg: SessionMessage<Op, ID>,
   ) -> Result<(), PlazaError<ID>> {
     let encoded = self.encode_message(msg)?;
     self.manager.broadcast(&target, encoded)?;
     Ok(())
   }
 
-  fn subscribe_to_incoming_messages(&self) -> SessionReceiver<SessionMessage<Op, ID, SnapshotPayload>> {
+  fn subscribe_to_incoming_messages(&self) -> SessionReceiver<SessionMessage<Op, ID>> {
     take_stream(&self.deserialized_rx, "incoming messages")
   }
 

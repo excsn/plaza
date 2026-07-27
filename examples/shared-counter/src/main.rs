@@ -10,13 +10,13 @@ mod types;
 
 use logic::CounterLogic;
 use snapshot::CounterSnapshotter;
-use types::{CounterOp, CounterSnapshotPayload, CounterStateData, CounterUser};
+use types::{CounterOp, CounterStateData, CounterUser};
 
 use plaza::{
   agent::Agent,
   controller::{query_state, ControllerCommand, StateControllerBuilder},
   session::in_process::ClientInbox,
-  session::{InProcessSession, Session, SessionMessage},
+  session::{InProcessSession, Session},
 };
 
 use std::sync::Arc;
@@ -24,20 +24,18 @@ use std::time::Duration;
 use tracing::{error, info, Level};
 use tracing_subscriber::EnvFilter;
 
-type CounterSession = InProcessSession<CounterOp, CounterUser, CounterSnapshotPayload>;
+type CounterSession = InProcessSession<CounterOp, CounterUser>;
 
 /// Logs what one client receives. The session already filtered by target, so
 /// everything arriving here was addressed to this client.
 fn spawn_client_listener(
   name: &'static str,
-  inbox: ClientInbox<CounterOp, CounterUser, CounterSnapshotPayload>,
+  inbox: ClientInbox<CounterOp, CounterUser>,
 ) -> tokio::task::JoinHandle<()> {
   tokio::spawn(async move {
     while let Ok(msg) = inbox.recv().await {
-      match msg {
-        SessionMessage::Ops { from, ops } => info!("[{}] ops from {}: {:?}", name, from, ops),
-        SessionMessage::StateData { data, .. } => info!("[{}] snapshot: {:?}", name, data.payload),
-      }
+      // One message kind: a snapshot arrives as an op.
+      info!("[{}] from {}: {:?}", name, msg.from, msg.ops);
     }
   })
 }

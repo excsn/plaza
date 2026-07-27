@@ -49,8 +49,22 @@ impl Default for GameState {
   }
 }
 
+/// What a client is sent on join: the state minus the scheduler, which is a
+/// live heap of pending events rather than something to transmit. `GameState`
+/// itself is deliberately not serde-able, so this is the serialisable view of
+/// it that its doc comment describes.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct GameView {
+  pub players: HashMap<PlayerId, PlayerState>,
+  pub current_tick: u64,
+  pub version: u64,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum GameOp {
+  /// A whole-state view, built per recipient. Boxed, or every `GameOp` in a
+  /// batch would be as large as a `GameView`.
+  Snapshot(Box<GameView>),
   /// Client informs server they are joining.
   JoinGame { player_id: PlayerId, name: String },
   /// Client requests to use an ability.
@@ -63,8 +77,6 @@ pub enum GameOp {
   ClientNotifyAbilityReady { ability: Ability },
   // LogicInput::TimeStep is the canonical way to advance time.
 }
-
-pub type CooldownSnapshotPayload = GameState;
 
 pub fn get_ability_cooldown_duration(ability: Ability) -> u64 {
   match ability {

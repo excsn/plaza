@@ -22,7 +22,7 @@ pub mod payloads;
 #[cfg(feature = "build")]
 pub mod build;
 
-pub use envelope::{Agent, AgentId, SessionMessage, SnapshotData};
+pub use envelope::{Agent, AgentId, SessionMessage};
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;

@@ -58,15 +58,24 @@ pub enum ScheduledAppEvent {
   UserTypingTimeout { user_id: UserId },
 }
 
+/// What a client is sent on join: the state minus the scheduler, which is a
+/// live heap of pending events rather than something to transmit.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct AppView {
+  pub users_presence: HashMap<UserId, UserPresence>,
+  pub version: u64,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum AppOp {
+  /// A whole-state view, built per recipient. Boxed, or every `AppOp` in a
+  /// batch would be as large as an `AppView`.
+  Snapshot(Box<AppView>),
   UserJoined { user_id: UserId, name: String },
   UserLeft { user_id: UserId },
   UserIsTyping { user_id: UserId }, // Client sends this periodically while user types
   // Server to Clients (or internal state updates that then get reflected)
   PresenceUpdate { user_id: UserId, status: TypingState },
 }
-
-pub type TypingIndicatorSnapshotPayload = AppState;
 
 pub const TYPING_TIMEOUT_DURATION: Duration = Duration::from_secs(3);

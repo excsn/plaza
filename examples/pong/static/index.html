@@ -62,43 +62,37 @@
         }
 
         function handleServerMessage(message) {
-            if (message.Ops) { // Assuming SessionMessage::Ops
-                message.Ops.ops.forEach(op => {
-                    // console.log("Received Op:", op);
-                    if (op.AssignPlayer) {
-                        myPlayerId = op.AssignPlayer.player_id;
-                        mySide = op.AssignPlayer.side;
-                        console.log(`Assigned as ${mySide} player: ${myPlayerId}`);
-                    } else if (op.GameUpdate) {
-                        gameState = op.GameUpdate;
-                        draw();
-                    } else if (op.ScoreUpdate) {
-                        if (gameState && gameState.scores) {
-                            gameState.scores[op.ScoreUpdate.player_id] = op.ScoreUpdate.new_score;
-                        }
-                        console.log(`Score Update: Player ${op.ScoreUpdate.player_id} now has ${op.ScoreUpdate.new_score}`);
-                        // Might also get a full GameUpdate shortly after, or just update score display
-                        draw();
-                    } else if (op.PhaseChange) {
-                        if (gameState) gameState.phase = op.PhaseChange;
-                        console.log("Game phase changed to:", op.PhaseChange);
-                        if (op.PhaseChange === "Paused" || op.PhaseChange === "Starting") {
-                            // Send ReadyToPlay after a short delay or on user action
-                            setTimeout(() => sendReadyToPlay(), 500);
-                        }
-                        draw();
+            // One message kind. A snapshot is an op like any other, so there is
+            // a single loop rather than an Ops-versus-StateData branch.
+            (message.ops || []).forEach(op => {
+                if (op.Snapshot) {
+                    gameState = op.Snapshot;
+                    if (gameState && myPlayerId) {
+                        if (gameState.player1_id === myPlayerId) mySide = "Left";
+                        else if (gameState.player2_id === myPlayerId) mySide = "Right";
                     }
-                });
-            } else if (message.StateData) { // Assuming SessionMessage::StateData (Snapshot)
-                console.log("Received Snapshot:", message.StateData.data);
-                gameState = message.StateData.data.payload; // Assuming payload is PongGameState
-                 if (gameState && myPlayerId) { // Try to determine side if not already set
-                    if (gameState.player1_id === myPlayerId) mySide = "Left";
-                    else if (gameState.player2_id === myPlayerId) mySide = "Right";
+                    sendReadyToPlay();
+                    draw();
+                } else if (op.AssignPlayer) {
+                    myPlayerId = op.AssignPlayer.player_id;
+                    mySide = op.AssignPlayer.side;
+                    console.log(`Assigned as ${mySide} player: ${myPlayerId}`);
+                } else if (op.GameUpdate) {
+                    gameState = op.GameUpdate;
+                    draw();
+                } else if (op.ScoreUpdate) {
+                    if (gameState && gameState.scores) {
+                        gameState.scores[op.ScoreUpdate.player_id] = op.ScoreUpdate.new_score;
+                    }
+                    draw();
+                } else if (op.PhaseChange) {
+                    if (gameState) gameState.phase = op.PhaseChange;
+                    if (op.PhaseChange === "Paused" || op.PhaseChange === "Starting") {
+                        setTimeout(() => sendReadyToPlay(), 500);
+                    }
+                    draw();
                 }
-                sendReadyToPlay(); // After getting snapshot, signal readiness
-                draw();
-            }
+            });
         }
 
         function sendPaddleMove(targetY) {

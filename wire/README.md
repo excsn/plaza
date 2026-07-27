@@ -11,16 +11,18 @@ Full surface in [API_REFERENCE.md](API_REFERENCE.md).
 Everything the two ends exchange is a `SessionMessage`, and it lives here rather than in `plaza` core for one concrete reason: **a browser client cannot depend on core**. Core pulls tokio and does not target `wasm32-unknown-unknown`, so a wasm client that wanted to speak the protocol could not name the type it had to send, and would have to hand-reimplement the envelope and hope the two agreed.
 
 ```rust,ignore
-pub enum SessionMessage<Op, ID: AgentId, SnapshotPayload> {
-  Ops { from: Agent<ID>, ops: Vec<Op> },
-  StateData { from: Agent<ID>, data: SnapshotData<SnapshotPayload> },
+pub struct SessionMessage<Op, ID: AgentId> {
+  pub from: Agent<ID>,
+  pub ops: Vec<Op>,
 }
 ```
+
+**One shape, not two.** A snapshot used to be a second variant carrying the application's whole state by value, so every message was sized to the largest one: an op batch needing 40 bytes occupied 4112 when the snapshot type was 4KB, in every queue slot and on every move. A snapshot is now an `Op` like any other, and this type's size no longer depends on what an application snapshots. Box the op variant that carries a full state, or the same tax reappears in your own type.
 
 It is encoded **once, as a whole**. An earlier design encoded each `Op` to bytes and then encoded the envelope around those byte arrays, which under a JSON codec put `ops: [[123,34,...]]` on the wire: unreadable to anything that is not Rust, and awkward even to Rust, since the receiver decoded twice. What goes out now is a document any language can read:
 
 ```json
-{"Ops":{"from":"System","ops":[{"AssignPlayer":{"player_id":"...","side":"Left"}}]}}
+{"from":"System","ops":[{"AssignPlayer":{"player_id":"...","side":"Left"}}]}
 ```
 
 Only genuinely serialized types are here. `MessageTarget`, `PresenceEvent` and `TargetedOp` stay in core: they are server-side routing and stream plumbing, they are not `Serialize`, and no client ever sees one. This crate is the wire vocabulary, not everything the server happens to name. Core re-exports all of it, so server code still writes `plaza::Agent`.

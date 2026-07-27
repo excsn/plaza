@@ -25,7 +25,7 @@ use crate::sim::types::MAX_PLAYERS;
 use crate::sim::protocol::Op;
 use crate::sim::types::Controls;
 
-type ArenaSession = ActixWsPlazaSession<Op, PlayerKey, ()>;
+type ArenaSession = ActixWsPlazaSession<Op, PlayerKey>;
 
 /// The tick rate the simulation is advanced at. Distinct from the *send* rate,
 /// which is `Controls::sync_hz` and is usually far lower: simulating often and

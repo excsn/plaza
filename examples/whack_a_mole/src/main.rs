@@ -12,7 +12,7 @@ mod types;
 use crate::{
   logic::MoleLogic,
   snapshot::MoleSnapshotProvider,
-  types::{MoleGameState, MoleOp, MoleSnapshotPayload, PlayerId, MAX_MOLE_SLOTS},
+  types::{MoleGameState, MoleOp, PlayerId, MAX_MOLE_SLOTS},
 };
 
 use plaza::{
@@ -31,7 +31,7 @@ use uuid::Uuid;
 /// How long the demo game runs, in server ticks.
 const GAME_TICKS: u64 = 400;
 
-type MoleSession = InProcessSession<MoleOp, PlayerId, MoleSnapshotPayload>;
+type MoleSession = InProcessSession<MoleOp, PlayerId>;
 
 /// A simulated player that whacks whichever slot the server last announced.
 ///
@@ -41,7 +41,7 @@ fn spawn_bot_player(
   agent: Agent<PlayerId>,
   name: &str,
   session: Arc<MoleSession>,
-  inbox: ClientInbox<MoleOp, PlayerId, MoleSnapshotPayload>,
+  inbox: ClientInbox<MoleOp, PlayerId>,
   reaction: Duration,
 ) {
   let name = name.to_string();
@@ -53,11 +53,7 @@ fn spawn_bot_player(
       .await;
 
     while let Ok(msg) = inbox.recv().await {
-      let SessionMessage::Ops { ops, .. } = msg else {
-        continue;
-      };
-
-      for op in ops {
+      for op in msg.ops {
         if let MoleOp::MoleSpawned { slot, .. } = op {
           tokio::time::sleep(reaction).await;
           session

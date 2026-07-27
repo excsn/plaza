@@ -30,25 +30,24 @@ const TRANSPORT: &str = "tcp";
 pub type AgentFactory<ID> = Arc<dyn Fn(SocketAddr) -> Agent<ID> + Send + Sync>;
 
 /// A Plaza `Session` served over length-delimited TCP.
-pub struct TcpPlazaSession<Op: Send + 'static, ID: AgentId, SnapshotPayload: Send + 'static, C: WireCodec = JsonCodec> {
-  inner: Arc<TransportSession<Op, ID, SnapshotPayload, C>>,
+pub struct TcpPlazaSession<Op: Send + 'static, ID: AgentId, C: WireCodec = JsonCodec> {
+  inner: Arc<TransportSession<Op, ID, C>>,
   local_addr: SocketAddr,
   listener_handle: JoinHandle<()>,
 }
 
-impl<Op: Send + 'static, ID: AgentId, SnapshotPayload: Send + 'static, C: WireCodec> Drop
-  for TcpPlazaSession<Op, ID, SnapshotPayload, C>
+impl<Op: Send + 'static, ID: AgentId, C: WireCodec> Drop
+  for TcpPlazaSession<Op, ID, C>
 {
   fn drop(&mut self) {
     self.listener_handle.abort();
   }
 }
 
-impl<Op, ID, SnapshotPayload> TcpPlazaSession<Op, ID, SnapshotPayload, JsonCodec>
+impl<Op, ID> TcpPlazaSession<Op, ID, JsonCodec>
 where
   Op: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static,
   ID: AgentId,
-  SnapshotPayload: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static,
 {
   /// Binds and starts accepting connections, using JSON on the wire.
   pub async fn bind(addr: impl Into<String>, agent_factory: AgentFactory<ID>) -> Result<Arc<Self>, SessionLayerError> {
@@ -56,11 +55,10 @@ where
   }
 }
 
-impl<Op, ID, SnapshotPayload, C> TcpPlazaSession<Op, ID, SnapshotPayload, C>
+impl<Op, ID, C> TcpPlazaSession<Op, ID, C>
 where
   Op: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static,
   ID: AgentId,
-  SnapshotPayload: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static,
   C: WireCodec,
 {
   /// Binds and starts accepting connections with an explicit wire codec.
@@ -177,11 +175,10 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
 }
 
 #[async_trait]
-impl<Op, ID, SnapshotPayload, C> Session<Op, ID, SnapshotPayload> for TcpPlazaSession<Op, ID, SnapshotPayload, C>
+impl<Op, ID, C> Session<Op, ID> for TcpPlazaSession<Op, ID, C>
 where
   Op: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static,
   ID: AgentId,
-  SnapshotPayload: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static,
   C: WireCodec,
 {
   async fn agent_join(&self, agent_info: Agent<ID>) -> Result<ConnectionId, PlazaError<ID>> {
@@ -195,12 +192,12 @@ where
   async fn send_message(
     &self,
     target: MessageTarget<ID>,
-    msg: SessionMessage<Op, ID, SnapshotPayload>,
+    msg: SessionMessage<Op, ID>,
   ) -> Result<(), PlazaError<ID>> {
     self.inner.send_message(target, msg).await
   }
 
-  fn subscribe_to_incoming_messages(&self) -> SessionReceiver<SessionMessage<Op, ID, SnapshotPayload>> {
+  fn subscribe_to_incoming_messages(&self) -> SessionReceiver<SessionMessage<Op, ID>> {
     self.inner.subscribe_to_incoming_messages()
   }
 

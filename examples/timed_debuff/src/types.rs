@@ -51,6 +51,9 @@ pub struct GameState {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum GameOp {
+  /// A whole-state view, built per recipient. Boxed, or every `GameOp` in a
+  /// batch would be as large as a `GameState`.
+  Snapshot(Box<GameState>),
   JoinGame {
     player_id: PlayerId,
     name: String,
@@ -77,5 +80,3 @@ pub enum GameOp {
     new_attributes: PlayerAttributes,
   },
 }
-
-pub type DebuffSnapshotPayload = GameState;

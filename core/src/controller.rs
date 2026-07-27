@@ -73,15 +73,14 @@ pub enum ControllerCommand<Op, ID: AgentId, StateType> {
 ///   .build();
 /// tokio::spawn(controller.run());
 /// ```
-pub struct StateControllerBuilder<Op, ID, StateType, SnapshotPayload, SL, Sess, SP>
+pub struct StateControllerBuilder<Op, ID, StateType, SL, Sess, SP>
 where
   ID: AgentId,
   Op: Debug + Clone + Send + Sync + 'static,
   StateType: Clone + Debug + Send + Sync + 'static,
-  SnapshotPayload: Debug + Clone + Send + Sync + 'static,
   SL: StateLogic<Op, ID, StateType>,
-  Sess: Session<Op, ID, SnapshotPayload>,
-  SP: SnapshotProvider<ID, StateType, SnapshotPayload>,
+  Sess: Session<Op, ID>,
+  SP: SnapshotProvider<ID, StateType, Op>,
 {
   op_handler: Arc<SL>,
   session: Arc<Sess>,
@@ -90,19 +89,18 @@ where
   buffer_size: usize,
   join_context: Option<SnapshotContext>,
   stats: Arc<ControllerStats>,
-  _phantom: PhantomData<fn() -> (Op, ID, SnapshotPayload)>,
+  _phantom: PhantomData<fn() -> (Op, ID)>,
 }
 
-impl<Op, ID, StateType, SnapshotPayload, SL, Sess, SP>
-  StateControllerBuilder<Op, ID, StateType, SnapshotPayload, SL, Sess, SP>
+impl<Op, ID, StateType, SL, Sess, SP>
+  StateControllerBuilder<Op, ID, StateType, SL, Sess, SP>
 where
   ID: AgentId,
   Op: Debug + Clone + Send + Sync + 'static,
   StateType: Clone + Debug + Send + Sync + 'static,
-  SnapshotPayload: Debug + Clone + Send + Sync + 'static,
   SL: StateLogic<Op, ID, StateType>,
-  Sess: Session<Op, ID, SnapshotPayload>,
-  SP: SnapshotProvider<ID, StateType, SnapshotPayload>,
+  Sess: Session<Op, ID>,
+  SP: SnapshotProvider<ID, StateType, Op>,
 {
   /// Starts a builder with everything a controller needs.
   pub fn new(op_handler: Arc<SL>, session: Arc<Sess>, snapshot_provider: Arc<SP>, initial_state: StateType) -> Self {
@@ -161,7 +159,7 @@ where
     self,
   ) -> (
     CommandSender<Op, ID, StateType>,
-    StateController<Op, ID, StateType, SnapshotPayload, SL, Sess, SP>,
+    StateController<Op, ID, StateType, SL, Sess, SP>,
   ) {
     StateController::new(
       self.initial_state,
@@ -219,15 +217,14 @@ static NEXT_CONTROLLER_ID: AtomicU64 = AtomicU64::new(1);
 ///
 /// Runs as a single-task actor: it owns the state outright and mutates it only
 /// from its own loop, so no locking is needed anywhere in this crate.
-pub struct StateController<Op, ID, StateType, SnapshotPayload, SL, Sess, SP>
+pub struct StateController<Op, ID, StateType, SL, Sess, SP>
 where
   ID: AgentId,
   Op: Debug + Clone + Send + Sync + 'static,
   StateType: Clone + Debug + Send + Sync + 'static,
-  SnapshotPayload: Debug + Clone + Send + Sync + 'static,
   SL: StateLogic<Op, ID, StateType>,
-  Sess: Session<Op, ID, SnapshotPayload>,
-  SP: SnapshotProvider<ID, StateType, SnapshotPayload>,
+  Sess: Session<Op, ID>,
+  SP: SnapshotProvider<ID, StateType, Op>,
 {
   state_data: StateType,
   op_handler: Arc<SL>,
@@ -240,20 +237,19 @@ where
   // and the task's first poll would otherwise be missed and never get a
   // snapshot. `Option` lets `run` own them while leaving `self` usable.
   session_presence_rx: Option<mpsc::BoundedAsyncReceiver<PresenceEvent<ID>>>,
-  session_incoming_rx: Option<mpsc::BoundedAsyncReceiver<SessionMessage<Op, ID, SnapshotPayload>>>,
+  session_incoming_rx: Option<mpsc::BoundedAsyncReceiver<SessionMessage<Op, ID>>>,
   stats: Arc<ControllerStats>,
 }
 
-impl<Op, ID, StateType, SnapshotPayload, SL, Sess, SP>
-  StateController<Op, ID, StateType, SnapshotPayload, SL, Sess, SP>
+impl<Op, ID, StateType, SL, Sess, SP>
+  StateController<Op, ID, StateType, SL, Sess, SP>
 where
   ID: AgentId,
   Op: Debug + Clone + Send + Sync + 'static,
   StateType: Clone + Debug + Send + Sync + 'static,
-  SnapshotPayload: Debug + Clone + Send + Sync + 'static,
   SL: StateLogic<Op, ID, StateType>,
-  Sess: Session<Op, ID, SnapshotPayload>,
-  SP: SnapshotProvider<ID, StateType, SnapshotPayload>,
+  Sess: Session<Op, ID>,
+  SP: SnapshotProvider<ID, StateType, Op>,
 {
   /// The live counters this controller writes into. See [`ControllerStats`].
   pub fn stats(&self) -> Arc<ControllerStats> {
@@ -357,15 +353,8 @@ where
 
         Ok(session_msg) = session_incoming_ops_rx.recv() => {
           debug!(?session_msg, "Received message from session subscription");
-          match session_msg {
-            SessionMessage::Ops { from, ops } => {
-              let input = LogicInput::AgentOps { source: from, ops };
-              self.handle_logic_input(input).await;
-            }
-            SessionMessage::StateData { .. } => {
-              warn!("StateController received unexpected StateData message from session subscription. Ignoring.");
-            }
-          }
+          let SessionMessage { from, ops } = session_msg;
+          self.handle_logic_input(LogicInput::AgentOps { source: from, ops }).await;
         }
         else => {
           info!("Controller's command or session event channel closed. Shutting down.");
@@ -449,10 +438,7 @@ where
         output.coalesce();
 
         for targeted_op in output.ops {
-          let msg = SessionMessage::Ops {
-            from: targeted_op.from_agent,
-            ops: targeted_op.ops,
-          };
+          let msg = SessionMessage::new(targeted_op.from_agent, targeted_op.ops);
           if let Err(e) = self.session.send_message(targeted_op.target, msg).await {
             error!(error = %e, "Failed to send message via session");
           }
@@ -500,22 +486,24 @@ where
         continue;
       };
 
-      let snapshot_data = match self
+      // A snapshot is an op, so it rides the ordinary ops path: there is no
+      // second message kind to distinguish it at this level.
+      let snapshot_op = match self
         .snapshot_provider
-        .create_snapshot_data(&self.state_data, Some(agent), context.clone())
+        .create_snapshot(&self.state_data, Some(agent), context.clone())
         .await
       {
-        Ok(data) => data,
+        // `None` is a provider saying this recipient gets nothing, which is
+        // how an application with no snapshot concept opts out entirely.
+        Ok(Some(op)) => op,
+        Ok(None) => continue,
         Err(e) => {
           error!(error = %e, agent = %agent, "Failed to create snapshot; skipping agent.");
           continue;
         }
       };
 
-      let msg = SessionMessage::StateData {
-        from: Agent::system(),
-        data: snapshot_data,
-      };
+      let msg = SessionMessage::system(vec![snapshot_op]);
       if let Err(e) = self.session.send_message(MessageTarget::Agent(target_id), msg).await {
         error!(error = %e, agent = %agent, "Failed to send snapshot.");
       } else {

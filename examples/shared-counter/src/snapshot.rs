@@ -1,9 +1,9 @@
-use crate::types::{CounterId, CounterSnapshotPayload, CounterStateData};
+use crate::types::{CounterId, CounterOp, CounterStateData};
 use async_trait::async_trait;
 use plaza::{
   agent::Agent,
   error::SnapshotError,
-  snapshot::{SnapshotContext, SnapshotData, SnapshotProvider},
+  snapshot::{SnapshotContext, SnapshotProvider},
 };
 use tracing::debug;
 
@@ -11,16 +11,14 @@ use tracing::debug;
 pub struct CounterSnapshotter;
 
 #[async_trait]
-impl SnapshotProvider<CounterId, CounterStateData, CounterSnapshotPayload> for CounterSnapshotter {
-  async fn create_snapshot_data(
+impl SnapshotProvider<CounterId, CounterStateData, CounterOp> for CounterSnapshotter {
+  async fn create_snapshot(
     &self,
     full_state: &CounterStateData,
     target_agent: Option<&Agent<CounterId>>,
     context: Option<SnapshotContext>,
-  ) -> Result<SnapshotData<CounterSnapshotPayload>, SnapshotError<CounterId>> {
+  ) -> Result<Option<CounterOp>, SnapshotError<CounterId>> {
     debug!(?target_agent, ?context, "Creating snapshot for counter");
-    Ok(SnapshotData {
-      payload: full_state.clone(),
-    })
+    Ok(Some(CounterOp::Snapshot(Box::new(full_state.clone()))))
   }
 }

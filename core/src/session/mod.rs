@@ -105,10 +105,9 @@ pub use plaza_wire::envelope::SessionMessage;
 ///
 /// Implementations cover a specific protocol. WebSockets, TCP, in-process.
 /// `Send + Sync + 'static` because the `StateController` holds an `Arc<Sess>`;
-/// `Op` and `SnapshotPayload` are `Send` because they cross task boundaries on
-/// the session's channels.
+/// `Op` is `Send` because it crosses task boundaries on the session's channels.
 #[async_trait]
-pub trait Session<Op: Send + 'static, ID: AgentId, SnapshotPayload: Send + 'static>: Send + Sync + 'static {
+pub trait Session<Op: Send + 'static, ID: AgentId>: Send + Sync + 'static {
   /// Registers an agent joining the session, establishing the underlying
   /// connection if the transport needs one.
   ///
@@ -124,13 +123,13 @@ pub trait Session<Op: Send + 'static, ID: AgentId, SnapshotPayload: Send + 'stat
   async fn send_message(
     &self,
     target: MessageTarget<ID>,
-    msg: SessionMessage<Op, ID, SnapshotPayload>,
+    msg: SessionMessage<Op, ID>,
   ) -> Result<(), PlazaError<ID>>;
 
   /// Takes the stream of *inbound* messages headed for server-side processing.
   ///
-  /// The `StateController` consumes this to receive `SessionMessage::Ops` from
-  /// clients. Implementations must not put their own outbound messages here.
+  /// The `StateController` consumes this to receive clients' ops.
+  /// Implementations must not put their own outbound messages here.
   ///
   /// # One consumer
   ///
@@ -139,7 +138,7 @@ pub trait Session<Op: Send + 'static, ID: AgentId, SnapshotPayload: Send + 'stat
   /// controller owns the state. Calling this twice splits the stream between the
   /// two receivers rather than duplicating it; for a second observer (metrics, a
   /// replay log), tee the messages inside your `StateLogic` instead.
-  fn subscribe_to_incoming_messages(&self) -> SessionReceiver<SessionMessage<Op, ID, SnapshotPayload>>;
+  fn subscribe_to_incoming_messages(&self) -> SessionReceiver<SessionMessage<Op, ID>>;
 
   /// Takes the stream of agents arriving and leaving, in the order they happened.
   ///

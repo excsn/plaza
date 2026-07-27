@@ -12,7 +12,7 @@ use plaza::error::SnapshotError;
 use plaza::controller::CommandSender;
 use plaza::session::in_process::ClientInbox;
 use plaza::session::{InProcessSession, Session, SessionMessage, TargetedOp};
-use plaza::snapshot::{SnapshotContext, SnapshotData, SnapshotProvider};
+use plaza::snapshot::{SnapshotContext, SnapshotProvider};
 use plaza::state_logic::{LogicInput, LogicOutput, SnapshotRequest, StateLogic, StateLogicError};
 use plaza::TickDriver;
 use serde::{Deserialize, Serialize};
@@ -27,6 +27,9 @@ enum CounterOp {
   Changed(i64),
   /// Broadcast when an agent joins.
   Joined(UserId),
+  /// A whole-state view, built per recipient. Boxed: unboxed, every `CounterOp`
+  /// in every batch would be the size of a `CounterSnapshot`.
+  Snapshot(Box<CounterSnapshot>),
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -77,32 +80,43 @@ impl StateLogic<CounterOp, UserId, CounterState> for CounterLogic {
   }
 }
 
+/// A snapshot is an op now, so recognising one is a match on the op rather than
+/// on a message kind.
+fn snapshot_of(msg: &SessionMessage<CounterOp, UserId>) -> Option<&CounterSnapshot> {
+  msg.ops.iter().find_map(|op| match op {
+    CounterOp::Snapshot(snap) => Some(&**snap),
+    _ => None,
+  })
+}
+
+fn is_snapshot(msg: &SessionMessage<CounterOp, UserId>) -> bool {
+  snapshot_of(msg).is_some()
+}
+
 #[derive(Debug, Default)]
 struct CounterSnapshotter;
 
 #[async_trait]
-impl SnapshotProvider<UserId, CounterState, CounterSnapshot> for CounterSnapshotter {
-  async fn create_snapshot_data(
+impl SnapshotProvider<UserId, CounterState, CounterOp> for CounterSnapshotter {
+  async fn create_snapshot(
     &self,
     state: &CounterState,
     _target: Option<&Agent<UserId>>,
     _context: Option<SnapshotContext>,
-  ) -> Result<SnapshotData<CounterSnapshot>, SnapshotError<UserId>> {
-    Ok(SnapshotData {
-      payload: CounterSnapshot {
-        value: state.value,
-        members: state.members.clone(),
-      },
-    })
+  ) -> Result<Option<CounterOp>, SnapshotError<UserId>> {
+    Ok(Some(CounterOp::Snapshot(Box::new(CounterSnapshot {
+      value: state.value,
+      members: state.members.clone(),
+    }))))
   }
 }
 
 /// Spawns a controller wired to a fresh in-process session.
 fn start() -> (
-  Arc<InProcessSession<CounterOp, UserId, CounterSnapshot>>,
+  Arc<InProcessSession<CounterOp, UserId>>,
   CommandSender<CounterOp, UserId, CounterState>,
 ) {
-  let session = InProcessSession::<CounterOp, UserId, CounterSnapshot>::new();
+  let session = InProcessSession::<CounterOp, UserId>::new();
   let (tx, controller) = StateControllerBuilder::new(
     Arc::new(CounterLogic),
     session.clone(),
@@ -129,11 +143,11 @@ async fn query_state(tx: &CommandSender<CounterOp, UserId, CounterState>) -> Cou
 /// The session filters by target, so anything arriving here was addressed to
 /// this client.
 async fn recv_matching<F>(
-  inbox: &ClientInbox<CounterOp, UserId, CounterSnapshot>,
+  inbox: &ClientInbox<CounterOp, UserId>,
   pred: F,
-) -> SessionMessage<CounterOp, UserId, CounterSnapshot>
+) -> SessionMessage<CounterOp, UserId>
 where
-  F: Fn(&SessionMessage<CounterOp, UserId, CounterSnapshot>) -> bool,
+  F: Fn(&SessionMessage<CounterOp, UserId>) -> bool,
 {
   tokio::time::timeout(Duration::from_secs(5), async {
     loop {
@@ -154,13 +168,9 @@ async fn joining_agent_receives_a_snapshot() {
   let alice = Agent::new_human(1u64);
   let (_conn_id, inbox) = session.connect(alice).await.expect("connect");
 
-  let msg = recv_matching(&inbox, |m| matches!(m, SessionMessage::StateData { .. })).await;
-  match msg {
-    SessionMessage::StateData { data, .. } => {
-      assert_eq!(data.payload.members, vec![1u64], "snapshot reflects the join");
-    }
-    other => panic!("expected StateData, got {:?}", other),
-  }
+  let msg = recv_matching(&inbox, |m| is_snapshot(m)).await;
+  let snap = snapshot_of(&msg).expect("a snapshot op");
+  assert_eq!(snap.members, vec![1u64], "snapshot reflects the join");
 
   assert_eq!(query_state(&tx).await.members, vec![1u64]);
 }
@@ -173,11 +183,8 @@ async fn client_op_mutates_state_and_is_broadcast() {
   let (_conn_id, inbox) = session.connect(alice.clone()).await.expect("connect");
   session.client_send(alice, vec![CounterOp::Increment(5)]).await;
 
-  let msg = recv_matching(&inbox, |m| {
-    matches!(m, SessionMessage::Ops { ops, .. } if ops.contains(&CounterOp::Changed(5)))
-  })
-  .await;
-  assert!(matches!(msg, SessionMessage::Ops { .. }));
+  let msg = recv_matching(&inbox, |m| m.ops.contains(&CounterOp::Changed(5))).await;
+  assert!(msg.ops.contains(&CounterOp::Changed(5)));
 
   assert_eq!(query_state(&tx).await.value, 5);
 }
@@ -217,7 +224,7 @@ async fn agent_leaving_is_reflected_in_state() {
 
 #[tokio::test]
 async fn shutdown_terminates_the_controller() {
-  let session = InProcessSession::<CounterOp, UserId, CounterSnapshot>::new();
+  let session = InProcessSession::<CounterOp, UserId>::new();
   let (tx, controller) = StateControllerBuilder::new(
     Arc::new(CounterLogic),
     session,
@@ -242,27 +249,25 @@ async fn shutdown_terminates_the_controller() {
 struct PerPlayerSnapshotter;
 
 #[async_trait]
-impl SnapshotProvider<UserId, CounterState, CounterSnapshot> for PerPlayerSnapshotter {
-  async fn create_snapshot_data(
+impl SnapshotProvider<UserId, CounterState, CounterOp> for PerPlayerSnapshotter {
+  async fn create_snapshot(
     &self,
     state: &CounterState,
     target: Option<&Agent<UserId>>,
     _context: Option<SnapshotContext>,
-  ) -> Result<SnapshotData<CounterSnapshot>, SnapshotError<UserId>> {
+  ) -> Result<Option<CounterOp>, SnapshotError<UserId>> {
     // Each player sees only themselves in `members`.
     let me = target.and_then(|a| a.id_cloned());
-    Ok(SnapshotData {
-      payload: CounterSnapshot {
-        value: state.value,
-        members: me.into_iter().collect(),
-      },
-    })
+    Ok(Some(CounterOp::Snapshot(Box::new(CounterSnapshot {
+      value: state.value,
+      members: me.into_iter().collect(),
+    }))))
   }
 }
 
 #[tokio::test]
 async fn each_agent_receives_a_snapshot_built_for_it() {
-  let session = InProcessSession::<CounterOp, UserId, CounterSnapshot>::new();
+  let session = InProcessSession::<CounterOp, UserId>::new();
   let (tx, controller) = StateControllerBuilder::new(
     Arc::new(CounterLogic),
     session.clone(),
@@ -279,7 +284,7 @@ async fn each_agent_receives_a_snapshot_built_for_it() {
 
   // Drain each client's join snapshot before asking for a fresh round.
   for inbox in [&alice_inbox, &bob_inbox] {
-    recv_matching(inbox, |m| matches!(m, SessionMessage::StateData { .. })).await;
+    recv_matching(inbox, |m| is_snapshot(m)).await;
   }
 
   tx.send(ControllerCommand::SendSnapshots {
@@ -289,13 +294,13 @@ async fn each_agent_receives_a_snapshot_built_for_it() {
   .await
   .expect("controller alive");
 
-  let for_alice = recv_matching(&alice_inbox, |m| matches!(m, SessionMessage::StateData { .. })).await;
-  let for_bob = recv_matching(&bob_inbox, |m| matches!(m, SessionMessage::StateData { .. })).await;
+  let for_alice = recv_matching(&alice_inbox, |m| is_snapshot(m)).await;
+  let for_bob = recv_matching(&bob_inbox, |m| is_snapshot(m)).await;
 
-  fn members(msg: SessionMessage<CounterOp, UserId, CounterSnapshot>) -> Vec<UserId> {
-    match msg {
-      SessionMessage::StateData { data, .. } => data.payload.members,
-      other => panic!("expected StateData, got {:?}", other),
+  fn members(msg: SessionMessage<CounterOp, UserId>) -> Vec<UserId> {
+    match snapshot_of(&msg) {
+      Some(snap) => snap.members.clone(),
+      None => panic!("expected a snapshot op, got {:?}", msg),
     }
   }
   assert_eq!(members(for_alice), vec![1u64], "Alice sees only herself");
@@ -342,7 +347,7 @@ impl StateLogic<CounterOp, UserId, CounterState> for ResnapshottingLogic {
 
 #[tokio::test]
 async fn logic_can_push_a_resnapshot_to_every_player() {
-  let session = InProcessSession::<CounterOp, UserId, CounterSnapshot>::new();
+  let session = InProcessSession::<CounterOp, UserId>::new();
   let (_tx, controller) = StateControllerBuilder::new(
     Arc::new(ResnapshottingLogic),
     session.clone(),
@@ -359,18 +364,15 @@ async fn logic_can_push_a_resnapshot_to_every_player() {
 
   // Drain the join snapshots.
   for inbox in [&alice_inbox, &bob_inbox] {
-    recv_matching(inbox, |m| matches!(m, SessionMessage::StateData { .. })).await;
+    recv_matching(inbox, |m| is_snapshot(m)).await;
   }
 
   // One client's op triggers a resnapshot for everyone, from inside the logic.
   session.client_send(alice, vec![CounterOp::Increment(3)]).await;
 
   for inbox in [&alice_inbox, &bob_inbox] {
-    let msg = recv_matching(inbox, |m| matches!(m, SessionMessage::StateData { .. })).await;
-    match msg {
-      SessionMessage::StateData { data, .. } => assert_eq!(data.payload.value, 3),
-      other => panic!("expected StateData, got {:?}", other),
-    }
+    let msg = recv_matching(inbox, |m| is_snapshot(m)).await;
+    assert_eq!(snapshot_of(&msg).expect("a snapshot op").value, 3);
   }
 }
 
@@ -381,25 +383,23 @@ async fn the_join_snapshot_context_is_configurable() {
   struct ContextReportingSnapshotter;
 
   #[async_trait]
-  impl SnapshotProvider<UserId, CounterState, CounterSnapshot> for ContextReportingSnapshotter {
-    async fn create_snapshot_data(
+  impl SnapshotProvider<UserId, CounterState, CounterOp> for ContextReportingSnapshotter {
+    async fn create_snapshot(
       &self,
       _state: &CounterState,
       _target: Option<&Agent<UserId>>,
       context: Option<SnapshotContext>,
-    ) -> Result<SnapshotData<CounterSnapshot>, SnapshotError<UserId>> {
+    ) -> Result<Option<CounterOp>, SnapshotError<UserId>> {
       // Encode the perspective name in `value` so the test can assert on it.
       let value = match context {
         Some(SnapshotContext::ForPerspective(name)) if name == "spectator" => 99,
         _ => 0,
       };
-      Ok(SnapshotData {
-        payload: CounterSnapshot { value, members: vec![] },
-      })
+      Ok(Some(CounterOp::Snapshot(Box::new(CounterSnapshot { value, members: vec![] }))))
     }
   }
 
-  let session = InProcessSession::<CounterOp, UserId, CounterSnapshot>::new();
+  let session = InProcessSession::<CounterOp, UserId>::new();
   let (_tx, controller) = StateControllerBuilder::new(
     Arc::new(CounterLogic),
     session.clone(),
@@ -415,18 +415,14 @@ async fn the_join_snapshot_context_is_configurable() {
     .await
     .expect("connect");
 
-  let msg = recv_matching(&inbox, |m| matches!(m, SessionMessage::StateData { .. })).await;
-  match msg {
-    SessionMessage::StateData { data, .. } => {
-      assert_eq!(data.payload.value, 99, "join used the configured perspective");
-    }
-    other => panic!("expected StateData, got {:?}", other),
-  }
+  let msg = recv_matching(&inbox, |m| is_snapshot(m)).await;
+  let snap = snapshot_of(&msg).expect("a snapshot op");
+  assert_eq!(snap.value, 99, "join used the configured perspective");
 }
 
 #[tokio::test]
 async fn shutdown_drains_work_queued_before_it() {
-  let session = InProcessSession::<CounterOp, UserId, CounterSnapshot>::new();
+  let session = InProcessSession::<CounterOp, UserId>::new();
   let (tx, controller) = StateControllerBuilder::new(
     Arc::new(CounterLogic),
     session,
@@ -463,7 +459,7 @@ async fn shutdown_drains_work_queued_before_it() {
 
 #[tokio::test]
 async fn run_returns_the_final_state_for_the_caller_to_persist() {
-  let session = InProcessSession::<CounterOp, UserId, CounterSnapshot>::new();
+  let session = InProcessSession::<CounterOp, UserId>::new();
   let (tx, controller) = StateControllerBuilder::new(
     Arc::new(CounterLogic),
     session.clone(),
@@ -505,24 +501,22 @@ async fn an_application_defined_context_survives_the_round_trip() {
   struct DigestAwareSnapshotter;
 
   #[async_trait]
-  impl SnapshotProvider<UserId, CounterState, CounterSnapshot> for DigestAwareSnapshotter {
-    async fn create_snapshot_data(
+  impl SnapshotProvider<UserId, CounterState, CounterOp> for DigestAwareSnapshotter {
+    async fn create_snapshot(
       &self,
       state: &CounterState,
       _target: Option<&Agent<UserId>>,
       context: Option<SnapshotContext>,
-    ) -> Result<SnapshotData<CounterSnapshot>, SnapshotError<UserId>> {
+    ) -> Result<Option<CounterOp>, SnapshotError<UserId>> {
       let value = match context.as_ref().and_then(SnapshotContext::downcast_ref::<SinceDigest>) {
         Some(SinceDigest(d)) if d == "abc123" => 42,
         _ => state.value,
       };
-      Ok(SnapshotData {
-        payload: CounterSnapshot { value, members: vec![] },
-      })
+      Ok(Some(CounterOp::Snapshot(Box::new(CounterSnapshot { value, members: vec![] }))))
     }
   }
 
-  let session = InProcessSession::<CounterOp, UserId, CounterSnapshot>::new();
+  let session = InProcessSession::<CounterOp, UserId>::new();
   let (tx, controller) = StateControllerBuilder::new(
     Arc::new(CounterLogic),
     session.clone(),
@@ -534,7 +528,7 @@ async fn an_application_defined_context_survives_the_round_trip() {
 
   let alice = Agent::new_human(1u64);
   let (_conn, inbox) = session.connect(alice.clone()).await.expect("connect");
-  recv_matching(&inbox, |m| matches!(m, SessionMessage::StateData { .. })).await;
+  recv_matching(&inbox, |m| is_snapshot(m)).await;
 
   tx.send(ControllerCommand::SendSnapshots {
     recipients: vec![alice],
@@ -543,11 +537,7 @@ async fn an_application_defined_context_survives_the_round_trip() {
   .await
   .expect("controller alive");
 
-  let msg = recv_matching(&inbox, |m| matches!(m, SessionMessage::StateData { .. })).await;
-  match msg {
-    SessionMessage::StateData { data, .. } => {
-      assert_eq!(data.payload.value, 42, "the provider received its own context type");
-    }
-    other => panic!("expected StateData, got {:?}", other),
-  }
+  let msg = recv_matching(&inbox, |m| is_snapshot(m)).await;
+  let snap = snapshot_of(&msg).expect("a snapshot op");
+  assert_eq!(snap.value, 42, "the provider received its own context type");
 }

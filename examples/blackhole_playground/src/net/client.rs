@@ -333,13 +333,10 @@ impl NetClient {
   fn on_frame(&mut self, bytes: &[u8], now_ms: u64, controls: &Controls) {
     // The envelope is whatever `plaza_session` sends; only `Ops` matters here,
     // since the arena is built with join snapshots off.
-    let Ok(message) = serde_json::from_slice::<plaza_wire::SessionMessage<Op, u64, ()>>(bytes) else {
+    let Ok(message) = serde_json::from_slice::<plaza_wire::SessionMessage<Op, u64>>(bytes) else {
       return;
     };
-    let plaza_wire::SessionMessage::Ops { ops, .. } = message else {
-      return;
-    };
-    for op in ops {
+    for op in message.ops {
       match op {
         Op::Welcome { player, policy } => {
           self.me = Some(player);

@@ -27,9 +27,8 @@ Nearly every type here is generic over the same four, so it is worth naming them
 | `StateType` | Your shared state | `Clone + Debug + Send + Sync + 'static` |
 | `Op` | Your operations | `Clone + Debug + Send + Sync + 'static`, plus serde to cross a network |
 | `ID` | Your identifier | anything satisfying `AgentId` |
-| `SnapshotPayload` | What a client is sent | `Clone + Debug + Send + Sync + 'static`, plus serde |
 
-`AgentId` is blanket-implemented for every `Clone + Debug + Eq + Hash + Send + Sync + Serialize + Deserialize + 'static` type, so `Uuid` and `u64` qualify with no work. `Agent<ID>` wraps an ID and distinguishes `Human`, `Bot`, and `System`. These, along with `SessionMessage` and `SnapshotData`, are defined in the runtime-free [`plaza_wire`](../wire/) and re-exported here, so a browser client (which cannot depend on core) names the same envelope types the server does; the `plaza::` paths below work regardless.
+`AgentId` is blanket-implemented for every `Clone + Debug + Eq + Hash + Send + Sync + Serialize + Deserialize + 'static` type, so `Uuid` and `u64` qualify with no work. `Agent<ID>` wraps an ID and distinguishes `Human`, `Bot`, and `System`. These, along with `SessionMessage`, are defined in the runtime-free [`plaza_wire`](../wire/) and re-exported here, so a browser client (which cannot depend on core) names the same envelope types the server does; the `plaza::` paths below work regardless.
 
 ## A complete program
 
@@ -38,7 +37,7 @@ use plaza::{
   agent::Agent,
   controller::{query_state, StateControllerBuilder},
   session::{InProcessSession, SessionMessage, TargetedOp},
-  snapshot::{SnapshotContext, SnapshotData, SnapshotError, SnapshotProvider},
+  snapshot::{SnapshotContext, SnapshotError, SnapshotProvider},
   state_logic::{LogicInput, LogicOutput, StateLogic, StateLogicError},
 };
 use async_trait::async_trait;
@@ -85,13 +84,14 @@ struct CounterSnapshotter;
 
 #[async_trait]
 impl SnapshotProvider<UserId, CounterState, i64> for CounterSnapshotter {
-  async fn create_snapshot_data(
+  async fn create_snapshot(
     &self,
     state: &CounterState,
     _target: Option<&Agent<UserId>>,
     _context: Option<SnapshotContext>,
-  ) -> Result<SnapshotData<i64>, SnapshotError<UserId>> {
-    Ok(SnapshotData { payload: state.value })
+  ) -> Result<Option<CounterOp>, SnapshotError<UserId>> {
+    // A snapshot is an op. Box the variant when it carries a whole state view.
+    Ok(Some(CounterOp::Snapshot(state.value)))
   }
 }
 
@@ -117,9 +117,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   session.client_send(alice, vec![CounterOp::Increment(5)]).await;
 
   while let Ok(msg) = inbox.recv().await {
-    match msg {
-      SessionMessage::StateData { data, .. } => println!("snapshot: {}", data.payload),
-      SessionMessage::Ops { ops, .. } => println!("ops: {ops:?}"),
+    // One message kind: a snapshot arrives as an op like any other.
+    for op in &msg.ops {
+      println!("op: {op:?}");
     }
     if query_state(&tx).await?.value == 5 {
       break;
@@ -150,18 +150,20 @@ TickDriver::run_virtual(&tx, Duration::from_secs(1), 5).await;       // 5s of ga
 
 ## Per-recipient views
 
-`create_snapshot_data` receives the agent a snapshot is *for*, and the controller calls it once per recipient. Returning a different payload per agent is the normal path, not a special case:
+`create_snapshot` receives the agent a snapshot is *for*, and the controller calls it once per recipient. Returning a different payload per agent is the normal path, not a special case:
 
 ```rust,ignore
 let me = target.and_then(|a| a.id());
-Ok(SnapshotData { payload: GameView {
+Ok(Some(GameOp::Snapshot(Box::new(GameView {
   my_hand: me.and_then(|id| state.hands.get(id)).cloned().unwrap_or_default(),
   opponent_hand_sizes: state.hands.iter()
     .filter(|(id, _)| Some(*id) != me)
     .map(|(id, h)| (id.clone(), h.len()))
     .collect(),
-}})
+}))))
 ```
+
+Return `Ok(None)` to send a recipient nothing, which is how an application with no snapshot concept opts out rather than inventing an empty op.
 
 When a change alters what players may see, logic can push fresh views rather than waiting to be asked:
 

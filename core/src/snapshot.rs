@@ -6,10 +6,6 @@ use crate::agent::{Agent, AgentId};
 pub use crate::error::SnapshotError;
 use async_trait::async_trait;
 
-/// Re-exported from [`plaza_wire`]: it travels on the wire, so its definition
-/// belongs where a wasm client can reach it.
-pub use plaza_wire::envelope::SnapshotData;
-
 /// What kind of snapshot is being asked for.
 ///
 /// Plaza never reads this. It travels from whoever asks for a snapshot to your
@@ -95,31 +91,44 @@ impl Debug for SnapshotContext {
 /// game shows each player their own hand and only the count of everyone else's:
 ///
 /// ```ignore
-/// async fn create_snapshot_data(
+/// // The snapshot variant is boxed: unboxed, every `Op` in every batch would
+/// // be as large as a whole `GameView`.
+/// enum GameOp { Play(Card), Snapshot(Box<GameView>) }
+///
+/// async fn create_snapshot(
 ///   &self, state: &Game, target: Option<&Agent<PlayerId>>, _ctx: Option<SnapshotContext>,
-/// ) -> Result<SnapshotData<GameView>, SnapshotError<PlayerId>> {
+/// ) -> Result<Option<GameOp>, SnapshotError<PlayerId>> {
 ///   let me = target.and_then(|a| a.id());
-///   Ok(SnapshotData { payload: GameView {
+///   Ok(Some(GameOp::Snapshot(Box::new(GameView {
 ///     my_hand: me.and_then(|id| state.hands.get(id)).cloned().unwrap_or_default(),
 ///     opponent_hand_sizes: state.hands.iter()
 ///       .filter(|(id, _)| Some(*id) != me)
 ///       .map(|(id, h)| (id.clone(), h.len()))
 ///       .collect(),
-///   }})
+///   }))))
 /// }
 /// ```
 ///
 /// The controller calls this once per recipient, so returning a different
 /// payload per agent costs nothing extra structurally.
 #[async_trait]
-pub trait SnapshotProvider<ID: AgentId, StateType, SnapshotPayload>: Send + Sync + 'static {
-  /// Builds snapshot data from the current authoritative state.
+pub trait SnapshotProvider<ID: AgentId, StateType, Op>: Send + Sync + 'static {
+  /// Builds a snapshot of the current authoritative state, as an `Op`.
+  ///
+  /// A snapshot is an operation like any other: the envelope carries no second
+  /// message kind, so "replace everything" is a variant of your `Op` rather
+  /// than a wire concept. **Box it** if it carries a whole state view, or every
+  /// `Op` in a batch is sized to it.
+  ///
+  /// Return `Ok(None)` to send this recipient nothing: an application with no
+  /// snapshot concept at all, or one declining a particular agent, says so here
+  /// rather than inventing an empty op.
   ///
   /// `target_agent` is `None` only when no particular recipient applies.
-  async fn create_snapshot_data(
+  async fn create_snapshot(
     &self,
     full_state: &StateType,
     target_agent: Option<&Agent<ID>>,
     context: Option<SnapshotContext>,
-  ) -> Result<SnapshotData<SnapshotPayload>, SnapshotError<ID>>;
+  ) -> Result<Option<Op>, SnapshotError<ID>>;
 }

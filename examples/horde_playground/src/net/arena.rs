@@ -763,14 +763,16 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
 pub struct NoSnapshots;
 
 #[async_trait]
-impl plaza::snapshot::SnapshotProvider<PlayerKey, Arena, ()> for NoSnapshots {
-  async fn create_snapshot_data(
+impl plaza::snapshot::SnapshotProvider<PlayerKey, Arena, Op> for NoSnapshots {
+  async fn create_snapshot(
     &self,
     _full_state: &Arena,
     _target_agent: Option<&Agent<PlayerKey>>,
     _context: Option<plaza::snapshot::SnapshotContext>,
-  ) -> Result<plaza::SnapshotData<()>, plaza::snapshot::SnapshotError<PlayerKey>> {
-    Ok(plaza::SnapshotData { payload: () })
+  ) -> Result<Option<Op>, plaza::snapshot::SnapshotError<PlayerKey>> {
+    // No snapshot concept: this arena streams deltas, and a joiner is caught
+    // up by the relevance stream rather than by a whole-state message.
+    Ok(None)
   }
 }
 
@@ -1447,13 +1449,13 @@ mod tests {
     for i in 0..(60 * 60) {
       let t = i as f32 * 0.05;
       for (_, packet) in server.advance(16, Vec2::new(t.cos(), t.sin()), &controls) {
-        let msg: plaza_wire::SessionMessage<Op, u64, ()> =
-          plaza_wire::SessionMessage::Ops { from: Agent::system(), ops: vec![Op::Frame(Box::new(packet.clone()))] };
+        let msg: plaza_wire::SessionMessage<Op, u64> =
+          plaza_wire::SessionMessage::system(vec![Op::Frame(Box::new(packet.clone()))]);
         let bytes = serde_json::to_vec(&msg).expect("encode");
-        let back = serde_json::from_slice::<plaza_wire::SessionMessage<Op, u64, ()>>(&bytes);
+        let back = serde_json::from_slice::<plaza_wire::SessionMessage<Op, u64>>(&bytes);
         assert!(back.is_ok(), "a frame failed to deserialize: {:?}", back.err());
-        if let Ok(plaza_wire::SessionMessage::Ops { ops, .. }) = back
-          && let Some(Op::Frame(p2)) = ops.first()
+        if let Ok(msg) = back
+          && let Some(Op::Frame(p2)) = msg.ops.first()
         {
           assert_eq!(p2.visible_digest, packet.visible_digest, "digest survived the wire");
         }

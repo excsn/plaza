@@ -9,7 +9,7 @@ mod types;
 
 use crate::{
   logic::CooldownLogic,
-  types::{get_ability_cooldown_duration, Ability, CooldownSnapshotPayload, GameOp, GameState, PlayerId},
+  types::{get_ability_cooldown_duration, Ability, GameOp, GameState, PlayerId},
 };
 use plaza::{
   agent::Agent,
@@ -56,7 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   tracing_subscriber::fmt().with_max_level(Level::INFO).init();
   info!("Plaza Ability Cooldowns Example - Starting (tick period {:?})", TICK);
 
-  let session = InProcessSession::<GameOp, PlayerId, CooldownSnapshotPayload>::new();
+  let session = InProcessSession::<GameOp, PlayerId>::new();
   let (controller_tx, controller) = StateControllerBuilder::new(
     Arc::new(CooldownLogic::default()),
     session.clone(),
