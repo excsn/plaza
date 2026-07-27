@@ -131,6 +131,10 @@ pub struct ConnectionManager<ID: AgentId> {
   presence_tx: SessionSender<PresenceEvent<ID>>,
   presence_rx: RwLock<Option<SessionReceiver<PresenceEvent<ID>>>>,
   stats: Arc<TransportStats>,
+  /// This build's `Hello`, encoded once at construction and pushed to every
+  /// connection as its first frame. It never changes, so encoding it per
+  /// connection would be per-connection work for a constant.
+  hello: Option<OutboundFrame>,
 }
 
 impl<ID: AgentId> Debug for ClientHandle<ID> {
@@ -146,6 +150,12 @@ impl<ID: AgentId> ConnectionManager<ID> {
   }
 
   pub fn new(transport: &'static str, capacity: usize) -> Self {
+    Self::with_hello(transport, capacity, None)
+  }
+
+  /// As [`new`](Self::new), plus the encoded `Hello` frame every new connection
+  /// is sent first, so the client can compare versions without asking.
+  pub fn with_hello(transport: &'static str, capacity: usize, hello: Option<OutboundFrame>) -> Self {
     let (raw_incoming_tx, raw_incoming_rx) = mpsc::bounded_async(capacity);
     let (presence_tx, presence_rx) = mpsc::bounded_async(capacity);
     Self {
@@ -157,6 +167,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
       presence_tx,
       presence_rx: RwLock::new(Some(presence_rx)),
       stats: TransportStats::new(),
+      hello,
     }
   }
 
@@ -165,6 +176,12 @@ impl<ID: AgentId> ConnectionManager<ID> {
   /// `to_client_tx` is the transport's outbound queue for this connection.
   pub fn register(&self, agent: Agent<ID>, to_client_tx: mpsc::BoundedAsyncSender<OutboundFrame>) -> ConnectionId {
     let conn_id = self.next_conn_id.fetch_add(1, Ordering::Relaxed);
+    // Ahead of everything else, so a client knows what it is talking to before
+    // the first op arrives. The handshake is symmetric: both ends say what they
+    // speak and neither has to ask.
+    if let Some(hello) = &self.hello {
+      let _ = to_client_tx.try_send(hello.clone());
+    }
     self.connections.write().insert(
       conn_id,
       ClientHandle {
@@ -414,7 +431,13 @@ where
   /// [`ProtocolVersion::UNKNOWN`] to declare nothing, which disables the check
   /// rather than failing it.
   pub fn with_protocol(transport: &'static str, codec: C, capacity: usize, protocol: ProtocolVersion) -> Arc<Self> {
-    let manager = Arc::new(ConnectionManager::new(transport, capacity));
+    let hello = (protocol != ProtocolVersion::UNKNOWN).then(|| {
+      let mut buf = Vec::new();
+      frame::begin(frame::Kind::Hello, &mut buf);
+      codec.encode_into(&protocol, &mut buf).expect("a u32 always encodes");
+      Bytes::from(buf)
+    });
+    let manager = Arc::new(ConnectionManager::with_hello(transport, capacity, hello));
     let (deserialized_tx, deserialized_rx) = mpsc::bounded_async(capacity);
 
     let session = Arc::new(Self {

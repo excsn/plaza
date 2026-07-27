@@ -135,6 +135,13 @@ async fn a_hello_is_dispatched_as_a_version_and_an_unknown_kind_is_skipped() {
   let mut client = Framed::new(stream, LengthDelimitedCodec::new());
   let codec = JsonCodec;
 
+  // The server speaks first: a client learns what it is talking to without
+  // asking, which is what makes the handshake symmetric.
+  let greeting = with_timeout(client.next()).await.expect("frame").expect("ok");
+  let (tag, body) = plaza_wire::frame::split(&greeting).expect("non-empty");
+  assert_eq!(plaza_wire::frame::Kind::from_byte(tag), Some(plaza_wire::frame::Kind::Hello));
+  assert_eq!(codec.decode::<ProtocolVersion>(body).expect("version"), ProtocolVersion(42));
+
   // A Hello: decoded as a version, not as ops, and never reaches the controller.
   let mut hello = Vec::new();
   plaza_wire::frame::begin(plaza_wire::frame::Kind::Hello, &mut hello);

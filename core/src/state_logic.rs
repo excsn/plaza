@@ -115,24 +115,30 @@ impl<Op, ID: AgentId> LogicOutput<Op, ID> {
     self
   }
 
-  /// Merges neighbouring ops that share a sender and a target into one entry.
+  /// Merges neighbouring ops that share a target into one entry.
   ///
   /// The controller sends one envelope per `TargetedOp`, and logic naturally
   /// pushes one per event, so a tick that hid a mole and spawned another sent
   /// two frames to the same everyone: two encodes, two fan-outs, and two copies
-  /// of an envelope that is around 34 bytes of JSON wrapped around ops often
-  /// smaller than that. The controller calls this before sending.
+  /// of a frame's overhead wrapped around ops often smaller than it. The
+  /// controller calls this before sending.
   ///
   /// **Neighbours only, and that is the whole subtlety.** Merging across a gap
   /// reorders: given `[A→all, B→p1, C→all]`, folding `C` into `A` moves it
   /// ahead of `B` for the one recipient that receives both. Restricting it to
   /// runs means any two ops that can reach a common recipient keep the order
   /// logic emitted them in, which is the only ordering guarantee ops have.
+  ///
+  /// **Target alone, not sender.** This used to split a run when `from_agent`
+  /// differed, which mattered while the sender rode the wire. It does not any
+  /// more: a frame is the kind byte and the ops, so two entries with the same
+  /// recipients are indistinguishable to that recipient however they were
+  /// caused, and keeping them apart cost an envelope for nothing.
   pub fn coalesce(&mut self) {
     // `dedup_by` passes the later element first and drops it when the closure
     // says yes, which is exactly a fold into the run's surviving head.
     self.ops.dedup_by(|current, kept| {
-      if kept.from_agent == current.from_agent && kept.target == current.target {
+      if kept.target == current.target {
         kept.ops.append(&mut current.ops);
         true
       } else {
@@ -233,17 +239,17 @@ mod tests {
   }
 
   #[test]
-  fn a_different_sender_breaks_the_run() {
-    // `from` is on the envelope, so two senders cannot share one.
+  fn a_different_sender_does_not_break_the_run() {
+    // The sender is not on the wire, so a recipient cannot tell these apart and
+    // splitting them would spend an envelope to preserve nothing.
     let mut output = LogicOutput::ops(vec![
       TargetedOp::new(Agent::system(), MessageTarget::All, vec![1u8]),
       TargetedOp::new(Agent::new_human(7u64), MessageTarget::All, vec![2u8]),
       TargetedOp::new(Agent::new_human(7u64), MessageTarget::All, vec![3u8]),
     ]);
     output.coalesce();
-    assert_eq!(output.ops.len(), 2);
-    assert_eq!(output.ops[0].ops, vec![1]);
-    assert_eq!(output.ops[1].ops, vec![2, 3]);
+    assert_eq!(output.ops.len(), 1, "one envelope, not three");
+    assert_eq!(output.ops[0].ops, vec![1, 2, 3]);
   }
 
   #[test]

@@ -89,8 +89,27 @@ fn report_sizes() {
   eprintln!("frame, one op, JSON: named fields {named_len} B, positional {positional_len} B");
   assert!(
     positional_len < named_len,
-    "positional variants must be smaller: the field names stop riding every frame"
+    "under JSON, positional variants must be smaller: field names stop riding every frame"
   );
+
+  // Whether that is worth rewriting an application's Op enum depends entirely
+  // on the codec, so the comparison is here rather than left as advice.
+  #[cfg(feature = "msgpack")]
+  {
+    use plaza_wire::MsgPackCodec;
+    let mp = MsgPackCodec;
+    let mut b = Vec::new();
+    encode_frame(&mp, &named(), &mut b);
+    let mp_named = b.len();
+    encode_frame(&mp, &positional(), &mut b);
+    let mp_positional = b.len();
+    eprintln!("frame, one op, MessagePack: named fields {mp_named} B, positional {mp_positional} B");
+    assert_eq!(
+      mp_named, mp_positional,
+      "a compact binary codec already encodes named structs positionally, so rewriting \
+       an Op enum into tuple variants buys nothing once the format is not JSON"
+    );
+  }
 
   // The buffer is hoisted, because reusing one is the whole claim. Allocating
   // it inside the closure would measure the Vec, not the encode.
