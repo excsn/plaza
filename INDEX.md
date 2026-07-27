@@ -96,7 +96,8 @@ Both transports share everything that is not socket I/O, which is why the adapte
 | What | Entry |
 |---|---|
 | `WireCodec` trait (with `is_text`) and `JsonCodec` | [wire/src/lib.rs](wire/src/lib.rs) |
-| The message envelope: `SessionMessage`, `Agent`, `AgentId`. Here rather than in core because a wasm client cannot depend on core | [wire/src/envelope.rs](wire/src/envelope.rs) |
+| Identity on the wire: `Agent`, `AgentId`. Here rather than in core because a wasm client cannot depend on core | [wire/src/envelope.rs](wire/src/envelope.rs) |
+| Framing: the kind byte in front of every message, and the skip-unknown rule that lets a frame kind be added later | [wire/src/frame.rs](wire/src/frame.rs) |
 | Shared netcode payload vocabulary (`SequencedClientInput`, `AuthoritativeStateUpdate`, `RemoteEntitySnapshot`, `TimestampedClientAction`) | [wire/src/payloads.rs](wire/src/payloads.rs) |
 | Build-time protocol version: hash the sources that define your messages, emit a `u32` (feature `build`, used from a `build.rs`) | [wire/src/build.rs](wire/src/build.rs) |
 

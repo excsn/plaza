@@ -28,6 +28,7 @@ use fibre::mpsc;
 use tracing::{debug, trace, warn};
 
 use crate::codec::WireCodec;
+use plaza_wire::frame;
 use crate::error::SessionLayerError;
 use crate::stats::TransportStats;
 
@@ -38,20 +39,25 @@ pub const DEFAULT_CLIENT_QUEUE_CAPACITY: usize = 64;
 
 /// An inbound `SessionMessage` whose ops are still encoded bytes.
 ///
-/// **Inbound only.** A client sends one encoded `Op` per frame and the transport
+/// **Inbound only.** A client sends one framed op batch and the transport
 /// attaches the `Agent` from the connection, because who a message is from is
 /// the server's fact and not the client's claim. The deserialize bridge then
-/// turns the bytes into the application's `Op` type.
+/// splits the kind tag off and decodes the body into the application's `Op`.
 ///
-/// Outbound needs no equivalent: a whole `SessionMessage` is encoded once, and
-/// what the transport moves is a finished frame.
+/// Outbound needs no equivalent: a frame is built once and what the transport
+/// moves is finished bytes.
 ///
 /// The payloads are `Bytes` because both transports hand over a buffer they
 /// already own: actix-ws yields a `Bytes`, and `LengthDelimitedCodec` a
 /// `BytesMut` that freezes into one. Copying them out into a `Vec` cost a
 /// memcpy of every inbound frame, per player per tick, to arrive at a buffer
 /// nothing needed to own more than the original did.
-pub type SerializedSessionMessage<ID> = SessionMessage<Bytes, ID>;
+pub struct IncomingFrame<ID: AgentId> {
+  /// Attached by the transport from the connection, never read off the wire.
+  pub from: Agent<ID>,
+  /// The frame exactly as it arrived: kind tag, then the encoded body.
+  pub frame: Bytes,
+}
 
 /// One connection's outbound queue.
 ///
@@ -117,8 +123,8 @@ pub struct ConnectionManager<ID: AgentId> {
   transport: &'static str,
   next_conn_id: AtomicU64,
   connections: RwLock<HashMap<ConnectionId, ClientHandle<ID>>>,
-  raw_incoming_tx: mpsc::BoundedAsyncSender<SerializedSessionMessage<ID>>,
-  raw_incoming_rx: RwLock<Option<mpsc::BoundedAsyncReceiver<SerializedSessionMessage<ID>>>>,
+  raw_incoming_tx: mpsc::BoundedAsyncSender<IncomingFrame<ID>>,
+  raw_incoming_rx: RwLock<Option<mpsc::BoundedAsyncReceiver<IncomingFrame<ID>>>>,
   presence_tx: SessionSender<PresenceEvent<ID>>,
   presence_rx: RwLock<Option<SessionReceiver<PresenceEvent<ID>>>>,
   stats: Arc<TransportStats>,
@@ -203,13 +209,13 @@ impl<ID: AgentId> ConnectionManager<ID> {
     }
   }
 
-  /// Publishes a client's raw operation bytes toward the controller.
-  pub fn forward_incoming(&self, from: Agent<ID>, serialized_ops: Vec<Bytes>) {
+  /// Publishes one client frame toward the controller, still encoded.
+  pub fn forward_incoming(&self, from: Agent<ID>, frame: Bytes) {
     // Dropping under load is the right failure here: blocking a connection task
     // on a backed-up controller would stall that client's socket reads.
     if self
       .raw_incoming_tx
-      .try_send(SessionMessage::new(from, serialized_ops))
+      .try_send(IncomingFrame { from, frame })
       .is_err()
     {
       self.stats.record_inbound(true);
@@ -253,7 +259,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
   }
 
   /// Takes the raw inbound stream. Single consumer: the deserialize bridge.
-  pub fn take_raw_incoming(&self) -> mpsc::BoundedAsyncReceiver<SerializedSessionMessage<ID>> {
+  pub fn take_raw_incoming(&self) -> mpsc::BoundedAsyncReceiver<IncomingFrame<ID>> {
     take_stream(&self.raw_incoming_rx, "raw incoming")
   }
 
@@ -410,15 +416,18 @@ where
   /// rather than once per client. `Bytes::from` takes the codec's `Vec` whole
   /// and adds no copy.
   pub fn encode_message(&self, msg: SessionMessage<Op, ID>) -> Result<OutboundFrame, SessionLayerError> {
+    // `from` is not sent. The wire is the kind tag and the ops, nothing else.
+    let mut buf = Vec::new();
+    frame::begin(frame::Kind::Ops, &mut buf);
     self
       .codec
-      .encode(&msg)
-      .map(Bytes::from)
+      .encode_into(&msg.ops, &mut buf)
       .map_err(|source| SessionLayerError::Serialization {
         transport: self.transport,
         context: "session message",
         source,
-      })
+      })?;
+    Ok(Bytes::from(buf))
   }
 }
 
@@ -428,7 +437,7 @@ where
 async fn deserialize_bridge<Op, ID, C>(
   transport: &'static str,
   codec: C,
-  raw_rx: mpsc::BoundedAsyncReceiver<SerializedSessionMessage<ID>>,
+  raw_rx: mpsc::BoundedAsyncReceiver<IncomingFrame<ID>>,
   typed_tx: SessionSender<SessionMessage<Op, ID>>,
 ) where
   Op: DeserializeOwned + Clone + Debug + Send + 'static,
@@ -441,9 +450,24 @@ async fn deserialize_bridge<Op, ID, C>(
       return;
     };
 
-    let SessionMessage { from, ops } = raw;
-    let decoded: Result<Vec<Op>, _> = ops.iter().map(|bytes| codec.decode::<Op>(bytes)).collect();
-    let typed = match decoded {
+    let (from, bytes) = (raw.from, raw.frame);
+    let Some((tag, body)) = frame::split(&bytes) else {
+      warn!(transport, agent = %from, "Discarding an empty frame.");
+      continue;
+    };
+    match frame::Kind::from_byte(tag) {
+      Some(frame::Kind::Ops) => {}
+      // Forward compatibility, and the reason the tag is read by hand rather
+      // than through serde: a peer speaking a newer protocol may send kinds
+      // this build has never heard of, and refusing them would turn every
+      // additive change into a break.
+      None => {
+        trace!(transport, kind = tag, agent = %from, "Skipping a frame of unknown kind.");
+        continue;
+      }
+    }
+
+    let typed = match codec.decode::<Vec<Op>>(body) {
       Ok(ops) => SessionMessage::new(from, ops),
       Err(source) => {
         warn!(

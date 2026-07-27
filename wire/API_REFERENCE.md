@@ -35,7 +35,13 @@ Short identifier used in error messages, e.g. `"json"`. Keep it lowercase and st
 
 #### Method `encode`
 
-Serializes any `Serialize` value to bytes. Called once per outbound message per recipient.
+Serializes any `Serialize` value to bytes.
+
+#### Method `encode_into`
+
+Appends the encoding to a caller-supplied `Vec`, leaving what is already there alone. **This is what the transports call**, for two reasons: a frame carries a kind tag ahead of the body, and appending lets the tag be written first rather than inserted afterwards, which would shift every byte of the body; and a caller can reuse one buffer, so encoding costs no allocation rather than one per message per tick.
+
+The default implementation calls `encode` and copies, so an existing codec keeps working. Override it: `serde_json::to_writer`, `rmp_serde::encode::write` and `bincode::serialize_into` all append to a `Vec` directly. Measured on a ten-op message, overriding took MessagePack from 170ns and four allocations to 23ns and none.
 
 #### Method `decode`
 
@@ -60,7 +66,7 @@ This is the default codec on every transport in `plaza_session`, chosen because 
 
 ## 4. Module `envelope`
 
-The message that wraps every exchange, and the identity types it carries. These live here rather than in `plaza` core because **a browser client cannot depend on core** (core pulls tokio and does not target `wasm32-unknown-unknown`), so a wasm client that must name the type it sends needs it in a runtime-free crate. `plaza` core re-exports all of it, so server code still writes `plaza::Agent`, `plaza::SessionMessage`, and so on.
+The identity types a frame carries. These live here rather than in `plaza` core because **a browser client cannot depend on core** (core pulls tokio and does not target `wasm32-unknown-unknown`), so a wasm client that must name the type it sends needs it in a runtime-free crate. `plaza` core re-exports all of it, so server code still writes `plaza::Agent`, `plaza::SessionMessage`, and so on.
 
 ### Trait `AgentId`
 
@@ -85,22 +91,34 @@ Who a message is from. Constructors `Agent::new_human(id)`, `Agent::new_bot(id)`
 
 Identity only, deliberately. A display name is application data: plaza never reads one, routing compares ids, and carrying a name here put it on every clone and every frame as a copy of something the application already had. Keep names in your own state or in `ParticipantTracker`'s `app_data`, and send them like any other value: as an op, or as a field in your snapshot payload. `examples/whack_a_mole` does the former. Note that a client's first op can reach the controller before its own join does (ops and presence are separate streams), so name-carrying ops should insert rather than assume a roster entry.
 
-### Struct `SessionMessage<Op, ID: AgentId>`
+## 5. Module `frame`
 
-```rust
-pub struct SessionMessage<Op, ID: AgentId> {
-  pub from: Agent<ID>,
-  pub ops: Vec<Op>,
-}
+Framing: the one byte in front of every message that says what it is.
+
+```
+[kind: u8][ codec-encoded body ]
 ```
 
-Everything the two ends exchange downstream. Constructors: `SessionMessage::new(from, ops)`, `SessionMessage::system(ops)`.
+### Enum `Kind`
 
-**One shape, not two.** A snapshot used to be a second variant carrying the application's whole state payload by value, which made every message the size of the largest one: an op batch needing 40 bytes occupied 4112 when the snapshot type was 4KB, in every queue slot and on every move. A snapshot is an `Op` now, so the union is gone and this type's size no longer depends on what an application snapshots. The distinction between "replace everything" and "apply increments" is real and now belongs to your `Op`, which is also where you can make it cheap: **box the variant carrying a full state**, measured at 4100 bytes per `Op` unboxed against 24 boxed.
+```rust
+#[repr(u8)]
+pub enum Kind { Ops = 0 }
+```
 
-It is encoded **once, as a whole**: `codec.encode(&msg)`. An earlier design encoded each `Op` to bytes and then encoded the envelope around those byte arrays, which under JSON put `ops: [[123,34,...]]` on the wire, unreadable to anything but Rust and decoded twice on receipt. Inbound is deliberately asymmetric: a client sends a bare `Op`, never an envelope, and the transport attaches the `Agent` from the connection, because who a message is from is the server's fact and not the client's claim.
+*   `as_byte(self) -> u8`: the tag written ahead of the body.
+*   `from_byte(u8) -> Option<Kind>`: `None` for a tag this build does not know.
 
-## 5. Module `payloads`
+**`None` means skip the frame, not fail the connection.** A peer speaking a newer protocol may send kinds this one has never heard of, and refusing them turns every additive change into a break. The rule has to exist from the start, because a deployed client cannot learn tolerance retroactively. It is also why the tag is read by hand rather than through `serde_repr`, which errors on an unknown discriminant.
+
+### Functions
+
+*   `split(frame: &[u8]) -> Option<(u8, &[u8])>`: the tag and the body, or `None` for an empty frame, which is malformed rather than unknown. An unrecognised tag still splits; deciding what to do about it is `Kind::from_byte`'s job.
+*   `begin(kind: Kind, buf: &mut Vec<u8>)`: clears `buf` and writes the tag, so the body can be appended after it.
+
+**Why the tag is not part of the encoded document.** A serde enum expresses the same thing, but then the codec decides what the tag costs: a quoted string under JSON, an array element under MessagePack, a field number under protobuf. A byte ahead of the body costs one byte in every format and is read without parsing. Measured on the same message: 39 bytes and 113ns to decode, against 42 bytes and 180ns for a serde enum tag, and 239ns for the variant that keeps the tag inside the document and dispatches on it, which needs a second parse.
+
+## 6. Module `payloads`
 
 The netcode vocabulary both ends of a connection exchange. Pure serde, generic over your application types, no math dependency. Re-exported by `plaza` core under `game_common::reconciliation::op_payloads`.
 
@@ -110,7 +128,7 @@ The netcode vocabulary both ends of a connection exchange. Pure serde, generic o
 *   **`TimestampedClientAction<ActionData, ClientTimeType>`**: client to server. `client_action_time`, `action_data`. The timestamp lets the server rewind to when the client acted, for lag compensation.
 *   **`Ping` / `Pong`**: either direction. `origin_time_ms`. A `Ping` is echoed back as a `Pong` carrying the same `origin_time_ms`; the sender computes `rtt = now - origin_time_ms`. Pair with `plaza_client_utils::RttEstimator` to smooth the samples.
 
-## 6. Module `build` (feature `build`)
+## 7. Module `build` (feature `build`)
 
 A protocol version derived at build time from the source files that define your messages, so it cannot drift out of date the way a manual constant does. Used from a `build.rs`, which is why it is behind its own feature: nothing at runtime needs it.
 
@@ -134,7 +152,7 @@ include!(concat!(env!("OUT_DIR"), "/wire_protocol.rs"));
 
 Pairs with [`plaza_session::host::Host`](../session/API_REFERENCE.md), which covers the other half (a page cannot quote a new version if the browser served it from cache).
 
-## 7. Feature Flags
+## 8. Feature Flags
 
 | Feature | Default | Effect |
 |---|---|---|

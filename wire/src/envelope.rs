@@ -1,4 +1,4 @@
-//! What actually crosses the wire: who a message is from, and what it carries.
+//! Who a message is from.
 //!
 //! These types live here rather than in `plaza` core for one concrete reason: a
 //! **browser client cannot depend on core**. Core pulls tokio and does not
@@ -9,9 +9,10 @@
 //! shared.
 //!
 //! Only the types that are genuinely serialized are here. `MessageTarget`,
-//! `PresenceEvent` and `TargetedOp` stay in core: they are server-side routing
-//! and stream plumbing, they are not `Serialize`, and no client ever sees one.
-//! This crate is the wire vocabulary, not everything the server happens to name.
+//! `PresenceEvent`, `TargetedOp` and `SessionMessage` stay in core: they are
+//! server-side routing and stream plumbing, they are not `Serialize`, and no
+//! client ever sees one. This crate is the wire vocabulary, not everything the
+//! server happens to name.
 //!
 //! Core re-exports all of it, so server code goes on writing `plaza::Agent`.
 
@@ -89,47 +90,6 @@ impl<ID: AgentId> fmt::Display for Agent<ID> {
   }
 }
 
-/// The envelope. Everything a client and server exchange is one of these.
-///
-/// **One shape, not two.** A snapshot used to be a second variant carrying the
-/// application's whole state payload by value, which made every message the
-/// size of the largest one: an op batch needing 40 bytes occupied 4112 when the
-/// snapshot type was 4KB, in every queue slot and on every move. A snapshot is
-/// now an `Op` like anything else, so the union is gone and the size of this
-/// type no longer depends on what an application snapshots.
-///
-/// The consequence to know: nothing at this level distinguishes "replace
-/// everything" from "apply these increments" any more. That distinction is real
-/// and now belongs to your `Op`, which is also where you can make it cheap.
-/// **Box the variant that carries a full state** (`Op::Snapshot(Box<View>)`) or
-/// the union tax simply moves here, measured at 4100 bytes per `Op` unboxed
-/// against 24 boxed.
-///
-/// Encoded **once**, as a whole. An earlier design encoded each `Op` to bytes
-/// and then encoded the envelope around those byte arrays, which under a JSON
-/// codec put `ops: [[123,34,...]]` on the wire: unreadable to anything that is
-/// not Rust, and awkward even to Rust, since the receiver had to decode twice.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(bound(serialize = "Op: Serialize", deserialize = "Op: Deserialize<'de>"))]
-pub struct SessionMessage<Op, ID: AgentId> {
-  /// Inbound, the client the transport attached. Outbound, whoever caused the
-  /// ops, which may be [`Agent::System`].
-  pub from: Agent<ID>,
-  pub ops: Vec<Op>,
-}
-
-impl<Op, ID: AgentId> SessionMessage<Op, ID> {
-  pub fn new(from: Agent<ID>, ops: Vec<Op>) -> Self {
-    Self { from, ops }
-  }
-
-  /// Server-originated ops: a snapshot, a timer's effects, anything no client
-  /// asked for.
-  pub fn system(ops: Vec<Op>) -> Self {
-    Self::new(Agent::system(), ops)
-  }
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -145,57 +105,6 @@ mod tests {
     let mut hasher = DefaultHasher::new();
     value.hash(&mut hasher);
     hasher.finish()
-  }
-
-  #[test]
-  fn the_envelope_encodes_as_one_document_with_ops_as_objects() {
-    // The property a non-Rust client depends on. Nested objects, not arrays of
-    // byte values, which is what a second encoding pass would produce.
-    let msg: SessionMessage<TestOp, u32> =
-      SessionMessage::new(Agent::new_human(7), vec![TestOp::Move { x: 3 }]);
-    let json = serde_json::to_string(&msg).unwrap();
-    assert!(json.contains(r#""Move""#), "ops are readable in the document: {json}");
-    assert!(!json.contains("[[") && !json.contains("[1"), "no byte arrays: {json}");
-  }
-
-  #[test]
-  fn the_sender_costs_only_its_id_on_the_wire() {
-    // An agent used to carry a display name, so every frame naming a sender
-    // re-sent a string the application already had. Identity is all that goes.
-    let msg: SessionMessage<TestOp, u32> = SessionMessage::new(Agent::new_human(7), vec![]);
-    let json = serde_json::to_string(&msg).unwrap();
-    assert!(json.contains(r#""Human":7"#), "the sender is just its id: {json}");
-    assert!(!json.contains("name"), "no name field: {json}");
-  }
-
-  #[test]
-  fn the_envelope_does_not_grow_with_the_snapshot_type() {
-    // The reason snapshots became ops. A second variant carrying the whole
-    // state by value sized every message, including op batches, to the largest
-    // one. This type's size now depends only on `Op`.
-    use std::mem::size_of;
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    struct Big([[u32; 32]; 32]); // 4 KB
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    enum BoxedOp {
-      Move { x: i32 },
-      Snapshot(Box<Big>),
-    }
-    assert_eq!(
-      size_of::<SessionMessage<TestOp, u32>>(),
-      size_of::<SessionMessage<BoxedOp, u32>>(),
-      "a boxed snapshot op must not widen the envelope"
-    );
-  }
-
-  #[test]
-  fn it_round_trips() {
-    let msg: SessionMessage<TestOp, u32> =
-      SessionMessage::new(Agent::new_human(1), vec![TestOp::Move { x: -2 }]);
-    let bytes = serde_json::to_vec(&msg).unwrap();
-    let back: SessionMessage<TestOp, u32> = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(back.from, Agent::new_human(1));
-    assert_eq!(back.ops, vec![TestOp::Move { x: -2 }]);
   }
 
   #[test]

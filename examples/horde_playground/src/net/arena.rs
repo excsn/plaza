@@ -1449,13 +1449,16 @@ mod tests {
     for i in 0..(60 * 60) {
       let t = i as f32 * 0.05;
       for (_, packet) in server.advance(16, Vec2::new(t.cos(), t.sin()), &controls) {
-        let msg: plaza_wire::SessionMessage<Op, u64> =
-          plaza_wire::SessionMessage::system(vec![Op::Frame(Box::new(packet.clone()))]);
-        let bytes = serde_json::to_vec(&msg).expect("encode");
-        let back = serde_json::from_slice::<plaza_wire::SessionMessage<Op, u64>>(&bytes);
+        let ops = vec![Op::Frame(Box::new(packet.clone()))];
+        let mut bytes = Vec::new();
+        plaza_wire::frame::begin(plaza_wire::frame::Kind::Ops, &mut bytes);
+        bytes.extend_from_slice(&serde_json::to_vec(&ops).expect("encode"));
+        let (tag, body) = plaza_wire::frame::split(&bytes).expect("a non-empty frame");
+        assert_eq!(plaza_wire::frame::Kind::from_byte(tag), Some(plaza_wire::frame::Kind::Ops));
+        let back = serde_json::from_slice::<Vec<Op>>(body);
         assert!(back.is_ok(), "a frame failed to deserialize: {:?}", back.err());
-        if let Ok(msg) = back
-          && let Some(Op::Frame(p2)) = msg.ops.first()
+        if let Ok(ops) = back
+          && let Some(Op::Frame(p2)) = ops.first()
         {
           assert_eq!(p2.visible_digest, packet.visible_digest, "digest survived the wire");
         }

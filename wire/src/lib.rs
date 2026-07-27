@@ -17,12 +17,14 @@
 //! older format can be told to reload instead of half working.
 
 pub mod envelope;
+pub mod frame;
 pub mod payloads;
 
 #[cfg(feature = "build")]
 pub mod build;
 
-pub use envelope::{Agent, AgentId, SessionMessage};
+pub use envelope::{Agent, AgentId};
+pub use frame::Kind;
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -36,6 +38,29 @@ pub trait WireCodec: Clone + Send + Sync + 'static {
   fn name(&self) -> &'static str;
 
   fn encode<T: Serialize>(&self, value: &T) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>;
+
+  /// Appends the encoding of `value` to `buf`, leaving whatever is already
+  /// there alone.
+  ///
+  /// This is the method the transports call, for two reasons. A frame carries a
+  /// one-byte kind tag ahead of the body (see [`frame`]), and appending lets the
+  /// tag be written first rather than inserted afterwards, which would shift
+  /// every byte of the body. And a caller can hand the same buffer back every
+  /// time, so encoding a message costs no allocation at all rather than one per
+  /// message per tick.
+  ///
+  /// The default implementation calls [`encode`](Self::encode) and copies, so an
+  /// existing codec keeps working. Override it: `serde_json::to_writer`,
+  /// `rmp_serde::encode::write` and `bincode::serialize_into` all append to a
+  /// `Vec` directly.
+  fn encode_into<T: Serialize>(
+    &self,
+    value: &T,
+    buf: &mut Vec<u8>,
+  ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    buf.extend_from_slice(&self.encode(value)?);
+    Ok(())
+  }
 
   fn decode<T: DeserializeOwned>(&self, bytes: &[u8]) -> Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -68,6 +93,14 @@ impl WireCodec for JsonCodec {
 
   fn encode<T: Serialize>(&self, value: &T) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
     serde_json::to_vec(value).map_err(Into::into)
+  }
+
+  fn encode_into<T: Serialize>(
+    &self,
+    value: &T,
+    buf: &mut Vec<u8>,
+  ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    serde_json::to_writer(buf, value).map_err(Into::into)
   }
 
   fn decode<T: DeserializeOwned>(&self, bytes: &[u8]) -> Result<T, Box<dyn std::error::Error + Send + Sync>> {

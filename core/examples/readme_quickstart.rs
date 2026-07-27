@@ -5,7 +5,7 @@
 use plaza::{
   agent::Agent,
   controller::{query_state, StateControllerBuilder},
-  session::{InProcessSession, SessionMessage, TargetedOp},
+  session::{InProcessSession, TargetedOp},
   snapshot::{SnapshotContext, SnapshotError, SnapshotProvider},
   state_logic::{LogicInput, LogicOutput, StateLogic, StateLogicError},
 };

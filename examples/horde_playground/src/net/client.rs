@@ -358,14 +358,17 @@ impl NetClient {
     self.sent.per_sec()
   }
 
-  /// Serialises an op, counts it, and sends it.
+  /// Frames one op and sends it.
   ///
   /// `send_json` would serialise internally and give nothing back to measure,
-  /// so the same work happens here where the length is visible. One allocation
-  /// either way.
+  /// so the same work happens here where the length is visible, and the frame's
+  /// kind tag has to be written ahead of the body regardless.
   fn send_op(&mut self, op: &Op) {
-    match serde_json::to_string(op) {
-      Ok(text) => {
+    match serde_json::to_string(std::slice::from_ref(op)) {
+      Ok(body) => {
+        let mut text = String::with_capacity(1 + body.len());
+        text.push(plaza_wire::frame::Kind::Ops.as_byte() as char);
+        text.push_str(&body);
         self.sent.add(text.len() as u64);
         let _ = self.socket.send_text(&text);
       }
@@ -380,10 +383,18 @@ impl NetClient {
     // the transport rather than of the model behind it.
     self.traffic.add(bytes.len() as u64);
     self.packets.add(1);
-    let Ok(message) = serde_json::from_slice::<plaza_wire::SessionMessage<Op, u64>>(bytes) else {
+    // One tag byte, then the body. An unknown kind is skipped rather than
+    // treated as an error: a server speaking a newer protocol may send frames
+    // this build has never heard of.
+    let Some((tag, body)) = plaza_wire::frame::split(bytes) else {
       return false;
     };
-    let ops = message.ops;
+    if plaza_wire::frame::Kind::from_byte(tag) != Some(plaza_wire::frame::Kind::Ops) {
+      return false;
+    }
+    let Ok(ops) = serde_json::from_slice::<Vec<Op>>(body) else {
+      return false;
+    };
     let mut applied_frame = false;
     for op in ops {
       match op {
@@ -512,7 +523,7 @@ mod tests {
   use std::sync::Arc;
 
   use parking_lot::Mutex;
-  use plaza_wire::{Agent, SessionMessage};
+  use plaza_wire::frame;
 
   use super::*;
   use crate::sim::types::Packet;
@@ -539,8 +550,12 @@ mod tests {
   }
 
   fn envelope(ops: Vec<Op>) -> Event {
-    let msg: SessionMessage<Op, u64> = SessionMessage::new(Agent::System, ops);
-    Event::Text(serde_json::to_string(&msg).unwrap())
+    // A frame is the kind tag then the body, so a test builds one the same way
+    // the transport does.
+    let mut bytes = Vec::new();
+    frame::begin(frame::Kind::Ops, &mut bytes);
+    bytes.extend_from_slice(serde_json::to_string(&ops).unwrap().as_bytes());
+    Event::Text(String::from_utf8(bytes).unwrap())
   }
 
   fn frame(seq: u64, server_time_ms: u64) -> Event {

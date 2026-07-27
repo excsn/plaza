@@ -6,28 +6,32 @@ The wire vocabulary shared by a Plaza server and whatever talks to it: the `Wire
 
 Full surface in [API_REFERENCE.md](API_REFERENCE.md).
 
-## The envelope
+## The frame
 
-Everything the two ends exchange is a `SessionMessage`, and it lives here rather than in `plaza` core for one concrete reason: **a browser client cannot depend on core**. Core pulls tokio and does not target `wasm32-unknown-unknown`, so a wasm client that wanted to speak the protocol could not name the type it had to send, and would have to hand-reimplement the envelope and hope the two agreed.
+A frame is **one kind byte, then the encoded body**:
 
-```rust,ignore
-pub struct SessionMessage<Op, ID: AgentId> {
-  pub from: Agent<ID>,
-  pub ops: Vec<Op>,
-}
 ```
-
-**One shape, not two.** A snapshot used to be a second variant carrying the application's whole state by value, so every message was sized to the largest one: an op batch needing 40 bytes occupied 4112 when the snapshot type was 4KB, in every queue slot and on every move. A snapshot is now an `Op` like any other, and this type's size no longer depends on what an application snapshots. Box the op variant that carries a full state, or the same tax reappears in your own type.
-
-It is encoded **once, as a whole**. An earlier design encoded each `Op` to bytes and then encoded the envelope around those byte arrays, which under a JSON codec put `ops: [[123,34,...]]` on the wire: unreadable to anything that is not Rust, and awkward even to Rust, since the receiver decoded twice. What goes out now is a document any language can read:
+[kind: u8][ codec-encoded body ]
+```
 
 ```json
-{"from":"System","ops":[{"AssignPlayer":{"player_id":"...","side":"Left"}}]}
+0[{"AssignPlayer":{"player_id":"...","side":"Left"}}]
 ```
 
-Only genuinely serialized types are here. `MessageTarget`, `PresenceEvent` and `TargetedOp` stay in core: they are server-side routing and stream plumbing, they are not `Serialize`, and no client ever sees one. This crate is the wire vocabulary, not everything the server happens to name. Core re-exports all of it, so server code still writes `plaza::Agent`.
+For `Kind::Ops`, the body is the ops array itself. Nothing else is on the wire. There is no envelope struct, no sender field, and no serde enum wrapping the payload.
 
-**Inbound is deliberately asymmetric.** A client sends a bare `Op`, not an envelope, and the transport attaches the `Agent` from the connection: who a message is from is the server's fact, never the client's claim.
+**The tag is outside the codec on purpose.** A serde enum expresses the same thing, and that is what this used to be, but then the *codec* decides what the tag costs: a quoted string under JSON, an array element under MessagePack, a field number under protobuf. A byte written ahead of the body costs exactly one byte in every format, and the decoder reads it without parsing anything. Measured on the same message: 39 bytes against 42, and 113ns to decode against 180ns, rising to 239ns for the version that keeps the tag inside the document and still dispatches on it, because that needs a second parse.
+
+**An unknown kind is skipped, not fatal.** `Kind::from_byte` returns `None` for a tag this build does not know, and every transport drops such a frame and carries on. That rule exists from the start because it cannot be added later: a client already deployed cannot learn to tolerate a new frame kind. It is also why the tag is read by hand rather than through `serde_repr`, which errors on an unknown discriminant and would make the rule unexpressible.
+
+**There is no `from` on the wire.** Who sent a message is the server's own bookkeeping, attached by the transport from the connection. Every shipped client already ignored it, and an application that needs to say who did something puts that in its own op at the width it actually needs, which is usually a seat index rather than a 64-bit identity.
+
+## What lives here
+
+`Agent`, `AgentId`, `Kind` and the framing helpers, the `WireCodec` trait, and the netcode payloads. All of it is genuinely serialized or genuinely shared, which is the rule for this crate: it exists so a **browser client can name what it sends** without depending on core, which pulls tokio and does not target `wasm32-unknown-unknown`.
+
+`MessageTarget`, `PresenceEvent`, `TargetedOp` and `SessionMessage` stay in core. They are server-side routing and plumbing, they are not `Serialize`, and no client ever sees one.
+
 
 ## Text or binary
 

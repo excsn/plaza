@@ -44,7 +44,7 @@ Returned by `StateLogic::process_input` when an input cannot be applied: `Invali
 
 ## 3. Agents
 
-`AgentId`, `Agent`, and `SessionMessage` are **defined in [`plaza_wire`](../wire/) and re-exported here**, so a wasm client (which cannot depend on core) and a server name the same types. The paths below (`plaza::AgentId`, `plaza::Agent`, ...) resolve exactly as documented.
+`AgentId` and `Agent` are **defined in [`plaza_wire`](../wire/) and re-exported here**, so a wasm client (which cannot depend on core) and a server name the same types. The paths below (`plaza::AgentId`, `plaza::Agent`, ...) resolve exactly as documented.
 
 ### Trait `AgentId`
 
@@ -207,7 +207,7 @@ One stream rather than two **because order between them matters**: separate chan
 
 ### Struct `SessionMessage<Op, ID: AgentId>`
 
-`{ from: Agent<ID>, ops: Vec<Op> }`, with `new(from, ops)` and `system(ops)`. One shape rather than two: a snapshot is an `Op`, so this type's size does not depend on what an application snapshots. `Serialize`/`Deserialize` when `Op` is.
+`{ from: Agent<ID>, ops: Vec<Op> }`, with `new(from, ops)` and `system(ops)`. **Server-side only and deliberately not `Serialize`**: the wire carries `[kind byte][encoded ops]` and nothing else, so `from` is bookkeeping the transport attaches inbound and never sends outbound. It sits beside `MessageTarget`, `PresenceEvent` and `TargetedOp` for the same reason they do.
 
 ### Struct `TargetedOp<Op, ID: AgentId>`
 

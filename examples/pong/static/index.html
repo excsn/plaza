@@ -39,10 +39,16 @@
                     ws.send("hb_pong");
                     return;
                 }
-                // console.log('Message from server: ', event.data);
+                // A frame is one kind byte then the encoded body. An unknown
+                // kind is skipped rather than treated as an error, so a server
+                // speaking a newer protocol does not break this page.
+                const kind = event.data.charCodeAt(0);
+                if (kind !== KIND_OPS) {
+                    console.debug('skipping frame of unknown kind', kind);
+                    return;
+                }
                 try {
-                    const message = JSON.parse(event.data);
-                    handleServerMessage(message);
+                    handleServerMessage(JSON.parse(event.data.slice(1)));
                 } catch (e) {
                     console.error('Error parsing message from server:', e, event.data);
                 }
@@ -61,10 +67,19 @@
             };
         }
 
-        function handleServerMessage(message) {
+        // Frame kinds, matching plaza_wire::frame::Kind.
+        const KIND_OPS = 0;
+
+        // The body of a KIND_OPS frame is the ops array itself: `from` is the
+        // server's own bookkeeping and is not sent.
+        function sendOps(ops) {
+            ws.send(String.fromCharCode(KIND_OPS) + JSON.stringify(ops));
+        }
+
+        function handleServerMessage(ops) {
             // One message kind. A snapshot is an op like any other, so there is
             // a single loop rather than an Ops-versus-StateData branch.
-            (message.ops || []).forEach(op => {
+            (ops || []).forEach(op => {
                 if (op.Snapshot) {
                     gameState = op.Snapshot;
                     if (gameState && myPlayerId) {
@@ -97,17 +112,14 @@
 
         function sendPaddleMove(targetY) {
             if (ws && ws.readyState === WebSocket.OPEN && myPlayerId && gameState && gameState.phase === "Playing") {
-                const op = { MovePaddle: { target_y: targetY } };
-                // console.log("Sending paddle move:", op);
-                ws.send(JSON.stringify(op));
+                sendOps([{ MovePaddle: { target_y: targetY } }]);
             }
         }
         
         function sendReadyToPlay() {
             if (ws && ws.readyState === WebSocket.OPEN && myPlayerId) {
-                 const op = { ReadyToPlay: null }; // Or ReadyToPlay: {}
                  console.log("Sending ReadyToPlay");
-                 ws.send(JSON.stringify(op));
+                 sendOps([{ ReadyToPlay: null }]);
             }
         }
 

@@ -17,7 +17,7 @@
 
 use plaza_client_utils::clock_sync::ClockSyncEstimator;
 use plaza_client_utils::{CorrectionMonitor, PlayerConfig, PredictedPlayer, RttEstimator};
-use plaza_ws::{CloseReason, Event, SendJson, Socket, State};
+use plaza_ws::{CloseReason, Event, Socket, State};
 
 use crate::sim::client::Client as SimClient;
 use crate::sim::protocol::{Op, ServerPolicy, PROTOCOL};
@@ -160,6 +160,18 @@ pub struct NetClient {
   pub ab_nodash_monitor: CorrectionMonitor,
 }
 
+/// Frames one op the way the transport expects: a kind tag, then the body.
+fn send_framed(socket: &dyn Socket, op: &Op) {
+  let Ok(body) = serde_json::to_string(std::slice::from_ref(op)) else {
+    debug_assert!(false, "an op failed to serialise");
+    return;
+  };
+  let mut text = String::with_capacity(1 + body.len());
+  text.push(plaza_wire::frame::Kind::Ops.as_byte() as char);
+  text.push_str(&body);
+  let _ = socket.send_text(&text);
+}
+
 impl NetClient {
   pub fn connect(url: &str) -> Result<Self, String> {
     let socket = open(url)?;
@@ -284,7 +296,7 @@ impl NetClient {
     // their corrections are a controlled comparison of predicting the dash or not.
     self.ab_dash.input(MoveInput { dir, dt, dash: dash_now });
     self.ab_nodash.input(MoveInput { dir, dt, dash: false });
-    let _ = self.socket.send_json(&Op::Input {
+    send_framed(self.socket.as_ref(), &Op::Input {
       seq,
       dx: dir.x,
       dy: dir.y,
@@ -300,7 +312,7 @@ impl NetClient {
     self.predict_dash = controls.predict_dash;
     if now_ms.saturating_sub(self.last_ping_ms) >= PING_INTERVAL_MS && self.socket.is_open() {
       self.last_ping_ms = now_ms;
-      let _ = self.socket.send_json(&Op::Ping { origin_ms: now_ms });
+      send_framed(self.socket.as_ref(), &Op::Ping { origin_ms: now_ms });
     }
 
     self.socket.poll(&mut self.events);
@@ -313,7 +325,7 @@ impl NetClient {
           }
           // Before anything else: say which wire format this build speaks, so a
           // stale page is told to reload rather than half-working.
-          let _ = self.socket.send_json(&Op::Hello { protocol: PROTOCOL });
+          send_framed(self.socket.as_ref(), &Op::Hello { protocol: PROTOCOL });
         }
         Event::Text(text) => self.on_frame(text.as_bytes(), now_ms, controls),
         Event::Message(bytes) => self.on_frame(&bytes, now_ms, controls),
@@ -333,10 +345,16 @@ impl NetClient {
   fn on_frame(&mut self, bytes: &[u8], now_ms: u64, controls: &Controls) {
     // The envelope is whatever `plaza_session` sends; only `Ops` matters here,
     // since the arena is built with join snapshots off.
-    let Ok(message) = serde_json::from_slice::<plaza_wire::SessionMessage<Op, u64>>(bytes) else {
+    let Some((tag, body)) = plaza_wire::frame::split(bytes) else {
       return;
     };
-    for op in message.ops {
+    if plaza_wire::frame::Kind::from_byte(tag) != Some(plaza_wire::frame::Kind::Ops) {
+      return;
+    }
+    let Ok(ops) = serde_json::from_slice::<Vec<Op>>(body) else {
+      return;
+    };
+    for op in ops {
       match op {
         Op::Welcome { player, policy } => {
           self.me = Some(player);

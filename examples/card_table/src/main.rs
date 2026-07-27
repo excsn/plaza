@@ -22,13 +22,13 @@ mod types;
 
 use logic::TableLogic;
 use snapshot::TableSnapshotter;
-use types::{Card, CardOp, PlayerId, PlayerView, TableState};
+use types::{Card, CardOp, PlayerId, TableState};
 
 use plaza::{
   agent::Agent,
   controller::{ControllerCommand, StateControllerBuilder},
   session::in_process::ClientInbox,
-  session::{InProcessSession, Session, SessionMessage},
+  session::{InProcessSession, Session},
   tick_driver::TickDriver,
 };
 

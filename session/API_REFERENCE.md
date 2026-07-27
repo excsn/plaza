@@ -66,9 +66,9 @@ The connection registry plus the notification channels a `StateController` consu
 *   **`new(transport: &'static str, capacity: usize) -> Self`**
 *   **`register(&self, agent: Agent<ID>, to_client_tx) -> ConnectionId`**: records a connected client and announces the join.
 *   **`deregister(&self, conn_id: ConnectionId)`**: removes it and announces the departure.
-*   **`forward_incoming(&self, from: Agent<ID>, serialized_ops: Vec<Bytes>)`**: publishes a client's raw bytes toward the controller. Non-blocking; drops under load rather than stalling a connection task. Takes `Bytes` because both transports hand over a buffer they already own, so a frame reaches the deserialize bridge without being copied out.
+*   **`forward_incoming(&self, from: Agent<ID>, frame: Bytes)`**: publishes one client frame toward the controller, still encoded. Non-blocking; drops under load rather than stalling a connection task. Takes `Bytes` because both transports hand over a buffer they already own, so a frame reaches the deserialize bridge without being copied out.
 *   **`broadcast(&self, target: &MessageTarget<ID>, frame: OutboundFrame) -> Result<(), SessionLayerError>`**: fans one already-encoded frame out to the matching connections. It takes bytes, not a message, because a `SessionMessage` is encoded **once** by [`encode_message`](#struct-transportsessionop-id-c-wirecodec) and the same buffer is shared with every recipient, at the cost of a refcount bump each.
-*   **`take_raw_incoming(&self) -> mpsc::BoundedAsyncReceiver<SerializedSessionMessage<ID>>`**: the inbound stream, whose payloads are still encoded bytes for the deserialize bridge to decode.
+*   **`take_raw_incoming(&self) -> mpsc::BoundedAsyncReceiver<IncomingFrame<ID>>`**: the inbound stream, whose payloads are still encoded bytes for the deserialize bridge to decode.
 *   **`take_presence(&self) -> SessionReceiver<PresenceEvent<ID>>`**
 *   **`agent_rtt(&self, id: &ID) -> Option<(Duration, u64)>`**: the measured round trip for an agent and how many samples it rests on. Keyed by agent because that is what an application holds: it knows who joined, not which socket they arrived on, and a reconnecting player is a new connection but the same agent.
 *   **`rtt(conn_id)`** / **`min_rtt(conn_id)`** / **`rtt_samples(conn_id)`**: the same, per connection.
@@ -99,9 +99,9 @@ The single implementation of the targeting rules. Agents without an ID (the syst
 
 `bytes::Bytes`: one fully-encoded downstream message, ready to write to a socket. What [`encode_message`](#struct-transportsessionop-id-c-wirecodec) produces and [`broadcast`](#struct-connectionmanagerid-agentid) fans out. Refcounted rather than owned, so handing the frame to N recipients shares one buffer instead of allocating and copying it N times, all of which happened under the connection registry's read lock. Both transports speak it already: actix-ws takes a `Bytes` (or a `ByteString`, which validates UTF-8 over the same buffer, for a text codec), and `LengthDelimitedCodec` takes a `Bytes`.
 
-### Type Alias `SerializedSessionMessage<ID>`
+### Struct `IncomingFrame<ID>`
 
-`SessionMessage<Bytes, ID>`: a message whose payloads are still encoded bytes, refcounted rather than copied out of whatever the socket produced. It survives on the **inbound** path only, where the deserialize bridge decodes a client's raw ops before handing them to the controller; the outbound path encodes once to an [`OutboundFrame`](#type-alias-outboundframe) and never builds one of these.
+`{ from: Agent<ID>, frame: Bytes }`: one inbound frame exactly as it arrived (kind tag, then body), with the `Agent` the transport attached. Refcounted rather than copied out of whatever the socket produced. It survives on the **inbound** path only, where the deserialize bridge decodes a client's raw ops before handing them to the controller; the outbound path encodes once to an [`OutboundFrame`](#type-alias-outboundframe) and never builds one of these.
 
 ### Constants
 

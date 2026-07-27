@@ -58,9 +58,11 @@ async fn tcp_client_op_reaches_controller_and_broadcast_reaches_client() {
     other => panic!("expected a join, got {:?}", other),
   }
 
-  // Client -> server: one encoded op per frame.
-  let op_bytes = codec.encode(&TestOp::Hello("hi".into())).unwrap();
-  client.send(op_bytes.into()).await.expect("client send");
+  // Client -> server: a kind tag, then the encoded ops.
+  let mut op_frame = Vec::new();
+  plaza_wire::frame::begin(plaza_wire::frame::Kind::Ops, &mut op_frame);
+  codec.encode_into(&vec![TestOp::Hello("hi".into())], &mut op_frame).unwrap();
+  client.send(op_frame.into()).await.expect("client send");
 
   let received = with_timeout(incoming.recv()).await.expect("incoming message");
   assert_eq!(received.from.id(), Some(&player_id));
@@ -75,18 +77,20 @@ async fn tcp_client_op_reaches_controller_and_broadcast_reaches_client() {
     .await
     .expect("broadcast");
 
-  // The envelope is encoded **once**, as a whole, so one decode yields typed ops
-  // rather than byte arrays that need a second pass. That is what lets a non-Rust
-  // client read the document, and what pong's browser client has always assumed.
+  // The frame is one tag byte and one encoded document, so a client reads the
+  // kind without parsing and then decodes the body in a single pass.
   let frame = with_timeout(client.next()).await.expect("frame").expect("frame ok");
-  let msg: SessionMessage<TestOp, PlayerId> = codec.decode(&frame).expect("decode envelope");
-  assert_eq!(msg.ops, vec![TestOp::Welcome("hello back".into())]);
+  let (tag, body) = plaza_wire::frame::split(&frame).expect("a non-empty frame");
+  assert_eq!(plaza_wire::frame::Kind::from_byte(tag), Some(plaza_wire::frame::Kind::Ops));
+  let ops: Vec<TestOp> = codec.decode(body).expect("decode body");
+  assert_eq!(ops, vec![TestOp::Welcome("hello back".into())]);
 
   // And the bytes themselves are readable: ops appear as objects, not as arrays
   // of byte values. Worth asserting on the wire rather than only through a
   // round trip, because a symmetric double-encoding would round trip fine and
   // still be unreadable to every other language.
-  let text = String::from_utf8(frame.to_vec()).expect("json is utf-8");
+  assert_eq!(frame.len(), body.len() + 1, "framing costs exactly one byte");
+  let text = String::from_utf8(body.to_vec()).expect("json is utf-8");
   assert!(text.contains("Welcome"), "ops are readable in the document: {text}");
   assert!(!text.contains("[["), "no nested byte arrays: {text}");
 }

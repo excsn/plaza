@@ -19,7 +19,7 @@ use plaza::{
   agent::Agent,
   controller::{query_state, ControllerCommand, StateControllerBuilder},
   session::in_process::ClientInbox,
-  session::{InProcessSession, SessionMessage},
+  session::InProcessSession,
   tick_driver::TickDriver,
 };
 

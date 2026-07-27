@@ -94,11 +94,37 @@ impl<Op, ID: AgentId> TargetedOp<Op, ID> {
   }
 }
 
-/// The message envelope, re-exported from [`plaza_wire`].
+/// A batch of ops with the agent that caused them.
 ///
-/// Defined there because it is the one type both ends must agree on, and a
-/// browser client cannot depend on core.
-pub use plaza_wire::envelope::SessionMessage;
+/// **Server-side only, and deliberately not `Serialize`.** The wire carries
+/// `[kind byte][encoded ops]` and nothing else: `from` is the server's own
+/// bookkeeping, attached by the transport on the way in and never sent on the
+/// way out. Every shipped client already ignored it, because an application
+/// that needs to say who did something puts that in the op, at the width it
+/// actually needs, which is a seat index rather than a 64-bit identity.
+///
+/// It sits here beside [`MessageTarget`], [`PresenceEvent`] and [`TargetedOp`]
+/// for the same reason they do: routing and plumbing, not vocabulary a client
+/// shares.
+#[derive(Debug, Clone)]
+pub struct SessionMessage<Op, ID: AgentId> {
+  /// Inbound, the client the transport attached. Outbound, whoever caused the
+  /// ops, which may be [`Agent::System`].
+  pub from: Agent<ID>,
+  pub ops: Vec<Op>,
+}
+
+impl<Op, ID: AgentId> SessionMessage<Op, ID> {
+  pub fn new(from: Agent<ID>, ops: Vec<Op>) -> Self {
+    Self { from, ops }
+  }
+
+  /// Server-originated ops: a snapshot, a timer's effects, anything no client
+  /// asked for.
+  pub fn system(ops: Vec<Op>) -> Self {
+    Self::new(Agent::system(), ops)
+  }
+}
 
 /// A transport: manages connections with agents and moves `SessionMessage`s
 /// between them and the server logic.
