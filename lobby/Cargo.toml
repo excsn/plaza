@@ -1,6 +1,6 @@
 [package]
 name = "plaza_lobby"
-version = "0.1.0"
+version = "0.5.0"
 edition = { workspace = true }
 keywords = ["gamedev", "networking", "multiplayer", "lobby", "matchmaking"]
 categories = ["game-development", "network-programming"]
@@ -12,7 +12,7 @@ repository = { workspace = true }
 readme = "README.md"
 
 [dependencies]
-plaza = { version = "0.1.0", path = "../core" } # Dependency on plaza-core
+plaza = { version = "0.5.0", path = "../core" } # Dependency on plaza-core
 
 async-trait = { workspace = true }
 fibre = { workspace = true }

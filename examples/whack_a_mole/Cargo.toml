@@ -2,6 +2,7 @@
 name = "plaza_example_whack_a_mole"
 version = "0.1.0"
 edition = { workspace = true }
+publish = false
 
 [dependencies]
 plaza = { path = "../../core" }

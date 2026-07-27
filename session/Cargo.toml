@@ -1,6 +1,6 @@
 [package]
 name = "plaza_session"
-version = "0.1.0"
+version = "0.5.0"
 edition = { workspace = true }
 description = "WebSocket and TCP transports for the Plaza real-time shared-state framework, with a pluggable wire format."
 readme = "README.md"
@@ -22,9 +22,9 @@ tcp = ["dep:tokio-util", "dep:bytes", "tokio/net"]
 actix_host = ["actix_ws", "dep:actix-files", "dep:tracing-subscriber"]
 
 [dependencies]
-plaza = { version = "0.1.0", path = "../core" }
+plaza = { version = "0.5.0", path = "../core" }
 # The wire format trait, kept in its own runtime-free crate so clients can share it.
-plaza_wire = { version = "0.1.0", path = "../wire" }
+plaza_wire = { version = "0.5.0", path = "../wire" }
 
 # The shared connection manager is always compiled, so its dependencies are not optional.
 serde = { version = "^1.0", features = ["derive"] }
