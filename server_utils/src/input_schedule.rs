@@ -115,7 +115,12 @@ pub struct InputSchedule<Input> {
   last_executed: Option<u64>,
   accepted: u64,
   late: u64,
-  rejected: u64,
+  rejected_late: u64,
+  rejected_early: u64,
+  /// `named - current` at the most recent rejection, so a live readout can say
+  /// which side of the window inputs are missing on and by how far, without a
+  /// debugger attached to the arena.
+  last_reject_margin: Option<i64>,
 }
 
 impl<Input> InputSchedule<Input> {
@@ -125,7 +130,9 @@ impl<Input> InputSchedule<Input> {
       last_executed: None,
       accepted: 0,
       late: 0,
-      rejected: 0,
+      rejected_late: 0,
+      rejected_early: 0,
+      last_reject_margin: None,
     }
   }
 
@@ -133,11 +140,13 @@ impl<Input> InputSchedule<Input> {
   /// simulation is on now, derived from its clock) and the window.
   pub fn submit(&mut self, tick: u64, input: Input, current: u64, window: InputWindow) -> Submission {
     if tick + window.max_late < current {
-      self.rejected += 1;
+      self.rejected_late += 1;
+      self.last_reject_margin = Some(tick as i64 - current as i64);
       return Submission::TickClosed;
     }
     if tick > current + window.max_early {
-      self.rejected += 1;
+      self.rejected_early += 1;
+      self.last_reject_margin = Some(tick as i64 - current as i64);
       return Submission::TooFarAhead;
     }
     // Never behind something already executed for this seat.
@@ -211,7 +220,19 @@ impl<Input> InputSchedule<Input> {
 
   /// Inputs dropped for naming a closed or far-future tick.
   pub fn rejected(&self) -> u64 {
-    self.rejected
+    self.rejected_late + self.rejected_early
+  }
+
+  /// The same drops split by side: `(closed tick, too far ahead)`.
+  pub fn rejected_split(&self) -> (u64, u64) {
+    (self.rejected_late, self.rejected_early)
+  }
+
+  /// `named - current` at the most recent rejection, in ticks: negative is
+  /// behind the simulation, positive is ahead of it. `None` until something
+  /// has been rejected.
+  pub fn last_reject_margin(&self) -> Option<i64> {
+    self.last_reject_margin
   }
 }
 
