@@ -28,6 +28,7 @@
 pub mod aggregate;
 pub mod delta;
 pub mod history;
+pub mod input_schedule;
 pub mod meter;
 pub mod relevance;
 pub mod seats;
@@ -35,6 +36,7 @@ pub mod seats;
 pub use aggregate::{AggregateTree, Summary, WeightedPoint};
 pub use delta::{DeltaBaseline, DeltaPlan, RecoveryPolicy};
 pub use history::{HistoricalStateBuffer, TimedState};
+pub use input_schedule::{InputSchedule, InputWindow, Submission};
 pub use meter::RateMeter;
 pub use relevance::{GridQuantizer, SetDigest, SpatialGrid, VisibilitySet};
 // The key space `DeltaBaseline` works in, and the client-side mirror that has to

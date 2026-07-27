@@ -12,6 +12,7 @@ use std::collections::BTreeSet;
 
 use plaza_server_utils::aggregate::{AggregateTree, WeightedPoint};
 use plaza_server_utils::delta::{DeltaBaseline, RecoveryPolicy};
+use plaza_server_utils::input_schedule::{InputSchedule, InputWindow};
 use plaza_server_utils::relevance::{GridQuantizer, SetDigest, SpatialGrid, VisibilitySet};
 
 use crate::sim::types::{PlayerFrame, 
@@ -66,29 +67,17 @@ pub struct Server {
 
 
   clock_ms: u64,
-  /// Inputs waiting for the tick they were scheduled to execute on, per seat, as
-  /// `(execute_at_ms, direction)`.
-  ///
-  /// Not applied on arrival. An input carries when it was *pressed*, and it runs
-  /// at that time plus the playout delay, so two players who pressed at the same
-  /// instant execute on the same tick however far apart their pings are. Sorted
-  /// by scheduled time rather than arrival, which is the whole point: arrival
-  /// order is a property of the network and execution order must not be.
-  scheduled: Vec<Vec<(u64, Vec2)>>,
+  /// Inputs waiting for the tick they name, per seat: the accepting window,
+  /// the reject-not-correct rule and the counters all live in the block. What
+  /// stays horde's is what an executed input *does* (become the held
+  /// direction) and the naive path below.
+  input_schedules: Vec<InputSchedule<Vec2>>,
   /// The direction each seat is currently holding, once an input for it has come
   /// due. Persists between inputs, which is what makes the steering continuous.
   held: Vec<Option<Vec2>>,
-  /// Inputs that arrived after the tick they were meant for. The direct measure
-  /// of whether the playout delay is covering the players actually connected.
-  late_inputs: u64,
-  /// Inputs named for a tick outside the accepting window, and dropped. A few are
-  /// normal on a bad link; a steady stream is either a client that cannot reach
-  /// the window or one trying to reopen a closed tick.
-  rejected_inputs: u64,
-  accepted_inputs: u64,
-  /// The newest time anything has been scheduled to execute per seat, so a client
-  /// cannot walk its own timestamps backwards.
-  last_executed: Vec<Option<u64>>,
+  /// Inputs taken by the naive apply-on-arrival path, which bypasses the
+  /// schedule and so is counted here.
+  naive_inputs: u64,
   /// Simulation time, spent in whole fixed steps. The step has to be the same one
   /// a client integrates by, which is why it is taken from here rather than
   /// passed in.
@@ -236,12 +225,9 @@ impl Server {
       cur_vis: (0..player_count).map(|_| VisibilitySet::with_capacity(enemy_count as u32)).collect(),
       announced_target,
       clock_ms: 0,
-      scheduled: vec![Vec::new(); player_count],
+      input_schedules: (0..player_count).map(|_| InputSchedule::new()).collect(),
       held: vec![None; player_count],
-      late_inputs: 0,
-      rejected_inputs: 0,
-      accepted_inputs: 0,
-      last_executed: vec![None; player_count],
+      naive_inputs: 0,
       sim: FixedTimestep::from_step_ms((SIM_DT * 1000.0) as u64),
       sync: Periodic::new(1),
       player_sync: Periodic::new(1),
@@ -815,89 +801,50 @@ impl Server {
 
   /// Clears a seat's buffered and held input, for somebody leaving it.
   pub fn clear_input(&mut self, seat: usize) {
-    if let Some(queue) = self.scheduled.get_mut(seat) {
-      queue.clear();
+    if let Some(schedule) = self.input_schedules.get_mut(seat) {
+      schedule.clear();
     }
     if let Some(held) = self.held.get_mut(seat) {
       *held = None;
     }
   }
 
-  /// Schedules an input to execute at the time it was pressed plus the playout
-  /// delay.
-  ///
-  /// `at_ms` is the client's estimate of server time when it sampled the input.
-  /// It is trusted only as a *schedule*, never as a claim about the world: the
-  /// worst a lying client can do is have its own steering applied early or late.
-  /// It is also clamped, so a client cannot park an input arbitrarily far in the
-  /// future and have it fire much later.
+  /// Offers an input naming a tick. The server owns time: the accepting
+  /// window, the reject-not-correct rule (the lag-switch defence) and the
+  /// clamp against reordering are all [`InputSchedule`]'s; see its docs.
   pub fn submit_input(&mut self, seat: usize, tick: u64, dir: Vec2, controls: &Controls) -> bool {
-    if seat >= self.scheduled.len() {
+    if seat >= self.input_schedules.len() {
       return false;
     }
     if !controls.input_playout {
       // The naive path, kept so the difference can be measured: whatever arrives
       // takes effect on the next tick.
       self.held[seat] = Some(dir);
-      self.accepted_inputs += 1;
+      self.naive_inputs += 1;
       return true;
     }
-    // **The server owns time.** The client names a tick it intends; whether that
-    // tick is still accepting is not the client's to decide.
-    //
-    // Rejected rather than corrected, which is the whole difference. Correcting a
-    // backdated tick into the window still executes it, so a liar loses the lie
-    // and keeps the input, and the residual advantage is whatever slack the
-    // correction had to allow. Dropping it means backdating costs you the input.
-    // It also removes the question of how much lying is tolerable, which has no
-    // good answer, and replaces it with one that does: is this tick open.
-    //
-    // The cost is real and lands on honest clients too. A link slower than the
-    // window loses inputs and rubber-bands, which is why the window is a setting
-    // rather than a constant.
+    let window = InputWindow {
+      max_late: controls.input_max_late_ticks,
+      max_early: controls.input_max_early_ticks,
+    };
     let current = self.tick();
-    if tick + controls.input_max_late_ticks < current {
-      // Already simulated. That tick is closed, and reopening it is exactly the
-      // rewrite of history a lag switch is trying to buy.
-      self.rejected_inputs += 1;
-      return false;
-    }
-    if tick > current + controls.input_max_early_ticks {
-      // Far enough ahead to be parking inputs in the future.
-      self.rejected_inputs += 1;
-      return false;
-    }
-    // Never behind something already executed for this seat, so a client cannot
-    // reorder its own history by walking its ticks backwards.
-    let mut execute_at = tick;
-    if let Some(last) = self.last_executed.get(seat).copied().flatten() {
-      execute_at = execute_at.max(last);
-    }
-    if execute_at < current {
-      // Inside the window but past its tick: applied on the next one, and counted,
-      // because a steady stream of these is the signal that the window is too
-      // tight for who is connected.
-      self.late_inputs += 1;
-    }
-    self.scheduled[seat].push((execute_at, dir));
-    self.accepted_inputs += 1;
-    true
+    self.input_schedules[seat].submit(tick, dir, current, window).accepted()
   }
 
   /// Inputs that arrived after the tick they were scheduled for.
   pub fn late_inputs(&self) -> u64 {
-    self.late_inputs
+    self.input_schedules.iter().map(|s| s.late()).sum()
   }
 
   /// Inputs the server accepted and scheduled. The denominator every other input
   /// count needs: rejections mean nothing without knowing how many arrived.
   pub fn accepted_inputs(&self) -> u64 {
-    self.accepted_inputs
+    self.naive_inputs + self.input_schedules.iter().map(|s| s.accepted()).sum::<u64>()
   }
 
   /// Inputs named for a tick the server was not accepting, and dropped.
   pub fn rejected_inputs(&self) -> u64 {
-    self.rejected_inputs
+    self.input_schedules.iter().map(|s| s.rejected()).sum()
   }
 
   /// The tick the server is currently simulating. What a client aims at.
@@ -913,30 +860,14 @@ impl Server {
     self.clock_ms / (SIM_DT * 1000.0) as u64
   }
 
-  /// Applies every input whose scheduled time has arrived, in scheduled order.
-  ///
-  /// Ordered by *when it was meant to happen*, not by when it turned up, which is
-  /// the property the whole buffer exists for. Within one step the newest due
-  /// input wins, because a held direction is a level rather than an edge.
+  /// Applies every input whose tick has arrived: each seat's newest due
+  /// direction becomes its held one. Ordering and supersession are
+  /// [`InputSchedule::execute_due`]'s.
   fn execute_due_inputs(&mut self) {
     let now = self.tick();
-    for (seat, queue) in self.scheduled.iter_mut().enumerate() {
-      if queue.is_empty() {
-        continue;
-      }
-      queue.sort_by_key(|(at, _)| *at);
-      let mut applied = None;
-      queue.retain(|(at, dir)| {
-        if *at <= now {
-          applied = Some(*dir);
-          false
-        } else {
-          true
-        }
-      });
-      if let Some(dir) = applied {
+    for (seat, schedule) in self.input_schedules.iter_mut().enumerate() {
+      if let Some(dir) = schedule.execute_due(now) {
         self.held[seat] = Some(dir);
-        self.last_executed[seat] = Some(now);
       }
     }
   }
