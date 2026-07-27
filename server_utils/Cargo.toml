@@ -10,8 +10,10 @@ readme = "README.md"
 keywords = ["gamedev", "networking", "multiplayer", "lag-compensation", "server"]
 categories = ["game-development", "network-programming"]
 
+[package.metadata.docs.rs]
+all-features = true
+
 [dependencies]
-# Depended on only for the shared Interpolatable/ToF32 traits.
 plaza_client_utils = { version = "0.5.0", path = "../client_utils" }
 tracing = "^0"
 

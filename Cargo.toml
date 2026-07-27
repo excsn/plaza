@@ -1,6 +1,4 @@
 [workspace]
-# The publishable set. Examples are a separate workspace (examples/Cargo.toml);
-# run ./check.sh to verify both.
 members = [
   "core",
   "lobby",

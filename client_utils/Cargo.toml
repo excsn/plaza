@@ -11,9 +11,10 @@ readme = "README.md"
 keywords = ["gamedev", "networking", "multiplayer", "prediction", "reconciliation"]
 categories = ["game-development", "network-programming"]
 
+[package.metadata.docs.rs]
+all-features = true
+
 [features]
-# An opt-in deterministic network simulator (latency, jitter, loss) for testing
-# and demonstrating netcode. Not part of the core client API.
 net-sim = []
 
 [dependencies]

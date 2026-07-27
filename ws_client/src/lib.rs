@@ -1,6 +1,6 @@
 //! One client-side WebSocket interface, whatever is underneath.
 //!
-//! [`plaza_session`] covers the server and is tokio/actix by construction, so it
+//! `plaza_session` covers the server and is tokio/actix by construction, so it
 //! cannot help a client, and least of all a browser one. This crate is the other
 //! half: the socket a *client* holds, with the same shape on a desktop, in a
 //! browser, and in-process.
@@ -12,7 +12,7 @@
 //! applications, which have a synchronous `loop { ...; next_frame().await }` and
 //! nowhere to put a future. An `async fn recv()` would be the natural Rust API
 //! and would be unusable there. Reusing the buffer also keeps a per-frame call
-//! allocation-free, matching how [`plaza_server_utils`] hands back its results.
+//! allocation-free, matching how `plaza_server_utils` hands back its results.
 //!
 //! ```no_run
 //! # use plaza_ws::{Socket, Event};
@@ -82,8 +82,10 @@ pub mod native;
 /// Something that arrived, in order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
-  /// The handshake finished. Sends before this are queued, not errors, because
-  /// a frame loop should not have to hold its own outbox.
+  /// The handshake finished, and [`Socket::state`] is now [`State::Open`].
+  ///
+  /// Sending before this arrives is **backend-dependent**, so a portable
+  /// application waits for it: see [`Socket::send`].
   Open,
   Message(Vec<u8>),
   Text(String),
@@ -104,10 +106,20 @@ pub enum CloseReason {
   Error(String),
 }
 
+/// Where a socket is in its lifecycle. Monotonic: a socket never returns to an
+/// earlier state, so [`Closed`](State::Closed) is terminal and reconnecting
+/// means a new socket.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
+  /// The handshake is in flight. Not every backend has this phase:
+  /// [`loopback`] is connected the moment it exists and so is never
+  /// `Connecting`.
   Connecting,
+  /// The handshake finished and messages can be sent.
   Open,
+  /// Terminal, whether the peer closed, this side called
+  /// [`Socket::close`], or the connection failed. Which of those it was is on
+  /// the [`Event::Closed`] that [`Socket::poll`] delivers.
   Closed,
 }
 
@@ -119,6 +131,10 @@ pub enum WsError {
   BadUrl(String),
   /// The connection could not be established.
   Connect(String),
+  /// A value could not be serialised for sending. Raised by
+  /// [`SendJson::send_json`] alone: a transport that cannot deliver bytes
+  /// reports [`Closed`](WsError::Closed), so this names a fault in the value
+  /// rather than in the socket.
   Send(String),
 }
 
@@ -141,8 +157,26 @@ impl std::error::Error for WsError {}
 /// policy, backoff, heartbeats, framing of its own messages) is left to it,
 /// because those are decisions and this is a pipe.
 pub trait Socket {
+  /// Sends one binary message.
+  ///
+  /// Takes `&self` rather than `&mut self`, so a send site does not need
+  /// exclusive access to a socket the frame loop is also polling.
+  ///
+  /// Fails with [`WsError::Closed`] once the connection is gone. **Before the
+  /// handshake completes, the backends differ**, and this is the one place
+  /// they do: [`native`] queues the message and delivers it on connect, while
+  /// the `miniquad` backend refuses it with [`WsError::Closed`] because a browser
+  /// `WebSocket` will not accept data before it opens. Portable code sends
+  /// only after [`Event::Open`] (or checks [`is_open`](Self::is_open)), which
+  /// is what an application wanting to know its message actually left should
+  /// do regardless.
   fn send(&self, bytes: &[u8]) -> Result<(), WsError>;
 
+  /// Sends one text message. Same rules as [`send`](Self::send).
+  ///
+  /// Prefer text for a JSON protocol: a text frame arrives in a browser as a
+  /// string that `JSON.parse` accepts directly, where a binary frame arrives
+  /// as a `Blob` or `ArrayBuffer` the client has to decode itself.
   fn send_text(&self, text: &str) -> Result<(), WsError>;
 
   /// Drains everything that has arrived since the last call, appending to `out`.
@@ -152,12 +186,22 @@ pub trait Socket {
   /// after the first.
   fn poll(&mut self, out: &mut Vec<Event>);
 
+  /// Where the connection is in its lifecycle, readable at any time without
+  /// polling.
+  ///
+  /// This is the connection's own state, not a report of what [`poll`](Self::poll)
+  /// has handed over: a socket can read [`State::Closed`] while its
+  /// [`Event::Closed`], and any messages that arrived before it, are still
+  /// queued. Drain [`poll`](Self::poll) after seeing a close rather than
+  /// discarding the socket, or the last thing the peer said is lost.
   fn state(&self) -> State;
 
   /// Begins a close. A [`Event::Closed`] follows from [`poll`](Self::poll);
   /// calling this twice is harmless.
   fn close(&mut self);
 
+  /// Whether messages can be sent right now. See [`send`](Self::send) for why
+  /// this matters before the handshake completes.
   fn is_open(&self) -> bool {
     self.state() == State::Open
   }
@@ -198,7 +242,7 @@ impl<S: Socket + ?Sized> SendJson for S {
 ///
 /// Present only when exactly one real backend is enabled, so that a build cannot
 /// silently pick a transport the author did not intend. With several, name the
-/// one you want: [`native::connect`] or [`miniquad::connect`]. [`loopback`] is
+/// one you want: `native::connect` or `miniquad::connect`. [`loopback`] is
 /// never chosen here because it connects to a peer rather than to a URL.
 #[cfg(any(
   all(feature = "native", not(target_arch = "wasm32"), not(feature = "miniquad")),

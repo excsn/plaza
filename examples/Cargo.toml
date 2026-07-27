@@ -14,9 +14,6 @@ members = [
   "typing_indicator",
   "whack_a_mole",
 ]
-# The four playgrounds pull in macroquad's large dependency tree and target
-# wasm, so they are kept out of the default set: a bare `cargo build`/`test`
-# skips them, while `cargo <cmd> --workspace` includes them.
 default-members = [
   "ability_cooldowns",
   "playground_common",
@@ -42,8 +39,6 @@ plaza = { path = "../core" }
 plaza_client_utils = { path = "../client_utils" }
 plaza_server_utils = { path = "../server_utils" }
 plaza_lobby = { path = "../lobby" }
-# Declared with defaults off because members disagree about them: a member can
-# add features to a workspace dependency but can never turn defaults back off.
 plaza_session = { path = "../session", default-features = false }
 plaza_wire = { path = "../wire", default-features = false }
 plaza_ws = { path = "../ws_client", default-features = false }

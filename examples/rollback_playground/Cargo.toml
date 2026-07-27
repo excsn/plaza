@@ -7,7 +7,6 @@ publish = false
 [dependencies]
 plaza_client_utils = { workspace = true, features = ["net-sim"] }
 
-# egui-macroquad is a bridge crate pinned to matching macroquad/egui versions.
 macroquad = "=0.4.15"
 egui-macroquad = "=0.17.3"
 

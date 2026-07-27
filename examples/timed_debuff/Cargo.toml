@@ -14,7 +14,3 @@ uuid = { version = "1", features = ["v4", "serde"] }
 parking_lot = "0.12"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-# For this example, we'll show the scheduler directly in StateLogic for simplicity,
-# rather than in GameState to avoid serde complexities with FnMut.
-# This means CooldownLogic won't be Default/Clone easily.
-# Or, we wrap scheduler in Arc<Mutex<...>> within StateLogic.

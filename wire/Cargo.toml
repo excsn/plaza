@@ -10,12 +10,12 @@ readme = "README.md"
 keywords = ["serialization", "codec", "gamedev", "networking", "wasm"]
 categories = ["encoding", "network-programming", "game-development"]
 
+[package.metadata.docs.rs]
+all-features = true
+
 [features]
 default = ["json"]
 json = ["dep:serde_json"]
-# Build-script support: derives a wire format version by hashing the source that
-# defines it. Meant for `[build-dependencies]`, not for the running program, so
-# it is off by default and pairs with `default-features = false`.
 build = []
 
 [dependencies]

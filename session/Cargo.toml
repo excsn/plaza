@@ -11,21 +11,19 @@ license = { workspace = true }
 authors = { workspace = true }
 repository = { workspace = true }
 
+[package.metadata.docs.rs]
+all-features = true
+
 [features]
 default = ["actix_ws", "tcp"]
 actix_ws = ["dep:actix-ws", "dep:actix-web"]
 tcp = ["dep:tokio-util", "dep:bytes", "tokio/net"]
-# The listen-server HTTP layer: binds a port, serves a browser client from it
-# with cache busting, and leaves signals to the process. Deciding what a process
-# *is* (headless, host, joiner) is not here: the browser client needs that
-# vocabulary too and must not inherit any of this to get it.
 actix_host = ["actix_ws", "dep:actix-files", "dep:tracing-subscriber"]
 
 [dependencies]
 plaza = { version = "0.5.0", path = "../core" }
 plaza_wire = { version = "0.5.0", path = "../wire" }
 
-# The shared connection manager is always compiled, so its dependencies are not optional.
 serde = { version = "^1.0", features = ["derive"] }
 tokio = { version = "^1", features = ["sync", "rt", "macros", "time"] }
 parking_lot = "^0.12"
@@ -35,7 +33,6 @@ thiserror = { workspace = true }
 fibre = { workspace = true }
 futures-util = { version = "^0", features = ["sink"] }
 
-# Transport-specific.
 actix-web = { version = "^4", optional = true }
 actix-ws = { version = "^0.3", optional = true }
 actix-files = { version = "^0.6", optional = true }

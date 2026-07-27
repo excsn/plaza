@@ -5,8 +5,4 @@ edition = { workspace = true }
 publish = false
 description = "What a listen-server example process is: the four roles, and the arguments that pick one. Shared by the playgrounds so there is one definition rather than two."
 
-# Deliberately none. Both halves of a listen server need this vocabulary, and one
-# of those halves is a wasm bundle that must not inherit an HTTP server or an
-# async runtime to learn the name of its own role. That constraint is why this is
-# a separate crate rather than a module in either playground.
 [dependencies]

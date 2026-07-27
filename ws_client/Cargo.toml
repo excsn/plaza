@@ -10,11 +10,12 @@ readme = "README.md"
 keywords = ["websocket", "gamedev", "wasm", "networking", "client"]
 categories = ["network-programming", "game-development", "wasm"]
 
+[package.metadata.docs.rs]
+all-features = true
+
 [features]
 default = ["loopback"]
 loopback = []
-# `SendJson`, for applications whose wire format is JSON. Off by default because
-# the transport itself has no opinion about what rides on it.
 json = ["dep:serde", "dep:serde_json"]
 native = ["dep:tungstenite"]
 miniquad = []
@@ -25,9 +26,6 @@ serde_json = { version = "^1", optional = true }
 tungstenite = { version = "^0.24", optional = true, features = ["rustls-tls-webpki-roots"] }
 
 [dev-dependencies]
-# Only for the browser echo spike, which has to run under macroquad's loader
-# because that loader is the whole thing being tested. Dev-only, so nothing
-# downstream inherits it.
 macroquad = "=0.4.15"
 
 [[example]]

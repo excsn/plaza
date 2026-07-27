@@ -4,13 +4,11 @@ version = "0.1.0"
 edition = { workspace = true }
 publish = false
 
-# Uses client_utils/server_utils, not plaza core: core is async and not wasm-safe.
 [dependencies]
 plaza_client_utils = { workspace = true, features = ["net-sim"] }
 plaza_server_utils = { workspace = true }
 plaza_wire = { workspace = true }
 
-# egui-macroquad is a bridge crate pinned to matching macroquad/egui versions.
 macroquad = "=0.4.15"
 egui-macroquad = "=0.17.3"
 

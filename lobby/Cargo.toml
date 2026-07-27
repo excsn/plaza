@@ -11,6 +11,9 @@ authors = { workspace = true }
 repository = { workspace = true }
 readme = "README.md"
 
+[package.metadata.docs.rs]
+all-features = true
+
 [dependencies]
 plaza = { version = "0.5.0", path = "../core" }
 
@@ -18,12 +21,9 @@ async-trait = { workspace = true }
 fibre = { workspace = true }
 serde = { workspace = true }
 uuid = { version = "1", features = ["v4", "serde"] }
-tokio = { version = "1", features = ["sync", "rt"] } # For Mutex, mpsc, spawn
+tokio = { version = "1", features = ["sync", "rt"] }
 tracing = "0.1"
 parking_lot = "0.12"
 thiserror = { workspace = true }
 
 [dev-dependencies]
-# For examples or tests within this crate
-# tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-# tracing-subscriber = { version = "0.3", features = ["env-filter"] }

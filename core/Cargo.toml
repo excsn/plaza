@@ -11,6 +11,9 @@ description = "A server-authoritative foundation for real-time shared state: mul
 authors = { workspace = true }
 repository = { workspace = true }
 
+[package.metadata.docs.rs]
+all-features = true
+
 [dependencies]
 plaza_wire = { version = "0.5.0", path = "../wire" }
 serde = { workspace = true }
@@ -18,7 +21,6 @@ async-trait = { workspace = true }
 fibre = { workspace = true }
 parking_lot = "^0.12"
 thiserror = { workspace = true }
-# `macros` is needed for tokio::select! in the controller loop; `time` for TickDriver.
 tokio = { version = "^1", features = ["macros", "sync", "time"] }
 tracing = { workspace = true }
 
