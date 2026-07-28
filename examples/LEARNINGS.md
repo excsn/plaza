@@ -388,6 +388,24 @@ The lattice example was written in a day and then debugged from four screenshots
 
 **What it changed in plaza.** `TickDriver::run_fixed` and `run_fixed_for`, which pace to real time while delivering whole steps of exactly the size asked for, carrying the remainder and dropping a stall rather than repaying it as a burst. Before this there was no way to run live at a cadence with a constant delta: `run` measured, and `run_virtual` was fixed but unpaced. `run`'s documentation now names the hazard rather than leaving it to be discovered, which cost four rounds of blaming the network.
 
+### An input that names a place cannot be scheduled into agreement (pellet maze)
+
+The maze example was built after `bomb_grid` had already paid for the four bugs above, so it started with a shared rule, tick-addressed inputs and a matched quantum. It still disagreed, and the disagreement was of a kind none of that machinery addresses.
+
+**A turn is a request for a place.** Press a direction and you do not turn: the turn is queued and taken at the next junction where that direction is open. So the two sides can agree exactly about *when* the request was made, run the same function on the same tick, and still resolve it at **different junctions**, because a junction is decided by the input history between the request and the corner. Get it wrong by one and the sides are not one cell apart, they are in different corridors, and the error grows with every step instead of being corrected away.
+
+That is why the counter is separate. A cell snap is bounded: one jump, over. A wrong junction is unbounded until a frame drags the client back. Averaging them together lets a hundred cheap corrections hide three expensive ones, so the panel reports `wrong junctions: N of M turns, worst K cells apart` above the snap rate.
+
+**Latency alone still does not cause one**, at any depth. Losing the request does, and only that. The two are pinned as separate tests, because the intuition that a place-input is "more sensitive to lag" is wrong and would send the next person tuning the wrong parameter.
+
+**The policy has to cross the wire.** How long a queued turn stays alive is a server setting, and a client that assumed a different one would predict a turn the server had already dropped and then run down a corridor the server never entered: a wrong junction manufactured entirely out of a disagreement about policy. It rides in `ServerPolicy` with the playout depth and the send rate.
+
+**Secrecy is a property of what the server sends, not of what a client draws.** The invisibility power-up made the frame **per recipient**: a hidden player is *absent* from everybody else's copy rather than flagged in it. A client handed a position it should not have has already lost the secret whatever it renders, and this is the same rule `card_table` applies to a hand of cards, arriving in a game where the hidden thing moves sixty times a second. Per-recipient frames cost one clone per seat here and are the only honest implementation.
+
+**Two bot bugs, one shape, and it is not the netcode's shape.** Three of four seats are bots, so a bot that looks broken makes the example look broken. Both faults were guards that were true far more often than they read as being: `drive_bots` skipped any player mid-step, and since a player begins its next step the instant it ends the last, that was nearly always, so a bot only ever chose a direction while already stuck against a wall. And the routing BFS was seeded in every direction including backwards, so a runner ate the cell it stood on, found the nearest remaining pellet behind it, turned round, and paced one corridor for the whole round. Fixing both took eating from 36 pellets in 45 seconds to 165. **Neither was visible without a number**: "the bot runs around a lot" is what both look like.
+
+**A feature measured is a feature you can delete.** Routing a threatened bot runner toward a nearby energizer sounded obviously right and was written. Measured over a minute it devoured no more pursuers, ate 22 fewer pellets, and left six power-ups uncollected, because a runner already crosses every corridor eating and walks over them anyway. Deleted, with the measurement kept in the test that replaced it.
+
 ### Smaller ones worth remembering
 
 **Ctrl-C would not kill the windowed host.** Actix caught the signal for a graceful shutdown while the window kept running, and the controller sprayed queue-full errors into dead links. Fixed with `disable_signals`, leaving signal handling to the process.

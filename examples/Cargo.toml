@@ -2,6 +2,7 @@
 members = [
   "ability_cooldowns",
   "bomb_grid",
+  "pellet_maze",
   "playground_common",
   "card_table",
   "blackhole_playground",
