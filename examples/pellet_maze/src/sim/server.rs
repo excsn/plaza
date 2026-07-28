@@ -54,17 +54,62 @@ pub struct Tickout {
   /// Turns taken this tick, with the cell each was taken at. The measurement
   /// the whole example rests on.
   pub turns: Vec<TurnTaken>,
-  /// `(eater, cells)` for pellets eaten this tick.
-  pub eaten: Vec<(PlayerId, Vec<Cell>)>,
+  /// Pellets eaten this tick, and who may be told.
+  pub eaten: Vec<PelletsEaten>,
   /// `(runner, catcher, milliseconds until the next round)`.
   pub caught: Option<(PlayerId, PlayerId, u64)>,
   pub round_start: Option<RoundStart>,
-  /// `(taker, cell, kind, server time it wears off)`.
-  pub powers: Vec<(PlayerId, Cell, Power, u64)>,
+  /// Power-ups taken this tick, and who may be told.
+  pub powers: Vec<PowerTaken>,
   /// `(runner, pursuer)` for each pursuer eaten while energized.
   pub devoured: Vec<(PlayerId, PlayerId)>,
   /// The final table when a match ends, highest first.
   pub match_over: Option<(Vec<(PlayerId, u32)>, u64)>,
+}
+
+/// Who an event may be told to.
+///
+/// A frame can keep a hidden player secret by leaving them out. An *event*
+/// cannot: `Op::Eaten` names the exact cell a pellet went from, which is a
+/// better position report than a frame is, and broadcasting it while its actor
+/// is invisible undoes the vanish completely. So an event carries its audience,
+/// and the ones that name a hidden player's cell go only to that player until
+/// the vanish ends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Audience {
+  Everyone,
+  Only(PlayerId),
+}
+
+#[derive(Clone, Debug)]
+pub struct PelletsEaten {
+  pub audience: Audience,
+  pub by: PlayerId,
+  pub cells: Vec<Cell>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PowerTaken {
+  pub audience: Audience,
+  pub by: PlayerId,
+  pub cell: Cell,
+  pub kind: Power,
+  pub until_ms: u64,
+}
+
+/// An event held back because its actor was invisible when it happened.
+#[derive(Clone, Copy, Debug)]
+enum Withheld {
+  Pellet { by: PlayerId, cell: Cell },
+  Power { by: PlayerId, cell: Cell, kind: Power, until_ms: u64 },
+}
+
+impl Withheld {
+  fn by(&self) -> PlayerId {
+    match self {
+      Withheld::Pellet { by, .. } | Withheld::Power { by, .. } => *by,
+    }
+  }
 }
 
 pub struct Server {
@@ -81,6 +126,9 @@ pub struct Server {
   match_round: u32,
   seed: u64,
   round_ends_at_ms: Option<u64>,
+  /// What the other players have not been told yet, because telling them would
+  /// have said where an invisible player was.
+  withheld: Vec<Withheld>,
   /// Set while the final table is up, so the elapsed round-end interval starts
   /// a new match rather than another round.
   awaiting_new_match: bool,
@@ -122,6 +170,7 @@ impl Clone for Server {
       match_round: self.match_round,
       seed: self.seed,
       round_ends_at_ms: self.round_ends_at_ms,
+      withheld: self.withheld.clone(),
       awaiting_new_match: self.awaiting_new_match,
       round_begins_at_ms: self.round_begins_at_ms,
       runner_seat: self.runner_seat,
@@ -163,6 +212,7 @@ impl Server {
       match_round: 1,
       seed,
       round_ends_at_ms: None,
+      withheld: Vec::new(),
       awaiting_new_match: false,
       round_begins_at_ms: ROUND_START_MS,
       runner_seat: 0,
@@ -384,11 +434,36 @@ impl Server {
         .filter(|p| p.id == recipient || !p.hidden(now))
         .cloned()
         .collect(),
-      pellets_left: self.pellets.len() as u32,
-      powerups: self.powerups.clone(),
+      // A frame counts what this recipient still believes is on the board.
+      // Otherwise the count drops on the tick a pellet is eaten, and a player
+      // watching the number is watching an invisible player eat.
+      pellets_left: self.pellets.len() as u32 + self.withheld_for(recipient, |w| matches!(w, Withheld::Pellet { .. })),
+      powerups: self.powerups_for(recipient),
       round: self.match_round,
       match_rounds: MATCH_ROUNDS,
     }
+  }
+
+  /// How many withheld events this recipient has not been told about.
+  fn withheld_for(&self, recipient: PlayerId, want: impl Fn(&Withheld) -> bool) -> u32 {
+    self.withheld.iter().filter(|w| w.by() != recipient && want(w)).count() as u32
+  }
+
+  /// The pickups this recipient still believes are on the board.
+  ///
+  /// One taken by an invisible player is put back for everybody else, because
+  /// a pickup disappearing is a cell and a moment, which is the whole of what
+  /// the vanish is meant to hide.
+  fn powerups_for(&self, recipient: PlayerId) -> Vec<PowerupState> {
+    let mut visible = self.powerups.clone();
+    for item in &self.withheld {
+      if let Withheld::Power { by, cell, kind, .. } = item
+        && *by != recipient
+      {
+        visible.push(PowerupState { cell: *cell, kind: *kind });
+      }
+    }
+    visible
   }
 
   /// The omniscient frame, for a host's own truth overlay and for tests.
@@ -462,6 +537,9 @@ impl Server {
     if let Some(result) = self.resolve_contact(out) {
       out.caught = Some(result);
     }
+    // After the pickups, so a vanish taken this tick keeps this tick's events
+    // secret rather than revealing them on the tick it began.
+    self.reveal_withheld(out);
     if self.send_due(controls) {
       out.frames = self.frames_for_everyone();
     }
@@ -536,26 +614,88 @@ impl Server {
     }
     for (seat, cell, kind) in taken {
       let until = now + kind.duration_ms();
+      let hidden = self.players[seat].hidden(now);
       let player = &mut self.players[seat];
       match kind {
         Power::Energize => player.energized_until_ms = until,
         Power::Vanish => player.hidden_until_ms = until,
       }
-      out.powers.push((player.id, cell, kind, until));
+      let by = player.id;
+      // `hidden` is read **before** the power is applied: taking a vanish is
+      // the one pickup whose own cell is safe to broadcast, because at that
+      // moment everybody could still see the player standing on it.
+      let audience = if hidden { Audience::Only(by) } else { Audience::Everyone };
+      if hidden {
+        self.withheld.push(Withheld::Power { by, cell, kind, until_ms: until });
+      }
+      out.powers.push(PowerTaken {
+        audience,
+        by,
+        cell,
+        kind,
+        until_ms: until,
+      });
+    }
+  }
+
+  /// Tells everybody what was held back, once its actor is visible again.
+  ///
+  /// The events go out late rather than never: a client that never heard them
+  /// would draw pellets that are gone and pickups that were taken, for the rest
+  /// of the round. Late is honest, because by the time it arrives the position
+  /// it reveals is one the player has already left.
+  fn reveal_withheld(&mut self, out: &mut Tickout) {
+    if self.withheld.is_empty() {
+      return;
+    }
+    let now = self.clock_ms;
+    let hidden: Vec<PlayerId> = self.players.iter().filter(|p| p.hidden(now)).map(|p| p.id).collect();
+    let (still_secret, tell): (Vec<Withheld>, Vec<Withheld>) = std::mem::take(&mut self.withheld).into_iter().partition(|w| hidden.contains(&w.by()));
+    self.withheld = still_secret;
+    for item in tell {
+      match item {
+        Withheld::Pellet { by, cell } => out.eaten.push(PelletsEaten {
+          audience: Audience::Everyone,
+          by,
+          cells: vec![cell],
+        }),
+        Withheld::Power { by, cell, kind, until_ms } => out.powers.push(PowerTaken {
+          audience: Audience::Everyone,
+          by,
+          cell,
+          kind,
+          until_ms,
+        }),
+      }
     }
   }
 
   fn eat_pellets(&mut self, out: &mut Tickout) {
+    let now = self.clock_ms;
+    let mut hidden_eats = Vec::new();
     for player in self.players.iter().filter(|p| p.role == Role::Runner && p.alive) {
       let at = player.occupied();
       if let Some(index) = self.pellets.iter().position(|c| *c == at) {
         self.pellets.swap_remove(index);
         self.pellets_eaten += 1;
-        out.eaten.push((player.id, vec![at]));
+        // The worst leak of the lot if it goes out: a pellet disappearing is
+        // an exact cell, at the exact tick, for a player nobody can see.
+        let audience = if player.hidden(now) {
+          hidden_eats.push(Withheld::Pellet { by: player.id, cell: at });
+          Audience::Only(player.id)
+        } else {
+          Audience::Everyone
+        };
+        out.eaten.push(PelletsEaten {
+          audience,
+          by: player.id,
+          cells: vec![at],
+        });
       }
     }
+    self.withheld.extend(hidden_eats);
     // Scores are applied outside the borrow above.
-    for (id, cells) in &out.eaten {
+    for PelletsEaten { by: id, cells, .. } in &out.eaten {
       if let Some(player) = self.players.iter_mut().find(|p| p.id == *id) {
         player.score += cells.len() as u32 * PELLET_VALUE;
       }
@@ -637,6 +777,10 @@ impl Server {
     self.maze = Maze::generate(self.seed);
     self.round_ends_at_ms = None;
     self.awaiting_new_match = false;
+    // Discarded rather than flushed: the next round relays the board, so an
+    // event about the last one would remove a pellet from a maze that no
+    // longer exists.
+    self.withheld.clear();
     self.round_begins_at_ms = self.clock_ms + ROUND_START_MS;
 
     // Rotate the role, not the identity. Ids stay put so a client keeps
@@ -1084,6 +1228,77 @@ mod tests {
 
     let mine = server.frame_for(runner);
     assert!(mine.players.iter().any(|p| p.id == runner), "but you can still see yourself");
+  }
+
+  #[test]
+  fn a_hidden_runner_does_not_leak_its_position_through_the_pellets_it_eats() {
+    // Leaving a player out of a frame hides nothing if the events keep going
+    // out: `Op::Eaten` names the exact cell, on the exact tick, and is a better
+    // position report than a frame is because it is not rate limited.
+    let c = Controls { bots: true, players: 2, ..controls() };
+    let mut server = started(&c);
+    let runner = server.runner_seat() as PlayerId;
+    let other = server.players.iter().find(|p| p.id != runner).map(|p| p.id).expect("somebody else");
+    server.players[runner as usize].hidden_until_ms = server.now_ms() + VANISH_MS;
+
+    let mut ate_in_secret = 0;
+    let until = server.now_ms() + VANISH_MS - SIM_STEP_MS * 2;
+    while server.now_ms() < until {
+      let out = server.advance(SIM_STEP_MS, &c);
+      for eaten in &out.eaten {
+        assert_eq!(
+          eaten.audience,
+          Audience::Only(runner),
+          "a pellet an invisible player ate was announced to everybody"
+        );
+        ate_in_secret += eaten.cells.len();
+      }
+      for power in &out.powers {
+        assert_eq!(power.audience, Audience::Only(runner), "so was a power-up it took");
+      }
+    }
+    assert!(ate_in_secret > 0, "the test is worthless unless it ate something: {ate_in_secret}");
+
+    // And the count in everybody else's frame did not move either, because a
+    // number that drops while nobody can see anything is still a report.
+    let theirs = server.frame_for(other);
+    let mine = server.frame_for(runner);
+    assert_eq!(
+      theirs.pellets_left as usize,
+      mine.pellets_left as usize + ate_in_secret,
+      "the other player's board still holds every pellet it was never told about"
+    );
+  }
+
+  #[test]
+  fn what_was_withheld_is_told_once_the_vanish_ends() {
+    // Late, not never: a client that never heard would draw pellets that are
+    // gone for the rest of the round.
+    let c = Controls { bots: true, players: 2, ..controls() };
+    let mut server = started(&c);
+    let runner = server.runner_seat() as PlayerId;
+    let other = server.players.iter().find(|p| p.id != runner).map(|p| p.id).expect("somebody else");
+    server.players[runner as usize].hidden_until_ms = server.now_ms() + VANISH_MS;
+
+    let mut secret = 0usize;
+    let mut told = 0usize;
+    let until = server.now_ms() + VANISH_MS + SIM_STEP_MS * 4;
+    while server.now_ms() < until {
+      let out = server.advance(SIM_STEP_MS, &c);
+      for eaten in &out.eaten {
+        match eaten.audience {
+          Audience::Only(_) => secret += eaten.cells.len(),
+          Audience::Everyone => told += eaten.cells.len(),
+        }
+      }
+    }
+    assert!(secret > 0, "it ate while hidden");
+    assert!(told >= secret, "and everything eaten in secret was told afterwards: {told} of {secret}");
+    assert_eq!(
+      server.frame_for(other).pellets_left,
+      server.frame_for(runner).pellets_left,
+      "so the two boards agree again"
+    );
   }
 
   #[test]

@@ -68,6 +68,19 @@ players: self.players.iter()
 
 A hidden runner is not dimmed on the other clients' screens, and not flagged. They are **absent**. A client handed a position it should not see has already lost the secret, whatever it chooses to draw, and "please do not render this" is a request rather than a rule. This is the same principle [`card_table`](../card_table/) applies to a hand of cards, in a game where the hidden thing moves sixty times a second, and it is what `plaza`'s per-recipient dispatch is for. `a_hidden_runner_is_absent_from_other_players_frames` asserts both halves: gone from theirs, present in their own.
 
+**And the frame was not enough**, which is the part worth carrying away. The first version hid the player from every frame and shipped, and it leaked completely, because the *events* kept going out to everybody:
+
+- `Op::Eaten` names the exact cell a pellet went from, on the exact tick. That is a **better** position report than a frame, because a frame is rate limited and an event is not.
+- `Op::PowerTaken` names the cell of the pickup.
+- `Op::TurnTaken` names the junction. Nobody even read it: a client discards every turn report that is not its own.
+- Even `Frame::pellets_left` and `Frame::powerups` gave it away, one as a count that dropped while nothing visible was happening, the other as a pickup that vanished from a cell.
+
+So an event now carries an [`Audience`](src/sim/server.rs). Anything that names a hidden player's cell goes to that player alone and is **held** for everybody else until the vanish ends, at which point it is sent late rather than never: a client that was never told would draw pellets that are gone for the rest of the round. Turn reports are simply addressed to the player they describe, hidden or not, because that is the only client that ever read one. And the two frame fields are computed per recipient, adding back what that recipient has not been told about.
+
+The end to end test reads the wire rather than the intent: `nothing_on_the_wire_says_where_a_hidden_player_is` takes the hidden player's actual cell on every tick and checks every op every other seat was handed against it. The one deliberate exception is the tick the vanish expires, when everything held back goes out and the player is in the frames again anyway.
+
+**The general shape: secrecy is a property of the whole outbound stream, not of one message in it.** A per-recipient frame is the obvious half and the easy half. What actually leaks is the event you did not think of as a position, and there is no way to find it by reading the frame code.
+
 ## The match, and why the score is cumulative
 
 A round is rarely cleared of pellets. Three pursuers converging on one runner is not a fair fight and is not meant to be, so a round is a few seconds of pressure rather than a board to complete. What is played for is the **total over five rounds**, and the roles rotate every round, so every seat runs and every seat hunts.

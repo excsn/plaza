@@ -16,7 +16,7 @@ use plaza_client_utils::net_sim::{LatencyLink, Rng};
 use plaza_server_utils::{SeatTable, Seating};
 
 use crate::sim::protocol::{Op, ServerPolicy, PROTOCOL};
-use crate::sim::server::Server;
+use crate::sim::server::{Audience, Server};
 use crate::sim::types::{Cell, Controls, Maze, PlayerId, PlayerState, MATCH_ROUNDS};
 
 pub type PlayerKey = u64;
@@ -226,17 +226,31 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         if let Some((runner, by, next_in_ms)) = out.caught {
           outbound.push(Op::Caught { runner, by, next_in_ms });
         }
-        // Before the frame: a turn describes a tick the frame is about to
-        // summarise, and a client that learned the position first would compare
-        // against a turn it had not been told about.
+        // Two lists, because secrecy is a property of who is *sent* a
+        // message. A turn report is only ever read by the player it names, and
+        // an event about an invisible player must reach nobody else.
+        let mut private: Vec<(PlayerId, Op)> = Vec::new();
         for taken in out.turns {
-          outbound.push(Op::TurnTaken(Box::new(taken)));
+          private.push((taken.player, Op::TurnTaken(Box::new(taken))));
         }
-        for (by, cells) in out.eaten {
-          outbound.push(Op::Eaten { by, cells });
+        for eaten in out.eaten {
+          let op = Op::Eaten { by: eaten.by, cells: eaten.cells };
+          match eaten.audience {
+            Audience::Everyone => outbound.push(op),
+            Audience::Only(id) => private.push((id, op)),
+          }
         }
-        for (by, cell, kind, until_ms) in out.powers {
-          outbound.push(Op::PowerTaken { by, cell, kind, until_ms });
+        for power in out.powers {
+          let op = Op::PowerTaken {
+            by: power.by,
+            cell: power.cell,
+            kind: power.kind,
+            until_ms: power.until_ms,
+          };
+          match power.audience {
+            Audience::Everyone => outbound.push(op),
+            Audience::Only(id) => private.push((id, op)),
+          }
         }
         for (runner, pursuer) in out.devoured {
           outbound.push(Op::Devoured { runner, pursuer });
@@ -254,6 +268,13 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
           let mine = out.frames.iter().find(|(id, _)| *id as usize == seat).map(|(_, f)| f.clone());
           let link = state.down.entry(key).or_default();
           for op in &outbound {
+            link.send(now, op.clone(), controls.latency_ms, controls.jitter_ms, controls.loss_pct, &mut state.rng);
+          }
+          // Before the frame: a turn describes a tick the frame is about to
+          // summarise, and a client that learned the position first would
+          // compare against a turn it had not been told about.
+          for (id, op) in private.iter().filter(|(id, _)| *id as usize == seat) {
+            let _ = id;
             link.send(now, op.clone(), controls.latency_ms, controls.jitter_ms, controls.loss_pct, &mut state.rng);
           }
           if let Some(frame) = mine {

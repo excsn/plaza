@@ -9,7 +9,7 @@ use plaza_client_utils::net_sim::{LatencyLink, Rng};
 
 use crate::sim::client::Client;
 use crate::sim::protocol::Op;
-use crate::sim::server::Server;
+use crate::sim::server::{Audience, Server};
 use crate::sim::types::*;
 
 const IMPAIR_SEED: u64 = 0x5EED_1A2E;
@@ -17,6 +17,10 @@ const IMPAIR_SEED: u64 = 0x5EED_1A2E;
 pub struct World {
   pub server: Server,
   pub clients: Vec<Client>,
+  /// What each seat was actually handed on the last step, so a test can assert
+  /// about what crossed the wire rather than about what the state ended up as.
+  /// Secrecy is a property of what is *sent*, and it is only testable here.
+  pub delivered: Vec<Vec<Op>>,
   down: Vec<LatencyLink<Op>>,
   up: LatencyLink<(usize, u64, Dir)>,
   rng: Rng,
@@ -39,6 +43,7 @@ impl World {
     Self {
       server,
       clients,
+      delivered: vec![Vec::new(); count],
       down: (0..count).map(|_| LatencyLink::default()).collect(),
       up: LatencyLink::default(),
       rng: Rng::new(IMPAIR_SEED),
@@ -73,14 +78,30 @@ impl World {
     if let Some((runner, by, next_in_ms)) = out.caught {
       outbound.push(Op::Caught { runner, by, next_in_ms });
     }
+    // Two lists: see the arena. A turn report is only read by the player it
+    // names, and an event about an invisible player must reach nobody else.
+    let mut private: Vec<(PlayerId, Op)> = Vec::new();
     for taken in out.turns {
-      outbound.push(Op::TurnTaken(Box::new(taken)));
+      private.push((taken.player, Op::TurnTaken(Box::new(taken))));
     }
-    for (by, cells) in out.eaten {
-      outbound.push(Op::Eaten { by, cells });
+    for eaten in out.eaten {
+      let op = Op::Eaten { by: eaten.by, cells: eaten.cells };
+      match eaten.audience {
+        Audience::Everyone => outbound.push(op),
+        Audience::Only(id) => private.push((id, op)),
+      }
     }
-    for (by, cell, kind, until_ms) in out.powers {
-      outbound.push(Op::PowerTaken { by, cell, kind, until_ms });
+    for power in out.powers {
+      let op = Op::PowerTaken {
+        by: power.by,
+        cell: power.cell,
+        kind: power.kind,
+        until_ms: power.until_ms,
+      };
+      match power.audience {
+        Audience::Everyone => outbound.push(op),
+        Audience::Only(id) => private.push((id, op)),
+      }
     }
     for (runner, pursuer) in out.devoured {
       outbound.push(Op::Devoured { runner, pursuer });
@@ -93,11 +114,18 @@ impl World {
       for op in &outbound {
         link.send(now, op.clone(), controls.latency_ms, controls.jitter_ms, controls.loss_pct, &mut self.rng);
       }
+      for (_, op) in private.iter().filter(|(id, _)| *id as usize == seat) {
+        link.send(now, op.clone(), controls.latency_ms, controls.jitter_ms, controls.loss_pct, &mut self.rng);
+      }
       // The frame is **this seat's**, not everybody's: a hidden runner is
       // absent from the others' copies.
       if let Some((_, frame)) = out.frames.iter().find(|(id, _)| *id as usize == seat) {
         link.send(now, Op::Frame(Box::new(frame.clone())), controls.latency_ms, controls.jitter_ms, controls.loss_pct, &mut self.rng);
       }
+    }
+
+    for row in self.delivered.iter_mut() {
+      row.clear();
     }
 
     for (seat, client) in self.clients.iter_mut().enumerate() {
@@ -107,6 +135,7 @@ impl World {
       // has stopped: predicting one tick past a freeze is a correction the
       // client did not have to make.
       for op in self.down[seat].drain_due(now) {
+        self.delivered[seat].push(op.clone());
         match op {
           Op::Frame(frame) => client.on_frame(&frame, controls),
           Op::Round(round) => client.on_round(&round),
@@ -164,6 +193,81 @@ mod tests {
       sync_hz: 60,
       ..Controls::default()
     }
+  }
+
+  #[test]
+  fn a_turn_report_goes_only_to_the_player_it_names() {
+    // Not secrecy machinery: a client discards every `TurnTaken` that is not
+    // its own, so broadcasting them put every player's exact junction on
+    // everybody's wire for no reader at all.
+    let c = quiet();
+    let mut world = World::new(&c, MAZE_SEED);
+    world.start_playing(&c);
+    let mut seen = 0;
+    for i in 0..600 {
+      if i % 8 == 0 {
+        for seat in 0..world.clients.len() {
+          let at = world.server.players[seat].cell;
+          let exits = world.server.maze.exits(at);
+          if let Some(dir) = exits.get(i as usize % exits.len().max(1)).copied() {
+            world.turn(seat, dir, &c);
+          }
+        }
+      }
+      world.run(SIM_STEP_MS, &c);
+      for (seat, ops) in world.delivered.iter().enumerate() {
+        for op in ops {
+          if let Op::TurnTaken(taken) = op {
+            seen += 1;
+            assert_eq!(taken.player as usize, seat, "seat {seat} was told where somebody else turned");
+          }
+        }
+      }
+    }
+    assert!(seen > 0, "the test is worthless unless turns were reported at all");
+  }
+
+  #[test]
+  fn nothing_on_the_wire_says_where_a_hidden_player_is() {
+    // The end to end version of the property, taken from the wire rather than
+    // from the server's intent: every op a seat is handed, checked against the
+    // hidden player's actual cell.
+    let c = Controls { bots: true, ..quiet() };
+    let mut world = World::new(&c, MAZE_SEED);
+    world.start_playing(&c);
+    let runner = world.server.runner_seat();
+    world.server.players[runner].hidden_until_ms = world.server.now_ms() + VANISH_MS;
+
+    let mut checked = 0;
+    while world.server.players[runner].hidden(world.server.now_ms()) {
+      let at = world.server.players[runner].occupied();
+      world.run(SIM_STEP_MS, &c);
+      // The tick the vanish expires is not part of the property: everything
+      // held back goes out on it, and by then the player is in the frames
+      // again, so the cells it names are no longer secret.
+      if !world.server.players[runner].hidden(world.server.now_ms()) {
+        break;
+      }
+      for (seat, ops) in world.delivered.iter().enumerate() {
+        if seat == runner {
+          continue;
+        }
+        for op in ops {
+          checked += 1;
+          match op {
+            Op::Frame(frame) => assert!(
+              !frame.players.iter().any(|p| p.id as usize == runner),
+              "a frame carried the hidden player"
+            ),
+            Op::Eaten { cells, .. } => assert!(!cells.contains(&at), "an eaten pellet gave the cell away"),
+            Op::PowerTaken { cell, .. } => assert!(*cell != at, "a taken power-up gave the cell away"),
+            Op::TurnTaken(taken) => assert!(taken.at != at, "a turn report gave the junction away"),
+            _ => {}
+          }
+        }
+      }
+    }
+    assert!(checked > 0, "some ops were actually delivered");
   }
 
   /// Turns at random from the exits actually available, which is what a player
