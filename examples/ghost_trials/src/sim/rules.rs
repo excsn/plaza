@@ -412,13 +412,23 @@ fn take_pickups(world: &mut World, tick: u32) {
 /// determinism examples in this repository keep finding.
 fn shove(world: &mut World) {
   let radius_sq = BUMP_RADIUS.mul(BUMP_RADIUS);
+  // **A finished racer is not on the track any more.** It has stopped moving,
+  // so leaving it in the collision set turns the finish line into a wall of
+  // parked cars, and a late finisher's time would then depend on how many
+  // people beat them to it. That is a real unfairness rather than an untidy
+  // picture: the thing a race is measuring would be partly decided by the
+  // result of the race.
+  let racing: Vec<bool> = world.racers.iter().map(|r| r.finished_tick.is_none()).collect();
   let before: Vec<P> = world.racers.iter().map(|r| r.pos).collect();
   let mut pushes: Vec<P> = vec![P::default(); world.racers.len()];
   let mut hit = vec![false; world.racers.len()];
 
   for i in 0..before.len() {
+    if !racing[i] {
+      continue;
+    }
     for j in (i + 1)..before.len() {
-      if before[i].dist_sq(before[j]) > radius_sq {
+      if !racing[j] || before[i].dist_sq(before[j]) > radius_sq {
         continue;
       }
       let dx = before[j].x - before[i].x;
@@ -747,6 +757,24 @@ mod tests {
       }
       assert!(completed, "{} was not completed", size.label());
     }
+  }
+
+  #[test]
+  fn a_finished_racer_stops_being_an_obstacle() {
+    // Otherwise the finish line fills up with parked cars and a late finisher's
+    // time depends on how many people beat them to it, which makes the result
+    // of the race an input to the race.
+    let track = Track::circuit();
+    let mut world = World::race(&track, 2);
+    world.racers[0].pos = P::from_ints(20, 20);
+    world.racers[0].finished_tick = Some(1);
+    world.racers[1].pos = P::new(Fx::from_int(20) + Fx::ratio(4, 10), Fx::from_int(20));
+    world.racers[1].speed = TOP_SPEED;
+    let parked = world.racers[0].pos;
+
+    step_world(&mut world, &[Input::default(), Input::default()], &track);
+    assert_eq!(world.racers[0].pos, parked, "the finished car did not move");
+    assert_eq!(world.racers[1].speed, TOP_SPEED, "and it cost the live one nothing");
   }
 
   #[test]

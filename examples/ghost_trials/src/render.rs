@@ -131,7 +131,27 @@ pub fn draw_pickups(board: &Board, pickups: &[Pickup], tick: u32) {
 }
 
 /// One racer. `ghost` draws it hollow: an echo of a run, not another car.
+/// How long a finished car lingers before it is gone, in ticks.
+///
+/// It goes hollow first rather than vanishing on the line, so a player can see
+/// who came in and where. It goes *away* rather than lingering, because a
+/// stationary car is read as an obstacle, and this one is not one any more.
+const FINISHED_LINGER: u32 = 90;
+
 pub fn draw_racer(board: &Board, racer: &Racer, colour: Color, ghost: bool, tick: u32, place: Option<usize>) {
+  // A finished car is out of the race: hollow while it fades, then gone.
+  let (ghost, colour) = match racer.finished_tick {
+    Some(at) => {
+      let age = tick.saturating_sub(at);
+      if age >= FINISHED_LINGER {
+        return;
+      }
+      let fade = 1.0 - age as f32 / FINISHED_LINGER as f32;
+      (true, Color::new(colour.r, colour.g, colour.b, 0.7 * fade))
+    }
+    None => (ghost, colour),
+  };
+
   let at = board.at(racer.pos);
   let size = board.scale * 0.9;
   let (fx, fy) = (cos(racer.heading).to_f32(), sin(racer.heading).to_f32());

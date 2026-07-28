@@ -32,6 +32,7 @@ Left and right steer. Hold space to charge: you slow down, you turn harder, and 
 | the number in the middle | your split against the ghost you are chasing |
 | the strip at the bottom | the board, and what each ghost cost to send against what a path would have |
 | purple arrows | the CPU field, in a race |
+| a car going hollow and fading | somebody who has finished. They stop being an obstacle the moment they cross |
 | **T** and **G** discs | pickups. **T** is a turbo, **G** is grip. An outline is one that has been taken and is coming back |
 | rim around a car | grip, running |
 
@@ -101,6 +102,12 @@ Four, and they are part of the circuit rather than events: fixed positions, fixe
 Grip and slick are deliberately opposites, because the game is built on one trade (pace against cornering) and the interesting pickups are the ones that move you along it rather than the ones that give you more of everything.
 
 A contested pickup goes to the racer with the lowest index, not to whoever was closest and not to whoever the loop reached first. Both of those are rules about the container rather than about the game. The shoves are the same discipline: **every impulse is computed from the state before any of them lands**, and `a_shove_is_the_same_whichever_order_the_pairs_come_up_in` reverses the list and checks the outcome is mirrored.
+
+### A finished car leaves the track
+
+When a racer crosses the line it stops moving, and it stops being an obstacle: it is taken out of the collision set and fades off the screen over a couple of seconds rather than parking on the finish line.
+
+That is a fairness fix and not a tidiness one. Cars that stop where they finish pile up exactly where everybody else is heading, so a late finisher's time would depend on how many people beat them there, which makes **the result of the race an input to the race**. `a_finished_racer_stops_being_an_obstacle` pins it.
 
 ### The starting grid, and one deliberate unfairness
 
