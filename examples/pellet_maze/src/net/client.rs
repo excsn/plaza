@@ -322,9 +322,10 @@ impl NetClient {
           self.sim.on_round(&round);
           self.send_policy.reset();
           self.last_result = None;
-          if round.match_round == 1 {
-            self.last_standings = None;
-          }
+          // Any round start clears it: play has resumed, whatever the table
+          // said. Keying this to `match_round == 1` left the table up for the
+          // whole of the next match if the two ever arrived together.
+          self.last_standings = None;
         }
         Op::Frame(frame) => {
           self.note_stamp(frame.server_time_ms);

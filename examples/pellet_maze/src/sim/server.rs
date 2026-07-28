@@ -81,6 +81,9 @@ pub struct Server {
   match_round: u32,
   seed: u64,
   round_ends_at_ms: Option<u64>,
+  /// Set while the final table is up, so the elapsed round-end interval starts
+  /// a new match rather than another round.
+  awaiting_new_match: bool,
   /// When play begins. Everybody is held still until then.
   round_begins_at_ms: u64,
   /// Which **seat** runs this round.
@@ -119,6 +122,7 @@ impl Clone for Server {
       match_round: self.match_round,
       seed: self.seed,
       round_ends_at_ms: self.round_ends_at_ms,
+      awaiting_new_match: self.awaiting_new_match,
       round_begins_at_ms: self.round_begins_at_ms,
       runner_seat: self.runner_seat,
       seats: self.seats.clone(),
@@ -159,6 +163,7 @@ impl Server {
       match_round: 1,
       seed,
       round_ends_at_ms: None,
+      awaiting_new_match: false,
       round_begins_at_ms: ROUND_START_MS,
       runner_seat: 0,
       seats: vec![Seat::Bot; count],
@@ -416,9 +421,17 @@ impl Server {
 
     if let Some(ends_at) = self.round_ends_at_ms {
       if self.clock_ms >= ends_at {
-        if self.match_round >= MATCH_ROUNDS {
-          out.match_over = Some((self.standings(), ROUND_END_MS));
+        if self.awaiting_new_match {
+          self.awaiting_new_match = false;
           out.round_start = Some(self.begin_match());
+        } else if self.match_round >= MATCH_ROUNDS {
+          // The table gets an interval of its own rather than one frame
+          // between two countdowns. It is what the last five rounds were for,
+          // and the next round's `RoundStart` is what clears it from a client,
+          // so sending both together shows it for no time at all.
+          out.match_over = Some((self.standings(), MATCH_END_MS));
+          self.awaiting_new_match = true;
+          self.round_ends_at_ms = Some(self.clock_ms + MATCH_END_MS);
         } else {
           out.round_start = Some(self.begin_round());
         }
@@ -623,6 +636,7 @@ impl Server {
     self.seed = self.seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
     self.maze = Maze::generate(self.seed);
     self.round_ends_at_ms = None;
+    self.awaiting_new_match = false;
     self.round_begins_at_ms = self.clock_ms + ROUND_START_MS;
 
     // Rotate the role, not the identity. Ids stay put so a client keeps
@@ -1165,5 +1179,48 @@ mod tests {
     assert!(standings[0].1 >= standings[1].1, "and it is sorted highest first");
     assert_eq!(server.match_round(), 1, "a new match starts over");
     assert!(server.players.iter().all(|p| p.score == 0), "with the scores cleared");
+  }
+
+  #[test]
+  fn the_final_table_gets_an_interval_of_its_own() {
+    // It used to go out in the same tick as the next match's `RoundStart`, and
+    // a client clears the table when a round starts, so the thing five rounds
+    // were played for was on screen for one frame.
+    let c = Controls { players: 2, ..controls() };
+    let mut server = started(&c);
+
+    let mut ended_at = None;
+    for _ in 0..(MATCH_ROUNDS + 2) {
+      let seat = server.runner_seat();
+      let at = server.players[seat].occupied();
+      let other = (seat + 1) % 2;
+      server.players[other].cell = at;
+      server.players[other].step = None;
+      server.players[other].eaten_until_ms = 0;
+      let round = server.round();
+      while server.round() == round && ended_at.is_none() {
+        let out = server.advance(SIM_STEP_MS, &c);
+        if out.match_over.is_some() {
+          assert!(out.round_start.is_none(), "the next match must not be laid out in the same tick");
+          ended_at = Some(server.now_ms());
+        }
+      }
+      if ended_at.is_some() {
+        break;
+      }
+    }
+    let ended_at = ended_at.expect("the match ends after its rounds");
+
+    // Nothing starts for the whole interval, and then something does.
+    let mut started_at = None;
+    while started_at.is_none() {
+      let out = server.advance(SIM_STEP_MS, &c);
+      if out.round_start.is_some() {
+        started_at = Some(server.now_ms());
+      }
+      assert!(server.now_ms() - ended_at <= MATCH_END_MS + SIM_STEP_MS * 4, "and it does not hang there for ever");
+    }
+    let held = started_at.expect("a new match") - ended_at;
+    assert!(held >= MATCH_END_MS, "the table stays up for its interval: {held} ms");
   }
 }

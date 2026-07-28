@@ -78,6 +78,13 @@ pub const ROUND_END_MS: u64 = 2200;
 /// declared to clients as an instant rather than a duration, so every client
 /// starts on the same tick rather than on whenever its own countdown finished.
 pub const ROUND_START_MS: u64 = 3000;
+
+/// How long the final table stays up before the next match is laid out.
+///
+/// Longer than the interval between rounds, because it is the only moment in
+/// five rounds where the whole match is readable, and a table that clears into
+/// a countdown is a table nobody read.
+pub const MATCH_END_MS: u64 = 5000;
 /// How close a pursuer must be to catch the runner: the same cell.
 pub const CATCH_DISTANCE: u16 = 0;
 
