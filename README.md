@@ -53,6 +53,7 @@ Please refer to **[`core/README.md`](core/README.md)** for installation, the fou
 | [`bomb_grid`](examples/bomb_grid/) | Netcode on a **lattice**, where a correction cannot be eased away and has to be counted instead. Bombs, chain reactions, destructible walls. See its [README](examples/bomb_grid/README.md). |
 | [`pellet_maze`](examples/pellet_maze/) | An input that names a **place** rather than a time, which no schedule can settle. Also per-recipient frames, used to make a player genuinely invisible. See its [README](examples/pellet_maze/README.md). |
 | [`seed_defense`](examples/seed_defense/) | A wire that carries **causes instead of consequences**: a seed and a wave number produce the whole world on every machine, and a digest proves they still agree. See its [README](examples/seed_defense/README.md). |
+| [`ghost_trials`](examples/ghost_trials/) | The op stream as an **event-sourced record**: a ghost is a replay of an input log, and a lap time is decided by replaying the evidence rather than by believing a number. See its [README](examples/ghost_trials/README.md). |
 
 ```sh
 cargo run -p plaza-example-shared-counter

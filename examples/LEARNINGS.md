@@ -424,6 +424,22 @@ The determinism example sends a seed instead of a world, so an arithmetic differ
 
 **And the first real bug the digest caught was in the server, not a client.** The server laid a wave out at the end of the tick it announced the wave on; clients laid it out at the start of the tick the announcement named. One tick apart, and every wave began with a mismatch. The wave is now scheduled to a tick exactly like a build op is, which is the same principle the rest of this file keeps arriving at from different directions: **if two machines must do a thing at the same moment, the moment has to be named, not implied by when each of them noticed.**
 
+### Replaying the past is the same discipline as agreeing with the present (ghost trials)
+
+The racing example stores a run as the inputs that produced it and replays them to make a ghost, which means a machine has to agree with **a recording made somewhere else, at some other time**. That is `seed_defense`'s problem with the second party removed, and everything that was true there is true here with one difference: the recording cannot be asked to compromise. There is no negotiating with last week's log.
+
+**An event log is small because an event is a change, not because it was compressed.** One entry per change of input rather than one per tick: a two-lap run is 146 entries over 1208 ticks, 738 bytes against 12,088 bytes of sampled positions. Worth knowing where that ends, though. The autopilot that drives the tests originally steered on *every tick*, the way a bang-bang controller does, and it scored barely three times better than the path. Giving it a deadband so it drove like a person took the ratio to sixteen. **The saving is a function of how still the input holds**, so the technique pays for humans and pays much less for machines.
+
+**Deciding by reconstruction is not a heuristic, and it is cheap.** The server never watches anybody race: it is handed a log and a claimed time, replays the log, and compares. There is no plausibility check, no speed cap, no statistical model, because the inputs either produce that time or they do not. The cost people fear is worth measuring rather than fearing: one trial is about 1200 ticks of integer arithmetic, once, at the end of a run somebody spent half a minute driving.
+
+**The rules belong in the version.** `build.rs` hashes `rules.rs` into the wire version alongside the message shapes, because a change to how a racer handles invalidates every stored log exactly as surely as a change to a message shape does. A log carries the version it was recorded under, and one from a different version is refused rather than replayed wrong: replaying it would produce *some* run, and that run would be a lie about what its player drove. This is the friendly kind of failure, an honest player and a valid log and a world that moved underneath it, and it is only friendly if something notices.
+
+**The self check found a real bug on its first run, and it was not in the physics.** The client replays its own finished log and compares it to the run it just drove. On one machine, with one implementation, that should be impossible to fail. It failed immediately: `finished_tick` is the *index* of the tick a lap completed on, so the ticks taken is one more than it, and the client counted one way while the replay counted the other. Twenty milliseconds, invisible on screen, and it would have made **every honest submission** get refused for claiming a time its own log did not produce.
+
+The general point is the one worth keeping. The check does not test the simulation, which has plenty of other witnesses. It tests the **recorder**, which has none: a recorder that closes a span one tick early produces a ghost that drifts away from the run it came from, slowly, in a way that reads as bad luck. Any system that stores events to rebuild state later wants this check, and it is four lines.
+
+**Latency is genuinely not on the path, which is worth stating once.** Four runs at 0, 80, 250 and 400 ms one way produce *identical* times, because the run happens on the machine driving it. Every other playground here spends its effort making latency cheap; this is the one that can say it costs nothing, and the reason is architectural rather than clever.
+
 ### Smaller ones worth remembering
 
 **Ctrl-C would not kill the windowed host.** Actix caught the signal for a graceful shutdown while the window kept running, and the controller sprayed queue-full errors into dead links. Fixed with `disable_signals`, leaving signal handling to the process.

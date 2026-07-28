@@ -17,6 +17,14 @@
 //! role. So it cannot live beside the hosting code in `plaza_session`, and it has
 //! no dependencies at all.
 //!
+//! # What else lives here
+//!
+//! [`fixed`], behind a feature, for the same reason: a playground whose wire
+//! carries causes rather than state has to reproduce arithmetic exactly, and
+//! two copies of a type that must agree to the bit is the "shared rule written
+//! twice" mistake with the stakes raised. It is optional so a crate that only
+//! wants the roles does not take a serde dependency for maths it never uses.
+//!
 //! That is an argument about where it *cannot* go, though, not an argument that
 //! it belongs in the published library. Argument parsing is an opinion, and an
 //! application of any size will have its own (clap, or a config file, or an
@@ -25,6 +33,9 @@
 //! is scaffolding, and scaffolding shared between two examples is exactly what
 //! this is. The genuinely reusable half of a listen server is
 //! `plaza_session::host::Host`, which is where the HTTP layer lives.
+
+#[cfg(feature = "fixed")]
+pub mod fixed;
 
 use std::fmt;
 

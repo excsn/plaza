@@ -1,0 +1,8 @@
+//! A time trial whose opponents are replays of an op log.
+//!
+//! `sim` is the whole game and every claim it makes, headless. `net` wraps it
+//! for a real socket and adds no rules.
+
+pub mod net;
+pub mod role;
+pub mod sim;
