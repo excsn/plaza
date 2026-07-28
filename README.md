@@ -50,12 +50,15 @@ Please refer to **[`core/README.md`](core/README.md)** for installation, the fou
 | [`rollback_playground`](examples/rollback_playground/) | The other netcode family: peer-to-peer deterministic rollback, two peers predicting each other's inputs. See its [README](examples/rollback_playground/README.md). |
 | [`horde_playground`](examples/horde_playground/) | Scale, as a real listen-server: thousands of enemies, per-player relevance, host or join over a socket or deploy headless. See its [README](examples/horde_playground/README.md). |
 | [`blackhole_playground`](examples/blackhole_playground/) | Sending a *field* instead of its consequences, also a listen-server with four roles (headless / observer / host / client). See its [README](examples/blackhole_playground/README.md). |
+| [`bomb_grid`](examples/bomb_grid/) | Netcode on a **lattice**, where a correction cannot be eased away and has to be counted instead. Bombs, chain reactions, destructible walls. See its [README](examples/bomb_grid/README.md). |
+| [`pellet_maze`](examples/pellet_maze/) | An input that names a **place** rather than a time, which no schedule can settle. Also per-recipient frames, used to make a player genuinely invisible. See its [README](examples/pellet_maze/README.md). |
+| [`seed_defense`](examples/seed_defense/) | A wire that carries **causes instead of consequences**: a seed and a wave number produce the whole world on every machine, and a digest proves they still agree. See its [README](examples/seed_defense/README.md). |
 
 ```sh
 cargo run -p plaza-example-shared-counter
 ```
 
-Turning the last two into real listen-servers surfaced a run of bugs whose causes were consistently not where the symptoms pointed, and most of what is in `client_utils` and `server_utils` today is what those argued for. [`examples/LEARNINGS.md`](examples/LEARNINGS.md) is the record: the principles that prevent whole classes of bug, what broke and which reasonable theories were wrong, and what all of it changed in plaza itself.
+Turning the browser playgrounds into real listen-servers surfaced a run of bugs whose causes were consistently not where the symptoms pointed, and most of what is in `client_utils` and `server_utils` today is what those argued for. [`examples/LEARNINGS.md`](examples/LEARNINGS.md) is the record: the principles that prevent whole classes of bug, what broke and which reasonable theories were wrong, and what all of it changed in plaza itself.
 
 ## License
 
