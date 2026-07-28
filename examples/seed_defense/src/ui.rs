@@ -135,12 +135,12 @@ pub fn draw_net_ui(
         ui.label(egui::RichText::new(format!("seed {:#x}", client.sim.seed)).strong())
           .on_hover_text("Handed over once, at join. Every enemy in every wave of this session follows from it and the wave number.");
         ui.label(format!(
-          "wave {} of {}, {} enemies alive, {} towers",
+          "wave {}, {} enemies alive, {} towers",
           client.sim.field.wave,
-          seed_defense::sim::server::LAST_WAVE,
           client.sim.field.enemies.len(),
           client.sim.field.towers.len()
-        ));
+        ))
+        .on_hover_text("There is no last wave. They keep coming and each one is harder, so a run ends when the line breaks rather than when a counter runs out.");
         ui.label(format!("{} digests checked, {} snapshots received", client.digests_seen, client.snapshots_received))
           .on_hover_text("A digest is eight bytes and proves the state matches without carrying it. A snapshot is the whole field, and is only ever sent because a digest already proved something was wrong.");
       });

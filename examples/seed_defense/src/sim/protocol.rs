@@ -89,6 +89,11 @@ pub enum Op {
     field: Box<Field>,
     server_time_ms: u64,
   },
+  /// The line broke. Sent once, and it is the only ending there is: the waves
+  /// do not stop coming, they stop being survivable.
+  Over {
+    wave: u32,
+  },
   /// A build the server refused. The client never applied it, so this is a
   /// receipt rather than a correction.
   Refused {
@@ -137,6 +142,7 @@ pub fn wire_cost(op: &Op) -> usize {
     Op::Built { .. } => 14,
     Op::Digest { .. } => 20,
     Op::Ack { .. } | Op::Refused { .. } => 6,
+    Op::Over { .. } => 8,
     Op::Ping { .. } | Op::Pong { .. } => 12,
     Op::Want { .. } => 14,
     Op::WantSnapshot { .. } => 18,

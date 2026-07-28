@@ -98,8 +98,7 @@ impl Arena {
         until_tick.saturating_sub(self.sim.tick()) * crate::sim::types::SIM_STEP_MS,
       ),
       Phase::Running => ("wave", 0),
-      Phase::Lost => ("lost", 0),
-      Phase::Won => ("won", 0),
+      Phase::Lost => ("overrun", 0),
     };
     HostView {
       field: Some(self.sim.field.clone()),

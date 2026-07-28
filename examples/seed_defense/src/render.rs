@@ -253,19 +253,24 @@ pub fn draw_prep(wave: u32, in_ms: u64, lives: i32, gold: i32) {
   draw_text(&sub, (screen_width() - dims.width) * 0.5, 66.0, 18.0, GRAY);
 }
 
-pub fn draw_over(won: bool) {
+/// The end of the run, which is the only ending there is: the waves do not
+/// stop coming, they stop being survivable.
+///
+/// Drawn from the server's announcement rather than inferred from the lives
+/// reaching zero locally, so every player sees it at the same moment.
+pub fn draw_over(wave: u32) {
   draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.0, 0.0, 0.0, 0.6));
-  let text = if won { "held" } else { "overrun" };
+  let text = "overrun";
   let dims = measure_text(text, None, 64, 1.0);
   draw_text(
     text,
     (screen_width() - dims.width) * 0.5,
     screen_height() * 0.5,
     64.0,
-    if won {
-      Color::new(0.6, 1.0, 0.7, 1.0)
-    } else {
-      Color::new(1.0, 0.5, 0.5, 1.0)
-    },
+    Color::new(1.0, 0.5, 0.5, 1.0),
   );
+
+  let sub = format!("the line held for {wave} waves");
+  let dims = measure_text(&sub, None, 24, 1.0);
+  draw_text(&sub, (screen_width() - dims.width) * 0.5, screen_height() * 0.5 + 36.0, 24.0, GRAY);
 }

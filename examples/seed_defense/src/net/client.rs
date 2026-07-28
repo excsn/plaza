@@ -268,6 +268,7 @@ impl NetClient {
           self.note_stamp(server_time_ms);
           self.sim.adopt(&field);
         }
+        Op::Over { wave } => self.sim.over = Some(wave),
         Op::Ack { seq } => self.last_ack = self.last_ack.max(seq),
         Op::Refused { .. } => self.refusals += 1,
         Op::NoSeat { seats } => self.status = Status::NoSeat { seats },

@@ -179,9 +179,19 @@ async fn frame_loop(options: role::Options) {
         client.want_build(cell, kind, upgrade);
       }
 
-      render::draw_prep(field.wave.max(1), 0, field.lives, field.gold);
-      if field.lives <= 0 {
-        render::draw_over(false);
+      // The countdown comes from the wave announcement's own tick, which this
+      // client already has. A timer message of its own would be a second
+      // opinion about the same moment.
+      let (wave, in_ms) = match client.sim.next_wave() {
+        Some((wave, at)) => (
+          wave,
+          at.saturating_sub(client.sim.tick()) * seed_defense::sim::types::SIM_STEP_MS,
+        ),
+        None => (field.wave.max(1), 0),
+      };
+      render::draw_prep(wave, in_ms, field.lives, field.gold);
+      if let Some(reached) = client.sim.over {
+        render::draw_over(reached);
       }
     }
 

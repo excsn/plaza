@@ -63,6 +63,8 @@ pub struct Client {
   pub resyncs: u64,
   pub builds_too_late: u64,
   pub last_reason: Option<ResyncReason>,
+  /// The wave the line broke on, once it has.
+  pub over: Option<u32>,
   /// The tick a mismatch was last seen at, and what each side held.
   pub last_mismatch: Option<(u64, u64, u64, u32, u32)>,
   /// Set when a snapshot is wanted. The net layer drains it.
@@ -92,6 +94,7 @@ impl Client {
       resyncs: 0,
       builds_too_late: 0,
       last_reason: None,
+      over: None,
       last_mismatch: None,
       wants_snapshot: None,
       events: StepEvents::default(),
@@ -121,6 +124,16 @@ impl Client {
     self.pending_builds.retain(|(at, _)| *at > self.field.tick);
     self.pending_waves.retain(|(_, at)| *at > self.field.tick);
     self.wants_snapshot = None;
+  }
+
+  /// The next wave and the tick it begins on, if one has been announced and
+  /// not yet laid out.
+  ///
+  /// The countdown between waves comes from here rather than from a message of
+  /// its own: the announcement already names the tick, and a separate timer
+  /// would be a second opinion about the same moment.
+  pub fn next_wave(&self) -> Option<(u32, u64)> {
+    self.pending_waves.iter().min_by_key(|(_, at)| *at).copied()
   }
 
   pub fn on_wave(&mut self, wave: u32, start_tick: u64) {

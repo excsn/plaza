@@ -2,7 +2,7 @@
 
 A co-op tower defence whose wire carries **causes instead of consequences**, and the machinery that catches you when that goes wrong.
 
-Place towers, hold twelve waves. That part is ordinary. The reason this example exists is that **the enemies are never sent**. Every machine is handed a seed once, told which tick each wave begins on, and produces the entire wave itself. A screen full of enemies costs about the same as an empty one, because there is nothing to send either way.
+Place towers and hold the line. The waves do not stop and each one is harder than the last, so a run ends when the line breaks rather than when a counter runs out. That part is ordinary. The reason this example exists is that **the enemies are never sent**. Every machine is handed a seed once, told which tick each wave begins on, and produces the entire wave itself. A screen full of enemies costs about the same as an empty one, because there is nothing to send either way.
 
 That is the oldest trick in networked games and it comes with a bill: the moment two machines compute one number differently, they are not slightly out of sync, they are playing different games, and nothing on either screen says so. So half of this example is the trick and the other half is the audit.
 
@@ -23,6 +23,7 @@ Click a buildable tile to place the selected tower, click a tower to upgrade it.
 | On screen | Meaning |
 |---|---|
 | the bar above the map | **agreement**. Green while every digest has matched, red from the tick one did not |
+| the banner over the map | the next wave and its countdown, computed from the announcement's own tick |
 | brown corridor | the path. Not buildable |
 | squares | towers, outlined in the colour of whoever paid |
 | circles | enemies, with a health bar |

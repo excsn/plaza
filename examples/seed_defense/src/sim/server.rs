@@ -34,16 +34,14 @@ const WINDOW: InputWindow = InputWindow {
 /// different game and finds out within half a second.
 pub const WORLD_SEED: u64 = 0x5EED_DEFE_0001;
 
-/// The wave the run stops at, so a session has an end to reach.
-pub const LAST_WAVE: u32 = 12;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
   /// Before the first wave, and between waves. Towers may be built.
   Prep { until_tick: u64 },
   Running,
+  /// The only ending. There is no last wave: they keep coming, and each one is
+  /// harder than the one before, so every run ends here eventually.
   Lost,
-  Won,
 }
 
 /// What one tick produced, for the arena to dispatch.
@@ -249,6 +247,9 @@ impl Server {
 
   fn advance_phase(&mut self, out: &mut Tickout) {
     if self.field.lives <= 0 {
+      if self.phase != Phase::Lost {
+        out.ops.push(Op::Over { wave: self.field.wave });
+      }
       self.phase = Phase::Lost;
       return;
     }
@@ -270,13 +271,9 @@ impl Server {
       // out, the field holds the previous wave with nothing left in it, which
       // reads as cleared and would start the next one immediately.
       Phase::Running if self.pending_wave.is_none() && self.field.wave_cleared() => {
-        if self.field.wave >= LAST_WAVE {
-          self.phase = Phase::Won;
-        } else {
-          self.phase = Phase::Prep {
-            until_tick: self.field.tick + GAP_TICKS,
-          };
-        }
+        self.phase = Phase::Prep {
+          until_tick: self.field.tick + GAP_TICKS,
+        };
       }
       _ => {}
     }
@@ -438,6 +435,53 @@ mod tests {
     let mut server = Server::new(1, 7);
     run(&mut server, 120_000, &c);
     assert_eq!(server.phase, Phase::Lost, "twenty lives and no defence");
+  }
+
+  #[test]
+  fn the_only_ending_is_being_overrun_and_it_is_announced_once() {
+    // A client cannot infer this moment. It can see its own lives reach zero,
+    // but the moment has to be one every machine agrees on, and a world that
+    // has stopped producing enemies looks exactly like a quiet one.
+    let c = controls();
+    let mut server = Server::new(1, 7);
+    let ops = run(&mut server, 120_000, &c);
+    let overs: Vec<u32> = ops
+      .iter()
+      .filter_map(|op| match op {
+        Op::Over { wave } => Some(*wave),
+        _ => None,
+      })
+      .collect();
+    assert_eq!(overs.len(), 1, "announced exactly once: {overs:?}");
+    assert_eq!(server.phase, Phase::Lost);
+
+    let after = run(&mut server, 30_000, &c);
+    assert!(
+      !after.iter().any(|op| matches!(op, Op::Wave { .. } | Op::Over { .. })),
+      "and nothing further happens"
+    );
+  }
+
+  #[test]
+  fn the_waves_do_not_stop_and_each_one_is_harder() {
+    // There is no last wave. What ends a run is the difficulty outgrowing the
+    // defence, so the escalation has to be real rather than a counter that
+    // increments while the enemies stay the same.
+    let c = controls();
+    let mut server = Server::new(1, 7);
+    let mut reached = 0;
+    for _ in 0..(600_000 / SIM_STEP_MS) {
+      // Kept alive: this test is about the wave sequence, not about whether an
+      // undefended map survives one.
+      server.field.lives = STARTING_LIVES;
+      server.advance(SIM_STEP_MS, &c);
+      reached = reached.max(server.field.wave);
+    }
+    assert!(reached > 12, "the waves kept coming: reached {reached}");
+
+    let early = EnemyKind::Grunt.hp(2);
+    let late = EnemyKind::Grunt.hp(reached);
+    assert!(late > early * 2, "and got harder: {early} hp at wave 2 against {late} at wave {reached}");
   }
 
   #[test]

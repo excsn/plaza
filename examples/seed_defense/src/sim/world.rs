@@ -131,6 +131,7 @@ impl World {
           Op::Built { tick, build } => client.on_built(tick, build),
           Op::Digest { tick, digest, enemies } => client.on_digest(tick, digest, enemies, controls),
           Op::Snapshot { field, .. } => client.adopt(&field),
+          Op::Over { wave } => client.over = Some(wave),
           _ => {}
         }
       }
