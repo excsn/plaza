@@ -1,6 +1,6 @@
 [package]
 name = "plaza_session"
-version = "0.5.0"
+version = "0.6.0"
 edition = { workspace = true }
 description = "WebSocket and TCP transports for the Plaza real-time shared-state framework, with a pluggable wire format."
 readme = "README.md"
@@ -21,8 +21,8 @@ tcp = ["dep:tokio-util", "tokio/net"]
 actix_host = ["actix_ws", "dep:actix-files", "dep:tracing-subscriber"]
 
 [dependencies]
-plaza = { version = "0.5.0", path = "../core" }
-plaza_wire = { version = "0.5.0", path = "../wire" }
+plaza = { version = "0.6.0", path = "../core" }
+plaza_wire = { version = "0.6.0", path = "../wire" }
 
 serde = { version = "^1.0", features = ["derive"] }
 tokio = { version = "^1", features = ["sync", "rt", "macros", "time"] }
