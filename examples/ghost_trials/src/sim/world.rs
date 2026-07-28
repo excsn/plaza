@@ -37,7 +37,7 @@ impl World {
     let mut clients = Vec::new();
     for seat in 0..count {
       server.take_seat(seat);
-      let mut client = Client::new(seat as PlayerId, server.track.clone(), server.rules_version);
+      let mut client = Client::new(seat as PlayerId, Track::circuit(), server.rules_version);
       if let Op::Welcome { ghosts, .. } = server.welcome(seat) {
         client.on_ghosts(ghosts);
       }
@@ -102,14 +102,12 @@ impl World {
   }
 
   pub fn start_all(&mut self) {
-    for client in self.clients.iter_mut() {
-      client.restart_as(Mode::Trial);
-    }
+    self.start_all_as(Mode::Trial, TrackSize::Medium, 1);
   }
 
-  pub fn start_all_as(&mut self, mode: Mode) {
+  pub fn start_all_as(&mut self, mode: Mode, size: TrackSize, field: usize) {
     for client in self.clients.iter_mut() {
-      client.restart_as(mode);
+      client.restart_as(mode, size, field);
     }
   }
 

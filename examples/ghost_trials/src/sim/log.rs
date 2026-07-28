@@ -40,6 +40,11 @@ pub struct Span {
 pub struct InputLog {
   /// The rules this was recorded under. See the module note.
   pub rules_version: u32,
+  /// Which circuit, and how many cars. Both are needed to reproduce the run
+  /// and neither is expensive: a track is a constant both ends already have,
+  /// and a field size is a number.
+  pub track: TrackSize,
+  pub field: u16,
   /// Which game it was: a trial alone, or a race against the CPU field.
   ///
   /// A race log carries **only the player's inputs**, because the opponents are
@@ -54,6 +59,8 @@ impl Default for InputLog {
   fn default() -> Self {
     Self {
       rules_version: 0,
+      track: TrackSize::Medium,
+      field: 1,
       mode: Mode::Trial,
       spans: Vec::new(),
     }
@@ -61,11 +68,16 @@ impl Default for InputLog {
 }
 
 impl InputLog {
+  /// The circuit this log was driven on. Built, not carried.
+  pub fn circuit(&self) -> Track {
+    Track::of(self.track)
+  }
+
   /// The world this log was driven in.
   pub fn world(&self, track: &Track) -> rules::World {
     match self.mode {
       Mode::Trial => rules::World::trial(track),
-      Mode::Race => rules::World::race(track, RACE_FIELD),
+      Mode::Race => rules::World::race(track, self.field.max(1) as usize),
     }
   }
 
@@ -106,10 +118,12 @@ pub struct Recorder {
 }
 
 impl Recorder {
-  pub fn new(rules_version: u32, mode: Mode) -> Self {
+  pub fn new(rules_version: u32, mode: Mode, track: TrackSize, field: u16) -> Self {
     Self {
       log: InputLog {
         rules_version,
+        track,
+        field,
         mode,
         spans: Vec::new(),
       },
@@ -249,7 +263,7 @@ pub fn replay_to(log: &InputLog, track: &Track, tick: u32) -> Racer {
 ///
 /// The whole of the anti-cheat, and it is not a heuristic: the log either
 /// produces that time or it does not.
-pub fn verify(log: &InputLog, claimed_ms: u64, track: &Track, rules_version: u32) -> Result<Replay, Rejection> {
+pub fn verify(log: &InputLog, claimed_ms: u64, rules_version: u32) -> Result<Replay, Rejection> {
   if log.rules_version != rules_version {
     return Err(Rejection::WrongRules {
       theirs: log.rules_version,
@@ -259,7 +273,7 @@ pub fn verify(log: &InputLog, claimed_ms: u64, track: &Track, rules_version: u32
   if log.ticks() > MAX_TICKS {
     return Err(Rejection::TooLong);
   }
-  let replay = replay(log, track);
+  let replay = replay(log, &log.circuit());
   let Some(time) = replay.time_ms() else {
     return Err(Rejection::NeverFinished);
   };
@@ -286,11 +300,12 @@ mod tests {
   }
 
   fn drive(track: &Track, mode: Mode) -> (Recorder, Racer) {
+    let field = if mode == Mode::Race { RACE_FIELD } else { 1 };
     let mut world = match mode {
       Mode::Trial => rules::World::trial(track),
-      Mode::Race => rules::World::race(track, RACE_FIELD),
+      Mode::Race => rules::World::race(track, field),
     };
-    let mut recorder = Recorder::new(VERSION, mode);
+    let mut recorder = Recorder::new(VERSION, mode, track.size, field as u16);
     for _ in 0..MAX_TICKS {
       // The player is driven by the same rule the opponents are, which makes
       // the fixture a fixture rather than a script.
@@ -381,7 +396,7 @@ mod tests {
   fn an_entry_is_a_change_of_input_rather_than_a_tick() {
     // The encoding is the op stream's own shape. A held key is one entry
     // however long it is held, which is why the log is small.
-    let mut recorder = Recorder::new(VERSION, Mode::Trial);
+    let mut recorder = Recorder::new(VERSION, Mode::Trial, TrackSize::Medium, 1);
     for _ in 0..500 {
       recorder.observe(Input::new(1, false));
     }
@@ -407,8 +422,8 @@ mod tests {
     let log = recorder.finish();
     let real = replay(&log, &track).time_ms().expect("finished");
 
-    assert!(verify(&log, real, &track, VERSION).is_ok(), "the honest time is accepted");
-    let err = verify(&log, real / 2, &track, VERSION).expect_err("a halved time is not");
+    assert!(verify(&log, real, VERSION).is_ok(), "the honest time is accepted");
+    let err = verify(&log, real / 2, VERSION).expect_err("a halved time is not");
     assert_eq!(
       err,
       Rejection::TimeDoesNotMatch {
@@ -421,13 +436,13 @@ mod tests {
   #[test]
   fn a_log_that_never_finishes_is_refused() {
     let track = Track::circuit();
-    let mut recorder = Recorder::new(VERSION, Mode::Trial);
+    let mut recorder = Recorder::new(VERSION, Mode::Trial, TrackSize::Medium, 1);
     for _ in 0..600 {
       recorder.observe(Input::new(1, false));
     }
     let log = recorder.finish();
     assert_eq!(
-      verify(&log, 12_000, &track, VERSION),
+      verify(&log, 12_000, VERSION),
       Err(Rejection::NeverFinished),
       "driving in circles is not a lap"
     );
@@ -446,7 +461,7 @@ mod tests {
     log.rules_version = VERSION + 1;
 
     assert_eq!(
-      verify(&log, real, &track, VERSION),
+      verify(&log, real, VERSION),
       Err(Rejection::WrongRules {
         theirs: VERSION + 1,
         ours: VERSION

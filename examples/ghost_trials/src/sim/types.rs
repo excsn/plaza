@@ -20,6 +20,8 @@ pub type PlayerId = u8;
 /// The simulation quantum, on every machine and in every replay. 50 Hz.
 pub const SIM_STEP_MS: u64 = 20;
 
+/// The medium arena, which is what the constants elsewhere are sized against.
+/// The live one comes from [`Track::arena`].
 pub const ARENA_W: i32 = 64;
 pub const ARENA_H: i32 = 40;
 
@@ -137,8 +139,10 @@ pub struct Racer {
   /// The ring this racer must pass through next.
   pub next_ring: u16,
   pub lap: u16,
-  /// Server tick a grip runs out on.
+  /// Ticks the timed power-ups run out on.
   pub grip_until: u32,
+  pub shield_until: u32,
+  pub slick_until: u32,
   /// The tick this racer finished on, if it has.
   pub finished_tick: Option<u32>,
 }
@@ -157,6 +161,8 @@ impl Racer {
       next_ring: 1,
       lap: 0,
       grip_until: 0,
+      shield_until: 0,
+      slick_until: 0,
       finished_tick: None,
     }
   }
@@ -167,18 +173,38 @@ impl Racer {
   /// four cars in one place shoving each other.
   pub fn on_grid(track: &Track, slot: usize, field: usize) -> Self {
     let mut racer = Self::at_start(track);
-    // Centred on the line for whatever the field actually is, not for the
-    // largest one it could be. A race of one starts on the line, which is what
-    // makes a trial a race with nobody else in it rather than a different game.
+    // A square-ish block, **centred on the line in both directions**. A field of
+    // thirty-two in one row is wider than the small circuit's arena, and thirty
+    // two rows deep runs off the back of it, so the grid grows in both and sits
+    // around the start rather than behind it. Some cars therefore begin a
+    // fraction ahead, which is a real and deliberate unfairness in a race and
+    // means nothing in a trial, where the field is one.
+    let field = field.max(1);
+    let per_row = grid_row(field);
+    let rows = field.div_ceil(per_row);
+    let col = slot % per_row;
+    let row = slot / per_row;
     let across = sin(racer.heading);
     let along = cos(racer.heading);
-    let offset = Fx::ratio(slot as i32 * 15, 10) - Fx::ratio((field.max(1) as i32 - 1) * 15, 20);
-    racer.pos = P::new(racer.pos.x + across.mul(offset), racer.pos.y - along.mul(offset));
+    let side = Fx::ratio(col as i32 * 16, 10) - Fx::ratio((per_row as i32 - 1) * 16, 20);
+    let back = Fx::ratio(row as i32 * 17, 10) - Fx::ratio((rows as i32 - 1) * 17, 20);
+    racer.pos = P::new(
+      racer.pos.x + across.mul(side) - along.mul(back),
+      racer.pos.y - along.mul(side) - across.mul(back),
+    );
     racer
   }
 
   pub fn gripping(&self, tick: u32) -> bool {
     self.grip_until > tick
+  }
+
+  pub fn shielded(&self, tick: u32) -> bool {
+    self.shield_until > tick
+  }
+
+  pub fn slick(&self, tick: u32) -> bool {
+    self.slick_until > tick
   }
 
   /// How far round the circuit, for placing racers against each other.
@@ -292,15 +318,38 @@ impl TryFrom<u8> for Mode {
 pub enum Power {
   Turbo,
   Grip,
+  Shield,
+  Slick,
 }
 
 impl Power {
-  pub const ALL: [Power; 2] = [Power::Turbo, Power::Grip];
+  pub const ALL: [Power; 4] = [Power::Turbo, Power::Grip, Power::Shield, Power::Slick];
 
   pub fn label(self) -> &'static str {
     match self {
       Power::Turbo => "turbo",
       Power::Grip => "grip",
+      Power::Shield => "shield",
+      Power::Slick => "slick",
+    }
+  }
+
+  /// The letter drawn on the disc.
+  pub fn mark(self) -> &'static str {
+    match self {
+      Power::Turbo => "T",
+      Power::Grip => "G",
+      Power::Shield => "S",
+      Power::Slick => "L",
+    }
+  }
+
+  pub fn describe(self) -> &'static str {
+    match self {
+      Power::Turbo => "the boost you would have had to slow down for",
+      Power::Grip => "the charge turn without the charge speed",
+      Power::Shield => "shoves nobody back, and cannot be shoved",
+      Power::Slick => "faster in a straight line, and it will not turn",
     }
   }
 }
@@ -317,14 +366,21 @@ impl TryFrom<u8> for Power {
     match v {
       0 => Ok(Power::Turbo),
       1 => Ok(Power::Grip),
+      2 => Ok(Power::Shield),
+      3 => Ok(Power::Slick),
       _ => Err("unknown power"),
     }
   }
 }
 
-/// What a turbo hands over, and how long a grip lasts.
+/// What a turbo hands over, and how long the timed ones last.
 pub const TURBO_BOOST: u16 = 55;
 pub const GRIP_TICKS: u16 = 180;
+pub const SHIELD_TICKS: u16 = 220;
+pub const SLICK_TICKS: u16 = 170;
+/// What a slick trades: pace for a turning circle.
+pub const SLICK_SPEED: Fx = Fx::ratio(38, 100);
+pub const SLICK_TURN: u16 = 6;
 /// How long a taken pickup stays gone.
 pub const PICKUP_RESPAWN: u32 = 320;
 pub const PICKUP_RADIUS: Fx = Fx::ratio(18, 10);
@@ -355,43 +411,180 @@ pub const BUMP_RADIUS: Fx = Fx::ratio(11, 10);
 pub const BUMP_SPEED_LOSS: Fx = Fx::ratio(6, 100);
 pub const BUMP_PUSH: Fx = Fx::ratio(35, 100);
 
-/// How many racers a race holds, you included.
+/// The default field, and the most the panel will let you ask for.
 pub const RACE_FIELD: usize = 4;
+pub const MAX_FIELD: usize = 32;
+/// How many start side by side before the grid steps back a row.
+///
+/// The smallest square that holds the field, so a grid grows in both directions
+/// instead of running off the end of the arena. Integer, and computed by
+/// counting rather than by a square root: this decides starting positions, and
+/// starting positions are part of what a log reproduces.
+pub fn grid_row(field: usize) -> usize {
+  let mut k = 1;
+  while k * k < field.max(1) {
+    k += 1;
+  }
+  k
+}
+
+/// Which circuit. Three fixed layouts rather than a generator, because a lap
+/// time only means anything against other laps of the same track, and a track
+/// that varied would make every recorded run incomparable with every other.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(into = "u8", try_from = "u8")]
+pub enum TrackSize {
+  Small,
+  #[default]
+  Medium,
+  Large,
+}
+
+impl TrackSize {
+  pub const ALL: [TrackSize; 3] = [TrackSize::Small, TrackSize::Medium, TrackSize::Large];
+
+  pub fn label(self) -> &'static str {
+    match self {
+      TrackSize::Small => "small",
+      TrackSize::Medium => "medium",
+      TrackSize::Large => "large",
+    }
+  }
+
+  /// The arena the circuit sits in, in tiles.
+  pub fn arena(self) -> (i32, i32) {
+    match self {
+      TrackSize::Small => (44, 28),
+      TrackSize::Medium => (64, 40),
+      TrackSize::Large => (92, 56),
+    }
+  }
+}
+
+impl From<TrackSize> for u8 {
+  fn from(s: TrackSize) -> u8 {
+    s as u8
+  }
+}
+
+impl TryFrom<u8> for TrackSize {
+  type Error = &'static str;
+  fn try_from(v: u8) -> Result<Self, Self::Error> {
+    match v {
+      0 => Ok(TrackSize::Small),
+      1 => Ok(TrackSize::Medium),
+      2 => Ok(TrackSize::Large),
+      _ => Err("unknown track size"),
+    }
+  }
+}
 
 /// The rings, in order, as a closed loop.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Track {
+  pub size: TrackSize,
   pub rings: Vec<P>,
+  pub pickups: Vec<Pickup>,
 }
 
 impl Default for Track {
   fn default() -> Self {
-    Self::circuit()
+    Self::of(TrackSize::Medium)
   }
 }
 
 impl Track {
-  /// The one circuit. Fixed rather than generated: a ghost is only comparable
-  /// against a run on the same track, and a track that varied would make every
-  /// recorded lap incomparable with every other.
+  /// The medium circuit, which is what the tests mean by "the track".
   pub fn circuit() -> Self {
-    let points = [
-      (10, 32),
-      (10, 12),
-      (20, 6),
-      (30, 14),
-      (30, 28),
-      (40, 34),
-      (50, 28),
-      (54, 14),
-      (44, 8),
-      (36, 20),
-      (24, 26),
-      (16, 36),
-    ];
+    Self::of(TrackSize::Medium)
+  }
+
+  /// One of the three fixed layouts.
+  ///
+  /// A track is **never sent**. Both ends build it from the size, which is one
+  /// byte in a log, for the same reason a wave in `seed_defense` is two
+  /// integers: it is a constant, and a constant is a thing both ends already
+  /// have rather than a thing one of them has to describe.
+  pub fn of(size: TrackSize) -> Self {
+    let (rings, pickups): (&[(i32, i32)], &[((i32, i32), Power)]) = match size {
+      TrackSize::Small => (
+        &[(8, 22), (8, 8), (18, 5), (26, 12), (34, 8), (38, 20), (28, 24), (18, 18)],
+        &[
+          ((8, 15), Power::Turbo),
+          ((22, 8), Power::Grip),
+          ((36, 14), Power::Shield),
+          ((23, 21), Power::Slick),
+        ],
+      ),
+      TrackSize::Medium => (
+        &[
+          (10, 32),
+          (10, 12),
+          (20, 6),
+          (30, 14),
+          (30, 28),
+          (40, 34),
+          (50, 28),
+          (54, 14),
+          (44, 8),
+          (36, 20),
+          (24, 26),
+          (16, 36),
+        ],
+        &[
+          ((10, 22), Power::Turbo),
+          ((25, 9), Power::Grip),
+          ((30, 21), Power::Shield),
+          ((45, 31), Power::Slick),
+          ((52, 20), Power::Turbo),
+          ((20, 31), Power::Grip),
+        ],
+      ),
+      TrackSize::Large => (
+        &[
+          (12, 46),
+          (10, 20),
+          (22, 6),
+          (38, 10),
+          (44, 24),
+          (36, 36),
+          (48, 46),
+          (66, 44),
+          (78, 30),
+          (70, 14),
+          (54, 8),
+          (58, 26),
+          (44, 38),
+          (28, 44),
+        ],
+        &[
+          ((11, 33), Power::Turbo),
+          ((30, 7), Power::Grip),
+          ((41, 17), Power::Shield),
+          ((40, 30), Power::Slick),
+          ((57, 45), Power::Turbo),
+          ((74, 37), Power::Grip),
+          ((62, 11), Power::Shield),
+          ((36, 41), Power::Slick),
+        ],
+      ),
+    };
     Self {
-      rings: points.iter().map(|(x, y)| P::from_ints(*x, *y)).collect(),
+      size,
+      rings: rings.iter().map(|(x, y)| P::from_ints(*x, *y)).collect(),
+      pickups: pickups
+        .iter()
+        .map(|((x, y), kind)| Pickup {
+          at: P::from_ints(*x, *y),
+          kind: *kind,
+          back_at: 0,
+        })
+        .collect(),
     }
+  }
+
+  pub fn arena(&self) -> (i32, i32) {
+    self.size.arena()
   }
 
   pub fn len(&self) -> usize {
@@ -405,26 +598,6 @@ impl Track {
   pub fn ring(&self, index: u16) -> P {
     self.rings[index as usize % self.rings.len()]
   }
-}
-
-/// Where the pickups sit. Part of the track, like the rings.
-pub fn pickups() -> Vec<Pickup> {
-  let spots = [
-    ((10, 22), Power::Turbo),
-    ((25, 9), Power::Grip),
-    ((30, 21), Power::Turbo),
-    ((45, 31), Power::Grip),
-    ((52, 20), Power::Turbo),
-    ((30, 24), Power::Grip),
-  ];
-  spots
-    .iter()
-    .map(|((x, y), kind)| Pickup {
-      at: P::from_ints(*x, *y),
-      kind: *kind,
-      back_at: 0,
-    })
-    .collect()
 }
 
 /// The dials the panel edits.
@@ -441,12 +614,9 @@ pub struct Controls {
   /// Submit a time the log does not support, to watch the server refuse it.
   pub cheat: bool,
   pub players: usize,
-  /// How far ahead of now an input in a race is scheduled.
-  ///
-  /// The whole cost of racing other people, in one number. A trial pays none of
-  /// it because a trial has nothing to be fair about.
-  pub playout_delay_ms: u64,
-  pub bots: usize,
+  /// How many cars line up, you included.
+  pub field: usize,
+  pub track: TrackSize,
 }
 
 impl Default for Controls {
@@ -459,8 +629,8 @@ impl Default for Controls {
       self_check: true,
       cheat: false,
       players: 2,
-      playout_delay_ms: 100,
-      bots: RACE_FIELD - 1,
+      field: RACE_FIELD,
+      track: TrackSize::Medium,
     }
   }
 }

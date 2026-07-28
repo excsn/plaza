@@ -135,20 +135,25 @@ async fn frame_loop(options: role::Options) {
 
     #[cfg(all(feature = "client", feature = "websocket"))]
     if in_menu {
-      let menu = render::draw_menu(client.sim.best_ms, client.sim.ghosts.len());
+      let menu = render::draw_menu(client.sim.best_ms, client.sim.ghosts.len(), &controls);
+      let clicked = is_mouse_button_pressed(MouseButton::Left);
+      let pointer = Vec2::from(mouse_position());
+      // A click on the setup rows changes what a run would be; only a click on
+      // a mode card starts one.
+      let adjusted = clicked && menu.adjust(pointer, &mut controls);
       let picked = if is_key_pressed(KeyCode::Key1) {
         Some(Mode::Trial)
       } else if is_key_pressed(KeyCode::Key2) {
         Some(Mode::Race)
-      } else if is_mouse_button_pressed(MouseButton::Left) {
-        menu.hit(Vec2::from(mouse_position()))
+      } else if clicked && !adjusted {
+        menu.hit(pointer)
       } else {
         None
       };
       if let Some(mode) = picked
         && client.is_playing()
       {
-        client.restart_as(mode);
+        client.restart_as(mode, controls.track, controls.field);
         last_ms = clock_ms;
         in_menu = false;
       }
@@ -169,8 +174,8 @@ async fn frame_loop(options: role::Options) {
         in_menu = true;
       }
 
-      let board = Board::fit();
       let sim = &client.sim;
+      let board = Board::fit(sim.track.arena());
       render::draw_arena(&board);
       render::draw_track(&board, &sim.track, sim.racer().next_ring);
       render::draw_pickups(&board, &sim.world.pickups, sim.tick);
@@ -181,16 +186,24 @@ async fn frame_loop(options: role::Options) {
             continue;
           }
           let colour = render::player_color(run.ghost.player);
-          render::draw_racer(&board, run.racer(), Color::new(colour.r, colour.g, colour.b, 0.55), true, run.tick);
+          render::draw_racer(&board, run.racer(), Color::new(colour.r, colour.g, colour.b, 0.55), true, run.tick, None);
         }
       }
       // The CPU field, in a plainer colour than the player: a race should read
       // at a glance as "me and them" rather than as four equal cars.
+      let racing = sim.mode == Mode::Race;
       for (i, racer) in sim.world.racers.iter().enumerate().skip(1) {
-        render::draw_racer(&board, racer, Color::new(0.72, 0.55, 0.85, 1.0), false, sim.tick);
-        let _ = i;
+        let place = racing.then(|| sim.place_of(i));
+        render::draw_racer(&board, racer, Color::new(0.72, 0.55, 0.85, 1.0), false, sim.tick, place);
       }
-      render::draw_racer(&board, sim.racer(), render::player_color(0), false, sim.tick);
+      render::draw_racer(
+        &board,
+        sim.racer(),
+        render::player_color(0),
+        false,
+        sim.tick,
+        racing.then(|| sim.position()),
+      );
 
       // The split against the ghost being chased, in the only currency a trial
       // has: how far round each of you is.
@@ -200,7 +213,7 @@ async fn frame_loop(options: role::Options) {
         (mine != theirs).then(|| (theirs as i64 - mine as i64) * 500)
       });
       render::draw_hud(&board, sim.elapsed_ms(), sim.racer().lap, sim.best_ms, split, sim.mode);
-      if sim.mode == Mode::Race {
+      if racing {
         render::draw_positions(&board, &sim.world, 0);
       }
 
@@ -242,6 +255,7 @@ async fn frame_loop(options: role::Options) {
         bytes_if_paths: truth.bytes_if_paths,
         seats_taken: truth.seats_taken,
         seats: truth.seats,
+        lost_submissions: truth.lost_submissions,
       });
     }
 

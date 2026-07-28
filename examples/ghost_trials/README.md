@@ -16,7 +16,7 @@ Drive two laps through the rings, as fast as you can. Every run you finish becom
 cargo test -p ghost_trials                   # every claim below, as a test
 ```
 
-Pick a mode: **time trial** alone against the clock and the ghosts, or **race** against three CPU drivers who shove and take your pickups.
+Pick a mode: **time trial** alone against the clock and the ghosts, or **race** against a CPU field of up to 32 who shove and take your pickups. The menu also picks the circuit, small, medium or large.
 
 Left and right steer. Hold space to charge: you slow down, you turn harder, and you bank a boost that spends when you let go. `R` starts again, `Escape` goes back to the menu.
 
@@ -75,7 +75,9 @@ The menu picks between two arrangements of the same track, the same rules and th
 
 **A time trial has nothing to arbitrate.** One car, one clock. So the client owns the whole of the feel, the server never watches, and the verdict arrives afterwards. Latency is not on the path at any depth.
 
-**A race has three CPU drivers on the circuit with you**, shoving for room and taking pickups out from under you. And the log does not get any bigger, because **the opponents are a pure function of the world**. `bot_input` reads a racer and the track and returns what that racer holds this tick; nothing else. So one player's key presses reproduce a four-way race, every shove and every stolen pickup included, which `one_players_log_reproduces_a_whole_four_way_race` asserts by driving one, replaying it, and comparing the whole field.
+**A race has a CPU field on the circuit with you**, anything from one other car to thirty-one, shoving for room and taking pickups out from under you. **A race of thirty-two is recorded by exactly the same log as a race of two**, because the opponents are a pure function of the world. `bot_input` reads a racer and the track and returns what that racer holds this tick; nothing else. So one player's key presses reproduce the whole field, every shove and every stolen pickup included, which `one_players_log_reproduces_a_whole_four_way_race` asserts by driving one, replaying it, and comparing every car.
+
+The circuit and the field size are in the log too, for the same reason the mode is: they are cheap (a byte and a number) and a run cannot be reproduced without them. The track itself is **never sent** at all. Both ends build it from the size, because a constant is a thing both ends already have rather than a thing one of them has to describe.
 
 That is `seed_defense`'s trick pointed at opponents instead of a wave of enemies, and it is why the mode is stored *in* the log: replaying a race log as a trial would leave three cars out, and the time it produced would be a time nobody drove.
 
@@ -89,12 +91,22 @@ The noise is also sampled in *chunks* of ticks rather than per tick, which matte
 
 ### The power-ups change a rule, not a number
 
-Two, and they are part of the circuit rather than events: fixed positions, fixed kinds, a fixed respawn interval. Nothing about them is drawn from anywhere, which is what lets a run be reproduced from its inputs alone.
+Four, and they are part of the circuit rather than events: fixed positions, fixed kinds, a fixed respawn interval. Nothing about them is drawn from anywhere, which is what lets a run be reproduced from its inputs alone.
 
 - **Turbo** hands over the boost you would otherwise have had to slow down to earn.
-- **Grip** gives you the charge turn *without* the charge speed, which inverts the trade the whole game is built on for a few seconds.
+- **Grip** gives you the charge turn *without* the charge speed.
+- **Slick** is the same trade in the other direction: faster in a straight line, and it will not turn.
+- **Shield** takes no shove and still gives one, which falls out of the ordering rule below for free: the impulses are all computed before any of them lands, so a shielded car has already pushed everyone it touched by the time it declines to be pushed itself.
+
+Grip and slick are deliberately opposites, because the game is built on one trade (pace against cornering) and the interesting pickups are the ones that move you along it rather than the ones that give you more of everything.
 
 A contested pickup goes to the racer with the lowest index, not to whoever was closest and not to whoever the loop reached first. Both of those are rules about the container rather than about the game. The shoves are the same discipline: **every impulse is computed from the state before any of them lands**, and `a_shove_is_the_same_whichever_order_the_pairs_come_up_in` reverses the list and checks the outcome is mirrored.
+
+### The starting grid, and one deliberate unfairness
+
+Thirty-two cars in one row is wider than the small circuit's arena, and thirty-two rows deep runs off the back of it, so the grid is the smallest square that holds the field, centred on the start line in **both** directions. Some cars therefore begin a fraction ahead of others. That is a real unfairness in a race, it is worth knowing about rather than discovering, and it means nothing at all in a trial, where the field is one.
+
+`a_full_grid_starts_inside_the_arena_and_not_on_top_of_itself` checks both halves on all three circuits, because a race that begins with a pile-up is a race decided by the pile-up.
 
 ## What a replay is a bet on
 
@@ -123,6 +135,16 @@ So the check stays, and the panel counts it. It does not test the simulation, it
 - **Nothing is predicted, and nothing is corrected.** There is no authority racing alongside you to disagree with. The client owns the whole of the feel; the server owns the verdict, and the verdict arrives after the run is over.
 - **The clock is not in the simulation.** A lap is counted in ticks taken, not in wall time, so a client with a badly fitted clock still records the same lap. That is what makes a run comparable with one driven on another machine a week later.
 - **The frame rate is not in the simulation either.** The input held during a frame is applied to every whole tick that frame covers, with the remainder carried. A racing game is the easiest place in the world to advance by "however long the last frame took", and it would make every recorded lap a function of the frame rate that recorded it. `the_simulation_runs_in_whole_ticks_however_long_a_frame_took` feeds the same total time in awkward pieces and asserts the tick count matches.
+
+## What the impairment sliders can and cannot do
+
+Worth stating plainly, because the honest answer looks like a broken feature.
+
+Turn the latency to 800 ms and drive a lap: **the time is identical**. That is not the slider failing, it is the measurement. The run happens on the machine driving it, and the link is not in the loop.
+
+What the link does decide is when the verdict on your run comes back and when somebody else's ghost turns up, and the arena impairs both on the real path: the answers to a submission go through a `LatencyLink` per seat, and a submission itself can be dropped, which the host panel counts.
+
+An earlier version of this example did **not** impair the live path at all. The sliders were wired only to the offline harness, so on a real host they moved nothing whatsoever, which invites exactly the wrong conclusion: a player turns the latency up, sees no change anywhere, and concludes the example is not doing anything. A control that acts on nothing is worse than one that acts on something dull. `the_impairment_is_on_the_real_path` now asserts a verdict cannot come back faster than the link allows.
 
 ## How it is built
 

@@ -18,7 +18,6 @@ pub const KEPT_GHOSTS: usize = 6;
 
 #[derive(Clone, Debug)]
 pub struct Server {
-  pub track: Track,
   pub rules_version: u32,
   /// Best runs, fastest first.
   pub board: Vec<Ghost>,
@@ -42,7 +41,6 @@ pub struct Server {
 impl Server {
   pub fn new(seats: usize) -> Self {
     Self {
-      track: Track::circuit(),
       rules_version: PROTOCOL,
       board: Vec::new(),
       seats: vec![false; seats.clamp(1, 4)],
@@ -91,7 +89,6 @@ impl Server {
     Op::Welcome {
       player: seat as PlayerId,
       protocol: self.rules_version,
-      track: Box::new(self.track.clone()),
       ghosts: self.board.clone(),
       server_time_ms: self.clock_ms,
     }
@@ -112,7 +109,7 @@ impl Server {
     self.bytes_in += 12 + log.wire_cost() as u64;
     self.ticks_replayed += log.ticks().min(log::MAX_TICKS) as u64;
 
-    match log::verify(&log, claimed_ms, &self.track, self.rules_version) {
+    match log::verify(&log, claimed_ms, self.rules_version) {
       Err(why) => {
         self.refused += 1;
         self.last_refusal = Some(why);
@@ -156,7 +153,7 @@ mod tests {
   fn a_run(version: u32) -> (InputLog, u64) {
     let track = Track::circuit();
     let mut world = rules::World::trial(&track);
-    let mut recorder = Recorder::new(version, Mode::Trial);
+    let mut recorder = Recorder::new(version, Mode::Trial, TrackSize::Medium, 1);
     let mut finished = None;
     for tick in 0..log::MAX_TICKS {
       let input = rules::bot_input(&world.racers[0], &track, world.tick, 0);

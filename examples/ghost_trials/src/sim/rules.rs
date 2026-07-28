@@ -33,10 +33,10 @@ fn turn_rate(charge: bool) -> u16 {
 }
 
 pub fn step(racer: &mut Racer, input: Input, track: &Track) {
-  step_at_rate(racer, input, track, turn_rate(input.charge));
+  step_at_rate(racer, input, track, turn_rate(input.charge), TOP_SPEED);
 }
 
-fn step_at_rate(racer: &mut Racer, input: Input, track: &Track, rate: u16) {
+fn step_at_rate(racer: &mut Racer, input: Input, track: &Track, rate: u16, top: Fx) {
   // Spend a boost before choosing the target speed, so the tick a boost ends is
   // the tick the racer starts slowing rather than the one after it.
   if racer.boost > 0 {
@@ -48,7 +48,7 @@ fn step_at_rate(racer: &mut Racer, input: Input, track: &Track, rate: u16) {
   } else if input.charge {
     CHARGE_SPEED
   } else {
-    TOP_SPEED
+    top
   };
 
   // Closing on the target at a fixed rate, up or down. Not a proportional
@@ -85,7 +85,8 @@ fn step_at_rate(racer: &mut Racer, input: Input, track: &Track, rate: u16) {
 
   // The arena edge costs speed rather than ending the run, so a mistake is
   // expensive without being unrecoverable.
-  let (min, max_x, max_y) = (Fx::from_int(1), Fx::from_int(ARENA_W - 1), Fx::from_int(ARENA_H - 1));
+  let (w, h) = track.arena();
+  let (min, max_x, max_y) = (Fx::from_int(1), Fx::from_int(w - 1), Fx::from_int(h - 1));
   let mut bumped = false;
   if racer.pos.x < min {
     racer.pos.x = min;
@@ -152,7 +153,7 @@ impl World {
     Self {
       tick: 0,
       racers: vec![Racer::at_start(track)],
-      pickups: pickups(),
+      pickups: track.pickups.clone(),
       mode: Mode::Trial,
     }
   }
@@ -161,7 +162,7 @@ impl World {
     Self {
       tick: 0,
       racers: (0..field.max(1)).map(|slot| Racer::on_grid(track, slot, field.max(1))).collect(),
-      pickups: pickups(),
+      pickups: track.pickups.clone(),
       mode: Mode::Race,
     }
   }
@@ -356,14 +357,19 @@ pub fn step_world(world: &mut World, inputs: &[Input], track: &Track) {
 
 /// One racer, one tick, with the grip timer folded in.
 fn step_with(racer: &mut Racer, input: Input, track: &Track, tick: u32) {
-  // Grip is the trade inverted: the charge turn without the charge speed. It is
-  // a *rate*, handed to the same step, rather than a second movement rule.
-  let rate = if racer.gripping(tick) {
-    TURN_RATE + CHARGE_TURN_BONUS
+  // The two timed handling power-ups are opposites, and both are expressed as a
+  // turn rate and a top speed handed to the same step rather than as branches
+  // inside it. Grip is the charge trade inverted: the sharp turn without the
+  // speed cost. Slick is the trade taken further the other way: pace bought
+  // with a turning circle.
+  let (rate, top) = if racer.gripping(tick) {
+    (TURN_RATE + CHARGE_TURN_BONUS, TOP_SPEED)
+  } else if racer.slick(tick) {
+    (SLICK_TURN, SLICK_SPEED)
   } else {
-    turn_rate(input.charge)
+    (turn_rate(input.charge), TOP_SPEED)
   };
-  step_at_rate(racer, input, track, rate);
+  step_at_rate(racer, input, track, rate, top);
 }
 
 /// Hands out any pickup a racer is standing on.
@@ -387,9 +393,12 @@ fn take_pickups(world: &mut World, tick: u32) {
     };
     let kind = world.pickups[index].kind;
     world.pickups[index].back_at = tick + PICKUP_RESPAWN;
+    let racer = &mut world.racers[taker];
     match kind {
-      Power::Turbo => world.racers[taker].boost += TURBO_BOOST,
-      Power::Grip => world.racers[taker].grip_until = tick + GRIP_TICKS as u32,
+      Power::Turbo => racer.boost += TURBO_BOOST,
+      Power::Grip => racer.grip_until = tick + GRIP_TICKS as u32,
+      Power::Shield => racer.shield_until = tick + SHIELD_TICKS as u32,
+      Power::Slick => racer.slick_until = tick + SLICK_TICKS as u32,
     }
   }
 }
@@ -431,8 +440,12 @@ fn shove(world: &mut World) {
     }
   }
 
+  let tick = world.tick;
   for (i, racer) in world.racers.iter_mut().enumerate() {
-    if !hit[i] {
+    if !hit[i] || racer.shielded(tick) {
+      // A shield takes nothing. It still *gives*, because the impulses were
+      // all computed above from the state before any of them landed, so
+      // everyone it touched has already been pushed.
       continue;
     }
     racer.pos = P::new(racer.pos.x + pushes[i].x, racer.pos.y + pushes[i].y);
@@ -559,16 +572,11 @@ mod tests {
     assert!(!world.pickups[0].available(world.tick), "it was taken");
     // Lowest index wins, deliberately: any rule that depended on distance or on
     // iteration order is a rule two machines could resolve differently.
-    match spot.kind {
-      Power::Turbo => {
-        assert!(world.racers[0].boost > 0);
-        assert_eq!(world.racers[1].boost, 0, "only one of them got it");
-      }
-      Power::Grip => {
-        assert!(world.racers[0].gripping(world.tick));
-        assert!(!world.racers[1].gripping(world.tick));
-      }
-    }
+    // Whatever it was, exactly one of them has it.
+    let had = |r: &Racer| r.boost > 0 || r.gripping(world.tick) || r.shielded(world.tick) || r.slick(world.tick);
+    assert!(had(&world.racers[0]), "the lower index took it");
+    assert!(!had(&world.racers[1]), "and the other one did not");
+    let _ = spot.kind;
 
     let taken_at = world.tick;
     for _ in 0..(PICKUP_RESPAWN - 1) {
@@ -693,6 +701,89 @@ mod tests {
         assert_eq!(a, b, "seat {seat} at tick {tick}");
       }
     }
+  }
+
+  #[test]
+  fn a_full_grid_starts_inside_the_arena_and_not_on_top_of_itself() {
+    // Thirty-two cars on one line is wider than any of these circuits, so the
+    // grid steps back in rows. Both halves matter: inside the walls, and not
+    // stacked, because a race that begins with a pile-up is a race decided by
+    // the pile-up.
+    for size in TrackSize::ALL {
+      let track = Track::of(size);
+      let (w, h) = track.arena();
+      let world = World::race(&track, MAX_FIELD);
+      for (i, racer) in world.racers.iter().enumerate() {
+        assert!(
+          racer.pos.x >= Fx::ZERO && racer.pos.x <= Fx::from_int(w) && racer.pos.y >= Fx::ZERO && racer.pos.y <= Fx::from_int(h),
+          "{} car {i} started at {:?}",
+          size.label(),
+          racer.pos
+        );
+      }
+      for i in 0..world.racers.len() {
+        for j in (i + 1)..world.racers.len() {
+          assert_ne!(world.racers[i].pos, world.racers[j].pos, "{} cars {i} and {j} are stacked", size.label());
+        }
+      }
+    }
+  }
+
+  #[test]
+  fn every_circuit_is_drivable() {
+    // Three layouts, and the cheapest way for one of them to be wrong is a ring
+    // placed where a car cannot reach it. Driven by the sharpest bot on each.
+    for size in TrackSize::ALL {
+      let track = Track::of(size);
+      let mut world = World::trial(&track);
+      let mut completed = false;
+      for _ in 0..crate::sim::log::MAX_TICKS {
+        let input = bot_input(&world.racers[0], &track, world.tick, 3);
+        step_world(&mut world, &[input], &track);
+        if finished(&world.racers[0]) {
+          completed = true;
+          break;
+        }
+      }
+      assert!(completed, "{} was not completed", size.label());
+    }
+  }
+
+  #[test]
+  fn a_shield_takes_no_shove_and_still_gives_one() {
+    let track = Track::circuit();
+    let mut world = World::race(&track, 2);
+    world.racers[0].pos = P::from_ints(20, 20);
+    world.racers[1].pos = P::new(Fx::from_int(20) + Fx::ratio(4, 10), Fx::from_int(20));
+    world.racers[0].speed = TOP_SPEED;
+    world.racers[1].speed = TOP_SPEED;
+    world.racers[0].shield_until = 10_000;
+    let shielded_at = world.racers[0].pos;
+
+    step_world(&mut world, &[Input::default(), Input::default()], &track);
+    assert_eq!(world.racers[0].speed, TOP_SPEED, "the shield paid nothing");
+    assert!(world.racers[1].speed < TOP_SPEED, "and the other one did");
+    let _ = shielded_at;
+  }
+
+  #[test]
+  fn a_slick_is_the_opposite_trade_from_a_grip() {
+    // Faster in a straight line, and it will not turn. The pair of them are
+    // the charge trade taken in both directions.
+    let track = Track::circuit();
+    let mut plain = World::race(&track, 1);
+    let mut slick = World::race(&track, 1);
+    slick.racers[0].slick_until = 10_000;
+
+    for _ in 0..40 {
+      step_world(&mut plain, &[Input::new(1, false)], &track);
+      step_world(&mut slick, &[Input::new(1, false)], &track);
+    }
+    let start = Racer::at_start(&track).heading;
+    let turned_plain = (plain.racers[0].heading + BRADS - start) % BRADS;
+    let turned_slick = (slick.racers[0].heading + BRADS - start) % BRADS;
+    assert!(turned_slick < turned_plain, "it will not turn: {turned_slick} against {turned_plain}");
+    assert!(slick.racers[0].speed > plain.racers[0].speed, "and it goes faster for it");
   }
 
   #[test]

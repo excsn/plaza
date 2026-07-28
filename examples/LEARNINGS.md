@@ -442,6 +442,8 @@ The general point is the one worth keeping. The check does not test the simulati
 
 That noise is sampled in chunks of ticks rather than per tick, for two reasons that turned out to be the same reason. A driver whose mind changes every tick reads as a twitch rather than as a mistake. And a driver whose mind changes every tick produces one log entry per tick, which is exactly what stops an event log being small. **How still an input holds is both a feel property and a bandwidth property**, and they push the same way.
 
+**A control that acts on nothing is worse than a control that acts on something dull.** The racing example shipped with latency, jitter and loss sliders that were wired only to the offline test harness. On a real host they moved nothing at all. That is a nastier fault than it sounds, because the example's headline claim is "latency cannot affect your lap": a player drags the slider to 400 ms, sees no change anywhere on the screen, and has just been shown a convincing demonstration of a thing that was not being tested. The impairment now runs on the real path (the verdict and the ghosts go through a per-seat link, and a submission can be dropped), so the claim is made against a link that is genuinely bad rather than against one that is not there. **If a demo has a switch, something has to be able to fail when it is thrown.**
+
 **Latency is genuinely not on the path, which is worth stating once.** Four runs at 0, 80, 250 and 400 ms one way produce *identical* times, because the run happens on the machine driving it. Every other playground here spends its effort making latency cheap; this is the one that can say it costs nothing, and the reason is architectural rather than clever.
 
 ### Smaller ones worth remembering

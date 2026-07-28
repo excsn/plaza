@@ -47,6 +47,8 @@ pub struct Client {
   pub track: Track,
   pub rules_version: u32,
   pub mode: Mode,
+  /// How many cars are on the circuit, you included.
+  pub field: usize,
 
   /// The whole circuit: you at seat zero, and in a race the CPU field beside
   /// you. A trial is this with one racer in it.
@@ -73,16 +75,18 @@ pub struct Client {
 impl Client {
   pub fn new(me: PlayerId, track: Track, rules_version: u32) -> Self {
     let world = crate::sim::rules::World::trial(&track);
+    let track_size = track.size;
     Self {
       me,
       track,
       rules_version,
       mode: Mode::Trial,
+      field: 1,
       world,
       tick: 0,
       running: false,
       finished_ms: None,
-      recorder: Recorder::new(rules_version, Mode::Trial),
+      recorder: Recorder::new(rules_version, Mode::Trial, track_size, 1),
       ghosts: Vec::new(),
       best_ms: None,
       last_place: None,
@@ -100,19 +104,25 @@ impl Client {
   /// A ghost recorded in the other mode is dropped rather than raced: a race
   /// log replays a four-way race, and running one beside a trial would put
   /// three phantom cars on a track that has none.
-  pub fn restart_as(&mut self, mode: Mode) {
+  pub fn restart_as(&mut self, mode: Mode, size: TrackSize, field: usize) {
     self.mode = mode;
+    self.track = Track::of(size);
+    self.field = if mode == Mode::Race { field.clamp(1, MAX_FIELD) } else { 1 };
     self.world = match mode {
       Mode::Trial => crate::sim::rules::World::trial(&self.track),
-      Mode::Race => crate::sim::rules::World::race(&self.track, RACE_FIELD),
+      Mode::Race => crate::sim::rules::World::race(&self.track, self.field),
     };
     self.tick = 0;
     self.running = true;
     self.finished_ms = None;
     self.last_place = None;
     self.last_refusal = None;
-    self.recorder = Recorder::new(self.rules_version, mode);
-    self.ghosts.retain(|g| g.ghost.log.mode == mode);
+    self.recorder = Recorder::new(self.rules_version, mode, size, self.field as u16);
+    // A ghost is only worth racing against a run of the same shape. A different
+    // track is a different lap, and a different field size is a different race.
+    self
+      .ghosts
+      .retain(|g| g.ghost.log.mode == mode && g.ghost.log.track == size && g.ghost.log.field as usize == self.field);
     for ghost in self.ghosts.iter_mut() {
       ghost.world = ghost.ghost.log.world(&self.track);
       ghost.tick = 0;
@@ -120,9 +130,9 @@ impl Client {
     }
   }
 
-  /// Starts again in the mode already being played.
+  /// Starts again with the setup already being played.
   pub fn restart(&mut self) {
-    self.restart_as(self.mode);
+    self.restart_as(self.mode, self.track.size, self.field);
   }
 
   /// Where this client's own racer is.
@@ -218,7 +228,7 @@ impl Client {
     if self.ghosts.iter().any(|g| g.ghost.id == ghost.id) {
       return;
     }
-    if ghost.log.mode != self.mode {
+    if ghost.log.mode != self.mode || ghost.log.track != self.track.size || ghost.log.field as usize != self.field {
       return;
     }
     let mut world = ghost.log.world(&self.track);
@@ -255,7 +265,12 @@ impl Client {
   /// Where the player is in the CPU field, one-based. Only means anything in a
   /// race; a trial has nobody to be ahead of.
   pub fn position(&self) -> usize {
-    self.world.standings().iter().position(|i| *i == 0).unwrap_or(0) + 1
+    self.place_of(0)
+  }
+
+  /// Where a seat is in the field, one-based.
+  pub fn place_of(&self, seat: usize) -> usize {
+    self.world.standings().iter().position(|i| *i == seat).unwrap_or(0) + 1
   }
 }
 
@@ -279,7 +294,7 @@ mod tests {
   }
 
   fn drive_as(client: &mut Client, mode: Mode, controls: &Controls) {
-    client.restart_as(mode);
+    client.restart_as(mode, TrackSize::Medium, if mode == Mode::Race { RACE_FIELD } else { 1 });
     while client.running {
       let input = crate::sim::rules::bot_input(client.racer(), &client.track, client.tick, 0);
       client.step(input, controls);
@@ -291,7 +306,7 @@ mod tests {
     // The self check, which tests the recorder rather than the physics.
     let c = controls();
     let server = Server::new(1);
-    let mut client = Client::new(0, server.track.clone(), server.rules_version);
+    let mut client = Client::new(0, Track::circuit(), server.rules_version);
     drive(&mut client, &c);
 
     assert!(client.finished_ms.is_some(), "it finished");
@@ -303,7 +318,7 @@ mod tests {
   fn the_submission_carries_the_log_and_the_time_it_produces() {
     let c = controls();
     let server = Server::new(1);
-    let mut client = Client::new(0, server.track.clone(), server.rules_version);
+    let mut client = Client::new(0, Track::circuit(), server.rules_version);
     drive(&mut client, &c);
 
     let (log, claimed) = client.take_submission().expect("something to send");
@@ -318,7 +333,7 @@ mod tests {
     // which an event log makes a one-liner.
     let c = controls();
     let mut server = Server::new(1);
-    let mut driver = Client::new(0, server.track.clone(), server.rules_version);
+    let mut driver = Client::new(0, Track::circuit(), server.rules_version);
     drive(&mut driver, &c);
     let (log, time) = driver.take_submission().expect("a run");
     let ghost = match server.submit(0, log, time).pop() {
@@ -326,8 +341,8 @@ mod tests {
       other => panic!("{other:?}"),
     };
 
-    let mut watcher = Client::new(1, server.track.clone(), server.rules_version);
-    watcher.restart_as(Mode::Trial);
+    let mut watcher = Client::new(1, Track::circuit(), server.rules_version);
+    watcher.restart_as(Mode::Trial, TrackSize::Medium, 1);
     for _ in 0..250 {
       watcher.step(Input::default(), &c);
     }
@@ -346,7 +361,7 @@ mod tests {
     // they are the same inputs through the same rules.
     let c = controls();
     let mut server = Server::new(1);
-    let mut first = Client::new(0, server.track.clone(), server.rules_version);
+    let mut first = Client::new(0, Track::circuit(), server.rules_version);
     drive(&mut first, &c);
     let (log, time) = first.take_submission().expect("a run");
     let ghost = match server.submit(0, log, time).pop() {
@@ -354,8 +369,8 @@ mod tests {
       other => panic!("{other:?}"),
     };
 
-    let mut second = Client::new(1, server.track.clone(), server.rules_version);
-    second.restart_as(Mode::Trial);
+    let mut second = Client::new(1, Track::circuit(), server.rules_version);
+    second.restart_as(Mode::Trial, TrackSize::Medium, 1);
     second.add_ghost(ghost);
     while second.running {
       let input = crate::sim::rules::bot_input(second.racer(), &second.track, second.tick, 0);
@@ -372,7 +387,7 @@ mod tests {
   fn the_cheat_switch_sends_a_time_the_log_does_not_support() {
     let c = Controls { cheat: true, ..controls() };
     let server = Server::new(1);
-    let mut client = Client::new(0, server.track.clone(), server.rules_version);
+    let mut client = Client::new(0, Track::circuit(), server.rules_version);
     drive(&mut client, &c);
 
     let (_, claimed) = client.take_submission().expect("a submission");

@@ -112,9 +112,9 @@ impl NetClient {
     self.sim.restart();
   }
 
-  pub fn restart_as(&mut self, mode: crate::sim::types::Mode) {
+  pub fn restart_as(&mut self, mode: crate::sim::types::Mode, size: crate::sim::types::TrackSize, field: usize) {
     self.spare_ms = 0;
-    self.sim.restart_as(mode);
+    self.sim.restart_as(mode, size, field);
   }
 
   pub fn poll(&mut self, now_ms: u64, controls: &Controls) {
@@ -201,12 +201,13 @@ impl NetClient {
         Op::Welcome {
           player,
           protocol,
-          track,
           ghosts,
           server_time_ms: _,
         } => {
           self.me = Some(player);
-          self.sim = SimClient::new(player, *track, protocol);
+          // The track is built here rather than sent: it is a constant both
+          // ends already have, and the log names which one by a single byte.
+          self.sim = SimClient::new(player, Track::circuit(), protocol);
           self.sim.on_ghosts(ghosts);
           self.status = Status::Playing;
         }
@@ -335,10 +336,10 @@ mod tests {
     let c = controls();
     let feed = ScriptedSocket::new();
     let mut smooth = welcomed(&feed);
-    smooth.restart_as(crate::sim::types::Mode::Trial);
+    smooth.restart_as(crate::sim::types::Mode::Trial, crate::sim::types::TrackSize::Medium, 1);
     let feed2 = ScriptedSocket::new();
     let mut lumpy = welcomed(&feed2);
-    lumpy.restart_as(crate::sim::types::Mode::Trial);
+    lumpy.restart_as(crate::sim::types::Mode::Trial, crate::sim::types::TrackSize::Medium, 1);
 
     for _ in 0..300 {
       smooth.tick(SIM_STEP_MS, Input::new(1, false), &c);
@@ -358,7 +359,7 @@ mod tests {
     let c = controls();
     let feed = ScriptedSocket::new();
     let mut client = welcomed(&feed);
-    client.restart_as(crate::sim::types::Mode::Trial);
+    client.restart_as(crate::sim::types::Mode::Trial, crate::sim::types::TrackSize::Medium, 1);
     for _ in 0..crate::sim::log::MAX_TICKS {
       let input = autopilot(client.sim.racer(), &client.sim.track, client.sim.tick, 0);
       client.tick(SIM_STEP_MS, input, &c);

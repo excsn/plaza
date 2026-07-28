@@ -23,17 +23,20 @@ pub const STRIP_H: f32 = 108.0;
 pub struct Board {
   pub origin: Vec2,
   pub scale: f32,
+  pub arena: (i32, i32),
 }
 
 impl Board {
-  pub fn fit() -> Self {
+  pub fn fit(arena: (i32, i32)) -> Self {
     let margin = 16.0;
     let usable_w = (screen_width() - margin * 2.0).max(64.0);
     let usable_h = (screen_height() - HUD_H - STRIP_H - margin).max(64.0);
-    let scale = (usable_w / ARENA_W as f32).min(usable_h / ARENA_H as f32);
+    let (aw, ah) = arena;
+    let scale = (usable_w / aw as f32).min(usable_h / ah as f32);
     Self {
-      origin: Vec2::new((screen_width() - scale * ARENA_W as f32) * 0.5, HUD_H),
+      origin: Vec2::new((screen_width() - scale * aw as f32) * 0.5, HUD_H),
       scale,
+      arena,
     }
   }
 
@@ -42,11 +45,11 @@ impl Board {
   }
 
   pub fn width(&self) -> f32 {
-    self.scale * ARENA_W as f32
+    self.scale * self.arena.0 as f32
   }
 
   pub fn height(&self) -> f32 {
-    self.scale * ARENA_H as f32
+    self.scale * self.arena.1 as f32
   }
 
   pub fn strip_top(&self) -> f32 {
@@ -103,14 +106,21 @@ pub fn draw_track(board: &Board, track: &Track, next: u16) {
 
 /// The pickups still on the circuit. A taken one leaves its outline, so a
 /// player can see where it will come back rather than having to remember.
+pub fn power_color(kind: Power) -> Color {
+  match kind {
+    Power::Turbo => Color::new(1.0, 0.6, 0.25, 1.0),
+    Power::Grip => Color::new(0.5, 0.9, 1.0, 1.0),
+    Power::Shield => Color::new(0.7, 1.0, 0.6, 1.0),
+    Power::Slick => Color::new(1.0, 0.5, 0.8, 1.0),
+  }
+}
+
 pub fn draw_pickups(board: &Board, pickups: &[Pickup], tick: u32) {
   for pickup in pickups {
     let at = board.at(pickup.at);
     let r = PICKUP_RADIUS.to_f32() * board.scale * 0.55;
-    let (colour, mark) = match pickup.kind {
-      Power::Turbo => (Color::new(1.0, 0.6, 0.25, 1.0), "T"),
-      Power::Grip => (Color::new(0.5, 0.9, 1.0, 1.0), "G"),
-    };
+    let colour = power_color(pickup.kind);
+    let mark = pickup.kind.mark();
     if pickup.available(tick) {
       draw_circle(at.x, at.y, r, Color::new(colour.r, colour.g, colour.b, 0.85));
       draw_text(mark, at.x - r * 0.35, at.y + r * 0.4, r * 1.5, Color::new(0.06, 0.07, 0.09, 1.0));
@@ -121,7 +131,7 @@ pub fn draw_pickups(board: &Board, pickups: &[Pickup], tick: u32) {
 }
 
 /// One racer. `ghost` draws it hollow: an echo of a run, not another car.
-pub fn draw_racer(board: &Board, racer: &Racer, colour: Color, ghost: bool, tick: u32) {
+pub fn draw_racer(board: &Board, racer: &Racer, colour: Color, ghost: bool, tick: u32, place: Option<usize>) {
   let at = board.at(racer.pos);
   let size = board.scale * 0.9;
   let (fx, fy) = (cos(racer.heading).to_f32(), sin(racer.heading).to_f32());
@@ -137,11 +147,33 @@ pub fn draw_racer(board: &Board, racer: &Racer, colour: Color, ghost: bool, tick
   }
   draw_triangle(nose, left, right, colour);
 
+  // The place, on the car. With a field of thirty-two, a table down the side of
+  // the screen is a table nobody reads while driving: the number a player wants
+  // is the one attached to the thing they are looking at.
+  if let Some(place) = place {
+    let text = format!("{place}");
+    let dims = measure_text(&text, None, (size * 1.6) as u16, 1.0);
+    draw_text(
+      &text,
+      at.x - dims.width * 0.5,
+      at.y - size * 1.5,
+      size * 1.6,
+      Color::new(0.95, 0.97, 1.0, 0.95),
+    );
+  }
+
   // The wind-up and the spend, which are the whole of the driving decision.
-  // Grip reads as a rim, because it changes how the car behaves rather than
-  // how fast it is going, and a player has to know which of the two they took.
-  if racer.gripping(tick) {
-    draw_circle_lines(at.x, at.y, size * 1.1, 2.0, Color::new(0.5, 0.9, 1.0, 0.8));
+  // The timed power-ups read as rims, because each changes how the car behaves
+  // rather than how fast it is going, and a player has to know which they have.
+  for (running, kind, radius) in [
+    (racer.gripping(tick), Power::Grip, 1.1),
+    (racer.slick(tick), Power::Slick, 1.3),
+    (racer.shielded(tick), Power::Shield, 1.5),
+  ] {
+    if running {
+      let c = power_color(kind);
+      draw_circle_lines(at.x, at.y, size * radius, 2.0, Color::new(c.r, c.g, c.b, 0.8));
+    }
   }
   if racer.charge > 0 {
     let share = racer.charge as f32 / CHARGE_MAX as f32;
@@ -221,15 +253,39 @@ pub fn draw_board(board: &Board, ghosts: &[(u32, PlayerId, u64, usize, usize)], 
 /// cost, and choosing what to play is the game.
 pub struct Menu {
   cards: Vec<(Mode, Rect)>,
+  /// The setup rows, which change the controls in place rather than starting
+  /// anything: picking a track is not picking a game.
+  options: Vec<(Rect, MenuOption)>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum MenuOption {
+  Track(TrackSize),
+  Field(usize),
 }
 
 impl Menu {
   pub fn hit(&self, at: Vec2) -> Option<Mode> {
     self.cards.iter().find(|(_, r)| r.contains(at)).map(|(m, _)| *m)
   }
+
+  /// Applies a click on the setup rows, if it landed on one.
+  pub fn adjust(&self, at: Vec2, controls: &mut Controls) -> bool {
+    for (rect, option) in &self.options {
+      if !rect.contains(at) {
+        continue;
+      }
+      match option {
+        MenuOption::Track(size) => controls.track = *size,
+        MenuOption::Field(n) => controls.field = *n,
+      }
+      return true;
+    }
+    false
+  }
 }
 
-pub fn draw_menu(best_trial: Option<u64>, ghosts: usize) -> Menu {
+pub fn draw_menu(best_trial: Option<u64>, ghosts: usize, controls: &Controls) -> Menu {
   draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.04, 0.05, 0.07, 1.0));
 
   let title = "ghost trials";
@@ -278,9 +334,9 @@ pub fn draw_menu(best_trial: Option<u64>, ghosts: usize) -> Menu {
         "race",
         "2",
         [
-          "you and three CPU racers",
+          "you and a field of CPU racers",
           "they shove, and they take your pickups",
-          "one log still reproduces all four",
+          "one log still reproduces all of them",
         ],
       ),
     };
@@ -292,26 +348,66 @@ pub fn draw_menu(best_trial: Option<u64>, ghosts: usize) -> Menu {
     cards.push((mode, rect));
   }
 
+  // The setup: which circuit, and how many cars. Both change what a run *is*,
+  // so they are chosen here rather than hidden in the diagnostics panel.
+  let mut options = Vec::new();
+  let mut row_y = y + card_h + 28.0;
+  let mut x = left;
+  draw_text("circuit", left - 84.0, row_y + 18.0, 17.0, Color::new(0.55, 0.6, 0.68, 1.0));
+  for size in TrackSize::ALL {
+    let rect = Rect::new(x, row_y, 92.0, 26.0);
+    let on = controls.track == size;
+    draw_rectangle(rect.x, rect.y, rect.w, rect.h, if on { Color::new(0.18, 0.24, 0.32, 1.0) } else { Color::new(0.10, 0.12, 0.15, 1.0) });
+    draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 1.0, Color::new(0.3, 0.35, 0.42, 1.0));
+    let colour = if on { Color::new(1.0, 0.9, 0.6, 1.0) } else { Color::new(0.62, 0.68, 0.75, 1.0) };
+    draw_text(size.label(), rect.x + 10.0, rect.y + 18.0, 17.0, colour);
+    options.push((rect, MenuOption::Track(size)));
+    x += 100.0;
+  }
+
+  row_y += 36.0;
+  x = left;
+  draw_text("cars", left - 84.0, row_y + 18.0, 17.0, Color::new(0.55, 0.6, 0.68, 1.0));
+  for n in [2usize, 4, 8, 16, MAX_FIELD] {
+    let rect = Rect::new(x, row_y, 54.0, 26.0);
+    let on = controls.field == n;
+    draw_rectangle(rect.x, rect.y, rect.w, rect.h, if on { Color::new(0.18, 0.24, 0.32, 1.0) } else { Color::new(0.10, 0.12, 0.15, 1.0) });
+    draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 1.0, Color::new(0.3, 0.35, 0.42, 1.0));
+    let colour = if on { Color::new(1.0, 0.9, 0.6, 1.0) } else { Color::new(0.62, 0.68, 0.75, 1.0) };
+    draw_text(&format!("{n}"), rect.x + 18.0, rect.y + 18.0, 17.0, colour);
+    options.push((rect, MenuOption::Field(n)));
+    x += 62.0;
+  }
+  draw_text(
+    "race only, and a ghost only races runs of the same shape",
+    x + 12.0,
+    row_y + 18.0,
+    15.0,
+    Color::new(0.42, 0.46, 0.52, 1.0),
+  );
+
   let footer = match best_trial {
-    Some(ms) => format!("best trial {}   {ghosts} ghosts on the board", format_ms(ms)),
-    None => format!("{ghosts} ghosts on the board"),
+    Some(ms) => format!("best trial {}   {ghosts} ghosts for this setup", format_ms(ms)),
+    None => format!("{ghosts} ghosts for this setup"),
   };
   let dims = measure_text(&footer, None, 18, 1.0);
   draw_text(
     &footer,
     (screen_width() - dims.width) * 0.5,
-    y + card_h + 40.0,
+    row_y + 60.0,
     18.0,
     Color::new(0.5, 0.55, 0.62, 1.0),
   );
 
-  Menu { cards }
+  Menu { cards, options }
 }
 
 /// Where the player is in the CPU field, drawn only in a race.
 pub fn draw_positions(board: &Board, world: &ghost_trials::sim::rules::World, me: usize) {
+  // The top few only. A list of thirty-two is not a readout, it is wallpaper,
+  // and the number that matters to a driver is drawn on their own car.
   let mut y = board.origin.y + 14.0;
-  for (place, index) in world.standings().iter().enumerate() {
+  for (place, index) in world.standings().iter().enumerate().take(5) {
     let racer = &world.racers[*index];
     let colour = if *index == me {
       player_color(0)

@@ -13,7 +13,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::sim::log::{InputLog, Rejection};
-use crate::sim::types::{PlayerId, Track};
+use crate::sim::types::PlayerId;
 
 /// The version of the rules and the messages together.
 ///
@@ -48,7 +48,6 @@ pub enum Op {
   Welcome {
     player: PlayerId,
     protocol: u32,
-    track: Box<Track>,
     /// Every ghost worth racing, at the moment of joining.
     ghosts: Vec<Ghost>,
     server_time_ms: u64,

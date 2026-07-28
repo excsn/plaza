@@ -3,7 +3,7 @@
 use egui_macroquad::egui;
 
 use ghost_trials::sim::log::Rejection;
-use ghost_trials::sim::types::{format_ms, Controls};
+use ghost_trials::sim::types::{format_ms, Controls, MAX_FIELD};
 
 fn section<R>(ui: &mut egui::Ui, title: &str, default_open: bool, add: impl FnOnce(&mut egui::Ui) -> R) {
   egui::CollapsingHeader::new(egui::RichText::new(title).strong())
@@ -36,11 +36,24 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls, host: bool) {
       .on_hover_text("A ghost is replayed in its own world, so it takes the pickups it took on the day and shoves nobody. Letting a recording interact with the live run would make it a record of a race that never happened.");
   });
 
+  section(ui, "the field", true, |ui| {
+    ui.label("Chosen on the menu, and shown here because they decide what a run is.");
+    ui.label(format!("circuit: {}   cars: {}", controls.track.label(), controls.field));
+    ui.add(egui::Slider::new(&mut controls.field, 1..=MAX_FIELD).text("cars next race"))
+      .on_hover_text("You plus the CPU field. It costs nothing on the wire whatever it is set to: the opponents are functions of the world, so a race of thirty-two is recorded by exactly the same log as a race of two.");
+  });
+
   if host {
     section(ui, "the link", true, |ui| {
-      ui.add(egui::Slider::new(&mut controls.latency_ms, 0..=400).text("latency ms one way"))
-        .on_hover_text("Drag it as far as it goes and drive a lap. The time is identical, because the run happens on this machine and the link is not in the loop. No other example here can say that.");
-      ui.add(egui::Slider::new(&mut controls.jitter_ms, 0..=120).text("jitter ms"));
+      ui.label(
+        egui::RichText::new("These act on the real path, and they cannot touch your lap. That is the measurement, not a limitation.")
+          .weak(),
+      );
+      ui.add(egui::Slider::new(&mut controls.latency_ms, 0..=800).text("latency ms one way"))
+        .on_hover_text(
+          "Drag it as far as it goes and drive a lap: the time is identical, because the run happens on this machine and the link is not in the loop. What it does delay is the verdict on your run and the arrival of somebody else's ghost, which is what the counters below are for. An earlier version of this example did not impair the live path at all, so the slider moved nothing and invited exactly the wrong conclusion.",
+        );
+      ui.add(egui::Slider::new(&mut controls.jitter_ms, 0..=200).text("jitter ms"));
       ui.add(egui::Slider::new(&mut controls.loss_pct, 0.0..=100.0).text("packet loss %"))
         .on_hover_text("A lost submission is a lap nobody recorded. There is no retry, deliberately: it costs the run and never the board, because the board only ever holds runs that were verified.");
     });
@@ -60,6 +73,7 @@ pub struct HostExtras {
   pub bytes_if_paths: u64,
   pub seats_taken: usize,
   pub seats: usize,
+  pub lost_submissions: u64,
 }
 
 /// The whole panel, in **one** `egui_macroquad::ui` call: it runs a complete
@@ -102,7 +116,7 @@ pub fn draw_net_ui(client: &ghost_trials::net::client::NetClient, url: &str, ext
           ui.label(egui::RichText::new(format!("mode: {}", sim.mode.label())).strong())
             .on_hover_text("A trial has nothing to arbitrate, so the client owns the feel completely. A race puts three CPU drivers on the same circuit, and because they are pure functions of the world, one player's log still reproduces all four.");
           if sim.mode == ghost_trials::sim::types::Mode::Race {
-            ui.label(format!("running {} of {}", sim.position(), ghost_trials::sim::types::RACE_FIELD))
+            ui.label(format!("running {} of {}", sim.position(), sim.field))
               .on_hover_text("The CPU field is deliberately uneven: one sloppy, one middling, one sharp. Their mistakes come from a hash of the tick rather than from a generator, because a generator is hidden state a log does not carry.");
           }
           ui.label(format!("{} ghosts, {} ticks driven this run", sim.ghosts.len(), sim.tick))
@@ -186,6 +200,13 @@ pub fn draw_net_ui(client: &ghost_trials::net::client::NetClient, url: &str, ext
         ));
         if let Some(why) = extras.last_refusal {
           ui.label(egui::RichText::new(describe(why)).color(egui::Color32::from_rgb(240, 150, 150)));
+        }
+        if extras.lost_submissions > 0 {
+          ui.label(
+            egui::RichText::new(format!("{} submissions the link ate", extras.lost_submissions))
+              .color(egui::Color32::from_rgb(240, 190, 140)),
+          )
+          .on_hover_text("Laps that were driven and never recorded. The board is unharmed: it only ever holds runs that were replayed and verified.");
         }
         ui.label(format!("{} ticks replayed to check them", extras.ticks_replayed))
           .on_hover_text("The cost of deciding by reconstruction: a couple of thousand ticks of integer maths, once, at the end of a run somebody spent half a minute driving.");
