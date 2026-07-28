@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "ability_cooldowns",
+  "bomb_grid",
   "playground_common",
   "card_table",
   "blackhole_playground",
