@@ -144,9 +144,14 @@ The controller does not advance time on its own: something has to send it `Proce
 tokio::spawn(TickDriver::from_hz(60).run(tx.clone()));               // a live server
 TickDriver::new(Duration::from_millis(16)).run_for(tx, 100).await;   // bounded, for tests
 TickDriver::run_virtual(&tx, Duration::from_secs(1), 5).await;       // 5s of game time, at once
+
+// Logic a client predicts: every step is exactly 16 ms, whatever the scheduler did.
+tokio::spawn(TickDriver::from_hz(120).run_fixed(tx.clone(), Duration::from_millis(16)));
 ```
 
-`delta_time` is measured elapsed time, so logic that integrates over it stays correct when a tick runs late.
+`run` passes the measured elapsed time, so logic that integrates over it stays correct when a tick runs late. That is right for a physics step, a decay, a cooldown.
+
+**`run_fixed` is not an optimisation, and choosing wrong is a real bug.** Measured time means the step size is whatever the host's scheduler delivered: 16 ms, then 17, then 16. A simulation advanced by that is a function of the scheduler as well as of its inputs, so **no client can reproduce it**, and prediction, replay and rollback all rest on reproducing it. `run_fixed` accumulates the elapsed time and spends it as whole steps of exactly the size you asked for, carrying the remainder; after a long stall the world falls behind rather than repaying the debt as a burst. Use it whenever anything predicts this logic.
 
 ## Per-recipient views
 

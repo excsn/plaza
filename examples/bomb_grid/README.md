@@ -76,6 +76,19 @@ This is the strongest correlation the playgrounds in this repository have found,
 
 The bomb-placement rule matters as much as the movement one. A client that guessed differently about the carry limit would draw a bomb the server was certain to refuse, and the player would watch it vanish. Sharing the rule means the client refuses locally exactly what the server would refuse remotely, so a phantom is always a real disagreement and never a self-inflicted one.
 
+## Sharing the rule is not enough: the quantum has to be shared too
+
+This example was written with a shared rule and tick-addressed inputs from the first commit, and it still snapped constantly. Four separate bugs, and every one of them was the same thing: the two sides advanced that shared rule in **different quanta**.
+
+- The **acknowledgement** retired an input from the client's pending list before the tick it named had arrived, so the client never ran it. The server acknowledges on *arrival*, which on a fast link is a hundred milliseconds before execution. It shows up as a player who will not stop walking.
+- The **round-over interval** freezes every player on the server so the last explosion stays readable, and nothing in a frame says so. A client that keeps predicting through it is corrected on every frame of the interval.
+- The **client** advanced once per rendered frame while the server advanced once per tick. Even at matching rates the grids are unaligned, so the two cross every cell boundary up to a tick apart. It scales with boundaries crossed, so open ground is where it becomes obvious.
+- The **server** advanced by `TickDriver`'s *measured* elapsed time: 16 ms, then 17, then 16. That makes the simulation a function of the host's scheduler, which nothing can reproduce. This one survived the three client-side fixes above and cost 2.2 snaps per hundred frames with no loss, no jitter and every input accepted on time.
+
+Both sides now step in whole `SIM_STEP_MS` ticks. The client catches up to `clock / SIM_STEP_MS` one step at a time; the server accumulates elapsed time and spends it the same way, and its host uses [`TickDriver::run_fixed`](../../core/API_REFERENCE.md#struct-tickdriver), which exists because of this example. The `dt` parameter is gone from the client's `tick` entirely: a caller must not be able to influence how fast a prediction runs. The simulation keeps its own accumulator as well as using the fixed driver, deliberately, so a different driver cannot silently break the guarantee.
+
+**Three of the four looked exactly like network faults**, which is the part worth carrying away. A correction is what a network problem looks like, so a correction is where you stop looking. The full write-up is in [LEARNINGS.md](../LEARNINGS.md#four-bugs-with-one-shape-bomb-grid).
+
 ## Where the wire went
 
 Small and bounded, deliberately, and this is a genuine difference from [`horde_playground`](../horde_playground/) rather than an oversight. Relevance culling and delta compression exist to make an *unbounded* world affordable. This world has a hard ceiling: at most four players, a handful of bombs, and a 15x13 board. A frame goes out whole because a delta of it would be more machinery than the thing it compresses.
