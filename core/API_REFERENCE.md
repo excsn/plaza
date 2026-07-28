@@ -243,7 +243,15 @@ Sends `ProcessTimeStep` at a fixed rate; the controller does not advance time on
 *   **`new(interval: Duration) -> Self`** (panics on zero), **`from_hz(hz: u32) -> Self`**
 *   **`async run<..>(self, tx: CommandSender<..>)`**: until the channel closes. `delta_time` is measured elapsed time, so logic integrating over it stays correct when a tick runs late.
 *   **`async run_for<..>(self, tx, max_ticks: u64)`**: bounded, for demos and tests.
+*   **`async run_fixed<..>(self, tx, step: Duration)`** / **`async run_fixed_for<..>(self, tx, step, max_steps: u64)`**: the same cadence, but `delta_time` is **always exactly `step`**. The driver wakes on its interval, accumulates the measured elapsed time, and spends it as whole steps, carrying the remainder. Bounded by *steps* rather than wakes, because with a fixed step the steps are the amount of simulated time a caller is counting.
 *   **`async run_virtual<..>(tx: &CommandSender<..>, delta_time: Duration, steps: u64) -> u64`** Advances game time without waiting on real time: fast-forwarding past a timeout in a test. Returns steps delivered.
+*   **`MAX_STEPS_PER_WAKE`** (module constant, 8): the most fixed steps one wake will spend. After a long stall the world falls behind rather than fast-forwarding, because repaying a five second stall as three hundred back-to-back steps is a freeze, and it lands exactly when the machine is already struggling.
+
+**Which one to use, and this is not a style preference.** Use `run_fixed` whenever anything **predicts, replays, or rolls back** this logic. Measured elapsed time means the step size is whatever the host's scheduler delivered: 16 ms, then 17, then 16. A simulation advanced by that is a function of the scheduler as well as of its inputs, and no client can reproduce it, because a client stepping in fixed ticks and a server stepping in measured ones accumulate the same motion at different rates. In a continuous game that presents as a permanent small correction; in a discrete one the two sides cross each boundary a step apart and every crossing is a visible jump. `run` is right for logic that only integrates: a physics step, a decay, a cooldown.
+
+The interval and the step are separate on purpose. Waking more often than you step keeps the phase error small, because a step is spent nearer the moment it was earned; waking less often batches them. Setting both the same is the ordinary choice.
+
+**A predicted simulation should still own its own quantum.** `run_fixed` fixes the driver, not the contract: a different driver, a test harness, or a hand-rolled loop can still hand the logic an arbitrary delta. Accumulating inside the simulation as well costs four lines and means the guarantee cannot be broken from outside; `examples/bomb_grid` does both, and `plaza_client_utils::FixedTimestep` is the same pattern for the client side.
 
 ## 8. Observability (module `stats`)
 
