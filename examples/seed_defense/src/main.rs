@@ -168,15 +168,26 @@ async fn frame_loop(options: role::Options) {
         }
       }
 
-      if is_mouse_button_pressed(MouseButton::Left)
-        && !over_panel
-        && let Some(cell) = hovered
-      {
-        // An upgrade if there is already a tower there, otherwise a placement.
-        // The client asks; it never builds. See `net::client`.
-        let upgrade = field.tower_at(cell).is_some();
-        let kind = field.tower_at(cell).map(|t| t.kind).unwrap_or(choice.0);
-        client.want_build(cell, kind, upgrade);
+      // The build strip, on the canvas: what each tower costs and does, and
+      // what the one under the cursor would cost to upgrade.
+      let inspect = hovered
+        .and_then(|cell| field.tower_at(cell))
+        .map(|tower| (tower.kind, tower.level, tower.owner));
+      let bar = render::draw_build_bar(choice.0, field.gold, inspect);
+
+      let pointer = Vec2::from(mouse_position());
+      if is_mouse_button_pressed(MouseButton::Left) && !over_panel {
+        if let Some(kind) = bar.hit(pointer) {
+          choice.0 = kind;
+        } else if !bar.contains(pointer)
+          && let Some(cell) = hovered
+        {
+          // An upgrade if there is already a tower there, otherwise a
+          // placement. The client asks; it never builds. See `net::client`.
+          let upgrade = field.tower_at(cell).is_some();
+          let kind = field.tower_at(cell).map(|t| t.kind).unwrap_or(choice.0);
+          client.want_build(cell, kind, upgrade);
+        }
       }
 
       // The countdown comes from the wave announcement's own tick, which this
@@ -222,7 +233,7 @@ async fn frame_loop(options: role::Options) {
 
     #[cfg(all(feature = "client", feature = "websocket"))]
     {
-      over_panel = ui::draw_net_ui(&client, &url, extras.as_ref(), &mut controls, &mut choice);
+      over_panel = ui::draw_net_ui(&client, &url, extras.as_ref(), &mut controls);
     }
     egui_macroquad::draw();
 

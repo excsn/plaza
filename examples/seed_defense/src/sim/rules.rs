@@ -175,7 +175,7 @@ pub fn apply_build(field: &mut Field, build: Build) -> bool {
   match (build.upgrade, existing) {
     (true, Some(index)) => {
       let tower = field.towers[index];
-      if tower.level >= 3 {
+      if tower.level >= MAX_TOWER_LEVEL {
         return false;
       }
       let price = tower.kind.upgrade_cost(tower.level);

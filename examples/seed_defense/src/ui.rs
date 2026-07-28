@@ -80,7 +80,8 @@ pub struct HostExtras {
   pub bytes_if_streamed: u64,
 }
 
-/// The tower the player is about to place.
+/// The tower the player is about to place. Chosen on the canvas, in the build
+/// strip, rather than in this panel: see `render::draw_build_bar`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Choice(pub TowerKind);
 
@@ -99,7 +100,6 @@ pub fn draw_net_ui(
   url: &str,
   extras: Option<&HostExtras>,
   controls: &mut Controls,
-  choice: &mut Choice,
 ) -> bool {
   use seed_defense::net::client::Status;
 
@@ -190,22 +190,6 @@ pub fn draw_net_ui(
             client.resume_drops
           ))
           .weak(),
-        );
-      });
-
-      section(ui, "build", true, |ui| {
-        ui.horizontal(|ui| {
-          for kind in TowerKind::ALL {
-            let selected = choice.0 == kind;
-            if ui.selectable_label(selected, format!("{} ({}g)", kind.label(), kind.cost())).clicked() {
-              choice.0 = kind;
-            }
-          }
-        });
-        ui.label(format!("{} gold, {} lives", client.sim.field.gold, client.sim.field.lives));
-        ui.label(
-          egui::RichText::new("A tower appears when the server's op arrives naming the tick every machine applies it on. It is deliberately not predicted: there is no correction here to undo a cause the server refuses.")
-            .weak(),
         );
       });
 

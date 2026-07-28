@@ -233,6 +233,27 @@ impl TowerKind {
       TowerKind::Frost => "frost",
     }
   }
+
+  /// Damage per second, which is the number that actually compares two towers.
+  /// Neither damage nor fire rate says anything on its own.
+  pub fn dps(self, level: u8) -> i32 {
+    let cooldown = self.cooldown_ms(level).max(1);
+    self.damage(level) * 1000 / cooldown
+  }
+
+  /// Shots per second, to one decimal, without going through a float.
+  pub fn rate_tenths(self, level: u8) -> i32 {
+    10_000 / self.cooldown_ms(level).max(1)
+  }
+
+  /// What this one does that the others do not.
+  pub fn quirk(self) -> &'static str {
+    match self {
+      TowerKind::Arrow => "single target",
+      TowerKind::Cannon => "splash",
+      TowerKind::Frost => "slows",
+    }
+  }
 }
 
 impl From<TowerKind> for u8 {
@@ -252,6 +273,9 @@ impl TryFrom<u8> for TowerKind {
     }
   }
 }
+
+/// The highest a tower goes.
+pub const MAX_TOWER_LEVEL: u8 = 3;
 
 /// How long a frost hit slows an enemy, and by how much.
 pub const SLOW_MS: u64 = 900;

@@ -15,7 +15,7 @@
 
 use macroquad::prelude::*;
 
-use seed_defense::sim::fixed::{Fx, P};
+use seed_defense::sim::fixed::{Fx, ONE, P};
 use seed_defense::sim::rules::Field;
 use seed_defense::sim::types::*;
 
@@ -29,12 +29,12 @@ impl Board {
   pub fn fit() -> Self {
     let margin = 24.0;
     let usable_w = (screen_width() - margin * 2.0).max(64.0);
-    let usable_h = (screen_height() - margin * 2.0 - 120.0).max(64.0);
+    let usable_h = (screen_height() - margin * 2.0 - 120.0 - STRIP_H).max(64.0);
     let cell = (usable_w / MAP_W as f32).min(usable_h / MAP_H as f32);
     let w = cell * MAP_W as f32;
     let h = cell * MAP_H as f32;
     Self {
-      origin: Vec2::new((screen_width() - w) * 0.5, (screen_height() - h) * 0.5 - 10.0),
+      origin: Vec2::new((screen_width() - w) * 0.5, (screen_height() - STRIP_H - h) * 0.5 + 8.0),
       cell,
     }
   }
@@ -235,6 +235,211 @@ impl Agreement {
     draw_rectangle(board.origin.x, y - 8.0, w, 4.0, Color::new(colour.r, colour.g, colour.b, 0.55));
     draw_text(&text, board.origin.x, y - 12.0, 18.0, colour);
   }
+}
+
+
+/// The build bar and the inspector, drawn on the canvas rather than in the
+/// debug panel.
+///
+/// The panel is for the things this example is *about*: what crossed the wire,
+/// whether the machines agree, and how to break them. Choosing a tower is not
+/// one of those, it is the game, and burying it in a collapsing header made a
+/// player read a diagnostics window to take their turn.
+pub struct BuildBar {
+  cards: Vec<(TowerKind, Rect)>,
+  strip: Rect,
+}
+
+/// How tall the bottom strip is, so the board can be laid out above it.
+pub const STRIP_H: f32 = 96.0;
+const CARD_W: f32 = 168.0;
+
+impl BuildBar {
+  /// The tower a click at this point selects, if any.
+  pub fn hit(&self, at: Vec2) -> Option<TowerKind> {
+    self.cards.iter().find(|(_, r)| r.contains(at)).map(|(k, _)| *k)
+  }
+
+  /// Whether a point is over the strip at all, so a click there is never also
+  /// a click on the map.
+  pub fn contains(&self, at: Vec2) -> bool {
+    self.strip.contains(at)
+  }
+}
+
+/// A fixed-point value to one decimal, without going anywhere near a float.
+/// The renderer may use floats freely; this is here because six call sites
+/// spelling out the same shift is noise.
+fn tenths(v: Fx) -> String {
+  format!("{}.{}", v.to_int(), (v.0 % ONE) * 10 / ONE)
+}
+
+fn stat_line(x: f32, y: f32, label: &str, value: String, colour: Color) {
+  draw_text(label, x, y, 15.0, Color::new(0.55, 0.58, 0.62, 1.0));
+  let w = measure_text(label, None, 15, 1.0).width;
+  draw_text(&value, x + w + 6.0, y, 15.0, colour);
+}
+
+/// Draws the bottom strip: one card per tower, then the inspector.
+pub fn draw_build_bar(selected: TowerKind, gold: i32, inspect: Option<(TowerKind, u8, PlayerId)>) -> BuildBar {
+  let strip = Rect::new(0.0, screen_height() - STRIP_H, screen_width(), STRIP_H);
+  draw_rectangle(strip.x, strip.y, strip.w, strip.h, Color::new(0.08, 0.09, 0.11, 1.0));
+  draw_line(0.0, strip.y, screen_width(), strip.y, 1.0, Color::new(0.20, 0.22, 0.26, 1.0));
+
+  let mut cards = Vec::new();
+  let mut x = 14.0;
+  for kind in TowerKind::ALL {
+    let rect = Rect::new(x, strip.y + 10.0, CARD_W, STRIP_H - 20.0);
+    let affordable = gold >= kind.cost();
+    let chosen = kind == selected;
+    let fill = if chosen {
+      Color::new(0.16, 0.20, 0.26, 1.0)
+    } else {
+      Color::new(0.11, 0.12, 0.15, 1.0)
+    };
+    draw_rectangle(rect.x, rect.y, rect.w, rect.h, fill);
+    draw_rectangle_lines(
+      rect.x,
+      rect.y,
+      rect.w,
+      rect.h,
+      if chosen { 2.0 } else { 1.0 },
+      if chosen { tower_color(kind) } else { Color::new(0.24, 0.26, 0.30, 1.0) },
+    );
+
+    let dim = if affordable { 1.0 } else { 0.45 };
+    let name = tower_color(kind);
+    draw_rectangle(rect.x + 10.0, rect.y + 10.0, 14.0, 14.0, Color::new(name.r, name.g, name.b, dim));
+    draw_text(
+      kind.label(),
+      rect.x + 32.0,
+      rect.y + 22.0,
+      19.0,
+      Color::new(0.92, 0.94, 0.97, dim),
+    );
+    let cost = format!("{}g", kind.cost());
+    let cw = measure_text(&cost, None, 17, 1.0).width;
+    draw_text(
+      &cost,
+      rect.x + rect.w - cw - 10.0,
+      rect.y + 22.0,
+      17.0,
+      if affordable {
+        Color::new(1.0, 0.88, 0.5, 1.0)
+      } else {
+        Color::new(0.8, 0.45, 0.4, 1.0)
+      },
+    );
+
+    stat_line(
+      rect.x + 10.0,
+      rect.y + 42.0,
+      "dps",
+      format!("{}", kind.dps(0)),
+      Color::new(0.88, 0.9, 0.94, dim),
+    );
+    stat_line(
+      rect.x + 74.0,
+      rect.y + 42.0,
+      "rng",
+      tenths(kind.range(0)),
+      Color::new(0.88, 0.9, 0.94, dim),
+    );
+    stat_line(
+      rect.x + 10.0,
+      rect.y + 60.0,
+      "",
+      kind.quirk().to_owned(),
+      Color::new(0.62, 0.72, 0.85, dim),
+    );
+
+    cards.push((kind, rect));
+    x += CARD_W + 10.0;
+  }
+
+  if let Some((kind, level, owner)) = inspect {
+    draw_inspector(x + 8.0, strip.y + 10.0, kind, level, owner, gold);
+  } else {
+    draw_text(
+      "hover a tower to inspect it, click a free tile to build",
+      x + 12.0,
+      strip.y + 32.0,
+      16.0,
+      Color::new(0.45, 0.48, 0.53, 1.0),
+    );
+  }
+
+  BuildBar { cards, strip }
+}
+
+/// The stat block for a tower already on the map: what it is now, and what the
+/// next level would cost and buy.
+fn draw_inspector(x: f32, y: f32, kind: TowerKind, level: u8, owner: PlayerId, gold: i32) {
+  let h = STRIP_H - 20.0;
+  let w = (screen_width() - x - 14.0).max(200.0);
+  draw_rectangle(x, y, w, h, Color::new(0.11, 0.12, 0.15, 1.0));
+  draw_rectangle_lines(x, y, w, h, 1.0, tower_color(kind));
+
+  draw_text(
+    &format!("{} L{}", kind.label(), level + 1),
+    x + 10.0,
+    y + 22.0,
+    19.0,
+    tower_color(kind),
+  );
+  draw_text(&format!("P{}", owner + 1), x + w - 34.0, y + 22.0, 16.0, player_color(owner));
+
+  let white = Color::new(0.88, 0.9, 0.94, 1.0);
+  stat_line(x + 10.0, y + 44.0, "dmg", format!("{}", kind.damage(level)), white);
+  stat_line(x + 84.0, y + 44.0, "dps", format!("{}", kind.dps(level)), white);
+  stat_line(
+    x + 158.0,
+    y + 44.0,
+    "rate",
+    format!("{}.{}/s", kind.rate_tenths(level) / 10, kind.rate_tenths(level) % 10),
+    white,
+  );
+  stat_line(
+    x + 248.0,
+    y + 44.0,
+    "range",
+    tenths(kind.range(level)),
+    white,
+  );
+  let special = match kind {
+    TowerKind::Cannon => format!("splash {}", tenths(kind.splash())),
+    TowerKind::Frost => format!("slows {}% for {}.{}s", 100 - SLOW_NUM * 100 / SLOW_DEN, SLOW_MS / 1000, (SLOW_MS % 1000) / 100),
+    TowerKind::Arrow => "single target".to_owned(),
+  };
+  stat_line(x + 336.0, y + 44.0, "", special, Color::new(0.62, 0.72, 0.85, 1.0));
+
+  // The upgrade, which is the decision a player is actually making here: what
+  // it costs, and what it buys.
+  if level >= MAX_TOWER_LEVEL {
+    draw_text("fully upgraded", x + 10.0, y + 66.0, 16.0, Color::new(0.55, 0.58, 0.62, 1.0));
+    return;
+  }
+  let price = kind.upgrade_cost(level);
+  let colour = if gold >= price {
+    Color::new(1.0, 0.88, 0.5, 1.0)
+  } else {
+    Color::new(0.8, 0.45, 0.4, 1.0)
+  };
+  draw_text(
+    &format!(
+      "click to upgrade to L{}: {}g   dps {} to {}   range {} to {}",
+      level + 2,
+      price,
+      kind.dps(level),
+      kind.dps(level + 1),
+      tenths(kind.range(level)),
+      tenths(kind.range(level + 1)),
+    ),
+    x + 10.0,
+    y + 66.0,
+    16.0,
+    colour,
+  );
 }
 
 /// The wave banner, drawn over the board between waves.
