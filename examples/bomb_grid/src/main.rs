@@ -7,6 +7,7 @@ mod ui;
 use bomb_grid::role;
 #[cfg(any(feature = "server", all(feature = "client", feature = "websocket")))]
 use bomb_grid::role::Role;
+use playground_common::touch::{Button, Pad, Pointers, Way};
 use bomb_grid::sim::types::{Controls, Dir, PlayerState};
 use macroquad::prelude::*;
 use render::Board;
@@ -85,7 +86,7 @@ fn windowed(options: role::Options) {
 ///
 /// One direction, not a vector: the lattice has no diagonals, so two keys at
 /// once must resolve to one answer rather than to a normalised blend.
-fn read_dir() -> Dir {
+fn read_dir(pad: Option<Way>) -> Dir {
   if is_key_down(KeyCode::W) || is_key_down(KeyCode::Up) {
     Dir::Up
   } else if is_key_down(KeyCode::S) || is_key_down(KeyCode::Down) {
@@ -95,7 +96,15 @@ fn read_dir() -> Dir {
   } else if is_key_down(KeyCode::D) || is_key_down(KeyCode::Right) {
     Dir::Right
   } else {
-    Dir::None
+    // The pad answers the same question the keys do, and answers it the same
+    // way: one direction, because the lattice has no diagonals.
+    match pad {
+      Some(Way::Up) => Dir::Up,
+      Some(Way::Down) => Dir::Down,
+      Some(Way::Left) => Dir::Left,
+      Some(Way::Right) => Dir::Right,
+      None => Dir::None,
+    }
   }
 }
 
@@ -142,6 +151,9 @@ async fn frame_loop(options: role::Options) {
 
   #[cfg(all(feature = "client", feature = "websocket"))]
   let mut marker = SnapMarker::default();
+  // A bomb is an edge, not a level: held is not repeatedly pressed, so the
+  // button needs the same edge detection the key gets for free.
+  let mut bomb_held = false;
   let mut clock_ms: u64 = 0;
   let mut perf = Perf::default();
 
@@ -157,8 +169,16 @@ async fn frame_loop(options: role::Options) {
       client.poll(clock_ms, &controls);
 
       let was = client.sim.my_player().cell;
-      client.send_walk(read_dir(), &controls);
-      if is_key_pressed(KeyCode::Space) {
+      // Gathered before anything reads it, so the pad and the button see the
+      // same frame's fingers.
+      let pointers = Pointers::gather();
+      let pad = Pad::bottom_left();
+      let bomb = Button::bottom_right(0, "bomb");
+      let bomb_now = bomb.held(&pointers) && !bomb_held;
+      bomb_held = bomb.held(&pointers);
+
+      client.send_walk(read_dir(pad.held(&pointers)), &controls);
+      if is_key_pressed(KeyCode::Space) || bomb_now {
         client.send_bomb();
       }
       // Once per frame, whatever the frame rate is. The prediction catches up
@@ -225,6 +245,16 @@ async fn frame_loop(options: role::Options) {
       let text = "waiting for the arena";
       let w = measure_text(text, None, 28, 1.0).width;
       draw_text(text, (screen_width() - w) * 0.5, screen_height() * 0.5, 28.0, GRAY);
+    }
+
+    // Drawn over everything, and only on a device that has produced a touch:
+    // a thumb pad on a desktop window is clutter in the one place a player is
+    // looking.
+    #[cfg(all(feature = "client", feature = "websocket"))]
+    if playground_common::touch::seen_touch() {
+      let pointers = Pointers::gather();
+      Pad::bottom_left().draw(&pointers);
+      Button::bottom_right(0, "bomb").draw(&pointers);
     }
 
     perf.draw();

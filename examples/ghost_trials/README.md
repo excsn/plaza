@@ -20,6 +20,8 @@ Pick a mode: **time trial** alone against the clock and the ghosts, or **race** 
 
 Left and right steer. Hold space to charge: you slow down, you turn harder, and you bank a boost that spends when you let go. `R` starts again, `Escape` goes back to the menu.
 
+On a phone, steer and charge buttons appear the first time you touch the screen. They are buttons rather than a stick because the input is one of three values, and because **charging has to be holdable at the same time as steering**: macroquad synthesises a mouse click from a touch, and a synthesised mouse is one pointer, so anything held in combination has to read the real touches.
+
 ## What you are looking at
 
 | On screen | Meaning |

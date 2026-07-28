@@ -25,6 +25,11 @@
 //! twice" mistake with the stakes raised. It is optional so a crate that only
 //! wants the roles does not take a serde dependency for maths it never uses.
 //!
+//! [`touch`], behind another, for the third time the same argument came up:
+//! every playground ships a browser build and is therefore reachable from a
+//! phone, and two of them had no pointer input at all. One set of on-screen
+//! controls rather than one per example.
+//!
 //! That is an argument about where it *cannot* go, though, not an argument that
 //! it belongs in the published library. Argument parsing is an opinion, and an
 //! application of any size will have its own (clap, or a config file, or an
@@ -36,6 +41,9 @@
 
 #[cfg(feature = "fixed")]
 pub mod fixed;
+
+#[cfg(feature = "touch")]
+pub mod touch;
 
 use std::fmt;
 

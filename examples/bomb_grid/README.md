@@ -16,7 +16,7 @@ Here a position is a cell. There is nothing between two cells to ease through. S
 cargo test -p bomb_grid                      # every claim below, as a test
 ```
 
-WASD or the arrow keys to walk, space to drop a bomb.
+WASD or the arrow keys to walk, space to drop a bomb. On a phone, a thumb pad and a bomb button appear the first time you touch the screen.
 
 ## What you are looking at
 

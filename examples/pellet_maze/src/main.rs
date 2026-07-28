@@ -7,6 +7,7 @@ mod ui;
 use pellet_maze::role;
 #[cfg(any(feature = "server", all(feature = "client", feature = "websocket")))]
 use pellet_maze::role::Role;
+use playground_common::touch::{Pad, Pointers, Way};
 use pellet_maze::sim::types::{Controls, Dir, PlayerId, PlayerState};
 use macroquad::prelude::*;
 use render::Board;
@@ -86,7 +87,7 @@ fn windowed(options: role::Options) {
 /// `None` means "no new request", **not** "stop": there is no standing still
 /// here, so releasing every key leaves the last request in place rather than
 /// cancelling the player's motion.
-fn read_turn() -> Option<Dir> {
+fn read_turn(pad: Option<Way>) -> Option<Dir> {
   if is_key_down(KeyCode::W) || is_key_down(KeyCode::Up) {
     Some(Dir::Up)
   } else if is_key_down(KeyCode::S) || is_key_down(KeyCode::Down) {
@@ -96,7 +97,16 @@ fn read_turn() -> Option<Dir> {
   } else if is_key_down(KeyCode::D) || is_key_down(KeyCode::Right) {
     Some(Dir::Right)
   } else {
-    None
+    // A press on the pad is a *request to turn at the next junction*, exactly
+    // as a key press is. Releasing it does not cancel anything, because there
+    // is no standing still in this game.
+    match pad {
+      Some(Way::Up) => Some(Dir::Up),
+      Some(Way::Down) => Some(Dir::Down),
+      Some(Way::Left) => Some(Dir::Left),
+      Some(Way::Right) => Some(Dir::Right),
+      None => None,
+    }
   }
 }
 
@@ -157,7 +167,8 @@ async fn frame_loop(options: role::Options) {
     {
       client.poll(clock_ms, &controls);
 
-      if let Some(dir) = read_turn() {
+      let pointers = Pointers::gather();
+      if let Some(dir) = read_turn(Pad::bottom_left().held(&pointers)) {
         client.send_turn(dir, &controls);
       }
       // Once per frame, whatever the frame rate is. The prediction catches up
@@ -236,6 +247,11 @@ async fn frame_loop(options: role::Options) {
       let text = "waiting for the arena";
       let w = measure_text(text, None, 28, 1.0).width;
       draw_text(text, (screen_width() - w) * 0.5, screen_height() * 0.5, 28.0, GRAY);
+    }
+
+    #[cfg(all(feature = "client", feature = "websocket"))]
+    if playground_common::touch::seen_touch() {
+      Pad::bottom_left().draw(&Pointers::gather());
     }
 
     perf.draw();

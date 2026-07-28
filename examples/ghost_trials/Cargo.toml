@@ -15,7 +15,7 @@ websocket = ["dep:plaza_ws", "dep:plaza_wire"]
 [dependencies]
 plaza_client_utils = { workspace = true, features = ["net-sim"] }
 plaza_server_utils = { workspace = true }
-playground_common = { workspace = true, features = ["fixed"] }
+playground_common = { workspace = true, features = ["fixed", "touch"] }
 parking_lot = "0.12"
 serde = { workspace = true }
 

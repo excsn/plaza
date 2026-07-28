@@ -16,7 +16,7 @@ Everything else in this repository has spent its effort on **when** an input hap
 cargo test -p pellet_maze                    # every claim below, as a test
 ```
 
-WASD or the arrow keys. There is no key for "stop".
+WASD or the arrow keys. There is no key for "stop". On a phone, a thumb pad appears the first time you touch the screen, and a press on it is a request to turn exactly as a key press is.
 
 ## What you are looking at
 

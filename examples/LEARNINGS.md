@@ -446,6 +446,16 @@ That noise is sampled in chunks of ticks rather than per tick, for two reasons t
 
 **Latency is genuinely not on the path, which is worth stating once.** Four runs at 0, 80, 250 and 400 ms one way produce *identical* times, because the run happens on the machine driving it. Every other playground here spends its effort making latency cheap; this is the one that can say it costs nothing, and the reason is architectural rather than clever.
 
+### A browser build is a phone build, whether or not anybody meant it to be (all the playgrounds)
+
+Every playground here ships a wasm bundle, so every one of them is one URL away from a phone. Two of them, `bomb_grid` and `pellet_maze`, were driven entirely by `WASD` and had **no pointer input at all**: the page loaded, the game ran at full speed, and nothing a finger could do would move anything. That is a worse failure than a crash, because it looks like a working demo.
+
+**macroquad synthesises a left click from a touch by default**, which is why the examples driven by *tapping* were already fine without anybody thinking about it: a menu, a build strip, a tile to place a tower on. `is_mouse_button_pressed` fires from a tap at the same coordinates.
+
+**It does not cover anything held, and it does not cover two at once.** A synthesised mouse is a single pointer, so "steer left while charging" cannot be expressed through it. Anything holdable has to read `touches()` directly, and take the mouse only as one extra pointer when there are no touches, or one finger reads as two.
+
+Two smaller decisions that were not obvious until they were made. **A discrete game wants buttons, not a stick**: three of these take one of a few values, and thresholding an analogue drag back into them is a threshold to get wrong, where a stick is right for the two that steer continuously. And **the controls stay hidden until the process sees its first touch**, latched rather than sampled, because a thumb pad drawn over a desktop window is clutter in the middle of what a player is looking at, and one that appeared and vanished between taps would be worse than one that was never there.
+
 ### Smaller ones worth remembering
 
 **Ctrl-C would not kill the windowed host.** Actix caught the signal for a graceful shutdown while the window kept running, and the controller sprayed queue-full errors into dead links. Fixed with `disable_signals`, leaving signal handling to the process.

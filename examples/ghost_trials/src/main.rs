@@ -8,6 +8,7 @@ use render::Board;
 use ghost_trials::role;
 #[cfg(any(feature = "server", all(feature = "client", feature = "websocket")))]
 use ghost_trials::role::Role;
+use playground_common::touch::{Button, Pointers};
 use ghost_trials::sim::types::{Controls, Mode};
 
 /// Reports a fatal misconfiguration.
@@ -163,7 +164,8 @@ async fn frame_loop(options: role::Options) {
         draw_text(text, (screen_width() - w) * 0.5, screen_height() - 40.0, 20.0, GRAY);
       }
     } else {
-      let input = read_input();
+      let pointers = Pointers::gather();
+      let input = read_input(&pointers);
       let elapsed = clock_ms.saturating_sub(last_ms);
       last_ms = clock_ms;
       client.tick(elapsed, input, &controls);
@@ -232,6 +234,12 @@ async fn frame_loop(options: role::Options) {
         .collect();
       render::draw_board(&board, &ghosts, Some(sim.me));
 
+      if playground_common::touch::seen_touch() {
+        for slot in 0..3 {
+          Button::bottom_right(slot, ["chg", ">", "<"][slot]).draw(&pointers);
+        }
+      }
+
       if let Some(time) = sim.finished_ms {
         let place = if sim.mode == Mode::Race { Some(sim.position() as u32) } else { None };
         render::draw_result(&board, time, sim.last_place, sim.last_refusal.map(ui::describe), place);
@@ -278,15 +286,21 @@ async fn frame_loop(options: role::Options) {
 /// honest translation of a key that is either down or not into a simulation
 /// that advances in fixed steps.
 #[cfg(any(feature = "server", all(feature = "client", feature = "websocket")))]
-fn read_input() -> ghost_trials::sim::types::Input {
-  let left = is_key_down(KeyCode::Left) || is_key_down(KeyCode::A);
-  let right = is_key_down(KeyCode::Right) || is_key_down(KeyCode::D);
+fn read_input(pointers: &Pointers) -> ghost_trials::sim::types::Input {
+  // Two steer buttons and a charge, rather than a stick: the input is one of
+  // three values, and thresholding an analogue drag back into three is a
+  // threshold to get wrong. The charge has to be holdable **at the same time**
+  // as a steer, which is the whole reason these read real touches instead of
+  // the mouse macroquad synthesises from them.
+  let left = is_key_down(KeyCode::Left) || is_key_down(KeyCode::A) || Button::bottom_right(2, "<").held(pointers);
+  let right = is_key_down(KeyCode::Right) || is_key_down(KeyCode::D) || Button::bottom_right(1, ">").held(pointers);
+  let charge = is_key_down(KeyCode::Space) || Button::bottom_right(0, "chg").held(pointers);
   let steer = match (left, right) {
     (true, false) => -1,
     (false, true) => 1,
     _ => 0,
   };
-  ghost_trials::sim::types::Input::new(steer, is_key_down(KeyCode::Space))
+  ghost_trials::sim::types::Input::new(steer, charge)
 }
 
 /// Frame time, because a client that cannot keep up simulates in bursts, and a
