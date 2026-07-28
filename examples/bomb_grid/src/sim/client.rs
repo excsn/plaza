@@ -257,7 +257,12 @@ impl Client {
     // A new board is the server simulating again, whatever it said before.
     self.paused = false;
     self.server_now_ms = round.server_time_ms;
-    self.next_tick = round.tick;
+    // `round.tick` is the tick the state is *at*, so it has already been
+    // simulated: the next to run is the one after. The off-by-one is invisible
+    // here, because a player starts a round standing still and an extra tick of
+    // standing still is nothing; it is a whole cell in `pellet_maze`, where a
+    // player is always running. Fixed in both rather than left as a trap.
+    self.next_tick = round.tick + 1;
     if let Some(mine) = round.players.iter().find(|p| p.id == self.me) {
       self.predicted = mine.clone();
     }
@@ -734,8 +739,9 @@ mod tests {
     let server = Server::new(2, B0MB_SEED);
     let mut client = joined(&server, 0);
 
-    client.schedule_input(1, 0, Intent::Bomb, 0);
-    client.tick(0, &c);
+    // Tick 1, not 0: a round starting at tick 0 has already simulated it.
+    client.schedule_input(1, 1, Intent::Bomb, 0);
+    client.tick(SIM_STEP_MS, &c);
     assert_eq!(client.drawn_bombs().len(), 1);
     assert_eq!(client.predicted_bombs, 1);
 
@@ -842,8 +848,9 @@ mod tests {
       client.grid.set(Cell::new(x, 1), Tile::Empty);
     }
 
-    client.schedule_input(1, 0, Intent::Walk(Dir::Right), 0);
-    client.tick(0, &c);
+    // Tick 1, not 0: a round starting at tick 0 has already simulated tick 0.
+    client.schedule_input(1, 1, Intent::Walk(Dir::Right), 0);
+    client.tick(SIM_STEP_MS, &c);
     assert!(client.my_player().step.is_some(), "walking");
 
     // The release, named for a tick in the future, acknowledged immediately.

@@ -100,7 +100,6 @@ impl World {
       // Each client's own estimate of server-now. In this harness the clock is
       // shared, which is exactly what the networked build cannot do; that is
       // the one thing this harness cannot measure.
-      client.tick(now, controls);
       for op in self.down[seat].drain_due(now) {
         match op {
           Op::Frame(frame) => client.on_frame(&frame, controls),
@@ -110,6 +109,10 @@ impl World {
           _ => {}
         }
       }
+      // Drained before the tick, which is the order a real client runs in:
+      // `poll` then `tick`. Ticking first spends a whole tick acting on stale
+      // knowledge, and the one that matters is being told the world stopped.
+      client.tick(now, controls);
     }
   }
 
