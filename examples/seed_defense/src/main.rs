@@ -173,7 +173,7 @@ async fn frame_loop(options: role::Options) {
       let inspect = hovered
         .and_then(|cell| field.tower_at(cell))
         .map(|tower| (tower.kind, tower.level, tower.owner));
-      let bar = render::draw_build_bar(choice.0, field.gold, inspect);
+      let bar = render::draw_build_bar(&board, choice.0, field.gold, inspect);
 
       let pointer = Vec2::from(mouse_position());
       if is_mouse_button_pressed(MouseButton::Left) && !over_panel {
@@ -200,9 +200,9 @@ async fn frame_loop(options: role::Options) {
         ),
         None => (field.wave.max(1), 0),
       };
-      render::draw_prep(wave, in_ms, field.lives, field.gold);
+      render::draw_hud(&board, wave, in_ms, field.lives, field.gold);
       if let Some(reached) = client.sim.over {
-        render::draw_over(reached);
+        render::draw_over(&board, reached);
       }
     }
 

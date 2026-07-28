@@ -26,17 +26,37 @@ pub struct Board {
 }
 
 impl Board {
+  /// Lays the whole screen out from the top down: a fixed band for the
+  /// readouts, then the board, then the build strip directly under it.
+  ///
+  /// Packed rather than centred, and the strip is placed against the board
+  /// rather than against the bottom of the window. Anchoring one element to the
+  /// top and another to the bottom means trusting that the window is exactly as
+  /// tall as it says it is, and the first version of this screen put the strip
+  /// off the bottom edge entirely.
   pub fn fit() -> Self {
-    let margin = 24.0;
+    let margin = 16.0;
     let usable_w = (screen_width() - margin * 2.0).max(64.0);
-    let usable_h = (screen_height() - margin * 2.0 - 120.0 - STRIP_H).max(64.0);
+    let usable_h = (screen_height() - HUD_H - STRIP_H - margin).max(64.0);
     let cell = (usable_w / MAP_W as f32).min(usable_h / MAP_H as f32);
     let w = cell * MAP_W as f32;
-    let h = cell * MAP_H as f32;
     Self {
-      origin: Vec2::new((screen_width() - w) * 0.5, (screen_height() - STRIP_H - h) * 0.5 + 8.0),
+      origin: Vec2::new((screen_width() - w) * 0.5, HUD_H),
       cell,
     }
+  }
+
+  pub fn width(&self) -> f32 {
+    self.cell * MAP_W as f32
+  }
+
+  pub fn height(&self) -> f32 {
+    self.cell * MAP_H as f32
+  }
+
+  /// The top of the build strip: directly below the board.
+  pub fn strip_top(&self) -> f32 {
+    self.origin.y + self.height() + 8.0
   }
 
   pub fn at(&self, p: P) -> Vec2 {
@@ -212,12 +232,17 @@ impl Agreement {
     self.since += dt;
   }
 
+  /// Drawn on its own row of the reserved band, never against the board's
+  /// edge: the wave line lives on the row above and the two used to be written
+  /// over each other.
   pub fn draw(&self, board: &Board) {
-    let w = board.cell * MAP_W as f32;
-    let y = board.origin.y - 16.0;
+    let y = board.origin.y - 12.0;
     let fresh = self.since < 4.0;
     let (colour, text) = if self.mismatches == 0 {
-      (Color::new(0.35, 0.85, 0.45, 1.0), format!("in step with the server ({} digests checked)", self.checked))
+      (
+        Color::new(0.35, 0.85, 0.45, 1.0),
+        format!("in step with the server ({} digests checked)", self.checked),
+      )
     } else if fresh {
       (
         Color::new(1.0, 0.35, 0.35, 1.0),
@@ -232,11 +257,10 @@ impl Agreement {
         format!("recovered, {} mismatches so far this session", self.mismatches),
       )
     };
-    draw_rectangle(board.origin.x, y - 8.0, w, 4.0, Color::new(colour.r, colour.g, colour.b, 0.55));
-    draw_text(&text, board.origin.x, y - 12.0, 18.0, colour);
+    draw_text(&text, board.origin.x, y, 17.0, colour);
+    draw_rectangle(board.origin.x, y + 5.0, board.width(), 3.0, Color::new(colour.r, colour.g, colour.b, 0.55));
   }
 }
-
 
 /// The build bar and the inspector, drawn on the canvas rather than in the
 /// debug panel.
@@ -250,8 +274,11 @@ pub struct BuildBar {
   strip: Rect,
 }
 
-/// How tall the bottom strip is, so the board can be laid out above it.
+/// How tall the build strip is, and how tall the band of readouts above the
+/// board is. Both are reserved before the board is sized, so nothing is ever
+/// drawn on top of anything else.
 pub const STRIP_H: f32 = 96.0;
+pub const HUD_H: f32 = 74.0;
 const CARD_W: f32 = 168.0;
 
 impl BuildBar {
@@ -281,8 +308,8 @@ fn stat_line(x: f32, y: f32, label: &str, value: String, colour: Color) {
 }
 
 /// Draws the bottom strip: one card per tower, then the inspector.
-pub fn draw_build_bar(selected: TowerKind, gold: i32, inspect: Option<(TowerKind, u8, PlayerId)>) -> BuildBar {
-  let strip = Rect::new(0.0, screen_height() - STRIP_H, screen_width(), STRIP_H);
+pub fn draw_build_bar(board: &Board, selected: TowerKind, gold: i32, inspect: Option<(TowerKind, u8, PlayerId)>) -> BuildBar {
+  let strip = Rect::new(0.0, board.strip_top(), screen_width(), STRIP_H);
   draw_rectangle(strip.x, strip.y, strip.w, strip.h, Color::new(0.08, 0.09, 0.11, 1.0));
   draw_line(0.0, strip.y, screen_width(), strip.y, 1.0, Color::new(0.20, 0.22, 0.26, 1.0));
 
@@ -442,20 +469,39 @@ fn draw_inspector(x: f32, y: f32, kind: TowerKind, level: u8, owner: PlayerId, g
   );
 }
 
-/// The wave banner, drawn over the board between waves.
-pub fn draw_prep(wave: u32, in_ms: u64, lives: i32, gold: i32) {
-  let text = if in_ms > 0 {
+/// The wave line: the top row of the reserved band.
+///
+/// One row, left aligned with the board, so it cannot collide with the
+/// agreement line beneath it. It carries no instructions: the build strip says
+/// what to click, and saying it twice was the overlap this layout was rebuilt
+/// to fix.
+pub fn draw_hud(board: &Board, wave: u32, in_ms: u64, lives: i32, gold: i32) {
+  let y = board.origin.y - 34.0;
+  let wave_text = if in_ms > 0 {
     format!("wave {} in {:.0}", wave, (in_ms as f32 / 1000.0).ceil())
   } else {
     format!("wave {wave}")
   };
-  let size = 30.0;
-  let dims = measure_text(&text, None, size as u16, 1.0);
-  draw_text(&text, (screen_width() - dims.width) * 0.5, 44.0, size, Color::new(1.0, 0.9, 0.6, 1.0));
+  draw_text(&wave_text, board.origin.x, y, 26.0, Color::new(1.0, 0.9, 0.6, 1.0));
 
-  let sub = format!("{lives} lives   {gold} gold   click a buildable tile to place, click a tower to upgrade");
-  let dims = measure_text(&sub, None, 18, 1.0);
-  draw_text(&sub, (screen_width() - dims.width) * 0.5, 66.0, 18.0, GRAY);
+  let right = board.origin.x + board.width();
+  let gold_text = format!("{gold} gold");
+  let gw = measure_text(&gold_text, None, 22, 1.0).width;
+  draw_text(&gold_text, right - gw, y, 22.0, Color::new(1.0, 0.88, 0.5, 1.0));
+
+  let lives_text = format!("{lives} lives");
+  let lw = measure_text(&lives_text, None, 22, 1.0).width;
+  draw_text(
+    &lives_text,
+    right - gw - lw - 18.0,
+    y,
+    22.0,
+    if lives <= 5 {
+      Color::new(1.0, 0.45, 0.45, 1.0)
+    } else {
+      Color::new(0.85, 0.88, 0.92, 1.0)
+    },
+  );
 }
 
 /// The end of the run, which is the only ending there is: the waves do not
@@ -463,19 +509,18 @@ pub fn draw_prep(wave: u32, in_ms: u64, lives: i32, gold: i32) {
 ///
 /// Drawn from the server's announcement rather than inferred from the lives
 /// reaching zero locally, so every player sees it at the same moment.
-pub fn draw_over(wave: u32) {
+pub fn draw_over(board: &Board, wave: u32) {
+  // Centred on the board rather than on the window, like everything else on
+  // this screen: one thing decides where the layout is.
   draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.0, 0.0, 0.0, 0.6));
+  let mid = board.origin.x + board.width() * 0.5;
+  let y = board.origin.y + board.height() * 0.5;
+
   let text = "overrun";
   let dims = measure_text(text, None, 64, 1.0);
-  draw_text(
-    text,
-    (screen_width() - dims.width) * 0.5,
-    screen_height() * 0.5,
-    64.0,
-    Color::new(1.0, 0.5, 0.5, 1.0),
-  );
+  draw_text(text, mid - dims.width * 0.5, y, 64.0, Color::new(1.0, 0.5, 0.5, 1.0));
 
   let sub = format!("the line held for {wave} waves");
   let dims = measure_text(&sub, None, 24, 1.0);
-  draw_text(&sub, (screen_width() - dims.width) * 0.5, screen_height() * 0.5 + 36.0, 24.0, GRAY);
+  draw_text(&sub, mid - dims.width * 0.5, y + 36.0, 24.0, GRAY);
 }

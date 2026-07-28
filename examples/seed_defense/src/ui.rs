@@ -109,7 +109,14 @@ pub fn draw_net_ui(
   egui_macroquad::ui(|ctx| {
     ctx.set_pixels_per_point(1.35);
     let title = if host { "seed defense (host)" } else { "seed defense" };
-    let window = egui::Window::new(title).default_pos((16.0, 16.0)).show(ctx, |ui| {
+    // Bounded and scrollable. Left to grow, this window runs the height of the
+    // screen and the arena window below it ends up underneath it.
+    let room = (ctx.screen_rect().height() - 60.0).max(200.0);
+    let window = egui::Window::new(title)
+      .default_pos((16.0, 16.0))
+      .max_height(room)
+      .show(ctx, |ui| {
+        egui::ScrollArea::vertical().max_height(room - 40.0).show(ui, |ui| {
       ui.label(format!("arena: {url}"));
       match &client.status {
         Status::Connecting => {
@@ -194,14 +201,19 @@ pub fn draw_net_ui(
       });
 
       section(ui, "controls", true, |ui| draw_controls(ui, controls, host));
-    });
+        });
+      });
 
     if let Some(response) = window {
       over_panel |= response.response.rect.contains(ctx.pointer_latest_pos().unwrap_or_default());
     }
 
     if let Some(extras) = extras {
-      let window = egui::Window::new("the arena itself").default_pos((16.0, 520.0)).show(ctx, |ui| {
+      // Anchored to the other side of the screen. Two windows both anchored
+      // top left is two windows on top of each other.
+      let window = egui::Window::new("the arena itself")
+        .anchor(egui::Align2::RIGHT_TOP, [-16.0, 16.0])
+        .show(ctx, |ui| {
         ui.label(format!(
           "{} wave {}   {} enemies   {} towers   seats {}/{}",
           extras.phase, extras.wave, extras.enemies, extras.towers, extras.seats_taken, extras.seats
