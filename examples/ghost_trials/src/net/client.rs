@@ -112,6 +112,11 @@ impl NetClient {
     self.sim.restart();
   }
 
+  pub fn restart_as(&mut self, mode: crate::sim::types::Mode) {
+    self.spare_ms = 0;
+    self.sim.restart_as(mode);
+  }
+
   pub fn poll(&mut self, now_ms: u64, controls: &Controls) {
     self.now_ms = now_ms;
     if now_ms.saturating_sub(self.last_ping_ms) >= PING_INTERVAL_MS && self.socket.is_open() {
@@ -204,7 +209,6 @@ impl NetClient {
           self.sim = SimClient::new(player, *track, protocol);
           self.sim.on_ghosts(ghosts);
           self.status = Status::Playing;
-          self.sim.restart();
         }
         Op::Accepted { ghost, place } => self.sim.on_accepted(*ghost, place),
         Op::Refused { why } => self.sim.on_refused(why),
@@ -321,7 +325,6 @@ mod tests {
     let feed = ScriptedSocket::new();
     let client = welcomed(&feed);
     assert_eq!(client.status, Status::Playing);
-    assert!(client.sim.running, "the trial is under way");
     assert_eq!(client.sim.track, Track::circuit());
   }
 
@@ -332,8 +335,10 @@ mod tests {
     let c = controls();
     let feed = ScriptedSocket::new();
     let mut smooth = welcomed(&feed);
+    smooth.restart_as(crate::sim::types::Mode::Trial);
     let feed2 = ScriptedSocket::new();
     let mut lumpy = welcomed(&feed2);
+    lumpy.restart_as(crate::sim::types::Mode::Trial);
 
     for _ in 0..300 {
       smooth.tick(SIM_STEP_MS, Input::new(1, false), &c);
@@ -345,7 +350,7 @@ mod tests {
       lumpy.tick(20, Input::new(1, false), &c);
     }
     assert_eq!(smooth.sim.tick, lumpy.sim.tick);
-    assert_eq!(smooth.sim.racer, lumpy.sim.racer);
+    assert_eq!(smooth.sim.racer(), lumpy.sim.racer());
   }
 
   #[test]
@@ -353,8 +358,9 @@ mod tests {
     let c = controls();
     let feed = ScriptedSocket::new();
     let mut client = welcomed(&feed);
+    client.restart_as(crate::sim::types::Mode::Trial);
     for _ in 0..crate::sim::log::MAX_TICKS {
-      let input = autopilot(&client.sim.racer, &client.sim.track, client.sim.tick);
+      let input = autopilot(client.sim.racer(), &client.sim.track, client.sim.tick, 0);
       client.tick(SIM_STEP_MS, input, &c);
       if !client.sim.running {
         break;

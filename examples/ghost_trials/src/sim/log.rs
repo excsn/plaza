@@ -36,14 +36,39 @@ pub struct Span {
 }
 
 /// A whole run, as the inputs that produced it.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InputLog {
   /// The rules this was recorded under. See the module note.
   pub rules_version: u32,
+  /// Which game it was: a trial alone, or a race against the CPU field.
+  ///
+  /// A race log carries **only the player's inputs**, because the opponents are
+  /// a pure function of the world they are in. One player's key presses
+  /// reproduce a four-way race, opponents and all, which is the same trick
+  /// `seed_defense` plays on a wave of enemies.
+  pub mode: Mode,
   pub spans: Vec<Span>,
 }
 
+impl Default for InputLog {
+  fn default() -> Self {
+    Self {
+      rules_version: 0,
+      mode: Mode::Trial,
+      spans: Vec::new(),
+    }
+  }
+}
+
 impl InputLog {
+  /// The world this log was driven in.
+  pub fn world(&self, track: &Track) -> rules::World {
+    match self.mode {
+      Mode::Trial => rules::World::trial(track),
+      Mode::Race => rules::World::race(track, RACE_FIELD),
+    }
+  }
+
   /// How many ticks the log covers.
   pub fn ticks(&self) -> u32 {
     self.spans.last().map(|s| s.until_tick).unwrap_or(0)
@@ -81,10 +106,11 @@ pub struct Recorder {
 }
 
 impl Recorder {
-  pub fn new(rules_version: u32) -> Self {
+  pub fn new(rules_version: u32, mode: Mode) -> Self {
     Self {
       log: InputLog {
         rules_version,
+        mode,
         spans: Vec::new(),
       },
       held: Input::default(),
@@ -134,6 +160,8 @@ pub struct Replay {
   /// The tick the last lap completed on, if it did.
   pub finished_tick: Option<u32>,
   pub racer: Racer,
+  /// The whole circuit at the end of the replay, opponents included.
+  pub world: rules::World,
 }
 
 impl Replay {
@@ -172,18 +200,23 @@ pub const MAX_TICKS: u32 = 6_000;
 /// where it decides whether a time is real. One implementation, because two
 /// would make a ghost that drives differently from the run it came from.
 pub fn replay(log: &InputLog, track: &Track) -> Replay {
-  let mut racer = Racer::at_start(track);
+  // Through the same `step_world` a live race runs, with a field of one. The
+  // pickups are part of the circuit, so a replay collects them exactly where
+  // the run did, and a trial is a race with nobody else in it rather than a
+  // second implementation that could drift from the first.
+  let mut world = log.world(track);
   let mut rings = Vec::new();
   let mut finished_tick = None;
   let ticks = log.ticks().min(MAX_TICKS);
 
   for tick in 0..ticks {
-    let before = (racer.lap, racer.next_ring);
-    rules::step(&mut racer, log.at(tick), track);
-    if (racer.lap, racer.next_ring) != before {
+    let before = (world.racers[0].lap, world.racers[0].next_ring);
+    let inputs = rules::field_inputs(&world, track, log.at(tick), 0);
+    rules::step_world(&mut world, &inputs, track);
+    if (world.racers[0].lap, world.racers[0].next_ring) != before {
       rings.push(tick);
     }
-    if finished_tick.is_none() && rules::finished(&racer) {
+    if finished_tick.is_none() && rules::finished(&world.racers[0]) {
       finished_tick = Some(tick);
       break;
     }
@@ -192,7 +225,8 @@ pub fn replay(log: &InputLog, track: &Track) -> Replay {
   Replay {
     rings,
     finished_tick,
-    racer,
+    racer: world.racers[0],
+    world,
   }
 }
 
@@ -203,11 +237,12 @@ pub fn replay(log: &InputLog, track: &Track) -> Replay {
 /// the cases that genuinely need a state at an arbitrary tick: seeking, and
 /// starting a ghost part way through.
 pub fn replay_to(log: &InputLog, track: &Track, tick: u32) -> Racer {
-  let mut racer = Racer::at_start(track);
+  let mut world = log.world(track);
   for t in 0..tick.min(log.ticks()).min(MAX_TICKS) {
-    rules::step(&mut racer, log.at(t), track);
+    let inputs = rules::field_inputs(&world, track, log.at(t), 0);
+    rules::step_world(&mut world, &inputs, track);
   }
-  racer
+  world.racers[0]
 }
 
 /// Checks a submitted log and the time it claims.
@@ -247,40 +282,27 @@ mod tests {
   /// competent player approximates and what gives a log with real structure in
   /// it rather than a single held input.
   fn drive_a_trial(track: &Track) -> (Recorder, Racer) {
-    let mut racer = Racer::at_start(track);
-    let mut recorder = Recorder::new(VERSION);
-    for tick in 0..MAX_TICKS {
-      let input = aim_at_next_ring(&racer, track, tick);
-      recorder.observe(input);
-      rules::step(&mut racer, input, track);
-      if rules::finished(&racer) {
+    drive(track, Mode::Trial)
+  }
+
+  fn drive(track: &Track, mode: Mode) -> (Recorder, Racer) {
+    let mut world = match mode {
+      Mode::Trial => rules::World::trial(track),
+      Mode::Race => rules::World::race(track, RACE_FIELD),
+    };
+    let mut recorder = Recorder::new(VERSION, mode);
+    for _ in 0..MAX_TICKS {
+      // The player is driven by the same rule the opponents are, which makes
+      // the fixture a fixture rather than a script.
+      let mine = rules::bot_input(&world.racers[0], track, world.tick, 0);
+      recorder.observe(mine);
+      let inputs = rules::field_inputs(&world, track, mine, 0);
+      rules::step_world(&mut world, &inputs, track);
+      if rules::finished(&world.racers[0]) {
         break;
       }
     }
-    (recorder, racer)
-  }
-
-  /// Steers toward the ring the racer is looking for, and charges on the run in
-  /// to a corner. Deterministic, so the fixture is a fixture.
-  fn aim_at_next_ring(racer: &Racer, track: &Track, tick: u32) -> Input {
-    let target = track.ring(racer.next_ring);
-    let want = angle_between(racer.pos, target);
-    let delta = (want + BRADS - racer.heading) % BRADS;
-    // A deadband, because without one the fixture flips its steering every
-    // tick and the log gets one entry per tick. That is not a bug in the
-    // encoding, it is the honest shape of it: an event log is small exactly to
-    // the degree that the input holds still, and a bang-bang autopilot is the
-    // worst case rather than the typical one.
-    const DEADBAND: u16 = 24;
-    let steer = if delta <= DEADBAND || delta >= BRADS - DEADBAND {
-      0
-    } else if delta < BRADS / 2 {
-      1
-    } else {
-      -1
-    };
-    let charge = tick % 200 < 40;
-    Input::new(steer, charge)
+    (recorder, world.racers[0])
   }
 
   #[test]
@@ -293,6 +315,47 @@ mod tests {
 
     assert!(replayed.finished_tick.is_some(), "the fixture finished the trial");
     assert_eq!(replayed.racer, driven, "the replay is the run, exactly");
+  }
+
+  #[test]
+  fn one_players_log_reproduces_a_whole_four_way_race() {
+    // The claim race mode is built on, and the one that makes it worth having
+    // beside the trial. Only the player's key presses are recorded. The other
+    // three racers, every shove between them, and every pickup they took come
+    // back because they are functions of the world rather than facts about it.
+    let track = Track::circuit();
+    let (recorder, driven) = drive(&track, Mode::Race);
+    let log = recorder.finish();
+    assert_eq!(log.mode, Mode::Race);
+
+    let replayed = replay(&log, &track);
+    assert_eq!(replayed.racer, driven, "the player came back");
+    assert_eq!(replayed.world.racers.len(), RACE_FIELD, "and so did the field");
+
+    // Driven again from scratch, to be sure the replay is reproducing rather
+    // than merely agreeing with a copy of itself.
+    let (_, again) = drive(&track, Mode::Race);
+    assert_eq!(again, driven);
+  }
+
+  #[test]
+  fn a_race_log_and_a_trial_log_are_not_the_same_run() {
+    // Which is why the mode is in the log. Replaying a race log as a trial
+    // would leave out three cars, and the time it produced would be a time
+    // nobody drove.
+    let track = Track::circuit();
+    let (trial, _) = drive(&track, Mode::Trial);
+    let (race, _) = drive(&track, Mode::Race);
+    let trial = trial.finish();
+    let mut race = race.finish();
+    assert_ne!(replay(&trial, &track).racer, replay(&race, &track).racer);
+
+    race.mode = Mode::Trial;
+    assert_ne!(
+      replay(&race, &track).time_ms(),
+      Some(0),
+      "replaying it under the wrong mode produces something, which is the danger"
+    );
   }
 
   #[test]
@@ -318,7 +381,7 @@ mod tests {
   fn an_entry_is_a_change_of_input_rather_than_a_tick() {
     // The encoding is the op stream's own shape. A held key is one entry
     // however long it is held, which is why the log is small.
-    let mut recorder = Recorder::new(VERSION);
+    let mut recorder = Recorder::new(VERSION, Mode::Trial);
     for _ in 0..500 {
       recorder.observe(Input::new(1, false));
     }
@@ -358,7 +421,7 @@ mod tests {
   #[test]
   fn a_log_that_never_finishes_is_refused() {
     let track = Track::circuit();
-    let mut recorder = Recorder::new(VERSION);
+    let mut recorder = Recorder::new(VERSION, Mode::Trial);
     for _ in 0..600 {
       recorder.observe(Input::new(1, false));
     }
@@ -399,11 +462,11 @@ mod tests {
     let (recorder, _) = drive_a_trial(&track);
     let log = recorder.finish();
 
-    let mut forward = Racer::at_start(&track);
+    let mut forward = rules::World::trial(&track);
     for tick in 0..300 {
-      rules::step(&mut forward, log.at(tick), &track);
+      rules::step_world(&mut forward, &[log.at(tick)], &track);
     }
-    assert_eq!(replay_to(&log, &track, 300), forward);
+    assert_eq!(replay_to(&log, &track, 300), forward.racers[0]);
   }
 
   #[test]

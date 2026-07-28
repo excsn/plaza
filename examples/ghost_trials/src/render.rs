@@ -101,8 +101,27 @@ pub fn draw_track(board: &Board, track: &Track, next: u16) {
   }
 }
 
+/// The pickups still on the circuit. A taken one leaves its outline, so a
+/// player can see where it will come back rather than having to remember.
+pub fn draw_pickups(board: &Board, pickups: &[Pickup], tick: u32) {
+  for pickup in pickups {
+    let at = board.at(pickup.at);
+    let r = PICKUP_RADIUS.to_f32() * board.scale * 0.55;
+    let (colour, mark) = match pickup.kind {
+      Power::Turbo => (Color::new(1.0, 0.6, 0.25, 1.0), "T"),
+      Power::Grip => (Color::new(0.5, 0.9, 1.0, 1.0), "G"),
+    };
+    if pickup.available(tick) {
+      draw_circle(at.x, at.y, r, Color::new(colour.r, colour.g, colour.b, 0.85));
+      draw_text(mark, at.x - r * 0.35, at.y + r * 0.4, r * 1.5, Color::new(0.06, 0.07, 0.09, 1.0));
+    } else {
+      draw_circle_lines(at.x, at.y, r, 1.0, Color::new(colour.r, colour.g, colour.b, 0.22));
+    }
+  }
+}
+
 /// One racer. `ghost` draws it hollow: an echo of a run, not another car.
-pub fn draw_racer(board: &Board, racer: &Racer, colour: Color, ghost: bool) {
+pub fn draw_racer(board: &Board, racer: &Racer, colour: Color, ghost: bool, tick: u32) {
   let at = board.at(racer.pos);
   let size = board.scale * 0.9;
   let (fx, fy) = (cos(racer.heading).to_f32(), sin(racer.heading).to_f32());
@@ -119,6 +138,11 @@ pub fn draw_racer(board: &Board, racer: &Racer, colour: Color, ghost: bool) {
   draw_triangle(nose, left, right, colour);
 
   // The wind-up and the spend, which are the whole of the driving decision.
+  // Grip reads as a rim, because it changes how the car behaves rather than
+  // how fast it is going, and a player has to know which of the two they took.
+  if racer.gripping(tick) {
+    draw_circle_lines(at.x, at.y, size * 1.1, 2.0, Color::new(0.5, 0.9, 1.0, 0.8));
+  }
   if racer.charge > 0 {
     let share = racer.charge as f32 / CHARGE_MAX as f32;
     draw_circle_lines(at.x, at.y, size * (0.9 + share * 0.9), 2.0, Color::new(1.0, 0.85, 0.4, 0.25 + share * 0.5));
@@ -130,11 +154,11 @@ pub fn draw_racer(board: &Board, racer: &Racer, colour: Color, ghost: bool) {
 }
 
 /// The top band: the clock, the split against the rival ghost, and the record.
-pub fn draw_hud(board: &Board, elapsed_ms: u64, lap: u16, best: Option<u64>, split: Option<i64>) {
+pub fn draw_hud(board: &Board, elapsed_ms: u64, lap: u16, best: Option<u64>, split: Option<i64>, mode: Mode) {
   let y = board.origin.y - 34.0;
   draw_text(&format_ms(elapsed_ms), board.origin.x, y, 30.0, Color::new(0.95, 0.96, 0.98, 1.0));
 
-  let laps = format!("lap {} of {}", (lap + 1).min(LAPS), LAPS);
+  let laps = format!("{}   lap {} of {}", mode.label(), (lap + 1).min(LAPS), LAPS);
   draw_text(&laps, board.origin.x + 130.0, y, 20.0, Color::new(0.7, 0.74, 0.8, 1.0));
 
   // The split is the number a time trial is actually played on.
@@ -190,8 +214,122 @@ pub fn draw_board(board: &Board, ghosts: &[(u32, PlayerId, u64, usize, usize)], 
   }
 }
 
+/// The mode menu, drawn on the canvas.
+///
+/// On the canvas rather than in the panel for the reason `seed_defense` records
+/// about its build menu: the panel is for what crossed the wire and what it
+/// cost, and choosing what to play is the game.
+pub struct Menu {
+  cards: Vec<(Mode, Rect)>,
+}
+
+impl Menu {
+  pub fn hit(&self, at: Vec2) -> Option<Mode> {
+    self.cards.iter().find(|(_, r)| r.contains(at)).map(|(m, _)| *m)
+  }
+}
+
+pub fn draw_menu(best_trial: Option<u64>, ghosts: usize) -> Menu {
+  draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.04, 0.05, 0.07, 1.0));
+
+  let title = "ghost trials";
+  let dims = measure_text(title, None, 54, 1.0);
+  let top = screen_height() * 0.22;
+  draw_text(title, (screen_width() - dims.width) * 0.5, top, 54.0, Color::new(0.95, 0.96, 0.98, 1.0));
+
+  let sub = "your opponents are replays of an input log";
+  let dims = measure_text(sub, None, 20, 1.0);
+  draw_text(sub, (screen_width() - dims.width) * 0.5, top + 30.0, 20.0, Color::new(0.5, 0.55, 0.62, 1.0));
+
+  let card_w = 300.0;
+  let card_h = 150.0;
+  let gap = 24.0;
+  let left = (screen_width() - card_w * 2.0 - gap) * 0.5;
+  let y = top + 70.0;
+
+  let mut cards = Vec::new();
+  for (i, mode) in [Mode::Trial, Mode::Race].into_iter().enumerate() {
+    let rect = Rect::new(left + i as f32 * (card_w + gap), y, card_w, card_h);
+    let hovered = rect.contains(Vec2::from(mouse_position()));
+    draw_rectangle(
+      rect.x,
+      rect.y,
+      rect.w,
+      rect.h,
+      if hovered {
+        Color::new(0.14, 0.17, 0.22, 1.0)
+      } else {
+        Color::new(0.09, 0.11, 0.14, 1.0)
+      },
+    );
+    draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 2.0, Color::new(0.32, 0.38, 0.46, 1.0));
+
+    let (name, key, lines) = match mode {
+      Mode::Trial => (
+        "time trial",
+        "1",
+        [
+          "alone against the clock",
+          "and against every run before it",
+          "nothing to arbitrate, so no lag at all",
+        ],
+      ),
+      Mode::Race => (
+        "race",
+        "2",
+        [
+          "you and three CPU racers",
+          "they shove, and they take your pickups",
+          "one log still reproduces all four",
+        ],
+      ),
+    };
+    draw_text(name, rect.x + 18.0, rect.y + 38.0, 28.0, Color::new(1.0, 0.9, 0.6, 1.0));
+    draw_text(key, rect.x + rect.w - 26.0, rect.y + 34.0, 24.0, Color::new(0.45, 0.5, 0.58, 1.0));
+    for (n, line) in lines.iter().enumerate() {
+      draw_text(line, rect.x + 18.0, rect.y + 68.0 + n as f32 * 22.0, 17.0, Color::new(0.62, 0.68, 0.75, 1.0));
+    }
+    cards.push((mode, rect));
+  }
+
+  let footer = match best_trial {
+    Some(ms) => format!("best trial {}   {ghosts} ghosts on the board", format_ms(ms)),
+    None => format!("{ghosts} ghosts on the board"),
+  };
+  let dims = measure_text(&footer, None, 18, 1.0);
+  draw_text(
+    &footer,
+    (screen_width() - dims.width) * 0.5,
+    y + card_h + 40.0,
+    18.0,
+    Color::new(0.5, 0.55, 0.62, 1.0),
+  );
+
+  Menu { cards }
+}
+
+/// Where the player is in the CPU field, drawn only in a race.
+pub fn draw_positions(board: &Board, world: &ghost_trials::sim::rules::World, me: usize) {
+  let mut y = board.origin.y + 14.0;
+  for (place, index) in world.standings().iter().enumerate() {
+    let racer = &world.racers[*index];
+    let colour = if *index == me {
+      player_color(0)
+    } else {
+      Color::new(0.55, 0.58, 0.64, 1.0)
+    };
+    let who = if *index == me { "you".to_owned() } else { format!("cpu {index}") };
+    let line = match racer.finished_tick {
+      Some(tick) => format!("{}. {who}  {}", place + 1, format_ms(tick as u64 * SIM_STEP_MS)),
+      None => format!("{}. {who}  lap {}", place + 1, (racer.lap + 1).min(LAPS)),
+    };
+    draw_text(&line, board.origin.x + 10.0, y, 17.0, colour);
+    y += 20.0;
+  }
+}
+
 /// Over the circuit when a run ends.
-pub fn draw_result(board: &Board, time_ms: u64, place: Option<u32>, refused: Option<String>) {
+pub fn draw_result(board: &Board, time_ms: u64, place: Option<u32>, refused: Option<String>, finished_position: Option<u32>) {
   let mid = board.origin.x + board.width() * 0.5;
   let y = board.origin.y + board.height() * 0.35;
   draw_rectangle(board.origin.x, y - 44.0, board.width(), 110.0, Color::new(0.0, 0.0, 0.0, 0.55));
@@ -199,6 +337,17 @@ pub fn draw_result(board: &Board, time_ms: u64, place: Option<u32>, refused: Opt
   let text = format_ms(time_ms);
   let dims = measure_text(&text, None, 48, 1.0);
   draw_text(&text, mid - dims.width * 0.5, y, 48.0, Color::new(1.0, 0.95, 0.7, 1.0));
+
+  // Where you came in the CPU field, which is the thing a race is played on and
+  // the board time is not.
+  if let Some(position) = finished_position {
+    let ordinal = match position {
+      1 => "won".to_owned(),
+      n => format!("{n} of {RACE_FIELD}"),
+    };
+    let dims = measure_text(&ordinal, None, 26, 1.0);
+    draw_text(&ordinal, mid - dims.width * 0.5, y - 44.0, 26.0, Color::new(0.8, 0.9, 1.0, 1.0));
+  }
 
   let (sub, colour) = match (&refused, place) {
     (Some(why), _) => (format!("refused: {why}"), Color::new(1.0, 0.5, 0.5, 1.0)),

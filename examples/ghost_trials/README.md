@@ -16,7 +16,9 @@ Drive two laps through the rings, as fast as you can. Every run you finish becom
 cargo test -p ghost_trials                   # every claim below, as a test
 ```
 
-Left and right steer. Hold space to charge: you slow down, you turn harder, and you bank a boost that spends when you let go. `R` starts again.
+Pick a mode: **time trial** alone against the clock and the ghosts, or **race** against three CPU drivers who shove and take your pickups.
+
+Left and right steer. Hold space to charge: you slow down, you turn harder, and you bank a boost that spends when you let go. `R` starts again, `Escape` goes back to the menu.
 
 ## What you are looking at
 
@@ -29,6 +31,9 @@ Left and right steer. Hold space to charge: you slow down, you turn harder, and 
 | tail behind your car | a boost, being spent |
 | the number in the middle | your split against the ghost you are chasing |
 | the strip at the bottom | the board, and what each ghost cost to send against what a path would have |
+| purple arrows | the CPU field, in a race |
+| **T** and **G** discs | pickups. **T** is a turbo, **G** is grip. An outline is one that has been taken and is coming back |
+| rim around a car | grip, running |
 
 ## The one decision everything follows from
 
@@ -63,6 +68,33 @@ The cost of deciding this way is worth having as a number rather than as a worry
 Not "barely". Not "within a tolerance". `latency_cannot_change_a_lap_time` drives the same inputs at 0, 80, 250 and 400 ms one way and asserts the four times are **identical**, because the run happens entirely on the machine driving it and the link is not in the loop. Every other playground here spends its design effort making latency cheap; this is the one where it is not on the path at all.
 
 What the link does decide is when a ghost turns up and how quickly a lie is caught, and neither touches the driving. A lost submission costs the run and never the board: there is no retry, deliberately, so a dropped lap is a disappointment rather than a corruption. The board only ever holds runs that were verified.
+
+## Two modes, one log
+
+The menu picks between two arrangements of the same track, the same rules and the same op log, which is the comparison worth drawing:
+
+**A time trial has nothing to arbitrate.** One car, one clock. So the client owns the whole of the feel, the server never watches, and the verdict arrives afterwards. Latency is not on the path at any depth.
+
+**A race has three CPU drivers on the circuit with you**, shoving for room and taking pickups out from under you. And the log does not get any bigger, because **the opponents are a pure function of the world**. `bot_input` reads a racer and the track and returns what that racer holds this tick; nothing else. So one player's key presses reproduce a four-way race, every shove and every stolen pickup included, which `one_players_log_reproduces_a_whole_four_way_race` asserts by driving one, replaying it, and comparing the whole field.
+
+That is `seed_defense`'s trick pointed at opponents instead of a wave of enemies, and it is why the mode is stored *in* the log: replaying a race log as a trial would leave three cars out, and the time it produced would be a time nobody drove.
+
+### The CPU field is deliberately uneven, and deliberately sloppy
+
+A field of identical drivers is a wall or a parade. The three seats have different tolerances for being off line, different appetites for charging, and different rates of simply not paying attention for a moment. `the_cpu_field_is_uneven` asserts the sharp one finishes ahead of the sloppy one, because a change that flattened the field would otherwise pass every other test here.
+
+The mistakes come from **a hash of the tick and the seat, not from a generator**. There is no random state anywhere in this example, and that is the point: a generator is hidden state that a log does not carry, so a ghost would need it saved and restored to replay. A pure function of the tick needs nothing.
+
+The noise is also sampled in *chunks* of ticks rather than per tick, which matters twice. A mind that changed every tick drives like a bang-bang controller and reads as a twitch rather than a mistake. And in a trial, where the player's own inputs *are* recorded, driving in that shape is exactly what makes an event log stop being small.
+
+### The power-ups change a rule, not a number
+
+Two, and they are part of the circuit rather than events: fixed positions, fixed kinds, a fixed respawn interval. Nothing about them is drawn from anywhere, which is what lets a run be reproduced from its inputs alone.
+
+- **Turbo** hands over the boost you would otherwise have had to slow down to earn.
+- **Grip** gives you the charge turn *without* the charge speed, which inverts the trade the whole game is built on for a few seconds.
+
+A contested pickup goes to the racer with the lowest index, not to whoever was closest and not to whoever the loop reached first. Both of those are rules about the container rather than about the game. The shoves are the same discipline: **every impulse is computed from the state before any of them lands**, and `a_shove_is_the_same_whichever_order_the_pairs_come_up_in` reverses the list and checks the outcome is mirrored.
 
 ## What a replay is a bet on
 

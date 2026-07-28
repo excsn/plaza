@@ -22,21 +22,35 @@ use crate::sim::log::{self, InputLog, Recorder, Rejection};
 use crate::sim::protocol::Ghost;
 use crate::sim::types::*;
 
-/// A ghost being raced against: its log, and where in it we are.
+/// A ghost being raced against: its log, and the world it is being replayed in.
+///
+/// **Its own world, not yours.** A ghost is a recording, so it takes the
+/// pickups it took on the day and shoves nobody. Letting it interact with the
+/// live run would make a ghost change the race it is a record of, and then no
+/// two people watching it would see the same thing.
 #[derive(Clone, Debug)]
 pub struct GhostRun {
   pub ghost: Ghost,
-  pub racer: Racer,
+  pub world: crate::sim::rules::World,
   pub tick: u32,
   pub done: bool,
+}
+
+impl GhostRun {
+  pub fn racer(&self) -> &Racer {
+    &self.world.racers[0]
+  }
 }
 
 pub struct Client {
   pub me: PlayerId,
   pub track: Track,
   pub rules_version: u32,
+  pub mode: Mode,
 
-  pub racer: Racer,
+  /// The whole circuit: you at seat zero, and in a race the CPU field beside
+  /// you. A trial is this with one racer in it.
+  pub world: crate::sim::rules::World,
   pub tick: u32,
   pub running: bool,
   /// The time this run took, once it is over.
@@ -58,16 +72,17 @@ pub struct Client {
 
 impl Client {
   pub fn new(me: PlayerId, track: Track, rules_version: u32) -> Self {
-    let racer = Racer::at_start(&track);
+    let world = crate::sim::rules::World::trial(&track);
     Self {
       me,
       track,
       rules_version,
-      racer,
+      mode: Mode::Trial,
+      world,
       tick: 0,
       running: false,
       finished_ms: None,
-      recorder: Recorder::new(rules_version),
+      recorder: Recorder::new(rules_version, Mode::Trial),
       ghosts: Vec::new(),
       best_ms: None,
       last_place: None,
@@ -79,19 +94,40 @@ impl Client {
     }
   }
 
-  /// Starts a fresh attempt. Every ghost restarts with it, so they race you
-  /// from the line rather than from wherever they happened to be.
-  pub fn restart(&mut self) {
-    self.racer = Racer::at_start(&self.track);
+  /// Starts a fresh attempt in a mode. Every ghost restarts with it, so they
+  /// race you from the line rather than from wherever they happened to be.
+  ///
+  /// A ghost recorded in the other mode is dropped rather than raced: a race
+  /// log replays a four-way race, and running one beside a trial would put
+  /// three phantom cars on a track that has none.
+  pub fn restart_as(&mut self, mode: Mode) {
+    self.mode = mode;
+    self.world = match mode {
+      Mode::Trial => crate::sim::rules::World::trial(&self.track),
+      Mode::Race => crate::sim::rules::World::race(&self.track, RACE_FIELD),
+    };
     self.tick = 0;
     self.running = true;
     self.finished_ms = None;
-    self.recorder = Recorder::new(self.rules_version);
+    self.last_place = None;
+    self.last_refusal = None;
+    self.recorder = Recorder::new(self.rules_version, mode);
+    self.ghosts.retain(|g| g.ghost.log.mode == mode);
     for ghost in self.ghosts.iter_mut() {
-      ghost.racer = Racer::at_start(&self.track);
+      ghost.world = ghost.ghost.log.world(&self.track);
       ghost.tick = 0;
       ghost.done = false;
     }
+  }
+
+  /// Starts again in the mode already being played.
+  pub fn restart(&mut self) {
+    self.restart_as(self.mode);
+  }
+
+  /// Where this client's own racer is.
+  pub fn racer(&self) -> &Racer {
+    &self.world.racers[0]
   }
 
   pub fn elapsed_ms(&self) -> u64 {
@@ -108,7 +144,10 @@ impl Client {
       return;
     }
     self.recorder.observe(input);
-    crate::sim::rules::step(&mut self.racer, input, &self.track);
+    // Only the player's input is recorded. The rest of the field is a function
+    // of the world, so it costs nothing to store and nothing to send.
+    let inputs = crate::sim::rules::field_inputs(&self.world, &self.track, input, 0);
+    crate::sim::rules::step_world(&mut self.world, &inputs, &self.track);
     self.tick += 1;
 
     for ghost in self.ghosts.iter_mut() {
@@ -119,11 +158,13 @@ impl Client {
         ghost.done = true;
         continue;
       }
-      crate::sim::rules::step(&mut ghost.racer, ghost.ghost.log.at(ghost.tick), &self.track);
+      let mine = ghost.ghost.log.at(ghost.tick);
+      let inputs = crate::sim::rules::field_inputs(&ghost.world, &self.track, mine, 0);
+      crate::sim::rules::step_world(&mut ghost.world, &inputs, &self.track);
       ghost.tick += 1;
     }
 
-    if crate::sim::rules::finished(&self.racer) {
+    if crate::sim::rules::finished(self.racer()) {
       self.finish(controls);
     } else if self.tick >= log::MAX_TICKS {
       self.running = false;
@@ -141,7 +182,7 @@ impl Client {
     if controls.self_check {
       self.self_checks += 1;
       let replayed = log::replay(&finished, &self.track);
-      if replayed.racer != self.racer || replayed.time_ms() != Some(time) {
+      if replayed.racer != *self.racer() || replayed.time_ms() != Some(time) {
         self.self_check_failures += 1;
       }
     }
@@ -177,10 +218,18 @@ impl Client {
     if self.ghosts.iter().any(|g| g.ghost.id == ghost.id) {
       return;
     }
-    let racer = log::replay_to(&ghost.log, &self.track, self.tick);
+    if ghost.log.mode != self.mode {
+      return;
+    }
+    let mut world = ghost.log.world(&self.track);
+    let tick = self.tick.min(ghost.log.ticks());
+    for t in 0..tick {
+      let inputs = crate::sim::rules::field_inputs(&world, &self.track, ghost.log.at(t), 0);
+      crate::sim::rules::step_world(&mut world, &inputs, &self.track);
+    }
     self.ghosts.push(GhostRun {
-      racer,
-      tick: self.tick.min(ghost.log.ticks()),
+      world,
+      tick,
       done: false,
       ghost,
     });
@@ -202,6 +251,12 @@ impl Client {
   pub fn rival(&self) -> Option<&GhostRun> {
     self.ghosts.first()
   }
+
+  /// Where the player is in the CPU field, one-based. Only means anything in a
+  /// race; a trial has nobody to be ahead of.
+  pub fn position(&self) -> usize {
+    self.world.standings().iter().position(|i| *i == 0).unwrap_or(0) + 1
+  }
 }
 
 #[cfg(test)]
@@ -220,26 +275,15 @@ mod tests {
 
   /// Drives a client to the flag with the same autopilot the other tests use.
   fn drive(client: &mut Client, controls: &Controls) {
-    client.restart();
-    while client.running {
-      let input = autopilot(&client.racer, &client.track, client.tick);
-      client.step(input, controls);
-    }
+    drive_as(client, Mode::Trial, controls);
   }
 
-  pub fn autopilot(racer: &Racer, track: &Track, tick: u32) -> Input {
-    let target = track.ring(racer.next_ring);
-    let want = angle_between(racer.pos, target);
-    let delta = (want + BRADS - racer.heading) % BRADS;
-    const DEADBAND: u16 = 24;
-    let steer = if delta <= DEADBAND || delta >= BRADS - DEADBAND {
-      0
-    } else if delta < BRADS / 2 {
-      1
-    } else {
-      -1
-    };
-    Input::new(steer, tick % 200 < 40)
+  fn drive_as(client: &mut Client, mode: Mode, controls: &Controls) {
+    client.restart_as(mode);
+    while client.running {
+      let input = crate::sim::rules::bot_input(client.racer(), &client.track, client.tick, 0);
+      client.step(input, controls);
+    }
   }
 
   #[test]
@@ -283,7 +327,7 @@ mod tests {
     };
 
     let mut watcher = Client::new(1, server.track.clone(), server.rules_version);
-    watcher.restart();
+    watcher.restart_as(Mode::Trial);
     for _ in 0..250 {
       watcher.step(Input::default(), &c);
     }
@@ -291,8 +335,8 @@ mod tests {
 
     let caught_up = &watcher.ghosts[0];
     assert_eq!(caught_up.tick, 250);
-    assert_eq!(caught_up.racer, log::replay_to(&ghost.log, &watcher.track, 250));
-    assert_ne!(caught_up.racer.pos, Racer::at_start(&watcher.track).pos, "not sitting on the line");
+    assert_eq!(*caught_up.racer(), log::replay_to(&ghost.log, &watcher.track, 250));
+    assert_ne!(caught_up.racer().pos, Racer::at_start(&watcher.track).pos, "not sitting on the line");
   }
 
   #[test]
@@ -311,14 +355,14 @@ mod tests {
     };
 
     let mut second = Client::new(1, server.track.clone(), server.rules_version);
+    second.restart_as(Mode::Trial);
     second.add_ghost(ghost);
-    second.restart();
     while second.running {
-      let input = autopilot(&second.racer, &second.track, second.tick);
+      let input = crate::sim::rules::bot_input(second.racer(), &second.track, second.tick, 0);
       second.step(input, &c);
       let against = &second.ghosts[0];
       if !against.done {
-        assert_eq!(against.racer, second.racer, "the ghost diverged at tick {}", second.tick);
+        assert_eq!(against.racer(), second.racer(), "the ghost diverged at tick {}", second.tick);
       }
     }
     assert_eq!(second.finished_ms, first.finished_ms);

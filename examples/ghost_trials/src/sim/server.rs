@@ -155,25 +155,15 @@ mod tests {
   /// use, so the two files agree about what a run looks like.
   fn a_run(version: u32) -> (InputLog, u64) {
     let track = Track::circuit();
-    let mut racer = Racer::at_start(&track);
-    let mut recorder = Recorder::new(version);
+    let mut world = rules::World::trial(&track);
+    let mut recorder = Recorder::new(version, Mode::Trial);
     let mut finished = None;
     for tick in 0..log::MAX_TICKS {
-      let target = track.ring(racer.next_ring);
-      let want = angle_between(racer.pos, target);
-      let delta = (want + BRADS - racer.heading) % BRADS;
-      const DEADBAND: u16 = 24;
-      let steer = if delta <= DEADBAND || delta >= BRADS - DEADBAND {
-        0
-      } else if delta < BRADS / 2 {
-        1
-      } else {
-        -1
-      };
-      let input = Input::new(steer, tick % 200 < 40);
+      let input = rules::bot_input(&world.racers[0], &track, world.tick, 0);
       recorder.observe(input);
-      rules::step(&mut racer, input, &track);
-      if rules::finished(&racer) {
+      let inputs = rules::field_inputs(&world, &track, input, 0);
+      rules::step_world(&mut world, &inputs, &track);
+      if rules::finished(&world.racers[0]) {
         finished = Some(tick);
         break;
       }

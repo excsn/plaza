@@ -438,6 +438,10 @@ The racing example stores a run as the inputs that produced it and replays them 
 
 The general point is the one worth keeping. The check does not test the simulation, which has plenty of other witnesses. It tests the **recorder**, which has none: a recorder that closes a span one tick early produces a ghost that drifts away from the run it came from, slowly, in a way that reads as bad luck. Any system that stores events to rebuild state later wants this check, and it is four lines.
 
+**Opponents can be free, and that is the same trick as a free wave of enemies.** The race mode puts three CPU drivers on the circuit, and the log does not grow by a byte, because a bot's input is a pure function of the world it is in. One player's key presses reproduce a four-way race, every shove and every stolen pickup included. The condition is strict and worth stating: the moment a bot reads a clock, a generator, or anything the log does not carry, the race stops being reproducible. So the sloppiness that makes the field feel real comes from a **hash of the tick and the seat** rather than from a random number generator, since a generator is hidden state that a recording would have to save and restore.
+
+That noise is sampled in chunks of ticks rather than per tick, for two reasons that turned out to be the same reason. A driver whose mind changes every tick reads as a twitch rather than as a mistake. And a driver whose mind changes every tick produces one log entry per tick, which is exactly what stops an event log being small. **How still an input holds is both a feel property and a bandwidth property**, and they push the same way.
+
 **Latency is genuinely not on the path, which is worth stating once.** Four runs at 0, 80, 250 and 400 ms one way produce *identical* times, because the run happens on the machine driving it. Every other playground here spends its effort making latency cheap; this is the one that can say it costs nothing, and the reason is architectural rather than clever.
 
 ### Smaller ones worth remembering

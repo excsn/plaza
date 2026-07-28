@@ -137,6 +137,10 @@ pub struct Racer {
   /// The ring this racer must pass through next.
   pub next_ring: u16,
   pub lap: u16,
+  /// Server tick a grip runs out on.
+  pub grip_until: u32,
+  /// The tick this racer finished on, if it has.
+  pub finished_tick: Option<u32>,
 }
 
 impl Racer {
@@ -152,7 +156,34 @@ impl Racer {
       boost: 0,
       next_ring: 1,
       lap: 0,
+      grip_until: 0,
+      finished_tick: None,
     }
+  }
+
+  /// Where the racer on a given grid slot starts.
+  ///
+  /// Spread across the line rather than stacked, so a race does not begin with
+  /// four cars in one place shoving each other.
+  pub fn on_grid(track: &Track, slot: usize, field: usize) -> Self {
+    let mut racer = Self::at_start(track);
+    // Centred on the line for whatever the field actually is, not for the
+    // largest one it could be. A race of one starts on the line, which is what
+    // makes a trial a race with nobody else in it rather than a different game.
+    let across = sin(racer.heading);
+    let along = cos(racer.heading);
+    let offset = Fx::ratio(slot as i32 * 15, 10) - Fx::ratio((field.max(1) as i32 - 1) * 15, 20);
+    racer.pos = P::new(racer.pos.x + across.mul(offset), racer.pos.y - along.mul(offset));
+    racer
+  }
+
+  pub fn gripping(&self, tick: u32) -> bool {
+    self.grip_until > tick
+  }
+
+  /// How far round the circuit, for placing racers against each other.
+  pub fn progress(&self) -> u32 {
+    self.lap as u32 * 1000 + self.next_ring as u32
   }
 
   pub fn boosting(&self) -> bool {
@@ -207,6 +238,126 @@ pub const RING_RADIUS: Fx = Fx::ratio(23, 10);
 /// The laps a trial is.
 pub const LAPS: u16 = 2;
 
+/// Which game is being played, and therefore which authority model.
+///
+/// The two modes are the same track, the same rules and the same op log, run
+/// under opposite arrangements, which is the comparison this example exists to
+/// draw. See the README.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(into = "u8", try_from = "u8")]
+pub enum Mode {
+  /// Alone against the clock and against recordings. Nothing to arbitrate, so
+  /// the client owns the feel completely and the server checks afterwards.
+  Trial,
+  /// Everybody at once. Now there is contention, so inputs are addressed to a
+  /// tick and executed on it, and everyone pays the playout delay for it.
+  Race,
+}
+
+impl Mode {
+  pub fn label(self) -> &'static str {
+    match self {
+      Mode::Trial => "time trial",
+      Mode::Race => "race",
+    }
+  }
+}
+
+impl From<Mode> for u8 {
+  fn from(m: Mode) -> u8 {
+    m as u8
+  }
+}
+
+impl TryFrom<u8> for Mode {
+  type Error = &'static str;
+  fn try_from(v: u8) -> Result<Self, Self::Error> {
+    match v {
+      0 => Ok(Mode::Trial),
+      1 => Ok(Mode::Race),
+      _ => Err("unknown mode"),
+    }
+  }
+}
+
+/// What a pickup gives you.
+///
+/// Two, and each changes a *rule* rather than a number, which is the test
+/// `pellet_maze` settled on: a coefficient is a tuning value, a rule change is
+/// a decision. Turbo hands you the boost you would otherwise have had to slow
+/// down to earn. Grip gives you the charge turn without the charge speed, which
+/// inverts the trade the whole game is built on for a few seconds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(into = "u8", try_from = "u8")]
+pub enum Power {
+  Turbo,
+  Grip,
+}
+
+impl Power {
+  pub const ALL: [Power; 2] = [Power::Turbo, Power::Grip];
+
+  pub fn label(self) -> &'static str {
+    match self {
+      Power::Turbo => "turbo",
+      Power::Grip => "grip",
+    }
+  }
+}
+
+impl From<Power> for u8 {
+  fn from(p: Power) -> u8 {
+    p as u8
+  }
+}
+
+impl TryFrom<u8> for Power {
+  type Error = &'static str;
+  fn try_from(v: u8) -> Result<Self, Self::Error> {
+    match v {
+      0 => Ok(Power::Turbo),
+      1 => Ok(Power::Grip),
+      _ => Err("unknown power"),
+    }
+  }
+}
+
+/// What a turbo hands over, and how long a grip lasts.
+pub const TURBO_BOOST: u16 = 55;
+pub const GRIP_TICKS: u16 = 180;
+/// How long a taken pickup stays gone.
+pub const PICKUP_RESPAWN: u32 = 320;
+pub const PICKUP_RADIUS: Fx = Fx::ratio(18, 10);
+
+/// One pickup on the circuit.
+///
+/// Its position is fixed and its kind is fixed, so a pickup is not a random
+/// event: it is part of the track. That is what lets a run be reproduced from
+/// its inputs alone, and it is why there is no random number generator in this
+/// example at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Pickup {
+  pub at: P,
+  pub kind: Power,
+  /// The tick it comes back on. Zero means it is there now.
+  pub back_at: u32,
+}
+
+impl Pickup {
+  pub fn available(&self, tick: u32) -> bool {
+    tick >= self.back_at
+  }
+}
+
+/// How close two racers have to be to shove each other.
+pub const BUMP_RADIUS: Fx = Fx::ratio(11, 10);
+/// What a shove costs the pair of them, and how hard it pushes.
+pub const BUMP_SPEED_LOSS: Fx = Fx::ratio(6, 100);
+pub const BUMP_PUSH: Fx = Fx::ratio(35, 100);
+
+/// How many racers a race holds, you included.
+pub const RACE_FIELD: usize = 4;
+
 /// The rings, in order, as a closed loop.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Track {
@@ -256,6 +407,26 @@ impl Track {
   }
 }
 
+/// Where the pickups sit. Part of the track, like the rings.
+pub fn pickups() -> Vec<Pickup> {
+  let spots = [
+    ((10, 22), Power::Turbo),
+    ((25, 9), Power::Grip),
+    ((30, 21), Power::Turbo),
+    ((45, 31), Power::Grip),
+    ((52, 20), Power::Turbo),
+    ((30, 24), Power::Grip),
+  ];
+  spots
+    .iter()
+    .map(|((x, y), kind)| Pickup {
+      at: P::from_ints(*x, *y),
+      kind: *kind,
+      back_at: 0,
+    })
+    .collect()
+}
+
 /// The dials the panel edits.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Controls {
@@ -270,6 +441,12 @@ pub struct Controls {
   /// Submit a time the log does not support, to watch the server refuse it.
   pub cheat: bool,
   pub players: usize,
+  /// How far ahead of now an input in a race is scheduled.
+  ///
+  /// The whole cost of racing other people, in one number. A trial pays none of
+  /// it because a trial has nothing to be fair about.
+  pub playout_delay_ms: u64,
+  pub bots: usize,
 }
 
 impl Default for Controls {
@@ -282,6 +459,8 @@ impl Default for Controls {
       self_check: true,
       cheat: false,
       players: 2,
+      playout_delay_ms: 100,
+      bots: RACE_FIELD - 1,
     }
   }
 }

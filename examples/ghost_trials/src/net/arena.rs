@@ -227,14 +227,15 @@ mod tests {
   }
 
   fn a_run(track: &Track, version: u32) -> (InputLog, u64) {
-    let mut racer = Racer::at_start(track);
-    let mut recorder = Recorder::new(version);
+    let mut world = rules::World::trial(track);
+    let mut recorder = Recorder::new(version, Mode::Trial);
     let mut finished = 0;
     for tick in 0..crate::sim::log::MAX_TICKS {
-      let input = autopilot(&racer, track, tick);
+      let input = autopilot(&world.racers[0], track, world.tick, 0);
       recorder.observe(input);
-      rules::step(&mut racer, input, track);
-      if rules::finished(&racer) {
+      let inputs = rules::field_inputs(&world, track, input, 0);
+      rules::step_world(&mut world, &inputs, track);
+      if rules::finished(&world.racers[0]) {
         finished = tick;
         break;
       }

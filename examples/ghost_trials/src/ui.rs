@@ -32,7 +32,8 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls, host: bool) {
       .on_hover_text(
         "Compares the finished recording against the run it came from. On one machine that should be impossible to fail, which is the point: it does not test the physics, it tests the recorder, and a recorder off by one tick at a span boundary makes a ghost that drifts away from the run it came from. It found exactly that bug the first time it ran.",
       );
-    ui.checkbox(&mut controls.show_ghosts, "draw the ghosts");
+    ui.checkbox(&mut controls.show_ghosts, "draw the ghosts")
+      .on_hover_text("A ghost is replayed in its own world, so it takes the pickups it took on the day and shoves nobody. Letting a recording interact with the live run would make it a record of a race that never happened.");
   });
 
   if host {
@@ -98,6 +99,12 @@ pub fn draw_net_ui(client: &ghost_trials::net::client::NetClient, url: &str, ext
 
         section(ui, "what a ghost is made of", true, |ui| {
           let sim = &client.sim;
+          ui.label(egui::RichText::new(format!("mode: {}", sim.mode.label())).strong())
+            .on_hover_text("A trial has nothing to arbitrate, so the client owns the feel completely. A race puts three CPU drivers on the same circuit, and because they are pure functions of the world, one player's log still reproduces all four.");
+          if sim.mode == ghost_trials::sim::types::Mode::Race {
+            ui.label(format!("running {} of {}", sim.position(), ghost_trials::sim::types::RACE_FIELD))
+              .on_hover_text("The CPU field is deliberately uneven: one sloppy, one middling, one sharp. Their mistakes come from a hash of the tick rather than from a generator, because a generator is hidden state a log does not carry.");
+          }
           ui.label(format!("{} ghosts, {} ticks driven this run", sim.ghosts.len(), sim.tick))
             .on_hover_text("A ghost is not a recorded path. It is the inputs, replayed through the same rules that produced them, so it is the run happening again rather than an animation of where it went.");
           for run in sim.ghosts.iter().take(4) {

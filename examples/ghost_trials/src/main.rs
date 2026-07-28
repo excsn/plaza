@@ -8,7 +8,7 @@ use render::Board;
 use ghost_trials::role;
 #[cfg(any(feature = "server", all(feature = "client", feature = "websocket")))]
 use ghost_trials::role::Role;
-use ghost_trials::sim::types::Controls;
+use ghost_trials::sim::types::{Controls, Mode};
 
 /// Reports a fatal misconfiguration.
 ///
@@ -118,6 +118,8 @@ async fn frame_loop(options: role::Options) {
   let mut clock_ms: u64 = 0;
   let mut last_ms: u64 = 0;
   let mut perf = Perf::default();
+  // The menu is the first thing, and Escape comes back to it.
+  let mut in_menu = true;
 
   loop {
     let dt = get_frame_time().min(0.25);
@@ -127,11 +129,35 @@ async fn frame_loop(options: role::Options) {
     let mut controls = *controls_slot.lock();
 
     #[cfg(all(feature = "client", feature = "websocket"))]
-    {
-      client.poll(clock_ms, &controls);
-      // The input held this frame, applied to every tick the frame covers.
-      // Sampling per frame and stepping in whole ticks is what keeps a lap time
-      // a property of the driving rather than of the frame rate.
+    client.poll(clock_ms, &controls);
+
+    clear_background(Color::new(0.05, 0.06, 0.07, 1.0));
+
+    #[cfg(all(feature = "client", feature = "websocket"))]
+    if in_menu {
+      let menu = render::draw_menu(client.sim.best_ms, client.sim.ghosts.len());
+      let picked = if is_key_pressed(KeyCode::Key1) {
+        Some(Mode::Trial)
+      } else if is_key_pressed(KeyCode::Key2) {
+        Some(Mode::Race)
+      } else if is_mouse_button_pressed(MouseButton::Left) {
+        menu.hit(Vec2::from(mouse_position()))
+      } else {
+        None
+      };
+      if let Some(mode) = picked
+        && client.is_playing()
+      {
+        client.restart_as(mode);
+        last_ms = clock_ms;
+        in_menu = false;
+      }
+      if !client.is_playing() {
+        let text = "waiting for the arena";
+        let w = measure_text(text, None, 20, 1.0).width;
+        draw_text(text, (screen_width() - w) * 0.5, screen_height() - 40.0, 20.0, GRAY);
+      }
+    } else {
       let input = read_input();
       let elapsed = clock_ms.saturating_sub(last_ms);
       last_ms = clock_ms;
@@ -139,16 +165,15 @@ async fn frame_loop(options: role::Options) {
       if is_key_pressed(KeyCode::R) {
         client.restart();
       }
-    }
+      if is_key_pressed(KeyCode::Escape) {
+        in_menu = true;
+      }
 
-    clear_background(Color::new(0.05, 0.06, 0.07, 1.0));
-    let board = Board::fit();
-
-    #[cfg(all(feature = "client", feature = "websocket"))]
-    {
+      let board = Board::fit();
       let sim = &client.sim;
       render::draw_arena(&board);
-      render::draw_track(&board, &sim.track, sim.racer.next_ring);
+      render::draw_track(&board, &sim.track, sim.racer().next_ring);
+      render::draw_pickups(&board, &sim.world.pickups, sim.tick);
 
       if controls.show_ghosts {
         for run in &sim.ghosts {
@@ -156,19 +181,28 @@ async fn frame_loop(options: role::Options) {
             continue;
           }
           let colour = render::player_color(run.ghost.player);
-          render::draw_racer(&board, &run.racer, Color::new(colour.r, colour.g, colour.b, 0.55), true);
+          render::draw_racer(&board, run.racer(), Color::new(colour.r, colour.g, colour.b, 0.55), true, run.tick);
         }
       }
-      render::draw_racer(&board, &sim.racer, render::player_color(sim.me), false);
+      // The CPU field, in a plainer colour than the player: a race should read
+      // at a glance as "me and them" rather than as four equal cars.
+      for (i, racer) in sim.world.racers.iter().enumerate().skip(1) {
+        render::draw_racer(&board, racer, Color::new(0.72, 0.55, 0.85, 1.0), false, sim.tick);
+        let _ = i;
+      }
+      render::draw_racer(&board, sim.racer(), render::player_color(0), false, sim.tick);
 
-      // The split against the ghost being chased: where it was at this tick
-      // against where you are, in the only currency a trial has.
+      // The split against the ghost being chased, in the only currency a trial
+      // has: how far round each of you is.
       let split = sim.rival().and_then(|rival| {
-        let mine = sim.racer.lap as u32 * 1000 + sim.racer.next_ring as u32;
-        let theirs = rival.racer.lap as u32 * 1000 + rival.racer.next_ring as u32;
+        let mine = sim.racer().progress();
+        let theirs = rival.racer().progress();
         (mine != theirs).then(|| (theirs as i64 - mine as i64) * 500)
       });
-      render::draw_hud(&board, sim.elapsed_ms(), sim.racer.lap, sim.best_ms, split);
+      render::draw_hud(&board, sim.elapsed_ms(), sim.racer().lap, sim.best_ms, split, sim.mode);
+      if sim.mode == Mode::Race {
+        render::draw_positions(&board, &sim.world, 0);
+      }
 
       let ghosts: Vec<(u32, ghost_trials::sim::types::PlayerId, u64, usize, usize)> = sim
         .ghosts
@@ -186,7 +220,8 @@ async fn frame_loop(options: role::Options) {
       render::draw_board(&board, &ghosts, Some(sim.me));
 
       if let Some(time) = sim.finished_ms {
-        render::draw_result(&board, time, sim.last_place, sim.last_refusal.map(ui::describe));
+        let place = if sim.mode == Mode::Race { Some(sim.position() as u32) } else { None };
+        render::draw_result(&board, time, sim.last_place, sim.last_refusal.map(ui::describe), place);
       }
     }
 
@@ -212,8 +247,8 @@ async fn frame_loop(options: role::Options) {
 
     #[cfg(all(feature = "client", feature = "websocket"))]
     {
-      // Nothing on this canvas is clickable, so the panel's hover result is not
-      // needed: the only inputs are keys.
+      // Nothing on this canvas is clickable once a run is under way, so the
+      // panel's hover result is only needed by the menu.
       let _ = ui::draw_net_ui(&client, &url, extras.as_ref(), &mut controls);
     }
     egui_macroquad::draw();

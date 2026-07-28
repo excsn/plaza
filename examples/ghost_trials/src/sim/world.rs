@@ -75,7 +75,7 @@ impl World {
         }
       }
       if client.running {
-        let input = autopilot(&client.racer, &client.track, client.tick);
+        let input = crate::sim::rules::bot_input(client.racer(), &client.track, client.tick, 0);
         client.step(input, controls);
       }
       if let Some((log, claimed)) = client.take_submission() {
@@ -103,7 +103,13 @@ impl World {
 
   pub fn start_all(&mut self) {
     for client in self.clients.iter_mut() {
-      client.restart();
+      client.restart_as(Mode::Trial);
+    }
+  }
+
+  pub fn start_all_as(&mut self, mode: Mode) {
+    for client in self.clients.iter_mut() {
+      client.restart_as(mode);
     }
   }
 
@@ -114,22 +120,12 @@ impl World {
   }
 }
 
-/// The stand-in for a player: steers at the ring it is looking for and charges
-/// on a fixed cadence. Deterministic, so a run is a fixture.
-pub fn autopilot(racer: &Racer, track: &Track, tick: u32) -> Input {
-  let target = track.ring(racer.next_ring);
-  let want = angle_between(racer.pos, target);
-  let delta = (want + BRADS - racer.heading) % BRADS;
-  const DEADBAND: u16 = 24;
-  let steer = if delta <= DEADBAND || delta >= BRADS - DEADBAND {
-    0
-  } else if delta < BRADS / 2 {
-    1
-  } else {
-    -1
-  };
-  Input::new(steer, tick % 200 < 40)
-}
+/// The stand-in for a player.
+///
+/// The same function the CPU field drives with, which lives in `rules` because
+/// in a race it is part of what a log reproduces. A harness that had its own
+/// copy would be testing a driver nobody plays against.
+pub use crate::sim::rules::bot_input as autopilot;
 
 #[cfg(test)]
 mod tests {
