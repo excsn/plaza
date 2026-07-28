@@ -2,7 +2,7 @@
 
 ## 1. Introduction & Core Concepts
 
-`plaza_wire` holds the runtime-free vocabulary shared by a Plaza server and any client that speaks to it: the message [`envelope`](#4-module-envelope) and identity types, the [`WireCodec`](#trait-wirecodec) trait and a JSON implementation, and the netcode [`payloads`](#5-module-payloads). No async dependencies.
+`plaza_wire` holds the runtime-free vocabulary shared by a Plaza server and any client that speaks to it: the message [`envelope`](#4-module-envelope) and identity types, the [`WireCodec`](#trait-wirecodec) trait with JSON and MessagePack implementations, the [`frame`](#5-module-frame) kind byte, and the netcode [`payloads`](#6-module-payloads). No async dependencies.
 
 It is separate from `plaza_session` so that both ends of a connection can agree on the protocol without the client inheriting the server's runtime. A wasm or browser-targeted client depends on this crate alone; a server gets the same items re-exported from `plaza` core (`plaza::Agent`, `plaza::SessionMessage`) and from `plaza_session` (`plaza_session::WireCodec`).
 
@@ -64,6 +64,23 @@ Human-readable JSON via `serde_json`. `name()` returns `"json"`. Being a unit st
 
 This is the default codec on every transport in `plaza_session`, chosen because a protocol you can read in a browser console or poke with `websocat` is worth more during development than a compact one. Switch to a binary format when the protocol stabilises.
 
+### Struct `MsgPackCodec`
+
+```rust
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MsgPackCodec;
+```
+
+*Requires the `msgpack` feature, which is off by default.*
+
+MessagePack via `rmp_serde`. `name()` returns `"msgpack"`, `is_text()` stays `false`, so a WebSocket transport sends binary frames. Also zero-sized.
+
+**Compact, not named.** `rmp_serde` offers two encodings: `to_vec_named` keeps struct field names, `to_vec` drops them and encodes structs positionally. Both compile and both round-trip, so picking the wrong one silently costs most of the benefit: measured on a ten-op message, named came out at 67% of JSON and compact at 40%. This uses compact, which means a peer decoding it **must be built from the same struct definitions** (field order is the schema), and that is what the [`build`](#7-module-build-feature-build) version and the `Hello` handshake exist to enforce.
+
+**What compact does not drop: enum variant names.** A struct becomes an array, but a variant is still a map keyed by its name, so `Op::Hello { protocol }` goes out as `{"Hello": [protocol]}` rather than as an index. Short variant names are worth real bytes and long ones cost on every frame carrying them, which is not obvious from the format's reputation. Where a fieldless enum rides a hot path, map it to a `u8` with `#[serde(into = "u8", try_from = "u8")]` and pin the numbers in the conversions; `examples/horde_playground` does this for its enemy kinds and leave reasons.
+
+Measured on horde's real traffic, the codec is worth 4.2x against JSON on its own, so the refinements above are refinements rather than reasons to hesitate.
+
 ## 4. Module `envelope`
 
 The identity types a frame carries. These live here rather than in `plaza` core because **a browser client cannot depend on core** (core pulls tokio and does not target `wasm32-unknown-unknown`), so a wasm client that must name the type it sends needs it in a runtime-free crate. `plaza` core re-exports all of it, so server code still writes `plaza::Agent`, `plaza::SessionMessage`, and so on.
@@ -103,13 +120,31 @@ Framing: the one byte in front of every message that says what it is.
 
 ```rust
 #[repr(u8)]
-pub enum Kind { Ops = 0 }
+pub enum Kind {
+  Ops = 0,    // body: Vec<Op>
+  Hello = 1,  // body: ProtocolVersion
+}
 ```
 
 *   `as_byte(self) -> u8`: the tag written ahead of the body.
 *   `from_byte(u8) -> Option<Kind>`: `None` for a tag this build does not know.
 
+**The body type follows from the kind**, which is what the byte buys beyond dispatch: a protocol frame is not squeezed into the application's op enum, so `Hello` carries a version and nothing else while `Ops` carries the application's payload.
+
 **`None` means skip the frame, not fail the connection.** A peer speaking a newer protocol may send kinds this one has never heard of, and refusing them turns every additive change into a break. The rule has to exist from the start, because a deployed client cannot learn tolerance retroactively. It is also why the tag is read by hand rather than through `serde_repr`, which errors on an unknown discriminant.
+
+### Struct `ProtocolVersion`
+
+```rust
+pub struct ProtocolVersion(pub u32);
+```
+
+What a peer says it speaks, sent as the body of a `Kind::Hello` frame **once when a connection opens** rather than on every frame: it cannot change mid-connection, and carrying it per frame measured 53 bytes against 42 under JSON for no information gained.
+
+*   `ProtocolVersion::UNKNOWN` is `ProtocolVersion(0)`.
+*   `agrees_with(self, other) -> bool`: whether two peers agree well enough to talk.
+
+**An unknown version on either side counts as agreement.** A peer that declares nothing is the pre-handshake case rather than a wrong one, and refusing it would break every client built before this frame kind existed. The number itself comes from [`build`](#7-module-build-feature-build), which hashes the type definitions your wire format is made of.
 
 ### Functions
 
@@ -157,4 +192,5 @@ Pairs with [`plaza_session::host::Host`](../session/API_REFERENCE.md), which cov
 | Feature | Default | Effect |
 |---|---|---|
 | `json` | yes | Compiles [`JsonCodec`](#struct-jsoncodec) and enables the `serde_json` dependency. With `default-features = false` the crate is the trait and payloads plus `serde` alone. |
-| `build` | no | Compiles [`build`](#6-module-build-feature-build), for use from a `build.rs`. Put it under `[build-dependencies]`, not `[dependencies]`. |
+| `msgpack` | no | Compiles [`MsgPackCodec`](#struct-msgpackcodec) and enables the `rmp-serde` dependency. |
+| `build` | no | Compiles [`build`](#7-module-build-feature-build), for use from a `build.rs`. Put it under `[build-dependencies]`, not `[dependencies]`. |

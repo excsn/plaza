@@ -81,7 +81,8 @@ Both transports share everything that is not socket I/O, which is why the adapte
 
 | What | Entry |
 |---|---|
-| Connection registry, message targeting, serialization, the deserialize bridge, and the `Session` impl both transports delegate to | [session/src/manager.rs](session/src/manager.rs) |
+| Connection registry, message targeting, serialization, the deserialize bridge (two-stage dispatch on the frame kind), and the `Session` impl both transports delegate to | [session/src/manager.rs](session/src/manager.rs) |
+| The protocol handshake: `with_protocol` declares a version, every new connection is sent a `Hello`, and a peer's declaration is recorded per agent | [session/src/manager.rs](session/src/manager.rs) |
 | Pluggable wire format; re-exports `WireCodec` and `JsonCodec` from [`plaza_wire`](#plaza_wire) | [session/src/codec.rs](session/src/codec.rs) |
 | actix-web WebSocket adapter: `handle_connection` is the whole integration | [session/src/actix_ws.rs](session/src/actix_ws.rs) |
 | Length-delimited TCP adapter | [session/src/tcp.rs](session/src/tcp.rs) |
@@ -95,9 +96,10 @@ Both transports share everything that is not socket I/O, which is why the adapte
 
 | What | Entry |
 |---|---|
-| `WireCodec` trait (with `is_text`) and `JsonCodec` | [wire/src/lib.rs](wire/src/lib.rs) |
+| `WireCodec` trait (with `is_text` and `encode_into`), `JsonCodec`, and `MsgPackCodec` (feature `msgpack`) | [wire/src/lib.rs](wire/src/lib.rs) |
 | Identity on the wire: `Agent`, `AgentId`. Here rather than in core because a wasm client cannot depend on core | [wire/src/envelope.rs](wire/src/envelope.rs) |
-| Framing: the kind byte in front of every message, and the skip-unknown rule that lets a frame kind be added later | [wire/src/frame.rs](wire/src/frame.rs) |
+| Framing: the kind byte in front of every message, the skip-unknown rule that lets a frame kind be added later, and `ProtocolVersion` for the `Hello` handshake | [wire/src/frame.rs](wire/src/frame.rs) |
+| What the codecs and the framing actually cost, with an allocation-counting allocator | [wire/benches/wire.rs](wire/benches/wire.rs) |
 | Shared netcode payload vocabulary (`SequencedClientInput`, `AuthoritativeStateUpdate`, `RemoteEntitySnapshot`, `TimestampedClientAction`) | [wire/src/payloads.rs](wire/src/payloads.rs) |
 | Build-time protocol version: hash the sources that define your messages, emit a `u32` (feature `build`, used from a `build.rs`) | [wire/src/build.rs](wire/src/build.rs) |
 

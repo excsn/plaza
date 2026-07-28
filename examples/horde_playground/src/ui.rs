@@ -14,10 +14,10 @@ use horde_playground::sim::{Controls, RemoteMode, World};
 ///
 /// The two are not the same quantity and were never shown together, which is how
 /// a host reading 60 KiB/s and a browser reading 180 went unexplained: the
-/// server counts a hypothetical compact encoding (a 3 byte id, quantised
-/// positions) while the wire actually carries JSON. The gap between them is the
-/// format's price, and it is the one number about wire cost this example
-/// measures rather than models.
+/// server counts an idealised encoding (a 3 byte id, quantised positions) while
+/// the wire carries MessagePack, which still spends bytes on its own structure
+/// and on enum variant names. The gap between them is the format's price, and it
+/// is the one number about wire cost this example measures rather than models.
 #[cfg(all(feature = "client", feature = "websocket"))]
 fn client_traffic(ui: &mut egui::Ui, client: &horde_playground::net::client::NetClient) {
   let (recent, session) = client.downstream_per_sec();
@@ -58,7 +58,7 @@ fn client_traffic(ui: &mut egui::Ui, client: &horde_playground::net::client::Net
     ))
     .weak(),
   )
-  .on_hover_text("The server's bandwidth readout is a model: what these packets would cost with compact ids and quantised positions, which is the encoding every saving in this example is quoted against. What actually crosses is JSON, with field names and decimal-text floats. This ratio is the difference, and it is why a host and a client reading 'bandwidth' can disagree by several times without either being wrong.");
+  .on_hover_text("The server's bandwidth readout is a model: what these packets would cost with compact ids and quantised positions, which is the encoding every saving in this example is quoted against. What actually crosses is MessagePack, which carries the ids and positions the model prices but spends bytes of its own on array headers and on enum variant names, which it writes out in full. This ratio is the difference, and it is why a host and a client reading 'bandwidth' can disagree without either being wrong. It was several times larger under JSON.");
 }
 
 /// One collapsible section.
@@ -452,7 +452,7 @@ pub fn draw_host_ui(
         client_traffic(ui, client);
         let (compact, naive) = (view.bytes_per_sec() / 1024.0, view.naive_bytes_per_sec() / 1024.0);
         ui.label(format!("modelled, all players: {:.1} KiB/s session, {compact:.1} KiB/s recent", view.lifetime_bytes_per_sec() / 1024.0))
-          .on_hover_text("Scope first, then the two windows. **All players** is the whole arena: the host builds and meters a packet per seat, so this covers every one of them, not just your own client. **Modelled**, because it is what those packets would cost with compact ids and quantised positions, not what the JSON on the wire actually costs. The line above measures that.");
+          .on_hover_text("Scope first, then the two windows. **All players** is the whole arena: the host builds and meters a packet per seat, so this covers every one of them, not just your own client. **Modelled**, because it is what those packets would cost with compact ids and quantised positions, not what the MessagePack on the wire actually costs. The line above measures that.");
         ui.label(format!("with uuids + f32 positions: {naive:.1} KiB/s ({:.0}% saved)", if naive > 0.0 { (1.0 - compact / naive) * 100.0 } else { 0.0 }));
         // Spawns as a share of what is sent, because the ratio is the readout
         // that matters and two separate numbers hid it: a stream whose

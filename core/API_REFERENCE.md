@@ -99,7 +99,7 @@ What processing produced.
 
 *   **Fields**: `ops: Vec<TargetedOp<Op, ID>>`, `snapshots: Vec<SnapshotRequest<ID>>`.
 *   **Constructors**: `none()`, `ops(Vec<TargetedOp<..>>)`.
-*   **Methods**: `and_snapshot(SnapshotRequest<ID>) -> Self` (builder-style); `coalesce(&mut self)`, which merges neighbouring ops sharing a sender and a target into one entry, so a tick's events travel in one envelope instead of one each. The controller calls it before sending, so logic is free to push an entry per event. Neighbours only: merging across a gap would reorder those ops against whatever sat between them, for any recipient that receives both.
+*   **Methods**: `and_snapshot(SnapshotRequest<ID>) -> Self` (builder-style); `coalesce(&mut self)`, which merges neighbouring ops sharing a target into one entry, so a tick's events travel in one envelope instead of one each. The controller calls it before sending, so logic is free to push an entry per event. Neighbours only: merging across a gap would reorder those ops against whatever sat between them, for any recipient that receives both. **Target alone, not sender**: a frame is a kind byte and the ops, so two entries with the same recipients are indistinguishable to that recipient however they were caused, and splitting a run on `from_agent` spent an envelope preserving nothing.
 *   **Conversions**: `From<Vec<TargetedOp<Op, ID>>>`, so ops-only logic ends with `Ok(ops.into())`.
 *   Ops are sent before snapshots, so a client sees the event explaining a change before the state reflecting it.
 
@@ -250,7 +250,7 @@ Sends `ProcessTimeStep` at a fixed rate; the controller does not advance time on
 ### Struct `ControllerStats`
 
 Live counters for one running controller, obtained from
-[`StateControllerBuilder::stats`](#struct-statecontrollerbuilderop-id-statetype-snapshotpayload-sl-sess-sp) before `build`
+[`StateControllerBuilder::stats`](#struct-statecontrollerbuilderop-id-statetype-sl-sess-sp) before `build`
 (or `with_stats` to supply one you already hold), and from `StateController::stats` after.
 
 *   **`ticks()`**, **`commands()`**, **`ops()`**, **`joins()`**, **`leaves()`**, **`snapshots()`**.

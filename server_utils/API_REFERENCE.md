@@ -224,6 +224,10 @@ One seat's buffered inputs and the counters that judge the window. Keep one per 
 *   **`drain_due(&mut self, current: u64) -> impl Iterator<Item = Input> + '_`**: every input due on tick `current`, in scheduled order: **event semantics**, for inputs that are discrete actions where each one matters. The counterpart of `execute_due`. A game with both kinds keeps two schedules, because the two kinds have different loss semantics and mixing them in one queue forces one of them to be wrong.
 *   **`clear(&mut self)`**: drops everything buffered, for a seat being vacated. Counters survive: they describe the session, not the occupant.
 *   **`accepted() -> u64`** (inputs buffered, scheduled plus late; the denominator every other count needs), **`late() -> u64`** (inputs accepted after their tick had passed), **`rejected() -> u64`** (inputs dropped for naming a closed or far-future tick).
+*   **`rejected_split() -> (u64, u64)`**: the same drops by side, `(closed tick, too far ahead)`.
+*   **`last_reject_margin() -> Option<i64>`**: `named - current` at the most recent rejection, in ticks. Negative is behind the simulation, positive is ahead of it; `None` until something has been rejected.
+
+**Why the split and the margin are worth keeping.** A single `rejected` total says a client cannot act and nothing about why, and the two sides have opposite causes: a steady negative margin means everything feeding that client's aim (its clock estimate, and the newest server stamp it has actually received) trails the simulation, which points at its downstream; a positive one means its clock runs fast. Diagnosing this from the client alone is not possible, because a rejected input is still acknowledged on arrival, so the client sees a healthy acknowledgement stream while nothing it does takes effect.
 
 ## 9. Seats (module `seats`)
 

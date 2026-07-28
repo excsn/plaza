@@ -348,6 +348,22 @@ Three separate causes wearing one symptom, which is why it took three rounds. Th
 
 **General lesson.** **A toggle wired to the demo path and not the real one reports on a system nobody runs.** Control-plane traffic (a version handshake, a ping) is a reasonable exemption; the traffic the mechanism under test depends on is not.
 
+### A joiner that could not move for half a minute after its tab woke up (horde)
+
+**Symptom.** A browser tab suspended and resumed. Frames arrived, the world drew, acknowledgements flowed, and the player could not move. It recovered on its own after tens of seconds. Alongside it, the joiner's measured-budget line jumped to 225 ms, climbed past 300, then decayed back.
+
+**Two wrong fixes came first, and both were reasonable.** The first: the budget readout is smoothed from declared stamps, a resume feeds it the kept tail's stall-era stamps plus one stall-sized gap, so reset the `ArrivalMonitor` on a timeline restart. It passed a scripted test that reproduced the resume, and made things *worse* in the browser. The second: a pong answering a pre-stall ping measures the suspension as a round trip and poisons the clock fit, so rebuild both estimators and refuse cross-stall pongs. Also tested, also shipped, also fixed nothing. Both were reverted.
+
+**What the captured data said.** Panel readouts added for the third attempt, read during a stuck window: acknowledgement lag 4, identical to healthy; input aim **-5 ticks** against a 4-tick accepting window; worst raw pong 1056 ms; round trip smoothed to 313 ms while the link was 21. So the inputs *were* arriving and *were* being refused, for naming ticks the server had already closed. No 40-second pong ever arrives, because pings stop while the frame loop is frozen, which is why the second fix could not have helped: it treated a poisoning that barely existed.
+
+**Cause.** After a resume the clock fit trails the stream: its window predates the stall, the first pongs back are delayed behind a draining backlog, and it refills at one ping a second. Every input names its tick from that fit, so for as long as the fit lags by more than the late window, every input is dropped.
+
+**Fix.** Floor the named tick at `(newest arrived stamp + playout depth) / step`. The server *wrote* that stamp, so server time is provably past it, and the floor needs no clock at all; it only ever lifts the aim, and never past where a perfect clock would have aimed, because the stamp trails true server time by the one-way delay. When the fit is healthy its estimate exceeds the floor and nothing changes.
+
+**General lesson, and it cost two shipped fixes.** **A readout that misbehaves is usually downstream of the broken quantity, not the broken quantity.** Both wrong fixes repaired *measurements* of the clock while the clock itself went on naming closed ticks; the second even reset the thing whose lag was the actual fault, then let it re-lag. The corollary is the fix that worked: **where a bound can be derived from something the peer stated, prefer it to an estimate.** An estimate is wrong exactly when it is under stress; a stamp the server wrote is a fact at any clock skew.
+
+**And a blind spot worth naming.** The client's acknowledgement lag *cannot* see this failure: the server acknowledges an input on arrival, before admission, so refused inputs are acknowledged exactly like accepted ones. The verdict exists only on the server, which is why `InputSchedule` now reports rejections split by side with the last margin in ticks, and why the host panel shows them per seat.
+
 ### Smaller ones worth remembering
 
 **Ctrl-C would not kill the windowed host.** Actix caught the signal for a graceful shutdown while the window kept running, and the controller sprayed queue-full errors into dead links. Fixed with `disable_signals`, leaving signal handling to the process.
@@ -380,6 +396,10 @@ What worked, repeatedly, after several rounds of confident wrong guesses:
 
 **A shadow A/B beats toggling.** To answer whether predicting the dash is worth it, run two predictors over identical inputs differing only in that flag and compare their mean error. One session, no toggling, no reliance on remembering how the last run felt.
 
+**A test written from a theory tests the theory.** Two fixes for the resume bug above shipped green: each came with a scripted socket test that reproduced the author's *model* of a resume and proved the fix worked against it. Both were wrong in the browser. A test built from the same assumption as the fix cannot falsify that assumption, and passing it feels exactly like being right. What broke the loop was instrumenting the real client, playing until it happened, and reading numbers nobody had predicted.
+
+**Verify the test discriminates before believing it.** Once a fix is written, disable it and check the test actually fails, then restore. The tick-floor test reads `-6213` with the floor removed and passes with it, so it is measuring the fix rather than the weather. This costs one minute and is the only thing separating a regression test from decoration.
+
 ## What this changed in plaza
 
 The principles above are guidance. These are the code changes the bugs argued for, all of them shipped, and each one stayed inside the north star in [IMPROVEMENTS.md](../IMPROVEMENTS.md): one concern, usable alone, generic over application types, additive to the existing primitives. The application still owns its payloads, its physics, its socket and its tick.
@@ -409,6 +429,16 @@ The principles above are guidance. These are the code changes the bugs argued fo
 **A fixed timestep is a five-line pattern with three decisions in it.** `client_utils::FixedTimestep` and `Periodic` replaced six hand-written accumulators (the filed count said five, which is its own evidence). The decisions each copy made differently: whether to cap the catch-up after a backgrounded tab, whether to carry the remainder or zero it, and whether the thing being stepped gets told the step size. The last is the one that bites, because a client integrating by its frame delta against a fixed-step server drifts continuously and it reads exactly like network jitter.
 
 **Coalescing is a policy with a trap in it.** `client_utils::InputCoalescer` carries the keepalive, and the reason for it: sending purely on change means a *dropped* direction change is not a missing update but a wrong state that persists, because the server holds the last direction it received. The player keeps gliding until they press something else, it is intermittent, and it reads as the controls sticking rather than as packet loss.
+
+**An input schedule has to say which way it refused.** `InputSchedule` splits its rejections into closed-tick and too-far-ahead and keeps the last margin in ticks, because a single total says a player cannot act and nothing about why, while the two sides have opposite causes and opposite fixes. Nothing on the client can substitute for it: an input is acknowledged on arrival, before admission, so a refused input and an applied one look identical from there.
+
+## What the wire work measured
+
+**The byte cost was in the thing sent most often, not in the thing that looked expensive.** Horde's downstream sat around 70 KiB/s at the defaults, and the obvious suspect was the encoding: the server's bandwidth model priced a 3-byte id and a quantised position while the wire actually carried a two-element array per handle and two 5-byte floats per position. Making the wire carry what the model priced (one packed integer per handle, fixed-point `i32` pairs per position, `u8` for every fieldless enum) was worth about **1.5x**. Correcting each visible enemy four times a second instead of in every packet was worth **4x**, and it is not an encoding change at all.
+
+**MessagePack writes enum variant names out in full**, which is not obvious from its reputation: every spawn was carrying six bytes of `"Swarm"` and every departure eleven of `"OutOfRange"`. Compact mode drops *struct field* names, not variant names. Where a fieldless enum rides a hot path it wants an explicit `u8` mapping, with the numbers pinned in the conversion so reordering the variants cannot silently renumber the wire.
+
+**A quantised wire needs a reason per field, not a policy.** Positions cross at 1/16 of a unit because that is two orders of magnitude under the smallest enemy radius and nothing reconciles against an exact float; handles cross as the packing the digest already uses, so there is not a second packing to disagree with. Both are `#[serde(into/from)]` conversions, so the simulation stays `f32` and the quantisation exists only on the wire, which is the only place it is affordable.
 
 ## What building the blocks taught, on top of what the bugs did
 

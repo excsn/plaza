@@ -95,8 +95,8 @@ pub struct NetClient {
   /// whether *its* link is the problem.
   traffic: plaza_server_utils::RateMeter,
   /// The same traffic as the *server* counts it: what these packets would cost
-  /// with compact ids and quantised positions, rather than what the JSON on the
-  /// wire actually cost. Kept beside the real figure because the gap between
+  /// with compact ids and quantised positions, rather than what the MessagePack
+  /// on the wire actually cost. Kept beside the real figure because the gap between
   /// them is the encoding's price, and it is the one number about wire cost
   /// this example never showed.
   modelled: plaza_server_utils::RateMeter,

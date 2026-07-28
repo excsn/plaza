@@ -64,7 +64,8 @@ Shared machinery. Most applications use it only through a transport, but it is p
 The connection registry plus the notification channels a `StateController` consumes.
 
 *   **`new(transport: &'static str, capacity: usize) -> Self`**
-*   **`register(&self, agent: Agent<ID>, to_client_tx) -> ConnectionId`**: records a connected client and announces the join.
+*   **`with_hello(transport: &'static str, capacity: usize, hello: Option<OutboundFrame>) -> Self`**: the same, plus a pre-encoded frame pushed to every connection the moment it registers. `TransportSession::with_protocol` builds one `Kind::Hello` frame at construction and hands it here, so the handshake costs one encode for the process rather than one per client.
+*   **`register(&self, agent: Agent<ID>, to_client_tx) -> ConnectionId`**: records a connected client, sends the hello frame if there is one, and announces the join.
 *   **`deregister(&self, conn_id: ConnectionId)`**: removes it and announces the departure.
 *   **`forward_incoming(&self, from: Agent<ID>, frame: Bytes)`**: publishes one client frame toward the controller, still encoded. Non-blocking; drops under load rather than stalling a connection task. Takes `Bytes` because both transports hand over a buffer they already own, so a frame reaches the deserialize bridge without being copied out.
 *   **`broadcast(&self, target: &MessageTarget<ID>, frame: OutboundFrame) -> Result<(), SessionLayerError>`**: fans one already-encoded frame out to the matching connections. It takes bytes, not a message, because a `SessionMessage` is encoded **once** by [`encode_message`](#struct-transportsessionop-id-c-wirecodec) and the same buffer is shared with every recipient, at the cost of a refcount bump each.
@@ -73,6 +74,7 @@ The connection registry plus the notification channels a `StateController` consu
 *   **`agent_rtt(&self, id: &ID) -> Option<(Duration, u64)>`**: the measured round trip for an agent and how many samples it rests on. Keyed by agent because that is what an application holds: it knows who joined, not which socket they arrived on, and a reconnecting player is a new connection but the same agent.
 *   **`rtt(conn_id)`** / **`min_rtt(conn_id)`** / **`rtt_samples(conn_id)`**: the same, per connection.
 *   **`record_rtt(conn_id, Duration)`**: what a transport calls when it has timed one.
+*   **`record_protocol(&self, agent: &Agent<ID>, version: ProtocolVersion)`** / **`protocol(&self, id: &ID) -> Option<ProtocolVersion>`**: what a peer declared in its `Hello`, kept per agent. The deserialize bridge records it; an application reads it to decide what a given client can be sent, or to tell it to reload.
 *   **`connection_count(&self) -> usize`**
 
 The `take_*` methods hand out single-consumer streams; calling one twice panics.
@@ -81,10 +83,13 @@ The `take_*` methods hand out single-consumer streams; calling one twice panics.
 
 A complete `Session` implementation over any byte transport. Both shipped adapters wrap one and delegate to it.
 
-*   **`new(transport: &'static str, codec: C, capacity: usize) -> Arc<Self>`**: also spawns the deserialize bridge task.
+*   **`with_protocol(transport: &'static str, codec: C, capacity: usize, protocol: ProtocolVersion) -> Arc<Self>`**: spawns the deserialize bridge and declares what this build speaks (from [`plaza_wire::build`](../wire/API_REFERENCE.md#7-module-build-feature-build)). It encodes one `Kind::Hello` frame up front for `ConnectionManager::with_hello` to send on every connection, and tells the bridge what to compare an inbound `Hello` against.
+*   **`new(transport: &'static str, codec: C, capacity: usize) -> Arc<Self>`**: the same with `ProtocolVersion::UNKNOWN`, which declares nothing and so disables the check rather than failing it.
 *   **`manager(&self) -> &Arc<ConnectionManager<ID>>`**
 *   **`codec(&self) -> &C`**
-*   **`encode_message(&self, msg: SessionMessage<Op, ID>) -> Result<OutboundFrame, SessionLayerError>`**: encodes a whole message to one frame in a single pass (`codec.encode(&msg)`). Hand the frame to [`broadcast`](#struct-connectionmanagerid-agentid); recipients share the buffer rather than each getting a re-encode or a copy.
+*   **`encode_message(&self, msg: SessionMessage<Op, ID>) -> Result<OutboundFrame, SessionLayerError>`**: writes `[Kind::Ops][encoded ops]` into one buffer, in a single pass, and takes the `Vec` whole into `Bytes` with no copy. **`msg.from` is not sent**: the wire is the tag and the ops, and the sender is bookkeeping the receiving transport attaches from the connection it read. Hand the frame to [`broadcast`](#struct-connectionmanagerid-agentid); recipients share the buffer rather than each getting a re-encode or a copy.
+
+**The deserialize bridge dispatches on the tag before it decodes anything**, which is what the framing byte buys. `Kind::Ops` decodes as `Vec<Op>` and becomes a `SessionMessage`; `Kind::Hello` decodes as a `ProtocolVersion`, is recorded against the agent, and **warns rather than refuses** on a mismatch, because the version is a build hash and a peer that merely recompiled is indistinguishable from one whose shape changed; an unknown tag is skipped with a `trace!` and the connection carries on. A malformed body of any kind is a per-message problem: it is logged and dropped, never a disconnect.
 *   Implements `Session`. `agent_join` returns `PlazaError::NotImplemented`: joins are transport-implicit, happening when a client connects and the adapter calls `register`.
 
 ### Function `target_matches`
@@ -112,9 +117,10 @@ The single implementation of the targeting rules. Agents without an ID (the syst
 
 ### Struct `ActixWsPlazaSession<Op, ID, C = JsonCodec>`
 
-*   **`new() -> Arc<Self>`**: JSON on the wire, the usual choice for browsers.
+*   **`new() -> Arc<Self>`**: JSON on the wire, the usual choice for browsers. Only on `C = JsonCodec`.
 *   **`with_codec(codec: C) -> Arc<Self>`**
 *   **`handle_connection(&self, req: &HttpRequest, stream: web::Payload, agent: Agent<ID>) -> Result<HttpResponse, actix_web::Error>`** Completes the handshake, registers the connection, and spawns its pump. Return the `HttpResponse` from your route. `agent` identifies the client: derive it from an auth token, a query string, or mint a fresh id for anonymous play.
+*   **`connection_rtt(conn_id) -> Option<(Duration, Duration, u64)>`** (smoothed, minimum, samples), **`agent_rtt(id) -> Option<(Duration, u64)>`**, **`stats() -> Arc<TransportStats>`**: available whatever the codec. They read the manager underneath, so a session built `with_codec` gets the same measurements as a JSON one.
 *   Implements `Session`.
 
 Usage is a five-line route:
