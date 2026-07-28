@@ -64,6 +64,9 @@ pub const EAT_VALUE: u32 = 15;
 pub const MATCH_ROUNDS: u32 = 5;
 /// How long an energizer lasts.
 pub const ENERGIZE_MS: u64 = 6_000;
+
+/// How long before an energizer runs out that its victims start flashing.
+pub const INVERSION_WARNING_MS: u64 = 1_800;
 /// How long a vanish lasts.
 pub const VANISH_MS: u64 = 4_500;
 /// Roughly one power-up per this many corridor cells.

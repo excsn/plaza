@@ -2,7 +2,7 @@
 
 use egui_macroquad::egui;
 
-use pellet_maze::sim::types::Controls;
+use pellet_maze::sim::types::{Controls, Role};
 
 fn section<R>(ui: &mut egui::Ui, title: &str, default_open: bool, add: impl FnOnce(&mut egui::Ui) -> R) {
   egui::CollapsingHeader::new(egui::RichText::new(title).strong())
@@ -115,6 +115,23 @@ pub fn draw_net_ui(client: &pellet_maze::net::client::NetClient, url: &str, extr
             }
             if me.eaten(now) {
               ui.label(egui::RichText::new("eaten: walking home, and harmless on the way").color(egui::Color32::GRAY));
+            } else if me.role == Role::Pursuer {
+              // The other side of the inversion, and the side that has to be
+              // told: an energized runner can see its own timer, its prey can
+              // only see that everything went white.
+              if let Some(until) = client
+                .sim
+                .players
+                .iter()
+                .filter(|p| p.role == Role::Runner && p.energized(now))
+                .map(|p| p.energized_until_ms)
+                .max()
+              {
+                ui.label(
+                  egui::RichText::new(format!("PREY for {:.1}s: the runner eats you on contact", (until - now) as f32 / 1000.0))
+                    .color(egui::Color32::from_rgb(230, 240, 255)),
+                );
+              }
             }
           }
         }

@@ -31,6 +31,7 @@ WASD or the arrow keys. There is no key for "stop".
 | orange ring on the floor | an **energizer**: the runner eats pursuers for six seconds |
 | blue ring on the floor | **vanish**: the runner is hidden from every other client for four and a half seconds |
 | orange halo | an energized runner. Contact now goes the other way |
+| white squares with a coloured outline | the pursuers **while that lasts**: they are prey, and they flash back to their own colour as it runs out |
 | dimmed square | a pursuer that was eaten, walking home and harmless on the way |
 
 ## The one decision everything follows from
@@ -82,6 +83,8 @@ The role rotation is a seat rotation, not an identity one. `the_role_rotates_for
 Two, and they were picked because each one changes a rule rather than a number.
 
 **Energize** inverts contact. `resolve_contact` is one function on the server, and while the runner is energized it reads the same collision the other way round: the pursuer is eaten, sent home at a faster step, and harmless on the walk. Speed boosts and shields would have been a coefficient; this is the sign flipping on the rule the whole round is about.
+
+The inversion is drawn on **both** sides of it, which is a rendering point worth stating because the first version missed it. The runner gets a halo, and every pursuer turns white for as long as it lasts, keeping its own colour as an outline so you can still tell which one you are, and flashing over the last stretch so the return is a deadline rather than a surprise. A rule change only one of the four players can see is a rule change nobody plays around: the runner knew, and the three players who had suddenly become prey were left to work it out from being eaten.
 
 **Vanish** removes the runner from what other clients are *sent*, per the section above. That one could not have been done at all without per-recipient frames, and doing it any other way would have been a lie.
 

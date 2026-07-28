@@ -183,6 +183,15 @@ async fn frame_loop(options: role::Options) {
       render::draw_pellets(&board, &client.sim.pellets);
       let now = client.server_time_ms();
       render::draw_powerups(&board, &client.sim.powerups, now);
+      // The round's inversion, not any one player's: while a runner holds an
+      // energizer, every pursuer is prey and is drawn as one.
+      let inversion = client
+        .sim
+        .players
+        .iter()
+        .filter(|p| p.role == pellet_maze::sim::types::Role::Runner && p.energized(now))
+        .map(|p| p.energized_until_ms)
+        .max();
 
       // The server's truth for your own player, hollow under your belief about
       // it. Only a host has this; a joiner legitimately cannot.
@@ -192,7 +201,7 @@ async fn frame_loop(options: role::Options) {
         if let Some(me) = client.me
           && let Some(authoritative) = truth.players.iter().find(|p| p.id == me)
         {
-          render::draw_player(&board, authoritative, None, true, false, now, None);
+          render::draw_player(&board, authoritative, None, true, false, now, inversion, None);
         }
       }
 
@@ -200,10 +209,10 @@ async fn frame_loop(options: role::Options) {
         if Some(player.id) == client.me {
           continue;
         }
-        render::draw_player(&board, player, None, false, false, now, Some(&format!("{}", player.id + 1)));
+        render::draw_player(&board, player, None, false, false, now, inversion, Some(&format!("{}", player.id + 1)));
       }
       let mine: &PlayerState = client.sim.my_player();
-      render::draw_player(&board, mine, client.sim.queued_turn(), false, true, now, Some(&format!("{}", mine.id + 1)));
+      render::draw_player(&board, mine, client.sim.queued_turn(), false, true, now, inversion, Some(&format!("{}", mine.id + 1)));
       marker.draw(&board);
 
       draw_scoreboard(&client.sim.players, client.sim.pellets_left, client.sim.round, client.sim.match_rounds, &board);

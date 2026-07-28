@@ -97,7 +97,22 @@ pub fn draw_pellets(board: &Board, pellets: &[Cell]) {
 /// `mine` draws the ring and the caret that say which one is you. Four coloured
 /// shapes in a maze are four coloured shapes, and reading the panel to find out
 /// which is yours is a thing you do once and then forget under pressure.
-pub fn draw_player(board: &Board, player: &PlayerState, queued: Option<Dir>, ghost: bool, mine: bool, now_ms: u64, label: Option<&str>) {
+///
+/// `inversion` is when the round's energizer runs out, if a runner is holding
+/// one. It is passed to every player rather than read off this one, because
+/// the state that changed is the **round's**: a pursuer is not itself
+/// energized, it is prey, and the only way it can look like prey is if the
+/// drawing knows about somebody else.
+pub fn draw_player(
+  board: &Board,
+  player: &PlayerState,
+  queued: Option<Dir>,
+  ghost: bool,
+  mine: bool,
+  now_ms: u64,
+  inversion: Option<u64>,
+  label: Option<&str>,
+) {
   if !player.alive {
     return;
   }
@@ -118,10 +133,24 @@ pub fn draw_player(board: &Board, player: &PlayerState, queued: Option<Dir>, gho
   let energized = player.energized(now_ms);
   let eaten = player.eaten(now_ms);
   let hidden = player.hidden(now_ms);
+  // Prey: a pursuer while somebody else is energized. The whole point of the
+  // power-up is that the round has reversed, and a reversal only one of the
+  // four players can see is a reversal nobody plays around.
+  let prey_until = inversion.filter(|until| *until > now_ms && player.role == Role::Pursuer && !eaten);
   let body = if eaten {
     Color::new(colour.r * 0.35, colour.g * 0.35, colour.b * 0.35, 0.8)
   } else if energized {
     Color::new(1.0, 0.75, 0.35, 1.0)
+  } else if let Some(until) = prey_until {
+    // White, flashing back toward their own colour over the last stretch, so
+    // running is a decision with a deadline rather than a surprise.
+    let left = until - now_ms;
+    let flashing = left < INVERSION_WARNING_MS && (left / 140) % 2 == 0;
+    if flashing {
+      colour
+    } else {
+      Color::new(0.95, 0.97, 1.0, 1.0)
+    }
   } else {
     colour
   };
@@ -136,7 +165,15 @@ pub fn draw_player(board: &Board, player: &PlayerState, queued: Option<Dir>, gho
     }
     // A pursuer is drawn square, so which role you are is readable at a glance
     // rather than from the scoreboard: the roles rotate every round.
-    Role::Pursuer => draw_rectangle(centre.x - w * 0.30, centre.y - w * 0.30, w * 0.60, w * 0.60, body),
+    Role::Pursuer => {
+      draw_rectangle(centre.x - w * 0.30, centre.y - w * 0.30, w * 0.60, w * 0.60, body);
+      // Their own colour stays on as an outline: four white squares are four
+      // white squares, and which one is chasing you still matters while they
+      // are the ones running.
+      if prey_until.is_some() {
+        draw_rectangle_lines(centre.x - w * 0.30, centre.y - w * 0.30, w * 0.60, w * 0.60, 3.0, colour);
+      }
+    }
   }
 
   // Your own vanish, drawn only to you. Everybody else is not sent this player
