@@ -12,9 +12,21 @@
 //!
 //! The screen is the assertion. Green means every arm of `Event` was seen.
 
+//! Cargo's `required-features` cannot also require a target, and the `miniquad`
+//! backend only exists on `wasm32`, so the body is gated here as well. Without
+//! it `--all-features` on a host target fails to compile this example.
+
+#[cfg(not(target_arch = "wasm32"))]
+fn main() {
+  eprintln!("echo_web is the browser half of the proof: build it for wasm32, which ./serve.sh does.");
+}
+
+#[cfg(target_arch = "wasm32")]
 use macroquad::prelude::*;
+#[cfg(target_arch = "wasm32")]
 use plaza_ws::{CloseReason, Event, Socket};
 
+#[cfg(target_arch = "wasm32")]
 fn window_conf() -> Conf {
   Conf {
     window_title: "plaza_ws echo".to_owned(),
@@ -24,6 +36,7 @@ fn window_conf() -> Conf {
   }
 }
 
+#[cfg(target_arch = "wasm32")]
 #[macroquad::main(window_conf)]
 async fn main() {
   // Same host, so a page served next to the echo server needs no editing.
@@ -89,6 +102,7 @@ async fn main() {
 }
 
 /// Whether the page was served over TLS, so `wss` is required.
+#[cfg(target_arch = "wasm32")]
 fn web_is_secure() -> bool {
   // Not worth a JS call for a test fixture; the spike is served over plain http.
   false
