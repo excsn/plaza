@@ -209,10 +209,12 @@ pub fn draw_net_ui(
     }
 
     if let Some(extras) = extras {
-      // Anchored to the other side of the screen. Two windows both anchored
-      // top left is two windows on top of each other.
+      // Opened on the other side of the screen, as a starting *position* rather
+      // than an anchor: an anchored window is pinned there and cannot be
+      // dragged, which is a worse problem than the overlap it was fixing.
+      let right = (ctx.screen_rect().right() - 380.0).max(16.0);
       let window = egui::Window::new("the arena itself")
-        .anchor(egui::Align2::RIGHT_TOP, [-16.0, 16.0])
+        .default_pos((right, 16.0))
         .show(ctx, |ui| {
         ui.label(format!(
           "{} wave {}   {} enemies   {} towers   seats {}/{}",
