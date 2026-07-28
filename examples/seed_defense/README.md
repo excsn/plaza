@@ -16,7 +16,7 @@ That is the oldest trick in networked games and it comes with a bill: the moment
 cargo test -p seed_defense                   # every claim below, as a test
 ```
 
-Click a buildable tile to place the selected tower, click a tower to upgrade it.
+Pick a tower in the strip along the bottom, click a buildable tile to place it, click a tower to upgrade it. Hovering a tower shows what it does now and what the next level costs and buys.
 
 ## What you are looking at
 
@@ -24,6 +24,7 @@ Click a buildable tile to place the selected tower, click a tower to upgrade it.
 |---|---|
 | the bar above the map | **agreement**. Green while every digest has matched, red from the tick one did not |
 | the banner over the map | the next wave and its countdown, computed from the announcement's own tick |
+| the strip along the bottom | the build menu and the inspector: cost, damage per second, range, fire rate, and the upgrade price |
 | brown corridor | the path. Not buildable |
 | squares | towers, outlined in the colour of whoever paid |
 | circles | enemies, with a health bar |
@@ -103,6 +104,12 @@ An op that arrives *after* the tick it names cannot be applied late, because lat
 That makes the build lead a real policy with a real constraint: it has to clear the worst one-way delay. `a_build_lead_shorter_than_the_link_cannot_be_met` sets a 100 ms lead over a 300 ms link and asserts the late builds climb and the snapshots follow. The panel counts them, and the slider is there to fix it.
 
 The wave announcement has the same constraint and a much larger margin: it goes out at the *start* of the prep phase, seconds ahead of the tick it names, rather than one tick ahead. The first version announced it one tick ahead, which worked perfectly at zero latency and resynced every client on every wave at sixty milliseconds.
+
+## Where the game UI is, and why the panel is not it
+
+The build menu, the tower stats and the upgrade price are drawn on the canvas, not in the egui panel. The panel is for the things this example is *about*: what crossed the wire, whether the machines still agree, and the switches that break them. Choosing a tower is not one of those, it is the game, and the first version had it inside a collapsing header, which meant reading a diagnostics window to take a turn.
+
+The numbers in the strip come from the same functions the simulation shoots with: `TowerKind::damage`, `range`, `cooldown_ms` and `upgrade_cost`. A UI carrying its own copy of the price list would be a second implementation of a shared rule, which is the one mistake this whole example is written to avoid.
 
 ## Where the wire went
 
