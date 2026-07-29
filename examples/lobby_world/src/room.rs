@@ -1,6 +1,5 @@
 //! One arena: a pot that refills, and whoever claims it keeps the coins.
 
-use std::collections::HashSet;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,6 +10,7 @@ use plaza::common::participants::ParticipantTracker;
 use plaza::session::{MessageTarget, TargetedOp};
 use plaza::snapshot::{SnapshotContext, SnapshotError, SnapshotProvider};
 use plaza::state_logic::{LogicInput, LogicOutput, SnapshotRequest, StateLogic, StateLogicError};
+use plaza_lobby::SeatReservations;
 
 use crate::types::{ArenaSettings, Occupant, PlayerId, RoomOp, RoomView, Seat};
 use crate::wallets::WalletRegistry;
@@ -20,11 +20,19 @@ const POT_STEP: u64 = 5;
 /// Capped, or an idle arena turns server uptime into a payout.
 const POT_CAP: u64 = 50;
 
+/// How long a bot waits between claims. Slow enough that a human who is paying
+/// attention beats it, which is the point: a filled seat should be an opponent,
+/// not a wall.
+const BOT_CLAIM_EVERY: Duration = Duration::from_secs(3);
+
 /// Per-arena only. The wallet lives in the shared registry: it outlives this room.
 #[derive(Debug, Clone)]
 pub struct Occupancy {
   pub seat: Seat,
   pub claims_here: u32,
+  pub bot: bool,
+  /// When this bot may next claim. Meaningless for humans, who claim by asking.
+  pub next_claim: Duration,
 }
 
 /// `Default` exists only to satisfy `RoomFactory::GameStateType`; the factory
@@ -36,10 +44,10 @@ pub struct ArenaState {
   pub max_players: u32,
   pub pot: u64,
   pub occupants: ParticipantTracker<PlayerId, Occupancy>,
-  /// Admitted by the lobby but not yet connected. Without it an arena cannot
-  /// tell an admitted player from a passer-by.
-  pub reserved: HashSet<PlayerId>,
+  pub reserved: SeatReservations<PlayerId>,
   pub since_refresh: Duration,
+  /// Arena time, the axis bot cooldowns are measured on.
+  pub elapsed: Duration,
   pub wallets: Arc<WalletRegistry>,
   /// Read by the lobby to refresh `RoomMetadata::current_players`.
   pub seats_taken: Arc<AtomicU32>,
@@ -59,8 +67,9 @@ impl ArenaState {
       max_players,
       pot: POT_STEP,
       occupants: ParticipantTracker::new(),
-      reserved: HashSet::new(),
+      reserved: SeatReservations::new(),
       since_refresh: Duration::ZERO,
+      elapsed: Duration::ZERO,
       wallets,
       seats_taken,
     }
@@ -74,12 +83,54 @@ impl ArenaState {
       .count() as u32
   }
 
+  fn bots(&self) -> u32 {
+    self
+      .occupants
+      .iter()
+      .filter(|(_, info)| info.app_data.bot)
+      .count() as u32
+  }
+
+  /// Humans holding a seat. When this reaches zero the bots have nobody to play
+  /// against and are cleared, or an arena nobody visits fills up with them.
+  fn seated_humans(&self) -> u32 {
+    self
+      .occupants
+      .iter()
+      .filter(|(_, info)| info.app_data.seat == Seat::Player && !info.app_data.bot)
+      .count() as u32
+  }
+
   fn spectators(&self) -> u32 {
     self
       .occupants
       .iter()
       .filter(|(_, info)| info.app_data.seat == Seat::Spectator)
       .count() as u32
+  }
+
+  fn bot_ids(&self) -> Vec<PlayerId> {
+    self
+      .occupants
+      .iter()
+      .filter(|(_, info)| info.app_data.bot)
+      .map(|(id, _)| *id)
+      .collect()
+  }
+
+  /// Seated bots whose cooldown has passed, longest-waiting first so a tie does
+  /// not always fall to the same one.
+  fn bots_ready_to_claim(&self) -> Vec<PlayerId> {
+    let mut ready: Vec<(PlayerId, Duration)> = self
+      .occupants
+      .iter()
+      .filter(|(_, info)| {
+        info.app_data.bot && info.app_data.seat == Seat::Player && info.app_data.next_claim <= self.elapsed
+      })
+      .map(|(id, info)| (*id, info.app_data.next_claim))
+      .collect();
+    ready.sort_by_key(|(id, next)| (*next, *id));
+    ready.into_iter().map(|(id, _)| id).collect()
   }
 
   fn publish_seat_count(&self) {
@@ -107,6 +158,7 @@ impl ArenaState {
       .map(|(id, info)| Occupant {
         player: *id,
         seat: info.app_data.seat,
+        bot: info.app_data.bot,
         coins: self.wallets.balance(*id),
         claims_here: info.app_data.claims_here,
       })
@@ -120,6 +172,7 @@ impl ArenaState {
       seats_taken: self.seated_players(),
       seats_total: self.max_players,
       spectators: self.spectators(),
+      bots: self.bots(),
       occupants,
       your_seat: viewer
         .and_then(|id| self.occupants.get_participant_app_data(id))
@@ -145,14 +198,20 @@ impl StateLogic<RoomOp, PlayerId, ArenaState> for ArenaLogic {
 
         // Both checks: the lobby's capacity check and this connect are not
         // atomic, so the room may have filled in between.
-        let admitted = state.reserved.remove(&id);
+        let admitted = state.reserved.consume(&id);
         let seat = if admitted && state.seated_players() < state.max_players {
           Seat::Player
         } else {
           Seat::Spectator
         };
 
-        state.occupants.add_participant(agent, Occupancy { seat, claims_here: 0 });
+        let bot = matches!(agent, Agent::Bot(_));
+        state.occupants.add_participant(agent, Occupancy {
+          seat,
+          claims_here: 0,
+          bot,
+          next_claim: state.elapsed + BOT_CLAIM_EVERY,
+        });
         state.publish_seat_count();
 
         // The controller snapshots the joiner itself once this returns.
@@ -169,6 +228,44 @@ impl StateLogic<RoomOp, PlayerId, ArenaState> for ArenaLogic {
       }
 
       LogicInput::TimeStep { delta_time } => {
+        state.elapsed += delta_time;
+        let mut out = Vec::new();
+
+        // Bots have nobody to play against once the last human seat empties, and
+        // an arena left alone would otherwise keep them for ever.
+        if state.bots() > 0 && state.seated_humans() == 0 {
+          for id in state.bot_ids() {
+            state.occupants.remove_participant(&id);
+          }
+          state.publish_seat_count();
+        }
+
+        for id in state.bots_ready_to_claim() {
+          if state.pot == 0 {
+            break;
+          }
+          let amount = std::mem::take(&mut state.pot);
+          let coins = state.wallets.credit(id, amount);
+          if let Some(occupancy) = state.occupants.get_participant_app_data_mut(&id) {
+            occupancy.claims_here += 1;
+            occupancy.next_claim = state.elapsed + BOT_CLAIM_EVERY;
+          }
+          out.push(TargetedOp::new(
+            Agent::new_bot(id),
+            MessageTarget::All,
+            vec![RoomOp::Claimed {
+              player: id,
+              amount,
+              coins,
+            }],
+          ));
+        }
+
+        if !out.is_empty() {
+          let everyone = state.everyone();
+          return Ok(LogicOutput::ops(out).and_snapshot(SnapshotRequest::to(everyone)));
+        }
+
         state.since_refresh += delta_time;
         let interval = Duration::from_millis(u64::from(state.settings.refresh_decis) * 100);
         if interval.is_zero() || state.since_refresh < interval {
@@ -241,7 +338,7 @@ impl StateLogic<RoomOp, PlayerId, ArenaState> for ArenaLogic {
                   "Only the lobby may reserve a seat.".into(),
                 ));
               }
-              state.reserved.insert(player);
+              state.reserved.reserve(player);
             }
 
             RoomOp::Withdraw { player } => {
@@ -250,7 +347,7 @@ impl StateLogic<RoomOp, PlayerId, ArenaState> for ArenaLogic {
                   "Only the lobby may cancel a reservation.".into(),
                 ));
               }
-              state.reserved.remove(&player);
+              state.reserved.withdraw(&player);
             }
 
             // Server-to-client variants.
@@ -428,7 +525,7 @@ mod tests {
       .process_input(&mut state, LogicInput::AgentLeft { agent_id: 1 })
       .await
       .unwrap();
-    assert!(state.reserved.contains(&1), "the seat is still held");
+    assert!(state.reserved.holds(&1), "the seat is still held");
 
     join(&mut state, 1).await;
     assert_eq!(state.view_for(Some(&1)).your_seat, Some(Seat::Player));
@@ -456,7 +553,7 @@ mod tests {
       })
       .await;
     assert!(result.is_err());
-    assert!(state.reserved.contains(&1));
+    assert!(state.reserved.holds(&1));
   }
 
   #[tokio::test]
@@ -475,6 +572,94 @@ mod tests {
 
     assert_eq!(state.seats_taken.load(Ordering::Relaxed), 0);
     assert_eq!(state.wallets.balance(1), earned, "the baggage travels");
+  }
+
+  async fn seat_bot(state: &mut ArenaState, id: PlayerId) {
+    reserve(state, id).await;
+    ArenaLogic
+      .process_input(state, LogicInput::AgentJoined {
+        agent: Agent::new_bot(id),
+      })
+      .await
+      .unwrap();
+  }
+
+  /// Who claimed in this output. A tick also carries pot refreshes, so "any
+  /// ops" is not the same question.
+  fn claimers(out: &LogicOutput<RoomOp, PlayerId>) -> Vec<PlayerId> {
+    out
+      .ops
+      .iter()
+      .flat_map(|t| t.ops.iter())
+      .filter_map(|op| match op {
+        RoomOp::Claimed { player, .. } => Some(*player),
+        _ => None,
+      })
+      .collect()
+  }
+
+  async fn tick(state: &mut ArenaState, ms: u64) -> LogicOutput<RoomOp, PlayerId> {
+    ArenaLogic
+      .process_input(state, LogicInput::TimeStep {
+        delta_time: Duration::from_millis(ms),
+      })
+      .await
+      .unwrap()
+  }
+
+  #[tokio::test]
+  async fn a_bot_takes_a_seat_and_is_marked_as_one() {
+    let mut state = arena();
+    seat_bot(&mut state, 1_000_000).await;
+    let view = state.view_for(None);
+    assert_eq!(view.seats_taken, 1);
+    assert_eq!(view.bots, 1);
+    assert!(view.occupants[0].bot);
+  }
+
+  #[tokio::test]
+  async fn a_bot_claims_once_its_cooldown_passes() {
+    let mut state = arena();
+    reserve(&mut state, 1).await;
+    join(&mut state, 1).await;
+    seat_bot(&mut state, 1_000_000).await;
+
+    let early = tick(&mut state, 1000).await;
+    assert!(claimers(&early).is_empty(), "still on cooldown");
+
+    let out = tick(&mut state, 2500).await;
+    assert_eq!(claimers(&out), vec![1_000_000], "the bot claimed");
+    assert!(state.wallets.balance(1_000_000) > 0);
+    assert_eq!(state.pot, 0);
+  }
+
+  /// A bot has nobody to play against once the humans go, and an arena left
+  /// alone would otherwise accumulate them.
+  #[tokio::test]
+  async fn bots_are_cleared_when_the_last_human_leaves() {
+    let mut state = arena();
+    reserve(&mut state, 1).await;
+    join(&mut state, 1).await;
+    seat_bot(&mut state, 1_000_000).await;
+    assert_eq!(state.bots(), 1);
+
+    ArenaLogic
+      .process_input(&mut state, LogicInput::AgentLeft { agent_id: 1 })
+      .await
+      .unwrap();
+    tick(&mut state, 100).await;
+    assert_eq!(state.bots(), 0);
+    assert_eq!(state.seats_taken.load(Ordering::Relaxed), 0);
+  }
+
+  /// A spectating human is not an opponent, so the bots still go.
+  #[tokio::test]
+  async fn a_spectator_does_not_keep_the_bots_around() {
+    let mut state = arena();
+    join(&mut state, 1).await;
+    seat_bot(&mut state, 1_000_000).await;
+    tick(&mut state, 100).await;
+    assert_eq!(state.bots(), 0);
   }
 
   #[tokio::test]

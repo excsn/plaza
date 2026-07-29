@@ -4,8 +4,9 @@
 //! the server measured, and that only exists on a socket the transport pings.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use plaza::agent::Agent;
@@ -15,12 +16,11 @@ use plaza::snapshot::{SnapshotContext, SnapshotError, SnapshotProvider};
 use plaza::state_logic::{LogicInput, LogicOutput, StateLogic, StateLogicError};
 use plaza_lobby::manager::InMemoryLobbyManager;
 use plaza_lobby::op_payloads::JoinRoomRequestPayload;
-use plaza_lobby::{LobbyError, RoomHandle, RoomId};
+use plaza_lobby::{Formed, LobbyError, MatchQueue, RoomHandle, RoomId, TicketRegistry};
 use plaza_session::ActixWsPlazaSession;
 use tracing::{info, warn};
 
 use crate::factory::{ArenaFactory, RoomRegistry};
-use crate::tickets::TicketRegistry;
 use crate::types::{LinkQuality, LobbyOp, PlayerId, RoomCard};
 use crate::wallets::WalletRegistry;
 
@@ -30,23 +30,47 @@ pub type LobbySession = ActixWsPlazaSession<LobbyOp, PlayerId>;
 /// reproducible.
 const ASSIGNED_LINKS_MS: [u32; 4] = [0, 25, 70, 140];
 
+/// Players per quick match, and how long the queue waits before filling the
+/// rest of the seats with bots.
+const MATCH_SIZE: usize = 2;
+const PATIENCE: Duration = Duration::from_secs(12);
+
+/// Bot ids start here, well clear of the humans' counter, so a bot is
+/// recognisable in a log without consulting anything.
+const FIRST_BOT_ID: PlayerId = 1_000_000;
+
 /// Per-player only; shared services live in the logic, already behind an `Arc`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct LobbyState {
   pub links: HashMap<PlayerId, LinkQuality>,
   /// Outstanding reservations, so they can be cancelled. Ids are per lobby
   /// connection, so one never consumed can never be consumed later.
   pub reserved_in: HashMap<PlayerId, RoomId>,
+  pub queue: MatchQueue<PlayerId, Duration>,
+  /// Lobby time, the axis the queue's patience is measured on.
+  pub now: Duration,
+}
+
+impl Default for LobbyState {
+  fn default() -> Self {
+    Self {
+      links: HashMap::new(),
+      reserved_in: HashMap::new(),
+      queue: MatchQueue::new(MATCH_SIZE, PATIENCE),
+      now: Duration::ZERO,
+    }
+  }
 }
 
 pub struct LobbyLogic {
   pub manager: Arc<InMemoryLobbyManager<ArenaFactory>>,
   pub registry: Arc<RoomRegistry>,
   pub wallets: Arc<WalletRegistry>,
-  pub tickets: Arc<TicketRegistry>,
+  pub tickets: Arc<TicketRegistry<PlayerId>>,
   /// For `agent_rtt`. The controller holds the same `Arc`.
   pub session: Arc<LobbySession>,
   next_link: AtomicUsize,
+  next_bot: AtomicU64,
 }
 
 impl LobbyLogic {
@@ -54,7 +78,7 @@ impl LobbyLogic {
     manager: Arc<InMemoryLobbyManager<ArenaFactory>>,
     registry: Arc<RoomRegistry>,
     wallets: Arc<WalletRegistry>,
-    tickets: Arc<TicketRegistry>,
+    tickets: Arc<TicketRegistry<PlayerId>>,
     session: Arc<LobbySession>,
   ) -> Self {
     Self {
@@ -64,6 +88,7 @@ impl LobbyLogic {
       tickets,
       session,
       next_link: AtomicUsize::new(0),
+      next_bot: AtomicU64::new(FIRST_BOT_ID),
     }
   }
 
@@ -129,17 +154,110 @@ impl LobbyLogic {
   }
 
   async fn tell_arena(&self, room_id: &RoomId, why: &str, op: crate::types::RoomOp) {
+    self
+      .command_arena(room_id, why, ControllerCommand::SubmitSystemOps {
+        source_description: why.to_string(),
+        ops: vec![op],
+      })
+      .await;
+  }
+
+  async fn command_arena(
+    &self,
+    room_id: &RoomId,
+    why: &str,
+    command: ControllerCommand<crate::types::RoomOp, PlayerId, crate::room::ArenaState>,
+  ) {
     let Some(handle) = self.manager.room(room_id) else {
       warn!(room = %room_id, why, "Spoke to a room that has since gone.");
       return;
     };
-    let command = ControllerCommand::SubmitSystemOps {
-      source_description: why.to_string(),
-      ops: vec![op],
-    };
     if handle.command_tx.send(command).await.is_err() {
       warn!(room = %room_id, why, "Arena controller ended before the message landed.");
     }
+  }
+
+  /// Seats a match the queue formed: humans get a reservation and an endpoint,
+  /// and the seats nobody came for get a bot.
+  ///
+  /// Bots join by command rather than by connecting, which is the whole reason
+  /// `Agent::Bot` exists: they are participants the transport never sees, so a
+  /// broadcast simply never matches them and nothing has to special-case one.
+  async fn seat_formed(
+    &self,
+    state: &mut LobbyState,
+    formed: Formed<PlayerId>,
+  ) -> Vec<TargetedOp<LobbyOp, PlayerId>> {
+    self.refresh_seat_counts();
+
+    // The slowest human decides which arenas are eligible, or the match would be
+    // placed somewhere one of its own players cannot play.
+    let worst = formed
+      .players
+      .iter()
+      .filter_map(|p| state.links.get(p).map(|l| l.one_way_ms))
+      .max()
+      .unwrap_or(0);
+    let needed = formed.size() as u32;
+
+    let Some(room) = self
+      .manager
+      .rooms_playable_at(worst)
+      .into_iter()
+      .find(|m| m.max_players.saturating_sub(m.current_players) >= needed)
+    else {
+      warn!(worst_one_way_ms = worst, needed, "No arena can seat this match.");
+      return formed
+        .players
+        .iter()
+        .map(|p| {
+          TargetedOp::new_system_to(*p, vec![LobbyOp::Refused {
+            room_id: RoomId::nil(),
+            reason: "No arena has room for a match on this link right now.".into(),
+            measured_one_way_ms: state.links.get(p).map(|l| l.one_way_ms).unwrap_or(0),
+            allowed_one_way_ms: None,
+          }])
+        })
+        .collect();
+    };
+
+    for _ in 0..formed.bots {
+      let bot = self.next_bot.fetch_add(1, Ordering::Relaxed);
+      self
+        .tell_arena(&room.room_id, "quick match bot", crate::types::RoomOp::Reserve { player: bot })
+        .await;
+      self
+        .command_arena(&room.room_id, "quick match bot", ControllerCommand::HandleAgentJoined {
+          agent: Agent::new_bot(bot),
+        })
+        .await;
+    }
+
+    let mut out = Vec::new();
+    for player in &formed.players {
+      self.reserve_seat(state, &room.room_id, *player).await;
+      let base = self
+        .manager
+        .room(&room.room_id)
+        .map(|h| h.session_endpoint_info())
+        .unwrap_or_default();
+      out.push(TargetedOp::new_system_to(*player, vec![LobbyOp::Placed {
+        room_id: room.room_id,
+        name: room.name.clone(),
+        endpoint: self.endpoint_with_ticket(&base, *player, room.room_id),
+        spectator: false,
+        coins: self.wallets.balance(*player),
+      }]));
+    }
+
+    info!(
+      arena = %room.name,
+      humans = formed.players.len(),
+      bots = formed.bots,
+      timed_out = formed.timed_out,
+      "Quick match seated."
+    );
+    out
   }
 
   /// Cancels any earlier reservation first: holding two would leave the first
@@ -192,6 +310,7 @@ impl StateLogic<LobbyOp, PlayerId, LobbyState> for LobbyLogic {
 
       LogicInput::AgentLeft { agent_id } => {
         state.links.remove(&agent_id);
+        state.queue.remove(&agent_id);
         // The departure an arena cannot infer: a closing socket means nothing,
         // but leaving the lobby means the seat will never be taken.
         if let Some(room_id) = state.reserved_in.remove(&agent_id) {
@@ -208,7 +327,18 @@ impl StateLogic<LobbyOp, PlayerId, LobbyState> for LobbyLogic {
         Ok(LogicOutput::none())
       }
 
-      LogicInput::TimeStep { .. } => Ok(LogicOutput::none()),
+      LogicInput::TimeStep { delta_time } => {
+        state.now += delta_time;
+        let ready = state.queue.drain_ready(state.now);
+        if ready.is_empty() {
+          return Ok(LogicOutput::none());
+        }
+        let mut out = Vec::new();
+        for formed in ready {
+          out.extend(self.seat_formed(state, formed).await);
+        }
+        Ok(LogicOutput::ops(out))
+      }
 
       LogicInput::AgentOps { source, ops } => {
         let Some(player) = source.id_cloned() else {
@@ -229,6 +359,23 @@ impl StateLogic<LobbyOp, PlayerId, LobbyState> for LobbyLogic {
                   link,
                 }],
               ));
+            }
+
+            LobbyOp::QuickMatch => {
+              let extra = state.links.get(&player).map(|l| l.assigned_extra_ms).unwrap_or(0);
+              let link = self.link_for(player, extra);
+              state.links.insert(player, link);
+              state.queue.enqueue(player, state.now);
+              out.push(TargetedOp::new_system_to(player, vec![LobbyOp::Queued {
+                position: state.queue.position(&player).unwrap_or(0) as u32,
+                needed: state.queue.match_size() as u32,
+                patience_ms: PATIENCE.as_millis() as u32,
+              }]));
+            }
+
+            LobbyOp::LeaveQueue => {
+              state.queue.remove(&player);
+              out.push(TargetedOp::new_system_to(player, vec![LobbyOp::QueueLeft]));
             }
 
             LobbyOp::Reroll => {

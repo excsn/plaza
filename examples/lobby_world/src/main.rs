@@ -6,7 +6,6 @@
 mod factory;
 mod lobby;
 mod room;
-mod tickets;
 mod types;
 mod wallets;
 
@@ -17,9 +16,10 @@ use std::time::Duration;
 use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer};
 use plaza::agent::Agent;
 use plaza::controller::StateControllerBuilder;
+use plaza::tick_driver::TickDriver;
 use plaza_lobby::manager::InMemoryLobbyManager;
 use plaza_lobby::op_payloads::RoomSettings;
-use plaza_lobby::RoomHandle;
+use plaza_lobby::{RoomHandle, TicketRegistry};
 use plaza_session::ActixWsPlazaSession;
 use serde::Deserialize;
 use tracing::{error, info, warn, Level};
@@ -27,7 +27,6 @@ use tracing_subscriber::EnvFilter;
 
 use crate::factory::{ArenaFactory, RoomRegistry};
 use crate::lobby::{LobbyLogic, LobbySession, LobbyState, NoLobbySnapshot};
-use crate::tickets::TicketRegistry;
 use crate::types::{PlayerId, ARENAS};
 use crate::wallets::WalletRegistry;
 
@@ -36,13 +35,17 @@ const BIND: &str = "127.0.0.1:8090";
 /// Keeps the socket registry from outliving the lobby's own room map.
 const REAP_EVERY: Duration = Duration::from_secs(15);
 
+/// Only the match queue needs the lobby to advance time, and it measures its
+/// patience in seconds.
+const LOBBY_TICK_HZ: u32 = 4;
+
 /// The only place a `PlayerId` is created.
 struct PlayerIds(AtomicU64);
 
 struct Services {
   lobby_session: Arc<LobbySession>,
   rooms: Arc<RoomRegistry>,
-  tickets: Arc<TicketRegistry>,
+  tickets: Arc<TicketRegistry<PlayerId>>,
   ids: PlayerIds,
 }
 
@@ -153,7 +156,7 @@ async fn main() -> std::io::Result<()> {
     lobby_session.clone(),
   ));
 
-  let (_lobby_tx, lobby_controller) = StateControllerBuilder::new(
+  let (lobby_tx, lobby_controller) = StateControllerBuilder::new(
     logic,
     lobby_session.clone(),
     Arc::new(NoLobbySnapshot),
@@ -168,6 +171,7 @@ async fn main() -> std::io::Result<()> {
       error!("Lobby controller exited with error: {e}");
     }
   });
+  tokio::spawn(TickDriver::from_hz(LOBBY_TICK_HZ).run(lobby_tx));
 
   {
     let manager = manager.clone();

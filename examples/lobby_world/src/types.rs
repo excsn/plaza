@@ -81,6 +81,9 @@ pub struct RoomCard {
 pub enum LobbyOp {
   ListRooms,
   Join { room_id: RoomId },
+  /// Be paired rather than choose. The other half of a lobby.
+  QuickMatch,
+  LeaveQueue,
   /// Deliberately bypasses `handle_join_room_request`: a spectator takes no
   /// seat, so the lobby's capacity accounting must not see one.
   Spectate { room_id: RoomId },
@@ -95,6 +98,14 @@ pub enum LobbyOp {
     rooms: Vec<RoomCard>,
     link: LinkQuality,
   },
+  Queued {
+    /// Zero-based place in line.
+    position: u32,
+    needed: u32,
+    /// Milliseconds before the remaining seats are filled with bots.
+    patience_ms: u32,
+  },
+  QueueLeft,
   Placed {
     room_id: RoomId,
     name: String,
@@ -120,6 +131,7 @@ pub enum Seat {
 pub struct Occupant {
   pub player: PlayerId,
   pub seat: Seat,
+  pub bot: bool,
   /// From the shared registry, so it includes what was earned elsewhere.
   pub coins: u64,
   pub claims_here: u32,
@@ -134,6 +146,7 @@ pub struct RoomView {
   pub seats_taken: u32,
   pub seats_total: u32,
   pub spectators: u32,
+  pub bots: u32,
   pub your_seat: Option<Seat>,
 }
 

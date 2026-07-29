@@ -75,8 +75,13 @@
       <div class="row"><span class="k">assigned extra</span><span class="num" id="extra">-</span></div>
       <div class="row"><span class="k">one-way, judged</span><span class="num" id="oneway">-</span></div>
       <div class="acts">
+        <button id="quick">Quick match</button>
+        <button id="cancel" style="display:none">Cancel</button>
         <button id="reroll">Re-roll link</button>
         <button id="refresh">Refresh rooms</button>
+      </div>
+      <div class="row" id="queue-row" style="display:none">
+        <span class="k">in queue</span><span class="num" id="queue-state">-</span>
       </div>
       <div class="note">
         Every number here is the server's. The RTT is what the transport timed with its own
@@ -108,6 +113,7 @@
           <button id="claim">Claim the pot</button>
           <button id="leave">Leave</button>
         </div>
+        <div class="row"><span class="k">bots seated</span><span class="num" id="a-bots">0</span></div>
         <table>
           <thead><tr><th>player</th><th>seat</th><th class="n">wallet</th><th class="n">claims here</th></tr></thead>
           <tbody id="a-occupants"></tbody>
@@ -135,6 +141,9 @@ let arena = null;
 let me = null;
 let coins = 0;
 let inArena = null;
+let queuedAt = null;
+let patienceMs = 0;
+let queueTimer = null;
 
 const $ = (id) => document.getElementById(id);
 
@@ -167,6 +176,13 @@ function onFrame(event, handle) {
 
 function ms(v) { return (v === null || v === undefined) ? 'none' : v + ' ms'; }
 
+// An externally-tagged serde enum puts struct variants in an object keyed by the
+// variant name, but a *unit* variant is a bare string. A client that only ever
+// reads `op.Something` silently drops every unit variant, which is a bug that
+// looks exactly like the server not sending.
+const opName = (op) => (typeof op === 'string' ? op : Object.keys(op)[0]);
+const opBody = (op) => (typeof op === 'string' ? {} : op[opName(op)]);
+
 /* ---------- lobby ---------- */
 
 function connectLobby() {
@@ -178,6 +194,10 @@ function connectLobby() {
 }
 
 function handleLobbyOp(op) {
+  const body = opBody(op);
+  switch (opName(op)) {
+    case 'QueueLeft': leaveQueueUi(); log('left the queue'); return;
+  }
   if (op.Welcome) {
     me = op.Welcome.you;
     coins = op.Welcome.coins;
@@ -188,7 +208,18 @@ function handleLobbyOp(op) {
   } else if (op.Catalogue) {
     showLink(op.Catalogue.link);
     drawRooms(op.Catalogue.rooms);
+  } else if (op.Queued) {
+    queuedAt = Date.now();
+    patienceMs = op.Queued.patience_ms;
+    $('quick').style.display = 'none';
+    $('cancel').style.display = '';
+    $('queue-row').style.display = '';
+    log(`queued: place ${op.Queued.position + 1}, matches are ${op.Queued.needed} players`);
+    if (queueTimer) clearInterval(queueTimer);
+    queueTimer = setInterval(drawQueue, 200);
+    drawQueue();
   } else if (op.Placed) {
+    if (queuedAt !== null) leaveQueueUi();
     const p = op.Placed;
     coins = p.coins;
     $('coins').textContent = coins;
@@ -200,6 +231,24 @@ function handleLobbyOp(op) {
       ? 'no stated limit' : r.allowed_one_way_ms + ' ms';
     log(`refused: ${r.reason} (measured ${r.measured_one_way_ms} ms one way, arena allows ${allowed})`, 'warn');
   }
+}
+
+// Counts down to the moment the queue gives up and fills the seats with bots,
+// which is the number that makes the patience visible rather than a surprise.
+function drawQueue() {
+  if (queuedAt === null) return;
+  const waited = Date.now() - queuedAt;
+  const left = Math.max(0, patienceMs - waited);
+  $('queue-state').textContent =
+    `${(waited / 1000).toFixed(1)}s  (bots fill in ${(left / 1000).toFixed(1)}s)`;
+}
+
+function leaveQueueUi() {
+  queuedAt = null;
+  if (queueTimer) { clearInterval(queueTimer); queueTimer = null; }
+  $('quick').style.display = '';
+  $('cancel').style.display = 'none';
+  $('queue-row').style.display = 'none';
 }
 
 function showLink(link) {
@@ -309,6 +358,7 @@ function drawArena(v) {
   $('a-name').textContent = v.arena;
   $('a-budget').textContent = ms(v.budget_ms);
   $('a-pot').textContent = v.pot;
+  $('a-bots').textContent = v.bots;
   $('a-seat').textContent = (v.your_seat === null || v.your_seat === undefined)
     ? 'none'
     : v.your_seat.toLowerCase() + (v.your_seat === 'Spectator' ? ' (watching)' : '');
@@ -320,7 +370,7 @@ function drawArena(v) {
     const tr = document.createElement('tr');
     if (o.player === me) tr.className = 'you';
     tr.innerHTML =
-      `<td>#${o.player}${o.player === me ? ' (you)' : ''}</td>` +
+      `<td>#${o.player}${o.player === me ? ' (you)' : ''}${o.bot ? ' bot' : ''}</td>` +
       `<td>${o.seat.toLowerCase()}</td>` +
       `<td class="n">${o.coins}</td>` +
       `<td class="n">${o.claims_here}</td>`;
@@ -332,6 +382,8 @@ function drawArena(v) {
 
 /* ---------- wiring ---------- */
 
+$('quick').onclick = () => sendOps(lobby, ["QuickMatch"]);
+$('cancel').onclick = () => sendOps(lobby, ["LeaveQueue"]);
 $('reroll').onclick = () => sendOps(lobby, ["Reroll"]);
 $('refresh').onclick = () => sendOps(lobby, ["ListRooms"]);
 $('claim').onclick = () => sendOps(arena, ["Claim"]);
