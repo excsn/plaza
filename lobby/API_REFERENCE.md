@@ -136,6 +136,54 @@ A room states what its simulation can carry; the caller supplies what the server
 
 **Why the measurement is not here.** Measuring needs the socket, deciding needs the rule, and routing needs the set of rooms. Those are three layers and they belong to the transport, the room, and the lobby respectively. Collapsing any two of them puts a number in a place that cannot check it.
 
+## 5c. Queues, reservations and tickets
+
+Three blocks either side of what the manager answers. Each holds no timers and spawns nothing, so an application drives it from its own `StateLogic`, in the manner of `plaza::common::reconnect::ReconnectTracker`.
+
+### Struct `MatchQueue<ID: AgentId, T: SchedulerInstant>`
+
+For games where a player is paired rather than choosing a room.
+
+*   **`new(size: usize, patience: T)`**: matches of `size`, waiting `patience` before filling the remaining seats. Panics on a zero `size`.
+*   **`enqueue(player, now) -> bool`**: `false` if already queued, so a double press does not take two places.
+*   **`remove(&player) -> bool`**: for a cancel or a disconnect.
+*   **`drain_ready(now) -> Vec<Formed<ID>>`**: every match that can start. Drive from `TimeStep`. Full matches first and for as long as there are enough people; then, if the longest-waiting player is out of patience, one more with the empty seats counted.
+*   **`position(&player) -> Option<usize>`**, **`waiting_since(&player) -> Option<T>`**, **`contains`**, **`match_size`**, **`len`**, **`is_empty`**, **`clear`**.
+
+### Struct `Formed<ID: AgentId>`
+
+*   **`players: Vec<ID>`**: the humans, in the order they queued.
+*   **`bots: usize`**: seats nobody is coming to fill. Zero for a full human match.
+*   **`timed_out: bool`**: whether patience ran out rather than the match filling. Worth telling apart in a readout: a queue that only ever forms this way is a single-player game with a delay.
+*   **`size() -> usize`**: `players.len() + bots`.
+
+**Why patience produces seats to fill rather than a refusal.** A queue that only pairs humans stops working at exactly the moment a game needs it: launch, off-peak, small regions. What fills the seats is yours: a bot, a smaller board, a merged lobby.
+
+### Struct `SeatReservations<ID: AgentId>`
+
+The window between the lobby admitting a player and that player's socket arriving.
+
+*   **`reserve(player) -> bool`**: promises a seat; `false` if already held.
+*   **`consume(&player) -> bool`**: takes the reservation, on `AgentJoined`. Spent once, so a second connection on one id is not a second seat.
+*   **`withdraw(&player) -> bool`**: cancels one that will never be used.
+*   **`holds`**, **`count`**, **`is_empty`**, **`iter`**, **`clear`**.
+
+**A closing socket must not cancel a reservation.** This is why the type exists rather than a bare `HashSet`. Moving between rooms reserves the new seat and *then* closes the old socket, so the room sees `AgentLeft` after the promise was made. A room that withdraws on disconnect throws away a seat the lobby already granted, and the player silently lands as a spectator while the lobby reports them seated. Only the lobby can tell "gone" from "the same player, one second later", so `withdraw` is the lobby's word and never the transport's.
+
+Distinct from `plaza_server_utils::SeatTable`, which allocates seat *indices* among agents already connected.
+
+### Struct `TicketRegistry<ID: AgentId>` and `Ticket<ID>`
+
+Fills `JoinRoomOutcomePayload::player_game_token`. Internally synchronised, so the lobby that issues and the route that redeems share one by `Arc`.
+
+*   **`issue(player, room) -> String`**: mints a token and records it.
+*   **`issue_with(token, player, room)`**: records a token you minted, for a real credential.
+*   **`redeem(&token) -> Option<Ticket<ID>>`**: spends it. One use, so a leaked token cannot be replayed alongside the connection already holding it.
+*   **`revoke(&token) -> bool`**, **`outstanding() -> usize`**: a count that climbs rather than hovering means placements are issued and abandoned.
+*   **`Ticket<ID> { player: ID, room: RoomId }`**.
+
+**Placement, not authentication.** Without a ticket, a room's only source for the connecting player's identity is the client, and a client that can name its own id can name somebody else's. `issue` mints a counter, which closes that and is not a secret; anything facing untrusted clients supplies its own signed, expiring value through `issue_with`. Plaza has no authentication story for this to be consistent with, which is why the crate provides the bookkeeping and not the secret.
+
 ## 6. Putting It Together
 
 ```rust,ignore
