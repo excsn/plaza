@@ -28,7 +28,6 @@ use crate::sim::types::*;
 /// busy and achieve nothing.
 const RUNNER_PANIC_CELLS: u16 = 5;
 
-
 /// The most elapsed time one call may spend, so a stalled host falls behind
 /// visibly rather than freezing while it repays a debt.
 const MAX_CATCH_UP_MS: u64 = 250;
@@ -821,16 +820,9 @@ impl Server {
       if self.seats[seat] != Seat::Bot || !self.players[seat].alive {
         continue;
       }
-      // About the cell they are **arriving at**, every tick.
-      //
-      // This used to skip any player mid-step, on the reasoning that a bot
-      // re-deciding every tick would never let a turn resolve. That reasoning
-      // was wrong twice over: a queued turn resolves at a cell boundary and a
-      // fresh request simply replaces the pending one, and `advance_player`
-      // starts the next step the instant it finishes the last, so `step` is
-      // essentially never `None` between ticks. The guard meant a bot only ever
-      // chose a direction when it was already stuck against a wall, which is
-      // exactly what "it just runs around" looks like.
+      // About the cell they are **arriving at**, every tick. Skipping a player
+      // mid-step would skip nearly every tick, because `advance_player` starts
+      // the next step the instant it finishes the last.
       let at = match &self.players[seat].step {
         Some(step) => step.to,
         None => self.players[seat].cell,
@@ -841,10 +833,8 @@ impl Server {
       };
       let dir = match self.players[seat].role {
         Role::Pursuer => rules::pursuit_dir(at, heading, target, &self.maze),
-        // A runner has two jobs and only one of them is fleeing. Running away
-        // from a pursuer that is nowhere near is what makes a bot look busy and
-        // achieve nothing, which is exactly how this one behaved before: it
-        // maximised distance every single cell and never went anywhere.
+        // A runner has two jobs and only one of them is fleeing. Maximising
+        // distance at every cell is a bot that looks busy and never eats.
         Role::Runner => {
           let threat = self
             .players
@@ -855,10 +845,9 @@ impl Server {
           match threat {
             Some(threat) if threat.distance(at) <= RUNNER_PANIC_CELLS => {
               // Under threat it still eats, it just refuses to walk into the
-              // pursuer while doing it. Fleeing *instead* of eating is what
-              // made this bot look busy and achieve nothing: the pursuer trails
-              // within a few cells almost the whole round, so a runner that
-              // drops everything at that range never eats at all.
+              // pursuer while doing it. A pursuer trails within a few cells
+              // almost the whole round, so a runner that fled instead would
+              // never eat at all.
               let keeping_away: Vec<Dir> = self
                 .maze
                 .exits(at)
@@ -1021,8 +1010,6 @@ mod tests {
 
   #[test]
   fn the_next_round_rotates_the_roles() {
-    // Being hunted and hunting are different games, and a player who only ever
-    // does one has seen half the example.
     let c = controls();
     let mut server = started(&c);
     let at = server.players[0].occupied();
@@ -1149,9 +1136,6 @@ mod tests {
 
   #[test]
   fn a_bot_runner_actually_eats() {
-    // It used to maximise its distance from the nearest pursuer at every single
-    // cell, wherever that pursuer was, which is a bot that looks busy and gets
-    // nothing done: it never went near a pellet on purpose.
     let c = Controls { bots: true, players: 2, ..controls() };
     let mut server = started(&c);
     run(&mut server, 45_000, &c);
@@ -1170,14 +1154,9 @@ mod tests {
 
   #[test]
   fn a_bot_runner_reaches_the_energizers_and_turns_on_its_pursuers() {
-    // The mechanic the round is designed around, measured end to end rather
-    // than asserted in isolation: three of the four seats are bots, so an
-    // inversion no bot ever reaches is one no player ever watches happen.
-    //
-    // The bots do not seek energizers, and a version that did was measured and
-    // removed: routing to one under threat devoured no more pursuers (3 either
-    // way), ate 22 fewer pellets, and left six power-ups on the board that the
-    // ordinary pellet route collects on its way past.
+    // The bots do not seek energizers. Routing to one under threat was
+    // measured at no more devoured pursuers, 22 fewer pellets, and six
+    // power-ups left on the board.
     let c = Controls { bots: true, players: 4, ..controls() };
     let mut server = started(&c);
     let laid_out = server.powerups.len();
@@ -1206,10 +1185,6 @@ mod tests {
 
   #[test]
   fn a_hidden_runner_is_absent_from_other_players_frames() {
-    // The property, and it is a **server** property. Drawing a hidden player
-    // dimly, or skipping them in the renderer, keeps no secret at all: a cheat
-    // client reads the buffer rather than the screen. The only way to hide a
-    // position is not to send it.
     let c = controls();
     let mut server = started(&c);
     let runner = server.runner_seat() as PlayerId;
@@ -1232,9 +1207,6 @@ mod tests {
 
   #[test]
   fn a_hidden_runner_does_not_leak_its_position_through_the_pellets_it_eats() {
-    // Leaving a player out of a frame hides nothing if the events keep going
-    // out: `Op::Eaten` names the exact cell, on the exact tick, and is a better
-    // position report than a frame is because it is not rate limited.
     let c = Controls { bots: true, players: 2, ..controls() };
     let mut server = started(&c);
     let runner = server.runner_seat() as PlayerId;
@@ -1272,8 +1244,6 @@ mod tests {
 
   #[test]
   fn what_was_withheld_is_told_once_the_vanish_ends() {
-    // Late, not never: a client that never heard would draw pellets that are
-    // gone for the rest of the round.
     let c = Controls { bots: true, players: 2, ..controls() };
     let mut server = started(&c);
     let runner = server.runner_seat() as PlayerId;
@@ -1322,8 +1292,6 @@ mod tests {
 
   #[test]
   fn an_energized_runner_eats_the_pursuer_instead_of_being_caught() {
-    // The inversion, which is the interesting half: for a few seconds contact
-    // means the opposite of what it means the rest of the time.
     let c = controls();
     let mut server = started(&c);
     let runner_seat = server.runner_seat();
@@ -1362,15 +1330,12 @@ mod tests {
 
   #[test]
   fn a_match_runs_a_fixed_number_of_rounds_and_then_resets_the_scores() {
-    // Clearing a maze outright is rare with three pursuers hunting, so the game
-    // is a cumulative score over a match rather than a race to empty the board.
     let c = Controls { players: 2, ..controls() };
     let mut server = started(&c);
     assert_eq!(server.match_round(), 1);
 
     let mut ended = None;
     for _ in 0..(MATCH_ROUNDS + 2) {
-      // Settle each round by walking a pursuer onto the runner.
       let seat = server.runner_seat();
       let at = server.players[seat].occupied();
       let other = (seat + 1) % 2;
@@ -1398,9 +1363,6 @@ mod tests {
 
   #[test]
   fn the_final_table_gets_an_interval_of_its_own() {
-    // It used to go out in the same tick as the next match's `RoundStart`, and
-    // a client clears the table when a round starts, so the thing five rounds
-    // were played for was on screen for one frame.
     let c = Controls { players: 2, ..controls() };
     let mut server = started(&c);
 
@@ -1426,7 +1388,6 @@ mod tests {
     }
     let ended_at = ended_at.expect("the match ends after its rounds");
 
-    // Nothing starts for the whole interval, and then something does.
     let mut started_at = None;
     while started_at.is_none() {
       let out = server.advance(SIM_STEP_MS, &c);

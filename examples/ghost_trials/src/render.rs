@@ -139,7 +139,6 @@ pub fn draw_pickups(board: &Board, pickups: &[Pickup], tick: u32) {
 const FINISHED_LINGER: u32 = 90;
 
 pub fn draw_racer(board: &Board, racer: &Racer, colour: Color, ghost: bool, tick: u32, place: Option<usize>) {
-  // A finished car is out of the race: hollow while it fades, then gone.
   let (ghost, colour) = match racer.finished_tick {
     Some(at) => {
       let age = tick.saturating_sub(at);
@@ -182,9 +181,6 @@ pub fn draw_racer(board: &Board, racer: &Racer, colour: Color, ghost: bool, tick
     );
   }
 
-  // The wind-up and the spend, which are the whole of the driving decision.
-  // The timed power-ups read as rims, because each changes how the car behaves
-  // rather than how fast it is going, and a player has to know which they have.
   for (running, kind, radius) in [
     (racer.gripping(tick), Power::Grip, 1.1),
     (racer.slick(tick), Power::Slick, 1.3),
@@ -213,7 +209,6 @@ pub fn draw_hud(board: &Board, elapsed_ms: u64, lap: u16, best: Option<u64>, spl
   let laps = format!("{}   lap {} of {}", mode.label(), (lap + 1).min(LAPS), LAPS);
   draw_text(&laps, board.origin.x + 130.0, y, 20.0, Color::new(0.7, 0.74, 0.8, 1.0));
 
-  // The split is the number a time trial is actually played on.
   if let Some(split) = split {
     let (text, colour) = if split <= 0 {
       (format!("-{}", format_ms((-split) as u64)), Color::new(0.5, 1.0, 0.6, 1.0))

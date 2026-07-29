@@ -229,9 +229,6 @@ mod tests {
 
   #[test]
   fn nothing_on_the_wire_says_where_a_hidden_player_is() {
-    // The end to end version of the property, taken from the wire rather than
-    // from the server's intent: every op a seat is handed, checked against the
-    // hidden player's actual cell.
     let c = Controls { bots: true, ..quiet() };
     let mut world = World::new(&c, MAZE_SEED);
     world.start_playing(&c);
@@ -289,9 +286,6 @@ mod tests {
 
   #[test]
   fn a_perfect_link_never_turns_at_the_wrong_junction() {
-    // The control, and the one that matters most here: a wrong junction on a
-    // perfect link would mean the turn rule is written twice, and every other
-    // measurement in this file would be meaningless.
     let c = quiet();
     let mut world = World::new(&c, MAZE_SEED);
     wander(&mut world, 0, 10, &c);
@@ -301,9 +295,6 @@ mod tests {
 
   #[test]
   fn latency_alone_still_turns_at_the_right_junction() {
-    // The measurement that says predicting a place-triggered input is worth
-    // doing at all. A client running a round trip ahead reaches each junction
-    // before the server does, and still has to reach the *same* one.
     let c = Controls {
       latency_ms: 120,
       jitter_ms: 30,
@@ -318,10 +309,6 @@ mod tests {
 
   #[test]
   fn losing_a_turn_request_is_what_sends_the_two_sides_down_different_corridors() {
-    // The failure this example exists to show, and the reason it is counted
-    // apart from a cell correction: the client took a turn the server never
-    // heard about, so the two are not one cell apart, they are in different
-    // parts of the maze, and the gap grows until a frame settles it.
     let c = Controls {
       latency_ms: 60,
       loss_pct: 55.0,
@@ -333,8 +320,6 @@ mod tests {
       world.total_snaps() > 0,
       "dropped turn requests put the two sides in different corridors"
     );
-    // However far apart they got, it must converge: a correction that does not
-    // settle is a bug rather than a trade-off.
     world.run(4_000, &c);
     assert_eq!(world.disagreement(0), Some(0), "and it always converges back");
   }

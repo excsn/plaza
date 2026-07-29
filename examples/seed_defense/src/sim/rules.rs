@@ -141,8 +141,6 @@ pub fn wave_schedule(seed: u64, wave: u32, start_tick: u64) -> Vec<(u64, EnemyKi
   let mut out = Vec::with_capacity(count as usize);
   let mut at = start_tick;
   for i in 0..count {
-    // A tank every few enemies once the waves get going, otherwise a mix
-    // weighted toward grunts.
     let kind = if wave >= 3 && i % 7 == 6 {
       EnemyKind::Tank
     } else {
@@ -262,11 +260,10 @@ fn advance_enemies(field: &mut Field, now: u64, quirks: Quirks, events: &mut Ste
 }
 
 fn fire_towers(field: &mut Field, now: u64, quirks: Quirks, events: &mut StepEvents) {
-  // Placement order. It does not actually matter here, and that is worth
-  // knowing rather than assuming: damage is additive and the dead are collected
-  // after every tower has fired, so no tower can steal another's kill within a
-  // tick. A version of this loop that removed the dead as it went would depend
-  // on the order, and would need the same defence the targeting below has.
+  // Placement order does not matter here: damage is additive and the dead are
+  // collected after every tower has fired, so no tower can steal another's kill
+  // within a tick. A loop that removed the dead as it went would need the same
+  // defence the targeting below has.
   for index in 0..field.towers.len() {
     let tower = field.towers[index];
     if tower.cooldown_ms > 0 {
@@ -401,9 +398,6 @@ mod tests {
 
   #[test]
   fn two_fields_stepped_apart_stay_bit_identical() {
-    // The claim the whole example rests on, at the smallest scale it can be
-    // made: two independent copies, stepped by different callers, agreeing
-    // exactly after thousands of ticks of accumulation.
     let mut a = field_with_wave(3);
     let mut b = field_with_wave(3);
     for cell in [Cell::new(4, 4), Cell::new(8, 6), Cell::new(13, 6)] {
@@ -482,9 +476,6 @@ mod tests {
 
   #[test]
   fn each_quirk_actually_diverges() {
-    // The three toggles are the demonstration, so each one has to be shown to
-    // change the world rather than to change a label. Any that stopped
-    // diverging would leave the panel claiming a detection that never fires.
     for quirk in [
       Quirks {
         floats: true,

@@ -310,8 +310,6 @@ mod tests {
 
   #[test]
   fn a_joiner_is_given_the_seed_and_the_wave_it_would_otherwise_have_missed() {
-    // The whole of what a client needs to reproduce the world: one seed, and
-    // the announcement of a wave that has been scheduled but not laid out.
     let logic = logic();
     let mut state = Arena::new(quiet(), 0xC0FFEE);
 
@@ -334,8 +332,6 @@ mod tests {
 
   #[test]
   fn a_build_reaches_every_seat_and_not_only_the_one_that_asked() {
-    // A `Built` is a cause, not a reply. A client that never heard it would
-    // simulate a world with one fewer tower for the rest of the wave.
     let logic = logic();
     let mut state = Arena::new(quiet(), 1);
     joined(&logic, &mut state, 1);
@@ -372,8 +368,6 @@ mod tests {
 
   #[test]
   fn the_regular_traffic_is_a_digest_and_nothing_else() {
-    // Ten seconds of arena, with the wave running, counted by kind. The
-    // example's claim as an assertion over what the netcode layer emits.
     let logic = logic();
     let mut state = Arena::new(quiet(), 0xC0FFEE);
     joined(&logic, &mut state, 1);

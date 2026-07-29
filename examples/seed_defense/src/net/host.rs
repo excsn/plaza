@@ -58,8 +58,7 @@ pub async fn serve(bind: &str, controls: Arc<Mutex<Controls>>, view: Option<Arc<
   let initial = *controls.lock();
   let logic = ArenaLogic::new(controls, view);
   let (commands, controller) = StateControllerBuilder::new(Arc::new(logic), session.clone(), Arc::new(NoSnapshots), Arena::new(initial, WORLD_SEED))
-    // No snapshot on join: `Op::Welcome` carries the board and the players
-    // together on the tick a joiner is seated.
+    // No snapshot on join: `Op::Welcome` carries the field itself.
     .snapshot_context_on_join(None)
     .command_buffer(256)
     .build();

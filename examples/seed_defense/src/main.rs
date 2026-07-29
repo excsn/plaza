@@ -168,8 +168,6 @@ async fn frame_loop(options: role::Options) {
         }
       }
 
-      // The build strip, on the canvas: what each tower costs and does, and
-      // what the one under the cursor would cost to upgrade.
       let inspect = hovered
         .and_then(|cell| field.tower_at(cell))
         .map(|tower| (tower.kind, tower.level, tower.owner));

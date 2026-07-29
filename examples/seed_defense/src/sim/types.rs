@@ -475,8 +475,6 @@ mod tests {
 
   #[test]
   fn the_path_is_axis_aligned_end_to_end() {
-    // The module's own precondition. A diagonal leg would silently change how
-    // a position is derived, from an addition into a normalisation.
     for w in PATH.windows(2) {
       let ((x0, y0), (x1, y1)) = (w[0], w[1]);
       assert!(x0 == x1 || y0 == y1, "leg {:?} to {:?} is diagonal", w[0], w[1]);
@@ -523,8 +521,6 @@ mod tests {
 
   #[test]
   fn the_digest_key_notices_a_single_step_of_drift() {
-    // The digest's whole job. A key that hashed a rounded position would agree
-    // here, and the two sides would be a tile apart before anything noticed.
     let a = Enemy {
       id: 3,
       kind: EnemyKind::Grunt,

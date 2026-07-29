@@ -126,8 +126,6 @@ pub fn draw_map(board: &Board) {
     }
   }
 
-  // The route, so a player can see what they are defending before anything
-  // walks down it.
   for w in PATH.windows(2) {
     let a = P::from_ints(w[0].0, w[0].1);
     let b = P::from_ints(w[1].0, w[1].1);
@@ -440,8 +438,6 @@ fn draw_inspector(x: f32, y: f32, kind: TowerKind, level: u8, owner: PlayerId, g
   };
   stat_line(x + 336.0, y + 44.0, "", special, Color::new(0.62, 0.72, 0.85, 1.0));
 
-  // The upgrade, which is the decision a player is actually making here: what
-  // it costs, and what it buys.
   if level >= MAX_TOWER_LEVEL {
     draw_text("fully upgraded", x + 10.0, y + 66.0, 16.0, Color::new(0.55, 0.58, 0.62, 1.0));
     return;

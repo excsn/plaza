@@ -322,7 +322,6 @@ mod tests {
 
   #[test]
   fn a_log_replays_to_the_run_that_produced_it() {
-    // The property everything else here rests on. Not "close to": equal.
     let track = Track::circuit();
     let (recorder, driven) = drive_a_trial(&track);
     let log = recorder.finish();
@@ -334,10 +333,6 @@ mod tests {
 
   #[test]
   fn one_players_log_reproduces_a_whole_four_way_race() {
-    // The claim race mode is built on, and the one that makes it worth having
-    // beside the trial. Only the player's key presses are recorded. The other
-    // three racers, every shove between them, and every pickup they took come
-    // back because they are functions of the world rather than facts about it.
     let track = Track::circuit();
     let (recorder, driven) = drive(&track, Mode::Race);
     let log = recorder.finish();
@@ -355,9 +350,6 @@ mod tests {
 
   #[test]
   fn a_race_log_and_a_trial_log_are_not_the_same_run() {
-    // Which is why the mode is in the log. Replaying a race log as a trial
-    // would leave out three cars, and the time it produced would be a time
-    // nobody drove.
     let track = Track::circuit();
     let (trial, _) = drive(&track, Mode::Trial);
     let (race, _) = drive(&track, Mode::Race);
@@ -375,7 +367,6 @@ mod tests {
 
   #[test]
   fn the_log_is_a_fraction_of_the_path_it_describes() {
-    // The measurement, from the same counters the panel shows.
     let track = Track::circuit();
     let (recorder, _) = drive_a_trial(&track);
     let log = recorder.finish();
@@ -394,8 +385,6 @@ mod tests {
 
   #[test]
   fn an_entry_is_a_change_of_input_rather_than_a_tick() {
-    // The encoding is the op stream's own shape. A held key is one entry
-    // however long it is held, which is why the log is small.
     let mut recorder = Recorder::new(VERSION, Mode::Trial, TrackSize::Medium, 1);
     for _ in 0..500 {
       recorder.observe(Input::new(1, false));
@@ -414,9 +403,6 @@ mod tests {
 
   #[test]
   fn a_faked_time_is_refused_because_the_log_does_not_produce_it() {
-    // Not a heuristic and not a plausibility check. The claim is reconstructed
-    // and compared, so a client can send any number it likes and the number it
-    // sends is not what gets recorded.
     let track = Track::circuit();
     let (recorder, _) = drive_a_trial(&track);
     let log = recorder.finish();
@@ -471,8 +457,6 @@ mod tests {
 
   #[test]
   fn seeking_into_a_log_lands_where_playing_it_forward_does() {
-    // A ghost has to be able to start part way through, so the two ways of
-    // getting to a tick have to agree.
     let track = Track::circuit();
     let (recorder, _) = drive_a_trial(&track);
     let log = recorder.finish();
@@ -486,8 +470,6 @@ mod tests {
 
   #[test]
   fn a_log_survives_the_wire_unchanged() {
-    // It is the only thing that crosses, so a round trip that lost a tick would
-    // lose the run.
     let track = Track::circuit();
     let (recorder, _) = drive_a_trial(&track);
     let log = recorder.finish();

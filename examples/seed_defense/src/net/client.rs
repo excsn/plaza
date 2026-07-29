@@ -390,9 +390,6 @@ mod tests {
 
   #[test]
   fn a_disagreeing_digest_puts_a_request_on_the_wire() {
-    // The loop the panel reports, end to end through the codec: a digest
-    // arrives, the client disagrees, and a request goes out. Without this the
-    // detection would be a counter that nothing acts on.
     let feed = ScriptedSocket::new();
     let mut client = welcomed(&feed);
     let c = controls();
@@ -442,9 +439,6 @@ mod tests {
 
   #[test]
   fn a_build_request_carries_no_tower() {
-    // The asymmetry, checked on the wire: a client asks, and says nothing about
-    // what exists. It does not place the tower locally either, because there is
-    // no correction here to undo a cause the server refuses.
     let feed = ScriptedSocket::new();
     let mut client = welcomed(&feed);
     let towers = client.sim.field.towers.len();

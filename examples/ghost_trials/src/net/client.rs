@@ -331,8 +331,6 @@ mod tests {
 
   #[test]
   fn the_simulation_runs_in_whole_ticks_however_long_a_frame_took() {
-    // The property that makes a lap time comparable across machines. Fed the
-    // same total time in different sized pieces, the tick count must match.
     let c = controls();
     let feed = ScriptedSocket::new();
     let mut smooth = welcomed(&feed);

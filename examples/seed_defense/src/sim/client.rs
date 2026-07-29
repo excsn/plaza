@@ -324,9 +324,6 @@ mod tests {
 
   #[test]
   fn a_client_told_only_the_seed_reproduces_the_whole_wave() {
-    // The example's claim, end to end and at the level that matters: after
-    // thirty seconds the two fields are equal, and the only thing the client
-    // was ever told about the enemies is that a wave started.
     let c = controls();
     let (mut server, mut client) = paired(0xC0FFEE, &c);
     pump(&mut server, &mut client, 30_000, &c);
@@ -357,9 +354,6 @@ mod tests {
 
   #[test]
   fn a_quirked_client_is_caught_by_the_digest() {
-    // Detection, which is the half a determinism claim usually leaves out. The
-    // client here is not lagging or lossy: it is running arithmetic that
-    // differs from the server's in one constant.
     let c = Controls {
       break_with_floats: true,
       resync_on_mismatch: false,
@@ -381,8 +375,6 @@ mod tests {
 
   #[test]
   fn a_resync_puts_a_diverged_client_back_on_the_rails() {
-    // Recovery. The same quirked client, with the resync left on: it is caught,
-    // it asks, it is given the field, and from there it agrees again.
     let c = Controls {
       break_with_floats: true,
       resync_on_mismatch: true,
@@ -430,8 +422,6 @@ mod tests {
 
   #[test]
   fn a_build_that_arrives_after_its_tick_is_not_applied_late() {
-    // The one genuinely fragile point. Applying it late would produce a state
-    // no other machine will ever hold, which is worse than admitting the gap.
     let c = controls();
     let (mut server, mut client) = paired(1, &c);
     pump(&mut server, &mut client, 2_000, &c);

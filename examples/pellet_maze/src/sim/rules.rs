@@ -209,8 +209,6 @@ mod tests {
 
   #[test]
   fn a_player_runs_without_being_told_to() {
-    // Not `bomb_grid`: there is no standing still, so a player with no input at
-    // all still crosses the maze.
     let maze = corridor_with_branch();
     let mut player = runner(Cell::new(1, 1), Dir::Right);
     let mut queue = TurnQueue::new();
@@ -247,9 +245,6 @@ mod tests {
 
   #[test]
   fn facing_a_wall_stands_still_and_a_turn_frees_it() {
-    // The dead-end case. A player who has run out of corridor must not be stuck
-    // for ever: asking the queue again every tick is what lets a press rescue
-    // them.
     let maze = corridor_with_branch();
     let mut player = runner(Cell::new(9, 1), Dir::Right);
     let mut queue = TurnQueue::new();
@@ -275,7 +270,6 @@ mod tests {
     let mut coarse = runner(Cell::new(1, 1), Dir::Right);
     let (mut a, mut b) = (TurnQueue::new(), TurnQueue::new());
 
-    // The same elapsed time, in different sized bites.
     for _ in 0..30 {
       advance_player(&mut fine, &mut a, &maze, 0, 200, 16);
     }

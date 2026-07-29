@@ -515,8 +515,6 @@ mod tests {
 
   #[test]
   fn a_client_that_agrees_never_snaps_and_never_turns_wrong() {
-    // The control. Anything above zero here is a rule written twice, not a
-    // network effect, and it invalidates every other measurement.
     let c = controls();
     let mut server = started(&c);
     let mut client = joined(&server, 0);
@@ -544,9 +542,6 @@ mod tests {
 
   #[test]
   fn a_turn_the_server_took_elsewhere_is_counted_as_a_wrong_junction() {
-    // The failure with no equivalent in a tick-addressed input. It cannot be
-    // detected from position alone: the heading is right and the cell is right
-    // for a while, so only the server saying *where* reveals it.
     let c = controls();
     let server = started(&c);
     let mut client = joined(&server, 0);
@@ -610,9 +605,6 @@ mod tests {
 
   #[test]
   fn the_prediction_is_driven_by_the_clock_not_by_how_often_it_is_polled() {
-    // The lesson `bomb_grid` paid for. A prediction that advances per frame
-    // rather than per tick crosses cell boundaries at different moments from
-    // the server, which here also means reaching junctions at different moments.
     let c = controls();
     let server = started(&c);
     let mut once = joined(&server, 0);

@@ -193,11 +193,6 @@ mod tests {
 
   #[test]
   fn latency_costs_nothing_at_all() {
-    // The measurement this example exists to take, and the reason it is worth
-    // taking: in every other playground here, latency buys corrections and the
-    // design is about making them cheap. A game that sends causes rather than
-    // state does not pay for latency at any depth, because nothing it computes
-    // depends on when anything arrived.
     for latency in [0u64, 60, 200, 400] {
       let c = Controls {
         latency_ms: latency,
@@ -221,11 +216,6 @@ mod tests {
 
   #[test]
   fn a_build_lead_shorter_than_the_link_cannot_be_met() {
-    // The constraint the test above works around, stated as its own claim. The
-    // server names the tick a build lands on; if that tick arrives before the
-    // op does, no client can apply it, and the only honest answer is to say so
-    // and ask for the state. The number to set is a policy, and setting it
-    // wrong is visible rather than silent.
     let c = Controls {
       latency_ms: 300,
       jitter_ms: 40,
@@ -243,10 +233,6 @@ mod tests {
 
   #[test]
   fn loss_costs_a_snapshot_rather_than_a_wrong_world() {
-    // The other half, and the honest one. A lost op is not a lost sample that
-    // the next one supersedes: it is a cause that happened on one machine and
-    // not another, which no amount of waiting repairs. So the design pays for
-    // it in the one expensive message it has.
     let c = Controls {
       latency_ms: 80,
       jitter_ms: 20,
@@ -268,9 +254,6 @@ mod tests {
 
   #[test]
   fn what_crossed_the_wire_never_described_an_enemy() {
-    // Read off the wire rather than off the server's intent, the way the
-    // secrecy test in `pellet_maze` is. Every op every seat was handed, checked
-    // against the one thing this example promises not to send.
     let c = quiet();
     let mut world = World::new(&c, 0xC0FFEE);
     build_a_defence(&mut world, &c);
@@ -299,9 +282,6 @@ mod tests {
 
   #[test]
   fn a_quirked_client_is_the_only_one_that_pays() {
-    // Two clients, one of them running different arithmetic. The honest one
-    // must not be dragged into the broken one's recovery: a resync is a reply
-    // to the client that asked, not a broadcast.
     let c = Controls {
       break_with_floats: true,
       ..quiet()

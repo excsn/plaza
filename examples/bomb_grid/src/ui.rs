@@ -150,8 +150,7 @@ pub fn draw_net_ui(client: &bomb_grid::net::client::NetClient, url: &str, extras
 
         // Where a residual snap rate has to be attributed. The offline harness
         // shares one clock between its server and its clients, so this is the
-        // one thing it structurally cannot measure, and it was the last thing
-        // left once the prediction ran on the server's tick grid.
+        // one thing it structurally cannot measure.
         let lead = sim.tick_lead();
         warn_line(
           ui,
@@ -211,8 +210,7 @@ pub fn draw_net_ui(client: &bomb_grid::net::client::NetClient, url: &str, extras
           // Late counts too, not only refused. A late input is *accepted* and
           // then run on the next tick the schedule can reach, which is not the
           // tick the client predicted it on, so it is a snap with no rejection
-          // to explain it. Hiding it left the client's snap counter looking
-          // unexplained.
+          // to explain it.
           if late + closed + ahead == 0 {
             continue;
           }

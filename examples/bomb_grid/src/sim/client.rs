@@ -261,7 +261,7 @@ impl Client {
     // simulated: the next to run is the one after. The off-by-one is invisible
     // here, because a player starts a round standing still and an extra tick of
     // standing still is nothing; it is a whole cell in `pellet_maze`, where a
-    // player is always running. Fixed in both rather than left as a trap.
+    // player is always running.
     self.next_tick = round.tick + 1;
     if let Some(mine) = round.players.iter().find(|p| p.id == self.me) {
       self.predicted = mine.clone();

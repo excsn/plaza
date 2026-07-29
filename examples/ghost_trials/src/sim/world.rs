@@ -141,9 +141,6 @@ mod tests {
 
   #[test]
   fn latency_cannot_change_a_lap_time() {
-    // The measurement, and it is a stronger claim than any other example here
-    // can make. The run happens on the machine driving it; the link is not in
-    // the loop. Not "corrections stay small": the number is *identical*.
     let mut times = Vec::new();
     for latency in [0u64, 80, 250, 400] {
       let c = Controls {
@@ -215,8 +212,6 @@ mod tests {
 
   #[test]
   fn nothing_but_logs_ever_crosses_the_wire() {
-    // Read off the wire rather than off intent. There is no frame, no
-    // position, and no state: a ghost is the inputs that made it.
     let c = quiet();
     let mut world = World::new(&c);
     world.start_all();

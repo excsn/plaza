@@ -384,7 +384,6 @@ mod tests {
 
   #[test]
   fn a_turn_reaches_the_simulation_and_its_place_is_broadcast() {
-    // The op nothing else in the repository sends: where a turn happened.
     let controls = Controls { input_playout: false, ..quiet() };
     let (cs, _view) = slots(controls);
     let logic = ArenaLogic::new(cs, None);

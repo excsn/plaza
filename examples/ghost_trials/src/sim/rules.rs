@@ -123,7 +123,6 @@ fn take_ring(racer: &mut Racer, track: &Track) {
   }
   racer.next_ring += 1;
   if racer.next_ring as usize > track.len() {
-    // Back through the start line: a lap.
     racer.lap += 1;
     racer.next_ring = 1;
   }
@@ -536,7 +535,6 @@ mod tests {
     let mut racer = Racer::at_start(&track);
     assert_eq!(racer.next_ring, 1);
 
-    // Put on a ring further round: it does not count.
     racer.pos = track.ring(4);
     step(&mut racer, Input::default(), &track);
     assert_eq!(racer.next_ring, 1, "the fourth ring is not the first");
@@ -580,9 +578,6 @@ mod tests {
 
     step_world(&mut world, &[Input::default(), Input::default()], &track);
     assert!(!world.pickups[0].available(world.tick), "it was taken");
-    // Lowest index wins, deliberately: any rule that depended on distance or on
-    // iteration order is a rule two machines could resolve differently.
-    // Whatever it was, exactly one of them has it.
     let had = |r: &Racer| r.boost > 0 || r.gripping(world.tick) || r.shielded(world.tick) || r.slick(world.tick);
     assert!(had(&world.racers[0]), "the lower index took it");
     assert!(!had(&world.racers[1]), "and the other one did not");
@@ -600,8 +595,6 @@ mod tests {
 
   #[test]
   fn grip_gives_the_charge_turn_without_the_charge_speed() {
-    // The reason it is a rule change rather than a coefficient: it inverts the
-    // trade the whole game is built on, for a few seconds.
     let track = Track::circuit();
     let mut plain = World::race(&track, 1);
     let mut gripped = World::race(&track, 1);
@@ -622,10 +615,6 @@ mod tests {
 
   #[test]
   fn a_shove_is_the_same_whichever_order_the_pairs_come_up_in() {
-    // The ordering rule, tested rather than asserted. Three racers in a heap,
-    // and the same heap with the list reversed: mirrored, the outcome has to
-    // match, which it only does because every impulse is computed before any
-    // of them lands.
     let track = Track::circuit();
     let mut a = World::race(&track, 3);
     let places = [P::from_ints(20, 20), P::from_ints(21, 20), P::from_ints(20, 21)];
@@ -665,8 +654,6 @@ mod tests {
 
   #[test]
   fn two_racers_in_exactly_the_same_place_are_still_separated() {
-    // The degenerate case: no direction to be pushed in, and a division that
-    // would be by zero.
     let track = Track::circuit();
     let mut world = World::race(&track, 2);
     world.racers[0].pos = P::from_ints(20, 20);
@@ -677,10 +664,8 @@ mod tests {
 
   #[test]
   fn the_cpu_field_is_uneven() {
-    // A field of identical drivers is a wall or a parade, depending on how good
-    // they are. The seats are deliberately different, and this is the assertion
-    // that keeps them that way: a change to the skill table that flattened the
-    // field would pass every other test in this file.
+    // A change to the skill table that flattened the field would pass every
+    // other test in this file.
     let track = Track::circuit();
     let mut world = World::race(&track, RACE_FIELD);
     for _ in 0..2200 {
@@ -699,9 +684,6 @@ mod tests {
 
   #[test]
   fn a_bot_is_a_function_of_the_world_and_nothing_else() {
-    // The property that lets one player's log reproduce a whole race. Asked the
-    // same question twice, in any order, a bot answers the same way: there is
-    // no generator behind it holding state.
     let track = Track::circuit();
     let world = World::race(&track, RACE_FIELD);
     for seat in 0..RACE_FIELD {
@@ -715,10 +697,6 @@ mod tests {
 
   #[test]
   fn a_full_grid_starts_inside_the_arena_and_not_on_top_of_itself() {
-    // Thirty-two cars on one line is wider than any of these circuits, so the
-    // grid steps back in rows. Both halves matter: inside the walls, and not
-    // stacked, because a race that begins with a pile-up is a race decided by
-    // the pile-up.
     for size in TrackSize::ALL {
       let track = Track::of(size);
       let (w, h) = track.arena();
@@ -741,8 +719,6 @@ mod tests {
 
   #[test]
   fn every_circuit_is_drivable() {
-    // Three layouts, and the cheapest way for one of them to be wrong is a ring
-    // placed where a car cannot reach it. Driven by the sharpest bot on each.
     for size in TrackSize::ALL {
       let track = Track::of(size);
       let mut world = World::trial(&track);
@@ -761,9 +737,6 @@ mod tests {
 
   #[test]
   fn a_finished_racer_stops_being_an_obstacle() {
-    // Otherwise the finish line fills up with parked cars and a late finisher's
-    // time depends on how many people beat them to it, which makes the result
-    // of the race an input to the race.
     let track = Track::circuit();
     let mut world = World::race(&track, 2);
     world.racers[0].pos = P::from_ints(20, 20);
@@ -796,8 +769,6 @@ mod tests {
 
   #[test]
   fn a_slick_is_the_opposite_trade_from_a_grip() {
-    // Faster in a straight line, and it will not turn. The pair of them are
-    // the charge trade taken in both directions.
     let track = Track::circuit();
     let mut plain = World::race(&track, 1);
     let mut slick = World::race(&track, 1);
@@ -816,8 +787,6 @@ mod tests {
 
   #[test]
   fn a_race_is_the_same_race_on_two_machines() {
-    // The whole of the race mode's correctness: everybody has the same inputs,
-    // so everybody has the same race, and the digest says so.
     let track = Track::circuit();
     let mut here = World::race(&track, RACE_FIELD);
     let mut there = World::race(&track, RACE_FIELD);
@@ -834,8 +803,6 @@ mod tests {
 
   #[test]
   fn a_trial_and_a_race_of_one_move_the_same_way() {
-    // A trial is a race with nobody else in it, not a separate code path. If
-    // these ever came apart, a ghost recorded in a trial would replay wrong.
     let track = Track::circuit();
     let mut trial = World::trial(&track);
     let mut race = World::race(&track, 1);
@@ -849,8 +816,6 @@ mod tests {
 
   #[test]
   fn the_same_inputs_produce_the_same_run_every_time() {
-    // The property a ghost is made entirely of. Two racers, stepped by
-    // different callers, given the same sequence.
     let track = Track::circuit();
     let mut a = Racer::at_start(&track);
     let mut b = Racer::at_start(&track);

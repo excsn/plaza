@@ -355,8 +355,6 @@ mod tests {
 
   #[test]
   fn a_wave_is_announced_as_two_integers_and_nothing_else() {
-    // The claim, stated as a test over the actual output: across a whole wave,
-    // the only thing the server says about the enemies is that the wave began.
     let c = controls();
     let mut server = Server::new(2, 0xBEEF);
     let ops = run(&mut server, 20_000, &c);
@@ -439,9 +437,6 @@ mod tests {
 
   #[test]
   fn the_only_ending_is_being_overrun_and_it_is_announced_once() {
-    // A client cannot infer this moment. It can see its own lives reach zero,
-    // but the moment has to be one every machine agrees on, and a world that
-    // has stopped producing enemies looks exactly like a quiet one.
     let c = controls();
     let mut server = Server::new(1, 7);
     let ops = run(&mut server, 120_000, &c);
@@ -464,9 +459,6 @@ mod tests {
 
   #[test]
   fn the_waves_do_not_stop_and_each_one_is_harder() {
-    // There is no last wave. What ends a run is the difficulty outgrowing the
-    // defence, so the escalation has to be real rather than a counter that
-    // increments while the enemies stay the same.
     let c = controls();
     let mut server = Server::new(1, 7);
     let mut reached = 0;
@@ -486,8 +478,6 @@ mod tests {
 
   #[test]
   fn what_was_sent_is_a_fraction_of_what_streaming_would_have_cost() {
-    // The measurement, taken from the same counters the panel shows rather
-    // than from an estimate written into the README.
     let c = controls();
     let mut server = Server::new(2, 0xBEEF);
     for _ in 0..(40_000 / SIM_STEP_MS) {

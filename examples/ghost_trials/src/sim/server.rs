@@ -188,7 +188,6 @@ mod tests {
 
   #[test]
   fn a_faked_time_is_refused_and_never_reaches_the_board() {
-    // The claim is a checksum on the evidence, not the evidence.
     let mut server = Server::new(2);
     let (log, time) = a_run(server.rules_version);
     let out = server.submit(0, log, time / 3);
@@ -200,8 +199,6 @@ mod tests {
 
   #[test]
   fn a_log_from_other_rules_is_refused_by_version_rather_than_by_replay() {
-    // Refused *before* being replayed. Replaying it would produce some run, and
-    // that run would be a lie about what its player drove.
     let mut server = Server::new(1);
     let (mut log, time) = a_run(server.rules_version);
     log.rules_version = server.rules_version.wrapping_add(1);

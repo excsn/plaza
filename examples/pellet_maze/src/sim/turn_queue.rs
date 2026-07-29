@@ -160,8 +160,6 @@ mod tests {
 
   #[test]
   fn a_turn_waits_for_a_place_rather_than_a_time() {
-    // The whole point. Pressing down in a corridor does nothing until the
-    // player reaches the one cell that offers it.
     let maze = corridor();
     let mut queue = TurnQueue::new();
     queue.request(Dir::Down, 0);
@@ -205,9 +203,6 @@ mod tests {
 
   #[test]
   fn a_turn_is_taken_on_the_tick_it_would_otherwise_expire() {
-    // The boundary case, decided in the player's favour: they pressed in time
-    // and arrived in time, and refusing there would be the buffer punishing a
-    // rounding error.
     let maze = corridor();
     let mut queue = TurnQueue::new();
     queue.request(Dir::Down, 0);
@@ -235,7 +230,6 @@ mod tests {
 
   #[test]
   fn reversing_is_legal_anywhere_a_corridor_goes_back() {
-    // The one escape a cornered runner has, and it must not need a junction.
     let maze = corridor();
     let mut queue = TurnQueue::new();
     queue.request(Dir::Left, 0);
@@ -256,9 +250,6 @@ mod tests {
 
   #[test]
   fn where_a_turn_was_taken_is_recorded_so_two_sides_can_be_compared() {
-    // The measurement this example is built on. A turn taken at a different
-    // junction from the server's is the failure that has no equivalent in a
-    // tick-addressed input, and it cannot be seen without knowing *where*.
     let maze = Maze::generate(MAZE_SEED);
     let mut queue = TurnQueue::new();
     assert_eq!(queue.last_taken_at(), None);

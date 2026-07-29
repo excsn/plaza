@@ -137,8 +137,6 @@ pub fn draw_net_ui(
       }
 
       section(ui, "what this client was told", true, |ui| {
-        // The headline, and the reason it is first: everything on screen was
-        // produced from these few numbers.
         ui.label(egui::RichText::new(format!("seed {:#x}", client.sim.seed)).strong())
           .on_hover_text("Handed over once, at join. Every enemy in every wave of this session follows from it and the wave number.");
         ui.label(format!(
@@ -209,9 +207,8 @@ pub fn draw_net_ui(
     }
 
     if let Some(extras) = extras {
-      // Opened on the other side of the screen, as a starting *position* rather
-      // than an anchor: an anchored window is pinned there and cannot be
-      // dragged, which is a worse problem than the overlap it was fixing.
+      // A starting position rather than an anchor: an anchored window is pinned
+      // and cannot be dragged.
       let right = (ctx.screen_rect().right() - 380.0).max(16.0);
       let window = egui::Window::new("the arena itself")
         .default_pos((right, 16.0))
@@ -226,7 +223,6 @@ pub fn draw_net_ui(
         ));
         ui.separator();
 
-        // The measurement the example is named for.
         let sent = extras.bytes_sent.max(1);
         let streamed = extras.bytes_if_streamed.max(1);
         ui.label(egui::RichText::new(format!("sent {} KiB", extras.bytes_sent / 1024)).strong());

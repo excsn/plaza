@@ -537,8 +537,6 @@ mod tests {
 
   #[test]
   fn an_input_never_aims_behind_what_the_stream_has_proven() {
-    // The failure `horde` paid two wrong fixes to find: a cold clock estimate
-    // names ticks the server has already closed and every input is refused.
     let feed = ScriptedSocket(Arc::new(Mutex::new(VecDeque::new())));
     let mut client = welcomed(&feed, 500_000);
     let c = Controls::default();
@@ -549,7 +547,6 @@ mod tests {
 
   #[test]
   fn a_turn_report_reaches_the_simulation() {
-    // The op this example exists for: the server saying *where*.
     let feed = ScriptedSocket(Arc::new(Mutex::new(VecDeque::new())));
     let mut client = welcomed(&feed, 0);
     let c = Controls::default();
@@ -560,8 +557,6 @@ mod tests {
       tick: 0,
     }))]));
     client.poll(10, &c);
-    // Nothing was predicted, so there is nothing to disagree with, and the
-    // report must not be counted as a failure on its own.
     assert_eq!(client.sim.wrong_junction, 0);
   }
 

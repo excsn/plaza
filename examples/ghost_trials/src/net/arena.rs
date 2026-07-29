@@ -49,12 +49,8 @@ pub struct Arena {
   seats: SeatTable<PlayerKey>,
   /// The impairment, on the real path.
   ///
-  /// It was missing at first, and the sliders in the panel moved nothing at
-  /// all, which is a worse fault than a slider that does something useless: it
-  /// invites a player to conclude that latency does not matter here because
-  /// they turned it up and nothing happened. It does not matter *to the lap*,
-  /// which is the example's whole claim, and it very much matters to when a
-  /// ghost turns up and when a verdict lands.
+  /// It does not touch the lap, which is the example's whole claim. It decides
+  /// when a ghost turns up and when a verdict lands.
   down: std::collections::HashMap<PlayerKey, LatencyLink<Op>>,
   rng: Rng,
   /// Submissions the link ate, so a dropped run is a number rather than a
@@ -362,12 +358,6 @@ mod tests {
 
   #[test]
   fn the_impairment_is_on_the_real_path() {
-    // The fault this test exists for: the sliders in the panel used to move
-    // nothing at all on a live host, which invites a player to conclude that
-    // latency does not matter here because they turned it up and saw no
-    // change. It does not matter to the *lap*. It very much matters to when a
-    // verdict lands, and a control that acts on nothing is worse than one that
-    // acts on something dull.
     let controls = Controls {
       latency_ms: 200,
       jitter_ms: 0,
@@ -411,9 +401,6 @@ mod tests {
 
   #[test]
   fn a_tick_simulates_nothing() {
-    // Worth asserting rather than assuming: this arena holds a leaderboard and
-    // replays evidence, and if a tick ever starts producing ops then something
-    // has grown a simulation that does not belong here.
     let logic = logic();
     let mut state = Arena::new(quiet());
     step(&logic, &mut state, LogicInput::AgentJoined { agent: Agent::new_human(1u64) });

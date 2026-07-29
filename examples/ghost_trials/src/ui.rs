@@ -51,7 +51,7 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls, host: bool) {
       );
       ui.add(egui::Slider::new(&mut controls.latency_ms, 0..=800).text("latency ms one way"))
         .on_hover_text(
-          "Drag it as far as it goes and drive a lap: the time is identical, because the run happens on this machine and the link is not in the loop. What it does delay is the verdict on your run and the arrival of somebody else's ghost, which is what the counters below are for. An earlier version of this example did not impair the live path at all, so the slider moved nothing and invited exactly the wrong conclusion.",
+          "Drag it as far as it goes and drive a lap: the time is identical, because the run happens on this machine and the link is not in the loop. What it does delay is the verdict on your run and the arrival of somebody else's ghost, which is what the counters below are for.",
         );
       ui.add(egui::Slider::new(&mut controls.jitter_ms, 0..=200).text("jitter ms"));
       ui.add(egui::Slider::new(&mut controls.loss_pct, 0.0..=100.0).text("packet loss %"))

@@ -689,7 +689,6 @@ mod tests {
   fn the_track_is_a_closed_loop_with_room_to_turn() {
     let track = Track::circuit();
     assert!(track.len() >= 8);
-    // Rings close enough together to chain, far enough apart to need steering.
     for i in 0..track.len() {
       let a = track.ring(i as u16);
       let b = track.ring(i as u16 + 1);
@@ -705,7 +704,6 @@ mod tests {
     let racer = Racer::at_start(&track);
     assert_eq!(racer.pos, track.ring(0));
     assert_eq!(racer.next_ring, 1);
-    // Facing means the step toward ring one shortens the gap to it.
     let ahead = P::new(racer.pos.x + cos(racer.heading), racer.pos.y + sin(racer.heading));
     assert!(ahead.dist_sq(track.ring(1)) < racer.pos.dist_sq(track.ring(1)));
   }

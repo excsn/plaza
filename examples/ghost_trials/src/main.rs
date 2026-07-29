@@ -119,7 +119,6 @@ async fn frame_loop(options: role::Options) {
   let mut clock_ms: u64 = 0;
   let mut last_ms: u64 = 0;
   let mut perf = Perf::default();
-  // The menu is the first thing, and Escape comes back to it.
   let mut in_menu = true;
 
   loop {
@@ -191,8 +190,6 @@ async fn frame_loop(options: role::Options) {
           render::draw_racer(&board, run.racer(), Color::new(colour.r, colour.g, colour.b, 0.55), true, run.tick, None);
         }
       }
-      // The CPU field, in a plainer colour than the player: a race should read
-      // at a glance as "me and them" rather than as four equal cars.
       let racing = sim.mode == Mode::Race;
       for (i, racer) in sim.world.racers.iter().enumerate().skip(1) {
         let place = racing.then(|| sim.place_of(i));

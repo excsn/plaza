@@ -404,11 +404,9 @@ impl Maze {
         if Dir::ALL.iter().any(|d| cell.step(*d).is_some_and(|c| maze.open(c))) {
           continue;
         }
-        // **Chosen from the directions that can actually be opened.** The
-        // repair used to pick at random and then discard its own choice when
-        // it pointed out of bounds, so for a corner cell it silently did
-        // nothing half the time it was needed, and whether a given seed
-        // stranded somebody was luck.
+        // **Chosen from the directions that can actually be opened.** Picking
+        // freely and discarding an out-of-bounds choice does nothing at all for
+        // a corner cell, and whether a seed strands somebody is then luck.
         let openable: Vec<Cell> = Dir::ALL
           .iter()
           .filter_map(|d| cell.step(*d))
@@ -678,9 +676,6 @@ mod tests {
 
   #[test]
   fn the_maze_has_junctions_rather_than_being_all_corridor() {
-    // The generator's whole reason for not being a perfect maze. A queued turn
-    // needs somewhere to be taken, and a maze of corridors and dead ends gives
-    // it almost nowhere.
     let maze = Maze::generate(MAZE_SEED);
     let junctions = maze.corridors().iter().filter(|c| maze.is_junction(**c)).count();
     let corridors = maze.corridors().len();
@@ -695,10 +690,8 @@ mod tests {
     // A walled-in cell strands whoever spawns in it: they cannot move at all,
     // which is an unplayable round rather than an awkward one.
     //
-    // **Many seeds, not one.** The first version checked a single seed and
-    // passed while the repair it was guarding was broken for corner cells,
-    // because whether any given maze stranded somebody was luck. A test over
-    // one sample of a random generator is a test of that sample.
+    // **Many seeds, not one.** A test over one sample of a random generator is
+    // a test of that sample.
     for seed in 0..400u64 {
       let maze = Maze::generate(seed.wrapping_mul(2_654_435_761).wrapping_add(1));
       for cell in maze.corridors() {
@@ -709,8 +702,6 @@ mod tests {
 
   #[test]
   fn every_spawn_can_move_on_every_seed() {
-    // The case the screenshot showed: a player standing in a cell with four
-    // walls around it, holding a direction, going nowhere.
     for seed in 0..400u64 {
       let maze = Maze::generate(seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1));
       for spawn in spawns(4) {
@@ -722,8 +713,6 @@ mod tests {
 
   #[test]
   fn a_straight_corridor_is_not_a_junction() {
-    // The distinction the turn queue rests on: a turn cannot be taken in the
-    // middle of a corridor, only where the maze offers a choice.
     let mut maze = Maze::default();
     for x in 1..6u8 {
       maze.set(Cell::new(x, 1), Tile::Corridor);
