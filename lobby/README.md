@@ -97,3 +97,16 @@ lobby.handle_join_room_request(&id, agent, &JoinRoomRequestPayload {
 **Refusal is the degenerate case.** The reason this belongs to a lobby rather than to a room is that a room can only say yes or no, while a lobby can say *where*: `rooms_playable_at(one_way_ms)` returns the rooms a connection could actually play in, tightest schedule first, so a fast link is not sent to the room built for slow ones and made to pay its delay. A room with no limit sorts last, since it takes anybody and is therefore the fallback. `RoomFilters::playable_at_one_way_ms` does the same for a room list, so a player is shown what they can play rather than what they will be turned away from.
 
 When nothing fits, `LobbyError::UnsuitableConnection` carries both numbers, so a client can state the case instead of just declining.
+
+## Blocks either side of the manager
+
+`InMemoryLobbyManager` answers "which room". These cover what happens before and after, and each is bookkeeping your own `StateLogic` drives: no timers, no tasks.
+
+| Block | For |
+|---|---|
+| `MatchQueue` | Being paired rather than choosing. Forms full matches, and when patience runs out reports how many seats to fill with bots rather than refusing to start. |
+| `SeatReservations` | The gap between admission and arrival. A closing socket deliberately does **not** cancel a reservation: a room hop closes the old connection *after* the new seat is reserved, so treating a disconnect as a cancellation silently demotes a player the lobby already promised. |
+| `TicketRegistry` | Filling `JoinRoomOutcomePayload::player_game_token`, so a room resolves the connecting player from a one-use ticket instead of trusting a URL. Placement, not authentication: supply your own signed value via `issue_with`. |
+| `routing` | Placing a connection in the tightest room its measured latency can carry. |
+
+All four are exercised by [`examples/lobby_world`](../examples/lobby_world/).
