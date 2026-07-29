@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "ability_cooldowns",
+  "auction_floor",
   "bomb_grid",
   "pellet_maze",
   "ghost_trials",
@@ -21,6 +22,7 @@ members = [
 ]
 default-members = [
   "ability_cooldowns",
+  "auction_floor",
   "playground_common",
   "card_table",
   "blackhole_playground",

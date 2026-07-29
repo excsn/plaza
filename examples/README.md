@@ -11,7 +11,8 @@ One crate each, smallest first. Run any of them with `cargo run -p <crate>` (the
 | [`timed_debuff`](timed_debuff/) | A callback scheduler undoing an effect on a timer. | `plaza_example_timed_debuff` |
 | [`typing_indicator`](typing_indicator/) | Game-time timeouts that reset on activity. | `plaza_example_typing_indicator` |
 | [`card_table`](card_table/) | Turns, rounds, and phases with hidden information: each player sees only their own cards. | `plaza_example_card_table` |
-| [`lobby_world`](lobby_world/) | Rooms, placement and travel: three arenas spawned on demand, admission decided on a latency the server measured, and a wallet that follows you between them. See its [README](lobby_world/README.md). | `plaza_example_lobby_world` |
+| [`lobby_world`](lobby_world/) | Rooms, placement and travel: arenas spawned on demand, admission decided on a latency the server measured, quick-match with bots filling the empty seats, and a wallet that follows you between rooms. See its [README](lobby_world/README.md). | `plaza_example_lobby_world` |
+| [`auction_floor`](auction_floor/) | **Correlated replies**: everyone grabs the same item, the server decides once from what each client *named* rather than when it arrived, and each claimant is told the fate of their own claim. See its [README](auction_floor/README.md). | `plaza_example_auction_floor` |
 | [`csp_net_example`](csp_net_example/) | Client-side prediction and server reconciliation over a simulated network (headless). | `plaza_csp_net_example` |
 | [`netcode_playground`](netcode_playground/) | The same made interactive in the browser, plus interpolation and lag compensation. See its [README](netcode_playground/README.md). | `netcode_playground` |
 | [`rollback_playground`](rollback_playground/) | The other netcode family: peer-to-peer deterministic rollback, two peers predicting each other's inputs in the browser. See its [README](rollback_playground/README.md). | `rollback_playground` |

@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>auction_floor</title>
+<style>
+  :root {
+    --bg:#14161a; --panel:#1c1f26; --line:#2c313b; --ink:#dfe3ea; --dim:#8b93a3;
+    --ok:#6fcf8f; --no:#e2756a; --hi:#d9a441; --link:#6aa9e0;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:20px; background:var(--bg); color:var(--ink);
+    font:14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  h1 { font-size:16px; margin:0 0 2px; letter-spacing:.08em; text-transform:uppercase; }
+  h2 { font-size:13px; margin:0 0 10px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; }
+  .sub { color:var(--dim); margin-bottom:18px; }
+  .cols { display:grid; grid-template-columns:minmax(0,1.15fr) minmax(0,1fr); gap:16px; align-items:start; }
+  @media (max-width:900px){ .cols{ grid-template-columns:minmax(0,1fr);} }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:14px; }
+  .row { display:flex; justify-content:space-between; gap:12px; padding:3px 0; }
+  .row .k { color:var(--dim); }
+  .num { font-variant-numeric:tabular-nums; }
+  #floor { min-height:190px; display:flex; flex-wrap:wrap; gap:10px; align-content:flex-start; }
+  .item { border:1px solid var(--hi); border-radius:6px; padding:10px 12px; min-width:118px;
+    cursor:pointer; background:#20242c; }
+  .item:hover { border-color:var(--ok); }
+  .item.done { opacity:.35; cursor:default; border-color:var(--line); }
+  .item .v { font-size:22px; color:var(--hi); font-variant-numeric:tabular-nums; }
+  .bar { height:4px; background:var(--line); border-radius:2px; margin-top:7px; overflow:hidden; }
+  .bar i { display:block; height:100%; background:var(--ok); }
+  table { width:100%; border-collapse:collapse; margin-top:8px; }
+  th,td { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); }
+  th { color:var(--dim); font-weight:400; font-size:12px; }
+  td.n { text-align:right; font-variant-numeric:tabular-nums; }
+  .you { color:var(--hi); }
+  #claims { max-height:320px; overflow-y:auto; margin-top:8px; }
+  .claim { border-bottom:1px solid var(--line); padding:5px 0; }
+  .claim .hd { display:flex; justify-content:space-between; }
+  .claim .why { color:var(--dim); font-size:12px; }
+  .win { color:var(--ok); } .lose { color:var(--no); } .pend { color:var(--dim); }
+  .note { color:var(--dim); font-size:12px; margin-top:10px; }
+  input[type=range]{ width:150px; vertical-align:middle; }
+  code { color:var(--link); }
+</style>
+</head>
+<body>
+
+<h1>auction&nbsp;floor</h1>
+<div class="sub">Everyone grabs the same item. The server decides once, and tells each claimant what happened to <em>their</em> claim.</div>
+
+<div class="cols">
+  <div>
+    <div class="panel">
+      <h2>The floor</h2>
+      <div id="floor"><div class="note" style="margin:0">waiting for the first drop</div></div>
+      <div class="note">
+        Click an item to claim it. Your click names a tick, and the contest is decided when the
+        item's window closes, not when your packet lands.
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <h2>Standings</h2>
+      <table>
+        <thead><tr><th>player</th><th class="n">won</th><th class="n">lost</th><th class="n">refused</th><th class="n">score</th></tr></thead>
+        <tbody id="standings"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <h2>You</h2>
+      <div class="row"><span class="k">player</span><span class="num" id="me">connecting</span></div>
+      <div class="row"><span class="k">server tick</span><span class="num" id="tick">-</span></div>
+      <div class="row"><span class="k">measured rtt</span><span class="num" id="rtt">-</span></div>
+      <div class="row"><span class="k">your earliest legal tick</span><span class="num" id="floorTicks">-</span></div>
+      <div class="row">
+        <span class="k">fake extra send delay</span>
+        <span><input type="range" id="lag" min="0" max="600" step="25" value="0"> <span class="num" id="lagv">0 ms</span></span>
+      </div>
+      <div class="note">
+        The slider holds <em>your</em> packets back without changing what you named. Drag it up
+        and keep playing: your claims arrive later and later, and the outcomes do not change.
+        That is the whole claim of this example, and it is falsifiable in about thirty seconds.
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <h2>Your claims</h2>
+      <div id="claims"></div>
+      <div class="note">
+        One line per <code>req</code> you sent. Several are outstanding at once, which is why a
+        reply has to say <em>which</em> one it answers.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const KIND_OPS = 0;
+
+// Unit variants arrive as bare strings, struct variants as one-key objects.
+const opName = (op) => (typeof op === 'string' ? op : Object.keys(op)[0]);
+const opBody = (op) => (typeof op === 'string' ? {} : op[opName(op)]);
+const $ = (id) => document.getElementById(id);
+
+let ws = null, me = null, hz = 20, windowTicks = 10;
+let tick = 0, tickAt = 0, myFloor = 0;
+let items = new Map();
+let nextReq = 1;
+const claims = new Map();       // req -> { item, named, state, detail }
+const claimedItems = new Set(); // items this page has already asked for
+
+function send(ops) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const frame = String.fromCharCode(KIND_OPS) + JSON.stringify(ops);
+  const lag = Number($('lag').value);
+  // Delays only the sending. What was named happened before this, which is
+  // exactly the separation the server's arbitration relies on.
+  if (lag > 0) setTimeout(() => ws.readyState === WebSocket.OPEN && ws.send(frame), lag);
+  else ws.send(frame);
+}
+
+/// The tick this page believes the server is on, extrapolated between frames.
+const estTick = () => tick + Math.floor((performance.now() - tickAt) / (1000 / hz));
+
+function connect() {
+  const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${scheme}//${location.host}/ws`);
+  ws.onmessage = (e) => {
+    if (e.data === 'hb_ping') { ws.send('hb_pong'); return; }
+    if (e.data.charCodeAt(0) !== KIND_OPS) return;
+    for (const op of JSON.parse(e.data.slice(1))) handle(op);
+  };
+  ws.onclose = () => { $('me').textContent = 'disconnected'; };
+}
+
+function handle(op) {
+  const b = opBody(op);
+  switch (opName(op)) {
+    case 'Welcome':
+      me = b.you; hz = b.hz; windowTicks = b.window;
+      $('me').textContent = '#' + me;
+      break;
+    case 'Frame':
+      tick = b.tick; tickAt = performance.now(); myFloor = b.your_floor;
+      $('tick').textContent = b.tick;
+      $('rtt').textContent = b.your_rtt_ms + ' ms';
+      $('floorTicks').textContent = `drop +${b.your_floor} ticks`;
+      items = new Map(b.items.map(i => [i.id, i]));
+      drawFloor(); drawStandings(b.standings);
+      break;
+    case 'Awarded':
+      settle(b.req, 'win', `won item ${b.item} for ${b.value}. you named ${b.named}` +
+        (b.contenders.length > 1 ? `, next named ${b.contenders[1].named} (+${b.margin})` : ', unopposed'));
+      break;
+    case 'Lost':
+      settle(b.req, 'lose', `lost item ${b.item} to #${b.to}. you named ${b.named}, they named ${b.winner_named}`);
+      break;
+    case 'Refused':
+      settle(b.req, 'lose', refusal(b.why));
+      break;
+    case 'Taken':
+    case 'Expired':
+      markGone(b.item);
+      break;
+  }
+}
+
+function refusal(why) {
+  const name = opName(why), d = opBody(why);
+  if (name === 'TooEarly') return `refused: named ${d.named}, but the earliest your link allows is ${d.floor}`;
+  if (name === 'TooLate') return `refused: named ${d.named}, the window closed at ${d.closed}`;
+  if (name === 'Duplicate') return 'refused: you already claimed that one';
+  return 'refused: no such item';
+}
+
+function grab(id) {
+  const item = items.get(id);
+  if (!item || claimedItems.has(id)) return;
+  // Name the tick you mean, never earlier than your own link permits.
+  const named = Math.max(estTick(), item.dropped_at + myFloor);
+  const req = nextReq++;
+  claims.set(req, { item: id, named, state: 'pend', detail: `named tick ${named}, waiting for the window to close` });
+  claimedItems.add(id);
+  send([{ Grab: { req, item: id, tick: named } }]);
+  drawClaims(); drawFloor();
+}
+
+function settle(req, state, detail) {
+  const c = claims.get(req);
+  if (!c) return;
+  c.state = state; c.detail = detail;
+  drawClaims();
+}
+
+function markGone(id) {
+  const it = items.get(id);
+  if (it) it.gone = true;
+  drawFloor();
+}
+
+function drawFloor() {
+  const host = $('floor');
+  host.innerHTML = '';
+  if (items.size === 0) {
+    host.innerHTML = '<div class="note" style="margin:0">nothing on the floor</div>';
+    return;
+  }
+  const now = estTick();
+  for (const item of items.values()) {
+    const left = Math.max(0, item.dropped_at + windowTicks - now);
+    const mine = claimedItems.has(item.id);
+    const el = document.createElement('div');
+    el.className = 'item' + (mine || item.gone ? ' done' : '');
+    el.innerHTML =
+      `<div class="v">${item.value}</div>` +
+      `<div class="note" style="margin:0">item ${item.id}</div>` +
+      `<div class="note" style="margin:0">${mine ? 'claimed' : left + ' ticks left'}</div>` +
+      `<div class="bar"><i style="width:${Math.round(100 * left / windowTicks)}%"></i></div>`;
+    if (!mine && !item.gone) el.onclick = () => grab(item.id);
+    host.append(el);
+  }
+}
+
+function drawStandings(rows) {
+  const body = $('standings');
+  body.innerHTML = '';
+  for (const [id, s] of rows) {
+    const tr = document.createElement('tr');
+    if (id === me) tr.className = 'you';
+    tr.innerHTML = `<td>#${id}${id === me ? ' (you)' : ''}</td>` +
+      `<td class="n">${s.won}</td><td class="n">${s.lost}</td>` +
+      `<td class="n">${s.rejected}</td><td class="n">${s.score}</td>`;
+    body.append(tr);
+  }
+}
+
+function drawClaims() {
+  const host = $('claims');
+  host.innerHTML = '';
+  const rows = [...claims.entries()].reverse().slice(0, 40);
+  if (!rows.length) { host.innerHTML = '<div class="note" style="margin:0">no claims yet</div>'; return; }
+  for (const [req, c] of rows) {
+    const el = document.createElement('div');
+    el.className = 'claim';
+    const cls = c.state === 'win' ? 'win' : c.state === 'lose' ? 'lose' : 'pend';
+    const label = c.state === 'pend' ? 'waiting' : c.state === 'win' ? 'won' : 'no';
+    el.innerHTML =
+      `<div class="hd"><span>req ${req} &rarr; item ${c.item}</span><span class="${cls}">${label}</span></div>` +
+      `<div class="why">${c.detail}</div>`;
+    host.append(el);
+  }
+}
+
+$('lag').oninput = () => { $('lagv').textContent = $('lag').value + ' ms'; };
+connect();
+setInterval(drawFloor, 100);
+</script>
+</body>
+</html>

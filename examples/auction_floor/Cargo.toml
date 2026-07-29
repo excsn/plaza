@@ -1,0 +1,16 @@
+[package]
+name = "plaza_example_auction_floor"
+version = "0.1.0"
+edition = { workspace = true }
+publish = false
+
+[dependencies]
+plaza = { workspace = true }
+plaza_session = { workspace = true, features = ["actix_ws"] }
+
+actix-web = "^4"
+async-trait = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

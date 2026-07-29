@@ -45,7 +45,8 @@ Please refer to **[`core/README.md`](core/README.md)** for installation, the fou
 | [`timed_debuff`](examples/timed_debuff/) | A callback scheduler undoing an effect on a timer. |
 | [`typing_indicator`](examples/typing_indicator/) | Game-time timeouts that reset on activity. |
 | [`card_table`](examples/card_table/) | Turns, rounds, and phases, with hidden information: each player sees only their own cards. |
-| [`lobby_world`](examples/lobby_world/) | Rooms, placement and travel: three arenas spawned on demand, admission decided on a latency the server measured rather than one the client claimed, and a wallet that follows you between them. See its [README](examples/lobby_world/README.md). |
+| [`lobby_world`](examples/lobby_world/) | Rooms, placement and travel: arenas spawned on demand, admission on a latency the server measured rather than one the client claimed, quick-match with bots filling the empty seats, and a wallet that follows you between rooms. See its [README](examples/lobby_world/README.md). |
+| [`auction_floor`](examples/auction_floor/) | **Correlated replies**: everyone grabs the same item, the server decides once from what each client *named* rather than when it arrived, and every claimant learns the fate of their own claim. See its [README](examples/auction_floor/README.md). |
 | [`csp_net_example`](examples/csp_net_example/) | Client-side prediction and server reconciliation over a simulated network. |
 | [`netcode_playground`](examples/netcode_playground/) | The same, made interactive in the browser: drag the box, crank the latency, toggle each mechanism off to see it break. Also interpolation and lag compensation. See its [README](examples/netcode_playground/README.md). |
 | [`rollback_playground`](examples/rollback_playground/) | The other netcode family: peer-to-peer deterministic rollback, two peers predicting each other's inputs. See its [README](examples/rollback_playground/README.md). |
