@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lobby_world</title>
+<style>
+  :root {
+    --bg: #14161a;
+    --panel: #1c1f26;
+    --line: #2c313b;
+    --ink: #dfe3ea;
+    --dim: #8b93a3;
+    --ok: #6fcf8f;
+    --no: #e2756a;
+    --hi: #d9a441;
+    --link: #6aa9e0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 20px;
+    background: var(--bg); color: var(--ink);
+    font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  h1 { font-size: 16px; margin: 0 0 2px; letter-spacing: .08em; text-transform: uppercase; }
+  h2 { font-size: 13px; margin: 0 0 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; }
+  .sub { color: var(--dim); margin-bottom: 18px; }
+  .cols { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 16px; align-items: start; }
+  @media (max-width: 860px) { .cols { grid-template-columns: minmax(0,1fr); } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 14px; }
+  .row { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; }
+  .row .k { color: var(--dim); }
+  .num { font-variant-numeric: tabular-nums; }
+  button {
+    font: inherit; color: var(--ink); background: #262b34;
+    border: 1px solid var(--line); border-radius: 4px;
+    padding: 4px 10px; cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--link); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  .arena { border: 1px solid var(--line); border-radius: 5px; padding: 10px; margin-bottom: 8px; }
+  .arena.no { opacity: .55; }
+  .arena .top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+  .name { color: var(--hi); font-weight: 700; }
+  .badge { font-size: 12px; padding: 1px 6px; border-radius: 3px; border: 1px solid var(--line); color: var(--dim); }
+  .badge.fit { color: var(--ok); border-color: var(--ok); }
+  .badge.unfit { color: var(--no); border-color: var(--no); }
+  .acts { display: flex; gap: 6px; margin-top: 8px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+  th { color: var(--dim); font-weight: 400; font-size: 12px; }
+  td.n { text-align: right; font-variant-numeric: tabular-nums; }
+  .you { color: var(--hi); }
+  .pot { font-size: 26px; color: var(--ok); font-variant-numeric: tabular-nums; }
+  .coins { font-size: 20px; color: var(--hi); font-variant-numeric: tabular-nums; }
+  #log { margin-top: 16px; max-height: 190px; overflow-y: auto; }
+  #log div { padding: 2px 0; border-bottom: 1px solid var(--line); color: var(--dim); }
+  #log .warn { color: var(--no); }
+  #log .good { color: var(--ok); }
+  .note { color: var(--dim); font-size: 12px; margin-top: 10px; }
+</style>
+</head>
+<body>
+
+<h1>lobby&nbsp;world</h1>
+<div class="sub">Three arenas, one lobby. Your link decides where you fit; your wallet comes with you.</div>
+
+<div class="cols">
+  <div>
+    <div class="panel">
+      <h2>You</h2>
+      <div class="row"><span class="k">player</span><span class="num" id="me">connecting</span></div>
+      <div class="row"><span class="k">wallet</span><span class="coins" id="coins">0</span></div>
+      <div class="row"><span class="k">measured rtt</span><span class="num" id="rtt">-</span></div>
+      <div class="row"><span class="k">assigned extra</span><span class="num" id="extra">-</span></div>
+      <div class="row"><span class="k">one-way, judged</span><span class="num" id="oneway">-</span></div>
+      <div class="acts">
+        <button id="reroll">Re-roll link</button>
+        <button id="refresh">Refresh rooms</button>
+      </div>
+      <div class="note">
+        Every number here is the server's. The RTT is what the transport timed with its own
+        ping, and the extra is assigned on connect so a localhost demo still has slow links in it.
+        A client that reported its own latency could understate it, and this decides entry.
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <h2>Arenas</h2>
+      <div id="rooms"></div>
+      <div class="note">
+        Ordered tightest schedule first, which is the order the lobby would place you in.
+        An arena you cannot play is still listed: refusal and an empty catalogue are different answers.
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <h2>Arena</h2>
+      <div id="arena-empty" class="note" style="margin:0">Not in an arena. Join or spectate one.</div>
+      <div id="arena" style="display:none">
+        <div class="row"><span class="k">arena</span><span class="name" id="a-name">-</span></div>
+        <div class="row"><span class="k">schedule budget</span><span class="num" id="a-budget">-</span></div>
+        <div class="row"><span class="k">your seat</span><span id="a-seat">-</span></div>
+        <div class="row"><span class="k">pot</span><span class="pot" id="a-pot">0</span></div>
+        <div class="acts">
+          <button id="claim">Claim the pot</button>
+          <button id="leave">Leave</button>
+        </div>
+        <table>
+          <thead><tr><th>player</th><th>seat</th><th class="n">wallet</th><th class="n">claims here</th></tr></thead>
+          <tbody id="a-occupants"></tbody>
+        </table>
+        <div class="note">
+          Wallets in this table are the shared registry's, not this arena's. That is the point:
+          leave, join another, and the number follows you.
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <h2>Log</h2>
+      <div id="log"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Frame kinds, matching plaza_wire::frame::Kind.
+const KIND_OPS = 0;
+
+let lobby = null;
+let arena = null;
+let me = null;
+let coins = 0;
+let inArena = null;
+
+const $ = (id) => document.getElementById(id);
+
+function log(msg, cls) {
+  const el = document.createElement('div');
+  if (cls) el.className = cls;
+  el.textContent = msg;
+  $('log').prepend(el);
+  while ($('log').childElementCount > 80) $('log').lastElementChild.remove();
+}
+
+// The body is the ops array itself; `from` is server-side and is not sent.
+function sendOps(sock, ops) {
+  if (sock && sock.readyState === WebSocket.OPEN) {
+    sock.send(String.fromCharCode(KIND_OPS) + JSON.stringify(ops));
+  }
+}
+
+// One kind byte then the body. Unknown kinds are skipped, not fatal, so a
+// newer server does not break this page.
+function onFrame(event, handle) {
+  if (event.data === "hb_ping") { event.target.send("hb_pong"); return; }
+  const kind = event.data.charCodeAt(0);
+  if (kind !== KIND_OPS) return;
+  let ops;
+  try { ops = JSON.parse(event.data.slice(1)); }
+  catch (e) { console.error('bad frame', e, event.data); return; }
+  (ops || []).forEach(handle);
+}
+
+function ms(v) { return (v === null || v === undefined) ? 'none' : v + ' ms'; }
+
+/* ---------- lobby ---------- */
+
+function connectLobby() {
+  const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  lobby = new WebSocket(`${scheme}//${location.host}/ws/lobby`);
+  lobby.onopen = () => log('lobby connected');
+  lobby.onclose = () => { log('lobby disconnected', 'warn'); $('me').textContent = 'disconnected'; };
+  lobby.onmessage = (e) => onFrame(e, handleLobbyOp);
+}
+
+function handleLobbyOp(op) {
+  if (op.Welcome) {
+    me = op.Welcome.you;
+    coins = op.Welcome.coins;
+    $('me').textContent = '#' + me;
+    $('coins').textContent = coins;
+    showLink(op.Welcome.link);
+    log('welcome, you are player #' + me);
+  } else if (op.Catalogue) {
+    showLink(op.Catalogue.link);
+    drawRooms(op.Catalogue.rooms);
+  } else if (op.Placed) {
+    const p = op.Placed;
+    coins = p.coins;
+    $('coins').textContent = coins;
+    log(`placed in ${p.name} as ${p.spectator ? 'spectator' : 'player'}, carrying ${p.coins}`, 'good');
+    enterArena(p);
+  } else if (op.Refused) {
+    const r = op.Refused;
+    const allowed = (r.allowed_one_way_ms === null || r.allowed_one_way_ms === undefined)
+      ? 'no stated limit' : r.allowed_one_way_ms + ' ms';
+    log(`refused: ${r.reason} (measured ${r.measured_one_way_ms} ms one way, arena allows ${allowed})`, 'warn');
+  }
+}
+
+function showLink(link) {
+  $('rtt').textContent = link.measured_rtt_ms + ' ms';
+  $('extra').textContent = '+' + link.assigned_extra_ms + ' ms';
+  $('oneway').textContent = link.one_way_ms + ' ms';
+}
+
+function drawRooms(rooms) {
+  const host = $('rooms');
+  host.innerHTML = '';
+  rooms.forEach(r => {
+    const full = r.current_players >= r.max_players;
+    const el = document.createElement('div');
+    el.className = 'arena' + (r.playable ? '' : ' no');
+
+    const top = document.createElement('div');
+    top.className = 'top';
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = r.name;
+    const badge = document.createElement('span');
+    if (r.playable) {
+      badge.className = 'badge fit';
+      badge.textContent = r.fit_rank === 0 ? 'best fit' : 'fits (#' + (r.fit_rank + 1) + ')';
+    } else {
+      badge.className = 'badge unfit';
+      badge.textContent = 'too slow for you';
+    }
+    top.append(name, badge);
+
+    const seats = document.createElement('div');
+    seats.className = 'row';
+    seats.innerHTML = `<span class="k">seats</span><span class="num">${r.current_players} / ${r.max_players}${full ? ' (full)' : ''}</span>`;
+
+    const budget = document.createElement('div');
+    budget.className = 'row';
+    budget.innerHTML = `<span class="k">budget</span><span class="num">${ms(r.budget_ms)}</span>`;
+
+    const acts = document.createElement('div');
+    acts.className = 'acts';
+    const join = document.createElement('button');
+    join.textContent = 'Join';
+    join.disabled = !r.playable || full;
+    join.onclick = () => sendOps(lobby, [{ Join: { room_id: r.room_id } }]);
+    const spec = document.createElement('button');
+    spec.textContent = 'Spectate';
+    // Enabled even when full or too slow: a spectator takes no seat and runs
+    // no schedule.
+    spec.onclick = () => sendOps(lobby, [{ Spectate: { room_id: r.room_id } }]);
+    acts.append(join, spec);
+
+    el.append(top, seats, budget, acts);
+    host.append(el);
+  });
+}
+
+/* ---------- arena ---------- */
+
+function enterArena(placed) {
+  if (arena) { arena.onclose = null; arena.close(); arena = null; }
+  inArena = placed;
+  arena = new WebSocket(placed.endpoint);
+  arena.onopen = () => log('arena socket open: ' + placed.name);
+  arena.onmessage = (e) => onFrame(e, handleArenaOp);
+  arena.onclose = () => {
+    log('arena socket closed');
+    showNoArena();
+  };
+  $('arena-empty').style.display = 'none';
+  $('arena').style.display = '';
+  $('a-name').textContent = placed.name;
+}
+
+function showNoArena() {
+  inArena = null;
+  $('arena').style.display = 'none';
+  $('arena-empty').style.display = '';
+}
+
+function leaveArena() {
+  if (arena) { arena.onclose = null; arena.close(); arena = null; }
+  showNoArena();
+  sendOps(lobby, ["ListRooms"]);
+}
+
+function handleArenaOp(op) {
+  if (op.Snapshot) {
+    drawArena(op.Snapshot);
+  } else if (op.PotRefreshed) {
+    $('a-pot').textContent = op.PotRefreshed.pot;
+  } else if (op.Claimed) {
+    const c = op.Claimed;
+    if (c.player === me) {
+      coins = c.coins;
+      $('coins').textContent = coins;
+      log(`you claimed ${c.amount}, wallet now ${c.coins}`, 'good');
+    } else {
+      log(`player #${c.player} claimed ${c.amount}`);
+    }
+  } else if (op.Rejected) {
+    log('rejected: ' + op.Rejected.reason, 'warn');
+  }
+}
+
+function drawArena(v) {
+  $('a-name').textContent = v.arena;
+  $('a-budget').textContent = ms(v.budget_ms);
+  $('a-pot').textContent = v.pot;
+  $('a-seat').textContent = (v.your_seat === null || v.your_seat === undefined)
+    ? 'none'
+    : v.your_seat.toLowerCase() + (v.your_seat === 'Spectator' ? ' (watching)' : '');
+  $('claim').disabled = v.your_seat !== 'Player';
+
+  const body = $('a-occupants');
+  body.innerHTML = '';
+  v.occupants.forEach(o => {
+    const tr = document.createElement('tr');
+    if (o.player === me) tr.className = 'you';
+    tr.innerHTML =
+      `<td>#${o.player}${o.player === me ? ' (you)' : ''}</td>` +
+      `<td>${o.seat.toLowerCase()}</td>` +
+      `<td class="n">${o.coins}</td>` +
+      `<td class="n">${o.claims_here}</td>`;
+    body.append(tr);
+  });
+
+  $('a-seat').title = `${v.seats_taken}/${v.seats_total} seats, ${v.spectators} watching`;
+}
+
+/* ---------- wiring ---------- */
+
+$('reroll').onclick = () => sendOps(lobby, ["Reroll"]);
+$('refresh').onclick = () => sendOps(lobby, ["ListRooms"]);
+$('claim').onclick = () => sendOps(arena, ["Claim"]);
+$('leave').onclick = leaveArena;
+
+connectLobby();
+
+// A fresh connection has no RTT samples yet and reads as zero; re-listing is
+// what lets the measurement and the seat counts catch up.
+setInterval(() => sendOps(lobby, ["ListRooms"]), 2000);
+</script>
+</body>
+</html>
