@@ -161,7 +161,7 @@ The netcode vocabulary both ends of a connection exchange. Pure serde, generic o
 *   **`AuthoritativeStateUpdate<PlayerStateData, ServerTimeType>`**: server to client. `last_processed_input_seq`, `authoritative_player_state`, `server_time_at_state`. The client snaps to this and replays newer inputs.
 *   **`RemoteEntitySnapshot<EntityKey, ServerTimeType, V3, Q>`**: server to client. `entity_id`, `server_time`, `position`, `rotation`, optional `linear_velocity` / `angular_velocity`. `V3`/`Q` are your position and rotation types (use `()` for a rotation you do not track). No defaults: the wire vocabulary does not mandate a math library.
 *   **`TimestampedClientAction<ActionData, ClientTimeType>`**: client to server. `client_action_time`, `action_data`. The timestamp lets the server rewind to when the client acted, for lag compensation.
-*   **`Ping` / `Pong`**: either direction. `origin_time_ms`. A `Ping` is echoed back as a `Pong` carrying the same `origin_time_ms`; the sender computes `rtt = now - origin_time_ms`. Pair with `plaza_client_utils::RttEstimator` to smooth the samples.
+*   **`Ping` / `Pong`**: either direction. A `Ping` carries `origin_time_ms`; the `Pong` carries it back plus the responder's own clock as `responder_time_ms`. The sender computes `rtt = now - origin_time_ms` and smooths it with `plaza_client_utils::RttEstimator`, and feeds the three timestamps to `ClockSyncEstimator::observe_exchange` to fit the offset. The second field is what makes a client able to render on the responder's timeline rather than only know how far away it is; which clock it reads is the responder's choice, and both ends have to mean the same one.
 
 ## 7. Module `build` (feature `build`)
 
@@ -169,6 +169,7 @@ A protocol version derived at build time from the source files that define your 
 
 *   **`emit(sources: &[P])`**: hash the sources and publish the result two ways, so a crate uses whichever suits it. `$OUT_DIR/wire_protocol.rs` defines `pub const WIRE_PROTOCOL: u32` and is meant to be `include!`d (preferred: already a number, no parsing to reach a `const`), and `cargo:rustc-env=WIRE_PROTOCOL` is there for a crate that would rather use `env!` and parse it itself. It also emits `cargo:rerun-if-changed` per source, so the version tracks edits without a clean build.
 *   **`version_of(sources: &[P]) -> u32`** / **`version_of_sources(iter) -> u32`**: the hash itself, if you would rather place it yourself.
+*   **`type_definitions(source: &[u8]) -> String`**: the declarations the hash is taken over, with everything else stripped. What makes the version reproducible rather than a hash of whole files.
 
 ```rust,ignore
 // build.rs

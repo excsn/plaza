@@ -20,6 +20,7 @@
 use plaza_client_utils::clock_sync::ClockSyncEstimator;
 use plaza_client_utils::{InputCoalescer, RttEstimator};
 use plaza_wire::frame::{self, ProtocolVersion};
+use plaza_wire::payloads;
 use plaza_wire::{MsgPackCodec, WireCodec};
 
 /// One codec for the whole client. Zero-sized, so naming it costs nothing, and
@@ -392,7 +393,7 @@ impl NetClient {
     self.now_ms = now_ms;
     if now_ms.saturating_sub(self.last_ping_ms) >= PING_INTERVAL_MS && self.socket.is_open() {
       self.last_ping_ms = now_ms;
-      self.send_op(&Op::Ping { origin_ms: now_ms });
+      self.send_op(&Op::Ping(payloads::Ping { origin_time_ms: now_ms }));
     }
 
     self.socket.poll(&mut self.events);
@@ -717,16 +718,17 @@ impl NetClient {
             measured_ms,
           };
         }
-        Op::Pong { origin_ms, server_ms } => {
+        Op::Pong(pong) => {
+          let origin_ms = pong.origin_time_ms;
           let raw = now_ms.saturating_sub(origin_ms);
           self.last_pong_rtt_ms = raw;
           self.worst_pong_rtt_ms = self.worst_pong_rtt_ms.max(raw);
           self.rtt.observe_pong(origin_ms, now_ms);
           let one_way = self.rtt.one_way_ms().unwrap_or(0.0) as f64;
-          let offset = (server_ms as f64 + one_way) - now_ms as f64;
+          let offset = (pong.responder_time_ms as f64 + one_way) - now_ms as f64;
           self.clock.observe(now_ms as f64, offset);
         }
-        Op::Input { .. } | Op::Ack { .. } | Op::Buy(_) | Op::Ping { .. } => {}
+        Op::Input { .. } | Op::Ack { .. } | Op::Buy(_) | Op::Ping(_) => {}
       }
     }
     applied_frame

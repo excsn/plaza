@@ -66,7 +66,7 @@ The [`payloads`] module holds the netcode vocabulary both ends exchange, generic
 - `AuthoritativeStateUpdate` (server to client): the client's own authoritative state plus the last input seq applied.
 - `RemoteEntitySnapshot` (server to client): another entity's state, for interpolation and extrapolation. You name its position/rotation types.
 - `TimestampedClientAction` (client to server): a time-stamped action, so the server can rewind to when the client acted (lag compensation).
-- `Ping` / `Pong` (either direction): a latency probe echoed back unchanged, so the sender measures its round trip.
+- `Ping` / `Pong` (either direction): a latency probe. The reply carries the origin stamp back plus the responder's own clock, so the sender gets both its round trip and the offset to fit a shared timeline from.
 
 The client half (`plaza_client_utils`) and the server half (`plaza_server_utils`, `plaza` core) share this one definition.
 

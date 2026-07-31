@@ -49,8 +49,8 @@ pub struct TimestampedClientAction<ActionData: Clone + Debug, ClientTimeType: Cl
   pub action_data: ActionData,
 }
 
-/// A latency probe: sent by either end, echoed back unchanged as a [`Pong`], so
-/// the original sender can measure the round trip from `origin_time_ms` without
+/// A latency probe: sent by either end, answered with a [`Pong`], so the
+/// original sender can measure the round trip from `origin_time_ms` without
 /// keeping any state.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub struct Ping {
@@ -58,11 +58,26 @@ pub struct Ping {
   pub origin_time_ms: u64,
 }
 
-/// The echo of a [`Ping`], carrying its `origin_time_ms` back. The measurer
-/// computes `rtt = now - origin_time_ms` on receipt.
+/// The answer to a [`Ping`]: its `origin_time_ms` back, plus the responder's own
+/// clock. The measurer computes `rtt = now - origin_time_ms` on receipt.
+///
+/// The second field is what makes this more than a stopwatch. A client that
+/// renders on the server's timeline needs the server's clock, not only the
+/// distance to it, and `rtt / 2` plus `responder_time_ms` is the exchange a
+/// [`ClockSyncEstimator`] fits an offset from. Without it every application
+/// writes its own probe to carry the one number it cannot do without.
+///
+/// **Which clock is yours to choose**, and both ends have to mean the same one.
+/// A simulation clock is usually right, because it is the timeline the client
+/// is drawing on; wall time is right only if that is also what stamps your
+/// snapshots.
+///
+/// [`ClockSyncEstimator`]: https://docs.rs/plaza_client_utils
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub struct Pong {
   pub origin_time_ms: u64,
+  /// The responder's own clock when it answered.
+  pub responder_time_ms: u64,
 }
 
 /// Server to client: the state of some other entity, for interpolation and

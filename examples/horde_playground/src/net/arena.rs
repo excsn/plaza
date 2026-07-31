@@ -19,6 +19,7 @@ use plaza::state_logic::{LogicInput, LogicOutput, StateLogic, StateLogicError};
 use plaza::Agent;
 use plaza_client_utils::net_sim::{LatencyLink, Rng};
 use plaza_server_utils::{RateMeter, SeatTable, Seating};
+use plaza_wire::payloads;
 
 use crate::sim::protocol::{Op, ServerPolicy};
 use crate::sim::server::{Seat, Server};
@@ -338,9 +339,12 @@ impl Arena {
         self.sim.receive_buy(seat, upgrade);
         None
       }
-      Op::Ping { origin_ms } => {
-        let server_ms = self.sim.now_ms();
-        Some(TargetedOp::new_system_to(key, vec![Op::Pong { origin_ms, server_ms }]))
+      Op::Ping(ping) => {
+        let pong = payloads::Pong {
+          origin_time_ms: ping.origin_time_ms,
+          responder_time_ms: self.sim.now_ms(),
+        };
+        Some(TargetedOp::new_system_to(key, vec![Op::Pong(pong)]))
       }
       // Server-to-client variants coming up mean a confused or hostile client;
       // not an error worth failing the tick over.
@@ -1548,7 +1552,7 @@ mod client_server_wire {
     for op in [
       Op::Input { seq: 7, dx: -0.5, dy: 0.5, tick: 3 },
       Op::Ack { newest: 9, mask: 0xff, digest: 1234 },
-      Op::Ping { origin_ms: 42 },
+      Op::Ping(payloads::Ping { origin_time_ms: 42 }),
     ] {
       // Exactly `Client::send_op`.
       let mut out = Vec::new();
