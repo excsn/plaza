@@ -282,7 +282,7 @@ The panel counts accepted, rejected and late inputs, and accepted is the denomin
 
 The loss slider had worked in the offline `World`, which is where every measurement above was taken, and did nothing at all on the path a host or joiner actually uses: the impairment link took latency and jitter from the panel and a hardcoded zero for loss. The upstream was worse, because there was none. Inputs, acknowledgements and purchases went over a real socket unimpaired, so the return path was perfect however far the slider was dragged, and that is exactly the traffic the recovery machinery exists for: an acknowledgement is what lets the server tell a starved mirror from a healthy one, and it could never be lost.
 
-Loss now applies in both directions. Inbound drops happen at the server, because that is where the controls live and a joiner has no reason to sabotage its own outbound. `Hello` and `Ping` are exempt: they are control plane, and dropping the version handshake makes a diagnostic flaky without teaching anything.
+Loss now applies in both directions. Inbound drops happen at the server, because that is where the controls live and a joiner has no reason to sabotage its own outbound. `Ping` is exempt: it is control plane, and dropping a latency probe makes a diagnostic flaky without teaching anything. The version handshake is exempt structurally rather than by name, because it is a `Kind::Hello` frame the session reads before anything reaches this path.
 
 The general form is the one this project keeps relearning: **a toggle that is wired to the demo path and not the real one reports on a system nobody runs.**
 

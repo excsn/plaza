@@ -74,8 +74,6 @@ pub enum Op {
   Buy(Upgrade),
   /// Round-trip probe; the reply echoes `origin_ms` verbatim.
   Ping { origin_ms: u64 },
-  /// The first thing a client says: which wire format it was built against.
-  Hello { protocol: u32 },
 
   // ---- server to client ----
   /// Sent once on join: which player is yours, and the settings a client cannot
@@ -122,9 +120,6 @@ pub enum Op {
   /// count is carried so the message can say what it is competing for.
   NoSeat { seats: usize },
   Pong { origin_ms: u64, server_ms: u64 },
-  /// This client was built against a different wire format and should reload.
-  /// Carries both versions so the message can say which way round it is.
-  Outdated { server: u32, client: u32 },
 }
 
 /// Server settings a client cannot see but has to reason about.

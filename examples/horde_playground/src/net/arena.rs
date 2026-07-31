@@ -20,7 +20,7 @@ use plaza::Agent;
 use plaza_client_utils::net_sim::{LatencyLink, Rng};
 use plaza_server_utils::{RateMeter, SeatTable, Seating};
 
-use crate::sim::protocol::{Op, ServerPolicy, PROTOCOL};
+use crate::sim::protocol::{Op, ServerPolicy};
 use crate::sim::server::{Seat, Server};
 use crate::sim::types::{
   Coin, Controls, Downstream, EnemyKind, Handle, PlayerId, Projectile, Vec2, Wallet, CROWD_BYTES, MAX_PLAYERS,
@@ -342,14 +342,6 @@ impl Arena {
         let server_ms = self.sim.now_ms();
         Some(TargetedOp::new_system_to(key, vec![Op::Pong { origin_ms, server_ms }]))
       }
-      // A client announcing a wire format that is not this one cannot be
-      // reasoned with, only told. Said once, on the client's own first message,
-      // instead of the per-op decode warnings a mismatch otherwise produces for
-      // as long as it stays connected.
-      Op::Hello { protocol } if protocol != PROTOCOL => {
-        tracing::warn!(client = protocol, server = PROTOCOL, "client is on a different wire format, telling it to reload");
-        Some(TargetedOp::new_system_to(key, vec![Op::Outdated { server: PROTOCOL, client: protocol }]))
-      }
       // Server-to-client variants coming up mean a confused or hostile client;
       // not an error worth failing the tick over.
       _ => None,
@@ -527,8 +519,9 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         // host. Ops come back out on the tick their delay expires.
         //
         // Control plane rides the same delay but never the loss: dropping a
-        // version handshake makes a diagnostic flaky without teaching anything
-        // about the netcode.
+        // latency probe makes a diagnostic flaky without teaching anything
+        // about the netcode. The version handshake is not here at all, because
+        // it is a frame the session reads before this path.
         let now = state.sim.now_ms();
         let (latency, jitter, loss) = (state.controls.latency_ms, state.controls.jitter_ms, state.controls.loss_pct);
         for op in ops {
@@ -1544,6 +1537,7 @@ mod wire_size {
 #[cfg(test)]
 mod client_server_wire {
   use super::*;
+  use crate::sim::protocol::PROTOCOL;
   use plaza_wire::{frame, MsgPackCodec, WireCodec};
 
   /// The client's outbound bytes, decoded exactly the way the server's
@@ -1552,7 +1546,6 @@ mod client_server_wire {
   #[test]
   fn what_the_client_sends_is_what_the_server_reads() {
     for op in [
-      Op::Hello { protocol: PROTOCOL },
       Op::Input { seq: 7, dx: -0.5, dy: 0.5, tick: 3 },
       Op::Ack { newest: 9, mask: 0xff, digest: 1234 },
       Op::Ping { origin_ms: 42 },
@@ -1568,6 +1561,31 @@ mod client_server_wire {
       let ops: Vec<Op> = MsgPackCodec.decode(body).expect("server decode");
       assert_eq!(ops.len(), 1, "one op in, one op out: {op:?}");
     }
+  }
+
+  /// The handshake is a frame, not an op, and it has to survive the case it
+  /// exists for: two builds that no longer agree about `Op`. Nothing here
+  /// decodes an `Op`, which is the property being asserted.
+  #[test]
+  fn the_handshake_survives_a_disagreement_about_ops() {
+    use plaza_wire::frame::ProtocolVersion;
+
+    // Exactly `Client::send_hello`, read exactly the way the session's
+    // deserialize bridge reads it.
+    let mut out = Vec::new();
+    frame::begin(frame::Kind::Hello, &mut out);
+    MsgPackCodec.encode_into(&ProtocolVersion(PROTOCOL), &mut out).expect("client encode");
+
+    let (tag, body) = frame::split(&out).expect("non-empty");
+    assert_eq!(frame::Kind::from_byte(tag), Some(frame::Kind::Hello));
+    let theirs: ProtocolVersion = MsgPackCodec.decode(body).expect("server decode");
+    assert_eq!(theirs, ProtocolVersion(PROTOCOL));
+    assert!(theirs.agrees_with(ProtocolVersion(PROTOCOL)));
+
+    // A build that speaks something else is reported, and a build that declares
+    // nothing is not: zero on either side is the pre-handshake case.
+    assert!(!ProtocolVersion(PROTOCOL).agrees_with(ProtocolVersion(PROTOCOL.wrapping_add(1))));
+    assert!(ProtocolVersion(PROTOCOL).agrees_with(ProtocolVersion::UNKNOWN));
   }
 
   /// And the other direction: what the server broadcasts is what the client

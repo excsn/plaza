@@ -15,6 +15,7 @@ use actix_web::{web, HttpRequest, HttpResponse};
 use parking_lot::Mutex;
 use plaza::{Agent, StateControllerBuilder, TickDriver};
 use plaza_session::actix_ws::ActixWsPlazaSession;
+use plaza_wire::frame::ProtocolVersion;
 use plaza_wire::MsgPackCodec;
 use plaza_session::host::{init_logging, Host};
 
@@ -23,7 +24,7 @@ use plaza_lobby::{RoomId, RoomMetadata};
 use crate::net::arena::{Arena, ArenaLogic, HostView, NoSnapshots, PlayerKey, Router};
 use crate::net::rooms::{self, DEFAULT_ROOM};
 use crate::sim::types::MAX_PLAYERS;
-use crate::sim::protocol::Op;
+use crate::sim::protocol::{Op, PROTOCOL};
 use crate::sim::types::Controls;
 
 type ArenaSession = ActixWsPlazaSession<Op, PlayerKey, MsgPackCodec>;
@@ -121,8 +122,10 @@ pub async fn serve(
 
   for room in active.iter() {
     // MessagePack, not JSON: the same codec the client names, so neither end
-    // can drift onto a format the other does not speak.
-    let session: Arc<ArenaSession> = ActixWsPlazaSession::with_codec(MsgPackCodec);
+    // can drift onto a format the other does not speak. The version is derived
+    // from the sources that define `Op`, so a client built before a wire change
+    // is told rather than left half-working.
+    let session: Arc<ArenaSession> = ActixWsPlazaSession::with_protocol(MsgPackCodec, ProtocolVersion(PROTOCOL));
     // Only the arena the host plays in reads the shared panel; the others run on
     // their own settings, or a slider drag would rewrite every room's schedule
     // and undo the thing that makes them different.

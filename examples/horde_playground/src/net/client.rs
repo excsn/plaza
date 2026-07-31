@@ -19,7 +19,7 @@
 
 use plaza_client_utils::clock_sync::ClockSyncEstimator;
 use plaza_client_utils::{InputCoalescer, RttEstimator};
-use plaza_wire::frame;
+use plaza_wire::frame::{self, ProtocolVersion};
 use plaza_wire::{MsgPackCodec, WireCodec};
 
 /// One codec for the whole client. Zero-sized, so naming it costs nothing, and
@@ -405,9 +405,7 @@ impl NetClient {
           if self.status == Status::Connecting {
             self.status = Status::Waiting;
           }
-          // Before anything else: say which wire format this build speaks, so a
-          // stale page is told to reload rather than half-working.
-          self.send_op(&Op::Hello { protocol: PROTOCOL });
+          self.send_hello();
         }
         Event::Text(text) => applied_a_frame |= self.on_frame(text.as_bytes(), now_ms, controls),
         Event::Message(bytes) => applied_a_frame |= self.on_frame(&bytes, now_ms, controls),
@@ -578,6 +576,44 @@ impl NetClient {
     }
   }
 
+  /// Announces which wire format this build speaks.
+  ///
+  /// A frame rather than an op: the version says whether the two ends agree
+  /// about `Op` at all, so a check that has to decode an `Op` to run cannot
+  /// report the case it exists for.
+  ///
+  /// Sent unprompted, as the server's is, so neither end waits for the other and
+  /// a peer built before the frame existed simply never answers.
+  fn send_hello(&mut self) {
+    self.out.clear();
+    frame::begin(frame::Kind::Hello, &mut self.out);
+    match WIRE.encode_into(&ProtocolVersion(PROTOCOL), &mut self.out) {
+      Ok(()) => {
+        self.sent.add(self.out.len() as u64);
+        let _ = self.socket.send(&self.out);
+      }
+      Err(_) => debug_assert!(false, "a protocol version failed to serialise"),
+    }
+  }
+
+  /// Reads the server's declared wire format and decides what to do about it.
+  ///
+  /// The decision is this client's, not plaza's: the session records a mismatch
+  /// and keeps serving, so ops go on arriving after this fires. A page can only
+  /// reload, so it stops and names both versions.
+  fn on_server_protocol(&mut self, body: &[u8]) {
+    let Ok(theirs) = WIRE.decode::<ProtocolVersion>(body) else {
+      return;
+    };
+    if ProtocolVersion(PROTOCOL).agrees_with(theirs) {
+      return;
+    }
+    self.status = Status::Gone(format!(
+      "this page was built for wire format {PROTOCOL} and the server speaks {}: reload to get the current client",
+      theirs.0
+    ));
+  }
+
   fn on_frame(&mut self, bytes: &[u8], now_ms: u64, controls: &Controls) -> bool {
     // Measured on the wire as it arrives, before decoding, so it is the cost of
     // the transport rather than of the model behind it.
@@ -589,8 +625,13 @@ impl NetClient {
     let Some((tag, body)) = frame::split(bytes) else {
       return false;
     };
-    if frame::Kind::from_byte(tag) != Some(frame::Kind::Ops) {
-      return false;
+    match frame::Kind::from_byte(tag) {
+      Some(frame::Kind::Ops) => {}
+      Some(frame::Kind::Hello) => {
+        self.on_server_protocol(body);
+        return false;
+      }
+      None => return false,
     }
     // Timed around the decode alone: this is the work that happens between two
     // drawn frames, so it is the part of a big packet a player can feel.
@@ -685,12 +726,7 @@ impl NetClient {
           let offset = (server_ms as f64 + one_way) - now_ms as f64;
           self.clock.observe(now_ms as f64, offset);
         }
-        Op::Outdated { server, client } => {
-          self.status = Status::Gone(format!(
-            "this page was built for wire format {client} and the server speaks {server}: reload to get the current client"
-          ));
-        }
-        Op::Input { .. } | Op::Ack { .. } | Op::Buy(_) | Op::Ping { .. } | Op::Hello { .. } => {}
+        Op::Input { .. } | Op::Ack { .. } | Op::Buy(_) | Op::Ping { .. } => {}
       }
     }
     applied_frame
