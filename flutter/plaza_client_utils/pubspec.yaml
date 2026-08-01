@@ -1,0 +1,12 @@
+name: plaza_client_utils
+description: >-
+  Real-time client primitives for plaza, ported from the Rust crate of the same
+  name, which stays authoritative.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.8.0
+
+dev_dependencies:
+  test: ^1.25.0

@@ -1,0 +1,22 @@
+name: plaza_flame_example
+description: >-
+  A Flame client for examples/lobby_world: the lobby as a scene, with the debug
+  readout and the version-skew policy a shipped game actually needs.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.8.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flame: ^1.27.0
+  plaza_flame:
+    path: ../
+  plaza_ws:
+    path: ../../plaza_ws
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter

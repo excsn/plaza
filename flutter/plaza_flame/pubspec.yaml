@@ -1,0 +1,22 @@
+name: plaza_flame
+description: >-
+  Flame glue for plaza. A game mixin owning the connection lifecycle, resume
+  wiring, and a drop-in debug readout.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.8.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flame: ^1.27.0
+  plaza_client:
+    path: ../plaza_client
+  plaza_client_utils:
+    path: ../plaza_client_utils
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter

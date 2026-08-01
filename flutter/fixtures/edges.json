@@ -1,0 +1,1 @@
+{"zero":0,"fixint_max":127,"u8_edge":255,"u16_edge":65535,"u32_edge":4294967295,"neg_fixint":-32,"i8_edge":-128,"i16_edge":-32768,"i32_edge":-2147483648,"float":3.141592653589793,"yes":true,"no":false,"nothing":null,"empty_str":"","fixstr_max":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","str8":"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy","unicode":"héllo 世界 🎲","empty_list":[]}

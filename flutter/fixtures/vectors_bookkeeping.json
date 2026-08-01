@@ -1,0 +1,472 @@
+{
+  "ack_window": {
+    "missing_since_150": [
+      151,
+      152,
+      153,
+      154,
+      155,
+      156,
+      157,
+      158,
+      159,
+      160,
+      161,
+      162,
+      163,
+      164,
+      165,
+      166,
+      167,
+      168,
+      169,
+      170,
+      171,
+      172,
+      173,
+      174,
+      175,
+      176,
+      177,
+      178,
+      179,
+      180,
+      181,
+      182,
+      183,
+      184,
+      185,
+      186,
+      187,
+      188,
+      189,
+      190,
+      191,
+      192,
+      193,
+      194,
+      195,
+      196,
+      197,
+      198,
+      199
+    ],
+    "steps": [
+      {
+        "contains_seq": true,
+        "encoded": [
+          1,
+          0
+        ],
+        "fresh": true,
+        "mask": 0,
+        "newest": 1,
+        "received_in_window": 1,
+        "seq": 1
+      },
+      {
+        "contains_seq": true,
+        "encoded": [
+          2,
+          1
+        ],
+        "fresh": true,
+        "mask": 1,
+        "newest": 2,
+        "received_in_window": 2,
+        "seq": 2
+      },
+      {
+        "contains_seq": true,
+        "encoded": [
+          4,
+          6
+        ],
+        "fresh": true,
+        "mask": 6,
+        "newest": 4,
+        "received_in_window": 3,
+        "seq": 4
+      },
+      {
+        "contains_seq": true,
+        "encoded": [
+          4,
+          7
+        ],
+        "fresh": true,
+        "mask": 7,
+        "newest": 4,
+        "received_in_window": 4,
+        "seq": 3
+      },
+      {
+        "contains_seq": true,
+        "encoded": [
+          5,
+          15
+        ],
+        "fresh": true,
+        "mask": 15,
+        "newest": 5,
+        "received_in_window": 5,
+        "seq": 5
+      },
+      {
+        "contains_seq": true,
+        "encoded": [
+          5,
+          15
+        ],
+        "fresh": false,
+        "mask": 15,
+        "newest": 5,
+        "received_in_window": 5,
+        "seq": 5
+      },
+      {
+        "contains_seq": true,
+        "encoded": [
+          9,
+          248
+        ],
+        "fresh": true,
+        "mask": 248,
+        "newest": 9,
+        "received_in_window": 6,
+        "seq": 9
+      },
+      {
+        "contains_seq": true,
+        "encoded": [
+          9,
+          249
+        ],
+        "fresh": true,
+        "mask": 249,
+        "newest": 9,
+        "received_in_window": 7,
+        "seq": 8
+      },
+      {
+        "contains_seq": true,
+        "encoded": [
+          9,
+          251
+        ],
+        "fresh": true,
+        "mask": 251,
+        "newest": 9,
+        "received_in_window": 8,
+        "seq": 7
+      },
+      {
+        "contains_seq": true,
+        "encoded": [
+          200,
+          0
+        ],
+        "fresh": true,
+        "mask": 0,
+        "newest": 200,
+        "received_in_window": 1,
+        "seq": 200
+      },
+      {
+        "contains_seq": true,
+        "encoded": [
+          201,
+          1
+        ],
+        "fresh": true,
+        "mask": 1,
+        "newest": 201,
+        "received_in_window": 2,
+        "seq": 201
+      },
+      {
+        "contains_seq": true,
+        "encoded": [
+          201,
+          1125899906842625
+        ],
+        "fresh": true,
+        "mask": 1125899906842625,
+        "newest": 201,
+        "received_in_window": 3,
+        "seq": 150
+      }
+    ]
+  },
+  "delta_mirror": {
+    "steps": [
+      {
+        "digest": 0,
+        "len": 3,
+        "op": "baseline",
+        "seq": 1
+      },
+      {
+        "digest": 0,
+        "len": 3,
+        "op": "delta",
+        "seq": 2
+      },
+      {
+        "agreed": false,
+        "op": "settle_matching"
+      },
+      {
+        "agreed": false,
+        "op": "settle_mismatched"
+      },
+      {
+        "extra": [
+          786433
+        ],
+        "missing": [
+          5046274
+        ],
+        "op": "divergence_from",
+        "server_keys": [
+          1,
+          589827,
+          5046274
+        ]
+      }
+    ]
+  },
+  "input_coalescer": {
+    "keepalive_ms": 500,
+    "steps": [
+      {
+        "input": 1,
+        "now_ms": 0,
+        "should_send": true
+      },
+      {
+        "input": 1,
+        "now_ms": 16,
+        "should_send": false
+      },
+      {
+        "input": 1,
+        "now_ms": 32,
+        "should_send": false
+      },
+      {
+        "input": 2,
+        "now_ms": 48,
+        "should_send": true
+      },
+      {
+        "input": 2,
+        "now_ms": 64,
+        "should_send": false
+      },
+      {
+        "input": 2,
+        "now_ms": 700,
+        "should_send": true
+      },
+      {
+        "input": 2,
+        "now_ms": 716,
+        "should_send": false
+      }
+    ]
+  },
+  "note": "Discrete state. Every value here is compared exactly: a digest or a slot key that disagrees is unrecoverable.",
+  "rel_tolerance": 0.0,
+  "slot_allocator": [
+    {
+      "events": [
+        {
+          "encoded": 0,
+          "len": 1,
+          "op": "alloc"
+        },
+        {
+          "encoded": 65536,
+          "len": 2,
+          "op": "alloc"
+        },
+        {
+          "encoded": 131072,
+          "len": 3,
+          "op": "alloc"
+        },
+        {
+          "encoded": 196608,
+          "len": 4,
+          "op": "alloc"
+        },
+        {
+          "encoded": 262144,
+          "len": 5,
+          "op": "alloc"
+        },
+        {
+          "encoded": 65536,
+          "freed": true,
+          "len": 4,
+          "op": "free"
+        },
+        {
+          "encoded": 196608,
+          "freed": true,
+          "len": 3,
+          "op": "free"
+        },
+        {
+          "encoded": 0,
+          "freed": true,
+          "len": 2,
+          "op": "free"
+        },
+        {
+          "encoded": 1,
+          "len": 3,
+          "op": "alloc"
+        },
+        {
+          "encoded": 196609,
+          "len": 4,
+          "op": "alloc"
+        },
+        {
+          "encoded": 65537,
+          "len": 5,
+          "op": "alloc"
+        },
+        {
+          "encoded": 65536,
+          "live": false,
+          "op": "is_live_stale"
+        },
+        {
+          "op": "index_space",
+          "value": 5
+        }
+      ],
+      "policy": "Lifo"
+    },
+    {
+      "events": [
+        {
+          "encoded": 0,
+          "len": 1,
+          "op": "alloc"
+        },
+        {
+          "encoded": 65536,
+          "len": 2,
+          "op": "alloc"
+        },
+        {
+          "encoded": 131072,
+          "len": 3,
+          "op": "alloc"
+        },
+        {
+          "encoded": 196608,
+          "len": 4,
+          "op": "alloc"
+        },
+        {
+          "encoded": 262144,
+          "len": 5,
+          "op": "alloc"
+        },
+        {
+          "encoded": 65536,
+          "freed": true,
+          "len": 4,
+          "op": "free"
+        },
+        {
+          "encoded": 196608,
+          "freed": true,
+          "len": 3,
+          "op": "free"
+        },
+        {
+          "encoded": 0,
+          "freed": true,
+          "len": 2,
+          "op": "free"
+        },
+        {
+          "encoded": 65537,
+          "len": 3,
+          "op": "alloc"
+        },
+        {
+          "encoded": 196609,
+          "len": 4,
+          "op": "alloc"
+        },
+        {
+          "encoded": 1,
+          "len": 5,
+          "op": "alloc"
+        },
+        {
+          "encoded": 65536,
+          "live": false,
+          "op": "is_live_stale"
+        },
+        {
+          "op": "index_space",
+          "value": 5
+        }
+      ],
+      "policy": "Fifo"
+    }
+  ],
+  "slot_key": {
+    "encodings": [
+      {
+        "decoded_generation": 0,
+        "decoded_index": 0,
+        "encoded": 0,
+        "generation": 0,
+        "index": 0,
+        "ungenerational_encoded": 0
+      },
+      {
+        "decoded_generation": 1,
+        "decoded_index": 1,
+        "encoded": 65537,
+        "generation": 1,
+        "index": 1,
+        "ungenerational_encoded": 65536
+      },
+      {
+        "decoded_generation": 7,
+        "decoded_index": 41,
+        "encoded": 2686983,
+        "generation": 7,
+        "index": 41,
+        "ungenerational_encoded": 2686976
+      },
+      {
+        "decoded_generation": 65535,
+        "decoded_index": 268435455,
+        "encoded": 17592186044415,
+        "generation": 65535,
+        "index": 268435455,
+        "ungenerational_encoded": 17592185978880
+      },
+      {
+        "decoded_generation": 65535,
+        "decoded_index": 7,
+        "encoded": 524287,
+        "generation": 65535,
+        "index": 7,
+        "ungenerational_encoded": 458752
+      }
+    ]
+  },
+  "tolerance": 0.0
+}

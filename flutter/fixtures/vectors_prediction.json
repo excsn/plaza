@@ -1,0 +1,236 @@
+{
+  "held_input": {
+    "blend": 0.25,
+    "hold": 10.0,
+    "steps": [
+      {
+        "logical": 0.1666666716337204,
+        "op": "advance"
+      },
+      {
+        "age_secs": 0.05,
+        "authoritative": 0.10000000149011612,
+        "op": "reconcile",
+        "seen": 0.3333333432674408,
+        "settled": 0.4000000059604645
+      },
+      {
+        "logical": 0.5666666626930237,
+        "op": "advance"
+      },
+      {
+        "age_secs": 0.05,
+        "authoritative": 0.30000001192092896,
+        "op": "reconcile",
+        "seen": 0.7333333492279053,
+        "settled": 0.75
+      },
+      {
+        "logical": 0.9166666865348816,
+        "op": "advance"
+      },
+      {
+        "age_secs": 0.05,
+        "authoritative": 0.5,
+        "op": "reconcile",
+        "seen": 1.0833333730697632,
+        "settled": 1.0625
+      }
+    ]
+  },
+  "input_buffer_overflow": {
+    "len": 4,
+    "max_size": 4,
+    "oldest_retained_seq": 17,
+    "overflowed": 16,
+    "recorded": 20
+  },
+  "note": "Prediction, reconciliation, held input and remote views.",
+  "predicted_entity": {
+    "input_buffer": 16,
+    "steps": [
+      {
+        "buffered": 1,
+        "input": 1.0,
+        "op": "input",
+        "predicted": 1.0,
+        "seq": 1
+      },
+      {
+        "buffered": 2,
+        "input": 2.0,
+        "op": "input",
+        "predicted": 3.0,
+        "seq": 2
+      },
+      {
+        "buffered": 3,
+        "input": 3.0,
+        "op": "input",
+        "predicted": 6.0,
+        "seq": 3
+      },
+      {
+        "buffered": 4,
+        "input": 4.0,
+        "op": "input",
+        "predicted": 10.0,
+        "seq": 4
+      },
+      {
+        "buffered": 5,
+        "input": 5.0,
+        "op": "input",
+        "predicted": 15.0,
+        "seq": 5
+      },
+      {
+        "buffered": 6,
+        "input": 6.0,
+        "op": "input",
+        "predicted": 21.0,
+        "seq": 6
+      },
+      {
+        "acked_seq": 3,
+        "authoritative": 4.0,
+        "buffered": 3,
+        "last_authoritative": 4.0,
+        "op": "reconcile",
+        "predicted": 19.0
+      }
+    ]
+  },
+  "predicted_player": {
+    "input_buffer": 32,
+    "smoothing_secs": 0.2,
+    "steps": [
+      {
+        "i": 0,
+        "logical": 2.0,
+        "op": "input",
+        "render": 2.0,
+        "seq": 1,
+        "unacked": 1
+      },
+      {
+        "i": 1,
+        "logical": 4.0,
+        "op": "input",
+        "render": 4.0,
+        "seq": 2,
+        "unacked": 2
+      },
+      {
+        "i": 2,
+        "logical": 6.0,
+        "op": "input",
+        "render": 6.0,
+        "seq": 3,
+        "unacked": 3
+      },
+      {
+        "i": 3,
+        "logical": 8.0,
+        "op": "input",
+        "render": 8.0,
+        "seq": 4,
+        "unacked": 4
+      },
+      {
+        "acked_seq": 2,
+        "authoritative": 3.0,
+        "logical": 7.0,
+        "op": "reconcile",
+        "render": 8.0,
+        "seen": 8.0,
+        "settled": 7.0,
+        "unacked": 2
+      },
+      {
+        "dt_secs": 0.05,
+        "logical": 7.0,
+        "op": "advance",
+        "render": 7.75
+      },
+      {
+        "dt_secs": 0.05,
+        "logical": 7.0,
+        "op": "advance",
+        "render": 7.5
+      },
+      {
+        "dt_secs": 0.05,
+        "logical": 7.0,
+        "op": "advance",
+        "render": 7.25
+      },
+      {
+        "dt_secs": 0.05,
+        "logical": 7.0,
+        "op": "advance",
+        "render": 7.0
+      }
+    ]
+  },
+  "rel_tolerance": 1e-6,
+  "remote_view": {
+    "buffer_size": 8,
+    "max_extrapolation_ms": 500,
+    "over_extrapolations": 1,
+    "queries": [
+      {
+        "extrapolated_x": 0.5,
+        "interpolated_x": 0.5,
+        "raw_x": 2.0,
+        "target_ms": 150
+      },
+      {
+        "extrapolated_x": 1.5,
+        "interpolated_x": 1.5,
+        "raw_x": 2.0,
+        "target_ms": 250
+      },
+      {
+        "extrapolated_x": 2.0,
+        "interpolated_x": 2.0,
+        "raw_x": 2.0,
+        "target_ms": 300
+      },
+      {
+        "extrapolated_x": 3.0,
+        "interpolated_x": 2.0,
+        "raw_x": 2.0,
+        "target_ms": 400
+      },
+      {
+        "extrapolated_x": 7.0,
+        "interpolated_x": 2.0,
+        "raw_x": 2.0,
+        "target_ms": 800
+      },
+      {
+        "extrapolated_x": 7.0,
+        "interpolated_x": 2.0,
+        "raw_x": 2.0,
+        "target_ms": 5000
+      }
+    ],
+    "samples": [
+      [
+        100,
+        0.0
+      ],
+      [
+        200,
+        1.0
+      ],
+      [
+        300,
+        2.0
+      ]
+    ],
+    "velocity_x": 10.0
+  },
+  "tolerance": 0.0001
+}

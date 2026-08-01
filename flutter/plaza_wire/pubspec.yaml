@@ -1,0 +1,12 @@
+name: plaza_wire
+description: >-
+  The plaza wire vocabulary in Dart. Framing, protocol version, and codecs.
+  A mirror of the Rust plaza_wire crate, which remains authoritative.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.8.0
+
+dev_dependencies:
+  test: ^1.25.0

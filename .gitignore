@@ -223,3 +223,20 @@ typings/
 
 # next.js build output
 .next
+
+##### Dart / Flutter #####
+# Tool state and build output under flutter/. `.dart_tool` holds compiled test
+# snapshots, which are large, binary and per-SDK-version.
+flutter/**/.dart_tool/
+flutter/**/build/
+flutter/**/.flutter-plugins
+flutter/**/.flutter-plugins-dependencies
+
+# `flutter create .` generates these for the example on demand, per the platforms
+# you have installed. Regenerate rather than commit one machine's set.
+flutter/plaza_flame/example/android/
+flutter/plaza_flame/example/ios/
+flutter/plaza_flame/example/linux/
+flutter/plaza_flame/example/macos/
+flutter/plaza_flame/example/web/
+flutter/plaza_flame/example/windows/

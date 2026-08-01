@@ -1,0 +1,17 @@
+name: plaza_ws
+description: >-
+  A WebSocket transport for plaza_client, over web_socket_channel. Kept apart so
+  plaza_client stays dependency-free.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.8.0
+
+dependencies:
+  plaza_client:
+    path: ../plaza_client
+  web_socket_channel: ^3.0.0
+
+dev_dependencies:
+  test: ^1.25.0
