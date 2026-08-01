@@ -133,7 +133,11 @@ Split out from `plaza_session` so a client can share the server's encoding witho
 | The playout queue: bounded, ordered by sequence, and the discontinuity verdict a resumed client acts on | [playout.rs](client_utils/src/playout.rs) |
 | Measured arrival statistics and the render-delay budget they imply | [arrival.rs](client_utils/src/arrival.rs) |
 | Client-side `Vec2`/`Vec3`/`Quat` with operators and slerp | [math.rs](client_utils/src/math.rs) |
-| Round-trip latency estimation from ping/pong samples | [rtt.rs](client_utils/src/rtt.rs) |
+| Delay, jitter and loss applied where the link is | [conditioner.rs](session/src/conditioner.rs) |
+| Frames the session answers for itself (probes, their schedule) | [control.rs](session/src/control.rs) |
+| Saying a one-shot op until the peer proves it heard | [oneshot.rs](examples/playground_common/src/oneshot.rs) |
+| Round-trip latency estimation from probe samples | [rtt.rs](client_utils/src/rtt.rs) |
+| A probe's epoch bookkeeping across reconnect and resume | [timeline.rs](client_utils/src/timeline.rs) |
 | Sliding-window acknowledgement: a sequence number plus a 64-bit arrival mask, so a sender resends only the gaps (and `contiguous_base`, for a protocol that re-derives instead) | [ack.rs](client_utils/src/ack.rs) |
 | Second-order dead reckoning: a damped quadratic through the last three samples of one scalar | [trajectory.rs](client_utils/src/trajectory.rs) |
 | Clock offset **and skew** (drift) by least-squares regression | [clock_sync.rs](client_utils/src/clock_sync.rs) |
