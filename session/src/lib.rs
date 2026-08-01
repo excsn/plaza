@@ -9,14 +9,19 @@
 //! Enable the `actix_ws` and/or `tcp` features to select transports.
 
 pub mod codec;
+pub mod conditioner;
 pub mod error;
 pub mod host;
 pub mod manager;
 pub mod stats;
 
+#[cfg(any(feature = "actix_ws", feature = "tcp"))]
+pub(crate) mod control;
+
 pub use codec::{JsonCodec, WireCodec};
+pub use conditioner::{Delivery, DirectionProfile, LinkProfile, RETRANSMIT_PENALTY};
 pub use error::SessionLayerError;
-pub use manager::{ConnectionManager, TransportSession};
+pub use manager::{ConnectionManager, SessionClock, SessionOptions, TransportSession};
 
 #[cfg(feature = "actix_ws")]
 pub mod actix_ws;

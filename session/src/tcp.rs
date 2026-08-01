@@ -17,13 +17,19 @@ use serde::Serialize;
 use tokio::net::{TcpListener, TcpStream};
 use fibre::mpsc;
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tracing::{debug, error, info, warn};
 
 use crate::codec::{JsonCodec, WireCodec};
 use plaza_wire::frame::ProtocolVersion;
+use crate::conditioner::Conditioner;
+use crate::control::{self, earliest, far_future, route_inbound, ProbeState, DOWN_SEED_FLIP};
 use crate::error::SessionLayerError;
-use crate::manager::{ConnectionManager, OutboundFrame, TransportSession, DEFAULT_BROADCAST_CAPACITY, DEFAULT_CLIENT_QUEUE_CAPACITY};
+use crate::manager::{
+  ConnectionManager, OutboundFrame, SessionOptions, TransportSession, DEFAULT_BROADCAST_CAPACITY,
+  DEFAULT_CLIENT_QUEUE_CAPACITY,
+};
 
 const TRANSPORT: &str = "tcp";
 
@@ -85,6 +91,17 @@ where
     codec: C,
     protocol: ProtocolVersion,
   ) -> Result<Arc<Self>, SessionLayerError> {
+    Self::bind_with_options(addr, agent_factory, codec, SessionOptions::with_protocol(protocol)).await
+  }
+
+  /// Binds with everything the session answers for itself: the version it
+  /// declares, and the clock it stamps a `Pong` with.
+  pub async fn bind_with_options(
+    addr: impl Into<String>,
+    agent_factory: AgentFactory<ID>,
+    codec: C,
+    options: SessionOptions,
+  ) -> Result<Arc<Self>, SessionLayerError> {
     let addr = addr.into();
     let listener = TcpListener::bind(&addr)
       .await
@@ -96,7 +113,7 @@ where
       .local_addr()
       .map_err(|source| SessionLayerError::Bind { addr, source })?;
 
-    let inner = TransportSession::with_protocol(TRANSPORT, codec.clone(), DEFAULT_BROADCAST_CAPACITY, protocol);
+    let inner = TransportSession::with_options(TRANSPORT, codec.clone(), DEFAULT_BROADCAST_CAPACITY, options);
     let manager = inner.manager().clone();
 
     let listener_handle = tokio::spawn(accept_loop::<ID, C>(listener, manager, agent_factory, codec));
@@ -151,21 +168,87 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
   stream: TcpStream,
   agent: Agent<ID>,
   manager: Arc<ConnectionManager<ID>>,
-  // Kept in the signature for symmetry with the ws transport, which needs the
-  // codec to choose a frame type. Length-delimited framing has no such choice.
-  _codec: C,
+  codec: C,
 ) {
   let mut framed = Framed::new(stream, LengthDelimitedCodec::new());
   let (to_client_tx, to_client_rx) = mpsc::bounded_async::<OutboundFrame>(DEFAULT_CLIENT_QUEUE_CAPACITY);
   let conn_id = manager.register(agent.clone(), to_client_tx);
+  let link = manager.link_handle(conn_id).expect("just registered");
+  let clock = manager.clock().cloned();
+
+  let mut up = Conditioner::new(conn_id);
+  let mut down = Conditioner::new(conn_id ^ DOWN_SEED_FLIP);
+  let mut probe = ProbeState::default();
+  let mut next_probe = Instant::now() + control::RTT_FAST_INTERVAL;
+
+  // Either hand the frame back to be written now, or queue it behind whatever
+  // the link is already holding. The emptiness check is what keeps order: a
+  // frame must not overtake ones still waiting, however the profile reads.
+  macro_rules! queue_down {
+    ($frame:expr, $now:expr) => {{
+      let profile = link.read().down;
+      if profile.is_passthrough() && down.is_empty() {
+        Some($frame)
+      } else {
+        if !down.push($frame, &profile, $now) {
+          manager.record_link_drop(conn_id);
+        }
+        None
+      }
+    }};
+  }
 
   loop {
+    let next_release = earliest(up.next_release(), down.next_release());
+
     tokio::select! {
       // Server -> client. Already encoded; length delimiting is this
       // transport's whole framing job, so there is nothing else to decide.
       Ok(frame) = to_client_rx.recv() => {
-        if let Err(e) = framed.send(frame).await {
-          warn!(transport = TRANSPORT, conn_id, error = %e, "Write failed; closing connection.");
+        if let Some(frame) = queue_down!(frame, Instant::now()) {
+          if let Err(e) = framed.send(frame).await {
+            warn!(transport = TRANSPORT, conn_id, error = %e, "Write failed; closing connection.");
+            break;
+          }
+        }
+      }
+
+      // This transport has no ping frame of its own, so the probe riding the
+      // frame path is the only round trip it can measure.
+      _ = tokio::time::sleep_until(next_probe) => {
+        let now = Instant::now();
+        let frame = control::make_probe(&codec, &mut probe, now);
+        next_probe = now + probe.interval();
+        if let Some(frame) = queue_down!(frame, now) {
+          if framed.send(frame).await.is_err() {
+            break;
+          }
+        }
+      }
+
+      _ = tokio::time::sleep_until(next_release.unwrap_or_else(far_future)), if next_release.is_some() => {
+        let now = Instant::now();
+        let mut dead = false;
+        while let Some(frame) = down.pop_ready(now) {
+          if framed.send(frame).await.is_err() {
+            dead = true;
+            break;
+          }
+        }
+        if dead {
+          break;
+        }
+        while let Some(frame) = up.pop_ready(now) {
+          if let Some(reply) = route_inbound(frame, &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent) {
+            if let Some(reply) = queue_down!(reply, now) {
+              if framed.send(reply).await.is_err() {
+                dead = true;
+                break;
+              }
+            }
+          }
+        }
+        if dead {
           break;
         }
       }
@@ -174,8 +257,19 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
       frame = framed.next() => {
         match frame {
           Some(Ok(bytes)) => {
-            // Each frame is one already-encoded op; the manager's bridge decodes it.
-            manager.forward_incoming(agent.clone(), bytes.freeze());
+            let now = Instant::now();
+            let profile = link.read().up;
+            if profile.is_passthrough() && up.is_empty() {
+              if let Some(reply) = route_inbound(bytes.freeze(), &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent) {
+                if let Some(reply) = queue_down!(reply, now) {
+                  if framed.send(reply).await.is_err() {
+                    break;
+                  }
+                }
+              }
+            } else if !up.push(bytes.freeze(), &profile, now) {
+              manager.record_link_drop(conn_id);
+            }
           }
           Some(Err(e)) => {
             warn!(transport = TRANSPORT, conn_id, error = %e, "Read failed; closing connection.");

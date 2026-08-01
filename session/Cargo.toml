@@ -1,6 +1,6 @@
 [package]
 name = "plaza_session"
-version = "0.6.0"
+version = "0.6.1"
 edition = { workspace = true }
 description = "WebSocket and TCP transports for the Plaza real-time shared-state framework, with a pluggable wire format."
 readme = "README.md"

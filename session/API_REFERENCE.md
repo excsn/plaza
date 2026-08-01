@@ -74,6 +74,10 @@ The connection registry plus the notification channels a `StateController` consu
 *   **`agent_rtt(&self, id: &ID) -> Option<(Duration, u64)>`**: the measured round trip for an agent and how many samples it rests on. Keyed by agent because that is what an application holds: it knows who joined, not which socket they arrived on, and a reconnecting player is a new connection but the same agent.
 *   **`rtt(conn_id)`** / **`min_rtt(conn_id)`** / **`rtt_samples(conn_id)`**: the same, per connection.
 *   **`record_rtt(conn_id, Duration)`**: what a transport calls when it has timed one.
+*   **`agent_link_rtt(&self, id: &ID)`** / **`link_rtt(conn_id)`** / **`min_link_rtt(conn_id)`** / **`link_rtt_samples(conn_id)`** / **`record_link_rtt(conn_id, Duration)`**: the same family for the round trip measured over the frame path, probe frame out and `Pong` back, through whatever impairment the link carries. The transport family above measures the socket underneath all of that; the difference between the two is what plaza and the configured link cost. A transport with no ping frame of its own reports only this one.
+*   **`set_link_profile(conn_id, LinkProfile)`** / **`set_agent_link_profile(&ID, LinkProfile)`** / **`set_all_link_profiles(LinkProfile)`** / **`link_profile(conn_id)`**: the delay, jitter and loss frames ride through. See [`conditioner`](#module-conditioner).
+*   **`record_link_drop(conn_id)`** / **`link_dropped(conn_id)`** / **`agent_link_dropped(&ID)`** / **`total_link_dropped()`**: how many frames the link threw away, which only a `Delivery::Datagram` profile ever does. The transports call the first whenever `Conditioner::push` refuses a frame. Worth exposing because the application cannot count these itself: what the link lost never reaches it.
+*   **`clock(&self) -> Option<&SessionClock>`**: the clock a `Pong` is stamped with, if one was installed.
 *   **`record_protocol(&self, agent: &Agent<ID>, version: ProtocolVersion)`** / **`protocol(&self, id: &ID) -> Option<ProtocolVersion>`**: what a peer declared in its `Hello`, kept per agent. The deserialize bridge records it; an application reads it to decide what a given client can be sent, or to tell it to reload.
 *   **`connection_count(&self) -> usize`**
 
@@ -89,7 +93,44 @@ A complete `Session` implementation over any byte transport. Both shipped adapte
 *   **`codec(&self) -> &C`**
 *   **`encode_message(&self, msg: SessionMessage<Op, ID>) -> Result<OutboundFrame, SessionLayerError>`**: writes `[Kind::Ops][encoded ops]` into one buffer, in a single pass, and takes the `Vec` whole into `Bytes` with no copy. **`msg.from` is not sent**: the wire is the tag and the ops, and the sender is bookkeeping the receiving transport attaches from the connection it read. Hand the frame to [`broadcast`](#struct-connectionmanagerid-agentid); recipients share the buffer rather than each getting a re-encode or a copy.
 
-**The deserialize bridge dispatches on the tag before it decodes anything**, which is what the framing byte buys. `Kind::Ops` decodes as `Vec<Op>` and becomes a `SessionMessage`; `Kind::Hello` decodes as a `ProtocolVersion`, is recorded against the agent, and **warns rather than refuses** on a mismatch, because the version is a build hash and a peer that merely recompiled is indistinguishable from one whose shape changed; an unknown tag is skipped with a `trace!` and the connection carries on. A malformed body of any kind is a per-message problem: it is logged and dropped, never a disconnect.
+**The deserialize bridge dispatches on the tag before it decodes anything**, which is what the framing byte buys. `Kind::Ops` decodes as `Vec<Op>` and becomes a `SessionMessage`; `Kind::Hello` decodes as a `ProtocolVersion` and is recorded against the agent for the application to read back; an unknown tag is skipped with a `trace!` and the connection carries on. A malformed body of any kind is a per-message problem: it is logged and dropped, never a disconnect.
+
+`Kind::Ping` and `Kind::Pong` never reach the bridge: they are answered and timed on the connection task, which is the only place that knows which socket to reply on and holds the timer that sent the probe.
+
+### Type `SessionClock` and struct `SessionOptions`
+
+```rust
+pub type SessionClock = Arc<dyn Fn() -> u64 + Send + Sync>;
+
+pub struct SessionOptions {
+  pub protocol: ProtocolVersion,
+  pub clock: Option<SessionClock>,
+}
+```
+
+What a session declares and what it can answer with, passed to `TransportSession::with_options` and each adapter's `with_options` / `bind_with_options`. `SessionOptions::with_protocol(v).clock(f)` builds one.
+
+The clock is read when answering a latency probe and its reading becomes `Pong.responder`. It is called on a connection task, so an authoritative clock living on the simulation loop is **published** rather than borrowed: store the tick into an `AtomicU64` and close over it. **The unit is the application's**; nothing here reads the value as a quantity, converts it, or has a default for it. Without a clock, `Pong.responder` is `None`, and a client can still measure a round trip but cannot estimate the offset between the two clocks.
+
+## Module `conditioner`
+
+```rust
+pub enum Delivery { Reliable, Datagram }   // Reliable is the default
+pub struct DirectionProfile { pub delay: Duration, pub jitter: Duration, pub loss: f32, pub delivery: Delivery }
+pub struct LinkProfile { pub up: DirectionProfile, pub down: DirectionProfile }
+```
+
+Impairment applied where the link is. `up` is what the client sends, `down` what the server sends, so a symmetric 100ms round trip is 50ms each way; `LinkProfile::symmetric(p)` builds one. The default is passthrough and costs nothing: no queue, no allocation, no deadline arithmetic on a frame that crosses an unimpaired connection.
+
+**Order is preserved.** Release times are made monotone as frames are queued, so a delayed frame holds up everything behind it and a jitter spike arrives as a stall followed by a burst. That is what jitter does to a reliable stream, and letting frames overtake each other would model a datagram link neither transport provides.
+
+**`loss` is the probability a frame is lost; `delivery` is what that costs.** Under `Delivery::Reliable`, the default and the truth about both transports, the segment is retransmitted: the frame arrives `RETRANSMIT_PENALTY` (200ms, TCP's minimum RTO) late and everything behind it waits. Nothing is deleted, because on a reliable stream a lost segment never reaches the application as a missing message. Under `Delivery::Datagram` the frame is gone and the two ends reconcile, which over a WebSocket is a deliberate simulation of a transport plaza does not yet have, useful for exercising an application's recovery before the channel it is for exists.
+
+**No frame kind is exempt under either model.** Under `Reliable` nothing is lost. Under `Datagram` a lost probe costs one sample of the several the session keeps in flight, and a lost `Hello` reads as a peer that declared nothing, the case that handshake already survives. The queue bound is the one place a frame is discarded outright, and it stands for a socket buffer running out rather than for anything the network did; control frames are still admitted there.
+
+**The jitter draw is reproducible**: an inline xorshift seeded from the connection id, not from the clock, so an impaired session re-runs the same way.
+
+A mismatch is **recorded and left connected**, at `debug!`. That is the whole of this layer's involvement, and the division is deliberate: a version is a build hash, so a peer that merely recompiled is indistinguishable here from one whose shapes changed, and refusing would drop clients that are fine. Whether the mismatch is fatal, cosmetic, or worth telling the client to reload is the application's call, made by reading [`ConnectionManager::protocol`](#struct-connectionmanagerid-agentid) and answering in its own ops. It is not a `warn!` for the same reason it is not a disconnect: on a fleet mid-rollout that is one warning per connection about nothing, and it would be this layer forming an opinion on the application's behalf.
 *   Implements `Session`. `agent_join` returns `PlazaError::NotImplemented`: joins are transport-implicit, happening when a client connects and the adapter calls `register`.
 
 ### Function `target_matches`
@@ -118,9 +159,12 @@ The single implementation of the targeting rules. Agents without an ID (the syst
 ### Struct `ActixWsPlazaSession<Op, ID, C = JsonCodec>`
 
 *   **`new() -> Arc<Self>`**: JSON on the wire, the usual choice for browsers. Only on `C = JsonCodec`.
-*   **`with_codec(codec: C) -> Arc<Self>`**
+*   **`with_codec(codec: C) -> Arc<Self>`**: declares nothing, so no `Hello` is sent and the version check is off.
+*   **`with_protocol(codec: C, protocol: ProtocolVersion) -> Arc<Self>`**: announces `protocol` (from [`plaza_wire::build`](../wire/API_REFERENCE.md#7-module-build-feature-build)) as a `Hello` before anything else, so a client learns about a skew on connect rather than by mis-decoding an op. This is the only way a WebSocket session declares a version: without it the handshake is unreachable for exactly the browser and mobile clients it exists for, and an installed app cannot be forced to reload the way a page can. `ProtocolVersion::UNKNOWN` is what `with_codec` passes.
+*   **`with_options(codec: C, options: SessionOptions) -> Arc<Self>`**: `with_protocol` plus a [`SessionClock`](#type-sessionclock-and-struct-sessionoptions) for stamping `Pong.responder`. The other constructors delegate to it with no clock.
 *   **`handle_connection(&self, req: &HttpRequest, stream: web::Payload, agent: Agent<ID>) -> Result<HttpResponse, actix_web::Error>`** Completes the handshake, registers the connection, and spawns its pump. Return the `HttpResponse` from your route. `agent` identifies the client: derive it from an auth token, a query string, or mint a fresh id for anonymous play.
-*   **`connection_rtt(conn_id) -> Option<(Duration, Duration, u64)>`** (smoothed, minimum, samples), **`agent_rtt(id) -> Option<(Duration, u64)>`**, **`stats() -> Arc<TransportStats>`**: available whatever the codec. They read the manager underneath, so a session built `with_codec` gets the same measurements as a JSON one.
+*   **`connection_rtt(conn_id) -> Option<(Duration, Duration, u64)>`** (smoothed, minimum, samples), **`agent_rtt(id) -> Option<(Duration, u64)>`**, **`connection_link_rtt(conn_id)`**, **`agent_link_rtt(id)`**, **`set_agent_link_profile(id, LinkProfile)`**, **`set_all_link_profiles(LinkProfile)`**, **`link_dropped()`**, **`agent_link_dropped(id)`**, **`stats() -> Arc<TransportStats>`**: available whatever the codec. They read the manager underneath, so a session built `with_codec` gets the same measurements as a JSON one.
+*   **`protocol(&self, id: &ID) -> Option<ProtocolVersion>`**: what that agent declared in its `Hello`, and where an application decides what to do about it. `None` means the peer declared nothing, which is not a mismatch. Unlike `TcpPlazaSession` this type does not hand out its `ConnectionManager`, so without this forward the version would be captured and then unreachable by the only code entitled to judge it.
 *   Implements `Session`.
 
 Usage is a five-line route:
@@ -136,7 +180,7 @@ async fn ws_route(
 }
 ```
 
-Inbound, text and binary frames are both accepted. Outbound, the frame type follows the codec: [`WireCodec::is_text()`](../wire/API_REFERENCE.md#method-is_text) decides, so a `JsonCodec` sends **text** frames a browser or `websocat` can read, and a binary codec sends binary. Pings are answered automatically, and the connection deregisters itself when the pump exits.
+Inbound, text and binary frames are both accepted. Outbound, the frame type follows the codec: [`WireCodec::is_text()`](../wire/API_REFERENCE.md#method-is_text) decides, so a `JsonCodec` sends **text** frames a browser or `websocat` can read, and a binary codec sends binary. WebSocket pings are answered automatically, as are `Kind::Ping` frames, and the connection deregisters itself when the pump exits.
 
 ## 6. Module `tcp` (feature `tcp`)
 
@@ -146,10 +190,12 @@ Length-delimited framing over TCP (`tokio_util::codec::LengthDelimitedCodec`). E
 
 *   **`async bind(addr: impl Into<String>, agent_factory: AgentFactory<ID>) -> Result<Arc<Self>, SessionLayerError>`** JSON on the wire.
 *   **`async bind_with_codec(addr, agent_factory, codec: C) -> Result<Arc<Self>, SessionLayerError>`**
+*   **`async bind_with_protocol(addr, agent_factory, codec: C, protocol: ProtocolVersion) -> Result<Arc<Self>, SessionLayerError>`**: announces `protocol` as a `Hello` on every connection.
+*   **`async bind_with_options(addr, agent_factory, codec: C, options: SessionOptions) -> Result<Arc<Self>, SessionLayerError>`**: `bind_with_protocol` plus a [`SessionClock`](#type-sessionclock-and-struct-sessionoptions) for stamping `Pong.responder`. The other constructors delegate to it.
 *   **`local_addr(&self) -> SocketAddr`**: resolves `:0` to the assigned port.
 *   Implements `Session`. `Drop` aborts the accept loop.
 
-Binding happens **before** the accept loop is spawned, so an address already in use surfaces as `SessionLayerError::Bind` rather than silently killing a detached task.
+Binding happens **before** the accept loop is spawned, so an address already in use surfaces as `SessionLayerError::Bind` rather than silently killing a detached task. `Kind::Ping` frames are answered on the connection task, so a TCP client is measured without the application doing anything; there is no transport-plane ping here, so the link plane is the only round trip TCP has.
 
 ### Type Alias `AgentFactory<ID>`
 
@@ -188,6 +234,8 @@ Turns on a console subscriber, once. `plaza` and `plaza_session` are instrumente
 ### Measured latency, and why the transport owns it
 
 The WebSocket adapter times its **own ping frame**, so a consumer gets a per-connection latency without adding anything to its application protocol. Probes go out fast for the first eight and then settle to upkeep, because a caller deciding whether a connection can meet a schedule wants several samples in the first second and nothing much after that.
+
+Two probes run per connection: the WebSocket's own ping frame (the transport plane, underneath the conditioner) and a `Kind::Ping` frame (the plaza plane, through it). Both are recorded; comparing them is how a slow client is diagnosed.
 
 **The server timing its own probe is the only version worth having**, and it matters wherever the number gates something. A client reporting its own latency can understate it; timing the probe is spoof-proof in the direction that counts, since a client can delay its reply and only make itself look worse.
 

@@ -29,6 +29,7 @@ use tracing::{debug, trace, warn};
 
 use crate::codec::WireCodec;
 use plaza_wire::frame::{self, ProtocolVersion};
+use crate::conditioner::LinkProfile;
 use crate::error::SessionLayerError;
 use crate::stats::TransportStats;
 
@@ -36,6 +37,59 @@ use crate::stats::TransportStats;
 pub const DEFAULT_BROADCAST_CAPACITY: usize = 256;
 /// Default capacity for a single client's outbound queue.
 pub const DEFAULT_CLIENT_QUEUE_CAPACITY: usize = 64;
+
+/// The clock a session stamps `Pong.responder` with.
+///
+/// Returns a number in whatever unit the application chose; nothing here reads
+/// it as a quantity, converts it, or has a default for it. Called on a
+/// connection task, so a clock that lives on the simulation loop is published
+/// rather than borrowed: store the tick into an `AtomicU64` and close over it.
+pub type SessionClock = Arc<dyn Fn() -> u64 + Send + Sync>;
+
+/// What a session declares and what it can answer with.
+#[derive(Clone)]
+pub struct SessionOptions {
+  /// What this build speaks, from [`plaza_wire::build`].
+  /// [`ProtocolVersion::UNKNOWN`] declares nothing and sends no `Hello`.
+  pub protocol: ProtocolVersion,
+  /// Read when answering a latency probe. Without one, a `Pong` carries no
+  /// responder time and a client can still measure its round trip but cannot
+  /// estimate the offset between the two clocks.
+  pub clock: Option<SessionClock>,
+}
+
+impl Default for SessionOptions {
+  fn default() -> Self {
+    Self {
+      protocol: ProtocolVersion::UNKNOWN,
+      clock: None,
+    }
+  }
+}
+
+impl SessionOptions {
+  pub fn with_protocol(protocol: ProtocolVersion) -> Self {
+    Self {
+      protocol,
+      clock: None,
+    }
+  }
+
+  pub fn clock(mut self, clock: impl Fn() -> u64 + Send + Sync + 'static) -> Self {
+    self.clock = Some(Arc::new(clock));
+    self
+  }
+}
+
+impl Debug for SessionOptions {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("SessionOptions")
+      .field("protocol", &self.protocol)
+      .field("clock", &self.clock.is_some())
+      .finish()
+  }
+}
+
 
 /// An inbound `SessionMessage` whose ops are still encoded bytes.
 ///
@@ -86,6 +140,37 @@ struct ClientHandle<ID: AgentId> {
   /// What this client said it speaks, `0` until its `Hello` arrives (or for
   /// ever, if it is old enough not to send one).
   protocol: AtomicU64,
+  /// The same three numbers for the probe that rides the whole frame path,
+  /// impairment included. The gap between the two is what plaza and the
+  /// configured link cost this connection, which is a number worth having
+  /// while debugging and the only one available on a transport with no ping
+  /// frame of its own.
+  link_rtt_us: AtomicU64,
+  min_link_rtt_us: AtomicU64,
+  link_samples: AtomicU64,
+  /// Frames this link discarded, which only a datagram profile ever does. The
+  /// application cannot count these for itself: what the link lost never
+  /// reaches it, which is the whole point of losing it.
+  link_dropped: AtomicU64,
+  /// Read by the connection task on every frame, written by the application
+  /// whenever it likes; the task picks a change up on its next frame or timer.
+  link: Arc<RwLock<LinkProfile>>,
+}
+
+/// Folds one sample into a smoothed average and a running minimum.
+///
+/// A plain exponential average, deliberately not `RttEstimator`: that lives in
+/// the client crate and this is a server transport, so borrowing it would put a
+/// client dependency in the connection path for eight lines of arithmetic.
+fn record_sample(samples: &AtomicU64, smoothed_us: &AtomicU64, min_us: &AtomicU64, us: u64) {
+  samples.fetch_add(1, Ordering::Relaxed);
+  let previous = smoothed_us.load(Ordering::Relaxed);
+  let smoothed = if previous == 0 { us } else { previous - previous / 8 + us / 8 };
+  smoothed_us.store(smoothed, Ordering::Relaxed);
+  let min = min_us.load(Ordering::Relaxed);
+  if min == 0 || us < min {
+    min_us.store(us, Ordering::Relaxed);
+  }
 }
 
 /// Hands out a single-consumer stream, or panics if it was already taken.
@@ -121,7 +206,6 @@ pub fn target_matches<ID: AgentId>(target: &MessageTarget<ID>, agent: &Agent<ID>
 /// All state sits behind a `RwLock`/atomics, so transports call these methods
 /// directly from their connection tasks: no actor, no command channel, no
 /// oneshot round-trips.
-#[derive(Debug)]
 pub struct ConnectionManager<ID: AgentId> {
   transport: &'static str,
   next_conn_id: AtomicU64,
@@ -135,6 +219,18 @@ pub struct ConnectionManager<ID: AgentId> {
   /// connection as its first frame. It never changes, so encoding it per
   /// connection would be per-connection work for a constant.
   hello: Option<OutboundFrame>,
+  clock: Option<SessionClock>,
+}
+
+impl<ID: AgentId> Debug for ConnectionManager<ID> {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("ConnectionManager")
+      .field("transport", &self.transport)
+      .field("connections", &self.connections.read().len())
+      .field("declares_protocol", &self.hello.is_some())
+      .field("has_clock", &self.clock.is_some())
+      .finish()
+  }
 }
 
 impl<ID: AgentId> Debug for ClientHandle<ID> {
@@ -156,6 +252,15 @@ impl<ID: AgentId> ConnectionManager<ID> {
   /// As [`new`](Self::new), plus the encoded `Hello` frame every new connection
   /// is sent first, so the client can compare versions without asking.
   pub fn with_hello(transport: &'static str, capacity: usize, hello: Option<OutboundFrame>) -> Self {
+    Self::with_hello_and_clock(transport, capacity, hello, None)
+  }
+
+  pub fn with_hello_and_clock(
+    transport: &'static str,
+    capacity: usize,
+    hello: Option<OutboundFrame>,
+    clock: Option<SessionClock>,
+  ) -> Self {
     let (raw_incoming_tx, raw_incoming_rx) = mpsc::bounded_async(capacity);
     let (presence_tx, presence_rx) = mpsc::bounded_async(capacity);
     Self {
@@ -168,7 +273,13 @@ impl<ID: AgentId> ConnectionManager<ID> {
       presence_rx: RwLock::new(Some(presence_rx)),
       stats: TransportStats::new(),
       hello,
+      clock,
     }
+  }
+
+  /// The clock a `Pong` is stamped with, if the application installed one.
+  pub fn clock(&self) -> Option<&SessionClock> {
+    self.clock.as_ref()
   }
 
   /// Registers a connected client and announces the join.
@@ -191,6 +302,11 @@ impl<ID: AgentId> ConnectionManager<ID> {
         min_rtt_us: AtomicU64::new(0),
         samples: AtomicU64::new(0),
         protocol: AtomicU64::new(0),
+        link_rtt_us: AtomicU64::new(0),
+        min_link_rtt_us: AtomicU64::new(0),
+        link_samples: AtomicU64::new(0),
+        link_dropped: AtomicU64::new(0),
+        link: Arc::new(RwLock::new(LinkProfile::default())),
       },
     );
     debug!(transport = self.transport, conn_id, agent = %agent, "Connection registered.");
@@ -323,22 +439,146 @@ impl<ID: AgentId> ConnectionManager<ID> {
   /// is spoof-proof in the direction that matters: a client can delay its reply
   /// and only make itself look worse.
   pub fn record_rtt(&self, conn_id: ConnectionId, rtt: Duration) {
-    let us = rtt.as_micros() as u64;
     let connections = self.connections.read();
     let Some(handle) = connections.get(&conn_id) else {
       return;
     };
-    handle.samples.fetch_add(1, Ordering::Relaxed);
-    // A plain exponential average, deliberately not `RttEstimator`: that lives in
-    // the client crate and this is a server transport, so borrowing it would put
-    // a client dependency in the connection path for eight lines of arithmetic.
-    let previous = handle.rtt_us.load(Ordering::Relaxed);
-    let smoothed = if previous == 0 { us } else { previous - previous / 8 + us / 8 };
-    handle.rtt_us.store(smoothed, Ordering::Relaxed);
-    let min = handle.min_rtt_us.load(Ordering::Relaxed);
-    if min == 0 || us < min {
-      handle.min_rtt_us.store(us, Ordering::Relaxed);
+    record_sample(
+      &handle.samples,
+      &handle.rtt_us,
+      &handle.min_rtt_us,
+      rtt.as_micros() as u64,
+    );
+  }
+
+  /// Records one round trip measured over the plaza frame path: a `Kind::Ping`
+  /// out and its `Pong` back, through whatever impairment the link carries.
+  ///
+  /// The other half of [`record_rtt`](Self::record_rtt), which times the
+  /// transport's own ping underneath all of that. Both are the server timing
+  /// its own probe; neither is a number a client reported.
+  pub fn record_link_rtt(&self, conn_id: ConnectionId, rtt: Duration) {
+    let connections = self.connections.read();
+    let Some(handle) = connections.get(&conn_id) else {
+      return;
+    };
+    record_sample(
+      &handle.link_samples,
+      &handle.link_rtt_us,
+      &handle.min_link_rtt_us,
+      rtt.as_micros() as u64,
+    );
+  }
+
+  /// The smoothed round trip over the frame path, once it has been measured.
+  pub fn link_rtt(&self, conn_id: ConnectionId) -> Option<Duration> {
+    self.sample(conn_id, |h| h.link_rtt_us.load(Ordering::Relaxed))
+  }
+
+  /// The smallest round trip seen over the frame path.
+  pub fn min_link_rtt(&self, conn_id: ConnectionId) -> Option<Duration> {
+    self.sample(conn_id, |h| h.min_link_rtt_us.load(Ordering::Relaxed))
+  }
+
+  pub fn link_rtt_samples(&self, conn_id: ConnectionId) -> u64 {
+    self
+      .connections
+      .read()
+      .get(&conn_id)
+      .map(|h| h.link_samples.load(Ordering::Relaxed))
+      .unwrap_or(0)
+  }
+
+  /// The frame-path round trip for an *agent*, and how many samples it rests
+  /// on. The counterpart of [`agent_rtt`](Self::agent_rtt), and the only one of
+  /// the two a transport without its own ping frame can report.
+  pub fn agent_link_rtt(&self, id: &ID) -> Option<(Duration, u64)> {
+    let connections = self.connections.read();
+    let handle = connections.values().find(|h| h.agent.id() == Some(id))?;
+    let us = handle.min_link_rtt_us.load(Ordering::Relaxed);
+    (us > 0).then(|| (Duration::from_micros(us), handle.link_samples.load(Ordering::Relaxed)))
+  }
+
+  /// Records one frame the link discarded.
+  pub fn record_link_drop(&self, conn_id: ConnectionId) {
+    let connections = self.connections.read();
+    if let Some(handle) = connections.get(&conn_id) {
+      handle.link_dropped.fetch_add(1, Ordering::Relaxed);
     }
+  }
+
+  /// How many frames this connection's link has discarded.
+  pub fn link_dropped(&self, conn_id: ConnectionId) -> u64 {
+    self
+      .connections
+      .read()
+      .get(&conn_id)
+      .map(|h| h.link_dropped.load(Ordering::Relaxed))
+      .unwrap_or(0)
+  }
+
+  /// The same for an agent, summed over its connections.
+  pub fn agent_link_dropped(&self, id: &ID) -> u64 {
+    self
+      .connections
+      .read()
+      .values()
+      .filter(|h| h.agent.id() == Some(id))
+      .map(|h| h.link_dropped.load(Ordering::Relaxed))
+      .sum()
+  }
+
+  /// Every link's discards, summed. What a panel showing one room wants.
+  pub fn total_link_dropped(&self) -> u64 {
+    self
+      .connections
+      .read()
+      .values()
+      .map(|h| h.link_dropped.load(Ordering::Relaxed))
+      .sum()
+  }
+
+  /// Sets the impairment one connection's frames ride through.
+  pub fn set_link_profile(&self, conn_id: ConnectionId, profile: LinkProfile) {
+    let connections = self.connections.read();
+    if let Some(handle) = connections.get(&conn_id) {
+      *handle.link.write() = profile;
+    }
+  }
+
+  /// Sets the impairment for every connection an agent holds.
+  ///
+  /// Keyed by agent because that is what an application has: it knows who is
+  /// playing, not which socket they arrived on.
+  pub fn set_agent_link_profile(&self, id: &ID, profile: LinkProfile) {
+    let connections = self.connections.read();
+    for handle in connections.values() {
+      if handle.agent.id() == Some(id) {
+        *handle.link.write() = profile;
+      }
+    }
+  }
+
+  /// Sets the impairment for every live connection.
+  ///
+  /// What a panel controlling one arena's link conditions wants: the setting
+  /// describes the arena, not a player picked out of it.
+  pub fn set_all_link_profiles(&self, profile: LinkProfile) {
+    let connections = self.connections.read();
+    for handle in connections.values() {
+      *handle.link.write() = profile;
+    }
+  }
+
+  /// What a connection's impairment currently reads.
+  pub fn link_profile(&self, conn_id: ConnectionId) -> Option<LinkProfile> {
+    self.connections.read().get(&conn_id).map(|h| *h.link.read())
+  }
+
+  /// The shared profile cell, taken once by a connection task so that reading
+  /// it per frame costs no lookup in the registry.
+  pub(crate) fn link_handle(&self, conn_id: ConnectionId) -> Option<Arc<RwLock<LinkProfile>>> {
+    self.connections.read().get(&conn_id).map(|h| Arc::clone(&h.link))
   }
 
   /// The smoothed round trip to a connection, once it has been measured.
@@ -431,13 +671,25 @@ where
   /// [`ProtocolVersion::UNKNOWN`] to declare nothing, which disables the check
   /// rather than failing it.
   pub fn with_protocol(transport: &'static str, codec: C, capacity: usize, protocol: ProtocolVersion) -> Arc<Self> {
+    Self::with_options(transport, codec, capacity, SessionOptions::with_protocol(protocol))
+  }
+
+  /// Creates the session with everything it needs to answer for itself: the
+  /// version it declares, and the clock it stamps a `Pong` with.
+  pub fn with_options(transport: &'static str, codec: C, capacity: usize, options: SessionOptions) -> Arc<Self> {
+    let protocol = options.protocol;
     let hello = (protocol != ProtocolVersion::UNKNOWN).then(|| {
       let mut buf = Vec::new();
       frame::begin(frame::Kind::Hello, &mut buf);
       codec.encode_into(&protocol, &mut buf).expect("a u32 always encodes");
       Bytes::from(buf)
     });
-    let manager = Arc::new(ConnectionManager::with_hello(transport, capacity, hello));
+    let manager = Arc::new(ConnectionManager::with_hello_and_clock(
+      transport,
+      capacity,
+      hello,
+      options.clock,
+    ));
     let (deserialized_tx, deserialized_rx) = mpsc::bounded_async(capacity);
 
     let session = Arc::new(Self {
@@ -530,22 +782,37 @@ async fn deserialize_bridge<Op, ID, C>(
           Ok(theirs) => {
             manager.record_protocol(&from, theirs);
             if !theirs.agrees_with(expected) {
-              // Warned, not refused. The version is a build hash, and a peer
-              // that recompiled is indistinguishable from one that changed
-              // shape, so rejecting on mismatch would disconnect clients that
-              // are fine. Skipping unknown *kinds* is what actually keeps an
-              // older peer working.
-              warn!(
+              // Recorded and reported, never refused and not warned about. A
+              // version is a build hash, so a peer that merely recompiled is
+              // indistinguishable from one whose shapes changed, and this layer
+              // cannot tell which it is looking at. Whether a mismatch is fatal,
+              // cosmetic, or worth telling the client to reload is the
+              // application's, which reads it back through
+              // `ConnectionManager::protocol`. A `warn!` here is this layer
+              // forming that opinion on the application's behalf, and on a fleet
+              // mid-rollout it is a warning per connection about nothing.
+              //
+              // Skipping unknown *kinds* is what actually keeps an older peer
+              // working; this only records what it said.
+              debug!(
                 transport,
                 agent = %from,
                 theirs = theirs.0,
                 ours = expected.0,
-                "Client declared a different protocol version."
+                "Client declared a different protocol version; see ConnectionManager::protocol."
               );
             }
           }
           Err(source) => warn!(transport, error = %source, agent = %from, "Discarding a malformed Hello."),
         }
+        continue;
+      }
+      // Answered on the connection task, which is the only place that knows
+      // which socket to reply on and holds the timer that sent the probe. One
+      // reaching here means a transport forwarded it instead, so it goes
+      // unanswered rather than being mistaken for ops.
+      Some(frame::Kind::Ping) | Some(frame::Kind::Pong) => {
+        trace!(transport, kind = tag, agent = %from, "Skipping a probe frame the transport did not handle.");
         continue;
       }
       // Forward compatibility, and the reason the tag is read by hand rather

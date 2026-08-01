@@ -59,11 +59,64 @@ Binding happens before the accept loop starts, so a port already in use surfaces
 
 ## Measured latency per connection
 
-The WebSocket adapter times its own ping frames, so `session.agent_rtt(&id)` gives you a measured round trip and a sample count with **nothing added to your protocol**. Fast probes for the first second, then upkeep.
+Two round trips are measured, both by the server, and neither is a number the client reported. Nothing is added to your protocol for either.
 
-Two things worth knowing. The server times its own probe rather than trusting a reported number, which is what makes it usable for anything that gates entry: a client can only make itself look worse. And `min_rtt` is the one to compare against a budget, because jitter only adds delay, so the smallest sample is the honest estimate of the link.
+`session.agent_rtt(&id)` is the **transport plane**: the WebSocket adapter timing its own ping frames, underneath everything this crate does. `session.agent_link_rtt(&id)` is the **plaza plane**: a `Kind::Ping` frame going out and its `Pong` coming back, so what it measures is everything a real message goes through, impairment included. Both start with fast probes for the first second, then settle into upkeep.
+
+The gap between them is what plaza and the configured link cost this connection, which is the number worth having while debugging a slow client. On TCP, which has no ping frame of its own, the link plane is the only round trip there is; before it existed, `agent_rtt` was permanently `None` there.
+
+`min_rtt` and `min_link_rtt` are the ones to compare against a budget, because jitter only adds delay, so the smallest sample is the honest estimate of the link.
 
 What you do with it is yours. `horde_playground` uses it to refuse connections that cannot meet its input schedule, which it previously discovered by seating them and then silently dropping every input they sent.
+
+### Answering a probe with your clock
+
+A `Pong` carries the responder's clock, which is what lets a client estimate the offset between the two timelines rather than only the distance between them. Install one and every probe this session answers is stamped with it:
+
+```rust,ignore
+let sim_clock = Arc::new(AtomicU64::new(0));
+let session = ActixWsPlazaSession::with_options(
+  MsgPackCodec,
+  SessionOptions::with_protocol(ProtocolVersion(PROTOCOL)).clock({
+    let sim_clock = sim_clock.clone();
+    move || sim_clock.load(Ordering::Relaxed)
+  }),
+);
+```
+
+The closure runs on a connection task, so an authoritative clock that lives on the simulation loop is **published** rather than borrowed: store the tick into an `AtomicU64` and close over it, which is what `horde_playground` does. The unit is yours and this crate never reads it as a quantity. Without a clock, `Pong.responder` is `None` and a client can still measure its round trip.
+
+## Impairment belongs to the link
+
+Delay, jitter and loss are properties of a connection, so they are applied where the connection is:
+
+```rust,ignore
+session.set_agent_link_profile(&id, LinkProfile::symmetric(DirectionProfile {
+  delay: Duration::from_millis(80),
+  jitter: Duration::from_millis(20),
+  loss: 0.02,
+  delivery: Delivery::Reliable,
+}));
+```
+
+`up` impairs what the client sends, `down` what the server sends; `LinkProfile::symmetric` applies the same each way, so the 80ms above is a 160ms round trip. `set_all_link_profiles` does the same for every live connection, which is what a panel describing one room's conditions wants. A default profile is passthrough and costs nothing: no queue, no allocation, no deadline arithmetic.
+
+### What a loss costs is the link's to say
+
+`loss` is the probability a frame is lost in transit. `delivery` says what that means, and the two answers are different link types rather than two knobs on one.
+
+`Delivery::Reliable` is the default and the truth about both transports here. TCP retransmits, so a lost segment never reaches the application as a missing message: it costs one retransmission timeout, everything queued behind it waits, and what arrives is a latency spike followed by a burst. **Nothing is deleted.** Modelling loss as a deleted frame would describe a link plaza does not have, and an application written against it would carry reconciliation for a case that cannot occur.
+
+`Delivery::Datagram` deletes the frame, which is what a real datagram link does and what the two ends then have to reconcile. Over a WebSocket that is a *simulation* of a transport plaza has yet to grow, and it is worth having deliberately: it is how an application's recovery gets exercised before the channel it was written for exists.
+
+No frame kind is exempt under either model, and none needs to be. Under `Reliable` nothing is lost at all. Under `Datagram` a lost probe costs one sample of the several the session keeps in flight, and a lost `Hello` reads as a peer that declared nothing, which is exactly the case that handshake was built to survive.
+
+**What the link discarded, it reports.** `session.link_dropped()` totals the frames the conditioner threw away, and `agent_link_dropped(&id)` narrows it to one agent. A `Datagram` profile is one of two ways a frame dies; the other is the queue bound, which stands for a socket buffer running out rather than for anything the network did, and refuses only `Ops` frames so a full queue can never wedge a handshake or starve a probe. This is worth reading precisely because an application cannot count it for itself: what the link lost never reaches the application, which is the whole point of losing it.
+
+Two other things it guarantees, each of which an application queue had to remember for itself:
+
+- **Order is preserved.** Release times are made monotone as frames are queued, so a delayed frame holds up everything behind it and a jitter spike arrives as a stall then a burst. That head-of-line blocking is also what makes one retransmission cost more than the frame that paid for it.
+- **Everything crosses it.** Including the link-plane probe, which is why `agent_link_rtt` moves when you drag a latency slider and `agent_rtt` does not.
 
 ## Wire format
 
@@ -72,6 +125,31 @@ Everything is encoded through `WireCodec`. `JsonCodec` is the default: readable 
 ```rust,ignore
 let session = ActixWsPlazaSession::with_codec(MyMsgPackCodec);
 ```
+
+A version declared here is announced to every client as a `Hello` before anything else, so a stale build hears about the skew on connect instead of mis-decoding one variant at a time. It matters most for a client that ships separately from the server: a page can be forced to reload and an installed app cannot.
+
+```rust,ignore
+let session = ActixWsPlazaSession::with_protocol(JsonCodec, ProtocolVersion(PROTOCOL));
+```
+
+`examples/lobby_world` does exactly this, deriving `PROTOCOL` in its `build.rs` from the file that defines its ops.
+
+### Who decides what a mismatch means
+
+This layer carries the number and stops. It records what a peer declared, keeps serving it, and lets you read it back with `session.protocol(&id)`. It does not refuse the connection and does not warn, because a version is a build hash: a peer that merely recompiled is indistinguishable from one whose shapes changed, and neither this crate nor a log line can tell them apart.
+
+The decision is the game's, and it is a real one. Refuse the seat, serve a degraded stream, show a banner, or tell the client to reload:
+
+```rust,ignore
+if let Some(theirs) = session.protocol(&id) {
+  if theirs != ProtocolVersion(PROTOCOL) {
+    // Your op, your policy. Six of the examples do exactly this.
+    return vec![TargetedOp::new_system_to(id, vec![Op::Outdated { server: PROTOCOL, client: theirs.0 }])];
+  }
+}
+```
+
+That is the layering: the `Hello` is how a version gets across, and an op like `Op::Outdated` is how your game answers. The handshake deliberately cannot answer for you, and an application-level op deliberately does not need to carry the version itself once the handshake does.
 
 ## Hosting a browser client (feature `actix_host`)
 
