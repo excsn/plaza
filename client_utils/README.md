@@ -36,7 +36,7 @@ You do not need a Plaza server to use it. Anything speaking a sequence-numbered-
 | Knowing whether a correction was normal, without a threshold you tuned once | `CorrectionMonitor` (running mean and variance, adaptive) |
 | The render clock drifts as latency changes | `InterpolationClock::resync` (position) or `observe_rate` (playback-rate glide) |
 | A variable frame has to drive a fixed-step simulation | `timestep::FixedTimestep` (and `Periodic` for "is it time yet") |
-| Measuring round-trip latency to the other end | `RttEstimator` (with `plaza_wire`'s `Ping`/`Pong`) |
+| Measuring round-trip latency to the other end | `Timeline` (a probe's bookkeeping), over a `plaza_wire` `Kind::Ping` frame |
 | Tracking clock offset **and drift** against a server | `ClockSyncEstimator` (least-squares offset + skew) |
 | Optimally smoothing one noisy signal (jitter, latency) | `ScalarKalman` (a 1D Kalman filter) |
 | Telling the other side what arrived, in twelve bytes, however bad the link | `ack::AckWindow` (a sliding-window bitmask) |
@@ -190,3 +190,13 @@ Its three counters stay separate on purpose. Sequence gaps mean the wire lost so
 ## Status
 
 Experimental. The API changes.
+
+## What the counters are for
+
+Four places in this crate degrade rather than fail, and each one counts how often it did. A `warn!` fires beside them, and the log line is not the useful half: it says a thing happened once, into a stream nobody aggregates, at the moment the game is too busy to read it. The number says whether it is climbing, which is the only version of the question worth asking.
+
+- **`ClientInputBuffer::overflowed`**: inputs dropped because the buffer was full. Past the first one a reconciliation can no longer replay everything the server has not acknowledged, so the prediction is not merely late, it is wrong by whatever those inputs did.
+- **`StateHistory::resets`**: saves that fell outside the window. Rollback assumes contiguous frames, so this should stay zero forever; non-zero means the window was rebuilt from a single frame and the next correction finds nothing to restore.
+- **`ExtrapolationBase::over_extrapolations`** and **`RemoteView::over_extrapolations`**: projections held at the cap. Not an error, and the steady case is the diagnosis: it means the render target is being computed ahead of the newest sample rather than trailing it, so remote entities are dead reckoned every frame and never interpolated. The fix is the render clock, not the cap.
+
+They are cheap enough to read every frame, which is the intended use: put them on a debug overlay next to the round trip. `plaza_flame::PlazaStats` exists for exactly that.

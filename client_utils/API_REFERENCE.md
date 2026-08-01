@@ -142,6 +142,7 @@ An entity you do not control: a `SnapshotBuffer` plus the interpolate / extrapol
 *   **`push(&mut self, time_ms, state, velocity)`**: record a snapshot and the velocity to dead-reckon along.
 *   **`render(&self, target: Option<u64>, RenderOpts) -> Option<State>`**: `None` until the first push; otherwise the state to draw. Interpolated at `target`, dead-reckoned when the buffer has starved (if `opts.extrapolate`), or the raw newest (if `opts.interpolate` is false).
 *   **`latest() -> Option<&State>`**.
+*   **`over_extrapolations() -> u64`**: how many renders asked for a time further past the newest sample than `max_extrapolation_ms` and were served the capped coast instead. Holding at the cap is a legitimate outcome, so this is a rate to watch rather than an error count, and it accumulates what each render's `ExtrapolationBase` found, since that base is built per call and would otherwise take its own count with it. Climbing steadily is almost never a starved link: it means the render target is computed ahead of the newest sample rather than trailing it, so the entity is dead reckoned every frame and never interpolated.
 *   **`oldest_timestamp() -> Option<u64>`**: the oldest instant the view can still interpolate at. A `render` target before this is **clamped to the oldest snapshot**, silently drawing the entity at a newer instant than asked for; a caller rendering a whole scene at one instant should compare its target against this and count the misses, and size `buffer_size` to cover its deepest render delay at its highest sample rate so they stay rare.
 
 **`RenderOpts`**: `interpolate: bool`, `extrapolate: bool`. `Default` is both on; a real client fixes them, the booleans exist so a UI can toggle them.
@@ -162,6 +163,7 @@ A frame-indexed ring of whole-world snapshots: the save-states rollback restores
 *   **`save(&mut self, frame, state)`**: record a frame. Contiguous use (append `latest + 1`, or overwrite a frame in the window, as re-simulation does); a save that skips ahead resets the window rather than leaving a gap.
 *   **`restore(&self, frame) -> Option<State>`**: the saved state, or `None` if evicted or never saved.
 *   **`oldest_frame()`**, **`latest_frame()`**, **`len`**, **`is_empty`**, **`clear`**.
+*   **`resets() -> u64`**: how many saves fell outside the window and reset it. Rollback assumes contiguous saves, so this should stay zero for the life of a session; non-zero means the window was thrown away and rebuilt from one frame, which silently shortens how far back the session can roll, and a correction arriving next frame finds nothing to restore.
 
 ### Struct `InputTimeline<Input: Clone + Debug>`
 
@@ -216,6 +218,7 @@ Unacknowledged inputs, kept for replay.
 *   **`get_unacknowledged_inputs(&self, last_acknowledged_sequence_number: SequenceNumber) -> impl Iterator`**: every buffered input with a sequence number greater than the argument, in order. What to replay.
 *   **`get_predicted_state_before_input(&self, sequence_number) -> Option<&PredictedStateSnapshot>`** Useful for diagnosing how far a prediction diverged.
 *   **`len`**, **`is_empty`**, **`clear`**
+*   **`overflowed() -> u64`**: how many inputs were discarded because the buffer was full. Non-zero means a reconciliation can no longer replay everything the server has not acknowledged, so the prediction is wrong by whatever those inputs did. The `warn` beside it fires once per event into a log; this is the number to put on a HUD or an alert, since what matters is whether it is climbing. Size the buffer at input rate times worst round trip and it stays zero.
 
 ### Struct `BufferedInput<Op, PredictedStateSnapshot>`
 
@@ -250,13 +253,30 @@ This fits the "estimate server time from packets, then subtract the delay" model
 *   **`observe_rate(&mut self, newest_server_time_ms: u64, max_rate_adjust: f32)`** + **`advance_scaled(&mut self, dt_ms: u64)`** + **`playback_rate() -> f32`** (on `InterpolationClock<u64>`): the rate-based alternative to `resync`. Instead of nudging the estimate's *position* toward the stream (a small snap each packet), `observe_rate` adjusts its *speed*, faster when the estimate is behind the newest time, slower when ahead (buffer starving), so it glides into alignment (time dilation). Drift is normalized by the render delay; `max_rate_adjust` (e.g. `0.1` for +/-10%) bounds how far from real time it goes. Pair `observe_rate` (per packet) with `advance_scaled` (per frame) in place of `observe`/`advance`; `playback_rate` reads the current dilation for a readout. Pick one of `resync` or `observe_rate`, not both.
 *   **`delay()`** / **`set_delay(delay)`**: read and change the render-behind delay. Change it at runtime to size the interpolation buffer dynamically, larger under jitter, smaller on a stable connection.
 
+### Struct `Timeline` and struct `Probe`
+
+The bookkeeping around a probe, and where most clients should start rather than driving the two estimators by hand.
+
+```rust
+let probe = timeline.begin(now);          // stamp your Kind::Ping with probe.sent_at
+timeline.complete(probe, now, pong.responder);   // feeds both estimators
+```
+
+*   **`begin(now) -> Probe`**, **`complete(probe, now, responder: Option<u64>) -> bool`**: `false` when the probe was discarded. With a `responder` the clock fit gets an exchange too; without one, only the round trip is recorded.
+*   **`on_reconnect()`**, **`on_resume()`**, **`epoch()`**.
+*   **`rtt`** and **`clock`** are public: read the estimates straight off them.
+
+**A probe carries the epoch it started in, and one that outlives its epoch is discarded rather than recorded.** A probe sent before a suspend and answered after it measures the suspend, not the network, and a smoothed estimator carries one such sample for minutes. A **reconnect** invalidates measurements in flight but keeps what has been learned, because the socket changed and the link probably did not. A **resume** invalidates both, because arbitrary wall time passed and a least-squares fit across a ten-minute gap produces a meaningless skew.
+
 ### Struct `RttEstimator`
 
-Smooths round-trip samples (from a `plaza_wire` `Ping`/`Pong` exchange) into a stable latency estimate. Both a client measuring the server and a server measuring a client use it.
+Smooths round-trip samples (from a `plaza_wire` `Kind::Ping` exchange) into a stable latency estimate. Both a client measuring the server and a server measuring a client use it.
+
+**No unit is named or assumed.** Samples go in as whatever you stamped a probe with and every number comes back in that same unit: feed milliseconds and read milliseconds, feed microseconds and read microseconds. Mixing two units across one estimator is the only way to get a wrong answer, and no signature can stop you, so pick one where you stamp and keep it.
 
 *   **`new(alpha)`** / **`Default`** (alpha 0.1): `alpha` is each sample's moving-average weight.
-*   **`observe(&mut self, rtt_sample_ms: u64)`**, **`observe_pong(&mut self, origin_time_ms, now_ms)`**: record a sample; the second computes `now - origin`.
-*   **`rtt_ms()`**, **`one_way_ms()`** (half the RTT), **`min_rtt_ms()`** (the smallest seen, the best latency estimate since jitter only adds delay), **`jitter_ms()`** (the smoothed mean deviation, size a dynamic interpolation buffer from it). Each `None` before the first sample.
+*   **`rtt()`**, **`one_way()`** (half the RTT), **`min_rtt()`** (the smallest seen, the best latency estimate since jitter only adds delay), **`jitter()`** (the smoothed mean deviation, size a dynamic interpolation buffer from it). Each `None` before the first sample.
+*   **`observe(sample)`**, **`observe_pong(origin, now)`** (the round trip is `now - origin`), **`clear()`**.
 
 `RttEstimator` is the zero-config default. The next two are heavier building blocks for when it is not enough, offered as options, not replacements.
 
@@ -265,9 +285,11 @@ Smooths round-trip samples (from a `plaza_wire` `Ping`/`Pong` exchange) into a s
 Fits the client-to-server clock **offset and its skew** (drift rate) by least squares over a sliding window, where a moving average models offset alone. `f64` times (millisecond timestamps over a long session exceed `f32`'s integer precision).
 
 *   **`new(window: usize)`**: fit over the last `window` measurements (16 to 64 typical). **Panics if less than 2.**
-*   **`observe(local_ms, offset_ms)`**: record a measured `offset = server - local` at local time `local_ms`.
-*   **`observe_exchange(local_send, server_recv, local_recv)`**: derive the offset from a round trip under the symmetric-delay assumption.
-*   **`offset_at(local_ms) -> Option<f64>`** (fitted, so it interpolates and extrapolates along the line), **`server_time_at(local_ms) -> Option<f64>`**, **`skew() -> f64`** (drift per unit time; `x 1e6` for ppm), **`is_ready()`**, **`sample_count()`**, **`clear()`**.
+*   **`observe(local, offset)`**: record a measured `offset = server - local` at local time `local`.
+*   **`observe_exchange(local_send, remote_recv, local_recv)`**: derive the offset from a round trip under the symmetric-delay assumption. `remote_recv` is what the other end stamped into its reply, which for a probe is `Pong.responder`.
+
+**Both ends must mean the same unit.** Unlike `RttEstimator`, which only ever subtracts two of your own readings, this compares your clock against someone else's, so a disagreement about the unit produces a confident wrong answer rather than a visible one.
+*   **`offset_at(local) -> Option<f64>`** (fitted, so it interpolates and extrapolates along the line), **`server_time_at(local) -> Option<f64>`**, **`skew() -> f64`** (drift per unit time; `x 1e6` for ppm), **`is_ready()`**, **`sample_count()`**, **`clear()`**.
 
 One honest limit: a round trip cannot recover the *asymmetric* one-way offset (upload slower than download) without an external time source; regression buys the drift rate cleanly, not the asymmetric constant. Size the interpolation buffer to absorb the residual. Contrasted against a moving average in the [`estimator_lab`](examples/estimator_lab.rs) example.
 
@@ -308,6 +330,7 @@ When snapshots stop arriving, continue an entity along its last known velocity r
 
 *   **`new(state, velocity, server_timestamp, client_receipt_time_ms: ClientTimeMs) -> Self`**: the last authoritative state, plus when the client processed it (which is what the extrapolation duration is measured from).
 *   **Public fields**: `state`, `velocity`, `server_timestamp`, `client_receipt_time_ms`.
+*   **`over_extrapolations() -> u64`**: how many projections ran past the cap and were held at it. Behind a `Cell`, because the method that counts is a read and making it `&mut self` would force every caller holding a base across frames to hold it mutably just to draw.
 *   **`get_extrapolated_state<TimeDelta>(&self, target_client_render_time_ms: ClientTimeMs, max_extrapolation_duration_ms: u64, convert_ms_to_time_delta: impl Fn(u64) -> TimeDelta) -> Option<StateType>`** Projects forward, capping the **duration** by `max_extrapolation_duration_ms` so an entity coasts to the limit and stops there rather than running off into the distance. A target before `client_receipt_time_ms` returns the un-extrapolated base state (extrapolation is for the future; use interpolation for the past). `convert_ms_to_time_delta` turns the capped millisecond duration into whatever `TimeDelta` your `Extrapolatable` impl takes (`|ms| ms as f32 / 1000.0` for seconds, `Duration::from_millis` for a `Duration`).
 
 Capping the duration rather than discarding the result is the fix to a real bug worth knowing about, because "clamp" reads naturally as the other thing. Returning the *un-extrapolated* state past the cap is a discontinuity: at the limit an entity has coasted `velocity * max_ms` forward, and one millisecond later it was drawn back at the raw sample, a jump of the entire window in the wrong direction, flickering whenever a jittery target crossed the boundary. Two tests had asserted the old behaviour, so they were pinning the bug rather than the requirement.

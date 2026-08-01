@@ -18,9 +18,16 @@
 //! cleanly; it does not buy you the asymmetric constant. Size your interpolation
 //! buffer to absorb the residual.
 //!
-//! Times are `f64`: millisecond timestamps over a long session exceed `f32`'s
-//! integer precision (about 4.6 hours of milliseconds), and the fit needs the
-//! headroom.
+//! Times are `f64`: these are absolute clock readings rather than durations,
+//! and a millisecond timestamp outgrows `f32`'s integer precision after about
+//! 4.6 hours, so the fit needs the headroom.
+//!
+//! **The unit is yours, and both ends must mean the same one.** Nothing here
+//! names a unit; feed local and remote readings in whatever the two ends
+//! agreed on out of band. Unlike [`crate::rtt::RttEstimator`], which only ever
+//! subtracts two of your own readings, this one compares your clock against
+//! someone else's, so a disagreement about the unit produces a confident wrong
+//! answer rather than a visible one.
 
 use std::collections::VecDeque;
 
@@ -28,8 +35,8 @@ use std::collections::VecDeque;
 /// server-minus-client offset observed then.
 #[derive(Debug, Clone, Copy)]
 struct Sample {
-  local_ms: f64,
-  offset_ms: f64,
+  local: f64,
+  offset: f64,
 }
 
 /// Fits the client-to-server clock offset and skew by least squares over a
@@ -60,25 +67,25 @@ impl ClockSyncEstimator {
     }
   }
 
-  /// Records a measured offset: `offset_ms = server_time - local_time`, observed
-  /// when the local clock read `local_ms`. The oldest sample drops when the
+  /// Records a measured offset: `offset = remote_time - local_time`, observed
+  /// when the local clock read `local`. The oldest sample drops when the
   /// window is full.
-  pub fn observe(&mut self, local_ms: f64, offset_ms: f64) {
+  pub fn observe(&mut self, local: f64, offset: f64) {
     if self.window.len() == self.capacity {
       self.window.pop_front();
     }
-    self.window.push_back(Sample { local_ms, offset_ms });
+    self.window.push_back(Sample { local, offset });
   }
 
   /// Records a symmetric round-trip exchange and derives the offset from it.
   ///
-  /// `local_send` is the client clock when the request left, `server_recv` the
-  /// server clock stamped in the reply, `local_recv` the client clock when the
-  /// reply arrived. Assuming symmetric delay, the offset is
-  /// `server_recv - (local_send + local_recv) / 2`, taken at `local_recv`. (Where
+  /// `local_send` is the local clock when the probe left, `remote_recv` the
+  /// reading the other end stamped into its reply, `local_recv` the local clock
+  /// when that reply arrived. Assuming symmetric delay, the offset is
+  /// `remote_recv - (local_send + local_recv) / 2`, taken at `local_recv`. (Where
   /// delay is asymmetric, see the module note: this offset carries that error.)
-  pub fn observe_exchange(&mut self, local_send: f64, server_recv: f64, local_recv: f64) {
-    let offset = server_recv - (local_send + local_recv) / 2.0;
+  pub fn observe_exchange(&mut self, local_send: f64, remote_recv: f64, local_recv: f64) {
+    let offset = remote_recv - (local_send + local_recv) / 2.0;
     self.observe(local_recv, offset);
   }
 
@@ -101,14 +108,14 @@ impl ClockSyncEstimator {
       return None;
     }
     let n_f = n as f64;
-    let mean_x = self.window.iter().map(|s| s.local_ms).sum::<f64>() / n_f;
-    let mean_y = self.window.iter().map(|s| s.offset_ms).sum::<f64>() / n_f;
+    let mean_x = self.window.iter().map(|s| s.local).sum::<f64>() / n_f;
+    let mean_y = self.window.iter().map(|s| s.offset).sum::<f64>() / n_f;
 
     let mut sxy = 0.0;
     let mut sxx = 0.0;
     for s in &self.window {
-      let dx = s.local_ms - mean_x;
-      sxy += dx * (s.offset_ms - mean_y);
+      let dx = s.local - mean_x;
+      sxy += dx * (s.offset - mean_y);
       sxx += dx * dx;
     }
     // Degenerate x-spread (all samples at one instant): no slope, flat offset.
@@ -116,25 +123,25 @@ impl ClockSyncEstimator {
     Some((mean_x, mean_y, skew))
   }
 
-  /// The estimated offset (`server - local`) at local time `local_ms`, along the
+  /// The estimated offset (`remote - local`) at local time `local`, along the
   /// fitted line, so it interpolates within the window and extrapolates past it.
   /// With one sample, that sample's offset; `None` with none.
-  pub fn offset_at(&self, local_ms: f64) -> Option<f64> {
+  pub fn offset_at(&self, local: f64) -> Option<f64> {
     match self.fit() {
-      Some((mean_x, mean_y, skew)) => Some(mean_y + skew * (local_ms - mean_x)),
-      None => self.window.back().map(|s| s.offset_ms),
+      Some((mean_x, mean_y, skew)) => Some(mean_y + skew * (local - mean_x)),
+      None => self.window.back().map(|s| s.offset),
     }
   }
 
-  /// The estimated server clock at local time `local_ms`: `local_ms` plus the
-  /// fitted offset. `None` until the first measurement.
-  pub fn server_time_at(&self, local_ms: f64) -> Option<f64> {
-    self.offset_at(local_ms).map(|off| local_ms + off)
+  /// The estimated remote clock at local time `local`: `local` plus the fitted
+  /// offset. `None` until the first measurement.
+  pub fn server_time_at(&self, local: f64) -> Option<f64> {
+    self.offset_at(local).map(|off| local + off)
   }
 
   /// The clock skew: how fast the offset changes per unit of local time
-  /// (dimensionless, `server_ms` drift per `local_ms`). Multiply by `1e6` for
-  /// parts per million. `0.0` until a line can be fit.
+  /// (dimensionless, remote drift per unit of local time, so the unit cancels).
+  /// Multiply by `1e6` for parts per million. `0.0` until a line can be fit.
   pub fn skew(&self) -> f64 {
     self.fit().map(|(_, _, skew)| skew).unwrap_or(0.0)
   }
