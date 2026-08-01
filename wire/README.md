@@ -66,9 +66,36 @@ The [`payloads`] module holds the netcode vocabulary both ends exchange, generic
 - `AuthoritativeStateUpdate` (server to client): the client's own authoritative state plus the last input seq applied.
 - `RemoteEntitySnapshot` (server to client): another entity's state, for interpolation and extrapolation. You name its position/rotation types.
 - `TimestampedClientAction` (client to server): a time-stamped action, so the server can rewind to when the client acted (lag compensation).
-- `Ping` / `Pong` (either direction): a latency probe. The reply carries the origin stamp back plus the responder's own clock, so the sender gets both its round trip and the offset to fit a shared timeline from.
 
 The client half (`plaza_client_utils`) and the server half (`plaza_server_utils`, `plaza` core) share this one definition.
+
+## Measuring your own round trip
+
+A latency probe is a frame kind rather than an op, because answering one is something a session can finish by itself: echo a value, stamp the reply with a clock. Send a `Kind::Ping` and the other end's session answers with a `Kind::Pong`, with no application code on either side of the exchange.
+
+```rust
+frame::begin(frame::Kind::Ping, &mut buf);
+codec.encode_into(&frame::Ping { origin: my_clock_now }, &mut buf)?;
+```
+
+```rust
+pub struct Ping { pub origin: u64 }
+pub struct Pong { pub origin: u64, pub responder: Option<u64> }
+```
+
+**Two fields, two contracts.** `origin` is opaque to the responder: it comes back exactly as it went out, and nothing but the sender ever interprets it. That is what a round trip is measured from, and it works whatever you stamped: milliseconds, nanoseconds, a frame counter.
+
+`responder` is the other end's clock, read as the reply was built, and it is the field that is easy to leave out. Echoing the origin alone gives a round trip, which measures the *distance* to the responder without ever locating it. A client that renders on the responder's timeline needs its clock too, which is what `ClockSyncEstimator::observe_exchange` fits an offset from. It is `Option` because a responder with no clock installed has to be distinguishable from one whose clock reads zero.
+
+**The unit is out of band and plaza has no opinion about it.** Nothing here converts, defaults, or names a unit; the values are passed and echoed as given. Which clock `responder` reads is yours to choose and both ends have to mean the same one. A simulation clock is usually right, because it is the timeline the client is drawing on; wall time is right only if that is also what stamps your snapshots.
+
+To answer a probe by hand, in a client with its own read loop, `frame::answer_ping` builds the reply:
+
+```rust
+if let Some(reply) = frame::answer_ping(&codec, body, my_clock_now) {
+  socket.send(&reply);
+}
+```
 
 ## Usage
 

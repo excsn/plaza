@@ -123,6 +123,8 @@ Framing: the one byte in front of every message that says what it is.
 pub enum Kind {
   Ops = 0,    // body: Vec<Op>
   Hello = 1,  // body: ProtocolVersion
+  Ping = 2,   // body: Ping
+  Pong = 3,   // body: Pong
 }
 ```
 
@@ -130,6 +132,8 @@ pub enum Kind {
 *   `from_byte(u8) -> Option<Kind>`: `None` for a tag this build does not know.
 
 **The body type follows from the kind**, which is what the byte buys beyond dispatch: a protocol frame is not squeezed into the application's op enum, so `Hello` carries a version and nothing else while `Ops` carries the application's payload.
+
+**What belongs in `Kind`.** A kind is an instruction to the *session*, and `Ops` is the one whose body belongs to the application instead. The test for a proposed kind: if application code has to act on it, it is an op and not a kind. `Hello` and `Ping` pass, because recording a version and echoing a value are things a session can finish by itself.
 
 **`None` means skip the frame, not fail the connection.** A peer speaking a newer protocol may send kinds this one has never heard of, and refusing them turns every additive change into a break. The rule has to exist from the start, because a deployed client cannot learn tolerance retroactively. It is also why the tag is read by hand rather than through `serde_repr`, which errors on an unknown discriminant.
 
@@ -146,8 +150,24 @@ What a peer says it speaks, sent as the body of a `Kind::Hello` frame **once whe
 
 **An unknown version on either side counts as agreement.** A peer that declares nothing is the pre-handshake case rather than a wrong one, and refusing it would break every client built before this frame kind existed. The number itself comes from [`build`](#7-module-build-feature-build), which hashes the type definitions your wire format is made of.
 
+### Structs `Ping` and `Pong`
+
+```rust
+pub struct Ping { pub origin: u64 }
+pub struct Pong { pub origin: u64, pub responder: Option<u64> }
+```
+
+A latency probe and its answer. `plaza_session` answers an inbound `Kind::Ping` on the connection task, so neither end's application sees the exchange.
+
+**`origin` is opaque to the responder.** It is echoed back exactly as it went out and nothing but the sender ever interprets it, so a round trip is measurable whatever you stamped it with: milliseconds, nanoseconds, a sequence number.
+
+**`responder` is the other end's clock**, read as the reply was built, in whatever unit that end works in. It is what `ClockSyncEstimator::observe_exchange` needs to fit an offset: echoing the origin alone gives the distance to the responder without locating it in time. `None` means the responder has no clock installed, which has to be distinguishable from a clock that reads zero.
+
+**No unit is named anywhere, converted, or defaulted.** The two ends agree out of band; plaza passes the values it is given.
+
 ### Functions
 
+*   `answer_ping(codec, ping_body, responder: Option<u64>) -> Option<Vec<u8>>`: builds the `Kind::Pong` frame answering a ping body, or `None` if it does not decode. What `plaza_session` calls, and what a client with its own read loop should call so both ends answer identically.
 *   `split(frame: &[u8]) -> Option<(u8, &[u8])>`: the tag and the body, or `None` for an empty frame, which is malformed rather than unknown. An unrecognised tag still splits; deciding what to do about it is `Kind::from_byte`'s job.
 *   `begin(kind: Kind, buf: &mut Vec<u8>)`: clears `buf` and writes the tag, so the body can be appended after it.
 
@@ -161,7 +181,6 @@ The netcode vocabulary both ends of a connection exchange. Pure serde, generic o
 *   **`AuthoritativeStateUpdate<PlayerStateData, ServerTimeType>`**: server to client. `last_processed_input_seq`, `authoritative_player_state`, `server_time_at_state`. The client snaps to this and replays newer inputs.
 *   **`RemoteEntitySnapshot<EntityKey, ServerTimeType, V3, Q>`**: server to client. `entity_id`, `server_time`, `position`, `rotation`, optional `linear_velocity` / `angular_velocity`. `V3`/`Q` are your position and rotation types (use `()` for a rotation you do not track). No defaults: the wire vocabulary does not mandate a math library.
 *   **`TimestampedClientAction<ActionData, ClientTimeType>`**: client to server. `client_action_time`, `action_data`. The timestamp lets the server rewind to when the client acted, for lag compensation.
-*   **`Ping` / `Pong`**: either direction. A `Ping` carries `origin_time_ms`; the `Pong` carries it back plus the responder's own clock as `responder_time_ms`. The sender computes `rtt = now - origin_time_ms` and smooths it with `plaza_client_utils::RttEstimator`, and feeds the three timestamps to `ClockSyncEstimator::observe_exchange` to fit the offset. The second field is what makes a client able to render on the responder's timeline rather than only know how far away it is; which clock it reads is the responder's choice, and both ends have to mean the same one.
 
 ## 7. Module `build` (feature `build`)
 

@@ -24,6 +24,14 @@
 //!
 //! This is also why the tag is read by hand rather than by `serde_repr`, which
 //! errors on an unknown discriminant and would make the rule unexpressible.
+//!
+//! # What belongs in [`Kind`]
+//!
+//! A kind is an instruction to the *session*, and [`Kind::Ops`] is the one
+//! whose body belongs to the application instead. The test for a proposed
+//! kind: if application code has to act on it, it is an op and not a kind.
+//! `Hello` and `Ping` pass, because recording a version and echoing a value
+//! are things a session can finish by itself.
 
 /// What a frame carries.
 ///
@@ -41,6 +49,11 @@ pub enum Kind {
   /// frame: it cannot change mid-connection, and carrying it per frame measured
   /// 53 bytes against 42 under JSON for no information gained.
   Hello = 1,
+  /// A latency probe. The body is a [`Ping`], and the receiving session answers
+  /// it with a [`Kind::Pong`] without the application being involved.
+  Ping = 2,
+  /// The answer to a [`Kind::Ping`]. The body is a [`Pong`].
+  Pong = 3,
 }
 
 impl Kind {
@@ -58,6 +71,8 @@ impl Kind {
     match byte {
       0 => Some(Kind::Ops),
       1 => Some(Kind::Hello),
+      2 => Some(Kind::Ping),
+      3 => Some(Kind::Pong),
       _ => None,
     }
   }
@@ -82,6 +97,51 @@ impl ProtocolVersion {
   pub const fn agrees_with(self, other: ProtocolVersion) -> bool {
     self.0 == 0 || other.0 == 0 || self.0 == other.0
   }
+}
+
+/// A latency probe, the body of a [`Kind::Ping`] frame.
+///
+/// # Units are the sender's business
+///
+/// Plaza never reads `origin` as a quantity: it comes back in the [`Pong`]
+/// exactly as it went out, and only the sender ever interprets it. Stamp it
+/// with milliseconds, nanoseconds, a frame counter, or a sequence number, and
+/// document the choice wherever your application documents its protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Ping {
+  pub origin: u64,
+}
+
+/// The answer to a [`Ping`], the body of a [`Kind::Pong`] frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Pong {
+  /// The probe's `origin`, echoed back unread.
+  pub origin: u64,
+  /// The responder's clock when the reply was built, in the responder's own
+  /// unit, or `None` if it has no clock to offer. Which clock this reads, and
+  /// in what unit, is agreed out of band: the two ends have to mean the same
+  /// one for an offset computed from it to mean anything.
+  pub responder: Option<u64>,
+}
+
+/// Builds the [`Kind::Pong`] frame answering a ping, or `None` if `ping_body`
+/// does not decode.
+///
+/// `responder` is the local clock in the local unit, if there is one to offer.
+pub fn answer_ping<C: crate::WireCodec>(codec: &C, ping_body: &[u8], responder: Option<u64>) -> Option<Vec<u8>> {
+  let ping = codec.decode::<Ping>(ping_body).ok()?;
+  let mut buf = Vec::new();
+  begin(Kind::Pong, &mut buf);
+  codec
+    .encode_into(
+      &Pong {
+        origin: ping.origin,
+        responder,
+      },
+      &mut buf,
+    )
+    .ok()?;
+  Some(buf)
 }
 
 /// Splits a frame into its kind byte and its body.
@@ -123,6 +183,7 @@ mod tests {
     // The property a future frame kind depends on. A peer built before that
     // kind existed must be able to ignore it, and it can only do that if this
     // returns None instead of erroring.
+    assert_eq!(Kind::from_byte(4), None, "the first unassigned byte");
     assert_eq!(Kind::from_byte(200), None);
     let frame = [200u8, 1, 2, 3];
     let (kind, body) = split(&frame).expect("still a well-formed frame");
@@ -139,6 +200,24 @@ mod tests {
   }
 
   #[test]
+  fn every_kind_survives_its_own_tag_byte() {
+    // Each kind, through the framing it will actually be written with. The
+    // probe tests below assert a Pong is produced; this asserts the tags
+    // themselves round-trip, which is what a peer dispatches on.
+    for kind in [Kind::Ops, Kind::Hello, Kind::Ping, Kind::Pong] {
+      let mut buf = Vec::new();
+      begin(kind, &mut buf);
+      buf.extend_from_slice(b"body");
+      let (tag, body) = split(&buf).expect("a non-empty frame splits");
+      assert_eq!(Kind::from_byte(tag), Some(kind), "{kind:?} round-trips its tag");
+      assert_eq!(body, b"body");
+    }
+    // And the tags are distinct, or dispatch is a coin flip.
+    let bytes = [Kind::Ops, Kind::Hello, Kind::Ping, Kind::Pong].map(Kind::as_byte);
+    assert_eq!(bytes, [0, 1, 2, 3], "wire values are pinned; renumbering breaks every peer");
+  }
+
+  #[test]
   fn an_undeclared_version_agrees_with_everything() {
     // A peer built before the handshake existed sends no Hello at all, so it
     // must not be refused for failing to match.
@@ -151,5 +230,56 @@ mod tests {
   #[test]
   fn an_empty_frame_is_malformed() {
     assert_eq!(split(&[]), None);
+  }
+
+  #[cfg(feature = "json")]
+  mod probes {
+    use super::*;
+    use crate::{JsonCodec, WireCodec};
+
+    #[test]
+    fn a_pong_echoes_the_origin_it_was_given() {
+      let mut ping = Vec::new();
+      begin(Kind::Ping, &mut ping);
+      JsonCodec.encode_into(&Ping { origin: 987_654_321 }, &mut ping).unwrap();
+
+      let (_, body) = split(&ping).unwrap();
+      let reply = answer_ping(&JsonCodec, body, Some(42)).expect("a well-formed ping is answerable");
+
+      let (kind, body) = split(&reply).unwrap();
+      assert_eq!(Kind::from_byte(kind), Some(Kind::Pong));
+      let pong: Pong = JsonCodec.decode(body).unwrap();
+      assert_eq!(pong.origin, 987_654_321, "the origin comes back unread");
+      assert_eq!(pong.responder, Some(42));
+    }
+
+    #[test]
+    fn a_responder_without_a_clock_offers_nothing() {
+      // Not zero: zero is a legitimate clock reading, and a responder that has
+      // no clock has to be distinguishable from one whose clock reads zero.
+      let mut ping = Vec::new();
+      begin(Kind::Ping, &mut ping);
+      JsonCodec.encode_into(&Ping { origin: 1 }, &mut ping).unwrap();
+      let (_, body) = split(&ping).unwrap();
+
+      let reply = answer_ping(&JsonCodec, body, None).unwrap();
+      let (_, body) = split(&reply).unwrap();
+      assert_eq!(JsonCodec.decode::<Pong>(body).unwrap().responder, None);
+    }
+
+    #[test]
+    fn a_malformed_ping_is_unanswerable_rather_than_fatal() {
+      assert!(answer_ping(&JsonCodec, b"not a ping", None).is_none());
+    }
+  }
+
+  #[cfg(feature = "msgpack")]
+  #[test]
+  fn a_pong_without_a_clock_survives_msgpack() {
+    use crate::{MsgPackCodec, WireCodec};
+    let pong = Pong { origin: 7, responder: None };
+    let mut buf = Vec::new();
+    MsgPackCodec.encode_into(&pong, &mut buf).unwrap();
+    assert_eq!(MsgPackCodec.decode::<Pong>(&buf).unwrap(), pong);
   }
 }
