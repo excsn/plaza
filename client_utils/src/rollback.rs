@@ -45,6 +45,7 @@ pub struct StateHistory<State: Clone> {
   ring: VecDeque<State>,
   base_frame: Frame,
   capacity: usize,
+  resets: u64,
 }
 
 impl<State: Clone> StateHistory<State> {
@@ -60,6 +61,7 @@ impl<State: Clone> StateHistory<State> {
       ring: VecDeque::with_capacity(capacity),
       base_frame: 0,
       capacity,
+      resets: 0,
     }
   }
 
@@ -86,6 +88,7 @@ impl<State: Clone> StateHistory<State> {
       let idx = (frame - self.base_frame) as usize;
       self.ring[idx] = state;
     } else {
+      self.resets += 1;
       tracing::warn!(?frame, base = self.base_frame, len = self.ring.len(), "StateHistory: non-contiguous save, resetting the window");
       self.ring.clear();
       self.base_frame = frame;
@@ -124,6 +127,16 @@ impl<State: Clone> StateHistory<State> {
   pub fn clear(&mut self) {
     self.ring.clear();
     self.base_frame = 0;
+  }
+
+  /// How many saves fell outside the window and reset it.
+  ///
+  /// Rollback assumes frames are saved contiguously, so this should stay zero for
+  /// the whole life of a session. Non-zero means the window was thrown away and
+  /// rebuilt from one frame, which silently shortens how far back the session can
+  /// roll: a correction that arrives next frame finds nothing to restore.
+  pub fn resets(&self) -> u64 {
+    self.resets
   }
 }
 
@@ -569,6 +582,21 @@ mod tests {
     h.save(1, 99); // re-simulation re-saves the same frame
     assert_eq!(h.restore(1), Some(99));
     assert_eq!(h.latest_frame(), Some(1), "overwriting does not extend the window");
+  }
+
+  #[test]
+  fn a_non_contiguous_save_is_counted_because_it_shortens_the_reach() {
+    // Rollback assumes contiguous saves, so this should stay zero for a whole
+    // session. Non-zero means the window was thrown away and rebuilt from one
+    // frame, and a correction arriving next frame finds nothing to restore.
+    let mut h = StateHistory::new(4);
+    h.save(0, 1);
+    h.save(1, 2);
+    assert_eq!(h.resets(), 0);
+    h.save(50, 3);
+    assert_eq!(h.resets(), 1);
+    assert_eq!(h.oldest_frame(), Some(50), "and the reach is now one frame");
+    assert_eq!(h.restore(1), None);
   }
 
   #[test]

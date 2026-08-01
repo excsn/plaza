@@ -87,6 +87,11 @@ pub struct RemoteView<State: Clone + Debug, Velocity: Clone + Debug> {
   buffer: SnapshotBuffer<u64, State>,
   latest: Option<(u64, State, Velocity)>,
   max_extrapolation_ms: u64,
+  /// Accumulated from the per-render [`ExtrapolationBase`], which is built fresh
+  /// each call and would otherwise take its count with it. `Cell` because
+  /// [`render`](Self::render) is a read and forcing it mutable would spread `&mut`
+  /// through every caller's draw path.
+  over_extrapolations: std::cell::Cell<u64>,
 }
 
 impl<State, Velocity> RemoteView<State, Velocity>
@@ -101,6 +106,7 @@ where
       buffer: SnapshotBuffer::new(buffer_size),
       latest: None,
       max_extrapolation_ms,
+      over_extrapolations: std::cell::Cell::new(0),
     }
   }
 
@@ -135,14 +141,27 @@ where
     match self.buffer.latest_timestamp() {
       Some(newest) if opts.extrapolate && t > newest => {
         let base = ExtrapolationBase::new(latest_state.clone(), latest_vel.clone(), newest, newest);
-        Some(
-          base
-            .get_extrapolated_state(t, self.max_extrapolation_ms, |ms| ms as f32 / 1000.0)
-            .unwrap_or_else(|| latest_state.clone()),
-        )
+        let state = base
+          .get_extrapolated_state(t, self.max_extrapolation_ms, |ms| ms as f32 / 1000.0)
+          .unwrap_or_else(|| latest_state.clone());
+        self.over_extrapolations.set(self.over_extrapolations.get() + base.over_extrapolations());
+        Some(state)
       }
       _ => Some(self.buffer.get_interpolated_state(t).unwrap_or_else(|| latest_state.clone())),
     }
+  }
+
+  /// How many renders asked for a time further past the newest sample than
+  /// `max_extrapolation_ms`, and were served the capped coast instead.
+  ///
+  /// Climbing steadily is the signal worth watching, and it is almost never a
+  /// starved link: it means the render target is being computed ahead of the
+  /// newest sample rather than trailing it, so this entity is dead reckoned every
+  /// frame and never interpolated. The cure is to steer the render clock toward
+  /// the stream (see [`InterpolationClock::resync`](crate::interpolation::InterpolationClock::resync))
+  /// so the target trails by a couple of send intervals.
+  pub fn over_extrapolations(&self) -> u64 {
+    self.over_extrapolations.get()
   }
 
   /// The newest raw snapshot, if any.
@@ -263,6 +282,21 @@ mod tests {
     // One snapshot cannot bracket a target, so it renders directly.
     let at = v.render(Some(150), RenderOpts::default()).unwrap();
     assert_eq!(at.x, 7.0);
+  }
+
+  #[test]
+  fn renders_held_at_the_cap_are_counted_on_the_view() {
+    // The per-render `ExtrapolationBase` is built fresh each call, so its own count
+    // goes out of scope with it. The view accumulates, which is what a HUD reads.
+    let mut v = view(); // max 500ms
+    v.push(100, S { x: 0.0 }, 10.0);
+    let opts = RenderOpts { interpolate: true, extrapolate: true };
+    assert_eq!(v.over_extrapolations(), 0);
+    let _ = v.render(Some(400), opts);
+    assert_eq!(v.over_extrapolations(), 0, "inside the cap");
+    let _ = v.render(Some(5000), opts);
+    let _ = v.render(Some(9000), opts);
+    assert_eq!(v.over_extrapolations(), 2);
   }
 
   #[test]

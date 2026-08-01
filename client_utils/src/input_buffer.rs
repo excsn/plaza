@@ -47,6 +47,7 @@ where
 {
   inputs: VecDeque<BufferedInput<Op, PredictedStateSnapshot>>,
   max_size: usize,
+  overflowed: u64,
 }
 
 impl<Op, PredictedStateSnapshot> ClientInputBuffer<Op, PredictedStateSnapshot>
@@ -65,6 +66,7 @@ where
     ClientInputBuffer {
       inputs: VecDeque::with_capacity(max_size),
       max_size,
+      overflowed: 0,
     }
   }
 
@@ -85,6 +87,7 @@ where
   ) {
     if self.inputs.len() == self.max_size {
       if let Some(discarded) = self.inputs.pop_front() {
+        self.overflowed += 1;
         tracing::warn!(
           seq = discarded.sequence_number,
           "ClientInputBuffer full (size {}), discarding oldest input.",
@@ -174,6 +177,19 @@ where
     self.inputs.clear();
     tracing::debug!("ClientInputBuffer cleared.");
   }
+
+  /// How many inputs were discarded because the buffer was full.
+  ///
+  /// Non-zero means a reconciliation can no longer replay everything the server
+  /// has not acknowledged, so the prediction is wrong by whatever those inputs
+  /// did. The `warn!` beside it says so once per event into a log; this is the
+  /// number to put on a HUD or an alert, because what matters is whether it is
+  /// climbing, not that it happened.
+  ///
+  /// Size the buffer at input rate times worst round trip and this stays zero.
+  pub fn overflowed(&self) -> u64 {
+    self.overflowed
+  }
 }
 
 #[cfg(test)]
@@ -231,6 +247,22 @@ mod tests {
     assert_eq!(unacked.len(), 2);
     assert_eq!(unacked[0].sequence_number, 2); // Input 1 is gone
     assert_eq!(unacked[1].sequence_number, 3);
+    assert_eq!(buffer.overflowed(), 1, "and the loss is counted, not only logged");
+  }
+
+  #[test]
+  fn overflow_is_counted_because_replay_is_no_longer_complete() {
+    // The count is the useful form: past this point a reconciliation cannot replay
+    // everything the server has not acknowledged, so the prediction is wrong by
+    // whatever the dropped inputs did, and what matters is whether it keeps
+    // climbing rather than that it happened once.
+    let mut buffer = ClientInputBuffer::<TestOp, TestState>::new(2);
+    assert_eq!(buffer.overflowed(), 0);
+    for seq in 1..=5 {
+      buffer.record_input(seq, TestOp(seq * 10), TestState(seq));
+    }
+    assert_eq!(buffer.overflowed(), 3);
+    assert_eq!(buffer.len(), 2);
   }
 
   #[test]

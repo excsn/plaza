@@ -4,6 +4,7 @@
 //! the last received authoritative server update, helping to mask network latency.
 //! It typically relies on the last known state and velocities.
 
+use std::cell::Cell;
 use std::fmt::Debug;
 use crate::types::ClientTimeMs;
 
@@ -45,6 +46,10 @@ where
   /// The client's local time when this server update was processed.
   /// Used to help estimate how "old" this data is relative to current client time.
   pub client_receipt_time_ms: ClientTimeMs,
+  /// How many extrapolations ran past the cap. `Cell` because the method that
+  /// counts is a read: making it `&mut self` would force every caller holding a
+  /// base across frames to hold it mutably to draw.
+  over_extrapolations: Cell<u64>,
 }
 
 impl<StateType, VelocityType, ServerTimestamp> ExtrapolationBase<StateType, VelocityType, ServerTimestamp>
@@ -64,6 +69,7 @@ where
       velocity,
       server_timestamp,
       client_receipt_time_ms,
+      over_extrapolations: Cell::new(0),
     }
   }
 
@@ -115,6 +121,7 @@ where
     let capped_ms = time_since_receipt_ms.min(max_extrapolation_duration_ms);
 
     if time_since_receipt_ms > max_extrapolation_duration_ms {
+      self.over_extrapolations.set(self.over_extrapolations.get() + 1);
       // Deliberately `warn`, and deliberately saying what it usually means.
       //
       // Holding is a legitimate outcome, so the temptation is to call this
@@ -156,6 +163,18 @@ where
     );
     Some(extrapolated_state)
   }
+
+  /// How many extrapolations were asked to reach further past receipt than the cap
+  /// allowed, and were held at the cap instead.
+  ///
+  /// Holding is a legitimate outcome, so this is not an error count. It is a rate:
+  /// climbing steadily means the render target is being computed ahead of the
+  /// newest sample rather than trailing it, and the entity is being dead reckoned
+  /// every frame instead of interpolated. See the note in
+  /// [`get_extrapolated_state`](Self::get_extrapolated_state) for the fix.
+  pub fn over_extrapolations(&self) -> u64 {
+    self.over_extrapolations.get()
+  }
 }
 
 #[cfg(test)]
@@ -191,6 +210,20 @@ mod tests {
       "crossing the limit jumped from {inside:?} to {outside:?}"
     );
     assert!(inside.0 > 11.0, "it really was extrapolating up to the limit: {inside:?}");
+  }
+
+  #[test]
+  fn holding_at_the_limit_is_counted_rather_than_only_logged() {
+    // Holding is a legitimate outcome, so this is a rate and not an error count.
+    // Climbing steadily means the render target is computed ahead of the newest
+    // sample instead of trailing it, and the entity is dead reckoned every frame.
+    let base = ExtrapolationBase::new(Pos(0.0), 100.0, 0u64, 0);
+    assert_eq!(base.over_extrapolations(), 0);
+    let _ = base.get_extrapolated_state(50, 120, |ms| ms as f32 / 1000.0);
+    assert_eq!(base.over_extrapolations(), 0, "inside the cap");
+    let _ = base.get_extrapolated_state(500, 120, |ms| ms as f32 / 1000.0);
+    let _ = base.get_extrapolated_state(900, 120, |ms| ms as f32 / 1000.0);
+    assert_eq!(base.over_extrapolations(), 2);
   }
 
   #[test]
