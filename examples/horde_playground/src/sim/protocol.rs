@@ -23,7 +23,6 @@
 //!
 //! [`Session`]: https://docs.rs/plaza
 
-use plaza_wire::payloads;
 use serde::{Deserialize, Serialize};
 
 use crate::sim::types::{Packet, PlayerFrame, PlayerId, Upgrade};
@@ -73,10 +72,6 @@ pub enum Op {
   Ack { newest: u64, mask: u64, digest: u64 },
   /// A purchase *request*. The client proposes; only the server can spend.
   Buy(Upgrade),
-  /// Round-trip probe, answered with [`Op::Pong`]. The shipped wire type rather
-  /// than a local one: what a probe carries is the same question in every
-  /// application, so the two ends agreeing is worth more than the field names.
-  Ping(payloads::Ping),
 
   // ---- server to client ----
   /// Sent once on join: which player is yours, and the settings a client cannot
@@ -122,10 +117,6 @@ pub enum Op {
   /// sits on a black screen that is indistinguishable from a broken server. The
   /// count is carried so the message can say what it is competing for.
   NoSeat { seats: usize },
-  /// The answer to [`Op::Ping`]. `responder_time_ms` is the arena's simulation
-  /// clock, which is the timeline a client draws on, so it is what the clock
-  /// estimator has to fit an offset against.
-  Pong(payloads::Pong),
 }
 
 /// Server settings a client cannot see but has to reason about.

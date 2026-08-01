@@ -38,8 +38,10 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls, host: bool) {
       ui.add(egui::Slider::new(&mut controls.jitter_ms, 0..=120).text("jitter ms"));
       ui.add(egui::Slider::new(&mut controls.loss_pct, 0.0..=40.0).text("packet loss %"))
         .on_hover_text(
-          "Applied to inputs on arrival and to frames on the way out. Loss is what actually snaps a player: a lost input means the two sides ran different inputs, and on a lattice that can only be resolved by jumping. Latency alone does not.",
+          "Applied to the link in both directions, so an input can be lost on the way in and a frame on the way out. Loss is what actually snaps a player: a lost input means the two sides ran different inputs, and on a lattice that can only be resolved by jumping. Latency alone does not.",
         );
+      ui.checkbox(&mut controls.datagram_link, "datagram link (a loss is a hole)")
+        .on_hover_text("On: a lost packet is gone and the two ends reconcile, which is the link this netcode is written for and what the loss slider above is demonstrating. Off: the truth about the WebSocket underneath, where a loss is retransmitted, so it costs a stall and a burst and nothing goes missing.");
     });
 
     section(ui, "input schedule", true, |ui| {

@@ -17,10 +17,8 @@
 //!   render instant. It was inferred from the death burst it causes once, and
 //!   the inference re-fired on every recovery repeat of the same announcements.
 
-use plaza_client_utils::clock_sync::ClockSyncEstimator;
-use plaza_client_utils::{InputCoalescer, RttEstimator};
+use plaza_client_utils::{InputCoalescer, Probe, Timeline};
 use plaza_wire::frame::{self, ProtocolVersion};
-use plaza_wire::payloads;
 use plaza_wire::{MsgPackCodec, WireCodec};
 
 /// One codec for the whole client. Zero-sized, so naming it costs nothing, and
@@ -87,8 +85,8 @@ pub struct NetClient {
   /// deliberately different: the prediction advances every tick whatever the wire
   /// is doing, so a quiet wire is not a stuttering player.
   send_policy: InputCoalescer<Vec2>,
-  rtt: RttEstimator,
-  clock: ClockSyncEstimator,
+  timeline: Timeline,
+  probe: Option<Probe>,
 
   /// What this client is actually receiving, which is the number it wants and
   /// the host cannot give it. The host reports "all players", an aggregate for
@@ -255,8 +253,8 @@ impl NetClient {
       policy: None,
       input_seq: 0,
       send_policy: InputCoalescer::new(INPUT_KEEPALIVE_MS),
-      rtt: RttEstimator::new(0.15),
-      clock: ClockSyncEstimator::new(32),
+      timeline: Timeline::new(),
+      probe: None,
       traffic: plaza_server_utils::RateMeter::new(),
       modelled: plaza_server_utils::RateMeter::new(),
       sent: plaza_server_utils::RateMeter::new(),
@@ -339,7 +337,7 @@ impl NetClient {
   }
 
   pub fn rtt_ms(&self) -> Option<f32> {
-    self.rtt.rtt_ms()
+    self.timeline.rtt.rtt()
   }
 
   pub fn is_playing(&self) -> bool {
@@ -370,7 +368,7 @@ impl NetClient {
       //
       // The server decides whether that tick is still open. This is an intention,
       // not a claim.
-      let server_now = self.clock.server_time_at(self.now_ms as f64).unwrap_or(self.now_ms as f64).max(0.0) as u64;
+      let server_now = self.timeline.clock.server_time_at(self.now_ms as f64).unwrap_or(self.now_ms as f64).max(0.0) as u64;
       let depth = self.policy.map(|p| p.playout_delay_ms).unwrap_or(0);
       // The clock names the tick, and the newest arrived stamp bounds it from
       // below: the server wrote that stamp, so server time is provably past it,
@@ -393,7 +391,7 @@ impl NetClient {
     self.now_ms = now_ms;
     if now_ms.saturating_sub(self.last_ping_ms) >= PING_INTERVAL_MS && self.socket.is_open() {
       self.last_ping_ms = now_ms;
-      self.send_op(&Op::Ping(payloads::Ping { origin_time_ms: now_ms }));
+      self.send_ping(now_ms);
     }
 
     self.socket.poll(&mut self.events);
@@ -463,20 +461,28 @@ impl NetClient {
     self.resume_drops += 1;
     self.last_drop_msgs = dropped.messages;
     self.last_drop_bytes = dropped.bytes;
-    let server_now = self.clock.server_time_at(now_ms as f64).unwrap_or(now_ms as f64).max(0.0) as u64;
+    let server_now = self.timeline.clock.server_time_at(now_ms as f64).unwrap_or(now_ms as f64).max(0.0) as u64;
     self.sim.timeline_lost(server_now);
     // One line per resume, so the panel readouts that follow have a timestamped
     // anchor in the console without any per-frame logging.
-    let offset = self.clock.server_time_at(now_ms as f64).map_or("unsynced".to_owned(), |s| format!("{:.0}", s - now_ms as f64));
+    let offset = self.timeline.clock.server_time_at(now_ms as f64).map_or("unsynced".to_owned(), |s| format!("{:.0}", s - now_ms as f64));
     eprintln!(
       "resume at local {now_ms} ms: dropped {} msgs ({:.1} KiB) unread; clock offset {offset} ms over {} pongs, last pong rtt {} ms, input seq {} acked {}",
       dropped.messages,
       dropped.bytes as f64 / 1024.0,
-      self.clock.sample_count(),
+      self.timeline.clock.sample_count(),
       self.last_pong_rtt_ms,
       self.input_seq,
       self.last_input_ack,
     );
+    // After the readouts above, which report the fit as it stood across the
+    // gap. A probe sent before the freeze and answered after it measures the
+    // freeze rather than the network, and its origin still matches, so the
+    // echo check waves it through; the epoch is what discards it. The
+    // estimators go with it, because a least-squares fit spanning an unknown
+    // stretch of wall time produces a meaningless skew.
+    self.timeline.on_resume();
+    self.probe = None;
     self.worst_pong_rtt_ms = 0;
   }
 
@@ -507,8 +513,8 @@ impl NetClient {
   /// exchanges are in.
   pub fn clock_diag(&self) -> (Option<f64>, usize) {
     (
-      self.clock.server_time_at(self.now_ms as f64).map(|s| s - self.now_ms as f64),
-      self.clock.sample_count(),
+      self.timeline.clock.server_time_at(self.now_ms as f64).map(|s| s - self.now_ms as f64),
+      self.timeline.clock.sample_count(),
     )
   }
 
@@ -577,14 +583,32 @@ impl NetClient {
     }
   }
 
-  /// Announces which wire format this build speaks.
-  ///
-  /// A frame rather than an op: the version says whether the two ends agree
-  /// about `Op` at all, so a check that has to decode an `Op` to run cannot
-  /// report the case it exists for.
-  ///
-  /// Sent unprompted, as the server's is, so neither end waits for the other and
-  /// a peer built before the frame existed simply never answers.
+  /// Starts a latency probe. The stamp is this client's own clock in
+  /// milliseconds, which is the unit this example works in throughout; the
+  /// server echoes it back without reading it.
+  fn send_ping(&mut self, now_ms: u64) {
+    let probe = self.timeline.begin(now_ms);
+    self.out.clear();
+    frame::begin(frame::Kind::Ping, &mut self.out);
+    match WIRE.encode_into(&frame::Ping { origin: probe.sent_at }, &mut self.out) {
+      Ok(()) => {
+        self.probe = Some(probe);
+        self.sent.add(self.out.len() as u64);
+        let _ = self.socket.send(&self.out);
+      }
+      Err(_) => debug_assert!(false, "a ping failed to serialise"),
+    }
+  }
+
+  /// Answers the server's probe. Its clock is the one being measured, so this
+  /// end has nothing to offer back.
+  fn answer_ping(&mut self, body: &[u8]) {
+    if let Some(reply) = frame::answer_ping(&WIRE, body, None) {
+      self.sent.add(reply.len() as u64);
+      let _ = self.socket.send(&reply);
+    }
+  }
+
   fn send_hello(&mut self) {
     self.out.clear();
     frame::begin(frame::Kind::Hello, &mut self.out);
@@ -597,11 +621,30 @@ impl NetClient {
     }
   }
 
-  /// Reads the server's declared wire format and decides what to do about it.
+  /// Folds an answered probe into the estimators.
   ///
-  /// The decision is this client's, not plaza's: the session records a mismatch
-  /// and keeps serving, so ops go on arriving after this fires. A page can only
-  /// reload, so it stops and names both versions.
+  /// Clock sync is driven by these alone, not by frames. A frame's offset is
+  /// only right if the one-way estimate matches the delay the frame actually
+  /// took, and on a *host* those disagree: pongs come straight back while the
+  /// impairment link holds frames, so a frame sample claims an offset 80 ms
+  /// off. Mixing the two made the estimate wobble every ping interval and jerk
+  /// the enemy projection backward.
+  fn on_pong(&mut self, body: &[u8], now_ms: u64) {
+    let Ok(pong) = WIRE.decode::<frame::Pong>(body) else {
+      return;
+    };
+    let Some(probe) = self.probe.take() else {
+      return;
+    };
+    if pong.origin != probe.sent_at {
+      return;
+    }
+    let raw = now_ms.saturating_sub(probe.sent_at);
+    self.last_pong_rtt_ms = raw;
+    self.worst_pong_rtt_ms = self.worst_pong_rtt_ms.max(raw);
+    self.timeline.complete(probe, now_ms, pong.responder);
+  }
+
   fn on_server_protocol(&mut self, body: &[u8]) {
     let Ok(theirs) = WIRE.decode::<ProtocolVersion>(body) else {
       return;
@@ -630,6 +673,14 @@ impl NetClient {
       Some(frame::Kind::Ops) => {}
       Some(frame::Kind::Hello) => {
         self.on_server_protocol(body);
+        return false;
+      }
+      Some(frame::Kind::Ping) => {
+        self.answer_ping(body);
+        return false;
+      }
+      Some(frame::Kind::Pong) => {
+        self.on_pong(body, now_ms);
         return false;
       }
       None => return false,
@@ -663,7 +714,7 @@ impl NetClient {
         Op::Players(frame) => {
           self.modelled.add(frame.bytes() as u64);
           self.newest_stamp_ms = self.newest_stamp_ms.max(frame.server_time_ms);
-          let server_now = self.clock.server_time_at(now_ms as f64).unwrap_or(now_ms as f64).max(0.0) as u64;
+          let server_now = self.timeline.clock.server_time_at(now_ms as f64).unwrap_or(now_ms as f64).max(0.0) as u64;
           self.sim.on_player_frame(&frame, server_now);
         }
         Op::Frame(packet) => {
@@ -688,7 +739,7 @@ impl NetClient {
           // ring) follows play-out, not arrival, or the reaction would land one
           // render delay before the thing it reacts to is visible.
           self.newest_stamp_ms = self.newest_stamp_ms.max(packet.server_time_ms);
-          let server_now = self.clock.server_time_at(now_ms as f64).unwrap_or(now_ms as f64).max(0.0) as u64;
+          let server_now = self.timeline.clock.server_time_at(now_ms as f64).unwrap_or(now_ms as f64).max(0.0) as u64;
           self.sim.receive_packet(*packet, server_now);
           self.frames_seen += 1;
           applied_frame = true;
@@ -718,17 +769,7 @@ impl NetClient {
             measured_ms,
           };
         }
-        Op::Pong(pong) => {
-          let origin_ms = pong.origin_time_ms;
-          let raw = now_ms.saturating_sub(origin_ms);
-          self.last_pong_rtt_ms = raw;
-          self.worst_pong_rtt_ms = self.worst_pong_rtt_ms.max(raw);
-          self.rtt.observe_pong(origin_ms, now_ms);
-          let one_way = self.rtt.one_way_ms().unwrap_or(0.0) as f64;
-          let offset = (pong.responder_time_ms as f64 + one_way) - now_ms as f64;
-          self.clock.observe(now_ms as f64, offset);
-        }
-        Op::Input { .. } | Op::Ack { .. } | Op::Buy(_) | Op::Ping(_) => {}
+        Op::Input { .. } | Op::Ack { .. } | Op::Buy(_) => {}
       }
     }
     applied_frame

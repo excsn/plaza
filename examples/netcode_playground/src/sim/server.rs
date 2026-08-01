@@ -80,7 +80,7 @@ impl ToyServer {
 
   /// The server's smoothed round trip to the player, if measured yet.
   pub fn rtt_ms(&self) -> Option<f32> {
-    self.rtt.rtt_ms()
+    self.rtt.rtt()
   }
 
   /// Accepts a delivered client command. Applied on the next server tick.

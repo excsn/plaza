@@ -34,15 +34,15 @@
             };
 
             ws.onmessage = (event) => {
-                if (event.data === "hb_ping") {
-                    // console.log("HB ping received");
-                    ws.send("hb_pong");
-                    return;
-                }
                 // A frame is one kind byte then the encoded body. An unknown
                 // kind is skipped rather than treated as an error, so a server
                 // speaking a newer protocol does not break this page.
                 const kind = event.data.charCodeAt(0);
+                if (kind === KIND_PING) {
+                    const ping = JSON.parse(event.data.slice(1));
+                    ws.send(String.fromCharCode(KIND_PONG) + JSON.stringify({ origin: ping.origin, responder: null }));
+                    return;
+                }
                 if (kind !== KIND_OPS) {
                     console.debug('skipping frame of unknown kind', kind);
                     return;
@@ -69,6 +69,11 @@
 
         // Frame kinds, matching plaza_wire::frame::Kind.
         const KIND_OPS = 0;
+        // A latency probe. The server's session sends these and answers them; this
+        // page only has to echo the stamp back untouched, which is what lets the
+        // server report a round trip for a browser client at all.
+        const KIND_PING = 2;
+        const KIND_PONG = 3;
 
         // The body of a KIND_OPS frame is the ops array itself: `from` is the
         // server's own bookkeeping and is not sent.

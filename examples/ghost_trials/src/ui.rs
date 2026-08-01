@@ -56,6 +56,8 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls, host: bool) {
       ui.add(egui::Slider::new(&mut controls.jitter_ms, 0..=200).text("jitter ms"));
       ui.add(egui::Slider::new(&mut controls.loss_pct, 0.0..=100.0).text("packet loss %"))
         .on_hover_text("A lost submission is a lap nobody recorded. There is no retry, deliberately: it costs the run and never the board, because the board only ever holds runs that were verified.");
+      ui.checkbox(&mut controls.datagram_link, "datagram link (a loss is a hole)")
+        .on_hover_text("On: a lost packet is gone and the two ends reconcile, which is the link this netcode is written for and what the loss slider above is demonstrating. Off: the truth about the WebSocket underneath, where a loss is retransmitted, so it costs a stall and a burst and nothing goes missing.");
     });
   }
 }
@@ -73,7 +75,7 @@ pub struct HostExtras {
   pub bytes_if_paths: u64,
   pub seats_taken: usize,
   pub seats: usize,
-  pub lost_submissions: u64,
+  pub frames_lost: u64,
 }
 
 /// The whole panel, in **one** `egui_macroquad::ui` call: it runs a complete
@@ -201,9 +203,9 @@ pub fn draw_net_ui(client: &ghost_trials::net::client::NetClient, url: &str, ext
         if let Some(why) = extras.last_refusal {
           ui.label(egui::RichText::new(describe(why)).color(egui::Color32::from_rgb(240, 150, 150)));
         }
-        if extras.lost_submissions > 0 {
+        if extras.frames_lost > 0 {
           ui.label(
-            egui::RichText::new(format!("{} submissions the link ate", extras.lost_submissions))
+            egui::RichText::new(format!("{} frames the link ate", extras.frames_lost))
               .color(egui::Color32::from_rgb(240, 190, 140)),
           )
           .on_hover_text("Laps that were driven and never recorded. The board is unharmed: it only ever holds runs that were replayed and verified.");

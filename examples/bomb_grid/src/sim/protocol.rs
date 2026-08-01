@@ -54,9 +54,6 @@ pub enum Op {
   /// not carried: it is the server's answer, not the client's claim.
   DropBomb { seq: u64, tick: u64 },
   /// Round-trip probe; the reply echoes `origin_ms` verbatim.
-  Ping { origin_ms: u64 },
-  /// The first thing a client says: which wire format it was built against.
-  Hello { protocol: u32 },
 
   // ---- server to client ----
   /// Sent once on join: which player is yours, the settings a client cannot see,
@@ -81,9 +78,6 @@ pub enum Op {
   RoundOver { winner: Option<PlayerId>, next_in_ms: u64 },
   /// There is no seat: the arena is full.
   NoSeat { seats: usize },
-  Pong { origin_ms: u64, server_ms: u64 },
-  /// This client was built against a different wire format and should reload.
-  Outdated { server: u32, client: u32 },
 }
 
 /// Everything a round begins with.
@@ -172,7 +166,7 @@ impl Op {
   /// Whether this is something a client may send. Used by the arena to refuse
   /// the rest without a match arm per variant.
   pub fn is_upstream(&self) -> bool {
-    matches!(self, Op::Move { .. } | Op::DropBomb { .. } | Op::Ping { .. } | Op::Hello { .. })
+    matches!(self, Op::Move { .. } | Op::DropBomb { .. })
   }
 }
 

@@ -514,6 +514,12 @@ pub struct Controls {
   pub latency_ms: u64,
   pub jitter_ms: u64,
   pub loss_pct: f32,
+  /// What a lost packet costs, which is a property of the link rather than of
+  /// this simulation. The transport underneath is a WebSocket, so the truthful
+  /// answer is a retransmission: the frame is late and nothing is missing. The
+  /// netcode above is written for the other answer, where the packet is gone,
+  /// which is the one worth demonstrating here.
+  pub datagram_link: bool,
   /// How long the server holds an input before executing it.
   ///
   /// The fairness knob, and it matters more here than in a continuous game: two
@@ -548,6 +554,7 @@ impl Default for Controls {
       latency_ms: 40,
       jitter_ms: 15,
       loss_pct: 0.0,
+      datagram_link: true,
       playout_delay_ms: 100,
       // Roughly the playout depth in 16 ms steps, plus slack for jitter.
       input_max_late_ticks: 4,

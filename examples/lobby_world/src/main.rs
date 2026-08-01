@@ -20,14 +20,16 @@ use plaza::tick_driver::TickDriver;
 use plaza_lobby::manager::InMemoryLobbyManager;
 use plaza_lobby::op_payloads::RoomSettings;
 use plaza_lobby::{RoomHandle, TicketRegistry};
+use plaza_session::codec::JsonCodec;
 use plaza_session::ActixWsPlazaSession;
+use plaza_wire::frame::ProtocolVersion;
 use serde::Deserialize;
 use tracing::{error, info, warn, Level};
 use tracing_subscriber::EnvFilter;
 
 use crate::factory::{ArenaFactory, RoomRegistry};
 use crate::lobby::{LobbyLogic, LobbySession, LobbyState, NoLobbySnapshot};
-use crate::types::{PlayerId, ARENAS};
+use crate::types::{PlayerId, ARENAS, PROTOCOL};
 use crate::wallets::WalletRegistry;
 
 const BIND: &str = "127.0.0.1:8090";
@@ -147,7 +149,7 @@ async fn main() -> std::io::Result<()> {
     }
   }
 
-  let lobby_session: Arc<LobbySession> = ActixWsPlazaSession::new();
+  let lobby_session: Arc<LobbySession> = ActixWsPlazaSession::with_protocol(JsonCodec, ProtocolVersion(PROTOCOL));
   let logic = Arc::new(LobbyLogic::new(
     manager.clone(),
     rooms.clone(),

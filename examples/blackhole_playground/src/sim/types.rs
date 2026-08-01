@@ -289,6 +289,12 @@ pub struct Controls {
   /// lands, and the local field integration carries on regardless, so it shows
   /// what running on stale forces costs.
   pub loss_pct: f32,
+  /// What a lost packet costs, which is a property of the link rather than of
+  /// this simulation. The transport underneath is a WebSocket, so the truthful
+  /// answer is a retransmission: the frame is late and nothing is missing. The
+  /// netcode above is written for the other answer, where the packet is gone,
+  /// which is the one worth demonstrating here.
+  pub datagram_link: bool,
   pub sync_hz: u32,
   pub mode: SyncMode,
   /// Under field sync: how many pellets are corrected per packet. Zero means the
@@ -363,6 +369,7 @@ impl Default for Controls {
       latency_ms: 80,
       jitter_ms: 15,
       loss_pct: 0.0,
+      datagram_link: true,
       sync_hz: 16,
       mode: SyncMode::Field,
       corrections_per_packet: 40,

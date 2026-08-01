@@ -260,7 +260,7 @@ async fn frame_loop(options: role::Options) {
         bytes_if_paths: truth.bytes_if_paths,
         seats_taken: truth.seats_taken,
         seats: truth.seats,
-        lost_submissions: truth.lost_submissions,
+        frames_lost: truth.frames_lost,
       });
     }
 

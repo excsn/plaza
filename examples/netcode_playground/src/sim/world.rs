@@ -10,7 +10,6 @@ use plaza_client_utils::net_sim::{LatencyLink, Rng};
 
 use crate::sim::client::Client;
 use crate::sim::server::ToyServer;
-use plaza_wire::payloads::{Ping, Pong};
 
 use crate::sim::types::{BoxState, ClientMsg, Controls, EntityId, MoveInput, ServerMsg, Shot, Vec2, ARENA_H, ARENA_W, PING_INTERVAL_FRAMES, STEP_MS};
 
@@ -119,9 +118,9 @@ impl World {
     // stamped with the shared wall clock, so each measures the real link delay.
     if self.wall_ms - self.last_ping_ms >= PING_INTERVAL_FRAMES * STEP_MS {
       self.last_ping_ms = self.wall_ms;
-      let ping = Ping { origin_time_ms: self.wall_ms };
-      self.send_up(ClientMsg::Ping(ping), controls);
-      self.send_down(ServerMsg::Ping(ping), controls);
+      let origin_time_ms = self.wall_ms;
+      self.send_up(ClientMsg::Ping { origin_time_ms }, controls);
+      self.send_down(ServerMsg::Ping { origin_time_ms }, controls);
     }
 
     // Deliver whatever has arrived at the server. Inputs queue for the next tick;
@@ -133,11 +132,13 @@ impl World {
           let result = self.server.resolve_shot(shot, controls.lag_comp);
           self.send_down(ServerMsg::ShotResult(result), controls);
         }
-        ClientMsg::Ping(p) => self.send_down(
-          ServerMsg::Pong(Pong { origin_time_ms: p.origin_time_ms, responder_time_ms: self.wall_ms }),
+        ClientMsg::Ping { origin_time_ms } => self.send_down(
+          ServerMsg::Pong { origin_time_ms, responder_time_ms: self.wall_ms },
           controls,
         ),
-        ClientMsg::Pong(p) => self.server.observe_rtt(self.wall_ms.saturating_sub(p.origin_time_ms)),
+        ClientMsg::Pong { origin_time_ms, .. } => {
+          self.server.observe_rtt(self.wall_ms.saturating_sub(origin_time_ms))
+        }
       }
     }
     for packet in self.server.advance(dt_ms, controls.server_step_ms()) {
@@ -152,11 +153,13 @@ impl World {
             shot.hit = Some(result.hit);
           }
         }
-        ServerMsg::Ping(p) => self.send_up(
-          ClientMsg::Pong(Pong { origin_time_ms: p.origin_time_ms, responder_time_ms: self.wall_ms }),
+        ServerMsg::Ping { origin_time_ms } => self.send_up(
+          ClientMsg::Pong { origin_time_ms, responder_time_ms: self.wall_ms },
           controls,
         ),
-        ServerMsg::Pong(p) => self.client.observe_rtt(self.wall_ms.saturating_sub(p.origin_time_ms)),
+        ServerMsg::Pong { origin_time_ms, .. } => {
+          self.client.observe_rtt(self.wall_ms.saturating_sub(origin_time_ms))
+        }
       }
     }
     self.client.tick(dt_ms);

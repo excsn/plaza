@@ -135,6 +135,11 @@
 <script>
 // Frame kinds, matching plaza_wire::frame::Kind.
 const KIND_OPS = 0;
+// A latency probe. The server's session sends these and answers them; this
+// page only has to echo the stamp back untouched, which is what lets the
+// server report a round trip for a browser client at all.
+const KIND_PING = 2;
+const KIND_PONG = 3;
 
 let lobby = null;
 let arena = null;
@@ -164,9 +169,15 @@ function sendOps(sock, ops) {
 
 // One kind byte then the body. Unknown kinds are skipped, not fatal, so a
 // newer server does not break this page.
-function onFrame(event, handle) {
-  if (event.data === "hb_ping") { event.target.send("hb_pong"); return; }
+function onFrame(event, handle, sock) {
   const kind = event.data.charCodeAt(0);
+  if (kind === KIND_PING) {
+    const ping = JSON.parse(event.data.slice(1));
+    if (sock && sock.readyState === WebSocket.OPEN) {
+      sock.send(String.fromCharCode(KIND_PONG) + JSON.stringify({ origin: ping.origin, responder: null }));
+    }
+    return;
+  }
   if (kind !== KIND_OPS) return;
   let ops;
   try { ops = JSON.parse(event.data.slice(1)); }
@@ -190,7 +201,7 @@ function connectLobby() {
   lobby = new WebSocket(`${scheme}//${location.host}/ws/lobby`);
   lobby.onopen = () => log('lobby connected');
   lobby.onclose = () => { log('lobby disconnected', 'warn'); $('me').textContent = 'disconnected'; };
-  lobby.onmessage = (e) => onFrame(e, handleLobbyOp);
+  lobby.onmessage = (e) => onFrame(e, handleLobbyOp, lobby);
 }
 
 function handleLobbyOp(op) {
@@ -313,7 +324,7 @@ function enterArena(placed) {
   inArena = placed;
   arena = new WebSocket(placed.endpoint);
   arena.onopen = () => log('arena socket open: ' + placed.name);
-  arena.onmessage = (e) => onFrame(e, handleArenaOp);
+  arena.onmessage = (e) => onFrame(e, handleArenaOp, arena);
   arena.onclose = () => {
     log('arena socket closed');
     showNoArena();

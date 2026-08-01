@@ -4,7 +4,6 @@
 use plaza_client_utils::extrapolation::Extrapolatable;
 use plaza_client_utils::interpolation::Interpolatable;
 use plaza_client_utils::types::SequenceNumber;
-use plaza_wire::payloads::{Ping, Pong};
 
 /// Arena the boxes move in. The server clamps to it; client prediction does not,
 /// which is what makes reconciliation something you can see.
@@ -172,9 +171,9 @@ pub enum ClientMsg {
   Cmd(ClientCmd),
   Shot(Shot),
   /// The client measuring its round trip to the server.
-  Ping(Ping),
+  Ping { origin_time_ms: u64 },
   /// The client answering a server ping.
-  Pong(Pong),
+  Pong { origin_time_ms: u64, responder_time_ms: u64 },
 }
 
 /// Everything that travels back down.
@@ -183,9 +182,9 @@ pub enum ServerMsg {
   State(ServerPacket),
   ShotResult(ShotResult),
   /// The server measuring its round trip to a player.
-  Ping(Ping),
+  Ping { origin_time_ms: u64 },
   /// The server answering a client ping.
-  Pong(Pong),
+  Pong { origin_time_ms: u64, responder_time_ms: u64 },
 }
 
 /// Which mechanisms are switched on. Flipping one off routes around the matching

@@ -58,9 +58,6 @@ pub enum Op {
   /// know what has already been accounted for.
   Input { seq: u64, dx: f32, dy: f32, dash: bool },
   /// Round-trip probe; the reply echoes `origin_ms` verbatim.
-  Ping { origin_ms: u64 },
-  /// The first thing a client says: which wire format it was built against.
-  Hello { protocol: u32 },
 
   // ---- server to client ----
   /// Sent once on join: which hole is yours, and the settings you would
@@ -77,10 +74,6 @@ pub enum Op {
   /// acknowledgement into the frame would make prediction correct only as often
   /// as the slower of the two.
   Ack { seq: u64 },
-  Pong { origin_ms: u64, server_ms: u64 },
-  /// This client was built against a different wire format and should reload.
-  /// Carries both versions so the message can say which way round it is.
-  Outdated { server: u32, client: u32 },
 }
 
 /// Server settings a client cannot see but has to reason about.

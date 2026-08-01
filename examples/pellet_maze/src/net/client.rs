@@ -22,9 +22,8 @@
 //!
 //! [`sim::Client`]: crate::sim::Client
 
-use plaza_client_utils::clock_sync::ClockSyncEstimator;
-use plaza_client_utils::{InputCoalescer, RttEstimator};
-use plaza_wire::frame;
+use plaza_client_utils::{InputCoalescer, Probe, Timeline};
+use plaza_wire::frame::{self, ProtocolVersion};
 use plaza_wire::{MsgPackCodec, WireCodec};
 use plaza_ws::{CloseReason, Event, Socket, State};
 
@@ -76,8 +75,8 @@ pub struct NetClient {
   pub me: Option<PlayerId>,
   pub policy: Option<ServerPolicy>,
 
-  rtt: RttEstimator,
-  clock: ClockSyncEstimator,
+  timeline: Timeline,
+  probe: Option<Probe>,
   /// The newest server timestamp this client has actually received, and the
   /// local time it landed. A lower bound on server time that needs no clock at
   /// all, plus the moment it was true, so it can be carried forward.
@@ -106,10 +105,32 @@ pub struct NetClient {
   pub last_standings: Option<Vec<(PlayerId, u32)>>,
 }
 
+fn send_hello(socket: &dyn Socket) {
+  let mut buf = Vec::with_capacity(16);
+  frame::begin(frame::Kind::Hello, &mut buf);
+  if WIRE.encode_into(&ProtocolVersion(PROTOCOL), &mut buf).is_err() {
+    debug_assert!(false, "a protocol version failed to serialise");
+    return;
+  }
+  let _ = socket.send(&buf);
+}
+
 /// Frames one op the way the transport expects: a kind tag, then the body.
 ///
 /// Through the codec rather than a hand-rolled call, so this end and the server
 /// cannot drift onto different formats: both name `WIRE`.
+/// Starts a latency probe. The stamp is this client's own clock in
+/// milliseconds; the server echoes it back without reading it.
+fn send_ping(socket: &dyn Socket, origin: u64) {
+  let mut buf = Vec::with_capacity(16);
+  frame::begin(frame::Kind::Ping, &mut buf);
+  if WIRE.encode_into(&frame::Ping { origin }, &mut buf).is_err() {
+    debug_assert!(false, "a ping failed to serialise");
+    return;
+  }
+  let _ = socket.send(&buf);
+}
+
 fn send_framed(socket: &dyn Socket, op: &Op) {
   let mut buf = Vec::with_capacity(64);
   frame::begin(frame::Kind::Ops, &mut buf);
@@ -133,8 +154,8 @@ impl NetClient {
       status: Status::Connecting,
       me: None,
       policy: None,
-      rtt: RttEstimator::new(0.15),
-      clock: ClockSyncEstimator::new(32),
+      timeline: Timeline::new(),
+      probe: None,
       newest_stamp_ms: 0,
       stamp_at_local_ms: 0,
       input_seq: 0,
@@ -156,7 +177,7 @@ impl NetClient {
   }
 
   pub fn rtt_ms(&self) -> Option<f32> {
-    self.rtt.rtt_ms()
+    self.timeline.rtt.rtt()
   }
 
   /// This client's best estimate of server time now.
@@ -177,7 +198,7 @@ impl NetClient {
   /// controls sticking. Carrying the stamp forward at wall rate is what keeps
   /// aiming and applying on one clock by construction.
   pub fn server_time_ms(&self) -> u64 {
-    let fitted = self.clock.server_time_at(self.now_ms as f64).unwrap_or(self.now_ms as f64).max(0.0) as u64;
+    let fitted = self.timeline.clock.server_time_at(self.now_ms as f64).unwrap_or(self.now_ms as f64).max(0.0) as u64;
     let carried = self.newest_stamp_ms + self.now_ms.saturating_sub(self.stamp_at_local_ms);
     fitted.max(carried)
   }
@@ -207,8 +228,8 @@ impl NetClient {
   /// The clock fit as `(offset_ms, samples)`.
   pub fn clock_diag(&self) -> (Option<f64>, usize) {
     (
-      self.clock.server_time_at(self.now_ms as f64).map(|s| s - self.now_ms as f64),
-      self.clock.sample_count(),
+      self.timeline.clock.server_time_at(self.now_ms as f64).map(|s| s - self.now_ms as f64),
+      self.timeline.clock.sample_count(),
     )
   }
 
@@ -252,7 +273,9 @@ impl NetClient {
     self.now_ms = now_ms;
     if now_ms.saturating_sub(self.last_ping_ms) >= PING_INTERVAL_MS && self.socket.is_open() {
       self.last_ping_ms = now_ms;
-      send_framed(self.socket.as_ref(), &Op::Ping { origin_ms: now_ms });
+      let probe = self.timeline.begin(now_ms);
+      self.probe = Some(probe);
+      send_ping(self.socket.as_ref(), probe.sent_at);
     }
 
     self.socket.poll(&mut self.events);
@@ -263,6 +286,12 @@ impl NetClient {
     // seconds on refocus.
     if self.frames_seen > 0 && plaza_ws::trim_backlog(&mut events, BACKLOG_TRIGGER, BACKLOG_KEEP).is_some() {
       self.resume_drops += 1;
+      // A probe sent before the freeze and answered after it measures the
+      // freeze, not the network, and its origin still matches so the echo
+      // check waves it through. The epoch is what discards it, along with
+      // everything the estimators learned across a gap of unknown length.
+      self.timeline.on_resume();
+      self.probe = None;
     }
 
     for event in events {
@@ -273,7 +302,7 @@ impl NetClient {
           }
           // Before anything else: say which wire format this build speaks, so
           // a stale page is told to reload rather than half-working.
-          send_framed(self.socket.as_ref(), &Op::Hello { protocol: PROTOCOL });
+          send_hello(self.socket.as_ref());
         }
         Event::Text(text) => self.on_frame(text.as_bytes(), controls),
         Event::Message(bytes) => self.on_frame(&bytes, controls),
@@ -290,14 +319,45 @@ impl NetClient {
     self.events.clear();
   }
 
+  fn on_server_protocol(&mut self, body: &[u8]) {
+    let Ok(theirs) = WIRE.decode::<ProtocolVersion>(body) else {
+      return;
+    };
+    if ProtocolVersion(PROTOCOL).agrees_with(theirs) {
+      return;
+    }
+    self.status = Status::Gone(format!(
+      "this page was built for wire format {PROTOCOL} and the server speaks {}: reload to get the current client",
+      theirs.0
+    ));
+  }
+
   fn on_frame(&mut self, bytes: &[u8], controls: &Controls) {
     let Some((tag, body)) = frame::split(bytes) else {
       return;
     };
     // Skip-unknown rather than fail: a server speaking a newer protocol may
     // send kinds this build has never heard of.
-    if frame::Kind::from_byte(tag) != Some(frame::Kind::Ops) {
-      return;
+    match frame::Kind::from_byte(tag) {
+      Some(frame::Kind::Ops) => {}
+      Some(frame::Kind::Hello) => return self.on_server_protocol(body),
+      // The server's session answers this one; this end only echoes the stamp
+      // back, because the clock being measured is the server's.
+      Some(frame::Kind::Ping) => {
+        if let Some(reply) = frame::answer_ping(&WIRE, body, None) {
+          let _ = self.socket.send(&reply);
+        }
+        return;
+      }
+      Some(frame::Kind::Pong) => {
+        if let (Ok(pong), Some(probe)) = (WIRE.decode::<frame::Pong>(body), self.probe.take())
+          && pong.origin == probe.sent_at
+        {
+          self.timeline.complete(probe, self.now_ms, pong.responder);
+        }
+        return;
+      }
+      None => return,
     }
     let Ok(ops) = WIRE.decode::<Vec<Op>>(body) else {
       return;
@@ -353,20 +413,6 @@ impl NetClient {
         Op::NoSeat { seats } => {
           self.status = Status::NoSeat { seats };
         }
-        Op::Pong { origin_ms, server_ms } => {
-          self.rtt.observe_pong(origin_ms, self.now_ms);
-          // The server stamped `server_ms` when it replied, roughly one way
-          // back from now. Correcting by the estimated one-way delay is what
-          // turns a raw sample into an offset worth fitting.
-          let one_way = self.rtt.one_way_ms().unwrap_or(0.0) as f64;
-          let offset = (server_ms as f64 + one_way) - self.now_ms as f64;
-          self.clock.observe(self.now_ms as f64, offset);
-        }
-        Op::Outdated { server, client } => {
-          self.status = Status::Gone(format!(
-            "this page was built for wire format {client} and the server speaks {server}: reload to get the current client"
-          ));
-        }
         Op::PowerTaken { cell, .. } => {
           self.sim.on_power_taken(cell);
         }
@@ -374,7 +420,7 @@ impl NetClient {
         Op::MatchOver { standings, .. } => {
           self.last_standings = Some(standings);
         }
-        Op::Turn { .. } | Op::Ping { .. } | Op::Hello { .. } => {}
+        Op::Turn { .. } | Op::Hello { .. } | Op::Outdated { .. } => {}
       }
     }
   }
@@ -441,6 +487,13 @@ mod tests {
     let mut bytes = Vec::new();
     frame::begin(frame::Kind::Ops, &mut bytes);
     WIRE.encode_into(&ops, &mut bytes).unwrap();
+    Event::Message(bytes)
+  }
+
+  fn hello(version: u32) -> Event {
+    let mut bytes = Vec::new();
+    frame::begin(frame::Kind::Hello, &mut bytes);
+    WIRE.encode_into(&ProtocolVersion(version), &mut bytes).unwrap();
     Event::Message(bytes)
   }
 
@@ -573,10 +626,7 @@ mod tests {
   fn a_server_on_another_wire_format_is_reported() {
     let feed = ScriptedSocket(Arc::new(Mutex::new(VecDeque::new())));
     let mut client = welcomed(&feed, 0);
-    feed.0.lock().push_back(envelope(vec![Op::Outdated {
-      server: PROTOCOL.wrapping_add(1),
-      client: PROTOCOL,
-    }]));
+    feed.0.lock().push_back(hello(PROTOCOL.wrapping_add(1)));
     client.poll(10, &Controls::default());
     assert!(matches!(client.status, Status::Gone(_)));
   }

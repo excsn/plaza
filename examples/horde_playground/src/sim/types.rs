@@ -1038,6 +1038,16 @@ pub struct Controls {
   /// dropped packet leaves the client permanently missing whatever that packet
   /// carried, and nothing in the stream ever mentions it again.
   pub loss_pct: f32,
+  /// What a lost packet costs, which is a property of the link rather than of
+  /// this simulation.
+  ///
+  /// The transport underneath is a WebSocket, so the truthful answer is a
+  /// retransmission: the frame is late and everything behind it waits, and
+  /// nothing is ever missing. The netcode above is written for the *other*
+  /// answer, where the packet is gone and the delta stream has to re-derive
+  /// what it carried, so the panel offers both and the recovery below is only
+  /// exercised by the second.
+  pub datagram_link: bool,
   /// Diff against the last packet the client *acknowledged* rather than the last
   /// one sent, so a dropped packet's contents are re-derived by the next diff.
   pub ack_recovery: bool,
@@ -1185,6 +1195,7 @@ impl Default for Controls {
       latency_ms: 30,
       jitter_ms: 20,
       loss_pct: 0.0,
+      datagram_link: true,
       ack_recovery: true,
       crowd_lod_theta: 0.0,
       coins: true,

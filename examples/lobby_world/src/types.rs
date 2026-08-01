@@ -1,6 +1,18 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// The wire format's version, derived at build time from this file (see
+/// `build.rs`), so it cannot drift out of date the way a manual constant does.
+///
+/// The point is a client that is a separate build product: it does not rebuild
+/// when the server does, so a client from before a wire change is the normal
+/// state of affairs. Without a version the failure is silent in the worst way,
+/// because the connection succeeds and only the messages whose shape changed are
+/// rejected.
+pub const PROTOCOL: u32 = WIRE_PROTOCOL;
+
+include!(concat!(env!("OUT_DIR"), "/wire_protocol.rs"));
+
 pub type PlayerId = u64;
 pub type RoomId = Uuid;
 

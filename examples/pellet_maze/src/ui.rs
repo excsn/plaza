@@ -36,6 +36,8 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls, host: bool) {
         .on_hover_text(
           "Loss is what actually sends the two sides down different corridors: a turn request the server never heard means the client turned and the server did not. Latency alone does not, which is the measurement worth taking away.",
         );
+      ui.checkbox(&mut controls.datagram_link, "datagram link (a loss is a hole)")
+        .on_hover_text("On: a lost packet is gone and the two ends reconcile, which is the link this netcode is written for and what the loss slider above is demonstrating. Off: the truth about the WebSocket underneath, where a loss is retransmitted, so it costs a stall and a burst and nothing goes missing.");
     });
 
     section(ui, "input schedule", false, |ui| {

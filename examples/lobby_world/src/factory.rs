@@ -13,11 +13,13 @@ use plaza_lobby::factory::RoomFactory;
 use plaza_lobby::op_payloads::RoomSettings;
 use plaza_lobby::room::InProcessRoomHandle;
 use plaza_lobby::{LobbyError, RoomId};
+use plaza_session::codec::JsonCodec;
 use plaza_session::ActixWsPlazaSession;
+use plaza_wire::frame::ProtocolVersion;
 use tracing::info;
 
 use crate::room::{ArenaLogic, ArenaSnapshotter, ArenaState};
-use crate::types::{ArenaSettings, PlayerId, RoomOp};
+use crate::types::{ArenaSettings, PlayerId, RoomOp, PROTOCOL};
 use crate::wallets::WalletRegistry;
 
 /// One per arena: a session feeds exactly one controller.
@@ -95,7 +97,7 @@ impl RoomFactory for ArenaFactory {
       .clone()
       .unwrap_or_else(|| format!("arena-{room_id}"));
     let seats = Arc::new(AtomicU32::new(0));
-    let session: Arc<ArenaSession> = ActixWsPlazaSession::new();
+    let session: Arc<ArenaSession> = ActixWsPlazaSession::with_protocol(JsonCodec, ProtocolVersion(PROTOCOL));
 
     let state = ArenaState::new(
       name.clone(),

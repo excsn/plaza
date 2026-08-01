@@ -57,6 +57,8 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls) {
     ui.add(egui::Slider::new(&mut controls.latency_ms, 0..=400).text("latency ms"));
     ui.add(egui::Slider::new(&mut controls.jitter_ms, 0..=150).text("jitter ms"));
     ui.add(egui::Slider::new(&mut controls.loss_pct, 0.0..=40.0).text("packet loss %"));
+    ui.checkbox(&mut controls.datagram_link, "datagram link (a loss is a hole)")
+      .on_hover_text("On: a lost packet is gone and the two ends reconcile, which is the link this netcode is written for and what the loss slider above is demonstrating. Off: the truth about the WebSocket underneath, where a loss is retransmitted, so it costs a stall and a burst and nothing goes missing.");
   });
 
   section(ui, "your hole", true, |ui| {

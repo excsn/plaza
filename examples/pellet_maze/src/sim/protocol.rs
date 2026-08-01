@@ -36,7 +36,6 @@ pub enum Op {
   /// pressed at the same instant are resolved by press order rather than by
   /// ping. What it does **not** carry is where the turn should be taken.
   Turn { seq: u64, dir: Dir, tick: u64 },
-  Ping { origin_ms: u64 },
   Hello { protocol: u32 },
 
   // ---- server to client ----
@@ -66,7 +65,6 @@ pub enum Op {
   Caught { runner: PlayerId, by: PlayerId, next_in_ms: u64 },
   InputAck { seq: u64 },
   NoSeat { seats: usize },
-  Pong { origin_ms: u64, server_ms: u64 },
   Outdated { server: u32, client: u32 },
 }
 

@@ -13,9 +13,8 @@
 //!
 //! [`sim::Client`]: crate::sim::client::Client
 
-use plaza_client_utils::clock_sync::ClockSyncEstimator;
-use plaza_client_utils::RttEstimator;
-use plaza_wire::frame;
+use plaza_client_utils::{Probe, Timeline};
+use plaza_wire::frame::{self, ProtocolVersion};
 use plaza_wire::{MsgPackCodec, WireCodec};
 use plaza_ws::{CloseReason, Event, Socket};
 
@@ -43,8 +42,8 @@ pub struct NetClient {
   pub status: Status,
   pub me: Option<PlayerId>,
 
-  rtt: RttEstimator,
-  clock: ClockSyncEstimator,
+  timeline: Timeline,
+  probe: Option<Probe>,
   events: Vec<Event>,
   last_ping_ms: u64,
   now_ms: u64,
@@ -54,6 +53,31 @@ pub struct NetClient {
   pub resume_drops: u64,
   pub bytes_sent: u64,
   pub bytes_received: u64,
+}
+
+fn send_hello(socket: &dyn Socket) -> usize {
+  let mut buf = Vec::with_capacity(16);
+  frame::begin(frame::Kind::Hello, &mut buf);
+  if WIRE.encode_into(&ProtocolVersion(PROTOCOL), &mut buf).is_err() {
+    debug_assert!(false, "a protocol version failed to serialise");
+    return 0;
+  }
+  let _ = socket.send(&buf);
+  buf.len()
+}
+
+/// Starts a latency probe. The stamp is this client's own clock in
+/// milliseconds; the server echoes it back without reading it.
+fn send_ping(socket: &dyn Socket, origin: u64) -> usize {
+  let mut buf = Vec::with_capacity(16);
+  frame::begin(frame::Kind::Ping, &mut buf);
+  if WIRE.encode_into(&frame::Ping { origin }, &mut buf).is_err() {
+    debug_assert!(false, "a ping failed to serialise");
+    return 0;
+  }
+  let n = buf.len();
+  let _ = socket.send(&buf);
+  n
 }
 
 fn send_framed(socket: &dyn Socket, op: &Op) -> usize {
@@ -80,8 +104,8 @@ impl NetClient {
       sim: SimClient::new(0, Track::circuit(), PROTOCOL),
       status: Status::Connecting,
       me: None,
-      rtt: RttEstimator::new(0.15),
-      clock: ClockSyncEstimator::new(32),
+      timeline: Timeline::new(),
+      probe: None,
       events: Vec::new(),
       last_ping_ms: 0,
       now_ms: 0,
@@ -97,13 +121,13 @@ impl NetClient {
   }
 
   pub fn rtt_ms(&self) -> Option<f32> {
-    self.rtt.rtt_ms()
+    self.timeline.rtt.rtt()
   }
 
   pub fn clock_diag(&self) -> (Option<f64>, usize) {
     (
-      self.clock.server_time_at(self.now_ms as f64).map(|s| s - self.now_ms as f64),
-      self.clock.sample_count(),
+      self.timeline.clock.server_time_at(self.now_ms as f64).map(|s| s - self.now_ms as f64),
+      self.timeline.clock.sample_count(),
     )
   }
 
@@ -121,13 +145,21 @@ impl NetClient {
     self.now_ms = now_ms;
     if now_ms.saturating_sub(self.last_ping_ms) >= PING_INTERVAL_MS && self.socket.is_open() {
       self.last_ping_ms = now_ms;
-      self.bytes_sent += send_framed(self.socket.as_ref(), &Op::Ping { origin_ms: now_ms }) as u64;
+      let probe = self.timeline.begin(now_ms);
+      self.probe = Some(probe);
+      self.bytes_sent += send_ping(self.socket.as_ref(), probe.sent_at) as u64;
     }
 
     self.socket.poll(&mut self.events);
     let mut events = std::mem::take(&mut self.events);
     if self.me.is_some() && plaza_ws::trim_backlog(&mut events, BACKLOG_TRIGGER, BACKLOG_KEEP).is_some() {
       self.resume_drops += 1;
+      // A probe sent before the freeze and answered after it measures the
+      // freeze, not the network, and its origin still matches so the echo
+      // check waves it through. The epoch is what discards it, along with
+      // everything the estimators learned across a gap of unknown length.
+      self.timeline.on_resume();
+      self.probe = None;
     }
 
     for event in events {
@@ -136,7 +168,7 @@ impl NetClient {
           if self.status == Status::Connecting {
             self.status = Status::Waiting;
           }
-          self.bytes_sent += send_framed(self.socket.as_ref(), &Op::Hello { protocol: PROTOCOL }) as u64;
+          self.bytes_sent += send_hello(self.socket.as_ref()) as u64;
         }
         Event::Text(text) => self.on_message(text.as_bytes()),
         Event::Message(bytes) => self.on_message(&bytes),
@@ -185,13 +217,44 @@ impl NetClient {
     }
   }
 
+  fn on_server_protocol(&mut self, body: &[u8]) {
+    let Ok(theirs) = WIRE.decode::<ProtocolVersion>(body) else {
+      return;
+    };
+    if ProtocolVersion(PROTOCOL).agrees_with(theirs) {
+      return;
+    }
+    self.status = Status::Gone(format!(
+      "this page was built for wire format {PROTOCOL} and the server speaks {}: reload to get the current client",
+      theirs.0
+    ));
+  }
+
   fn on_message(&mut self, bytes: &[u8]) {
     self.bytes_received += bytes.len() as u64;
     let Some((tag, body)) = frame::split(bytes) else {
       return;
     };
-    if frame::Kind::from_byte(tag) != Some(frame::Kind::Ops) {
-      return;
+    match frame::Kind::from_byte(tag) {
+      Some(frame::Kind::Ops) => {}
+      Some(frame::Kind::Hello) => return self.on_server_protocol(body),
+      // The server's session answers this one; this end only echoes the stamp
+      // back, because the clock being measured is the server's.
+      Some(frame::Kind::Ping) => {
+        if let Some(reply) = frame::answer_ping(&WIRE, body, None) {
+          let _ = self.socket.send(&reply);
+        }
+        return;
+      }
+      Some(frame::Kind::Pong) => {
+        if let (Ok(pong), Some(probe)) = (WIRE.decode::<frame::Pong>(body), self.probe.take())
+          && pong.origin == probe.sent_at
+        {
+          self.timeline.complete(probe, self.now_ms, pong.responder);
+        }
+        return;
+      }
+      None => return,
     }
     let Ok(ops) = WIRE.decode::<Vec<Op>>(body) else {
       return;
@@ -214,18 +277,7 @@ impl NetClient {
         Op::Accepted { ghost, place } => self.sim.on_accepted(*ghost, place),
         Op::Refused { why } => self.sim.on_refused(why),
         Op::NoSeat { seats } => self.status = Status::NoSeat { seats },
-        Op::Pong { origin_ms, server_ms } => {
-          self.rtt.observe_pong(origin_ms, self.now_ms);
-          let one_way = self.rtt.one_way_ms().unwrap_or(0.0) as f64;
-          let offset = (server_ms as f64 + one_way) - self.now_ms as f64;
-          self.clock.observe(self.now_ms as f64, offset);
-        }
-        Op::Outdated { server, client } => {
-          self.status = Status::Gone(format!(
-            "this page was built for wire format {client} and the server speaks {server}: reload to get the current client"
-          ));
-        }
-        Op::Hello { .. } | Op::Ping { .. } | Op::Submit { .. } => {}
+        Op::Submit { .. } => {}
       }
     }
   }

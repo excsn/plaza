@@ -30,6 +30,12 @@
 //! phone, and two of them had no pointer input at all. One set of on-screen
 //! controls rather than one per example.
 //!
+//! [`oneshot`], for the fourth: every playground has a `Welcome` with nothing
+//! behind it, and on a link that can lose a frame every one of them needs the
+//! same holding-and-repeating. Six copies of that bookkeeping is the same
+//! mistake again, and the copies had already begun to differ, three of them by
+//! being wired up and doing nothing at all.
+//!
 //! That is an argument about where it *cannot* go, though, not an argument that
 //! it belongs in the published library. Argument parsing is an opinion, and an
 //! application of any size will have its own (clap, or a config file, or an
@@ -38,6 +44,8 @@
 //! is scaffolding, and scaffolding shared between two examples is exactly what
 //! this is. The genuinely reusable half of a listen server is
 //! `plaza_session::host::Host`, which is where the HTTP layer lives.
+
+pub mod oneshot;
 
 #[cfg(feature = "fixed")]
 pub mod fixed;

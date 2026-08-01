@@ -418,6 +418,12 @@ pub struct Controls {
   pub latency_ms: u64,
   pub jitter_ms: u64,
   pub loss_pct: f32,
+  /// What a lost packet costs, which is a property of the link rather than of
+  /// this simulation. The transport underneath is a WebSocket, so the truthful
+  /// answer is a retransmission: the frame is late and nothing is missing. The
+  /// netcode above is written for the other answer, where the packet is gone,
+  /// which is the one worth demonstrating here.
+  pub datagram_link: bool,
   /// Whether a client simulates the wave at all. Off, it draws only what a
   /// snapshot told it, which is the bandwidth comparison made visible.
   pub simulate_locally: bool,
@@ -446,6 +452,7 @@ impl Default for Controls {
       latency_ms: 60,
       jitter_ms: 15,
       loss_pct: 0.0,
+      datagram_link: true,
       simulate_locally: true,
       digest_checks: true,
       resync_on_mismatch: true,

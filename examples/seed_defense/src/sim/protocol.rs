@@ -31,12 +31,6 @@ include!(concat!(env!("OUT_DIR"), "/wire_protocol.rs"));
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Op {
   // ---- client to server ----
-  Hello {
-    protocol: u32,
-  },
-  Ping {
-    origin_ms: u64,
-  },
   /// "I would like a tower here." Never "there is a tower here."
   Want {
     seq: u64,
@@ -102,16 +96,8 @@ pub enum Op {
   Ack {
     seq: u64,
   },
-  Pong {
-    origin_ms: u64,
-    server_ms: u64,
-  },
   NoSeat {
     seats: usize,
-  },
-  Outdated {
-    server: u32,
-    client: u32,
   },
 }
 
@@ -143,11 +129,10 @@ pub fn wire_cost(op: &Op) -> usize {
     Op::Digest { .. } => 20,
     Op::Ack { .. } | Op::Refused { .. } => 6,
     Op::Over { .. } => 8,
-    Op::Ping { .. } | Op::Pong { .. } => 12,
     Op::Want { .. } => 14,
     Op::WantSnapshot { .. } => 18,
     Op::Snapshot { field, .. } | Op::Welcome { field, .. } => field_cost(field),
-    Op::Hello { .. } | Op::NoSeat { .. } | Op::Outdated { .. } => 8,
+    Op::NoSeat { .. } => 8,
   }
 }
 

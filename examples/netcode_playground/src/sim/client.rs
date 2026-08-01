@@ -91,12 +91,12 @@ impl Client {
 
   /// The client's smoothed round trip to the server, if measured yet.
   pub fn rtt_ms(&self) -> Option<f32> {
-    self.rtt.rtt_ms()
+    self.rtt.rtt()
   }
 
   /// The measured jitter, if any.
   pub fn jitter_ms(&self) -> Option<f32> {
-    self.rtt.jitter_ms()
+    self.rtt.jitter()
   }
 
   /// The interpolation delay currently in effect (fixed or adaptive).

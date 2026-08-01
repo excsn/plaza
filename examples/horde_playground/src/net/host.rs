@@ -15,6 +15,7 @@ use actix_web::{web, HttpRequest, HttpResponse};
 use parking_lot::Mutex;
 use plaza::{Agent, StateControllerBuilder, TickDriver};
 use plaza_session::actix_ws::ActixWsPlazaSession;
+use plaza_session::SessionOptions;
 use plaza_wire::frame::ProtocolVersion;
 use plaza_wire::MsgPackCodec;
 use plaza_session::host::{init_logging, Host};
@@ -122,10 +123,18 @@ pub async fn serve(
 
   for room in active.iter() {
     // MessagePack, not JSON: the same codec the client names, so neither end
-    // can drift onto a format the other does not speak. The version is derived
-    // from the sources that define `Op`, so a client built before a wire change
-    // is told rather than left half-working.
-    let session: Arc<ArenaSession> = ActixWsPlazaSession::with_protocol(MsgPackCodec, ProtocolVersion(PROTOCOL));
+    // can drift onto a format the other does not speak.
+    // The clock a `Pong` carries is the arena's simulation clock, which is what
+    // clients synchronise against; the arena stores its tick here and the
+    // session reads it from whichever connection task is answering.
+    let sim_clock = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let session: Arc<ArenaSession> = ActixWsPlazaSession::with_options(
+      MsgPackCodec,
+      SessionOptions::with_protocol(ProtocolVersion(PROTOCOL)).clock({
+        let sim_clock = sim_clock.clone();
+        move || sim_clock.load(std::sync::atomic::Ordering::Relaxed)
+      }),
+    );
     // Only the arena the host plays in reads the shared panel; the others run on
     // their own settings, or a slider drag would rewrite every room's schedule
     // and undo the thing that makes them different.
@@ -140,8 +149,14 @@ pub async fn serve(
       let session = session.clone();
       Arc::new(move |key: &PlayerKey| session.agent_rtt(key)) as crate::net::arena::LatencySource
     };
+    let link = {
+      let session = session.clone();
+      Arc::new(move |profile| session.set_all_link_profiles(profile)) as crate::net::arena::LinkSink
+    };
     let logic = ArenaLogic::new(room_controls, room_view)
       .with_latency(measured)
+      .with_link(link)
+      .with_clock(sim_clock)
       .with_router(room.id, router.clone());
     let mut builder = StateControllerBuilder::new(
       Arc::new(logic),

@@ -15,10 +15,11 @@ use actix_web::{web, HttpRequest, HttpResponse};
 use parking_lot::Mutex;
 use plaza::{Agent, StateControllerBuilder, TickDriver};
 use plaza_session::actix_ws::ActixWsPlazaSession;
+use plaza_wire::frame::ProtocolVersion;
 use plaza_session::host::{init_logging, Host};
 
 use crate::net::arena::{Arena, ArenaLogic, HostView, NoSnapshots, PlayerKey};
-use crate::sim::protocol::Op;
+use crate::sim::protocol::{Op, PROTOCOL};
 use crate::sim::types::{Controls, B0MB_SEED, SIM_STEP_MS};
 
 type ArenaSession = ActixWsPlazaSession<Op, PlayerKey, plaza_wire::MsgPackCodec>;
@@ -52,10 +53,24 @@ pub async fn serve(bind: &str, controls: Arc<Mutex<Controls>>, view: Option<Arc<
 
   // Built with the protocol this binary speaks, so a stale browser bundle is
   // told to reload by the handshake rather than half-working.
-  let session: Arc<ArenaSession> = ActixWsPlazaSession::with_codec(plaza_wire::MsgPackCodec);
+  // The clock a `Pong` carries is the arena's simulation clock, which is what
+  // clients synchronise against; the arena stores its tick here and the session
+  // reads it from whichever connection task is answering.
+  let sim_clock = Arc::new(std::sync::atomic::AtomicU64::new(0));
+  let session: Arc<ArenaSession> = ActixWsPlazaSession::with_options(
+    plaza_wire::MsgPackCodec,
+    plaza_session::SessionOptions::with_protocol(ProtocolVersion(PROTOCOL)).clock({
+      let sim_clock = sim_clock.clone();
+      move || sim_clock.load(std::sync::atomic::Ordering::Relaxed)
+    }),
+  );
 
   let initial = *controls.lock();
-  let logic = ArenaLogic::new(controls, view);
+  let link = {
+    let session = session.clone();
+    Arc::new(move |profile| session.set_all_link_profiles(profile)) as crate::net::arena::LinkSink
+  };
+  let logic = ArenaLogic::new(controls, view).with_link(link).with_clock(sim_clock);
   let (commands, controller) = StateControllerBuilder::new(Arc::new(logic), session.clone(), Arc::new(NoSnapshots), Arena::new(initial, B0MB_SEED))
     // No snapshot on join: `Op::Welcome` carries the board and the players
     // together on the tick a joiner is seated.

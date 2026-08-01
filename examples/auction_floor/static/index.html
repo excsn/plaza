@@ -100,6 +100,11 @@
 
 <script>
 const KIND_OPS = 0;
+// A latency probe. The server's session sends these and answers them; this
+// page only has to echo the stamp back untouched, which is what lets the
+// server report a round trip for a browser client at all.
+const KIND_PING = 2;
+const KIND_PONG = 3;
 
 // Unit variants arrive as bare strings, struct variants as one-key objects.
 const opName = (op) => (typeof op === 'string' ? op : Object.keys(op)[0]);
@@ -130,8 +135,13 @@ function connect() {
   const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${scheme}//${location.host}/ws`);
   ws.onmessage = (e) => {
-    if (e.data === 'hb_ping') { ws.send('hb_pong'); return; }
-    if (e.data.charCodeAt(0) !== KIND_OPS) return;
+    const kind = e.data.charCodeAt(0);
+    if (kind === KIND_PING) {
+      const ping = JSON.parse(e.data.slice(1));
+      ws.send(String.fromCharCode(KIND_PONG) + JSON.stringify({ origin: ping.origin, responder: null }));
+      return;
+    }
+    if (kind !== KIND_OPS) return;
     for (const op of JSON.parse(e.data.slice(1))) handle(op);
   };
   ws.onclose = () => { $('me').textContent = 'disconnected'; };

@@ -27,12 +27,6 @@ include!(concat!(env!("OUT_DIR"), "/wire_protocol.rs"));
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Op {
   // ---- client to server ----
-  Hello {
-    protocol: u32,
-  },
-  Ping {
-    origin_ms: u64,
-  },
   /// A finished run: the inputs, and the time the client believes they take.
   ///
   /// The time is not authoritative and is not trusted. It is here so that a
@@ -62,16 +56,8 @@ pub enum Op {
   Refused {
     why: Rejection,
   },
-  Pong {
-    origin_ms: u64,
-    server_ms: u64,
-  },
   NoSeat {
     seats: usize,
-  },
-  Outdated {
-    server: u32,
-    client: u32,
   },
 }
 
@@ -99,7 +85,6 @@ pub fn wire_cost(op: &Op) -> usize {
     Op::Accepted { ghost, .. } => 8 + ghost.wire_cost(),
     Op::Welcome { ghosts, .. } => 32 + ghosts.iter().map(|g| g.wire_cost()).sum::<usize>(),
     Op::Refused { .. } => 10,
-    Op::Ping { .. } | Op::Pong { .. } => 12,
-    Op::Hello { .. } | Op::NoSeat { .. } | Op::Outdated { .. } => 8,
+    Op::NoSeat { .. } => 8,
   }
 }

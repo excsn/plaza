@@ -151,7 +151,7 @@ Worth stating plainly, because the honest answer looks like a broken feature.
 
 Turn the latency to 800 ms and drive a lap: **the time is identical**. That is not the slider failing, it is the measurement. The run happens on the machine driving it, and the link is not in the loop.
 
-What the link does decide is when the verdict on your run comes back and when somebody else's ghost turns up, and the arena impairs both on the real path: the answers to a submission go through a `LatencyLink` per seat, and a submission itself can be dropped, which the host panel counts.
+What the link does decide is when the verdict on your run comes back and when somebody else's ghost turns up, and the impairment is on the real path for both: the session holds every frame the connection carries, in either direction, and on a datagram link it can drop one. The panel reports the frames it ate, read back from the session rather than counted here, because a frame the link discarded never reaches this arena to be counted.
 
 An earlier version of this example did **not** impair the live path at all. The sliders were wired only to the offline harness, so on a real host they moved nothing whatsoever, which invites exactly the wrong conclusion: a player turns the latency up, sees no change anywhere, and concludes the example is not doing anything. A control that acts on nothing is worse than one that acts on something dull. `the_impairment_is_on_the_real_path` now asserts a verdict cannot come back faster than the link allows.
 

@@ -98,7 +98,9 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls) {
       .on_hover_text("One way, each direction, applied to traffic leaving the host and to traffic arriving from a client. Not a setting a real deployment has: the host runs the server in this process, so the real link is microseconds and this is what stands in for one. The two budgets below are sized to cover it.");
     ui.add(egui::Slider::new(&mut controls.jitter_ms, 0..=150).text("jitter ms"));
     ui.add(egui::Slider::new(&mut controls.loss_pct, 0.0..=40.0).text("packet loss %"))
-      .on_hover_text("A delta stream assumes every packet arrives. Raise this with recovery off and watch the phantom count climb.");
+      .on_hover_text("A delta stream assumes every packet arrives. Raise this with recovery off, on a datagram link, and watch the phantom count climb.");
+    ui.checkbox(&mut controls.datagram_link, "datagram link (a loss is a hole)")
+      .on_hover_text("On: a lost packet is gone and the stream has to re-derive what it carried, which is what the recovery below exists for and the link this netcode is written for. Off: the truth about the WebSocket underneath, where a loss is retransmitted, so it costs a stall and a burst and nothing goes missing.");
   });
 
   section(ui, "send rates", true, |ui| {
