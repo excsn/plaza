@@ -231,7 +231,11 @@ impl Quat {
       let sin_theta = theta.sin();
       let sin_theta_0 = theta_0.sin();
 
-      let s0 = (theta_0 - theta).cos() - dot * sin_theta / sin_theta_0; // == theta.cos()
+      // `cos(theta) - dot * sin(theta) / sin(theta_0)`, which reduces to the
+      // standard `sin((1 - t) * theta_0) / sin(theta_0)`. This read
+      // `(theta_0 - theta).cos()`, which equals `theta.cos()` only at `t == 0.5`,
+      // the one value the test covered; at `t == 1.0` slerp did not reach `end`.
+      let s0 = theta.cos() - dot * sin_theta / sin_theta_0;
       let s1 = sin_theta / sin_theta_0;
 
       Quat::new(
@@ -376,6 +380,26 @@ mod tests {
     assert!((q_mid.w - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-5);
     assert!(q_mid.x.abs() < 1e-5);
     assert!(q_mid.z.abs() < 1e-5);
+  }
+
+  #[test]
+  fn quat_slerp_reaches_its_endpoints() {
+    let end = Quat::new(0.0, 1.0, 0.0, 1.0).normalize();
+    let at_zero = Quat::IDENTITY.slerp(end, 0.0);
+    let at_one = Quat::IDENTITY.slerp(end, 1.0);
+    assert!((at_zero.w - 1.0).abs() < 1e-5, "t=0 is self: {at_zero:?}");
+    assert!((at_one.y - end.y).abs() < 1e-5, "t=1 is end: {at_one:?} against {end:?}");
+    assert!((at_one.w - end.w).abs() < 1e-5, "t=1 is end: {at_one:?} against {end:?}");
+  }
+
+  #[test]
+  fn quat_slerp_takes_the_shorter_arc() {
+    let q = Quat::new(0.0, 0.3, 0.0, 0.95).normalize();
+    let negated = Quat::new(-q.x, -q.y, -q.z, -q.w);
+    let a = Quat::IDENTITY.slerp(q, 0.5);
+    let b = Quat::IDENTITY.slerp(negated, 0.5);
+    assert!((a.y - b.y).abs() < 1e-6, "{a:?} against {b:?}");
+    assert!((a.w - b.w).abs() < 1e-6, "{a:?} against {b:?}");
   }
 
   #[test]
