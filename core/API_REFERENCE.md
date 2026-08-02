@@ -124,6 +124,8 @@ pub trait SnapshotProvider<ID: AgentId, StateType, Op>: Send + Sync + 'static {
 
 **The seam for hidden information.** `target_agent` is who the snapshot is *for*, and the controller calls this once per recipient, so returning a different payload per agent (each player sees their own hand) is the normal path.
 
+**Every call in a pass is started before any is awaited**, so a provider that reads a database or a cache overlaps its waits rather than serialising them. That matters because the controller is one task: a pass awaiting per agent stalls ticks and ops behind it, and against a provider suspending ~1.3ms, 64 recipients cost 85ms in sequence and 1.4ms overlapped (`core/benches/snapshots.rs`). A provider that never awaits is unaffected. The consequence is that **calls interleave**: one that relies on finishing before the next begins cannot assume it, though taking `&self` already ruled out holding state across a call.
+
 **A snapshot is an `Op`.** The envelope has one message kind, so "replace everything" is a variant of your own op type rather than a wire concept. **Box it** if it carries a whole state view: unboxed, every op in every batch is sized to it. Return `Ok(None)` to send a recipient nothing, which is how an application declines a particular agent.
 
 ### Struct `NoSnapshots`
@@ -159,7 +161,7 @@ Which snapshot is wanted. **Plaza never reads this**: it carries it from caller 
 *   `ProcessTimeStep { delta_time }`
 *   `HandleAgentJoined { agent }` / `HandleAgentLeft { agent_id }`: the push-style alternative to the session's own notifications; the lobby uses the latter.
 *   `QueryCurrentState { response_tx: oneshot::ExclusiveSender<StateType> }`: the single-sender oneshot, since the sender is moved into the command and never cloned.
-*   `SendSnapshots { recipients: Vec<Agent<ID>>, context: Option<SnapshotContext> }`: re-sends state, building a snapshot per recipient. Recipients are explicit because the roster lives in your state, not the controller.
+*   `SendSnapshots { recipients: Vec<Agent<ID>>, context: Option<SnapshotContext> }`: re-sends state, building a snapshot per recipient, with every provider call started before any is awaited. Recipients are explicit because the roster lives in your state, not the controller.
 *   `Shutdown`
 
 ### Type Alias `CommandSender<Op, ID, StateType>`

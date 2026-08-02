@@ -111,6 +111,13 @@ impl Debug for SnapshotContext {
 ///
 /// The controller calls this once per recipient, so returning a different
 /// payload per agent costs nothing extra structurally.
+///
+/// **Every call in a pass is started before any is awaited.** A provider that
+/// reads a database or a cache therefore overlaps its waits rather than
+/// serialising them, which matters because the controller is one task and a
+/// pass that awaits per agent stalls ticks and ops behind it. The consequence
+/// is that calls interleave: one relying on finishing before the next begins
+/// cannot assume it.
 #[async_trait]
 pub trait SnapshotProvider<ID: AgentId, StateType, Op>: Send + Sync + 'static {
   /// Builds a snapshot of the current authoritative state, as an `Op`.
