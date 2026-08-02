@@ -29,10 +29,16 @@ tokio = { version = "^1", features = ["macros", "rt-multi-thread", "sync", "time
 uuid = { workspace = true }
 tracing-subscriber = { workspace = true }
 criterion = { version = "^0", features = ["html_reports"] }
+futures-util = "^0"
+serde = { workspace = true }
 
 [features]
 default = []
 
 [[bench]]
 name = "controller"
+harness = false
+
+[[bench]]
+name = "snapshots"
 harness = false
