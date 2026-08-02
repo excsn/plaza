@@ -21,7 +21,9 @@ use serde::Serialize;
 use plaza_wire::frame::ProtocolVersion;
 use tracing::{debug, error, warn};
 
-use crate::codec::{JsonCodec, WireCodec};
+use crate::codec::WireCodec;
+#[cfg(feature = "json")]
+use crate::codec::JsonCodec;
 use crate::conditioner::{Conditioner, LinkProfile};
 use crate::control::{
   self, earliest, far_future, route_inbound, ProbeState, DOWN_SEED_FLIP, RTT_FAST_INTERVAL, RTT_FAST_PINGS,
@@ -42,10 +44,23 @@ const MAX_CONTINUATION_SIZE: usize = 1024 * 1024;
 /// Construct one, share it with both your `StateController` and your actix
 /// `App` (via `web::Data`), then call [`Self::handle_connection`] from the
 /// WebSocket route.
+///
+/// `C` defaults to [`JsonCodec`] only while the `json` feature is on, which is
+/// why the declaration appears twice: a default type parameter has to name a
+/// type that exists, and dropping `json` is what takes `serde_json` out of the
+/// build. Without it, name the codec: `ActixWsPlazaSession<Op, Id, MyCodec>`.
+#[cfg(feature = "json")]
 pub struct ActixWsPlazaSession<Op: Send + 'static, ID: AgentId, C: WireCodec = JsonCodec> {
   inner: Arc<TransportSession<Op, ID, C>>,
 }
 
+/// A Plaza `Session` served over actix-web WebSockets.
+#[cfg(not(feature = "json"))]
+pub struct ActixWsPlazaSession<Op: Send + 'static, ID: AgentId, C: WireCodec> {
+  inner: Arc<TransportSession<Op, ID, C>>,
+}
+
+#[cfg(feature = "json")]
 impl<Op, ID> ActixWsPlazaSession<Op, ID, JsonCodec>
 where
   Op: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static,

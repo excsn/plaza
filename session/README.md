@@ -11,7 +11,7 @@ Full surface in [API_REFERENCE.md](API_REFERENCE.md).
 ```toml
 [dependencies]
 plaza = "0.1"
-plaza_session = { version = "0.1", default-features = false, features = ["actix_ws"] }
+plaza_session = { version = "0.1", default-features = false, features = ["actix_ws", "json"] }
 ```
 
 | Feature | Default | Gives you |
@@ -19,8 +19,12 @@ plaza_session = { version = "0.1", default-features = false, features = ["actix_
 | `actix_ws` | yes | `ActixWsPlazaSession`: WebSockets on actix-web 4 |
 | `tcp` | yes | `TcpPlazaSession`: length-delimited TCP |
 | `actix_host` | no | `host::Host`: the listen-server HTTP layer, serving a browser client from the same origin as the socket |
+| `json` | yes | `JsonCodec`, and the codec a session type falls back to when it names none |
+| `msgpack` | no | `MsgPackCodec` |
 
-The shared connection manager and codec compile either way.
+The shared connection manager compiles either way.
+
+Turning off `json` drops `serde_json` from the build, which is why the transport features are worth naming explicitly rather than reaching for `default-features = false` alone. It costs the zero-argument constructors (`new`, `bind`) and the default type parameter, so a session type names its codec: `ActixWsPlazaSession<Op, PlayerId, MsgPackCodec>`. Note that `actix_ws` brings `serde_json` back regardless, since actix-web depends on it; a build that truly excludes it is TCP or a transport of your own.
 
 ## WebSockets
 

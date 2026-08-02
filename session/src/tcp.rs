@@ -20,7 +20,9 @@ use tokio::time::Instant;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tracing::{debug, error, info, warn};
 
-use crate::codec::{JsonCodec, WireCodec};
+use crate::codec::WireCodec;
+#[cfg(feature = "json")]
+use crate::codec::JsonCodec;
 use plaza_wire::frame::ProtocolVersion;
 use crate::conditioner::Conditioner;
 use crate::control::{self, earliest, far_future, route_inbound, ProbeState, DOWN_SEED_FLIP};
@@ -36,7 +38,21 @@ const TRANSPORT: &str = "tcp";
 pub type AgentFactory<ID> = Arc<dyn Fn(SocketAddr) -> Agent<ID> + Send + Sync>;
 
 /// A Plaza `Session` served over length-delimited TCP.
+///
+/// `C` defaults to [`JsonCodec`] only while the `json` feature is on, which is
+/// why the declaration appears twice: a default type parameter has to name a
+/// type that exists, and dropping `json` is what takes `serde_json` out of the
+/// build. Without it, name the codec: `TcpPlazaSession<Op, Id, MyCodec>`.
+#[cfg(feature = "json")]
 pub struct TcpPlazaSession<Op: Send + 'static, ID: AgentId, C: WireCodec = JsonCodec> {
+  inner: Arc<TransportSession<Op, ID, C>>,
+  local_addr: SocketAddr,
+  listener_handle: JoinHandle<()>,
+}
+
+/// A Plaza `Session` served over length-delimited TCP.
+#[cfg(not(feature = "json"))]
+pub struct TcpPlazaSession<Op: Send + 'static, ID: AgentId, C: WireCodec> {
   inner: Arc<TransportSession<Op, ID, C>>,
   local_addr: SocketAddr,
   listener_handle: JoinHandle<()>,
@@ -50,6 +66,7 @@ impl<Op: Send + 'static, ID: AgentId, C: WireCodec> Drop
   }
 }
 
+#[cfg(feature = "json")]
 impl<Op, ID> TcpPlazaSession<Op, ID, JsonCodec>
 where
   Op: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static,

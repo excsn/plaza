@@ -9,4 +9,10 @@
 //! runtime. It is re-exported here because server code has no reason to name a
 //! second crate.
 
-pub use plaza_wire::{JsonCodec, WireCodec};
+pub use plaza_wire::WireCodec;
+
+#[cfg(feature = "json")]
+pub use plaza_wire::JsonCodec;
+
+#[cfg(feature = "msgpack")]
+pub use plaza_wire::MsgPackCodec;

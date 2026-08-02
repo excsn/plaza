@@ -15,7 +15,7 @@ repository = { workspace = true }
 all-features = true
 
 [dependencies]
-plaza_wire = { version = "0.6.0", path = "../wire" }
+plaza_wire = { version = "0.6.0", path = "../wire", default-features = false }
 serde = { workspace = true }
 async-trait = { workspace = true }
 fibre = { workspace = true }

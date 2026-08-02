@@ -15,14 +15,19 @@ repository = { workspace = true }
 all-features = true
 
 [features]
-default = ["actix_ws", "tcp"]
+default = ["actix_ws", "tcp", "json"]
 actix_ws = ["dep:actix-ws", "dep:actix-web", "dep:bytestring"]
 tcp = ["dep:tokio-util", "tokio/net"]
 actix_host = ["actix_ws", "dep:actix-files", "dep:tracing-subscriber"]
+# The wire formats this crate re-exports and defaults to. `json` also supplies
+# the codec a session type falls back to when it names none; without it, name
+# a codec in the type parameter.
+json = ["plaza_wire/json"]
+msgpack = ["plaza_wire/msgpack"]
 
 [dependencies]
 plaza = { version = "0.6.0", path = "../core" }
-plaza_wire = { version = "0.6.0", path = "../wire" }
+plaza_wire = { version = "0.6.0", path = "../wire", default-features = false }
 
 serde = { version = "^1.0", features = ["derive"] }
 tokio = { version = "^1", features = ["sync", "rt", "macros", "time"] }

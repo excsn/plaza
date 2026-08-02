@@ -19,8 +19,14 @@
 | `actix_ws` | yes | [`ActixWsPlazaSession`](#struct-actixwsplazasessionop-id-c-jsoncodec): actix-web WebSockets. |
 | `tcp` | yes | [`TcpPlazaSession`](#struct-tcpplazasessionop-id-c-jsoncodec): length-delimited TCP. |
 | `actix_host` | no | [`host::Host`](#7-module-host-feature-actix_host): the listen-server HTTP layer. Implies `actix_ws`. |
+| `json` | yes | `JsonCodec`, and the codec a session type falls back to when it names none. Enables `plaza_wire/json`, which is what pulls in `serde_json`. |
+| `msgpack` | no | `MsgPackCodec`. Enables `plaza_wire/msgpack`. |
 
 [`manager`](#4-module-manager), [`codec`](#3-module-codec), and [`error`](#2-error-handling) compile unconditionally.
+
+**Dropping `serde_json`.** Turn off `json` and the crate no longer builds it: `plaza_session = { version = "0.6", default-features = false, features = ["tcp", "msgpack"] }`. Nothing else has to change, because `plaza` and `plaza_wire` are depended on with `default-features = false` here and neither `plaza` nor `plaza_lobby` names a codec at all, so no internal dependency forces the choice back on. Bring your own codec and you can drop `msgpack` too, leaving no built-in format compiled.
+
+Two consequences worth knowing before you do. Without `json` the session types have no default type parameter, so `ActixWsPlazaSession<Op, Id>` becomes `ActixWsPlazaSession<Op, Id, MyCodec>`, and the zero-argument constructors (`ActixWsPlazaSession::new`, `TcpPlazaSession::bind`) are gone with it; use `with_codec` and `bind_with_codec`. And **`actix_ws` re-introduces `serde_json` regardless**, because actix-web depends on it unconditionally for its own extractors. A build that genuinely excludes it is a `tcp` or custom-transport build.
 
 ## 2. Error Handling
 

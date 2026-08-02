@@ -18,7 +18,11 @@ pub mod stats;
 #[cfg(any(feature = "actix_ws", feature = "tcp"))]
 pub(crate) mod control;
 
-pub use codec::{JsonCodec, WireCodec};
+pub use codec::WireCodec;
+#[cfg(feature = "json")]
+pub use codec::JsonCodec;
+#[cfg(feature = "msgpack")]
+pub use codec::MsgPackCodec;
 pub use conditioner::{Delivery, DirectionProfile, LinkProfile, RETRANSMIT_PENALTY};
 pub use error::SessionLayerError;
 pub use manager::{ConnectionManager, SessionClock, SessionOptions, TransportSession};
