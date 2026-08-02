@@ -2,7 +2,7 @@ use crate::agent::{Agent, AgentId};
 use crate::error::PlazaError;
 use crate::session::{MessageTarget, PresenceEvent, Session, SessionMessage};
 use crate::stats::ControllerStats;
-use crate::snapshot::{SnapshotContext, SnapshotProvider};
+use crate::snapshot::{NoSnapshots, SnapshotContext, SnapshotProvider};
 use crate::state_logic::{LogicInput, StateLogic};
 
 use std::fmt::Debug;
@@ -38,7 +38,7 @@ pub enum ControllerCommand<Op, ID: AgentId, StateType> {
     agent_id: ID,
   },
   QueryCurrentState {
-    response_tx: oneshot::ExclusiveSender<StateType>,
+    read: StateReader<StateType>,
   },
   /// Re-sends state to specific agents, each getting a snapshot built for them.
   ///
@@ -77,7 +77,7 @@ pub struct StateControllerBuilder<Op, ID, StateType, SL, Sess, SP>
 where
   ID: AgentId,
   Op: Debug + Clone + Send + Sync + 'static,
-  StateType: Clone + Debug + Send + Sync + 'static,
+  StateType: Debug + Send + Sync + 'static,
   SL: StateLogic<Op, ID, StateType>,
   Sess: Session<Op, ID>,
   SP: SnapshotProvider<ID, StateType, Op>,
@@ -97,7 +97,7 @@ impl<Op, ID, StateType, SL, Sess, SP>
 where
   ID: AgentId,
   Op: Debug + Clone + Send + Sync + 'static,
-  StateType: Clone + Debug + Send + Sync + 'static,
+  StateType: Debug + Send + Sync + 'static,
   SL: StateLogic<Op, ID, StateType>,
   Sess: Session<Op, ID>,
   SP: SnapshotProvider<ID, StateType, Op>,
@@ -173,6 +173,29 @@ where
   }
 }
 
+impl<Op, ID, StateType, SL, Sess> StateControllerBuilder<Op, ID, StateType, SL, Sess, NoSnapshots>
+where
+  ID: AgentId,
+  Op: Debug + Clone + Send + Sync + 'static,
+  StateType: Debug + Send + Sync + 'static,
+  SL: StateLogic<Op, ID, StateType>,
+  Sess: Session<Op, ID>,
+{
+  /// Starts a builder for an application where joining carries no catch-up.
+  ///
+  /// A chat relay, an event log, a client that rebuilds from the op stream: all
+  /// of them had to write a [`SnapshotProvider`] returning `Ok(None)` to say so.
+  /// This says it instead. Everything else about the controller is unchanged,
+  /// including `SendSnapshots`, which becomes a request that sends nothing.
+  ///
+  /// ```ignore
+  /// let (tx, controller) = StateControllerBuilder::without_snapshots(logic, session, state).build();
+  /// ```
+  pub fn without_snapshots(op_handler: Arc<SL>, session: Arc<Sess>, initial_state: StateType) -> Self {
+    Self::new(op_handler, session, Arc::new(NoSnapshots), initial_state)
+  }
+}
+
 /// Default depth of the controller's command channel.
 pub const DEFAULT_COMMAND_BUFFER: usize = 32;
 
@@ -189,10 +212,73 @@ pub enum QueryError {
   ControllerGone,
 }
 
+/// Runs on the controller's task with the authoritative state in hand, and
+/// answers with whatever it takes from it.
+///
+/// The state is **borrowed**, never handed over: a controller that gave its
+/// state away would have to clone it, which is why this carries the projection
+/// to the state rather than carrying the state to the caller. What comes back
+/// is whatever the closure sends, so asking for one score costs one `u32` where
+/// a copy of the world used to be the only option. It is also why `StateType`
+/// need not be `Clone`.
+pub struct StateReader<StateType>(Box<dyn FnOnce(&StateType) + Send>);
+
+impl<StateType> StateReader<StateType> {
+  /// Wraps a projection for [`ControllerCommand::QueryCurrentState`].
+  ///
+  /// Prefer [`query_with`], which builds the reply channel too; reach for this
+  /// only when constructing the command by hand.
+  pub fn new(read: impl FnOnce(&StateType) + Send + 'static) -> Self {
+    Self(Box::new(read))
+  }
+
+  fn apply(self, state: &StateType) {
+    (self.0)(state)
+  }
+}
+
+impl<StateType> Debug for StateReader<StateType> {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.write_str("StateReader")
+  }
+}
+
+/// Asks a running controller to compute something from its current state.
+///
+/// The closure runs on the controller's task, so it must not block or await;
+/// take what you need and get out. Nothing is cloned unless the closure clones
+/// it:
+///
+/// ```ignore
+/// let players = query_with(&tx, |state| state.players.len()).await?;
+/// ```
+pub async fn query_with<Op, ID, StateType, T>(
+  tx: &CommandSender<Op, ID, StateType>,
+  read: impl FnOnce(&StateType) -> T + Send + 'static,
+) -> Result<T, QueryError>
+where
+  Op: Send + 'static,
+  ID: AgentId,
+  StateType: Send + 'static,
+  T: Send + 'static,
+{
+  let (response_tx, mut response_rx) = oneshot::exclusive();
+  let command = ControllerCommand::QueryCurrentState {
+    read: StateReader::new(move |state| {
+      // A dropped receiver just means the asker gave up.
+      let _ = response_tx.send(read(state));
+    }),
+  };
+  tx.send(command).await.map_err(|_| QueryError::ControllerGone)?;
+  response_rx.recv().await.map_err(|_| QueryError::ControllerGone)
+}
+
 /// Asks a running controller for a copy of its current state.
 ///
-/// Wraps the request/response channel dance, so callers don't have to build a
-/// oneshot themselves:
+/// The whole-state case of [`query_with`], and the reason `Clone` is required
+/// here and nowhere else. On a large world this copies all of it on the
+/// controller's task while the tick waits; prefer `query_with` when a field or
+/// a count is what you actually want.
 ///
 /// ```ignore
 /// let state = query_state(&tx).await?;
@@ -201,13 +287,9 @@ pub async fn query_state<Op, ID, StateType>(tx: &CommandSender<Op, ID, StateType
 where
   Op: Send + 'static,
   ID: AgentId,
-  StateType: Send + 'static,
+  StateType: Clone + Send + 'static,
 {
-  let (response_tx, mut response_rx) = oneshot::exclusive();
-  tx.send(ControllerCommand::QueryCurrentState { response_tx })
-    .await
-    .map_err(|_| QueryError::ControllerGone)?;
-  response_rx.recv().await.map_err(|_| QueryError::ControllerGone)
+  query_with(tx, StateType::clone).await
 }
 
 static NEXT_CONTROLLER_ID: AtomicU64 = AtomicU64::new(1);
@@ -221,7 +303,7 @@ pub struct StateController<Op, ID, StateType, SL, Sess, SP>
 where
   ID: AgentId,
   Op: Debug + Clone + Send + Sync + 'static,
-  StateType: Clone + Debug + Send + Sync + 'static,
+  StateType: Debug + Send + Sync + 'static,
   SL: StateLogic<Op, ID, StateType>,
   Sess: Session<Op, ID>,
   SP: SnapshotProvider<ID, StateType, Op>,
@@ -246,7 +328,7 @@ impl<Op, ID, StateType, SL, Sess, SP>
 where
   ID: AgentId,
   Op: Debug + Clone + Send + Sync + 'static,
-  StateType: Clone + Debug + Send + Sync + 'static,
+  StateType: Debug + Send + Sync + 'static,
   SL: StateLogic<Op, ID, StateType>,
   Sess: Session<Op, ID>,
   SP: SnapshotProvider<ID, StateType, Op>,
@@ -391,9 +473,8 @@ where
       ControllerCommand::SendSnapshots { recipients, context } => {
         self.send_snapshots(&recipients, context).await;
       }
-      ControllerCommand::QueryCurrentState { response_tx } => {
-        // A dropped receiver just means the asker gave up.
-        let _ = response_tx.send(self.state_data.clone());
+      ControllerCommand::QueryCurrentState { read } => {
+        read.apply(&self.state_data);
       }
       ControllerCommand::Shutdown => {
         info!("Shutdown received; draining queued commands.");

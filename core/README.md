@@ -24,7 +24,7 @@ Nearly every type here is generic over the same four, so it is worth naming them
 
 | Parameter | What it is | Bounds |
 |---|---|---|
-| `StateType` | Your shared state | `Clone + Debug + Send + Sync + 'static` |
+| `StateType` | Your shared state | `Debug + Send + Sync + 'static`, plus `Clone` only to call `query_state` |
 | `Op` | Your operations | `Clone + Debug + Send + Sync + 'static`, plus serde to cross a network |
 | `ID` | Your identifier | anything satisfying `AgentId` |
 
@@ -168,7 +168,15 @@ Ok(Some(GameOp::Snapshot(Box::new(GameView {
 }))))
 ```
 
-Return `Ok(None)` to send a recipient nothing, which is how an application with no snapshot concept opts out rather than inventing an empty op.
+Return `Ok(None)` to send a recipient nothing, which is how an application declines a particular agent. If nothing you build ever needs catch-up on join, say so once instead: `StateControllerBuilder::without_snapshots(logic, session, state)` supplies the shipped `NoSnapshots` provider and you write no `create_snapshot` at all.
+
+### Asking a running controller a question
+
+`query_state(&tx)` copies the whole state back to you, and is the only thing in the crate that needs `StateType: Clone`. When a field is what you want, ask for the field: the closure runs on the controller's task with the state borrowed, so nothing is copied.
+
+```rust,ignore
+let seated = query_with(&tx, |state| state.seated_players().len()).await?;
+```
 
 When a change alters what players may see, logic can push fresh views rather than waiting to be asked:
 

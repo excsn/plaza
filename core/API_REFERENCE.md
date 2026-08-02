@@ -6,7 +6,7 @@
 
 An application supplies four things; `plaza` runs the loop around them.
 
-*   **`StateType`**: the shared state. Any `Clone + Debug + Send + Sync + 'static` type.
+*   **`StateType`**: the shared state. Any `Debug + Send + Sync + 'static` type; `Clone` is needed only if you call [`query_state`](#function-query_state), which copies the whole of it.
 *   **`Op`**: the discrete actions that change it. `Clone + Debug + Send + Sync + 'static`, and `Serialize`/`Deserialize` if it crosses a network.
 *   **[`StateLogic`](#trait-statelogic)**: the rules. The only place state is mutated.
 *   **[`SnapshotProvider`](#trait-snapshotprovider)**: what a client is sent, built per recipient.
@@ -124,7 +124,11 @@ pub trait SnapshotProvider<ID: AgentId, StateType, Op>: Send + Sync + 'static {
 
 **The seam for hidden information.** `target_agent` is who the snapshot is *for*, and the controller calls this once per recipient, so returning a different payload per agent (each player sees their own hand) is the normal path.
 
-**A snapshot is an `Op`.** The envelope has one message kind, so "replace everything" is a variant of your own op type rather than a wire concept. **Box it** if it carries a whole state view: unboxed, every op in every batch is sized to it. Return `Ok(None)` to send a recipient nothing, which is how an application with no snapshot concept opts out rather than inventing an empty op.
+**A snapshot is an `Op`.** The envelope has one message kind, so "replace everything" is a variant of your own op type rather than a wire concept. **Box it** if it carries a whole state view: unboxed, every op in every batch is sized to it. Return `Ok(None)` to send a recipient nothing, which is how an application declines a particular agent.
+
+### Struct `NoSnapshots`
+
+The shipped provider for an application with no snapshot concept at all: a chat relay, an event log, a client that rebuilds from the op stream. It answers `Ok(None)` for every recipient, so joining carries no catch-up. Implemented for every `ID`/`StateType`/`Op`, and `StateControllerBuilder::without_snapshots(logic, session, state)` takes it for you rather than making you write the `Ok(None)` yourself.
 
 #### Enum `SnapshotContext`
 
@@ -139,6 +143,7 @@ Which snapshot is wanted. **Plaza never reads this**: it carries it from caller 
 ### Struct `StateControllerBuilder<Op, ID, StateType, SL, Sess, SP>`
 
 *   **`new(op_handler: Arc<SL>, session: Arc<Sess>, snapshot_provider: Arc<SP>, initial_state: StateType) -> Self`** All components are required, which is why `build` is infallible.
+*   **`without_snapshots(op_handler: Arc<SL>, session: Arc<Sess>, initial_state: StateType) -> Self`**: the same for an application where joining carries no catch-up. Supplies [`NoSnapshots`](#struct-nosnapshots), so `SP` is fixed to it. Everything else is unchanged, including `SendSnapshots`, which becomes a request that sends nothing.
 *   **`command_buffer(size: usize) -> Self`**: command channel depth. Default [`DEFAULT_COMMAND_BUFFER`](#constants) (32).
 *   **`snapshot_context_on_join(context: Option<SnapshotContext>) -> Self`**: context for the snapshot a joining agent receives. Defaults to `Full`.
 *   **`build(self) -> (CommandSender<Op, ID, StateType>, StateController<..>)`**
@@ -161,6 +166,19 @@ Which snapshot is wanted. **Plaza never reads this**: it carries it from caller 
 
 `fibre::mpsc::BoundedAsyncSender<ControllerCommand<..>>`. Cloneable, a tick driver, a lobby, and request handlers can all hold one.
 
+### Function `query_with`
+
+```rust,ignore
+pub async fn query_with<Op, ID, StateType, T>(
+  tx: &CommandSender<Op, ID, StateType>,
+  read: impl FnOnce(&StateType) -> T + Send + 'static,
+) -> Result<T, QueryError>
+```
+
+Asks the controller to compute something from its state and send that back. The closure runs **on the controller's task**, with the state borrowed rather than handed over, so it must not block or await: take what you need and get out.
+
+This is the reason `StateType` need not be `Clone`. Nothing is copied unless the closure copies it, so `query_with(&tx, |s| s.players.len())` costs one `usize` where a copy of the world used to be the only option.
+
 ### Function `query_state`
 
 ```rust,ignore
@@ -169,7 +187,11 @@ pub async fn query_state<Op, ID, StateType>(
 ) -> Result<StateType, QueryError>
 ```
 
-Wraps the request/response channel dance for `QueryCurrentState`.
+The whole-state case of `query_with`, and the **only** place `StateType: Clone` is required. On a large world it copies all of it on the controller's task while the tick waits; prefer `query_with` when a field or a count is what you want.
+
+### Struct `StateReader<StateType>`
+
+What `QueryCurrentState` carries: a boxed `FnOnce(&StateType) + Send`, with `StateReader::new` to build one. Reach for it only when constructing the command by hand; `query_with` builds both it and the reply channel.
 
 ### Constants
 
@@ -365,4 +387,4 @@ Op shapes for non-game applications. These are payload definitions, not engines;
 
 ## 12. Crate Re-exports
 
-For convenience, the crate root re-exports: `Agent`, `AgentId`, `CommandSender`, `ControllerCommand`, `StateController`, `StateControllerBuilder`, `query_state`, `PlazaError`, `InProcessSession`, `MessageTarget`, `Session`, `SessionMessage`, `TargetedOp`, `SnapshotProvider`, `LogicInput`, `StateLogic`, `TickDriver`.
+For convenience, the crate root re-exports: `Agent`, `AgentId`, `CommandSender`, `ControllerCommand`, `StateController`, `StateControllerBuilder`, `query_state`, `query_with`, `StateReader`, `NoSnapshots`, `PlazaError`, `InProcessSession`, `MessageTarget`, `Session`, `SessionMessage`, `TargetedOp`, `SnapshotProvider`, `LogicInput`, `StateLogic`, `TickDriver`.

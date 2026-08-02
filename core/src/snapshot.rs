@@ -132,3 +132,31 @@ pub trait SnapshotProvider<ID: AgentId, StateType, Op>: Send + Sync + 'static {
     context: Option<SnapshotContext>,
   ) -> Result<Option<Op>, SnapshotError<ID>>;
 }
+
+/// A [`SnapshotProvider`] for an application that has no snapshot concept.
+///
+/// Answers `Ok(None)` for every recipient, which the controller reads as
+/// "send this one nothing". Use it when joining carries no catch-up: a chat
+/// relay, a pure event log, a game whose clients rebuild from the op stream.
+/// [`StateControllerBuilder::without_snapshots`] takes it for you.
+///
+/// [`StateControllerBuilder::without_snapshots`]: crate::controller::StateControllerBuilder::without_snapshots
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoSnapshots;
+
+#[async_trait]
+impl<ID, StateType, Op> SnapshotProvider<ID, StateType, Op> for NoSnapshots
+where
+  ID: AgentId,
+  StateType: Send + Sync + 'static,
+  Op: Send + 'static,
+{
+  async fn create_snapshot(
+    &self,
+    _full_state: &StateType,
+    _target_agent: Option<&Agent<ID>>,
+    _context: Option<SnapshotContext>,
+  ) -> Result<Option<Op>, SnapshotError<ID>> {
+    Ok(None)
+  }
+}

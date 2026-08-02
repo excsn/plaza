@@ -47,9 +47,11 @@ pub mod stats;
 pub mod tick_driver;
 
 pub use agent::{Agent, AgentId};
-pub use controller::{query_state, CommandSender, ControllerCommand, StateController, StateControllerBuilder};
+pub use controller::{
+  query_state, query_with, CommandSender, ControllerCommand, StateController, StateControllerBuilder, StateReader,
+};
 pub use error::PlazaError;
 pub use session::{InProcessSession, MessageTarget, Session, SessionMessage, TargetedOp};
-pub use snapshot::SnapshotProvider;
+pub use snapshot::{NoSnapshots, SnapshotProvider};
 pub use state_logic::{LogicInput, StateLogic};
 pub use tick_driver::TickDriver;

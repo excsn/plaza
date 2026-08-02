@@ -16,7 +16,6 @@ use plaza::snapshot::{SnapshotContext, SnapshotProvider};
 use plaza::state_logic::{LogicInput, LogicOutput, SnapshotRequest, StateLogic, StateLogicError};
 use plaza::TickDriver;
 use serde::{Deserialize, Serialize};
-use fibre::oneshot;
 
 type UserId = u64;
 
@@ -131,11 +130,34 @@ fn start() -> (
 }
 
 async fn query_state(tx: &CommandSender<CounterOp, UserId, CounterState>) -> CounterState {
-  let (resp_tx, mut resp_rx) = oneshot::exclusive();
-  tx.send(ControllerCommand::QueryCurrentState { response_tx: resp_tx })
-    .await
-    .expect("controller alive");
-  resp_rx.recv().await.expect("controller responds")
+  plaza::controller::query_state(tx).await.expect("controller alive")
+}
+
+/// A state deliberately **not** `Clone`, and with no snapshot to build from it.
+#[derive(Debug, Default)]
+struct Ledger {
+  entries: Vec<i64>,
+}
+
+#[derive(Debug, Default)]
+struct LedgerLogic;
+
+#[async_trait]
+impl StateLogic<CounterOp, UserId, Ledger> for LedgerLogic {
+  async fn process_input(
+    &self,
+    state: &mut Ledger,
+    input: LogicInput<CounterOp, UserId>,
+  ) -> Result<LogicOutput<CounterOp, UserId>, StateLogicError> {
+    if let LogicInput::AgentOps { ops, .. } = input {
+      for op in ops {
+        if let CounterOp::Increment(by) = op {
+          state.entries.push(by);
+        }
+      }
+    }
+    Ok(Vec::new().into())
+  }
 }
 
 /// Waits for a message satisfying `pred`, failing rather than hanging.
@@ -540,4 +562,35 @@ async fn an_application_defined_context_survives_the_round_trip() {
   let msg = recv_matching(&inbox, |m| is_snapshot(m)).await;
   let snap = snapshot_of(&msg).expect("a snapshot op");
   assert_eq!(snap.value, 42, "the provider received its own context type");
+}
+
+#[tokio::test]
+async fn a_controller_runs_without_snapshots_over_a_state_that_is_not_clone() {
+  let session = InProcessSession::<CounterOp, UserId>::new();
+  let (tx, controller) =
+    StateControllerBuilder::without_snapshots(Arc::new(LedgerLogic), session.clone(), Ledger::default()).build();
+  tokio::spawn(controller.run());
+
+  let alice = Agent::new_human(1u64);
+  let (_conn_id, inbox) = session.connect(alice.clone()).await.expect("connect");
+  session.client_send(alice, vec![CounterOp::Increment(7)]).await;
+
+  let total = tokio::time::timeout(Duration::from_secs(5), async {
+    loop {
+      let sum = plaza::controller::query_with(&tx, |ledger: &Ledger| ledger.entries.iter().sum::<i64>())
+        .await
+        .expect("controller alive");
+      if sum == 7 {
+        return sum;
+      }
+      tokio::task::yield_now().await;
+    }
+  })
+  .await
+  .expect("the op should reach the ledger");
+  assert_eq!(total, 7);
+
+  // The join was handled before the op that just landed, so an empty inbox here
+  // means `NoSnapshots` answered for it rather than that nothing has run yet.
+  assert!(inbox.try_recv().is_err(), "a snapshot-less controller sent a join snapshot");
 }
