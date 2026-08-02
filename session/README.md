@@ -31,7 +31,7 @@ Turning off `json` drops `serde_json` from the build, which is why the transport
 Construct the session, share it with both the controller and your actix `App`, then hand connections over in the route:
 
 ```rust,ignore
-let session = ActixWsPlazaSession::<Op, PlayerId, Snapshot>::new();
+let session = ActixWsPlazaSession::<Op, PlayerId>::new();
 
 let (tx, controller) = StateControllerBuilder::new(
   Arc::new(MyLogic), session.clone(), Arc::new(MySnapshotter), MyState::default(),
@@ -41,7 +41,7 @@ tokio::spawn(controller.run());
 async fn ws_route(
   req: HttpRequest,
   stream: web::Payload,
-  session: web::Data<Arc<ActixWsPlazaSession<Op, PlayerId, Snapshot>>>,
+  session: web::Data<Arc<ActixWsPlazaSession<Op, PlayerId>>>,
 ) -> Result<HttpResponse, actix_web::Error> {
   let id = Uuid::new_v4();
   session.handle_connection(&req, stream, Agent::new_human(id))
@@ -53,7 +53,7 @@ async fn ws_route(
 ## TCP
 
 ```rust,ignore
-let session = TcpPlazaSession::<Op, PlayerId, Snapshot>::bind(
+let session = TcpPlazaSession::<Op, PlayerId>::bind(
   "127.0.0.1:9000",
   Arc::new(|peer| Agent::new_human(id_for(peer))),
 ).await?;

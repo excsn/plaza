@@ -29,7 +29,7 @@ impl RoomFactory for MyGameFactory {
   async fn spawn_room(&self, room_id: RoomId, settings: &RoomSettings<MySettings>)
     -> Result<InProcessRoomHandle<MyOp, PlayerId, MyState, MySettings>, LobbyError>
   {
-    let session = ActixWsPlazaSession::<MyOp, PlayerId, MySnapshot>::new();
+    let session = ActixWsPlazaSession::<MyOp, PlayerId>::new();
     let (command_tx, controller) = StateControllerBuilder::new(
       Arc::new(MyLogic), session, Arc::new(MySnapshotter), MyState::default(),
     ).build();
