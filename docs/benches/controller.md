@@ -33,6 +33,13 @@ One command in at the session, out at every inbox, through the real controller.
 
 Run-to-run variance on this group is ~5-10%.
 
+Sequential against concurrent `send_snapshots`, measured back to back by checking out the parent commit's `controller.rs`:
+
+| | sequential | concurrent |
+|---|---|---|
+| snapshot_to/1 | 561.5 ns | 575.1 ns |
+| snapshot_to/16 | 4.217 µs | 4.213 µs |
+
 ## command_handoff, state_reply, coalesce
 
 Not yet recorded here.
