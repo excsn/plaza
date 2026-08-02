@@ -42,12 +42,18 @@ pub trait WireCodec: Clone + Send + Sync + 'static {
   /// Appends the encoding of `value` to `buf`, leaving whatever is already
   /// there alone.
   ///
-  /// This is the method the transports call, for two reasons. A frame carries a
-  /// one-byte kind tag ahead of the body (see [`frame`]), and appending lets the
-  /// tag be written first rather than inserted afterwards, which would shift
-  /// every byte of the body. And a caller can hand the same buffer back every
-  /// time, so encoding a message costs no allocation at all rather than one per
-  /// message per tick.
+  /// This is the method the transports call, because a frame carries a one-byte
+  /// kind tag ahead of the body (see [`frame`]) and appending lets the tag be
+  /// written first rather than inserted afterwards, which would shift every byte
+  /// of the body.
+  ///
+  /// A caller that keeps its buffer can also hand the same one back every time
+  /// and pay no allocation per message. **A server fanning out cannot**: the
+  /// frame it produces is shared by every recipient, so the buffer becomes the
+  /// frame and the allocation goes with it. What that caller can do instead is
+  /// size the buffer from the last frame it built, which is worth more than it
+  /// sounds, because a `Vec` growing from nothing to even a few dozen bytes
+  /// reallocates and copies four or five times before the encode is done.
   ///
   /// The default implementation calls [`encode`](Self::encode) and copies, so an
   /// existing codec keeps working. Override it: `serde_json::to_writer`,

@@ -130,7 +130,7 @@ pub struct Pong {
 /// `responder` is the local clock in the local unit, if there is one to offer.
 pub fn answer_ping<C: crate::WireCodec>(codec: &C, ping_body: &[u8], responder: Option<u64>) -> Option<Vec<u8>> {
   let ping = codec.decode::<Ping>(ping_body).ok()?;
-  let mut buf = Vec::new();
+  let mut buf = Vec::with_capacity(PROBE_FRAME_HINT);
   begin(Kind::Pong, &mut buf);
   codec
     .encode_into(
@@ -153,11 +153,19 @@ pub fn split(frame: &[u8]) -> Option<(u8, &[u8])> {
   frame.split_first().map(|(kind, body)| (*kind, body))
 }
 
+/// Enough for a `Ping` or a `Pong` under either shipped codec, so a probe frame
+/// is one allocation rather than the four or five a `Vec` growing from nothing
+/// costs to reach twenty-odd bytes.
+pub const PROBE_FRAME_HINT: usize = 64;
+
 /// Starts a frame: writes the tag, so the body can be appended after it.
 ///
 /// Writing the tag first is the whole reason [`crate::WireCodec::encode_into`]
 /// appends rather than returning a `Vec`. Inserting a byte at the front of an
 /// encoded body would shift every byte of it.
+///
+/// Clears first, so a buffer being reused starts a frame rather than extending
+/// the last one. Capacity survives a clear, which is the point.
 pub fn begin(kind: Kind, buf: &mut Vec<u8>) {
   buf.clear();
   buf.push(kind.as_byte());

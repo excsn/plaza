@@ -39,7 +39,9 @@ Serializes any `Serialize` value to bytes.
 
 #### Method `encode_into`
 
-Appends the encoding to a caller-supplied `Vec`, leaving what is already there alone. **This is what the transports call**, for two reasons: a frame carries a kind tag ahead of the body, and appending lets the tag be written first rather than inserted afterwards, which would shift every byte of the body; and a caller can reuse one buffer, so encoding costs no allocation rather than one per message per tick.
+Appends the encoding to a caller-supplied `Vec`, leaving what is already there alone. **This is what the transports call**, because a frame carries a kind tag ahead of the body and appending lets the tag be written first rather than inserted afterwards, which would shift every byte of the body.
+
+A caller that keeps its buffer can also hand the same one back every time and pay no allocation per message. **A server fanning out cannot**: the frame it produces is shared by every recipient, so the buffer becomes the frame and the allocation leaves with it. What that caller can do is size the buffer from the last frame it built, which `plaza_session` does. It is worth more than it sounds: a `Vec` growing from empty reallocates and copies four or five times before even a one-op frame is done, and starting it at size is 2.7x faster on JSON and 3.0x on MessagePack (`plaza_session/benches/encode.rs`). Writing into a `BytesMut` arena instead was measured and is slower, because serde's many small writes cost more through `put_slice` than through a `Vec`'s specialised `extend_from_slice`; that is why this method still takes a `Vec`.
 
 The default implementation calls `encode` and copies, so an existing codec keeps working. Override it: `serde_json::to_writer`, `rmp_serde::encode::write` and `bincode::serialize_into` all append to a `Vec` directly. Measured on a ten-op message, overriding took MessagePack from 170ns and four allocations to 23ns and none.
 
@@ -169,7 +171,8 @@ A latency probe and its answer. `plaza_session` answers an inbound `Kind::Ping` 
 
 *   `answer_ping(codec, ping_body, responder: Option<u64>) -> Option<Vec<u8>>`: builds the `Kind::Pong` frame answering a ping body, or `None` if it does not decode. What `plaza_session` calls, and what a client with its own read loop should call so both ends answer identically.
 *   `split(frame: &[u8]) -> Option<(u8, &[u8])>`: the tag and the body, or `None` for an empty frame, which is malformed rather than unknown. An unrecognised tag still splits; deciding what to do about it is `Kind::from_byte`'s job.
-*   `begin(kind: Kind, buf: &mut Vec<u8>)`: clears `buf` and writes the tag, so the body can be appended after it.
+*   `begin(kind: Kind, buf: &mut Vec<u8>)`: clears `buf` and writes the tag, so the body can be appended after it. Capacity survives the clear, which is the point of clearing rather than starting fresh.
+*   `PROBE_FRAME_HINT: usize = 64`: enough for a `Ping` or a `Pong` under either shipped codec. `answer_ping` starts its buffer here, and `plaza_session` does the same for the probes it sends, so a control frame costs one allocation rather than the several a `Vec` growing from nothing needs to reach twenty-odd bytes.
 
 **Why the tag is not part of the encoded document.** A serde enum expresses the same thing, but then the codec decides what the tag costs: a quoted string under JSON, an array element under MessagePack, a field number under protobuf. A byte ahead of the body costs one byte in every format and is read without parsing. Measured on the same message: 39 bytes and 113ns to decode, against 42 bytes and 180ns for a serde enum tag, and 239ns for the variant that keeps the tag inside the document and dispatches on it, which needs a second parse.
 

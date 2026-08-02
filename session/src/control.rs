@@ -118,7 +118,7 @@ pub(crate) fn make_probe<C: WireCodec>(codec: &C, probe: &mut ProbeState, now: I
   }
   probe.outstanding.push_back((probe.seq, now));
 
-  let mut buf = Vec::new();
+  let mut buf = Vec::with_capacity(frame::PROBE_FRAME_HINT);
   frame::begin(frame::Kind::Ping, &mut buf);
   codec
     .encode_into(&frame::Ping { origin: probe.seq }, &mut buf)

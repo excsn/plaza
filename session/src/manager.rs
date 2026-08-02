@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 use std::sync::Arc;
 
@@ -759,6 +759,13 @@ pub struct TransportSession<Op: Send + 'static, ID: AgentId, C: WireCodec> {
   /// Typed inbound messages, filled by the deserialize bridge task. Held as an
   /// `Option` because the controller takes the receiver exactly once.
   deserialized_rx: RwLock<Option<SessionReceiver<SessionMessage<Op, ID>>>>,
+  /// Roughly what the last frames measured, so the next one is allocated at
+  /// size instead of growing into it.
+  ///
+  /// A hint, not a count: `Relaxed` throughout, and a racing pair of encodes
+  /// costs at worst a buffer sized for the other one's message. See
+  /// [`encode_message`](TransportSession::encode_message).
+  encode_hint: AtomicUsize,
   _phantom: PhantomData<fn() -> Op>,
 }
 
@@ -815,6 +822,7 @@ where
       codec: codec.clone(),
       manager: manager.clone(),
       deserialized_rx: RwLock::new(Some(deserialized_rx)),
+      encode_hint: AtomicUsize::new(0),
       _phantom: PhantomData,
     });
 
@@ -847,10 +855,14 @@ where
   ///
   /// The result is shared by every recipient, so this runs once per message
   /// rather than once per client. `Bytes::from` takes the codec's `Vec` whole
-  /// and adds no copy.
+  /// and adds no copy, which is also why the buffer cannot be kept and reused:
+  /// it leaves as the frame. What it can be is the right size on the first try,
+  /// taken from what the last frames measured, because a `Vec` growing from
+  /// nothing reallocates and copies several times before a small message is
+  /// even finished.
   pub fn encode_message(&self, msg: SessionMessage<Op, ID>) -> Result<OutboundFrame, SessionLayerError> {
     // `from` is not sent. The wire is the kind tag and the ops, nothing else.
-    let mut buf = Vec::new();
+    let mut buf = Vec::with_capacity(self.encode_hint.load(Ordering::Relaxed));
     frame::begin(frame::Kind::Ops, &mut buf);
     self
       .codec
@@ -860,6 +872,11 @@ where
         context: "session message",
         source,
       })?;
+    // Decays toward the smaller sizes rather than latching onto the largest, so
+    // one fat snapshot does not oversize every op batch after it, and a stream
+    // of them still settles where it belongs.
+    let hint = self.encode_hint.load(Ordering::Relaxed);
+    self.encode_hint.store(buf.len().max(hint / 2), Ordering::Relaxed);
     Ok(Bytes::from(buf))
   }
 }
