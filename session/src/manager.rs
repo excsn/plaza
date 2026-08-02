@@ -20,11 +20,11 @@ use parking_lot::RwLock;
 use plaza::agent::{Agent, AgentId};
 use plaza::error::PlazaError;
 use plaza::session::{
-  ConnectionId, MessageTarget, PresenceEvent, Session, SessionMessage, SessionReceiver, SessionSender,
+  session_channel, ConnectionId, MessageTarget, PresenceEvent, Session, SessionMessage, SessionReceiver,
+  SessionSender,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use fibre::mpsc;
 use tracing::{debug, trace, warn};
 
 use crate::codec::WireCodec;
@@ -126,7 +126,7 @@ pub type OutboundFrame = Bytes;
 
 struct ClientHandle<ID: AgentId> {
   agent: Agent<ID>,
-  to_client_tx: mpsc::BoundedAsyncSender<OutboundFrame>,
+  to_client_tx: SessionSender<OutboundFrame>,
   /// Round trip to this client, in microseconds, `0` before the first sample.
   ///
   /// Atomics rather than a lock, so a connection task recording a sample needs
@@ -157,6 +157,24 @@ struct ClientHandle<ID: AgentId> {
   link: Arc<RwLock<LinkProfile>>,
 }
 
+impl<ID: AgentId> ClientHandle<ID> {
+  fn new(agent: Agent<ID>, to_client_tx: SessionSender<OutboundFrame>) -> Self {
+    Self {
+      agent,
+      to_client_tx,
+      rtt_us: AtomicU64::new(0),
+      min_rtt_us: AtomicU64::new(0),
+      samples: AtomicU64::new(0),
+      protocol: AtomicU64::new(0),
+      link_rtt_us: AtomicU64::new(0),
+      min_link_rtt_us: AtomicU64::new(0),
+      link_samples: AtomicU64::new(0),
+      link_dropped: AtomicU64::new(0),
+      link: Arc::new(RwLock::new(LinkProfile::default())),
+    }
+  }
+}
+
 /// Folds one sample into a smoothed average and a running minimum.
 ///
 /// A plain exponential average, deliberately not `RttEstimator`: that lives in
@@ -183,7 +201,9 @@ fn take_stream<T: Send + 'static>(slot: &RwLock<Option<T>>, name: &str) -> T {
 
 /// Returns whether `agent` is included in `target`.
 ///
-/// The single copy of the targeting rules, shared by every transport.
+/// The rules in scanning form, for a transport that keeps its own registry.
+/// [`ConnectionManager`] resolves a target through an agent index instead, and a
+/// test pins the two to the same answer.
 pub fn target_matches<ID: AgentId>(target: &MessageTarget<ID>, agent: &Agent<ID>) -> bool {
   let agent_id = match agent.id() {
     Some(id) => id,
@@ -200,6 +220,124 @@ pub fn target_matches<ID: AgentId>(target: &MessageTarget<ID>, agent: &Agent<ID>
   }
 }
 
+/// Live connections, keyed by connection and indexed by agent.
+///
+/// The second index is what keeps addressing one agent off a pass over the
+/// registry, which matters because per-recipient snapshots address one agent per
+/// send and every `agent_*` reader answers about one player. An agent may hold
+/// several connections at once, so an id maps to all of them, in the order they
+/// registered.
+struct Registry<ID: AgentId> {
+  by_conn: HashMap<ConnectionId, ClientHandle<ID>>,
+  by_agent: HashMap<ID, Vec<ConnectionId>>,
+}
+
+impl<ID: AgentId> Registry<ID> {
+  fn new() -> Self {
+    Self {
+      by_conn: HashMap::new(),
+      by_agent: HashMap::new(),
+    }
+  }
+
+  fn insert(&mut self, conn_id: ConnectionId, handle: ClientHandle<ID>) {
+    if let Some(id) = handle.agent.id_cloned() {
+      self.by_agent.entry(id).or_default().push(conn_id);
+    }
+    self.by_conn.insert(conn_id, handle);
+  }
+
+  fn remove(&mut self, conn_id: ConnectionId) -> Option<ClientHandle<ID>> {
+    let handle = self.by_conn.remove(&conn_id)?;
+    if let Some(id) = handle.agent.id() {
+      if let Some(conns) = self.by_agent.get_mut(id) {
+        conns.retain(|held| *held != conn_id);
+        if conns.is_empty() {
+          self.by_agent.remove(id);
+        }
+      }
+    }
+    Some(handle)
+  }
+
+  fn get(&self, conn_id: ConnectionId) -> Option<&ClientHandle<ID>> {
+    self.by_conn.get(&conn_id)
+  }
+
+  fn len(&self) -> usize {
+    self.by_conn.len()
+  }
+
+  fn handles(&self) -> impl Iterator<Item = &ClientHandle<ID>> {
+    self.by_conn.values()
+  }
+
+  fn for_agent(&self, id: &ID) -> impl Iterator<Item = (ConnectionId, &ClientHandle<ID>)> {
+    self
+      .by_agent
+      .get(id)
+      .map_or(&[][..], |conns| conns.as_slice())
+      .iter()
+      .filter_map(|conn_id| self.by_conn.get(conn_id).map(|handle| (*conn_id, handle)))
+  }
+
+  /// Visits every connection `target` addresses, each exactly once.
+  ///
+  /// Agents without an id (the system agent) are never a delivery target, which
+  /// is why the whole-registry arms test for one.
+  ///
+  /// The variants carrying a list of ids test that list as it stands rather
+  /// than hashing it into a set first. `benches/broadcast.rs` measures the
+  /// alternative: for a `u32` id, building the set costs more than the
+  /// comparisons it saves at every list length up to 128, because the default
+  /// hasher is SipHash and comparing integers is close to free. An id that is
+  /// expensive to compare would eventually invert that, so the shape to watch
+  /// is a long list of wide ids.
+  fn for_target(&self, target: &MessageTarget<ID>, mut visit: impl FnMut(ConnectionId, &ClientHandle<ID>)) {
+    match target {
+      MessageTarget::All => {
+        for (conn_id, handle) in &self.by_conn {
+          if handle.agent.id().is_some() {
+            visit(*conn_id, handle);
+          }
+        }
+      }
+      MessageTarget::Agent(id) => {
+        for (conn_id, handle) in self.for_agent(id) {
+          visit(conn_id, handle);
+        }
+      }
+      // Deduped by looking back over the ids already passed, because the list is
+      // the caller's and a repeated id would otherwise queue the frame twice,
+      // where a scan visited each connection once however often it was named.
+      MessageTarget::Agents(ids) => {
+        for (position, id) in ids.iter().enumerate() {
+          if ids[..position].contains(id) {
+            continue;
+          }
+          for (conn_id, handle) in self.for_agent(id) {
+            visit(conn_id, handle);
+          }
+        }
+      }
+      MessageTarget::AllExcept(id) => {
+        for (conn_id, handle) in &self.by_conn {
+          if handle.agent.id().is_some_and(|agent_id| agent_id != id) {
+            visit(*conn_id, handle);
+          }
+        }
+      }
+      MessageTarget::AllExceptThese(ids) => {
+        for (conn_id, handle) in &self.by_conn {
+          if handle.agent.id().is_some_and(|agent_id| !ids.contains(agent_id)) {
+            visit(*conn_id, handle);
+          }
+        }
+      }
+    }
+  }
+}
+
 /// Registry of live connections plus the notification channels the
 /// `StateController` subscribes to.
 ///
@@ -209,9 +347,9 @@ pub fn target_matches<ID: AgentId>(target: &MessageTarget<ID>, agent: &Agent<ID>
 pub struct ConnectionManager<ID: AgentId> {
   transport: &'static str,
   next_conn_id: AtomicU64,
-  connections: RwLock<HashMap<ConnectionId, ClientHandle<ID>>>,
-  raw_incoming_tx: mpsc::BoundedAsyncSender<IncomingFrame<ID>>,
-  raw_incoming_rx: RwLock<Option<mpsc::BoundedAsyncReceiver<IncomingFrame<ID>>>>,
+  connections: RwLock<Registry<ID>>,
+  raw_incoming_tx: SessionSender<IncomingFrame<ID>>,
+  raw_incoming_rx: RwLock<Option<SessionReceiver<IncomingFrame<ID>>>>,
   presence_tx: SessionSender<PresenceEvent<ID>>,
   presence_rx: RwLock<Option<SessionReceiver<PresenceEvent<ID>>>>,
   stats: Arc<TransportStats>,
@@ -261,12 +399,12 @@ impl<ID: AgentId> ConnectionManager<ID> {
     hello: Option<OutboundFrame>,
     clock: Option<SessionClock>,
   ) -> Self {
-    let (raw_incoming_tx, raw_incoming_rx) = mpsc::bounded_async(capacity);
-    let (presence_tx, presence_rx) = mpsc::bounded_async(capacity);
+    let (raw_incoming_tx, raw_incoming_rx) = session_channel(capacity);
+    let (presence_tx, presence_rx) = session_channel(capacity);
     Self {
       transport,
       next_conn_id: AtomicU64::new(1),
-      connections: RwLock::new(HashMap::new()),
+      connections: RwLock::new(Registry::new()),
       raw_incoming_tx,
       raw_incoming_rx: RwLock::new(Some(raw_incoming_rx)),
       presence_tx,
@@ -285,7 +423,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
   /// Registers a connected client and announces the join.
   ///
   /// `to_client_tx` is the transport's outbound queue for this connection.
-  pub fn register(&self, agent: Agent<ID>, to_client_tx: mpsc::BoundedAsyncSender<OutboundFrame>) -> ConnectionId {
+  pub fn register(&self, agent: Agent<ID>, to_client_tx: SessionSender<OutboundFrame>) -> ConnectionId {
     let conn_id = self.next_conn_id.fetch_add(1, Ordering::Relaxed);
     // Ahead of everything else, so a client knows what it is talking to before
     // the first op arrives. The handshake is symmetric: both ends say what they
@@ -293,22 +431,10 @@ impl<ID: AgentId> ConnectionManager<ID> {
     if let Some(hello) = &self.hello {
       let _ = to_client_tx.try_send(hello.clone());
     }
-    self.connections.write().insert(
-      conn_id,
-      ClientHandle {
-        agent: agent.clone(),
-        to_client_tx,
-        rtt_us: AtomicU64::new(0),
-        min_rtt_us: AtomicU64::new(0),
-        samples: AtomicU64::new(0),
-        protocol: AtomicU64::new(0),
-        link_rtt_us: AtomicU64::new(0),
-        min_link_rtt_us: AtomicU64::new(0),
-        link_samples: AtomicU64::new(0),
-        link_dropped: AtomicU64::new(0),
-        link: Arc::new(RwLock::new(LinkProfile::default())),
-      },
-    );
+    self
+      .connections
+      .write()
+      .insert(conn_id, ClientHandle::new(agent.clone(), to_client_tx));
     debug!(transport = self.transport, conn_id, agent = %agent, "Connection registered.");
 
     // try_send, not send: this is a sync path on a connection task, and a
@@ -325,7 +451,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
 
   /// Removes a connection and announces the departure.
   pub fn deregister(&self, conn_id: ConnectionId) {
-    let handle = self.connections.write().remove(&conn_id);
+    let handle = self.connections.write().remove(conn_id);
     match handle {
       Some(handle) => {
         debug!(transport = self.transport, conn_id, agent = %handle.agent, "Connection deregistered.");
@@ -371,18 +497,15 @@ impl<ID: AgentId> ConnectionManager<ID> {
     let mut full: Option<ConnectionId> = None;
 
     let (mut sent, mut dropped) = (0u64, 0u64);
-    for (conn_id, handle) in connections.iter() {
-      if !target_matches(target, &handle.agent) {
-        continue;
-      }
+    connections.for_target(target, |conn_id, handle| {
       // try_send, not send: a wedged client must never stall the controller.
       if handle.to_client_tx.try_send(frame.clone()).is_err() {
         dropped += 1;
-        full.get_or_insert(*conn_id);
+        full.get_or_insert(conn_id);
       } else {
         sent += 1;
       }
-    }
+    });
     self.stats.record_outbound(sent, dropped);
 
     match full {
@@ -396,7 +519,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
   }
 
   /// Takes the raw inbound stream. Single consumer: the deserialize bridge.
-  pub fn take_raw_incoming(&self) -> mpsc::BoundedAsyncReceiver<IncomingFrame<ID>> {
+  pub fn take_raw_incoming(&self) -> SessionReceiver<IncomingFrame<ID>> {
     take_stream(&self.raw_incoming_rx, "raw incoming")
   }
 
@@ -414,10 +537,8 @@ impl<ID: AgentId> ConnectionManager<ID> {
   pub fn record_protocol(&self, agent: &Agent<ID>, version: ProtocolVersion) {
     let Some(id) = agent.id() else { return };
     let connections = self.connections.read();
-    for handle in connections.values() {
-      if handle.agent.id() == Some(id) {
-        handle.protocol.store(version.0 as u64, Ordering::Relaxed);
-      }
+    for (_, handle) in connections.for_agent(id) {
+      handle.protocol.store(version.0 as u64, Ordering::Relaxed);
     }
   }
 
@@ -425,9 +546,9 @@ impl<ID: AgentId> ConnectionManager<ID> {
   pub fn protocol(&self, id: &ID) -> Option<ProtocolVersion> {
     let connections = self.connections.read();
     connections
-      .values()
-      .find(|h| h.agent.id() == Some(id))
-      .map(|h| ProtocolVersion(h.protocol.load(Ordering::Relaxed) as u32))
+      .for_agent(id)
+      .next()
+      .map(|(_, h)| ProtocolVersion(h.protocol.load(Ordering::Relaxed) as u32))
       .filter(|v| *v != ProtocolVersion::UNKNOWN)
   }
 
@@ -440,7 +561,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
   /// and only make itself look worse.
   pub fn record_rtt(&self, conn_id: ConnectionId, rtt: Duration) {
     let connections = self.connections.read();
-    let Some(handle) = connections.get(&conn_id) else {
+    let Some(handle) = connections.get(conn_id) else {
       return;
     };
     record_sample(
@@ -459,7 +580,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
   /// its own probe; neither is a number a client reported.
   pub fn record_link_rtt(&self, conn_id: ConnectionId, rtt: Duration) {
     let connections = self.connections.read();
-    let Some(handle) = connections.get(&conn_id) else {
+    let Some(handle) = connections.get(conn_id) else {
       return;
     };
     record_sample(
@@ -484,7 +605,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
     self
       .connections
       .read()
-      .get(&conn_id)
+      .get(conn_id)
       .map(|h| h.link_samples.load(Ordering::Relaxed))
       .unwrap_or(0)
   }
@@ -494,7 +615,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
   /// the two a transport without its own ping frame can report.
   pub fn agent_link_rtt(&self, id: &ID) -> Option<(Duration, u64)> {
     let connections = self.connections.read();
-    let handle = connections.values().find(|h| h.agent.id() == Some(id))?;
+    let (_, handle) = connections.for_agent(id).next()?;
     let us = handle.min_link_rtt_us.load(Ordering::Relaxed);
     (us > 0).then(|| (Duration::from_micros(us), handle.link_samples.load(Ordering::Relaxed)))
   }
@@ -502,7 +623,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
   /// Records one frame the link discarded.
   pub fn record_link_drop(&self, conn_id: ConnectionId) {
     let connections = self.connections.read();
-    if let Some(handle) = connections.get(&conn_id) {
+    if let Some(handle) = connections.get(conn_id) {
       handle.link_dropped.fetch_add(1, Ordering::Relaxed);
     }
   }
@@ -512,7 +633,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
     self
       .connections
       .read()
-      .get(&conn_id)
+      .get(conn_id)
       .map(|h| h.link_dropped.load(Ordering::Relaxed))
       .unwrap_or(0)
   }
@@ -522,9 +643,8 @@ impl<ID: AgentId> ConnectionManager<ID> {
     self
       .connections
       .read()
-      .values()
-      .filter(|h| h.agent.id() == Some(id))
-      .map(|h| h.link_dropped.load(Ordering::Relaxed))
+      .for_agent(id)
+      .map(|(_, h)| h.link_dropped.load(Ordering::Relaxed))
       .sum()
   }
 
@@ -533,7 +653,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
     self
       .connections
       .read()
-      .values()
+      .handles()
       .map(|h| h.link_dropped.load(Ordering::Relaxed))
       .sum()
   }
@@ -541,7 +661,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
   /// Sets the impairment one connection's frames ride through.
   pub fn set_link_profile(&self, conn_id: ConnectionId, profile: LinkProfile) {
     let connections = self.connections.read();
-    if let Some(handle) = connections.get(&conn_id) {
+    if let Some(handle) = connections.get(conn_id) {
       *handle.link.write() = profile;
     }
   }
@@ -552,10 +672,8 @@ impl<ID: AgentId> ConnectionManager<ID> {
   /// playing, not which socket they arrived on.
   pub fn set_agent_link_profile(&self, id: &ID, profile: LinkProfile) {
     let connections = self.connections.read();
-    for handle in connections.values() {
-      if handle.agent.id() == Some(id) {
-        *handle.link.write() = profile;
-      }
+    for (_, handle) in connections.for_agent(id) {
+      *handle.link.write() = profile;
     }
   }
 
@@ -565,20 +683,20 @@ impl<ID: AgentId> ConnectionManager<ID> {
   /// describes the arena, not a player picked out of it.
   pub fn set_all_link_profiles(&self, profile: LinkProfile) {
     let connections = self.connections.read();
-    for handle in connections.values() {
+    for handle in connections.handles() {
       *handle.link.write() = profile;
     }
   }
 
   /// What a connection's impairment currently reads.
   pub fn link_profile(&self, conn_id: ConnectionId) -> Option<LinkProfile> {
-    self.connections.read().get(&conn_id).map(|h| *h.link.read())
+    self.connections.read().get(conn_id).map(|h| *h.link.read())
   }
 
   /// The shared profile cell, taken once by a connection task so that reading
   /// it per frame costs no lookup in the registry.
   pub(crate) fn link_handle(&self, conn_id: ConnectionId) -> Option<Arc<RwLock<LinkProfile>>> {
-    self.connections.read().get(&conn_id).map(|h| Arc::clone(&h.link))
+    self.connections.read().get(conn_id).map(|h| Arc::clone(&h.link))
   }
 
   /// The smoothed round trip to a connection, once it has been measured.
@@ -598,7 +716,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
     self
       .connections
       .read()
-      .get(&conn_id)
+      .get(conn_id)
       .map(|h| h.samples.load(Ordering::Relaxed))
       .unwrap_or(0)
   }
@@ -614,14 +732,14 @@ impl<ID: AgentId> ConnectionManager<ID> {
   /// connection that is usually fine and occasionally awful.
   pub fn agent_rtt(&self, id: &ID) -> Option<(Duration, u64)> {
     let connections = self.connections.read();
-    let handle = connections.values().find(|h| h.agent.id() == Some(id))?;
+    let (_, handle) = connections.for_agent(id).next()?;
     let us = handle.min_rtt_us.load(Ordering::Relaxed);
     (us > 0).then(|| (Duration::from_micros(us), handle.samples.load(Ordering::Relaxed)))
   }
 
   fn sample(&self, conn_id: ConnectionId, read: impl Fn(&ClientHandle<ID>) -> u64) -> Option<Duration> {
     let connections = self.connections.read();
-    let us = read(connections.get(&conn_id)?);
+    let us = read(connections.get(conn_id)?);
     (us > 0).then(|| Duration::from_micros(us))
   }
 
@@ -690,7 +808,7 @@ where
       hello,
       options.clock,
     ));
-    let (deserialized_tx, deserialized_rx) = mpsc::bounded_async(capacity);
+    let (deserialized_tx, deserialized_rx) = session_channel(capacity);
 
     let session = Arc::new(Self {
       transport,
@@ -754,7 +872,7 @@ async fn deserialize_bridge<Op, ID, C>(
   codec: C,
   manager: Arc<ConnectionManager<ID>>,
   expected: ProtocolVersion,
-  raw_rx: mpsc::BoundedAsyncReceiver<IncomingFrame<ID>>,
+  raw_rx: SessionReceiver<IncomingFrame<ID>>,
   typed_tx: SessionSender<SessionMessage<Op, ID>>,
 ) where
   Op: DeserializeOwned + Clone + Debug + Send + 'static,
@@ -854,24 +972,6 @@ where
   ID: AgentId,
   C: WireCodec,
 {
-  /// Not supported: joins are implicit for networked transports.
-  ///
-  /// A client joins by connecting; the transport adapter calls
-  /// [`ConnectionManager::register`], which fires the join notification the
-  /// `StateController` is waiting on. There is nothing for the server to
-  /// initiate here.
-  async fn agent_join(&self, _agent_info: Agent<ID>) -> Result<ConnectionId, PlazaError<ID>> {
-    Err(PlazaError::NotImplemented(format!(
-      "{}: agents join by connecting, not via agent_join()",
-      self.transport
-    )))
-  }
-
-  async fn agent_leave(&self, _agent_id: &ID, conn_id: ConnectionId) -> Result<(), PlazaError<ID>> {
-    self.manager.deregister(conn_id);
-    Ok(())
-  }
-
   async fn send_message(
     &self,
     target: MessageTarget<ID>,
@@ -894,6 +994,71 @@ where
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  fn handle(agent: Agent<u32>) -> ClientHandle<u32> {
+    ClientHandle::new(agent, session_channel(4).0)
+  }
+
+  #[test]
+  fn routing_through_the_index_answers_what_a_scan_answers() {
+    let members = [
+      (1u64, Agent::Human(10u32)),
+      (2, Agent::Human(20)),
+      (3, Agent::Human(10)),
+      (4, Agent::Bot(30)),
+      (5, Agent::System),
+    ];
+    let mut registry = Registry::new();
+    for (conn_id, agent) in &members {
+      registry.insert(*conn_id, handle(agent.clone()));
+    }
+
+    let targets = [
+      MessageTarget::All,
+      MessageTarget::Agent(10),
+      MessageTarget::Agent(99),
+      MessageTarget::Agents(vec![10, 30, 10]),
+      MessageTarget::Agents(vec![]),
+      MessageTarget::AllExcept(10),
+      MessageTarget::AllExcept(99),
+      MessageTarget::AllExceptThese(vec![10, 30]),
+      MessageTarget::AllExceptThese(vec![]),
+      // Past HASH_MEMBERSHIP_ABOVE, so the hashed arm of both list-bearing
+      // variants is exercised too.
+      MessageTarget::Agents((0..40).chain([10, 10]).collect()),
+      MessageTarget::AllExceptThese((0..40).collect()),
+    ];
+
+    for target in &targets {
+      let mut addressed = Vec::new();
+      registry.for_target(target, |conn_id, _| addressed.push(conn_id));
+      addressed.sort_unstable();
+
+      let mut scanned: Vec<ConnectionId> = members
+        .iter()
+        .filter(|(_, agent)| target_matches(target, agent))
+        .map(|(conn_id, _)| *conn_id)
+        .collect();
+      scanned.sort_unstable();
+
+      assert_eq!(addressed, scanned, "{target:?}");
+    }
+  }
+
+  #[test]
+  fn a_removed_connection_leaves_no_index_entry() {
+    let mut registry = Registry::new();
+    registry.insert(1, handle(Agent::Human(10u32)));
+    registry.insert(2, handle(Agent::Human(10)));
+
+    registry.remove(1);
+    let mut addressed = Vec::new();
+    registry.for_target(&MessageTarget::Agent(10), |conn_id, _| addressed.push(conn_id));
+    assert_eq!(addressed, vec![2]);
+
+    registry.remove(2);
+    assert!(registry.by_agent.is_empty());
+  }
 
   #[test]
   fn fanning_a_frame_out_shares_one_buffer() {

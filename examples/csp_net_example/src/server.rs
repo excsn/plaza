@@ -305,23 +305,6 @@ impl DummyServerSession {
 
 #[async_trait]
 impl Session<GameOp, PlayerId> for DummyServerSession {
-  async fn agent_join(&self, agent: Agent<PlayerId>) -> Result<PlazaConnectionId, PlazaError<PlayerId>> {
-    let (conn_id, _from_server_rx) = self.connect(agent)?;
-    Ok(conn_id)
-  }
-
-  async fn agent_leave(&self, player_id: &PlayerId, conn_id: PlazaConnectionId) -> Result<(), PlazaError<PlayerId>> {
-    if self.clients.lock().unwrap().remove(&conn_id).is_some() {
-      info!(player_id = %player_id, conn_id = %conn_id, "DummySession: Agent left, removed from clients map.");
-      if self.presence_tx.try_send(PresenceEvent::Left(*player_id)).is_err() {
-        warn!(player_id = %player_id, "DummySession: No subscribers for agent_left.");
-      }
-    } else {
-      warn!(player_id = %player_id, conn_id = %conn_id, "DummySession: AgentLeave called for unknown conn_id.");
-    }
-    Ok(())
-  }
-
   async fn send_message(
     &self,
     target: MessageTarget<PlayerId>,

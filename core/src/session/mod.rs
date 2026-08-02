@@ -30,6 +30,16 @@ pub type SessionReceiver<T> = mpsc::BoundedAsyncReceiver<T>;
 /// Sending end of one of a [`Session`]'s notification streams.
 pub type SessionSender<T> = mpsc::BoundedAsyncSender<T>;
 
+/// Builds the channel pair behind a [`Session`]'s notification streams.
+///
+/// The concrete channel (`fibre`'s bounded async MPSC) is part of plaza's
+/// contract; this constructor exists so a transport implemented outside this
+/// workspace produces the exact type the trait returns without depending on
+/// the channel crate itself. Panics if `capacity` is zero.
+pub fn session_channel<T: Send>(capacity: usize) -> (SessionSender<T>, SessionReceiver<T>) {
+  mpsc::bounded_async(capacity)
+}
+
 /// An agent arriving or leaving.
 ///
 /// One stream rather than two, because the order between them matters: a client
@@ -138,16 +148,6 @@ impl<Op, ID: AgentId> SessionMessage<Op, ID> {
 /// `Op` is `Send` because it crosses task boundaries on the session's channels.
 #[async_trait]
 pub trait Session<Op: Send + 'static, ID: AgentId>: Send + Sync + 'static {
-  /// Registers an agent joining the session, establishing the underlying
-  /// connection if the transport needs one.
-  ///
-  /// Networked transports usually treat joins as implicit, the client connects
-  /// and the transport registers it, and return `NotImplemented` here.
-  async fn agent_join(&self, agent_info: Agent<ID>) -> Result<ConnectionId, PlazaError<ID>>;
-
-  /// Cleans up after an agent leaves or disconnects.
-  async fn agent_leave(&self, agent_id: &ID, conn_id: ConnectionId) -> Result<(), PlazaError<ID>>;
-
   /// Delivers a message to everyone `target` names, serializing it if the
   /// transport requires that.
   async fn send_message(

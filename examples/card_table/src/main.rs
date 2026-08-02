@@ -28,7 +28,7 @@ use plaza::{
   agent::Agent,
   controller::{ControllerCommand, StateControllerBuilder},
   session::in_process::ClientInbox,
-  session::{InProcessSession, Session},
+  session::InProcessSession,
   tick_driver::TickDriver,
 };
 
@@ -134,7 +134,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   // Round 3: Carol drops out. `remove_actor` closes the gap in the turn order,
   // so play continues with two rather than stalling on someone who left.
   info!("--- round 3: Carol disconnects, the remaining two play it out");
-  session.agent_leave(&PlayerId(3), carol_conn).await?;
+  session.disconnect(&PlayerId(3), carol_conn).await;
   settle().await;
   play(&session, &alice, Card(4)).await;
   play(&session, &bob, Card(7)).await;

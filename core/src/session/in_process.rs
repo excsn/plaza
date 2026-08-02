@@ -10,26 +10,25 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use fibre::mpsc;
 use parking_lot::Mutex;
 use tracing::{debug, trace, warn};
 
 use crate::agent::{Agent, AgentId};
 use crate::error::PlazaError;
 use crate::session::{
-  ConnectionId, MessageTarget, PresenceEvent, Session, SessionMessage, SessionReceiver, SessionSender,
-  DEFAULT_SESSION_CAPACITY,
+  session_channel, ConnectionId, MessageTarget, PresenceEvent, Session, SessionMessage, SessionReceiver,
+  SessionSender, DEFAULT_SESSION_CAPACITY,
 };
 
 /// Default depth of a single client's inbox.
 pub const DEFAULT_CLIENT_CAPACITY: usize = 64;
 
 /// The receiving end of a simulated client's connection.
-pub type ClientInbox<Op, ID> = mpsc::BoundedAsyncReceiver<SessionMessage<Op, ID>>;
+pub type ClientInbox<Op, ID> = SessionReceiver<SessionMessage<Op, ID>>;
 
 struct ClientHandle<Op: Send + 'static, ID: AgentId> {
   agent: Agent<ID>,
-  outbox: mpsc::BoundedAsyncSender<SessionMessage<Op, ID>>,
+  outbox: SessionSender<SessionMessage<Op, ID>>,
 }
 
 /// An in-memory `Session`.
@@ -75,8 +74,8 @@ where
   /// Creates a session with explicit channel depths. Raise `client_capacity` if
   /// a burst could outpace a client that reads slowly.
   pub fn with_capacity(session_capacity: usize, client_capacity: usize) -> Arc<Self> {
-    let (incoming_tx, incoming_rx) = mpsc::bounded_async(session_capacity);
-    let (presence_tx, presence_rx) = mpsc::bounded_async(session_capacity);
+    let (incoming_tx, incoming_rx) = session_channel(session_capacity);
+    let (presence_tx, presence_rx) = session_channel(session_capacity);
 
     Arc::new(Self {
       next_conn_id: AtomicU64::new(1),
@@ -98,7 +97,7 @@ where
     &self,
     agent: Agent<ID>,
   ) -> Result<(ConnectionId, ClientInbox<Op, ID>), PlazaError<ID>> {
-    let (outbox, inbox) = mpsc::bounded_async(self.client_capacity);
+    let (outbox, inbox) = session_channel(self.client_capacity);
     let conn_id = self.next_conn_id.fetch_add(1, Ordering::Relaxed);
 
     self.clients.lock().insert(
@@ -114,6 +113,14 @@ where
       warn!("No controller is consuming presence events; snapshot will not be sent.");
     }
     Ok((conn_id, inbox))
+  }
+
+  /// Disconnects a simulated client and announces the leave: the in-process
+  /// equivalent of the socket closing.
+  pub async fn disconnect(&self, agent_id: &ID, conn_id: ConnectionId) {
+    self.clients.lock().remove(&conn_id);
+    debug!(conn_id, ?agent_id, "Client left in-process session.");
+    let _ = self.presence_tx.send(PresenceEvent::Left(agent_id.clone())).await;
   }
 
   /// Sends ops to the server as if `from` were a connected client.
@@ -144,22 +151,6 @@ where
   Op: Debug + Clone + Send + Sync + 'static,
   ID: AgentId,
 {
-  /// Registers an agent without handing back an inbox.
-  ///
-  /// Useful when the test only cares that the controller reacts to the join;
-  /// use [`connect`](Self::connect) to actually read what the server sends.
-  async fn agent_join(&self, agent_info: Agent<ID>) -> Result<ConnectionId, PlazaError<ID>> {
-    let (conn_id, _inbox) = self.connect(agent_info).await?;
-    Ok(conn_id)
-  }
-
-  async fn agent_leave(&self, agent_id: &ID, conn_id: ConnectionId) -> Result<(), PlazaError<ID>> {
-    self.clients.lock().remove(&conn_id);
-    debug!(conn_id, ?agent_id, "Client left in-process session.");
-    let _ = self.presence_tx.send(PresenceEvent::Left(agent_id.clone())).await;
-    Ok(())
-  }
-
   async fn send_message(
     &self,
     target: MessageTarget<ID>,

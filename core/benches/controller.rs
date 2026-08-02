@@ -377,6 +377,21 @@ fn command_queue(c: &mut Criterion, threaded: &Runtime, inline: &Runtime) {
       })
     })
   });
+  // The sender is moved into the command and never cloned, so the clonable
+  // channel's claim protocol is paid for a race that cannot happen here.
+  group.bench_function("fibre_exclusive", |b| {
+    b.iter_custom(|iters| {
+      inline.block_on(async move {
+        let started = Instant::now();
+        for _ in 0..iters {
+          let (tx, mut rx) = oneshot::exclusive::<BenchState>();
+          tx.send(BenchState::default()).expect("the receiver is alive");
+          black_box(rx.recv().await.expect("a sent value"));
+        }
+        started.elapsed()
+      })
+    })
+  });
   group.bench_function("tokio", |b| {
     b.iter_custom(|iters| {
       inline.block_on(async move {

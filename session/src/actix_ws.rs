@@ -15,10 +15,9 @@ use futures_util::StreamExt;
 use bytestring::ByteString;
 use plaza::agent::{Agent, AgentId};
 use plaza::error::PlazaError;
-use plaza::session::{ConnectionId, MessageTarget, PresenceEvent, Session, SessionMessage, SessionReceiver};
+use plaza::session::{session_channel, MessageTarget, PresenceEvent, Session, SessionMessage, SessionReceiver};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use fibre::mpsc;
 use plaza_wire::frame::ProtocolVersion;
 use tracing::{debug, error, warn};
 
@@ -246,7 +245,7 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
     .aggregate_continuations()
     .max_continuation_size(MAX_CONTINUATION_SIZE);
 
-  let (to_client_tx, to_client_rx) = mpsc::bounded_async::<OutboundFrame>(DEFAULT_CLIENT_QUEUE_CAPACITY);
+  let (to_client_tx, to_client_rx) = session_channel::<OutboundFrame>(DEFAULT_CLIENT_QUEUE_CAPACITY);
   let conn_id = manager.register(agent.clone(), to_client_tx);
   // Frames arrive already encoded, so a broadcast encodes once and every
   // recipient's task just writes bytes.
@@ -416,14 +415,6 @@ where
   ID: AgentId,
   C: WireCodec,
 {
-  async fn agent_join(&self, agent_info: Agent<ID>) -> Result<ConnectionId, PlazaError<ID>> {
-    self.inner.agent_join(agent_info).await
-  }
-
-  async fn agent_leave(&self, agent_id: &ID, conn_id: ConnectionId) -> Result<(), PlazaError<ID>> {
-    self.inner.agent_leave(agent_id, conn_id).await
-  }
-
   async fn send_message(
     &self,
     target: MessageTarget<ID>,

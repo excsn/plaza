@@ -38,7 +38,7 @@ pub enum ControllerCommand<Op, ID: AgentId, StateType> {
     agent_id: ID,
   },
   QueryCurrentState {
-    response_tx: oneshot::Sender<StateType>,
+    response_tx: oneshot::ExclusiveSender<StateType>,
   },
   /// Re-sends state to specific agents, each getting a snapshot built for them.
   ///
@@ -203,7 +203,7 @@ where
   ID: AgentId,
   StateType: Send + 'static,
 {
-  let (response_tx, response_rx) = oneshot::oneshot();
+  let (response_tx, mut response_rx) = oneshot::exclusive();
   tx.send(ControllerCommand::QueryCurrentState { response_tx })
     .await
     .map_err(|_| QueryError::ControllerGone)?;

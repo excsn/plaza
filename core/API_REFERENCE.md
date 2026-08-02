@@ -153,7 +153,7 @@ Which snapshot is wanted. **Plaza never reads this**: it carries it from caller 
 *   `SubmitSystemOps { source_description, ops }`
 *   `ProcessTimeStep { delta_time }`
 *   `HandleAgentJoined { agent }` / `HandleAgentLeft { agent_id }`: the push-style alternative to the session's own notifications; the lobby uses the latter.
-*   `QueryCurrentState { response_tx: oneshot::Sender<StateType> }`
+*   `QueryCurrentState { response_tx: oneshot::ExclusiveSender<StateType> }`: the single-sender oneshot, since the sender is moved into the command and never cloned.
 *   `SendSnapshots { recipients: Vec<Agent<ID>>, context: Option<SnapshotContext> }`: re-sends state, building a snapshot per recipient. Recipients are explicit because the roster lives in your state, not the controller.
 *   `Shutdown`
 
@@ -184,8 +184,6 @@ Wraps the request/response channel dance for `QueryCurrentState`.
 pub trait Session<Op: Send + 'static, ID: AgentId>:
   Send + Sync + 'static
 {
-  async fn agent_join(&self, agent_info: Agent<ID>) -> Result<ConnectionId, PlazaError<ID>>;
-  async fn agent_leave(&self, agent_id: &ID, conn_id: ConnectionId) -> Result<(), PlazaError<ID>>;
   async fn send_message(&self, target: MessageTarget<ID>, msg: SessionMessage<..>) -> Result<(), PlazaError<ID>>;
   fn subscribe_to_incoming_messages(&self) -> SessionReceiver<SessionMessage<..>>;
   fn on_presence_change(&self) -> SessionReceiver<PresenceEvent<ID>>;
@@ -193,7 +191,7 @@ pub trait Session<Op: Send + 'static, ID: AgentId>:
 ```
 
 *   **One consumer.** The two streams deliver each item to exactly one receiver: they are *taken*, not subscribed to, and taking one twice panics. A session feeds exactly one controller, which is already the architecture.
-*   **`agent_join`** returns `NotImplemented` on networked transports, where a client joins by connecting.
+*   **Membership is not on the trait.** Joins and leaves are transport-level facts the controller learns from the presence stream: a client joins by connecting, and a server-side disconnect is an inherent method on the transport that owns the connection (`InProcessSession::disconnect`, `ConnectionManager::deregister`).
 
 ### Enum `PresenceEvent<ID: AgentId>`
 
@@ -220,13 +218,15 @@ Loopback transport for tests, demos, and local play. Each client gets its own in
 
 *   **`new() -> Arc<Self>`**, **`with_capacity(session_capacity, client_capacity) -> Arc<Self>`**
 *   **`async connect(&self, agent) -> Result<(ConnectionId, ClientInbox<..>), PlazaError<ID>>`** Registers a client and announces the join: read the inbox for the snapshot that follows.
+*   **`async disconnect(&self, agent_id: &ID, conn_id: ConnectionId)`**: removes the client and announces the leave, the in-process equivalent of the socket closing.
 *   **`async client_send(&self, from: Agent<ID>, ops: Vec<Op>)`**: as if a client sent them.
 *   **`connected_agents(&self) -> Vec<Agent<ID>>`**
 
 ### Type Aliases
 
 *   `ConnectionId = u64`
-*   `SessionReceiver<T>` / `SessionSender<T>`: `fibre::mpsc` bounded async handles.
+*   `SessionReceiver<T>` / `SessionSender<T>`: bounded async MPSC handles. The concrete channel is `fibre`'s, which is part of plaza's contract; build pairs with `session_channel` rather than naming the crate.
+*   **`session_channel<T: Send>(capacity) -> (SessionSender<T>, SessionReceiver<T>)`**: the constructor behind every `Session` stream, so a transport outside this workspace produces the exact type the trait returns without a fibre dependency of its own. Panics if `capacity` is zero.
 *   `ClientInbox<Op, ID>`: the receiving end of a simulated client.
 
 ### Constants

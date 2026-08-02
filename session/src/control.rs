@@ -257,7 +257,7 @@ mod tests {
   #[tokio::test]
   async fn a_matching_pong_records_a_sample() {
     let manager = manager();
-    let (tx, _rx) = fibre::mpsc::bounded_async(4);
+    let (tx, _rx) = plaza::session::session_channel(4);
     let conn_id = manager.register(Agent::new_human(7u32), tx);
 
     let mut probe = ProbeState::default();
@@ -293,7 +293,7 @@ mod tests {
   #[tokio::test]
   async fn a_pong_answering_nothing_records_nothing() {
     let manager = manager();
-    let (tx, _rx) = fibre::mpsc::bounded_async(4);
+    let (tx, _rx) = plaza::session::session_channel(4);
     let conn_id = manager.register(Agent::new_human(7u32), tx);
     let mut probe = ProbeState::default();
 
@@ -339,7 +339,7 @@ mod tests {
     // The single-slot bug: with a 200ms link and a 125ms schedule, every reply
     // arrives after its successor went out, so nothing was ever recorded.
     let manager = manager();
-    let (tx, _rx) = fibre::mpsc::bounded_async(4);
+    let (tx, _rx) = plaza::session::session_channel(4);
     let conn_id = manager.register(Agent::new_human(7u32), tx);
     let mut probe = ProbeState::default();
 

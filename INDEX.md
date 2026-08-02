@@ -87,7 +87,7 @@ Both transports share everything that is not socket I/O, which is why the adapte
 | What the transport carried and what it dropped rather than stalling for | [session/src/stats.rs](session/src/stats.rs) |
 | Transport errors | [session/src/error.rs](session/src/error.rs) |
 
-**To add a transport:** write a socket pump that calls `ConnectionManager::{register, forward_incoming, deregister}` and delegates the `Session` trait to a `TransportSession`. `tcp.rs` is the smaller of the two to copy.
+**To add a transport:** write a socket pump that calls `ConnectionManager::{register, forward_incoming, deregister}` and delegates the `Session` trait to a `TransportSession`. Build the per-client queue with `plaza::session::session_channel`, so the transport never names the channel crate. `tcp.rs` is the smaller of the two to copy.
 
 ## `plaza_wire`
 

@@ -63,13 +63,17 @@ Shared machinery. Most applications use it only through a transport, but it is p
 
 The connection registry plus the notification channels a `StateController` consumes.
 
+Connections are held by id and **indexed by agent**, because both halves of the surface below need them that way: a target naming agents resolves by lookup, and the `agent_*` readers answer about one player without walking every connection. An agent may hold several connections at once (a reconnect that overlaps the old socket, a second device), so the index maps an id to all of them and `set_agent_link_profile`, `record_protocol` and `agent_link_dropped` act on each, while `agent_rtt`, `agent_link_rtt` and `protocol` answer from the first registered.
+
 *   **`new(transport: &'static str, capacity: usize) -> Self`**
 *   **`with_hello(transport: &'static str, capacity: usize, hello: Option<OutboundFrame>) -> Self`**: the same, plus a pre-encoded frame pushed to every connection the moment it registers. `TransportSession::with_protocol` builds one `Kind::Hello` frame at construction and hands it here, so the handshake costs one encode for the process rather than one per client.
-*   **`register(&self, agent: Agent<ID>, to_client_tx) -> ConnectionId`**: records a connected client, sends the hello frame if there is one, and announces the join.
+*   **`register(&self, agent: Agent<ID>, to_client_tx: SessionSender<OutboundFrame>) -> ConnectionId`**: records a connected client, sends the hello frame if there is one, and announces the join. Build the queue with `plaza::session::session_channel`, so a transport never names the channel crate.
 *   **`deregister(&self, conn_id: ConnectionId)`**: removes it and announces the departure.
 *   **`forward_incoming(&self, from: Agent<ID>, frame: Bytes)`**: publishes one client frame toward the controller, still encoded. Non-blocking; drops under load rather than stalling a connection task. Takes `Bytes` because both transports hand over a buffer they already own, so a frame reaches the deserialize bridge without being copied out.
-*   **`broadcast(&self, target: &MessageTarget<ID>, frame: OutboundFrame) -> Result<(), SessionLayerError>`**: fans one already-encoded frame out to the matching connections. It takes bytes, not a message, because a `SessionMessage` is encoded **once** by [`encode_message`](#struct-transportsessionop-id-c-wirecodec) and the same buffer is shared with every recipient, at the cost of a refcount bump each.
-*   **`take_raw_incoming(&self) -> mpsc::BoundedAsyncReceiver<IncomingFrame<ID>>`**: the inbound stream, whose payloads are still encoded bytes for the deserialize bridge to decode.
+*   **`broadcast(&self, target: &MessageTarget<ID>, frame: OutboundFrame) -> Result<(), SessionLayerError>`**: fans one already-encoded frame out to the matching connections. It takes bytes, not a message, because a `SessionMessage` is encoded **once** by [`encode_message`](#struct-transportsessionop-id-c-wirecodec) and the same buffer is shared with every recipient, at the cost of a refcount bump each. `Agent` and `Agents` cost a lookup per named agent rather than a pass over the registry, which matters because per-recipient snapshots address one agent at a time: a scan there made a snapshot pass quadratic in connections. Measured in `benches/broadcast.rs`, addressing one agent is flat at ~37ns from 8 connections to 4096, against a scan that reaches 10µs at the top of that range; below roughly a dozen connections the scan is the cheaper of the two, by about 9ns.
+
+`Agents` still delivers once to an agent named twice. The variants carrying a list of ids test that list directly rather than hashing it into a set, which the same bench settled: for a `u32` id, building the set costs more than the comparisons it saves at every list length up to 128.
+*   **`take_raw_incoming(&self) -> SessionReceiver<IncomingFrame<ID>>`**: the inbound stream, whose payloads are still encoded bytes for the deserialize bridge to decode.
 *   **`take_presence(&self) -> SessionReceiver<PresenceEvent<ID>>`**
 *   **`agent_rtt(&self, id: &ID) -> Option<(Duration, u64)>`**: the measured round trip for an agent and how many samples it rests on. Keyed by agent because that is what an application holds: it knows who joined, not which socket they arrived on, and a reconnecting player is a new connection but the same agent.
 *   **`rtt(conn_id)`** / **`min_rtt(conn_id)`** / **`rtt_samples(conn_id)`**: the same, per connection.
@@ -131,7 +135,7 @@ Impairment applied where the link is. `up` is what the client sends, `down` what
 **The jitter draw is reproducible**: an inline xorshift seeded from the connection id, not from the clock, so an impaired session re-runs the same way.
 
 A mismatch is **recorded and left connected**, at `debug!`. That is the whole of this layer's involvement, and the division is deliberate: a version is a build hash, so a peer that merely recompiled is indistinguishable here from one whose shapes changed, and refusing would drop clients that are fine. Whether the mismatch is fatal, cosmetic, or worth telling the client to reload is the application's call, made by reading [`ConnectionManager::protocol`](#struct-connectionmanagerid-agentid) and answering in its own ops. It is not a `warn!` for the same reason it is not a disconnect: on a fleet mid-rollout that is one warning per connection about nothing, and it would be this layer forming an opinion on the application's behalf.
-*   Implements `Session`. `agent_join` returns `PlazaError::NotImplemented`: joins are transport-implicit, happening when a client connects and the adapter calls `register`.
+*   Implements `Session`. Joins are transport-implicit: a client joins by connecting, and the adapter calls `register`; a server-side disconnect is [`ConnectionManager::deregister`](#struct-connectionmanagerid-agentid).
 
 ### Function `target_matches`
 
@@ -139,7 +143,9 @@ A mismatch is **recorded and left connected**, at `debug!`. That is the whole of
 pub fn target_matches<ID: AgentId>(target: &MessageTarget<ID>, agent: &Agent<ID>) -> bool
 ```
 
-The single implementation of the targeting rules. Agents without an ID (the system agent) are never a delivery target.
+The targeting rules in scanning form, for a transport that keeps its own registry. Agents without an ID (the system agent) are never a delivery target.
+
+[`ConnectionManager`](#struct-connectionmanagerid-agentid) does not use it: it holds an agent-to-connection index and resolves `Agent`/`Agents` by lookup rather than by walking the registry, which is what keeps a per-recipient snapshot pass from costing a scan per recipient. A unit test pins the two to the same answer over every target variant, including the cases where they could plausibly differ (a repeated id in `Agents`, an id nobody holds, the system agent).
 
 ### Type Alias `OutboundFrame`
 
@@ -260,10 +266,10 @@ Every fan-out here uses `try_send` by design: a wedged client must not stall the
 ## 9. Writing Another Transport
 
 1.  Create a `TransportSession::new(name, codec, capacity)` and keep the `Arc`.
-2.  Per connection: make an `mpsc::bounded_async` outbound queue, call `manager.register(agent, tx)`, and run a pump that
+2.  Per connection: make an outbound queue with `plaza::session::session_channel`, call `manager.register(agent, tx)`, and run a pump that
     *   forwards inbound frames with `manager.forward_incoming(agent, bytes)`, and
     *   writes queued outbound messages, encoding with the session's codec.
 3.  On exit, call `manager.deregister(conn_id)`.
-4.  Delegate the six `Session` methods to the inner `TransportSession`.
+4.  Delegate the three `Session` methods to the inner `TransportSession`.
 
 `tcp.rs` is the shorter of the two shipped adapters to copy.

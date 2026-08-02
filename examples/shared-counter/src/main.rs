@@ -16,7 +16,7 @@ use plaza::{
   agent::Agent,
   controller::{query_state, ControllerCommand, StateControllerBuilder},
   session::in_process::ClientInbox,
-  session::{InProcessSession, Session},
+  session::InProcessSession,
 };
 
 use std::sync::Arc;
@@ -97,7 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   info!("Final counter state: {:?}", query_state(&controller_tx).await?);
 
   info!("Alice leaving...");
-  session.agent_leave(&alice_id, alice_conn).await?;
+  session.disconnect(&alice_id, alice_conn).await;
   tokio::time::sleep(Duration::from_millis(50)).await;
 
   controller_tx.send(ControllerCommand::Shutdown).await?;

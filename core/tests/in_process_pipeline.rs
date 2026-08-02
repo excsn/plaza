@@ -11,7 +11,7 @@ use plaza::controller::{ControllerCommand, StateControllerBuilder};
 use plaza::error::SnapshotError;
 use plaza::controller::CommandSender;
 use plaza::session::in_process::ClientInbox;
-use plaza::session::{InProcessSession, Session, SessionMessage, TargetedOp};
+use plaza::session::{InProcessSession, SessionMessage, TargetedOp};
 use plaza::snapshot::{SnapshotContext, SnapshotProvider};
 use plaza::state_logic::{LogicInput, LogicOutput, SnapshotRequest, StateLogic, StateLogicError};
 use plaza::TickDriver;
@@ -131,7 +131,7 @@ fn start() -> (
 }
 
 async fn query_state(tx: &CommandSender<CounterOp, UserId, CounterState>) -> CounterState {
-  let (resp_tx, resp_rx) = oneshot::oneshot();
+  let (resp_tx, mut resp_rx) = oneshot::exclusive();
   tx.send(ControllerCommand::QueryCurrentState { response_tx: resp_tx })
     .await
     .expect("controller alive");
@@ -203,8 +203,8 @@ async fn agent_leaving_is_reflected_in_state() {
   let (session, tx) = start();
 
   let alice = Agent::new_human(1u64);
-  let conn_id = session.agent_join(alice).await.expect("join");
-  session.agent_leave(&1u64, conn_id).await.expect("leave");
+  let (conn_id, _inbox) = session.connect(alice).await.expect("join");
+  session.disconnect(&1u64, conn_id).await;
 
   // Both events are queued before the controller reads either. They share one
   // stream, so the leave cannot overtake the join, when they were separate

@@ -11,11 +11,10 @@ use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use plaza::agent::{Agent, AgentId};
 use plaza::error::PlazaError;
-use plaza::session::{ConnectionId, MessageTarget, PresenceEvent, Session, SessionMessage, SessionReceiver};
+use plaza::session::{session_channel, MessageTarget, PresenceEvent, Session, SessionMessage, SessionReceiver};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio::net::{TcpListener, TcpStream};
-use fibre::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
@@ -171,7 +170,7 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
   codec: C,
 ) {
   let mut framed = Framed::new(stream, LengthDelimitedCodec::new());
-  let (to_client_tx, to_client_rx) = mpsc::bounded_async::<OutboundFrame>(DEFAULT_CLIENT_QUEUE_CAPACITY);
+  let (to_client_tx, to_client_rx) = session_channel::<OutboundFrame>(DEFAULT_CLIENT_QUEUE_CAPACITY);
   let conn_id = manager.register(agent.clone(), to_client_tx);
   let link = manager.link_handle(conn_id).expect("just registered");
   let clock = manager.clock().cloned();
@@ -296,14 +295,6 @@ where
   ID: AgentId,
   C: WireCodec,
 {
-  async fn agent_join(&self, agent_info: Agent<ID>) -> Result<ConnectionId, PlazaError<ID>> {
-    self.inner.agent_join(agent_info).await
-  }
-
-  async fn agent_leave(&self, agent_id: &ID, conn_id: ConnectionId) -> Result<(), PlazaError<ID>> {
-    self.inner.agent_leave(agent_id, conn_id).await
-  }
-
   async fn send_message(
     &self,
     target: MessageTarget<ID>,
