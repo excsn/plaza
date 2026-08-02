@@ -195,6 +195,7 @@ The server-side counterpart, also runtime-free and wasm-safe. Shares `client_uti
 
 - `parking_lot` for `Mutex`/`RwLock`, never `std::sync` (workspace-wide excsn rule).
 - All channels are `fibre`, not `tokio::sync`. What that buys, measured twice (fibre's own channel arena at `fibre/channels/arena/docs/mpsc.md`, and `core/benches/controller.rs`'s producer sweep): throughput independent of producer count on the bounded async MPSC shape, where tokio's collapses past a handful of senders, 2x slower at 64 producers in plaza's own workload and worse under saturation. The cost is 3-5% on a nearly-uncontended threaded queue, which no deployment observes. Sync call sites use `try_send`; fibre's `send` is a future, so `let _ = tx.send(x);` silently does nothing.
+- Bench results live in [docs/benches/](docs/benches/), one page per bench target.
 - A session's two notification streams (inbound messages and presence), are single-consumer: they are *taken*, not subscribed to. Taking one twice panics.
 - Joins and leaves share one ordered `PresenceEvent` stream on purpose. Splitting them lets a leave overtake a join under `select!`, which broke reconnection.
 - Nothing in `core` spawns a task except `TickDriver` and the caller's own `controller.run()`.
