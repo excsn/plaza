@@ -318,15 +318,16 @@ fn command_queue(c: &mut Criterion, threaded: &Runtime, inline: &Runtime) {
   const MESSAGES: usize = 4096;
 
   // A producer outrunning the loop, which is the state a queue depth exists for.
-  // `threaded/1` and `threaded/4` differ only in contention on the send side; the
-  // wake the consumer pays is amortised over a queue's worth of messages either
-  // way, so `inline` is where the channels themselves are compared.
+  // The producer sweep is the axis fibre's own channel arena says decides this
+  // shape: its bounded async MPSC holds flat from 1 to 64 producers while
+  // tokio's collapses (fibre/channels/arena/docs/mpsc.md), and 64 producers is
+  // what a 64-connection server's inbound channel has.
   let mut group = c.benchmark_group("command_queue");
   group.throughput(Throughput::Elements(MESSAGES as u64));
   // A threaded iteration is milliseconds, so 100 samples overruns the default
   // target time and criterion asks for one of these three instead.
   group.sample_size(50);
-  for producers in [1usize, 4] {
+  for producers in [1usize, 4, 16, 64] {
     let id = format!("threaded/{producers}");
     group.bench_with_input(BenchmarkId::new("fibre", &id), &producers, |b, &producers| {
       b.iter_custom(|iters| threaded.block_on(fibre_queue(iters, producers, MESSAGES)))
