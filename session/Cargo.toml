@@ -41,7 +41,12 @@ bytestring = { version = "^1", optional = true }
 tokio-util = { version = "^0.7", features = ["codec"], optional = true }
 
 [dev-dependencies]
+criterion = { version = "^0", features = ["html_reports"] }
 tokio = { version = "^1", features = ["macros", "rt-multi-thread", "net", "io-util"] }
 tokio-util = { version = "^0.7", features = ["codec"] }
 tracing-subscriber = { version = "^0.3", features = ["env-filter"] }
 uuid = { version = "^1", features = ["v4", "serde"] }
+
+[[bench]]
+name = "broadcast"
+harness = false

@@ -84,6 +84,7 @@ Both transports share everything that is not socket I/O, which is why the adapte
 | actix-web WebSocket adapter: `handle_connection` is the whole integration | [session/src/actix_ws.rs](session/src/actix_ws.rs) |
 | Length-delimited TCP adapter | [session/src/tcp.rs](session/src/tcp.rs) |
 | The listen-server HTTP layer (feature `actix_host`): `Host`, the stamped index, no-cache assets, the preflight, `lan_address`, `init_logging` | [session/src/host/server.rs](session/src/host/server.rs) |
+| What routing a frame to a target costs, the agent index against the registry pass it replaced | [session/benches/broadcast.rs](session/benches/broadcast.rs) |
 | What the transport carried and what it dropped rather than stalling for | [session/src/stats.rs](session/src/stats.rs) |
 | Transport errors | [session/src/error.rs](session/src/error.rs) |
 
