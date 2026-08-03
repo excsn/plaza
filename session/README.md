@@ -127,6 +127,25 @@ SessionOptions::with_protocol(ProtocolVersion(PROTOCOL))
 
 `SessionOptions::queues` holds the depths (`inbound`, `decoded`, `presence`, `outbound`, `conditioner`) and `limits` holds the caps (`max_frame_bytes` for TCP, `max_message_bytes` for WebSocket, `probe_slots`). Set a group wholesale with `.queues(..)` / `.limits(..)`, or one field at a time as above. `ConnectionManager::queues()` and `limits()` read them back, which is where a third-party transport picks them up.
 
+### What a full queue does
+
+Depth is half the decision; the other half is what happens when the depth runs out, and the right answer differs per queue because the producers differ.
+
+```rust,ignore
+SessionOptions::with_protocol(ProtocolVersion(PROTOCOL))
+  .disconnect_slow_clients()   // outbound: end the connection rather than the frame
+  .backpressure_inbound()      // inbound: stop reading that socket while the controller is behind
+  .backpressure_presence()     // presence: hold a connection at registration rather than lose a join
+```
+
+Or all three at once with `.overflow(Overflow::drop_everywhere())`, which is what ships, or `Overflow::block_where_possible()`.
+
+The three are separate types rather than one shared enum, because the arms that make sense differ. Only a client can be disconnected, so `Disconnect` exists on `outbound` alone: an inbound queue fills because the *controller* is behind, which names nothing a particular client did, and a lost presence event is already a bookkeeping failure that disconnecting would answer by inventing a second one. And there is deliberately no "block everywhere": the outbound fan-out runs under the connection registry's read guard and has no arm that waits, so a uniform setter would quietly mean something different there. Making that a compile error rather than a doc paragraph is the point of the three types.
+
+Two of these have a failure mode worth knowing before you choose them. `backpressure_presence` wedges every connection at registration if the session starts before its controller does and the presence queue fills, which is the exact case dropping exists for. And `backpressure_inbound` is TCP backpressure on one client, which is the point, but a controller that falls behind applies it to every client at once.
+
+Naming a workload picks for you: `LossFree` disconnects and waits, `LatencyFirst` drops everywhere, on the grounds that where ops supersede each other a lost frame costs nothing and where they do not, a client holding a view the server never authored should be told.
+
 Two of these are worth knowing about before you need them. `inbound`, `decoded` and `presence` default to the same number because they used to share a single constructor argument, not because a trickle of joins and every frame from every client are comparable traffic. And `max_frame_bytes` defaults to 8 MiB because that is what `LengthDelimitedCodec` enforces when nobody asks; it is the largest allocation a client can make this server perform, so a build that knows its own frames are small should say so.
 
 ## Impairment belongs to the link

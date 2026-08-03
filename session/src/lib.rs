@@ -28,7 +28,8 @@ pub use conditioner::{Delivery, DirectionProfile, LinkProfile, RETRANSMIT_PENALT
 pub use error::SessionLayerError;
 pub use workload::{Priority, Workload, DEFAULT_SOCKET_BUFFER_BYTES};
 pub use manager::{
-  ConnectionManager, Limits, Queues, SessionClock, SessionOptions, TransportSession,
+  ConnectionManager, InboundOverflow, Limits, OutboundOverflow, Overflow, PresenceOverflow, Queues, SessionClock,
+  SessionOptions, TransportSession,
   DEFAULT_BROADCAST_CAPACITY, DEFAULT_CLIENT_QUEUE_CAPACITY, DEFAULT_CONDITIONER_CAPACITY,
   DEFAULT_MAX_FRAME_BYTES, DEFAULT_MAX_MESSAGE_BYTES, DEFAULT_PROBE_SLOTS,
 };

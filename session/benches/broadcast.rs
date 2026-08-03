@@ -81,12 +81,18 @@ fn registries(
   };
   let mut held = Vec::with_capacity(connections * 2);
 
+  // Registration announces a join, which under a backpressure policy can wait.
+  // Setup only; nothing measured below crosses it.
+  let runtime = tokio::runtime::Builder::new_current_thread()
+    .build()
+    .expect("a current-thread runtime for setup");
+
   for seat in 0..connections as Seat {
     let agent = Agent::new_human(seat);
 
     let (tx, rx) = session_channel(QUEUE);
     held.push(rx);
-    let conn_id = manager.register(agent.clone(), tx);
+    let conn_id = runtime.block_on(manager.register(agent.clone(), tx));
 
     let (tx, rx) = session_channel(QUEUE);
     held.push(rx);

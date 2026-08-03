@@ -10,7 +10,7 @@
 
 **Pluggable wire format.** All encoding and decoding goes through [`WireCodec`](#trait-wirecodec). [`JsonCodec`](#struct-jsoncodec) is the default; supply your own for MessagePack, bincode, or anything else without touching transport code.
 
-**Backpressure policy.** Outbound sends to a client use `try_send`: a client that has stopped reading is dropped from that message rather than stalling the controller for everyone. Inbound traffic is awaited in the deserialize bridge, so a busy controller applies backpressure instead of discarding ops a client already sent.
+**Backpressure policy.** Configurable per juncture, and by default what it always was: outbound sends use `try_send`, so a client that stopped reading loses the frame rather than stalling the controller for everyone, while the deserialize bridge awaits, so a busy controller backs traffic up behind it. [`Overflow`](#struct-overflow) changes either, and [`Queues`](#structs-queues-and-limits) changes how much fits before the question arises.
 
 ### Feature Flags
 
@@ -75,10 +75,14 @@ Connections are held by id and **indexed by agent**, because both halves of the 
 *   **`with_hello(transport: &'static str, capacity: usize, hello: Option<OutboundFrame>) -> Self`**: the same, plus a pre-encoded frame pushed to every connection the moment it registers. `TransportSession::with_protocol` builds one `Kind::Hello` frame at construction and hands it here, so the handshake costs one encode for the process rather than one per client.
 *   **`with_options(transport: &'static str, hello: Option<OutboundFrame>, options: &SessionOptions) -> Self`**: takes the clock, queue depths and limits from `options`. `hello` stays a separate argument because the manager holds the encoded frame while `options` holds the version it was built from. The `capacity` constructors above are this one with `inbound`, `decoded` and `presence` all set to that number.
 *   **`queues(&self) -> &Queues`**, **`limits(&self) -> &Limits`**: what this manager was built with. A transport adapter reads `queues().outbound` when it creates a connection's outbound queue, `queues().conditioner` for its delay queues, `limits().probe_slots` for the probe table, and whichever byte cap its own framing enforces.
-*   **`register(&self, agent: Agent<ID>, to_client_tx: SessionSender<OutboundFrame>) -> ConnectionId`**: records a connected client, sends the hello frame if there is one, and announces the join. Build the queue with `plaza::session::session_channel`, so a transport never names the channel crate.
-*   **`deregister(&self, conn_id: ConnectionId)`**: removes it and announces the departure.
-*   **`forward_incoming(&self, from: Agent<ID>, frame: Bytes)`**: publishes one client frame toward the controller, still encoded. Non-blocking; drops under load rather than stalling a connection task. Takes `Bytes` because both transports hand over a buffer they already own, so a frame reaches the deserialize bridge without being copied out.
-*   **`broadcast(&self, target: &MessageTarget<ID>, frame: OutboundFrame) -> Result<(), SessionLayerError>`**: fans one already-encoded frame out to the matching connections. It takes bytes, not a message, because a `SessionMessage` is encoded **once** by [`encode_message`](#struct-transportsessionop-id-c-wirecodec) and the same buffer is shared with every recipient, at the cost of a refcount bump each. `Agent` and `Agents` cost a lookup per named agent rather than a pass over the registry, which matters because per-recipient snapshots address one agent at a time: a scan there made a snapshot pass quadratic in connections. Measured in `benches/broadcast.rs`, addressing one agent is flat at ~37ns from 8 connections to 4096, against a scan that reaches 10µs at the top of that range; below roughly a dozen connections the scan is the cheaper of the two, by about 9ns.
+*   **`async register(&self, agent: Agent<ID>, to_client_tx: SessionSender<OutboundFrame>) -> ConnectionId`**: records a connected client, sends the hello frame if there is one, and announces the join. Build the queue with `plaza::session::session_channel`, so a transport never names the channel crate. `async` because announcing may wait under `PresenceOverflow::Backpressure`.
+*   **`async deregister(&self, conn_id: ConnectionId)`**: removes it and announces the departure.
+*   **`async forward_incoming(&self, from: Agent<ID>, frame: Bytes)`**: publishes one client frame toward the controller, still encoded. Drops under load by default; waits under `InboundOverflow::Backpressure`, which stops that client's socket being read. Takes `Bytes` because both transports hand over a buffer they already own, so a frame reaches the deserialize bridge without being copied out.
+*   **`broadcast(&self, target: &MessageTarget<ID>, frame: OutboundFrame) -> Result<Vec<ConnectionId>, SessionLayerError>`**: fans one already-encoded frame out to the matching connections. It takes bytes, not a message, because a `SessionMessage` is encoded **once** by [`encode_message`](#struct-transportsessionop-id-c-wirecodec) and the same buffer is shared with every recipient, at the cost of a refcount bump each. `Agent` and `Agents` cost a lookup per named agent rather than a pass over the registry, which matters because per-recipient snapshots address one agent at a time: a scan there made a snapshot pass quadratic in connections. Measured in `benches/broadcast.rs`, addressing one agent is flat at ~37ns from 8 connections to 4096, against a scan that reaches 10µs at the top of that range; below roughly a dozen connections the scan is the cheaper of the two, by about 9ns.
+
+    The connections returned are those that could not take the frame, populated only under `OutboundOverflow::Disconnect`: under `Drop` every recipient may be full at once, and naming them would allocate on the fan-out path for a list nobody reads. It stays sync and releases the read guard before returning, because `deregister` takes the write guard and would deadlock against it on the same thread.
+*   **`async disconnect_overflowed(&self, overflowed: Vec<ConnectionId>)`**: ends those connections in the order `broadcast` reported them. `TransportSession::send_message` calls it for you.
+*   **`overflow(&self) -> Overflow`**: what this manager does when a queue is full.
 
 `Agents` still delivers once to an agent named twice. The variants carrying a list of ids test that list directly rather than hashing it into a set, which the same bench settled: for a `u32` id, building the set costs more than the comparisons it saves at every list length up to 128.
 *   **`take_raw_incoming(&self) -> SessionReceiver<IncomingFrame<ID>>`**: the inbound stream, whose payloads are still encoded bytes for the deserialize bridge to decode.
@@ -201,6 +205,24 @@ Both are plain structs with `Default`, reachable through [`SessionOptions`](#typ
 The defaults below are a starting point rather than a prescription: what suits a 16-player room and what suits a 4000-connection relay are not the same number, and only the application knows which it is. Raising a depth costs memory times connections; lowering it makes the queue drop sooner. `inbound`, `decoded` and `presence` share a default because they used to share one constructor argument, not because they carry comparable traffic: presence is one event per connect, the other two are every frame from every client.
 
 The two byte caps are separate because they bound different mechanisms, and each defaults to what its transport enforced before it was nameable. A build serving both transports that wants one number sets both.
+
+### Struct `Overflow`
+
+```rust
+pub struct Overflow {
+  pub outbound: OutboundOverflow,   // Drop | Disconnect
+  pub inbound: InboundOverflow,     // Drop | Backpressure
+  pub presence: PresenceOverflow,   // Drop | Backpressure
+}
+```
+
+What each queue does when it is full. `Default` is `Drop` on all three, which is what shipped before the policy existed. Reach it through `SessionOptions::overflow(..)`, the one-call builders `disconnect_slow_clients` / `backpressure_inbound` / `backpressure_presence`, or `Overflow::for_workload`. `ConnectionManager::overflow()` reads it back.
+
+Three types rather than one shared enum, because the coherent arms differ and a shared enum would make `presence: Disconnect` typeable. `Disconnect` belongs to `outbound` alone: an inbound queue fills because the controller is behind, which names nothing a particular client did, and a lost presence event is a bookkeeping failure that disconnecting would compound. There is no `block_everywhere` for the same reason in reverse: `broadcast` fans out under the registry's read guard and has no arm that can wait, so `Overflow::block_where_possible()` leaves `outbound` on `Drop` and says so.
+
+`PresenceOverflow::Backpressure` wedges every connection at registration if the session starts before its controller and the queue fills. `InboundOverflow::Backpressure` is TCP backpressure on one client, which is its purpose, but a slow controller applies it to all of them at once.
+
+Both are reachable only because `forward_incoming`, `register`, `deregister` and `broadcast`'s disconnect path became `async`; there is no blocking arm without one.
 
 ### Constants
 

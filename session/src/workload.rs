@@ -11,7 +11,10 @@
 
 use std::time::Duration;
 
-use crate::manager::{Limits, Queues, DEFAULT_CONDITIONER_CAPACITY, DEFAULT_PROBE_SLOTS};
+use crate::manager::{
+  InboundOverflow, Limits, OutboundOverflow, Overflow, PresenceOverflow, Queues, DEFAULT_CONDITIONER_CAPACITY,
+  DEFAULT_PROBE_SLOTS,
+};
 
 /// Bytes buffered below the outbound queue: socket buffers plus the transport's
 /// own writer.
@@ -258,6 +261,29 @@ impl Queues {
       presence: (workload.join_burst * headroom).max(MIN_CONTROLLER_CAPACITY),
       outbound: outbound.max(1),
       conditioner: DEFAULT_CONDITIONER_CAPACITY,
+    }
+  }
+}
+
+impl Overflow {
+  /// What each queue does when it is full, from [`Workload::priority`].
+  ///
+  /// [`LossFree`](Priority::LossFree) waits wherever a producer can wait, and
+  /// ends a connection it cannot deliver to rather than discarding the frame:
+  /// where ops do not supersede each other, a client that missed one holds a
+  /// view the server never authored, and disconnecting says so.
+  ///
+  /// [`LatencyFirst`](Priority::LatencyFirst) drops everywhere. The next frame
+  /// replaces the lost one, and nothing waiting is what keeps a wedged peer
+  /// from becoming everybody's problem.
+  pub fn for_workload(workload: &Workload) -> Self {
+    match workload.priority {
+      Priority::LossFree => Self {
+        outbound: OutboundOverflow::Disconnect,
+        inbound: InboundOverflow::Backpressure,
+        presence: PresenceOverflow::Backpressure,
+      },
+      Priority::LatencyFirst => Self::drop_everywhere(),
     }
   }
 }

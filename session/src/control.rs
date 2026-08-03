@@ -178,7 +178,7 @@ pub(crate) fn handle_inbound<ID: AgentId, C: WireCodec>(
 ///
 /// The caller decides how that reply reaches the socket, because that is the
 /// one part the two transports do differently.
-pub(crate) fn route_inbound<ID: AgentId, C: WireCodec>(
+pub(crate) async fn route_inbound<ID: AgentId, C: WireCodec>(
   frame_bytes: Bytes,
   codec: &C,
   clock: Option<&SessionClock>,
@@ -189,7 +189,7 @@ pub(crate) fn route_inbound<ID: AgentId, C: WireCodec>(
 ) -> Option<Bytes> {
   match handle_inbound(frame_bytes, codec, clock, probe, conn_id, manager) {
     Inbound::Forward(frame_bytes) => {
-      manager.forward_incoming(agent.clone(), frame_bytes);
+      manager.forward_incoming(agent.clone(), frame_bytes).await;
       None
     }
     Inbound::Reply(reply) => Some(reply),
@@ -264,7 +264,7 @@ mod tests {
   async fn a_matching_pong_records_a_sample() {
     let manager = manager();
     let (tx, _rx) = plaza::session::session_channel(4);
-    let conn_id = manager.register(Agent::new_human(7u32), tx);
+    let conn_id = manager.register(Agent::new_human(7u32), tx).await;
 
     let mut probe = ProbeState::default();
     let sent = make_probe(&JsonCodec, &mut probe, Instant::now());
@@ -300,7 +300,7 @@ mod tests {
   async fn a_pong_answering_nothing_records_nothing() {
     let manager = manager();
     let (tx, _rx) = plaza::session::session_channel(4);
-    let conn_id = manager.register(Agent::new_human(7u32), tx);
+    let conn_id = manager.register(Agent::new_human(7u32), tx).await;
     let mut probe = ProbeState::default();
 
     let mut stray = Vec::new();
@@ -346,7 +346,7 @@ mod tests {
     // arrives after its successor went out, so nothing was ever recorded.
     let manager = manager();
     let (tx, _rx) = plaza::session::session_channel(4);
-    let conn_id = manager.register(Agent::new_human(7u32), tx);
+    let conn_id = manager.register(Agent::new_human(7u32), tx).await;
     let mut probe = ProbeState::default();
 
     let mut origins = Vec::new();

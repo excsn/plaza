@@ -191,7 +191,7 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
       .new_codec(),
   );
   let (to_client_tx, to_client_rx) = session_channel::<OutboundFrame>(queues.outbound);
-  let conn_id = manager.register(agent.clone(), to_client_tx);
+  let conn_id = manager.register(agent.clone(), to_client_tx).await;
   let link = manager.link_handle(conn_id).expect("just registered");
   let clock = manager.clock().cloned();
 
@@ -258,7 +258,7 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
           break;
         }
         while let Some(frame) = up.pop_ready(now) {
-          if let Some(reply) = route_inbound(frame, &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent) {
+          if let Some(reply) = route_inbound(frame, &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent).await {
             if let Some(reply) = queue_down!(reply, now) {
               if framed.send(reply).await.is_err() {
                 dead = true;
@@ -279,7 +279,7 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
             let now = Instant::now();
             let profile = link.read().up;
             if profile.is_passthrough() && up.is_empty() {
-              if let Some(reply) = route_inbound(bytes.freeze(), &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent) {
+              if let Some(reply) = route_inbound(bytes.freeze(), &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent).await {
                 if let Some(reply) = queue_down!(reply, now) {
                   if framed.send(reply).await.is_err() {
                     break;
@@ -305,7 +305,7 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
     }
   }
 
-  manager.deregister(conn_id);
+  manager.deregister(conn_id).await;
 }
 
 #[async_trait]

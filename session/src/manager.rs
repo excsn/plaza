@@ -92,6 +92,89 @@ impl Default for Queues {
   }
 }
 
+/// What a full client queue means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OutboundOverflow {
+  /// Discard the frame and keep the connection. Right for a stream of absolute
+  /// state, where the next frame supersedes the lost one.
+  #[default]
+  Drop,
+  /// Drop the connection instead of the frame.
+  ///
+  /// A client that cannot keep up is not going to catch up, and one that has
+  /// missed frames from a stream that is not self-correcting is holding a view
+  /// the server never authored. Ending it is honest where dropping is not.
+  Disconnect,
+}
+
+/// What a full inbound queue means.
+///
+/// There is no `Disconnect` here: the queue fills because the *controller* is
+/// behind, so it names nothing a particular client did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InboundOverflow {
+  /// Discard the batch. **These are ops a client already sent and believes
+  /// arrived**, and nothing upstream will retry them.
+  #[default]
+  Drop,
+  /// Stop reading that client's socket until the controller catches up, which
+  /// hands the problem to TCP and eventually to the client.
+  ///
+  /// One slow controller applies this to every connection at once.
+  Backpressure,
+}
+
+/// What a full presence queue means.
+///
+/// There is no `Disconnect` here either: a lost join is a client the controller
+/// never hears about, so disconnecting it would be answering a bookkeeping
+/// failure by inventing a second one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PresenceOverflow {
+  /// Discard the event. The one drop where a single loss is a correctness
+  /// problem: a lost join leaves the controller with a client it has never
+  /// heard of, a lost leave leaves it holding a seat forever.
+  #[default]
+  Drop,
+  /// Hold the connection at registration until the controller catches up.
+  ///
+  /// **A session whose controller has not started yet wedges every connection
+  /// once the queue fills.** That is the case [`Drop`](Self::Drop) exists for.
+  Backpressure,
+}
+
+/// What each of a session's queues does when it is full.
+///
+/// The three are separate types rather than one shared enum because the arms
+/// that make sense differ: only a client can be disconnected, and only a
+/// producer that can wait can apply backpressure. There is deliberately no
+/// `block_everywhere`, because [`broadcast`](ConnectionManager::broadcast)
+/// fans out under a read guard and has no arm that waits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Overflow {
+  pub outbound: OutboundOverflow,
+  pub inbound: InboundOverflow,
+  pub presence: PresenceOverflow,
+}
+
+impl Overflow {
+  /// What ships: nothing waits, and a wedged peer costs frames rather than
+  /// stalling the server.
+  pub fn drop_everywhere() -> Self {
+    Self::default()
+  }
+
+  /// Waits wherever a producer can wait, which is everywhere except the
+  /// outbound fan-out.
+  pub fn block_where_possible() -> Self {
+    Self {
+      outbound: OutboundOverflow::Drop,
+      inbound: InboundOverflow::Backpressure,
+      presence: PresenceOverflow::Backpressure,
+    }
+  }
+}
+
 /// Caps a session enforces on one connection.
 ///
 /// The two byte caps are separate because they bound different mechanisms and
@@ -139,6 +222,8 @@ pub struct SessionOptions {
   pub queues: Queues,
   /// What this session refuses per connection.
   pub limits: Limits,
+  /// What each queue does when it is full.
+  pub overflow: Overflow,
 }
 
 impl Default for SessionOptions {
@@ -148,6 +233,7 @@ impl Default for SessionOptions {
       clock: None,
       queues: Queues::default(),
       limits: Limits::default(),
+      overflow: Overflow::default(),
     }
   }
 }
@@ -179,6 +265,7 @@ impl SessionOptions {
   pub fn workload(mut self, workload: &crate::workload::Workload) -> Self {
     self.queues = Queues::for_workload(workload);
     self.limits = Limits::for_workload(workload);
+    self.overflow = Overflow::for_workload(workload);
     self
   }
 
@@ -191,6 +278,32 @@ impl SessionOptions {
   /// Replaces every limit at once.
   pub fn limits(mut self, limits: Limits) -> Self {
     self.limits = limits;
+    self
+  }
+
+  /// Replaces every overflow policy at once.
+  pub fn overflow(mut self, overflow: Overflow) -> Self {
+    self.overflow = overflow;
+    self
+  }
+
+  /// Ends a connection whose outbound queue is full instead of discarding the
+  /// frame.
+  pub fn disconnect_slow_clients(mut self) -> Self {
+    self.overflow.outbound = OutboundOverflow::Disconnect;
+    self
+  }
+
+  /// Stops reading a client's socket while the controller is behind, rather
+  /// than discarding ops it already sent.
+  pub fn backpressure_inbound(mut self) -> Self {
+    self.overflow.inbound = InboundOverflow::Backpressure;
+    self
+  }
+
+  /// Holds a connection at registration rather than losing a join or a leave.
+  pub fn backpressure_presence(mut self) -> Self {
+    self.overflow.presence = PresenceOverflow::Backpressure;
     self
   }
 
@@ -250,6 +363,7 @@ impl Debug for SessionOptions {
       .field("clock", &self.clock.is_some())
       .field("queues", &self.queues)
       .field("limits", &self.limits)
+      .field("overflow", &self.overflow)
       .finish()
   }
 }
@@ -524,6 +638,7 @@ pub struct ConnectionManager<ID: AgentId> {
   clock: Option<SessionClock>,
   queues: Queues,
   limits: Limits,
+  overflow: Overflow,
 }
 
 impl<ID: AgentId> Debug for ConnectionManager<ID> {
@@ -599,7 +714,13 @@ impl<ID: AgentId> ConnectionManager<ID> {
       clock: options.clock.clone(),
       queues: options.queues.clone(),
       limits: options.limits.clone(),
+      overflow: options.overflow,
     }
+  }
+
+  /// What this manager does when a queue is full.
+  pub fn overflow(&self) -> Overflow {
+    self.overflow
   }
 
   /// The queue depths this manager was built with. A transport adapter reads
@@ -624,7 +745,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
   /// Registers a connected client and announces the join.
   ///
   /// `to_client_tx` is the transport's outbound queue for this connection.
-  pub fn register(&self, agent: Agent<ID>, to_client_tx: SessionSender<OutboundFrame>) -> ConnectionId {
+  pub async fn register(&self, agent: Agent<ID>, to_client_tx: SessionSender<OutboundFrame>) -> ConnectionId {
     let conn_id = self.next_conn_id.fetch_add(1, Ordering::Relaxed);
     // Ahead of everything else, so a client knows what it is talking to before
     // the first op arrives. The handshake is symmetric: both ends say what they
@@ -638,27 +759,42 @@ impl<ID: AgentId> ConnectionManager<ID> {
       .insert(conn_id, ClientHandle::new(agent.clone(), to_client_tx));
     debug!(transport = self.transport, conn_id, agent = %agent, "Connection registered.");
 
-    // try_send, not send: this is a sync path on a connection task, and a
-    // controller that has not started yet must not stall the accept loop.
-    if self.presence_tx.try_send(PresenceEvent::Joined(agent)).is_err() {
-      self.stats.record_presence_dropped();
+    if !self.announce(PresenceEvent::Joined(agent)).await {
       warn!(
         transport = self.transport,
-        conn_id, "Join notification dropped: no controller listening, or its queue is full."
+        conn_id,
+        depth = self.queues.presence,
+        "Join notification dropped: no controller listening, or its queue is full. \
+         Raise `presence_capacity` or set `backpressure_presence`."
       );
     }
     conn_id
   }
 
+  /// Publishes one presence event, returning whether it was taken.
+  ///
+  /// Ordering is the reason this is one channel and one path: a client that
+  /// drops and immediately reconnects must not have its departure applied after
+  /// its return, so a dropped event is dropped here rather than retried later.
+  async fn announce(&self, event: PresenceEvent<ID>) -> bool {
+    let taken = match self.overflow.presence {
+      PresenceOverflow::Drop => self.presence_tx.try_send(event).is_ok(),
+      PresenceOverflow::Backpressure => self.presence_tx.send(event).await.is_ok(),
+    };
+    if !taken {
+      self.stats.record_presence_dropped();
+    }
+    taken
+  }
+
   /// Removes a connection and announces the departure.
-  pub fn deregister(&self, conn_id: ConnectionId) {
+  pub async fn deregister(&self, conn_id: ConnectionId) {
     let handle = self.connections.write().remove(conn_id);
     match handle {
       Some(handle) => {
         debug!(transport = self.transport, conn_id, agent = %handle.agent, "Connection deregistered.");
         if let Some(id) = handle.agent.id_cloned() {
-          if self.presence_tx.try_send(PresenceEvent::Left(id)).is_err() {
-            self.stats.record_presence_dropped();
+          if !self.announce(PresenceEvent::Left(id)).await {
             warn!(transport = self.transport, conn_id, "Leave notification dropped.");
           }
         }
@@ -674,48 +810,87 @@ impl<ID: AgentId> ConnectionManager<ID> {
   }
 
   /// Publishes one client frame toward the controller, still encoded.
-  pub fn forward_incoming(&self, from: Agent<ID>, frame: Bytes) {
-    // Dropping under load is the right failure here: blocking a connection task
-    // on a backed-up controller would stall that client's socket reads.
-    if self
-      .raw_incoming_tx
-      .try_send(IncomingFrame { from, frame })
-      .is_err()
-    {
-      self.stats.record_inbound(true);
+  pub async fn forward_incoming(&self, from: Agent<ID>, frame: Bytes) {
+    let incoming = IncomingFrame { from, frame };
+    let taken = match self.overflow.inbound {
+      // Not reading this client's socket for as long as the controller is
+      // behind, which is backpressure the client eventually feels.
+      InboundOverflow::Backpressure => self.raw_incoming_tx.send(incoming).await.is_ok(),
+      InboundOverflow::Drop => self.raw_incoming_tx.try_send(incoming).is_ok(),
+    };
+    self.stats.record_inbound(!taken);
+    if !taken {
       warn!(
         transport = self.transport,
-        "Inbound ops dropped: controller queue full or closed."
+        depth = self.queues.inbound,
+        "Inbound ops dropped: controller queue full or closed. \
+         Raise `inbound_capacity` or set `backpressure_inbound`."
       );
-    } else {
-      self.stats.record_inbound(false);
     }
   }
 
   /// Queues an already-encoded frame for every connection matching `target`.
-  pub fn broadcast(&self, target: &MessageTarget<ID>, frame: OutboundFrame) -> Result<(), SessionLayerError> {
+  ///
+  /// Returns the connections that could not take it, which is populated only
+  /// under [`OutboundOverflow::Disconnect`]: under `Drop` every recipient may
+  /// be full at once, and naming them would allocate on the fan-out path for a
+  /// list nobody reads. Ending them is [`disconnect_overflowed`] rather than
+  /// this, because `deregister` announces a departure and may wait, and this
+  /// runs under the registry's read guard.
+  ///
+  /// [`disconnect_overflowed`]: Self::disconnect_overflowed
+  pub fn broadcast(
+    &self,
+    target: &MessageTarget<ID>,
+    frame: OutboundFrame,
+  ) -> Result<Vec<ConnectionId>, SessionLayerError> {
+    let disconnecting = self.overflow.outbound == OutboundOverflow::Disconnect;
     let connections = self.connections.read();
     let mut full: Option<ConnectionId> = None;
+    let mut overflowed = Vec::new();
 
     let (mut sent, mut dropped) = (0u64, 0u64);
     connections.for_target(target, |conn_id, handle| {
-      // try_send, not send: a wedged client must never stall the controller.
+      // try_send, not send: a wedged client must never stall the controller,
+      // and this holds a read guard that an await would have to cross.
       if handle.to_client_tx.try_send(frame.clone()).is_err() {
         dropped += 1;
         full.get_or_insert(conn_id);
+        if disconnecting {
+          overflowed.push(conn_id);
+        }
       } else {
         sent += 1;
       }
     });
+    drop(connections);
     self.stats.record_outbound(sent, dropped);
 
     match full {
-      Some(conn_id) => Err(SessionLayerError::ClientSendFailed {
+      Some(conn_id) if !disconnecting => Err(SessionLayerError::ClientSendFailed {
         transport: self.transport,
         conn_id,
         reason: "client queue full or closed",
       }),
-      None => Ok(()),
+      _ => Ok(overflowed),
+    }
+  }
+
+  /// Ends the connections [`broadcast`](Self::broadcast) reported, in the order
+  /// it reported them.
+  ///
+  /// Separate from the fan-out because `deregister` takes the registry's write
+  /// guard, which the fan-out's read guard would deadlock against on the same
+  /// thread, and because announcing a departure may wait.
+  pub async fn disconnect_overflowed(&self, overflowed: Vec<ConnectionId>) {
+    for conn_id in overflowed {
+      warn!(
+        transport = self.transport,
+        conn_id,
+        depth = self.queues.outbound,
+        "Disconnecting a client whose outbound queue was full."
+      );
+      self.deregister(conn_id).await;
     }
   }
 
@@ -1202,7 +1377,8 @@ where
     msg: SessionMessage<Op, ID>,
   ) -> Result<(), PlazaError<ID>> {
     let encoded = self.encode_message(msg)?;
-    self.manager.broadcast(&target, encoded)?;
+    let overflowed = self.manager.broadcast(&target, encoded)?;
+    self.manager.disconnect_overflowed(overflowed).await;
     Ok(())
   }
 
@@ -1299,5 +1475,88 @@ mod tests {
       assert_eq!(copy.as_ptr(), frame.as_ptr(), "a recipient got its own copy of the frame");
       assert_eq!(copy.len(), frame.len());
     }
+  }
+
+  fn manager_with(overflow: Overflow) -> ConnectionManager<u32> {
+    let options = SessionOptions {
+      queues: Queues {
+        outbound: 1,
+        presence: 1,
+        ..Queues::default()
+      },
+      overflow,
+      ..SessionOptions::default()
+    };
+    ConnectionManager::with_options("test", None, &options)
+  }
+
+  #[tokio::test]
+  async fn a_full_client_queue_is_named_under_disconnect_and_only_counted_under_drop() {
+    for (overflow, expected) in [
+      (Overflow::default(), 0),
+      (
+        Overflow {
+          outbound: OutboundOverflow::Disconnect,
+          ..Overflow::default()
+        },
+        1,
+      ),
+    ] {
+      let manager = manager_with(overflow);
+      let (tx, _rx) = session_channel(1);
+      let conn_id = manager.register(Agent::new_human(1u32), tx).await;
+
+      let frame: OutboundFrame = Bytes::from_static(b"x");
+      // The first fills the queue of one, the second has nowhere to go.
+      let _ = manager.broadcast(&MessageTarget::All, frame.clone());
+      let outcome = manager.broadcast(&MessageTarget::All, frame);
+
+      let named = outcome.map(|full| full.len()).unwrap_or(0);
+      assert_eq!(named, expected, "{overflow:?}");
+      if expected == 1 {
+        manager.disconnect_overflowed(vec![conn_id]).await;
+        assert_eq!(manager.connection_count(), 0, "the wedged client is gone");
+      } else {
+        assert_eq!(manager.connection_count(), 1, "dropping keeps the connection");
+      }
+    }
+  }
+
+  #[tokio::test]
+  async fn dropping_a_presence_event_is_counted_rather_than_waited_on() {
+    let manager = manager_with(Overflow::default());
+    // Depth one, and nothing takes the stream: the first join fills it.
+    manager.register(Agent::new_human(1u32), session_channel(4).0).await;
+    manager.register(Agent::new_human(2u32), session_channel(4).0).await;
+
+    assert_eq!(manager.stats().presence_dropped(), 1);
+    assert_eq!(manager.connection_count(), 2, "a lost announcement is not a lost connection");
+  }
+
+  #[tokio::test]
+  async fn backpressure_waits_where_dropping_would_not() {
+    let manager = Arc::new(manager_with(Overflow {
+      presence: PresenceOverflow::Backpressure,
+      ..Overflow::default()
+    }));
+    let mut presence = manager.take_presence();
+
+    manager.register(Agent::new_human(1u32), session_channel(4).0).await;
+
+    let waiting = {
+      let manager = manager.clone();
+      tokio::spawn(async move { manager.register(Agent::new_human(2u32), session_channel(4).0).await })
+    };
+    // The queue holds one, so the second registration cannot finish until the
+    // first event is taken. Long enough that the task has certainly run.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!waiting.is_finished(), "the second join is waiting on a full queue");
+
+    presence.recv().await.expect("the first join");
+    tokio::time::timeout(Duration::from_secs(1), waiting)
+      .await
+      .expect("draining one event releases the waiter")
+      .expect("the registration task");
+    assert_eq!(manager.stats().presence_dropped(), 0, "nothing was lost");
   }
 }

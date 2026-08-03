@@ -258,7 +258,7 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
     .max_continuation_size(limits.max_message_bytes);
 
   let (to_client_tx, to_client_rx) = session_channel::<OutboundFrame>(queues.outbound);
-  let conn_id = manager.register(agent.clone(), to_client_tx);
+  let conn_id = manager.register(agent.clone(), to_client_tx).await;
   // Frames arrive already encoded, so a broadcast encodes once and every
   // recipient's task just writes bytes.
   let send_as_text = codec.is_text();
@@ -353,7 +353,7 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
           break None;
         }
         while let Some(frame) = up.pop_ready(now) {
-          if let Some(reply) = route_inbound(frame, &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent) {
+          if let Some(reply) = route_inbound(frame, &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent).await {
             if let Some(reply) = queue_down!(reply, now) {
               if !write_frame(&mut ws_session, reply, send_as_text).await {
                 dead = true;
@@ -399,7 +399,7 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
           let now = tokio::time::Instant::now();
           let profile: LinkProfile = *link.read();
           if profile.up.is_passthrough() && up.is_empty() {
-            if let Some(reply) = route_inbound(bytes, &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent) {
+            if let Some(reply) = route_inbound(bytes, &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent).await {
               if let Some(reply) = queue_down!(reply, now) {
                 if !write_frame(&mut ws_session, reply, send_as_text).await {
                   break None;
@@ -416,7 +416,7 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
     }
   };
 
-  manager.deregister(conn_id);
+  manager.deregister(conn_id).await;
   let _ = ws_session.close(close_reason).await;
 }
 
