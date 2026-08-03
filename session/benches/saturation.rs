@@ -1,0 +1,296 @@
+//! What a queue absorbs before it starts dropping.
+//!
+//! Depth is invisible to the other benches in this crate: they measure
+//! uncontended paths, and a `try_send` into a queue of 64 costs what it costs
+//! into a queue of 4096. Depth only becomes a variable once a producer outruns
+//! its consumer, so every scenario here stalls one consumer and counts what
+//! got through.
+//!
+//! Each scenario sweeps one depth and reports what was absorbed. The number
+//! that matters is the **slope**: one more slot should absorb one more frame,
+//! and a slope that is not 1 means the knob is not the binding term. The
+//! intercept is everything buffering underneath that plaza does not own, which
+//! is mostly the kernel's socket buffers, and is the reason a configured depth
+//! is not the depth a client experiences.
+//!
+//! `cargo bench -p plaza_session --bench saturation -- <scenario>`
+
+#![cfg(feature = "tcp")]
+
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
+use futures_util::SinkExt;
+use plaza::agent::Agent;
+use plaza::session::{MessageTarget, Session, SessionMessage};
+use plaza_session::codec::{JsonCodec, WireCodec};
+use plaza_session::{DirectionProfile, LinkProfile, SessionOptions, TcpPlazaSession};
+use plaza_wire::frame;
+use serde::{Deserialize, Serialize};
+use tokio::net::TcpStream;
+use tokio_util::codec::{Framed, LengthDelimitedCodec};
+
+type Seat = u32;
+
+/// Large enough that a socket buffer holds tens of frames rather than
+/// thousands, so the intercept stays in the same order as the depths swept.
+const FRAME_PAYLOAD: usize = 4096;
+
+/// Enough to overrun every depth swept, bounding a scenario that never drops.
+const BURST: u64 = 20_000;
+
+/// How long a scenario waits for the queues to settle before reading counters.
+const SETTLE: Duration = Duration::from_millis(400);
+
+const DEPTHS: [usize; 5] = [8, 16, 32, 64, 128];
+
+/// The outbound queue is measured across a socket, so the kernel's send buffer
+/// and the framed writer sit in the intercept and neither is stable run to run.
+/// These are an order of magnitude above that swing rather than inside it.
+const OUTBOUND_DEPTHS: [usize; 5] = [64, 128, 256, 512, 1024];
+
+/// Repeats behind the median for the one scenario whose reading moves.
+const REPEATS: usize = 5;
+
+/// How often the partial-drain scenario takes one message off the controller's
+/// queue: slower than arrival, so both queues still fill.
+const DRAIN_INTERVAL: Duration = Duration::from_millis(2);
+
+fn median(mut readings: Vec<u64>) -> u64 {
+  readings.sort_unstable();
+  readings[readings.len() / 2]
+}
+
+/// A `String` rather than bytes: JSON writes it one character per byte, so a
+/// frame on the wire is the size named above instead of the four-fold
+/// expansion a `Vec<u8>` takes as an array of numbers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Op(String);
+
+fn op() -> Op {
+  Op("x".repeat(FRAME_PAYLOAD))
+}
+
+fn ops_frame() -> Vec<u8> {
+  let mut buf = Vec::new();
+  frame::begin(frame::Kind::Ops, &mut buf);
+  JsonCodec.encode_into(&vec![op()], &mut buf).expect("op encodes");
+  buf
+}
+
+async fn bind(options: SessionOptions) -> Arc<TcpPlazaSession<Op, Seat>> {
+  let next_seat = Arc::new(AtomicU32::new(1));
+  let agent_factory: plaza_session::tcp::AgentFactory<Seat> = Arc::new(move |_peer| {
+    Agent::new_human(next_seat.fetch_add(1, Ordering::Relaxed))
+  });
+  TcpPlazaSession::bind_with_options("127.0.0.1:0", agent_factory, JsonCodec, options)
+    .await
+    .expect("bind on an ephemeral port")
+}
+
+async fn connected(session: &TcpPlazaSession<Op, Seat>, count: usize) {
+  for _ in 0..200 {
+    if session.manager().connection_count() >= count {
+      return;
+    }
+    tokio::time::sleep(Duration::from_millis(10)).await;
+  }
+  panic!("only {} of {count} connections registered", session.manager().connection_count());
+}
+
+/// Broadcasts until the burst is spent, ignoring the error a full queue raises:
+/// the counters are what this reads, not the return.
+async fn flood(session: &TcpPlazaSession<Op, Seat>) {
+  for _ in 0..BURST {
+    let _ = session
+      .send_message(MessageTarget::All, SessionMessage::system(vec![op()]))
+      .await;
+  }
+}
+
+/// One client that never reads its socket, against a server broadcasting at it.
+///
+/// The connection task blocks writing to a full socket, stops draining the
+/// outbound queue, and the queue fills behind it.
+async fn outbound_absorption(depth: usize) -> u64 {
+  let session = bind(SessionOptions::default().outbound_capacity(depth)).await;
+  let addr = session.local_addr();
+
+  let _silent = TcpStream::connect(addr).await.expect("connect");
+  connected(&session, 1).await;
+
+  flood(&session).await;
+  tokio::time::sleep(SETTLE).await;
+  session.manager().stats().outbound()
+}
+
+/// A client sending as fast as it can, against a controller that never
+/// subscribes.
+///
+/// The bridge drains the raw queue into the decoded one and blocks there, so
+/// what is absorbed is both depths together. Sweeping either one says whether
+/// they are separate terms or one.
+async fn inbound_absorption(inbound: usize, decoded: usize) -> u64 {
+  inbound_absorption_drained(inbound, decoded, false).await
+}
+
+/// As above, with the controller taking one message every [`DRAIN_INTERVAL`].
+///
+/// The bridge decodes between the two queues, so a consumer that moves at all
+/// is the case where they could stop behaving as one term.
+async fn inbound_absorption_drained(inbound: usize, decoded: usize, drain: bool) -> u64 {
+  let session = bind(
+    SessionOptions::default()
+      .inbound_capacity(inbound)
+      .decoded_capacity(decoded),
+  )
+  .await;
+  let addr = session.local_addr();
+
+  let drainer = drain.then(|| {
+    let incoming = session.subscribe_to_incoming_messages();
+    tokio::spawn(async move {
+      while incoming.recv().await.is_ok() {
+        tokio::time::sleep(DRAIN_INTERVAL).await;
+      }
+    })
+  });
+
+  let stream = TcpStream::connect(addr).await.expect("connect");
+  let mut client = Framed::new(stream, LengthDelimitedCodec::new());
+  connected(&session, 1).await;
+
+  let frame_bytes = ops_frame();
+  for _ in 0..BURST {
+    if client.send(frame_bytes.clone().into()).await.is_err() {
+      break;
+    }
+  }
+  tokio::time::sleep(SETTLE).await;
+  if let Some(drainer) = drainer {
+    drainer.abort();
+  }
+  // `inbound` counts every batch offered, `outbound` only the accepted ones.
+  let stats = session.manager().stats();
+  stats.inbound() - stats.inbound_dropped()
+}
+
+/// Connections arriving faster than a controller that never subscribes.
+async fn presence_absorption(depth: usize) -> u64 {
+  let session = bind(SessionOptions::default().presence_capacity(depth)).await;
+  let addr = session.local_addr();
+
+  let arriving = depth as u64 * 4;
+  let mut held = Vec::with_capacity(arriving as usize);
+  for _ in 0..arriving {
+    held.push(TcpStream::connect(addr).await.expect("connect"));
+  }
+  connected(&session, arriving as usize).await;
+  tokio::time::sleep(SETTLE).await;
+
+  arriving - session.manager().stats().presence_dropped()
+}
+
+/// Frames held by a delayed link, against an outbound queue deep enough that
+/// the conditioner is what fills.
+async fn conditioner_absorption(depth: usize) -> u64 {
+  let session = bind(
+    SessionOptions::default()
+      .conditioner_capacity(depth)
+      .outbound_capacity(BURST as usize),
+  )
+  .await;
+  let addr = session.local_addr();
+
+  let _client = TcpStream::connect(addr).await.expect("connect");
+  connected(&session, 1).await;
+  session.manager().set_all_link_profiles(LinkProfile::symmetric(DirectionProfile::delayed(
+    Duration::from_secs(30),
+  )));
+
+  flood(&session).await;
+  tokio::time::sleep(SETTLE).await;
+
+  let dropped: u64 = (1..=1).map(|conn| session.manager().link_dropped(conn)).sum();
+  BURST - dropped
+}
+
+/// Absorbed against depth, plus the line through the ends of the sweep.
+fn report(title: &str, unit: &str, rows: &[(usize, u64)]) {
+  println!("\n## {title}\n");
+  println!("| depth | {unit} |");
+  println!("|---|---|");
+  for (depth, absorbed) in rows {
+    println!("| {depth} | {absorbed} |");
+  }
+  let (first_depth, first) = rows[0];
+  let (last_depth, last) = rows[rows.len() - 1];
+  let slope = (last as f64 - first as f64) / (last_depth as f64 - first_depth as f64);
+  let intercept = first as f64 - slope * first_depth as f64;
+  println!("\nslope {slope:.2} per slot, intercept {intercept:.0}");
+}
+
+#[tokio::main(flavor = "multi_thread")]
+async fn main() {
+  let wanted: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect();
+  let run = |name: &str| wanted.is_empty() || wanted.iter().any(|w| w == name);
+
+  if run("outbound") {
+    let mut rows = Vec::new();
+    for depth in OUTBOUND_DEPTHS {
+      let mut readings = Vec::with_capacity(REPEATS);
+      for _ in 0..REPEATS {
+        readings.push(outbound_absorption(depth).await);
+      }
+      rows.push((depth, median(readings)));
+    }
+    report(
+      &format!("outbound, median of {REPEATS}"),
+      "frames accepted",
+      &rows,
+    );
+  }
+
+  if run("inbound") {
+    let mut rows = Vec::new();
+    for depth in DEPTHS {
+      rows.push((depth, inbound_absorption(depth, DEPTHS[0]).await));
+    }
+    report("inbound, decoded held at 8", "frames accepted", &rows);
+
+    let mut rows = Vec::new();
+    for depth in DEPTHS {
+      rows.push((depth, inbound_absorption(DEPTHS[0], depth).await));
+    }
+    report("decoded, inbound held at 8", "frames accepted", &rows);
+
+    let mut rows = Vec::new();
+    for depth in DEPTHS {
+      rows.push((depth, inbound_absorption_drained(depth, DEPTHS[0], true).await));
+    }
+    report("inbound under a draining controller", "frames accepted", &rows);
+
+    let mut rows = Vec::new();
+    for depth in DEPTHS {
+      rows.push((depth, inbound_absorption_drained(DEPTHS[0], depth, true).await));
+    }
+    report("decoded under a draining controller", "frames accepted", &rows);
+  }
+
+  if run("presence") {
+    let mut rows = Vec::new();
+    for depth in DEPTHS {
+      rows.push((depth, presence_absorption(depth).await));
+    }
+    report("presence", "joins accepted", &rows);
+  }
+
+  if run("conditioner") {
+    let mut rows = Vec::new();
+    for depth in DEPTHS {
+      rows.push((depth, conditioner_absorption(depth).await));
+    }
+    report("conditioner", "frames accepted", &rows);
+  }
+}
