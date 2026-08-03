@@ -7,7 +7,7 @@ publish = false
 [dependencies]
 plaza = { workspace = true }
 plaza_lobby = { workspace = true }
-plaza_session = { workspace = true, features = ["actix_ws"] }
+plaza_session = { workspace = true, features = ["actix_ws", "json"] }
 plaza_wire = { workspace = true }
 
 actix-web = "^4"
