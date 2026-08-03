@@ -214,11 +214,17 @@ impl Workload {
     Self::default()
   }
 
-  /// One tick of the application's own work.
-  fn tick_cost(&self) -> Duration {
-    self
-      .tick_budget
-      .unwrap_or_else(|| Duration::from_secs_f64(1.0 / self.tick_rate.max(1) as f64))
+  /// Ticks' worth of arrivals that accumulate while one tick is worked.
+  ///
+  /// `None` is one by definition, and is answered without building a
+  /// `Duration` from it: `1/60` of a second rounds up to 16666667ns, which
+  /// multiplied back by the rate exceeds 1.0 and takes `ceil` to 2, doubling
+  /// the backlog on every workload that leaves this unset.
+  fn backlog_ticks(&self) -> usize {
+    match self.tick_budget {
+      None => 1,
+      Some(budget) => events(self.tick_rate, budget),
+    }
   }
 
   /// Frames the host already buffers before the outbound queue is what fills.
@@ -252,7 +258,7 @@ impl Queues {
     }
 
     let arrivals_per_tick = workload.peak_players * workload.ops_per_player_per_tick as usize;
-    let backlog = events(workload.tick_rate, workload.tick_cost()) * arrivals_per_tick;
+    let backlog = workload.backlog_ticks() * arrivals_per_tick;
     let pipe = (arrivals_per_tick + backlog) * headroom;
 
     Self {
@@ -426,6 +432,31 @@ mod tests {
     let capped = Queues::for_workload(&hungry).outbound;
 
     assert!(capped < uncapped, "{capped} should be under {uncapped}");
+  }
+
+  #[test]
+  fn an_unset_tick_budget_is_one_tick_and_not_two() {
+    // `Duration::from_secs_f64(1.0/60.0)` rounds up, and multiplying it back by
+    // the rate lands fractionally over 1.0, which `ceil` reads as two ticks.
+    // That doubled the backlog on every preset that leaves `tick_budget` unset.
+    for tick_rate in [1u32, 4, 10, 20, 30, 60, 128] {
+      let workload = Workload {
+        tick_rate,
+        tick_budget: None,
+        ..Workload::default()
+      };
+      assert_eq!(workload.backlog_ticks(), 1, "at {tick_rate} Hz");
+    }
+  }
+
+  #[test]
+  fn an_explicit_tick_budget_is_read_in_ticks() {
+    let workload = Workload {
+      tick_rate: 60,
+      tick_budget: Some(Duration::from_millis(50)),
+      ..Workload::default()
+    };
+    assert_eq!(workload.backlog_ticks(), 3, "50ms of a 60Hz tick is three of them");
   }
 
   #[test]

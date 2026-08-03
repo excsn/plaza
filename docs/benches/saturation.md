@@ -115,3 +115,32 @@ A 30s link delay, outbound deep enough that the conditioner is what fills.
 | 128 | 128 |
 
 slope 1.00, intercept 0.
+
+## does a parameter's derived depth sit on the knee
+
+The sweeps above prove the depth knob is the binding term. This asks the separate question the formulas need: build the load from a `Workload` rather than from a depth, run it at the derived depth and at half of it, and see whether the derivation lands on the knee.
+
+| parameter | value | derived | drops at derived | drops at half |
+|---|---|---|---|---|
+| join_burst | 8 | 16 | 0 | 0 |
+| join_burst | 32 | 64 | 0 | 0 |
+| join_burst | 128 | 256 | 0 | 0 |
+| join_burst | 512 | 1024 | 0 | 0 |
+| peak_players x ops | 8 x 1 | 24 | 0 | 0 |
+| peak_players x ops | 8 x 2 | 48 | 0 | 0 |
+| peak_players x ops | 32 x 1 | 96 | 0 | 0 |
+| peak_players x ops | 32 x 2 | 192 | 0 | 0 |
+| peak_players x ops | 128 x 1 | 384 | 0 | 0 |
+| peak_players x ops | 128 x 2 | 768 | 0 | 0 |
+| stall_tolerance | 250ms | 4 | 0 | 0 |
+| stall_tolerance | 500ms | 17 | 0 | 0 |
+| stall_tolerance | 1s | 47 | 0 | 23 |
+| stall_tolerance | 2s | 107 | 0 | 53 |
+
+**`stall_tolerance` is confirmed, exactly.** At 1s the load is 60 frames, and zero drops at depth 47 against 23 at depth 23 puts the socket at `60 - 23 - 23 = 14` frames; at 2s, `120 - 53 - 53 = 14` again. That is the same 14 the frame-size sweep measured from unrelated arithmetic, so `outbound = tick_rate * stall - socket_frames` predicts the knee to the frame.
+
+Its first two rows carry no knee for reasons the numbers give: at 250ms the formula asks for 2 slots and `MIN_OUTBOUND_CAPACITY` overrides it, so the floor is what is being measured. 500ms is unexplained: 30 frames against 13 socket and 8 queue should have dropped, and did not.
+
+**`join_burst` and `peak_players x ops` are untested rather than confirmed.** Halving a depth that carries a 2x `LossFree` headroom lands exactly on the requirement, and the controller-facing depths also carry `MIN_CONTROLLER_CAPACITY` on top, so the generated load never approaches either point. Finding their knees needs a third point below the requirement, not a second at it.
+
+The sweep did find a bug rather than confirming one: `128 x 2` derived 768 where the formula says 512, because an unset `tick_budget` became a `Duration` that rounds up and read as two ticks of backlog instead of one. Six of the seven presets left it unset. Fixed, with the derived depths above taken before the fix.

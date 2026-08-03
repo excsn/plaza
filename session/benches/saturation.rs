@@ -251,6 +251,124 @@ async fn conditioner_absorption(depth: usize) -> u64 {
   BURST - dropped
 }
 
+/// Whether a workload parameter predicts the depth its own load needs.
+///
+/// The sweeps above prove the depth knob is the binding term. These prove the
+/// formulas that compute a depth from a [`Workload`] are worth the parameters
+/// they read: the load is built from the workload rather than from the depth,
+/// and run at the derived depth and at a fraction of it. A parameter whose
+/// derived depth does not sit on the knee is a parameter that does not earn
+/// its place.
+///
+/// Returns drops at full derivation and at half of it. The first should be
+/// zero and the second should not.
+async fn presence_formula(join_burst: usize) -> (u64, u64) {
+  let workload = Workload {
+    join_burst,
+    ..Workload::lobby()
+  };
+  let derived = Queues::for_workload(&workload).presence;
+  let mut readings = Vec::new();
+
+  for depth in [derived, (derived / 2).max(1)] {
+    let session = bind(
+      SessionOptions::default()
+        .presence_capacity(depth)
+        // Dropping, so the shortfall is counted rather than waited on.
+        .overflow(Overflow::drop_everywhere()),
+    )
+    .await;
+    let addr = session.local_addr();
+
+    let mut held = Vec::with_capacity(join_burst);
+    for _ in 0..join_burst {
+      held.push(TcpStream::connect(addr).await.expect("connect"));
+    }
+    connected(&session, join_burst).await;
+    tokio::time::sleep(SETTLE).await;
+    readings.push(session.manager().stats().presence_dropped());
+  }
+  (readings[0], readings[1])
+}
+
+/// The same for the inbound pipe, whose depth is one tick of arrivals plus what
+/// accumulates while the controller works.
+async fn inbound_formula(peak_players: usize, ops_per_player_per_tick: u32) -> (u64, u64) {
+  let workload = Workload {
+    peak_players,
+    ops_per_player_per_tick,
+    ..Workload::action()
+  };
+  let queues = Queues::for_workload(&workload);
+  let derived = queues.inbound + queues.decoded;
+  let arrivals = peak_players * ops_per_player_per_tick as usize;
+  let mut readings = Vec::new();
+
+  for total in [derived, (derived / 2).max(1)] {
+    let session = bind(
+      SessionOptions::default()
+        .inbound_capacity(total.div_ceil(2))
+        .decoded_capacity(total.div_ceil(2)),
+    )
+    .await;
+    let addr = session.local_addr();
+
+    let mut clients = Vec::with_capacity(peak_players);
+    for _ in 0..peak_players {
+      clients.push(Framed::new(
+        TcpStream::connect(addr).await.expect("connect"),
+        LengthDelimitedCodec::new(),
+      ));
+    }
+    connected(&session, peak_players).await;
+
+    // Exactly one tick's arrivals, which is what the depth is derived to hold.
+    let frame_bytes = ops_frame();
+    for _ in 0..ops_per_player_per_tick {
+      for client in clients.iter_mut() {
+        let _ = client.send(frame_bytes.clone().into()).await;
+      }
+    }
+    tokio::time::sleep(SETTLE).await;
+    readings.push(session.manager().stats().inbound_dropped());
+    let _ = arrivals;
+  }
+  (readings[0], readings[1])
+}
+
+/// The same for the outbound queue, whose depth is what a stall needs beyond
+/// what the socket already holds.
+async fn outbound_formula(tick_rate: u32, stall: Duration, payload: usize) -> (u64, u64) {
+  let workload = Workload {
+    tick_rate,
+    stall_tolerance: stall,
+    max_payload: payload,
+    memory_budget: None,
+    ..Workload::horde()
+  };
+  let derived = Queues::for_workload(&workload).outbound;
+  // What a client that stops reading for `stall` is sent in that time.
+  let frames = (tick_rate as f64 * stall.as_secs_f64()).ceil() as u64;
+  let mut readings = Vec::new();
+
+  for depth in [derived, (derived / 2).max(1)] {
+    let session = bind(
+      SessionOptions::default()
+        .outbound_capacity(depth)
+        .overflow(Overflow::drop_everywhere()),
+    )
+    .await;
+    let addr = session.local_addr();
+    let _silent = TcpStream::connect(addr).await.expect("connect");
+    connected(&session, 1).await;
+
+    flood(&session, payload, frames).await;
+    tokio::time::sleep(SETTLE).await;
+    readings.push(session.manager().stats().outbound_dropped());
+  }
+  (readings[0], readings[1])
+}
+
 /// Resident kibibytes for this process.
 ///
 /// Shelled out rather than taken through `libc`, because a dependency added to
@@ -434,6 +552,54 @@ async fn main() {
       rows.push((depth, presence_absorption(depth).await));
     }
     report("presence", "joins accepted", &rows);
+  }
+
+  if run("parameters") {
+    println!("\n## does a parameter's derived depth sit on the knee\n");
+    println!("| parameter | value | derived | drops at derived | drops at half |");
+    println!("|---|---|---|---|---|");
+
+    for join_burst in [8usize, 32, 128, 512] {
+      let derived = Queues::for_workload(&Workload {
+        join_burst,
+        ..Workload::lobby()
+      })
+      .presence;
+      let (full, half) = presence_formula(join_burst).await;
+      println!("| join_burst | {join_burst} | {derived} | {full} | {half} |");
+    }
+
+    for peak_players in [8usize, 32, 128] {
+      for ops in [1u32, 2] {
+        let queues = Queues::for_workload(&Workload {
+          peak_players,
+          ops_per_player_per_tick: ops,
+          ..Workload::action()
+        });
+        let derived = queues.inbound + queues.decoded;
+        let (full, half) = inbound_formula(peak_players, ops).await;
+        println!("| peak_players x ops | {peak_players} x {ops} | {derived} | {full} | {half} |");
+      }
+    }
+
+    for stall in [
+      Duration::from_millis(250),
+      Duration::from_millis(500),
+      Duration::from_secs(1),
+      Duration::from_secs(2),
+    ] {
+      let payload = 40 * 1024;
+      let derived = Queues::for_workload(&Workload {
+        tick_rate: 60,
+        stall_tolerance: stall,
+        max_payload: payload,
+        memory_budget: None,
+        ..Workload::horde()
+      })
+      .outbound;
+      let (full, half) = outbound_formula(60, stall, payload).await;
+      println!("| stall_tolerance | {stall:?} | {derived} | {full} | {half} |");
+    }
   }
 
   if run("workload") {
