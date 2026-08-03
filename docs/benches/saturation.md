@@ -48,35 +48,43 @@ Both slope 1.00, intercept 9. Accepted is `inbound + decoded + 1` exactly. **The
 
 ## inbound and decoded, draining controller
 
-One message taken every 2ms, single shot rather than a median.
+One message taken every 2ms, median of 5.
 
 | depth | inbound swept | decoded swept |
 |---|---|---|
-| 8 | 33 | 25 |
-| 16 | 41 | 25 |
-| 32 | 49 | 41 |
+| 8 | 25 | 33 |
+| 16 | 41 | 41 |
+| 32 | 57 | 41 |
 | 64 | 89 | 73 |
-| 128 | 145 | 137 |
+| 128 | 153 | 137 |
 
-Both slope 0.93. Point-to-point deltas are irregular because what the drainer removes during the fill is timing-dependent, so 0.93 is not distinguishable from 1.00 here. What it does show is no separation between the two queues: the decode step between them was the candidate for splitting them and does not.
+Slopes 1.07 and 0.87, against 0.93 for both when this was single-shot. They straddle 1.00 and disagree with each other by 20%, which is the reading: **medians do not rescue this scenario.** How many messages the drainer removes depends on how long the client's send takes, which varies run to run, so repetition shrinks the spread without removing the term. Absorption here is inferred rather than measured.
+
+So this neither contradicts the undrained result nor sharpens it. Fixing it is design rather than repetition: count what the drainer took and subtract it. Until then the undrained sweeps, which return byte-identical integers across four runs, are the ones that carry the conclusion.
 
 ## per-connection footprint
 
 256 silent connections per preset, flooded until every outbound queue is full, resident bytes divided by connections. A controller drains presence, which a measurement has to model: without one, a preset carrying `PresenceOverflow::Backpressure` blocks every registration at the queue depth.
 
-| preset | outbound | max payload | derived, B | measured, B |
-|---|---|---|---|---|
-| action | 4 | 512 | 2048 | 256 |
-| horde | 47 | 40960 | 1925120 | 65088 |
-| turn_based | 4 | 8192 | 32768 | 16896 |
-| social_relay | 4 | 512 | 2048 | 0 |
-| spectator | 4 | 8192 | 32768 | 192 |
-| lobby | 4 | 4096 | 16384 | 192 |
-| local | 4 | 4096 | 16384 | 128 |
+`broadcast` is 256 connections receiving one frame each time; `per-recipient` is 64 connections each addressed alone, which is the snapshot path and what `memory_budget` is derived against. The overflow policy is forced to `Drop`, since `Disconnect` empties the queue being measured.
 
-`derived` is `outbound * max_payload`, what `memory_budget` is checked against. Measured comes in far under it because a broadcast hands every recipient the same refcounted buffer, so 256 queues holding one frame cost one frame and 256 pointers. The derivation is the worst case rather than the usual one, and the worst case is real: a per-recipient snapshot builds a distinct payload per client, which this scenario does not exercise.
+| preset | outbound | max payload | derived, B | broadcast, B | per-recipient, B |
+|---|---|---|---|---|---|
+| action | 4 | 512 | 2048 | 1472 | 132352 |
+| horde | 47 | 40960 | 1925120 | 66176 | 2198784 |
+| turn_based | 4 | 8192 | 32768 | 20160 | 15104 |
+| social_relay | 4 | 512 | 2048 | 0 | 42240 |
+| spectator | 4 | 8192 | 32768 | 0 | 14848 |
+| lobby | 4 | 4096 | 16384 | 3072 | 8960 |
+| local | 4 | 4096 | 16384 | 320 | 0 |
 
-**Everything under about 1 KiB per connection is below the floor.** `ps` reports resident size in KiB for the whole process, so across 256 connections the resolution is 4 B each and `social_relay`'s `0` means the delta never registered. Only `horde` and `turn_based` are above it.
+**`horde` is the row that validates the derivation**: 2198784 measured against 1925120 derived, 14% over, the excess being per-connection task and socket overhead. It is the only preset whose retained queue is large enough to dominate what the flood allocates, so it is the only one where this reads as memory rather than as allocator churn.
+
+Everywhere else the reading is `retained + some fraction of churn`, and churn wins. Overrunning the socket takes about 2000 sends per connection at 512 B against 124 at 40 KiB, and a freed buffer does not shrink the arena, so `action` shows 132 KiB per connection for a queue that retains 2 KiB.
+
+The `0`s are the method's floor, not a measurement: `ps` reports whole KiB for the process, which is 4 B per connection at 256 and 16 B at 64. `broadcast` reads zero wherever one refcounted frame is all that is retained.
+
+Taken together: `memory_budget` is checked against a formula that holds where it matters, and this method can only confirm it where the queue is large.
 
 ## presence
 
