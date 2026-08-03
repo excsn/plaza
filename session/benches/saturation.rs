@@ -25,7 +25,7 @@ use futures_util::SinkExt;
 use plaza::agent::Agent;
 use plaza::session::{MessageTarget, Session, SessionMessage};
 use plaza_session::codec::{JsonCodec, WireCodec};
-use plaza_session::{DirectionProfile, LinkProfile, Queues, SessionOptions, TcpPlazaSession, Workload};
+use plaza_session::{DirectionProfile, LinkProfile, Overflow, Queues, SessionOptions, TcpPlazaSession, Workload};
 use plaza_wire::frame;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
@@ -61,6 +61,11 @@ const DEPTHS: [usize; 5] = [8, 16, 32, 64, 128];
 /// of a session divides away, and short of a preset's real peak, which is what
 /// the per-connection figure is for extrapolating to.
 const FOOTPRINT_CONNECTIONS: usize = 256;
+
+/// Connections behind the per-recipient figure. Fewer, because addressing each
+/// one costs a send per connection per frame, and the socket has to be
+/// overrun on every one of them before a queue starts filling.
+const ADDRESSED_CONNECTIONS: usize = 64;
 
 /// The outbound queue is measured across a socket, so the kernel's send buffer
 /// and the framed writer sit in the intercept and neither is stable run to run.
@@ -248,14 +253,42 @@ fn resident_kib() -> u64 {
   String::from_utf8_lossy(&out.stdout).trim().parse().unwrap_or(0)
 }
 
+/// Sends each connection its own frame, so no two queues share a buffer.
+///
+/// The per-recipient snapshot path: one `create_snapshot` per agent, each
+/// producing a payload only that agent receives. It is what `memory_budget` is
+/// checked against, and what a broadcast is not.
+async fn flood_per_recipient(session: &TcpPlazaSession<Op, Seat>, frame_bytes: usize, count: u64, connections: usize) {
+  for _ in 0..count {
+    for seat in 1..=connections as Seat {
+      let _ = session
+        .send_message(
+          MessageTarget::Agent(seat),
+          SessionMessage::system(vec![op(frame_bytes)]),
+        )
+        .await;
+    }
+  }
+}
+
 /// What one connection costs a preset once its outbound queue is full.
 ///
 /// Every client is silent, so the flood fills each queue to its derived depth
 /// and stops. Socket buffers do not appear here: they are the kernel's, not
-/// this process's.
-async fn workload_footprint(workload: &Workload, connections: usize) -> (u64, usize) {
+/// this process's, which is also why the flood has to overrun them first.
+///
+/// `shared` chooses the traffic shape: one broadcast reaching everybody, whose
+/// frame is refcounted rather than copied, against a frame addressed to each
+/// connection alone.
+///
+/// The overflow policy is forced to `Drop` whatever the preset derives. What is
+/// being measured is a full queue, and `Disconnect` empties it by ending the
+/// connection instead.
+async fn workload_footprint(workload: &Workload, connections: usize, shared: bool) -> (u64, usize) {
   let queues = Queues::for_workload(workload);
-  let options = SessionOptions::default().workload(workload);
+  let options = SessionOptions::default()
+    .workload(workload)
+    .overflow(Overflow::drop_everywhere());
   let session = bind(options).await;
   let addr = session.local_addr();
 
@@ -274,9 +307,15 @@ async fn workload_footprint(workload: &Workload, connections: usize) -> (u64, us
   tokio::time::sleep(SETTLE).await;
 
   let before = resident_kib();
-  // Twice what the queues hold, so every one of them is full at the end.
-  let frames = (queues.outbound as u64 + 2) * 2;
-  flood(&session, workload.max_payload, frames).await;
+  // The socket swallows a fixed number of bytes before plaza's queue is what
+  // fills, so the flood has to clear that first and then fill the depth.
+  let socket_frames = workload.socket_buffer_bytes as u64 / workload.max_payload.max(1) as u64;
+  let frames = (socket_frames + queues.outbound as u64 + 2) * 2;
+  if shared {
+    flood(&session, workload.max_payload, frames).await;
+  } else {
+    flood_per_recipient(&session, workload.max_payload, frames, connections).await;
+  }
   tokio::time::sleep(SETTLE).await;
   let after = resident_kib();
 
@@ -347,17 +386,35 @@ async fn main() {
     }
     report("decoded, inbound held at 8", "frames accepted", &rows);
 
+    // Medians here: what the drainer removes mid-fill is timing-dependent, and
+    // a single shot could not tell a real slope from that.
     let mut rows = Vec::new();
     for depth in DEPTHS {
-      rows.push((depth, inbound_absorption_drained(depth, DEPTHS[0], true).await));
+      let mut readings = Vec::with_capacity(REPEATS);
+      for _ in 0..REPEATS {
+        readings.push(inbound_absorption_drained(depth, DEPTHS[0], true).await);
+      }
+      rows.push((depth, median(readings)));
     }
-    report("inbound under a draining controller", "frames accepted", &rows);
+    report(
+      &format!("inbound under a draining controller, median of {REPEATS}"),
+      "frames accepted",
+      &rows,
+    );
 
     let mut rows = Vec::new();
     for depth in DEPTHS {
-      rows.push((depth, inbound_absorption_drained(DEPTHS[0], depth, true).await));
+      let mut readings = Vec::with_capacity(REPEATS);
+      for _ in 0..REPEATS {
+        readings.push(inbound_absorption_drained(DEPTHS[0], depth, true).await);
+      }
+      rows.push((depth, median(readings)));
     }
-    report("decoded under a draining controller", "frames accepted", &rows);
+    report(
+      &format!("decoded under a draining controller, median of {REPEATS}"),
+      "frames accepted",
+      &rows,
+    );
   }
 
   if run("presence") {
@@ -370,8 +427,8 @@ async fn main() {
 
   if run("workload") {
     println!("\n## per-connection footprint with every outbound queue full\n");
-    println!("| preset | outbound | max payload | derived, B | measured, B |");
-    println!("|---|---|---|---|---|");
+    println!("| preset | outbound | max payload | derived, B | broadcast, B | per-recipient, B |");
+    println!("|---|---|---|---|---|---|");
     for (name, workload) in [
       ("action", Workload::action()),
       ("horde", Workload::horde()),
@@ -381,9 +438,10 @@ async fn main() {
       ("lobby", Workload::lobby()),
       ("local", Workload::local()),
     ] {
-      let (measured, depth) = workload_footprint(&workload, FOOTPRINT_CONNECTIONS).await;
+      let (shared, depth) = workload_footprint(&workload, FOOTPRINT_CONNECTIONS, true).await;
+      let (addressed, _) = workload_footprint(&workload, ADDRESSED_CONNECTIONS, false).await;
       println!(
-        "| {name} | {depth} | {} | {} | {measured} |",
+        "| {name} | {depth} | {} | {} | {shared} | {addressed} |",
         workload.max_payload,
         depth * workload.max_payload,
       );

@@ -1561,6 +1561,68 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn one_broadcast_costs_one_buffer_and_a_pointer_per_recipient() {
+    // What the footprint scenario measured, as a property rather than a
+    // number: a broadcast's memory is the frame, not the frame times the
+    // recipients. `memory_budget` is derived against the opposite case, a
+    // payload addressed to one agent, which allocates per recipient.
+    let manager = manager_with(Overflow::default());
+    let mut inboxes = Vec::new();
+    for seat in 1..=4u32 {
+      let (tx, rx) = session_channel(4);
+      manager.register(Agent::new_human(seat), tx).await;
+      inboxes.push(rx);
+    }
+
+    let shared: OutboundFrame = Bytes::from(vec![9u8; 512]);
+    manager.broadcast(&MessageTarget::All, shared.clone()).expect("fan out");
+
+    for inbox in &inboxes {
+      let queued = inbox.try_recv().expect("every recipient was sent the frame");
+      assert_eq!(queued.as_ptr(), shared.as_ptr(), "a recipient got its own copy");
+    }
+
+    // Addressed individually, the payloads are distinct allocations, which is
+    // the shape the budget has to survive.
+    let mut addressed = Vec::new();
+    for seat in 1..=4u32 {
+      let own: OutboundFrame = Bytes::from(vec![seat as u8; 512]);
+      addressed.push(own.as_ptr());
+      manager.broadcast(&MessageTarget::Agent(seat), own).expect("one recipient");
+    }
+    for (index, inbox) in inboxes.iter().enumerate() {
+      let queued = inbox.try_recv().expect("the agent's own frame");
+      assert_eq!(queued.as_ptr(), addressed[index], "an addressed frame is that agent's");
+    }
+  }
+
+  #[tokio::test]
+  async fn a_registration_that_waits_still_counts_the_connection() {
+    // The documented hazard: `Backpressure` with nothing draining holds the
+    // registration open. What must not also happen is the connection going
+    // missing, because the transport already has the socket.
+    let manager = Arc::new(manager_with(Overflow {
+      presence: PresenceOverflow::Backpressure,
+      ..Overflow::default()
+    }));
+    manager.register(Agent::new_human(1u32), session_channel(4).0).await;
+
+    let waiting = {
+      let manager = manager.clone();
+      tokio::spawn(async move { manager.register(Agent::new_human(2u32), session_channel(4).0).await })
+    };
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    assert!(!waiting.is_finished(), "the announcement is still waiting");
+    assert_eq!(
+      manager.connection_count(),
+      2,
+      "a connection held at its announcement is still a connection"
+    );
+    waiting.abort();
+  }
+
+  #[tokio::test]
   async fn disconnecting_a_client_never_waits_on_the_controller_that_caused_it() {
     // What LossFree derives, against the case it is worst in: the controller is
     // behind on presence, which is what filled the outbound queue.

@@ -395,6 +395,28 @@ mod tests {
   }
 
   #[test]
+  fn the_socket_estimate_tracks_what_was_measured() {
+    // `benches/saturation.rs` read the intercept at three frame sizes and found
+    // it constant in bytes rather than in frames: 1049, 135 and 14 frames at
+    // 512 B, 4 KiB and 40 KiB. If `DEFAULT_SOCKET_BUFFER_BYTES` drifts from
+    // that, every derived `outbound` moves with it.
+    for (payload, measured) in [(512usize, 1049usize), (4096, 135), (40960, 14)] {
+      let workload = Workload {
+        max_payload: payload,
+        ..Workload::default()
+      };
+      let estimated = workload.socket_frames();
+      // One frame either way is the division rounding, which the bench sees as
+      // a partly-buffered frame and this sees as a floor. Beyond that is drift.
+      let apart = estimated.abs_diff(measured);
+      assert!(
+        apart <= 1 || apart * 20 <= measured,
+        "at {payload} B the estimate is {estimated} frames against {measured} measured"
+      );
+    }
+  }
+
+  #[test]
   fn a_memory_budget_caps_what_a_stall_asks_for() {
     let mut hungry = Workload::horde();
     hungry.memory_budget = None;
