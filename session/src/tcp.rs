@@ -27,10 +27,7 @@ use plaza_wire::frame::ProtocolVersion;
 use crate::conditioner::Conditioner;
 use crate::control::{self, earliest, far_future, route_inbound, ProbeState, DOWN_SEED_FLIP};
 use crate::error::SessionLayerError;
-use crate::manager::{
-  ConnectionManager, OutboundFrame, SessionOptions, TransportSession, DEFAULT_BROADCAST_CAPACITY,
-  DEFAULT_CLIENT_QUEUE_CAPACITY,
-};
+use crate::manager::{ConnectionManager, OutboundFrame, SessionOptions, TransportSession};
 
 const TRANSPORT: &str = "tcp";
 
@@ -129,7 +126,7 @@ where
       .local_addr()
       .map_err(|source| SessionLayerError::Bind { addr, source })?;
 
-    let inner = TransportSession::with_options(TRANSPORT, codec.clone(), DEFAULT_BROADCAST_CAPACITY, options);
+    let inner = TransportSession::with_options(TRANSPORT, codec.clone(), options);
     let manager = inner.manager().clone();
 
     let listener_handle = tokio::spawn(accept_loop::<ID, C>(listener, manager, agent_factory, codec));
@@ -186,15 +183,21 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
   manager: Arc<ConnectionManager<ID>>,
   codec: C,
 ) {
-  let mut framed = Framed::new(stream, LengthDelimitedCodec::new());
-  let (to_client_tx, to_client_rx) = session_channel::<OutboundFrame>(DEFAULT_CLIENT_QUEUE_CAPACITY);
+  let (queues, limits) = (manager.queues().clone(), manager.limits().clone());
+  let mut framed = Framed::new(
+    stream,
+    LengthDelimitedCodec::builder()
+      .max_frame_length(limits.max_frame_bytes)
+      .new_codec(),
+  );
+  let (to_client_tx, to_client_rx) = session_channel::<OutboundFrame>(queues.outbound);
   let conn_id = manager.register(agent.clone(), to_client_tx);
   let link = manager.link_handle(conn_id).expect("just registered");
   let clock = manager.clock().cloned();
 
-  let mut up = Conditioner::new(conn_id);
-  let mut down = Conditioner::new(conn_id ^ DOWN_SEED_FLIP);
-  let mut probe = ProbeState::default();
+  let mut up = Conditioner::new(conn_id, queues.conditioner);
+  let mut down = Conditioner::new(conn_id ^ DOWN_SEED_FLIP, queues.conditioner);
+  let mut probe = ProbeState::with_slots(limits.probe_slots);
   let mut next_probe = Instant::now() + control::RTT_FAST_INTERVAL;
 
   // Either hand the frame back to be written now, or queue it behind whatever

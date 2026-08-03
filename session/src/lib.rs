@@ -25,7 +25,11 @@ pub use codec::JsonCodec;
 pub use codec::MsgPackCodec;
 pub use conditioner::{Delivery, DirectionProfile, LinkProfile, RETRANSMIT_PENALTY};
 pub use error::SessionLayerError;
-pub use manager::{ConnectionManager, SessionClock, SessionOptions, TransportSession};
+pub use manager::{
+  ConnectionManager, Limits, Queues, SessionClock, SessionOptions, TransportSession,
+  DEFAULT_BROADCAST_CAPACITY, DEFAULT_CLIENT_QUEUE_CAPACITY, DEFAULT_CONDITIONER_CAPACITY,
+  DEFAULT_MAX_FRAME_BYTES, DEFAULT_MAX_MESSAGE_BYTES, DEFAULT_PROBE_SLOTS,
+};
 
 #[cfg(feature = "actix_ws")]
 pub mod actix_ws;

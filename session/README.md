@@ -90,6 +90,21 @@ let session = ActixWsPlazaSession::with_options(
 
 The closure runs on a connection task, so an authoritative clock that lives on the simulation loop is **published** rather than borrowed: store the tick into an `AtomicU64` and close over it, which is what `horde_playground` does. The unit is yours and this crate never reads it as a quantity. Without a clock, `Pong.responder` is `None` and a client can still measure its round trip.
 
+### Sizing the queues, and what a connection may ask for
+
+Every buffer a session owns and every cap it enforces has a default, and every one of them is a guess about a server this crate has never seen. A 16-player room and a 4000-connection relay do not want the same numbers, so the defaults are a starting point and each is one call away:
+
+```rust,ignore
+SessionOptions::with_protocol(ProtocolVersion(PROTOCOL))
+  .outbound_capacity(512)      // frames one slow client may fall behind by
+  .presence_capacity(1024)     // joins and leaves waiting for the controller
+  .max_frame_bytes(256 * 1024) // largest inbound frame this build will accept
+```
+
+`SessionOptions::queues` holds the depths (`inbound`, `decoded`, `presence`, `outbound`, `conditioner`) and `limits` holds the caps (`max_frame_bytes` for TCP, `max_message_bytes` for WebSocket, `probe_slots`). Set a group wholesale with `.queues(..)` / `.limits(..)`, or one field at a time as above. `ConnectionManager::queues()` and `limits()` read them back, which is where a third-party transport picks them up.
+
+Two of these are worth knowing about before you need them. `inbound`, `decoded` and `presence` default to the same number because they used to share a single constructor argument, not because a trickle of joins and every frame from every client are comparable traffic. And `max_frame_bytes` defaults to 8 MiB because that is what `LengthDelimitedCodec` enforces when nobody asks; it is the largest allocation a client can make this server perform, so a build that knows its own frames are small should say so.
+
 ## Impairment belongs to the link
 
 Delay, jitter and loss are properties of a connection, so they are applied where the connection is:

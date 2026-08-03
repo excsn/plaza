@@ -73,6 +73,8 @@ Connections are held by id and **indexed by agent**, because both halves of the 
 
 *   **`new(transport: &'static str, capacity: usize) -> Self`**
 *   **`with_hello(transport: &'static str, capacity: usize, hello: Option<OutboundFrame>) -> Self`**: the same, plus a pre-encoded frame pushed to every connection the moment it registers. `TransportSession::with_protocol` builds one `Kind::Hello` frame at construction and hands it here, so the handshake costs one encode for the process rather than one per client.
+*   **`with_options(transport: &'static str, hello: Option<OutboundFrame>, options: &SessionOptions) -> Self`**: takes the clock, queue depths and limits from `options`. `hello` stays a separate argument because the manager holds the encoded frame while `options` holds the version it was built from. The `capacity` constructors above are this one with `inbound`, `decoded` and `presence` all set to that number.
+*   **`queues(&self) -> &Queues`**, **`limits(&self) -> &Limits`**: what this manager was built with. A transport adapter reads `queues().outbound` when it creates a connection's outbound queue, `queues().conditioner` for its delay queues, `limits().probe_slots` for the probe table, and whichever byte cap its own framing enforces.
 *   **`register(&self, agent: Agent<ID>, to_client_tx: SessionSender<OutboundFrame>) -> ConnectionId`**: records a connected client, sends the hello frame if there is one, and announces the join. Build the queue with `plaza::session::session_channel`, so a transport never names the channel crate.
 *   **`deregister(&self, conn_id: ConnectionId)`**: removes it and announces the departure.
 *   **`forward_incoming(&self, from: Agent<ID>, frame: Bytes)`**: publishes one client frame toward the controller, still encoded. Non-blocking; drops under load rather than stalling a connection task. Takes `Bytes` because both transports hand over a buffer they already own, so a frame reaches the deserialize bridge without being copied out.
@@ -99,6 +101,7 @@ A complete `Session` implementation over any byte transport. Both shipped adapte
 
 *   **`with_protocol(transport: &'static str, codec: C, capacity: usize, protocol: ProtocolVersion) -> Arc<Self>`**: spawns the deserialize bridge and declares what this build speaks (from [`plaza_wire::build`](../wire/API_REFERENCE.md#7-module-build-feature-build)). It encodes one `Kind::Hello` frame up front for `ConnectionManager::with_hello` to send on every connection, and tells the bridge what to compare an inbound `Hello` against.
 *   **`new(transport: &'static str, codec: C, capacity: usize) -> Arc<Self>`**: the same with `ProtocolVersion::UNKNOWN`, which declares nothing and so disables the check rather than failing it.
+*   **`with_options(transport: &'static str, codec: C, options: SessionOptions) -> Arc<Self>`**: what the two above delegate to. It takes no `capacity`, because `options.queues` carries every depth including the bridge's own output queue.
 *   **`manager(&self) -> &Arc<ConnectionManager<ID>>`**
 *   **`codec(&self) -> &C`**
 *   **`encode_message(&self, msg: SessionMessage<Op, ID>) -> Result<OutboundFrame, SessionLayerError>`**: writes `[Kind::Ops][encoded ops]` into one buffer, in a single pass, and takes the `Vec` whole into `Bytes` with no copy. **`msg.from` is not sent**: the wire is the tag and the ops, and the sender is bookkeeping the receiving transport attaches from the connection it read. Hand the frame to [`broadcast`](#struct-connectionmanagerid-agentid); recipients share the buffer rather than each getting a re-encode or a copy.
@@ -117,10 +120,22 @@ pub type SessionClock = Arc<dyn Fn() -> u64 + Send + Sync>;
 pub struct SessionOptions {
   pub protocol: ProtocolVersion,
   pub clock: Option<SessionClock>,
+  pub queues: Queues,
+  pub limits: Limits,
 }
 ```
 
-What a session declares and what it can answer with, passed to `TransportSession::with_options` and each adapter's `with_options` / `bind_with_options`. `SessionOptions::with_protocol(v).clock(f)` builds one.
+What a session declares, what it can answer with, and how much it will hold or accept. Passed to `TransportSession::with_options` and each adapter's `with_options` / `bind_with_options`. `SessionOptions::with_protocol(v).clock(f)` builds one, and every field has a one-call builder:
+
+```rust
+SessionOptions::with_protocol(ProtocolVersion(PROTOCOL))
+  .outbound_capacity(512)
+  .max_frame_bytes(256 * 1024)
+```
+
+*   **`queues(Queues)`**, **`limits(Limits)`**: replace a whole group.
+*   **`inbound_capacity`**, **`decoded_capacity`**, **`presence_capacity`**, **`outbound_capacity`**, **`conditioner_capacity`**: one queue depth each.
+*   **`max_frame_bytes`**, **`max_message_bytes`**, **`probe_slots`**: one limit each.
 
 The clock is read when answering a latency probe and its reading becomes `Pong.responder`. It is called on a connection task, so an authoritative clock living on the simulation loop is **published** rather than borrowed: store the tick into an `AtomicU64` and close over it. **The unit is the application's**; nothing here reads the value as a quantity, converts it, or has a default for it. Without a clock, `Pong.responder` is `None`, and a client can still measure a round trip but cannot estimate the offset between the two clocks.
 
@@ -163,10 +178,38 @@ The targeting rules in scanning form, for a transport that keeps its own registr
 
 `{ from: Agent<ID>, frame: Bytes }`: one inbound frame exactly as it arrived (kind tag, then body), with the `Agent` the transport attached. Refcounted rather than copied out of whatever the socket produced. It survives on the **inbound** path only, where the deserialize bridge decodes a client's raw ops before handing them to the controller; the outbound path encodes once to an [`OutboundFrame`](#type-alias-outboundframe) and never builds one of these.
 
+### Structs `Queues` and `Limits`
+
+```rust
+pub struct Queues {
+  pub inbound: usize,      // encoded frames waiting for the deserialize bridge
+  pub decoded: usize,      // decoded messages waiting for the controller
+  pub presence: usize,     // joins and leaves waiting for the controller
+  pub outbound: usize,     // frames waiting to be written to one client
+  pub conditioner: usize,  // frames held per direction per connection, while a LinkProfile is set
+}
+
+pub struct Limits {
+  pub max_frame_bytes: usize,    // largest inbound length-delimited frame, TCP only
+  pub max_message_bytes: usize,  // largest inbound message once continuations are joined, WebSocket only
+  pub probe_slots: usize,        // probes in flight before the oldest is abandoned
+}
+```
+
+Both are plain structs with `Default`, reachable through [`SessionOptions`](#type-sessionclock-and-struct-sessionoptions) and readable off a manager with `ConnectionManager::queues()` / `limits()`, which is where a transport adapter picks them up.
+
+The defaults below are a starting point rather than a prescription: what suits a 16-player room and what suits a 4000-connection relay are not the same number, and only the application knows which it is. Raising a depth costs memory times connections; lowering it makes the queue drop sooner. `inbound`, `decoded` and `presence` share a default because they used to share one constructor argument, not because they carry comparable traffic: presence is one event per connect, the other two are every frame from every client.
+
+The two byte caps are separate because they bound different mechanisms, and each defaults to what its transport enforced before it was nameable. A build serving both transports that wants one number sets both.
+
 ### Constants
 
-*   `DEFAULT_BROADCAST_CAPACITY: usize = 256`: notification channel depth.
-*   `DEFAULT_CLIENT_QUEUE_CAPACITY: usize = 64`: one client's outbound queue.
+*   `DEFAULT_BROADCAST_CAPACITY: usize = 256`: `Queues::inbound`, `decoded` and `presence`.
+*   `DEFAULT_CLIENT_QUEUE_CAPACITY: usize = 64`: `Queues::outbound`.
+*   `DEFAULT_CONDITIONER_CAPACITY: usize = 1024`: `Queues::conditioner`.
+*   `DEFAULT_MAX_FRAME_BYTES: usize = 8 * 1024 * 1024`: `Limits::max_frame_bytes`, which is what `LengthDelimitedCodec` enforces without being asked.
+*   `DEFAULT_MAX_MESSAGE_BYTES: usize = 1024 * 1024`: `Limits::max_message_bytes`.
+*   `DEFAULT_PROBE_SLOTS: usize = 16`: `Limits::probe_slots`, about two seconds of the probe's fast phase.
 
 ## 5. Module `actix_ws` (feature `actix_ws`)
 

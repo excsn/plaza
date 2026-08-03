@@ -47,14 +47,6 @@ use bytes::Bytes;
 use plaza_wire::frame;
 use tokio::time::Instant;
 
-/// Queued frames per direction, past which further ops are refused.
-///
-/// A finite buffer, because a link that delays by a second and a client that
-/// sends every tick otherwise grow memory without limit. This is the one place
-/// a frame is discarded, and it stands for a socket buffer running out rather
-/// than for anything the network did.
-const MAX_QUEUED_FRAMES: usize = 1024;
-
 /// What one retransmission costs. TCP's minimum RTO, which is the floor a real
 /// stack waits before deciding a segment is gone.
 pub const RETRANSMIT_PENALTY: Duration = Duration::from_millis(200);
@@ -166,14 +158,16 @@ pub(crate) struct Conditioner {
   queue: VecDeque<(Instant, Bytes)>,
   last_release: Option<Instant>,
   rng: XorShift64,
+  capacity: usize,
 }
 
 impl Conditioner {
-  pub(crate) fn new(seed: u64) -> Self {
+  pub(crate) fn new(seed: u64, capacity: usize) -> Self {
     Self {
       queue: VecDeque::new(),
       last_release: None,
       rng: XorShift64::new(seed),
+      capacity,
     }
   }
 
@@ -187,7 +181,7 @@ impl Conditioner {
     // A local resource running out, not the network losing anything. Control
     // frames are still admitted: refusing a handshake here would wedge a
     // connection for a reason that has nothing to do with the link.
-    if self.queue.len() >= MAX_QUEUED_FRAMES && frame_bytes.first() == Some(&frame::Kind::Ops.as_byte()) {
+    if self.queue.len() >= self.capacity && frame_bytes.first() == Some(&frame::Kind::Ops.as_byte()) {
       return false;
     }
     let lost = profile.loss > 0.0 && self.rng.next_f32() < profile.loss;
@@ -227,6 +221,7 @@ impl Conditioner {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::manager::DEFAULT_CONDITIONER_CAPACITY as CAP;
 
   fn ops_frame(n: u8) -> Bytes {
     Bytes::from(vec![frame::Kind::Ops.as_byte(), n])
@@ -246,7 +241,7 @@ mod tests {
   async fn jitter_stalls_the_queue_instead_of_reordering_it() {
     // The property a reliable stream has and a datagram link does not: however
     // the per-frame jitter falls, what comes out is what went in, in order.
-    let mut c = Conditioner::new(1);
+    let mut c = Conditioner::new(1, CAP);
     let profile = DirectionProfile {
       delay: Duration::from_millis(10),
       jitter: Duration::from_millis(200),
@@ -273,7 +268,7 @@ mod tests {
 
   #[tokio::test]
   async fn a_frame_is_not_released_before_its_time() {
-    let mut c = Conditioner::new(2);
+    let mut c = Conditioner::new(2, CAP);
     let now = Instant::now();
     c.push(ops_frame(1), &DirectionProfile::delayed(Duration::from_millis(50)), now);
 
@@ -287,7 +282,7 @@ mod tests {
     // The thing a WebSocket actually does. Nothing goes missing, whatever the
     // slider reads, because TCP retransmits and the application only ever sees
     // the wait.
-    let mut c = Conditioner::new(3);
+    let mut c = Conditioner::new(3, CAP);
     let certain_loss = DirectionProfile {
       loss: 1.0,
       ..DirectionProfile::default()
@@ -315,7 +310,7 @@ mod tests {
   async fn a_datagram_link_loses_frames_outright() {
     // The simulation, for exercising an application's recovery before the
     // channel it is written for exists.
-    let mut c = Conditioner::new(3);
+    let mut c = Conditioner::new(3, CAP);
     let certain_loss = DirectionProfile {
       loss: 1.0,
       delivery: Delivery::Datagram,
@@ -332,11 +327,11 @@ mod tests {
 
   #[tokio::test]
   async fn a_full_queue_still_admits_control_frames() {
-    let mut c = Conditioner::new(4);
+    let mut c = Conditioner::new(4, CAP);
     let profile = DirectionProfile::delayed(Duration::from_secs(1));
     let now = Instant::now();
 
-    for _ in 0..MAX_QUEUED_FRAMES {
+    for _ in 0..crate::manager::DEFAULT_CONDITIONER_CAPACITY {
       assert!(c.push(ops_frame(0), &profile, now));
     }
     assert!(!c.push(ops_frame(0), &profile, now), "the buffer is finite");
@@ -344,8 +339,20 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn a_configured_capacity_is_what_fills() {
+    let mut c = Conditioner::new(4, 3);
+    let profile = DirectionProfile::delayed(Duration::from_secs(1));
+    let now = Instant::now();
+
+    for _ in 0..3 {
+      assert!(c.push(ops_frame(0), &profile, now));
+    }
+    assert!(!c.push(ops_frame(0), &profile, now));
+  }
+
+  #[tokio::test]
   async fn an_empty_queue_has_nothing_to_wait_for() {
-    let mut c = Conditioner::new(5);
+    let mut c = Conditioner::new(5, CAP);
     assert!(c.next_release().is_none());
     assert!(c.pop_ready(Instant::now()).is_none());
   }

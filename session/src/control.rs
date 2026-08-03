@@ -61,18 +61,7 @@ pub(crate) fn far_future() -> Instant {
   Instant::now() + Duration::from_secs(86_400 * 365)
 }
 
-/// How many probes may be in flight before the oldest is abandoned.
-///
-/// Not one. A probe is answered a round trip after it goes out, and the
-/// schedule below sends another every 125ms in its fast phase, so any link
-/// slower than that has a pong land after the next probe was sent. With a
-/// single slot every one of those samples is discarded and the link is never
-/// measured at all, which is worst at exactly the latencies worth measuring.
-/// This covers two seconds of the fast phase.
-const MAX_IN_FLIGHT: usize = 16;
-
 /// The probes this connection has in flight.
-#[derive(Default)]
 pub(crate) struct ProbeState {
   /// Oldest first. A pong is matched by its echoed origin, so no correlation
   /// id beyond that is needed, and anything older than the one it answers is
@@ -80,9 +69,25 @@ pub(crate) struct ProbeState {
   outstanding: VecDeque<(u64, Instant)>,
   seq: u64,
   sent: u32,
+  slots: usize,
+}
+
+impl Default for ProbeState {
+  fn default() -> Self {
+    Self::with_slots(crate::manager::DEFAULT_PROBE_SLOTS)
+  }
 }
 
 impl ProbeState {
+  pub(crate) fn with_slots(slots: usize) -> Self {
+    Self {
+      outstanding: VecDeque::new(),
+      seq: 0,
+      sent: 0,
+      slots,
+    }
+  }
+
   /// How long until the next probe. Fast at first, then sparse: a caller
   /// deciding whether a connection meets a schedule wants several samples in
   /// the first second, and after that this is upkeep.
@@ -113,7 +118,7 @@ pub(crate) enum Inbound {
 pub(crate) fn make_probe<C: WireCodec>(codec: &C, probe: &mut ProbeState, now: Instant) -> Bytes {
   probe.seq = probe.seq.wrapping_add(1);
   probe.sent = probe.sent.saturating_add(1);
-  if probe.outstanding.len() >= MAX_IN_FLIGHT {
+  if probe.outstanding.len() >= probe.slots {
     probe.outstanding.pop_front();
   }
   probe.outstanding.push_back((probe.seq, now));
@@ -196,6 +201,7 @@ pub(crate) fn route_inbound<ID: AgentId, C: WireCodec>(
 mod tests {
   use super::*;
   use crate::codec::JsonCodec;
+  use crate::manager::DEFAULT_PROBE_SLOTS;
   use plaza::agent::Agent;
   use std::sync::Arc;
 
@@ -365,10 +371,10 @@ mod tests {
   #[tokio::test]
   async fn an_unanswered_link_does_not_grow_without_bound() {
     let mut probe = ProbeState::default();
-    for _ in 0..(MAX_IN_FLIGHT * 4) {
+    for _ in 0..(DEFAULT_PROBE_SLOTS * 4) {
       make_probe(&JsonCodec, &mut probe, Instant::now());
     }
-    assert_eq!(probe.outstanding.len(), MAX_IN_FLIGHT, "the oldest are abandoned");
+    assert_eq!(probe.outstanding.len(), DEFAULT_PROBE_SLOTS, "the oldest are abandoned");
   }
 
   #[tokio::test]

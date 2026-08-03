@@ -29,15 +29,11 @@ use crate::control::{
   self, earliest, far_future, route_inbound, ProbeState, DOWN_SEED_FLIP, RTT_FAST_INTERVAL, RTT_FAST_PINGS,
   RTT_IDLE_INTERVAL,
 };
-use crate::manager::{
-  ConnectionManager, OutboundFrame, SessionOptions, TransportSession, DEFAULT_BROADCAST_CAPACITY,
-  DEFAULT_CLIENT_QUEUE_CAPACITY,
-};
+use crate::manager::{ConnectionManager, OutboundFrame, SessionOptions, TransportSession};
 
 const TRANSPORT: &str = "actix_ws";
 
 /// Maximum size of a reassembled (continuation) WebSocket frame.
-const MAX_CONTINUATION_SIZE: usize = 1024 * 1024;
 
 /// A Plaza `Session` served over actix-web WebSockets.
 ///
@@ -195,7 +191,7 @@ where
   /// declares, and the clock it stamps a `Pong` with.
   pub fn with_options(codec: C, options: SessionOptions) -> Arc<Self> {
     Arc::new(Self {
-      inner: TransportSession::with_options(TRANSPORT, codec, DEFAULT_BROADCAST_CAPACITY, options),
+      inner: TransportSession::with_options(TRANSPORT, codec, options),
     })
   }
 
@@ -256,11 +252,12 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
   manager: Arc<ConnectionManager<ID>>,
   codec: C,
 ) {
+  let (queues, limits) = (manager.queues().clone(), manager.limits().clone());
   let mut msg_stream = msg_stream
     .aggregate_continuations()
-    .max_continuation_size(MAX_CONTINUATION_SIZE);
+    .max_continuation_size(limits.max_message_bytes);
 
-  let (to_client_tx, to_client_rx) = session_channel::<OutboundFrame>(DEFAULT_CLIENT_QUEUE_CAPACITY);
+  let (to_client_tx, to_client_rx) = session_channel::<OutboundFrame>(queues.outbound);
   let conn_id = manager.register(agent.clone(), to_client_tx);
   // Frames arrive already encoded, so a broadcast encodes once and every
   // recipient's task just writes bytes.
@@ -275,9 +272,9 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
   let mut pings_sent: u32 = 0;
   let mut next_ping = tokio::time::Instant::now() + RTT_FAST_INTERVAL;
 
-  let mut up = Conditioner::new(conn_id);
-  let mut down = Conditioner::new(conn_id ^ DOWN_SEED_FLIP);
-  let mut probe = ProbeState::default();
+  let mut up = Conditioner::new(conn_id, queues.conditioner);
+  let mut down = Conditioner::new(conn_id ^ DOWN_SEED_FLIP, queues.conditioner);
+  let mut probe = ProbeState::with_slots(limits.probe_slots);
   let mut next_probe = tokio::time::Instant::now() + RTT_FAST_INTERVAL;
 
   // Either hand the frame back to be written now, or queue it behind whatever

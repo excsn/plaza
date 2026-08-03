@@ -37,6 +37,85 @@ use crate::stats::TransportStats;
 pub const DEFAULT_BROADCAST_CAPACITY: usize = 256;
 /// Default capacity for a single client's outbound queue.
 pub const DEFAULT_CLIENT_QUEUE_CAPACITY: usize = 64;
+/// Default frames held per direction per connection while a link profile is set.
+///
+/// A finite buffer, because a link that delays by a second and a client that
+/// sends every tick otherwise grow memory without limit. Refusal here stands
+/// for a socket buffer running out rather than for anything the network did.
+pub const DEFAULT_CONDITIONER_CAPACITY: usize = 1024;
+/// Default number of latency probes a connection keeps in flight.
+///
+/// Not one. A probe is answered a round trip after it goes out, and the fast
+/// phase sends another every 125ms, so any link slower than that has a pong
+/// land after the next probe was sent. With a single slot every one of those
+/// samples is discarded and the link is never measured at all, which is worst
+/// at exactly the latencies worth measuring. This covers two seconds of the
+/// fast phase.
+pub const DEFAULT_PROBE_SLOTS: usize = 16;
+/// Default cap on one inbound length-delimited frame. TCP only.
+///
+/// What `LengthDelimitedCodec` enforces without being asked, named here so it
+/// is plaza's number rather than tokio-util's.
+pub const DEFAULT_MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
+/// Default cap on one inbound message once continuations are joined. WebSocket only.
+pub const DEFAULT_MAX_MESSAGE_BYTES: usize = 1024 * 1024;
+
+/// Depths of the queues a session owns.
+///
+/// Defaults are a starting point, not a prescription: what suits a 16-player
+/// room and what suits a 4000-connection relay are not the same number, and
+/// only the application knows which it is.
+#[derive(Debug, Clone)]
+pub struct Queues {
+  /// Encoded frames waiting for the deserialize bridge.
+  pub inbound: usize,
+  /// Decoded messages waiting for the controller.
+  pub decoded: usize,
+  /// Joins and leaves waiting for the controller.
+  pub presence: usize,
+  /// Frames waiting to be written to one client.
+  pub outbound: usize,
+  /// Frames held per direction per connection, and only while a
+  /// [`LinkProfile`] is set: a passthrough link queues nothing.
+  pub conditioner: usize,
+}
+
+impl Default for Queues {
+  fn default() -> Self {
+    Self {
+      inbound: DEFAULT_BROADCAST_CAPACITY,
+      decoded: DEFAULT_BROADCAST_CAPACITY,
+      presence: DEFAULT_BROADCAST_CAPACITY,
+      outbound: DEFAULT_CLIENT_QUEUE_CAPACITY,
+      conditioner: DEFAULT_CONDITIONER_CAPACITY,
+    }
+  }
+}
+
+/// Caps a session enforces on one connection.
+///
+/// The two byte caps are separate because they bound different mechanisms and
+/// each defaults to what its transport already enforced; a build that speaks
+/// both and wants one number sets both.
+#[derive(Debug, Clone)]
+pub struct Limits {
+  /// Largest inbound length-delimited frame. TCP only.
+  pub max_frame_bytes: usize,
+  /// Largest inbound message once continuations are joined. WebSocket only.
+  pub max_message_bytes: usize,
+  /// Probes in flight before the oldest is abandoned.
+  pub probe_slots: usize,
+}
+
+impl Default for Limits {
+  fn default() -> Self {
+    Self {
+      max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
+      max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
+      probe_slots: DEFAULT_PROBE_SLOTS,
+    }
+  }
+}
 
 /// The clock a session stamps `Pong.responder` with.
 ///
@@ -56,6 +135,10 @@ pub struct SessionOptions {
   /// responder time and a client can still measure its round trip but cannot
   /// estimate the offset between the two clocks.
   pub clock: Option<SessionClock>,
+  /// How deep this session's queues are.
+  pub queues: Queues,
+  /// What this session refuses per connection.
+  pub limits: Limits,
 }
 
 impl Default for SessionOptions {
@@ -63,6 +146,8 @@ impl Default for SessionOptions {
     Self {
       protocol: ProtocolVersion::UNKNOWN,
       clock: None,
+      queues: Queues::default(),
+      limits: Limits::default(),
     }
   }
 }
@@ -71,12 +156,72 @@ impl SessionOptions {
   pub fn with_protocol(protocol: ProtocolVersion) -> Self {
     Self {
       protocol,
-      clock: None,
+      ..Self::default()
     }
   }
 
   pub fn clock(mut self, clock: impl Fn() -> u64 + Send + Sync + 'static) -> Self {
     self.clock = Some(Arc::new(clock));
+    self
+  }
+
+  /// Replaces every queue depth at once.
+  pub fn queues(mut self, queues: Queues) -> Self {
+    self.queues = queues;
+    self
+  }
+
+  /// Replaces every limit at once.
+  pub fn limits(mut self, limits: Limits) -> Self {
+    self.limits = limits;
+    self
+  }
+
+  /// Encoded frames waiting for the deserialize bridge.
+  pub fn inbound_capacity(mut self, depth: usize) -> Self {
+    self.queues.inbound = depth;
+    self
+  }
+
+  /// Decoded messages waiting for the controller.
+  pub fn decoded_capacity(mut self, depth: usize) -> Self {
+    self.queues.decoded = depth;
+    self
+  }
+
+  /// Joins and leaves waiting for the controller.
+  pub fn presence_capacity(mut self, depth: usize) -> Self {
+    self.queues.presence = depth;
+    self
+  }
+
+  /// Frames waiting to be written to one client.
+  pub fn outbound_capacity(mut self, depth: usize) -> Self {
+    self.queues.outbound = depth;
+    self
+  }
+
+  /// Frames held per direction per connection while a link profile is set.
+  pub fn conditioner_capacity(mut self, depth: usize) -> Self {
+    self.queues.conditioner = depth;
+    self
+  }
+
+  /// Largest inbound length-delimited frame. TCP only.
+  pub fn max_frame_bytes(mut self, bytes: usize) -> Self {
+    self.limits.max_frame_bytes = bytes;
+    self
+  }
+
+  /// Largest inbound message once continuations are joined. WebSocket only.
+  pub fn max_message_bytes(mut self, bytes: usize) -> Self {
+    self.limits.max_message_bytes = bytes;
+    self
+  }
+
+  /// Probes in flight before the oldest is abandoned.
+  pub fn probe_slots(mut self, slots: usize) -> Self {
+    self.limits.probe_slots = slots;
     self
   }
 }
@@ -86,6 +231,8 @@ impl Debug for SessionOptions {
     f.debug_struct("SessionOptions")
       .field("protocol", &self.protocol)
       .field("clock", &self.clock.is_some())
+      .field("queues", &self.queues)
+      .field("limits", &self.limits)
       .finish()
   }
 }
@@ -358,6 +505,8 @@ pub struct ConnectionManager<ID: AgentId> {
   /// connection would be per-connection work for a constant.
   hello: Option<OutboundFrame>,
   clock: Option<SessionClock>,
+  queues: Queues,
+  limits: Limits,
 }
 
 impl<ID: AgentId> Debug for ConnectionManager<ID> {
@@ -399,8 +548,27 @@ impl<ID: AgentId> ConnectionManager<ID> {
     hello: Option<OutboundFrame>,
     clock: Option<SessionClock>,
   ) -> Self {
-    let (raw_incoming_tx, raw_incoming_rx) = session_channel(capacity);
-    let (presence_tx, presence_rx) = session_channel(capacity);
+    let options = SessionOptions {
+      clock,
+      queues: Queues {
+        inbound: capacity,
+        decoded: capacity,
+        presence: capacity,
+        ..Queues::default()
+      },
+      ..SessionOptions::default()
+    };
+    Self::with_options(transport, hello, &options)
+  }
+
+  /// As [`with_hello`](Self::with_hello), taking the clock, queue depths and
+  /// limits from `options`.
+  ///
+  /// `hello` is passed separately because the manager holds the encoded frame
+  /// and `options` holds the version it was built from.
+  pub fn with_options(transport: &'static str, hello: Option<OutboundFrame>, options: &SessionOptions) -> Self {
+    let (raw_incoming_tx, raw_incoming_rx) = session_channel(options.queues.inbound);
+    let (presence_tx, presence_rx) = session_channel(options.queues.presence);
     Self {
       transport,
       next_conn_id: AtomicU64::new(1),
@@ -411,8 +579,24 @@ impl<ID: AgentId> ConnectionManager<ID> {
       presence_rx: RwLock::new(Some(presence_rx)),
       stats: TransportStats::new(),
       hello,
-      clock,
+      clock: options.clock.clone(),
+      queues: options.queues.clone(),
+      limits: options.limits.clone(),
     }
+  }
+
+  /// The queue depths this manager was built with. A transport adapter reads
+  /// [`Queues::outbound`] here when it creates a connection's outbound queue,
+  /// and [`Queues::conditioner`] when it creates its delay queues.
+  pub fn queues(&self) -> &Queues {
+    &self.queues
+  }
+
+  /// What this manager refuses per connection. A transport adapter reads the
+  /// byte cap its own framing enforces, and [`Limits::probe_slots`] for the
+  /// probe table.
+  pub fn limits(&self) -> &Limits {
+    &self.limits
   }
 
   /// The clock a `Pong` is stamped with, if the application installed one.
@@ -796,12 +980,23 @@ where
   /// [`ProtocolVersion::UNKNOWN`] to declare nothing, which disables the check
   /// rather than failing it.
   pub fn with_protocol(transport: &'static str, codec: C, capacity: usize, protocol: ProtocolVersion) -> Arc<Self> {
-    Self::with_options(transport, codec, capacity, SessionOptions::with_protocol(protocol))
+    let options = SessionOptions {
+      protocol,
+      queues: Queues {
+        inbound: capacity,
+        decoded: capacity,
+        presence: capacity,
+        ..Queues::default()
+      },
+      ..SessionOptions::default()
+    };
+    Self::with_options(transport, codec, options)
   }
 
   /// Creates the session with everything it needs to answer for itself: the
-  /// version it declares, and the clock it stamps a `Pong` with.
-  pub fn with_options(transport: &'static str, codec: C, capacity: usize, options: SessionOptions) -> Arc<Self> {
+  /// version it declares, the clock it stamps a `Pong` with, and how deep its
+  /// queues are.
+  pub fn with_options(transport: &'static str, codec: C, options: SessionOptions) -> Arc<Self> {
     let protocol = options.protocol;
     let hello = (protocol != ProtocolVersion::UNKNOWN).then(|| {
       let mut buf = Vec::new();
@@ -809,13 +1004,8 @@ where
       codec.encode_into(&protocol, &mut buf).expect("a u32 always encodes");
       Bytes::from(buf)
     });
-    let manager = Arc::new(ConnectionManager::with_hello_and_clock(
-      transport,
-      capacity,
-      hello,
-      options.clock,
-    ));
-    let (deserialized_tx, deserialized_rx) = session_channel(capacity);
+    let manager = Arc::new(ConnectionManager::with_options(transport, hello, &options));
+    let (deserialized_tx, deserialized_rx) = session_channel(options.queues.decoded);
 
     let session = Arc::new(Self {
       transport,
