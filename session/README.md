@@ -92,7 +92,31 @@ The closure runs on a connection task, so an authoritative clock that lives on t
 
 ### Sizing the queues, and what a connection may ask for
 
-Every buffer a session owns and every cap it enforces has a default, and every one of them is a guess about a server this crate has never seen. A 16-player room and a 4000-connection relay do not want the same numbers, so the defaults are a starting point and each is one call away:
+Every buffer a session owns and every cap it enforces has a default, and every one of them is a guess about a server this crate has never seen. A 16-player room and a 4000-connection relay do not want the same numbers, so nothing here is prescribed: name what your game does and the depths follow, or set any of them yourself.
+
+The shortest version is to name the workload:
+
+```rust,ignore
+SessionOptions::with_protocol(ProtocolVersion(PROTOCOL)).workload(&Workload::action())
+```
+
+which derives every depth and cap from a handful of answers, and what those answers are is worth knowing because you will want to change them. `Workload` carries the tick rate, peak players, ops per player per tick, how long a client may stall, the join burst, the tick budget, the largest frame, a memory budget, and whether a lost op or a wait is the worse failure. A preset is just a `Workload` with those filled in, so `Workload::action().peak_players(200)` is not an escape hatch out of a preset, it is the same mechanism.
+
+What the seven derive today:
+
+| preset | inbound | decoded | presence | outbound |
+|---|---|---|---|---|
+| `action` | 48 | 48 | 16 | 4 |
+| `horde` | 192 | 192 | 64 | 47 |
+| `turn_based` | 16 | 16 | 16 | 4 |
+| `social_relay` | 4096 | 4096 | 512 | 4 |
+| `spectator` | 8 | 8 | 512 | 4 |
+| `lobby` | 8 | 8 | 4096 | 4 |
+| `local` | 32 | 32 | 32 | 4 |
+
+The striking column is `outbound`, and it is measured rather than chosen. A stalled client's socket already holds roughly 540 KiB before this crate's queue is what fills, which is over a thousand frames at 512 bytes and fourteen at 40 KiB. So for a small-payload game the outbound queue is nearly a no-op and the kernel is doing the work; it only becomes the binding term once frames are large, which is why `horde` is the one preset that needs a real one. That 540 KiB is this machine's, though, so `Workload::socket_buffer_bytes` is a field: a Linux box behind a real NIC tunes its sockets differently and should say so.
+
+Underneath all of that, every field is still yours:
 
 ```rust,ignore
 SessionOptions::with_protocol(ProtocolVersion(PROTOCOL))

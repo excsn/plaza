@@ -14,6 +14,7 @@ pub mod error;
 pub mod host;
 pub mod manager;
 pub mod stats;
+pub mod workload;
 
 #[cfg(any(feature = "actix_ws", feature = "tcp"))]
 pub(crate) mod control;
@@ -25,6 +26,7 @@ pub use codec::JsonCodec;
 pub use codec::MsgPackCodec;
 pub use conditioner::{Delivery, DirectionProfile, LinkProfile, RETRANSMIT_PENALTY};
 pub use error::SessionLayerError;
+pub use workload::{Priority, Workload, DEFAULT_SOCKET_BUFFER_BYTES};
 pub use manager::{
   ConnectionManager, Limits, Queues, SessionClock, SessionOptions, TransportSession,
   DEFAULT_BROADCAST_CAPACITY, DEFAULT_CLIENT_QUEUE_CAPACITY, DEFAULT_CONDITIONER_CAPACITY,

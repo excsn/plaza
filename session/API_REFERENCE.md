@@ -196,7 +196,7 @@ pub struct Limits {
 }
 ```
 
-Both are plain structs with `Default`, reachable through [`SessionOptions`](#type-sessionclock-and-struct-sessionoptions) and readable off a manager with `ConnectionManager::queues()` / `limits()`, which is where a transport adapter picks them up.
+Both are plain structs with `Default`, reachable through [`SessionOptions`](#type-sessionclock-and-struct-sessionoptions) and readable off a manager with `ConnectionManager::queues()` / `limits()`, which is where a transport adapter picks them up. `Queues::for_workload` and `Limits::for_workload` derive them from a [`Workload`](#module-workload).
 
 The defaults below are a starting point rather than a prescription: what suits a 16-player room and what suits a 4000-connection relay are not the same number, and only the application knows which it is. Raising a depth costs memory times connections; lowering it makes the queue drop sooner. `inbound`, `decoded` and `presence` share a default because they used to share one constructor argument, not because they carry comparable traffic: presence is one event per connect, the other two are every frame from every client.
 
@@ -210,6 +210,37 @@ The two byte caps are separate because they bound different mechanisms, and each
 *   `DEFAULT_MAX_FRAME_BYTES: usize = 8 * 1024 * 1024`: `Limits::max_frame_bytes`, which is what `LengthDelimitedCodec` enforces without being asked.
 *   `DEFAULT_MAX_MESSAGE_BYTES: usize = 1024 * 1024`: `Limits::max_message_bytes`.
 *   `DEFAULT_PROBE_SLOTS: usize = 16`: `Limits::probe_slots`, about two seconds of the probe's fast phase.
+
+## Module `workload`
+
+```rust
+pub struct Workload {
+  pub tick_rate: u32,
+  pub peak_players: usize,
+  pub ops_per_player_per_tick: u32,
+  pub stall_tolerance: Duration,
+  pub join_burst: usize,
+  pub tick_budget: Option<Duration>,
+  pub max_payload: usize,
+  pub memory_budget: Option<usize>,
+  pub priority: Priority,          // LossFree | LatencyFirst
+  pub socket_buffer_bytes: usize,
+}
+```
+
+What an application does, in terms its author already knows, and the input `Queues::for_workload` and `Limits::for_workload` derive depths from. `SessionOptions::workload(&w)` applies both.
+
+Seven presets, each a `Workload` literal rather than an opaque table, so changing one field of one is the same mechanism as writing your own: `action`, `horde`, `turn_based`, `social_relay`, `spectator`, `lobby`, `local`. A test asserts no two derive the same shape, on the principle that a preset which computes what another computes is a second name rather than a second preset.
+
+Three constants are judgement rather than measurement, and say so in their own docs:
+
+*   `DEFAULT_SOCKET_BUFFER_BYTES: usize = 540 * 1024`: what the host buffers under the outbound queue, measured on macOS loopback in `benches/saturation.rs` and constant across an 80x range of frame sizes. It is a property of the host, which is why `Workload::socket_buffer_bytes` overrides it.
+*   `MIN_OUTBOUND_CAPACITY: usize = 4`: floor under a derived per-connection depth, because the derivation subtracts a socket estimate this crate cannot verify and an over-large one concludes the queue is unnecessary. A `memory_budget` that cannot afford the floor still wins, so a build that cannot pay four frames per connection learns it rather than being quietly given them.
+*   `MIN_CONTROLLER_CAPACITY: usize = 8`: floor under the controller-facing depths. `ops_per_player_per_tick: 0` is a claim about intent and not a guarantee, since a client can always send.
+
+`Priority::headroom` doubles derived depths under `LossFree`: an under-provisioned queue costs correctness there and one superseded frame otherwise.
+
+`conditioner` and `probe_slots` are not derived. What the conditioner holds follows from the `LinkProfile` set at runtime, and the probe table from the round trip and the probe schedule; neither is something a workload describes.
 
 ## 5. Module `actix_ws` (feature `actix_ws`)
 

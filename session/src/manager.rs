@@ -165,6 +165,23 @@ impl SessionOptions {
     self
   }
 
+  /// Derives every queue depth and limit from what the application does.
+  ///
+  /// The starting point rather than the last word: any field can still be set
+  /// after this call, and the individual builders below override what the
+  /// derivation chose.
+  ///
+  /// ```rust,ignore
+  /// SessionOptions::with_protocol(ProtocolVersion(PROTOCOL))
+  ///   .workload(&Workload::action())
+  ///   .outbound_capacity(512)
+  /// ```
+  pub fn workload(mut self, workload: &crate::workload::Workload) -> Self {
+    self.queues = Queues::for_workload(workload);
+    self.limits = Limits::for_workload(workload);
+    self
+  }
+
   /// Replaces every queue depth at once.
   pub fn queues(mut self, queues: Queues) -> Self {
     self.queues = queues;
