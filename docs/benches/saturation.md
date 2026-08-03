@@ -8,17 +8,29 @@ The reading is the **slope**. One more slot should absorb one more frame, so slo
 
 ## outbound, median of 5
 
-A client that never reads its socket.
+A client that never reads its socket, at three frame sizes.
 
-| depth | frames accepted |
-|---|---|
-| 64 | 198 |
-| 128 | 261 |
-| 256 | 389 |
-| 512 | 646 |
-| 1024 | 1158 |
+| depth | 512 B | 4 KiB | 40 KiB |
+|---|---|---|---|
+| 64 | 1113 | 199 | 78 |
+| 128 | 1175 | 261 | 142 |
+| 256 | 1297 | 391 | 270 |
+| 512 | 1561 | 646 | 526 |
+| 1024 | 2074 | 1157 | 1038 |
 
-slope 1.00, intercept 134. Accepted is `depth + 134` at every point, within one frame. The intercept is the kernel send buffer plus the framed writer, so it is a byte budget rather than a frame count: at 4 KiB per frame it is roughly 540 KiB, and a build sending larger frames should expect proportionally fewer. Unmeasured at a second frame size.
+slope 1.00 at all three sizes; intercepts 1049, 135 and 14 frames.
+
+| frame bytes | intercept, frames | intercept, KiB |
+|---|---|---|
+| 512 | 1049 | 524 |
+| 4096 | 135 | 541 |
+| 40960 | 14 | 560 |
+
+**The intercept is a byte budget, not a frame count**: about 540 KiB across an 80x range of frame sizes. The 7% drift is rounding, since a partly-buffered frame counts as a whole one and that is worth more at 40 KiB than at 512 B.
+
+It is socket buffering plus the framed writer, and on loopback both ends are the same machine: macOS 26.4.1 starts `net.inet.tcp.sendspace` at 128 KiB and auto-tunes to `net.inet.tcp.autosndbufmax` of 4 MiB, with `recvspace` another 128 KiB filling on the stalled client's side. What transfers to another platform is the shape, byte-fixed with slope 1, not the constant.
+
+The consequence for sizing: `outbound` is the binding term only once frames are large. At 512 B the socket already holds a thousand frames, so the default depth of 64 adds 6% to what a client can fall behind by; at 40 KiB it holds 14, and the queue is nearly all of it.
 
 ## inbound and decoded
 

@@ -37,8 +37,20 @@ type Seat = u32;
 /// thousands, so the intercept stays in the same order as the depths swept.
 const FRAME_PAYLOAD: usize = 4096;
 
+/// The sizes the outbound intercept is measured at. What sits under plaza's
+/// queue is a kernel buffer counted in bytes, so an intercept read in frames
+/// only means something once it is read at more than one frame size.
+const FRAME_SIZES: [usize; 3] = [512, 4096, 40960];
+
 /// Enough to overrun every depth swept, bounding a scenario that never drops.
 const BURST: u64 = 20_000;
+
+/// As above, sized for one sweep: the depth, plus room for an intercept that
+/// grows as frames shrink. A flat `BURST` of large frames encodes gigabytes to
+/// learn the same thing.
+fn burst_for(depth: usize, frame_bytes: usize) -> u64 {
+  depth as u64 * 2 + (3 * 600_000 / frame_bytes as u64) + 1_000
+}
 
 /// How long a scenario waits for the queues to settle before reading counters.
 const SETTLE: Duration = Duration::from_millis(400);
@@ -68,14 +80,16 @@ fn median(mut readings: Vec<u64>) -> u64 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Op(String);
 
-fn op() -> Op {
-  Op("x".repeat(FRAME_PAYLOAD))
+fn op(frame_bytes: usize) -> Op {
+  Op("x".repeat(frame_bytes))
 }
 
 fn ops_frame() -> Vec<u8> {
   let mut buf = Vec::new();
   frame::begin(frame::Kind::Ops, &mut buf);
-  JsonCodec.encode_into(&vec![op()], &mut buf).expect("op encodes");
+  JsonCodec
+    .encode_into(&vec![op(FRAME_PAYLOAD)], &mut buf)
+    .expect("op encodes");
   buf
 }
 
@@ -101,10 +115,10 @@ async fn connected(session: &TcpPlazaSession<Op, Seat>, count: usize) {
 
 /// Broadcasts until the burst is spent, ignoring the error a full queue raises:
 /// the counters are what this reads, not the return.
-async fn flood(session: &TcpPlazaSession<Op, Seat>) {
-  for _ in 0..BURST {
+async fn flood(session: &TcpPlazaSession<Op, Seat>, frame_bytes: usize, count: u64) {
+  for _ in 0..count {
     let _ = session
-      .send_message(MessageTarget::All, SessionMessage::system(vec![op()]))
+      .send_message(MessageTarget::All, SessionMessage::system(vec![op(frame_bytes)]))
       .await;
   }
 }
@@ -113,14 +127,14 @@ async fn flood(session: &TcpPlazaSession<Op, Seat>) {
 ///
 /// The connection task blocks writing to a full socket, stops draining the
 /// outbound queue, and the queue fills behind it.
-async fn outbound_absorption(depth: usize) -> u64 {
+async fn outbound_absorption(depth: usize, frame_bytes: usize) -> u64 {
   let session = bind(SessionOptions::default().outbound_capacity(depth)).await;
   let addr = session.local_addr();
 
   let _silent = TcpStream::connect(addr).await.expect("connect");
   connected(&session, 1).await;
 
-  flood(&session).await;
+  flood(&session, frame_bytes, burst_for(depth, frame_bytes)).await;
   tokio::time::sleep(SETTLE).await;
   session.manager().stats().outbound()
 }
@@ -209,7 +223,7 @@ async fn conditioner_absorption(depth: usize) -> u64 {
     Duration::from_secs(30),
   )));
 
-  flood(&session).await;
+  flood(&session, FRAME_PAYLOAD, BURST).await;
   tokio::time::sleep(SETTLE).await;
 
   let dropped: u64 = (1..=1).map(|conn| session.manager().link_dropped(conn)).sum();
@@ -217,7 +231,7 @@ async fn conditioner_absorption(depth: usize) -> u64 {
 }
 
 /// Absorbed against depth, plus the line through the ends of the sweep.
-fn report(title: &str, unit: &str, rows: &[(usize, u64)]) {
+fn report(title: &str, unit: &str, rows: &[(usize, u64)]) -> f64 {
   println!("\n## {title}\n");
   println!("| depth | {unit} |");
   println!("|---|---|");
@@ -229,6 +243,7 @@ fn report(title: &str, unit: &str, rows: &[(usize, u64)]) {
   let slope = (last as f64 - first as f64) / (last_depth as f64 - first_depth as f64);
   let intercept = first as f64 - slope * first_depth as f64;
   println!("\nslope {slope:.2} per slot, intercept {intercept:.0}");
+  intercept
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -237,19 +252,31 @@ async fn main() {
   let run = |name: &str| wanted.is_empty() || wanted.iter().any(|w| w == name);
 
   if run("outbound") {
-    let mut rows = Vec::new();
-    for depth in OUTBOUND_DEPTHS {
-      let mut readings = Vec::with_capacity(REPEATS);
-      for _ in 0..REPEATS {
-        readings.push(outbound_absorption(depth).await);
+    let mut intercepts = Vec::new();
+    for frame_bytes in FRAME_SIZES {
+      let mut rows = Vec::new();
+      for depth in OUTBOUND_DEPTHS {
+        let mut readings = Vec::with_capacity(REPEATS);
+        for _ in 0..REPEATS {
+          readings.push(outbound_absorption(depth, frame_bytes).await);
+        }
+        rows.push((depth, median(readings)));
       }
-      rows.push((depth, median(readings)));
+      let intercept = report(
+        &format!("outbound at {frame_bytes} B frames, median of {REPEATS}"),
+        "frames accepted",
+        &rows,
+      );
+      intercepts.push((frame_bytes, intercept));
     }
-    report(
-      &format!("outbound, median of {REPEATS}"),
-      "frames accepted",
-      &rows,
-    );
+
+    println!("\n## outbound intercept against frame size\n");
+    println!("| frame bytes | intercept, frames | intercept, KiB |");
+    println!("|---|---|---|");
+    for (frame_bytes, intercept) in &intercepts {
+      let kib = intercept * *frame_bytes as f64 / 1024.0;
+      println!("| {frame_bytes} | {intercept:.0} | {kib:.0} |");
+    }
   }
 
   if run("inbound") {
