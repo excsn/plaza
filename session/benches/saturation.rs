@@ -79,6 +79,12 @@ const REPEATS: usize = 5;
 /// queue: slower than arrival, so both queues still fill.
 const DRAIN_INTERVAL: Duration = Duration::from_millis(2);
 
+/// Fractions of a derived depth the knee sweep runs at. A quarter is here
+/// because halving lands on the requirement itself wherever the derivation
+/// folds in a 2x headroom, and a point that is not below the requirement
+/// cannot show a knee.
+const FRACTIONS: [usize; 3] = [1, 2, 4];
+
 fn median(mut readings: Vec<u64>) -> u64 {
   readings.sort_unstable();
   readings[readings.len() / 2]
@@ -260,9 +266,11 @@ async fn conditioner_absorption(depth: usize) -> u64 {
 /// derived depth does not sit on the knee is a parameter that does not earn
 /// its place.
 ///
-/// Returns drops at full derivation and at half of it. The first should be
-/// zero and the second should not.
-async fn presence_formula(join_burst: usize) -> (u64, u64) {
+/// Returns drops at the derived depth and at successive fractions of it. The
+/// first should be zero and one of the rest should not: halving alone lands
+/// exactly on the requirement wherever `LossFree` folds in its 2x headroom, so
+/// a quarter is what reaches below it.
+async fn presence_formula(join_burst: usize) -> (u64, u64, u64) {
   let workload = Workload {
     join_burst,
     ..Workload::lobby()
@@ -270,7 +278,8 @@ async fn presence_formula(join_burst: usize) -> (u64, u64) {
   let derived = Queues::for_workload(&workload).presence;
   let mut readings = Vec::new();
 
-  for depth in [derived, (derived / 2).max(1)] {
+  for divisor in FRACTIONS {
+    let depth = (derived / divisor).max(1);
     let session = bind(
       SessionOptions::default()
         .presence_capacity(depth)
@@ -288,12 +297,12 @@ async fn presence_formula(join_burst: usize) -> (u64, u64) {
     tokio::time::sleep(SETTLE).await;
     readings.push(session.manager().stats().presence_dropped());
   }
-  (readings[0], readings[1])
+  (readings[0], readings[1], readings[2])
 }
 
 /// The same for the inbound pipe, whose depth is one tick of arrivals plus what
 /// accumulates while the controller works.
-async fn inbound_formula(peak_players: usize, ops_per_player_per_tick: u32) -> (u64, u64) {
+async fn inbound_formula(peak_players: usize, ops_per_player_per_tick: u32) -> (u64, u64, u64) {
   let workload = Workload {
     peak_players,
     ops_per_player_per_tick,
@@ -304,7 +313,8 @@ async fn inbound_formula(peak_players: usize, ops_per_player_per_tick: u32) -> (
   let arrivals = peak_players * ops_per_player_per_tick as usize;
   let mut readings = Vec::new();
 
-  for total in [derived, (derived / 2).max(1)] {
+  for divisor in FRACTIONS {
+    let total = (derived / divisor).max(1);
     let session = bind(
       SessionOptions::default()
         .inbound_capacity(total.div_ceil(2))
@@ -333,12 +343,12 @@ async fn inbound_formula(peak_players: usize, ops_per_player_per_tick: u32) -> (
     readings.push(session.manager().stats().inbound_dropped());
     let _ = arrivals;
   }
-  (readings[0], readings[1])
+  (readings[0], readings[1], readings[2])
 }
 
 /// The same for the outbound queue, whose depth is what a stall needs beyond
 /// what the socket already holds.
-async fn outbound_formula(tick_rate: u32, stall: Duration, payload: usize) -> (u64, u64) {
+async fn outbound_formula(tick_rate: u32, stall: Duration, payload: usize) -> (u64, u64, u64) {
   let workload = Workload {
     tick_rate,
     stall_tolerance: stall,
@@ -351,7 +361,8 @@ async fn outbound_formula(tick_rate: u32, stall: Duration, payload: usize) -> (u
   let frames = (tick_rate as f64 * stall.as_secs_f64()).ceil() as u64;
   let mut readings = Vec::new();
 
-  for depth in [derived, (derived / 2).max(1)] {
+  for divisor in FRACTIONS {
+    let depth = (derived / divisor).max(1);
     let session = bind(
       SessionOptions::default()
         .outbound_capacity(depth)
@@ -366,7 +377,7 @@ async fn outbound_formula(tick_rate: u32, stall: Duration, payload: usize) -> (u
     tokio::time::sleep(SETTLE).await;
     readings.push(session.manager().stats().outbound_dropped());
   }
-  (readings[0], readings[1])
+  (readings[0], readings[1], readings[2])
 }
 
 /// Resident kibibytes for this process.
@@ -556,8 +567,8 @@ async fn main() {
 
   if run("parameters") {
     println!("\n## does a parameter's derived depth sit on the knee\n");
-    println!("| parameter | value | derived | drops at derived | drops at half |");
-    println!("|---|---|---|---|---|");
+    println!("| parameter | value | derived | at derived | at half | at quarter |");
+    println!("|---|---|---|---|---|---|");
 
     for join_burst in [8usize, 32, 128, 512] {
       let derived = Queues::for_workload(&Workload {
@@ -565,8 +576,8 @@ async fn main() {
         ..Workload::lobby()
       })
       .presence;
-      let (full, half) = presence_formula(join_burst).await;
-      println!("| join_burst | {join_burst} | {derived} | {full} | {half} |");
+      let (full, half, quarter) = presence_formula(join_burst).await;
+      println!("| join_burst | {join_burst} | {derived} | {full} | {half} | {quarter} |");
     }
 
     for peak_players in [8usize, 32, 128] {
@@ -577,8 +588,8 @@ async fn main() {
           ..Workload::action()
         });
         let derived = queues.inbound + queues.decoded;
-        let (full, half) = inbound_formula(peak_players, ops).await;
-        println!("| peak_players x ops | {peak_players} x {ops} | {derived} | {full} | {half} |");
+        let (full, half, quarter) = inbound_formula(peak_players, ops).await;
+        println!("| peak_players x ops | {peak_players} x {ops} | {derived} | {full} | {half} | {quarter} |");
       }
     }
 
@@ -597,8 +608,8 @@ async fn main() {
         ..Workload::horde()
       })
       .outbound;
-      let (full, half) = outbound_formula(60, stall, payload).await;
-      println!("| stall_tolerance | {stall:?} | {derived} | {full} | {half} |");
+      let (full, half, quarter) = outbound_formula(60, stall, payload).await;
+      println!("| stall_tolerance | {stall:?} | {derived} | {full} | {half} | {quarter} |");
     }
   }
 

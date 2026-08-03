@@ -118,29 +118,31 @@ slope 1.00, intercept 0.
 
 ## does a parameter's derived depth sit on the knee
 
-The sweeps above prove the depth knob is the binding term. This asks the separate question the formulas need: build the load from a `Workload` rather than from a depth, run it at the derived depth and at half of it, and see whether the derivation lands on the knee.
+The sweeps above prove the depth knob is the binding term. This asks the separate question the formulas need: build the load from a `Workload` rather than from a depth, run it at the derived depth and at fractions of it, and see whether the derivation lands on the knee. A quarter is needed because halving lands exactly on the requirement wherever `LossFree` folds in its 2x headroom.
 
-| parameter | value | derived | drops at derived | drops at half |
-|---|---|---|---|---|
-| join_burst | 8 | 16 | 0 | 0 |
-| join_burst | 32 | 64 | 0 | 0 |
-| join_burst | 128 | 256 | 0 | 0 |
-| join_burst | 512 | 1024 | 0 | 0 |
-| peak_players x ops | 8 x 1 | 24 | 0 | 0 |
-| peak_players x ops | 8 x 2 | 48 | 0 | 0 |
-| peak_players x ops | 32 x 1 | 96 | 0 | 0 |
-| peak_players x ops | 32 x 2 | 192 | 0 | 0 |
-| peak_players x ops | 128 x 1 | 384 | 0 | 0 |
-| peak_players x ops | 128 x 2 | 768 | 0 | 0 |
-| stall_tolerance | 250ms | 4 | 0 | 0 |
-| stall_tolerance | 500ms | 17 | 0 | 0 |
-| stall_tolerance | 1s | 47 | 0 | 23 |
-| stall_tolerance | 2s | 107 | 0 | 53 |
+| parameter | value | derived | at derived | at half | at quarter |
+|---|---|---|---|---|---|
+| join_burst | 8 | 16 | 0 | 0 | 4 |
+| join_burst | 32 | 64 | 0 | 0 | 16 |
+| join_burst | 128 | 256 | 0 | 0 | 64 |
+| join_burst | 512 | 1024 | 0 | 0 | 256 |
+| peak_players x ops | 8 x 1 | 16 | 0 | 0 | 3 |
+| peak_players x ops | 8 x 2 | 32 | 0 | 0 | 7 |
+| peak_players x ops | 32 x 1 | 64 | 0 | 0 | 15 |
+| peak_players x ops | 32 x 2 | 128 | 0 | 0 | 31 |
+| peak_players x ops | 128 x 1 | 256 | 0 | 0 | 63 |
+| peak_players x ops | 128 x 2 | 512 | 0 | 0 | 127 |
+| stall_tolerance | 250ms | 4 | 0 | 0 | 5 |
+| stall_tolerance | 500ms | 17 | 0 | 0 | 12 |
+| stall_tolerance | 1s | 47 | 0 | 23 | 11 |
+| stall_tolerance | 2s | 107 | 0 | 53 | 80 |
 
-**`stall_tolerance` is confirmed, exactly.** At 1s the load is 60 frames, and zero drops at depth 47 against 23 at depth 23 puts the socket at `60 - 23 - 23 = 14` frames; at 2s, `120 - 53 - 53 = 14` again. That is the same 14 the frame-size sweep measured from unrelated arithmetic, so `outbound = tick_rate * stall - socket_frames` predicts the knee to the frame.
+**`join_burst` is exact**: drops are `load - depth` at all four values, which is presence absorbing precisely its depth with nothing underneath, reached from the parameter side rather than the depth side.
 
-Its first two rows carry no knee for reasons the numbers give: at 250ms the formula asks for 2 slots and `MIN_OUTBOUND_CAPACITY` overrides it, so the floor is what is being measured. 500ms is unexplained: 30 frames against 13 socket and 8 queue should have dropped, and did not.
+**`peak_players` and `ops_per_player_per_tick` are exact to one frame**: drops are `load - depth - 1` across all six rows, the spare frame being the one in flight through the bridge that the undrained sweeps saw as intercept 9 rather than 8.
 
-**`join_burst` and `peak_players x ops` are untested rather than confirmed.** Halving a depth that carries a 2x `LossFree` headroom lands exactly on the requirement, and the controller-facing depths also carry `MIN_CONTROLLER_CAPACITY` on top, so the generated load never approaches either point. Finding their knees needs a third point below the requirement, not a second at it.
+**`stall_tolerance` holds where the burst clears the socket's auto-tuning.** At 2s all three points agree on a socket of 14 frames: `120 - 53 - 53` and `120 - 26 - 80` both give 14, and 107 + 14 covers the 120 sent. At 1s the half point gives 14 again and the quarter point is an outlier. The 250ms and 500ms rows are internally inconsistent, requiring a socket of 9 and 22 within a single row: those bursts are 600 KB and 1.2 MB against a send buffer that starts at 128 KiB and auto-tunes toward 4 MiB, so what it absorbs is not settled. **Below roughly 2 MB this method does not measure the outbound knee**, which is a limit of the harness rather than of the formula.
 
-The sweep did find a bug rather than confirming one: `128 x 2` derived 768 where the formula says 512, because an unset `tick_budget` became a `Duration` that rounds up and read as two ticks of backlog instead of one. Six of the seven presets left it unset. Fixed, with the derived depths above taken before the fix.
+The derived depths for the inbound rows are two thirds of what the previous run reported, which is the `tick_budget` rounding fix showing up in the measurement: one backlog tick instead of two turns `(arrivals + 2*arrivals)` into `(arrivals + arrivals)`. It was found by this sweep, fixed, and is confirmed here rather than only in the unit test written for it.
+
+`tick_budget` itself is measured only at its default. Explicit values are covered by a test, not by a sweep.
