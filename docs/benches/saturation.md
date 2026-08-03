@@ -48,19 +48,21 @@ Both slope 1.00, intercept 9. Accepted is `inbound + decoded + 1` exactly. **The
 
 ## inbound and decoded, draining controller
 
-One message taken every 2ms, median of 5.
+One message taken every 2ms, median of 5. The drainer counts what it removes and stops when the flood does, so absorption is `accepted - taken` rather than `accepted`.
 
 | depth | inbound swept | decoded swept |
 |---|---|---|
-| 8 | 25 | 33 |
-| 16 | 41 | 41 |
-| 32 | 57 | 41 |
-| 64 | 89 | 73 |
-| 128 | 153 | 137 |
+| 8 | 15 | 15 |
+| 16 | 24 | 24 |
+| 32 | 39 | 26 |
+| 64 | 72 | 55 |
+| 128 | 135 | 120 |
 
-Slopes 1.07 and 0.87, against 0.93 for both when this was single-shot. They straddle 1.00 and disagree with each other by 20%, which is the reading: **medians do not rescue this scenario.** How many messages the drainer removes depends on how long the client's send takes, which varies run to run, so repetition shrinks the spread without removing the term. Absorption here is inferred rather than measured.
+Slopes 1.00 and 0.88. The inbound sweep is on the undrained control, its intercept two frames lower for the messages in flight through the bridge when the drainer stops.
 
-So this neither contradicts the undrained result nor sharpens it. Fixing it is design rather than repetition: count what the drainer took and subtract it. Until then the undrained sweeps, which return byte-identical integers across four runs, are the ones that carry the conclusion.
+The decoded sweep is not, and its depth-32 point is non-monotone against its own neighbours, which reads as noise rather than as a separation between the queues.
+
+What the sequence of attempts says is worth more than either number. Inferring absorption from the accepted total gave 0.93 and 0.93; medians alone gave 1.07 and 0.87; counting the drainer's messages but reading the count after the settle, while it was still emptying the queues, gave 0.12 and 0.02. Only counting over the right window resolved anything, and it resolved one sweep of two. **The undrained pair carries the conclusion**: byte-identical integers, six runs.
 
 ## per-connection footprint
 

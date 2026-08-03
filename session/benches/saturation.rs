@@ -17,7 +17,7 @@
 
 #![cfg(feature = "tcp")]
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -172,10 +172,17 @@ async fn inbound_absorption_drained(inbound: usize, decoded: usize, drain: bool)
   .await;
   let addr = session.local_addr();
 
+  // Counted, not assumed: how many the drainer removes depends on how long the
+  // client's send takes, which varies run to run. Inferring absorption from the
+  // accepted total left that term in the reading, and repeating the run only
+  // shrank its spread.
+  let taken = Arc::new(AtomicU64::new(0));
   let drainer = drain.then(|| {
     let incoming = session.subscribe_to_incoming_messages();
+    let taken = taken.clone();
     tokio::spawn(async move {
       while incoming.recv().await.is_ok() {
+        taken.fetch_add(1, Ordering::Relaxed);
         tokio::time::sleep(DRAIN_INTERVAL).await;
       }
     })
@@ -191,13 +198,17 @@ async fn inbound_absorption_drained(inbound: usize, decoded: usize, drain: bool)
       break;
     }
   }
-  tokio::time::sleep(SETTLE).await;
+  // Stopped before the queues are allowed to settle, not after: a drainer left
+  // running through the settle keeps emptying them, and its count then includes
+  // messages removed after the fill it is meant to correct for.
   if let Some(drainer) = drainer {
     drainer.abort();
   }
+  tokio::time::sleep(SETTLE).await;
   // `inbound` counts every batch offered, `outbound` only the accepted ones.
+  // What the queues still hold is what was accepted less what the drainer took.
   let stats = session.manager().stats();
-  stats.inbound() - stats.inbound_dropped()
+  (stats.inbound() - stats.inbound_dropped()).saturating_sub(taken.load(Ordering::Relaxed))
 }
 
 /// Connections arriving faster than a controller that never subscribes.
