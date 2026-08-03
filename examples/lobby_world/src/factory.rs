@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use parking_lot::Mutex;
-use plaza::controller::StateControllerBuilder;
+use plaza::controller::{CommandSender, StateControllerBuilder};
 use plaza::tick_driver::TickDriver;
 use plaza_lobby::factory::RoomFactory;
 use plaza_lobby::op_payloads::RoomSettings;
@@ -31,6 +31,16 @@ const ARENA_TICK_HZ: u32 = 20;
 #[derive(Clone)]
 pub struct ArenaEntry {
   pub session: Arc<ArenaSession>,
+  /// The room's command channel, kept here rather than on its `RoomHandle`.
+  ///
+  /// The seam the lobby holds names neither `RoomOp` nor `ArenaState`, which is
+  /// what lets a room live somewhere else. An application that needs to speak
+  /// to its rooms in their own vocabulary built them, so it keeps them.
+  pub commands: CommandSender<RoomOp, PlayerId, ArenaState>,
+  /// The concrete handle, for the same reason as `commands`: the lobby's copy
+  /// of a room's metadata is a cache, and refreshing it is the application's
+  /// job because only the application knows the live count.
+  pub room: Arc<InProcessRoomHandle<RoomOp, PlayerId, ArenaState, ArenaSettings>>,
   /// An atomic rather than a controller query: the lobby reads this on every
   /// room listing.
   pub seats: Arc<AtomicU32>,
@@ -53,6 +63,17 @@ impl RoomRegistry {
 
   pub fn get(&self, room_id: &RoomId) -> Option<ArenaEntry> {
     self.arenas.lock().get(room_id).cloned()
+  }
+
+  /// The command channel for one arena, which the lobby's `RoomHandle`
+  /// deliberately does not carry.
+  pub fn commands(&self, room_id: &RoomId) -> Option<CommandSender<RoomOp, PlayerId, ArenaState>> {
+    self.arenas.lock().get(room_id).map(|entry| entry.commands.clone())
+  }
+
+  /// The concrete handle for one arena.
+  pub fn room(&self, room_id: &RoomId) -> Option<Arc<InProcessRoomHandle<RoomOp, PlayerId, ArenaState, ArenaSettings>>> {
+    self.arenas.lock().get(room_id).map(|entry| Arc::clone(&entry.room))
   }
 
   pub fn remove(&self, room_id: &RoomId) {
@@ -88,10 +109,7 @@ impl RoomFactory for ArenaFactory {
     &self,
     room_id: RoomId,
     room_settings: &RoomSettings<Self::CustomGameSettings>,
-  ) -> Result<
-    InProcessRoomHandle<Self::GameOp, Self::GameID, Self::GameStateType, Self::CustomGameSettings>,
-    LobbyError,
-  > {
+  ) -> Result<Arc<dyn plaza_lobby::RoomHandle<Self::GameID, Self::CustomGameSettings>>, LobbyError> {
     let name = room_settings
       .name
       .clone()
@@ -119,10 +137,7 @@ impl RoomFactory for ArenaFactory {
     let task = tokio::spawn(controller.run());
     tokio::spawn(TickDriver::from_hz(ARENA_TICK_HZ).run(commands.clone()));
 
-    self.registry.insert(room_id, ArenaEntry {
-      session,
-      seats,
-    });
+
 
     let endpoint = format!("ws://{}/ws/room/{}", self.authority, room_id);
     info!(room = %room_id, arena = %name, endpoint = %endpoint, "Arena spawned.");
@@ -138,13 +153,20 @@ impl RoomFactory for ArenaFactory {
       custom_game_settings_summary: room_settings.custom_game_settings,
     };
 
-    Ok(InProcessRoomHandle::new(
+    let room = Arc::new(InProcessRoomHandle::new(
       room_id,
       metadata,
-      commands,
+      commands.clone(),
       task,
       endpoint,
       room_settings.password_hash.clone(),
-    ))
+    ));
+    self.registry.insert(room_id, ArenaEntry {
+      session,
+      seats,
+      commands,
+      room: Arc::clone(&room),
+    });
+    Ok(room)
   }
 }

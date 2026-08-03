@@ -1,7 +1,7 @@
 use crate::error::LobbyError;
 use crate::factory::RoomFactory;
 use crate::op_payloads::*;
-use crate::room::{InProcessRoomHandle, RoomHandle};
+use crate::room::RoomHandle;
 use crate::types::RoomId;
 use parking_lot::Mutex;
 use plaza::agent::Agent;
@@ -9,14 +9,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
-type RoomArc<F> = Arc<
-  InProcessRoomHandle<
-    <F as RoomFactory>::GameOp,
-    <F as RoomFactory>::GameID,
-    <F as RoomFactory>::GameStateType,
-    <F as RoomFactory>::CustomGameSettings,
-  >,
->;
+type RoomArc<F> =
+  Arc<dyn RoomHandle<<F as RoomFactory>::GameID, <F as RoomFactory>::CustomGameSettings>>;
 
 /// Compares a submitted password against a room's stored hash.
 ///
@@ -26,7 +20,7 @@ type RoomArc<F> = Arc<
 /// [`with_password_verifier`](InMemoryLobbyManager::with_password_verifier).
 pub type PasswordVerifier = Arc<dyn Fn(&str, &str) -> bool + Send + Sync>;
 
-/// Manages `InProcessRoomHandle`s for a single-server lobby, spawning rooms
+/// Manages room handles for a single-server lobby, spawning rooms
 /// through an application-supplied [`RoomFactory`].
 pub struct InMemoryLobbyManager<F>
 where
@@ -91,7 +85,7 @@ where
           room_id,
           room_handle.session_endpoint_info()
         );
-        self.rooms.lock().insert(room_id, Arc::new(room_handle));
+        self.rooms.lock().insert(room_id, room_handle);
         Ok(metadata)
       }
       Err(e) => {

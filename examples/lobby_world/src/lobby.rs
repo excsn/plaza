@@ -16,7 +16,7 @@ use plaza::snapshot::{SnapshotContext, SnapshotError, SnapshotProvider};
 use plaza::state_logic::{LogicInput, LogicOutput, StateLogic, StateLogicError};
 use plaza_lobby::manager::InMemoryLobbyManager;
 use plaza_lobby::op_payloads::JoinRoomRequestPayload;
-use plaza_lobby::{Formed, LobbyError, MatchQueue, RoomHandle, RoomId, TicketRegistry};
+use plaza_lobby::{Formed, LobbyError, MatchQueue, RoomId, TicketRegistry};
 use plaza_session::ActixWsPlazaSession;
 use tracing::{info, warn};
 
@@ -113,11 +113,14 @@ impl LobbyLogic {
   }
 
   /// One pass, rather than every arena reaching into the lobby's metadata.
+  ///
+  /// Through the registry's own handles: the lobby holds a seam that names no
+  /// game types, so refreshing its cached counts is the application's job.
   fn refresh_seat_counts(&self) {
     for handle in self.manager.rooms() {
-      if let Some(entry) = self.registry.get(&handle.id()) {
-        handle.update_player_count_in_metadata(entry.seats.load(Ordering::Relaxed));
-      }
+      let Some(entry) = self.registry.get(&handle.id()) else { continue };
+      let Some(room) = self.registry.room(&handle.id()) else { continue };
+      room.update_player_count_in_metadata(entry.seats.load(Ordering::Relaxed));
     }
   }
 
@@ -168,11 +171,13 @@ impl LobbyLogic {
     why: &str,
     command: ControllerCommand<crate::types::RoomOp, PlayerId, crate::room::ArenaState>,
   ) {
-    let Some(handle) = self.manager.room(room_id) else {
+    // Through the factory's registry, not the lobby's handle: the seam names
+    // no game types, which is what would let an arena live in another process.
+    let Some(commands) = self.registry.commands(room_id) else {
       warn!(room = %room_id, why, "Spoke to a room that has since gone.");
       return;
     };
-    if handle.command_tx.send(command).await.is_err() {
+    if commands.send(command).await.is_err() {
       warn!(room = %room_id, why, "Arena controller ended before the message landed.");
     }
   }

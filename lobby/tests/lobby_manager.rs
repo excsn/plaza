@@ -2,7 +2,10 @@
 //! password checks, filtering, reaping, and the two concurrency bugs this crate
 //! has already produced.
 
+use std::collections::HashMap;
 use std::sync::Arc;
+
+use parking_lot::Mutex;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -77,6 +80,19 @@ impl SnapshotProvider<PlayerId, GameState, GameOp> for GameSnapshotter {
 struct TestRoomFactory {
   /// When set, `spawn_room` fails: exercising the error path.
   fail: bool,
+  /// The concrete handles, kept beside the lobby's trait objects.
+  ///
+  /// This is the pattern an application uses when it needs something of its
+  /// rooms that the seam does not carry: the factory built them, so it can keep
+  /// them. Putting those methods on `RoomHandle` would name `GameOp` and
+  /// `GameStateType` on a trait whose whole point is not to.
+  spawned: Mutex<HashMap<RoomId, Arc<InProcessRoomHandle<GameOp, PlayerId, GameState, GameSettings>>>>,
+}
+
+impl TestRoomFactory {
+  fn concrete(&self, room_id: &RoomId) -> Arc<InProcessRoomHandle<GameOp, PlayerId, GameState, GameSettings>> {
+    Arc::clone(self.spawned.lock().get(room_id).expect("the factory spawned it"))
+  }
 }
 
 #[async_trait]
@@ -90,7 +106,7 @@ impl RoomFactory for TestRoomFactory {
     &self,
     room_id: RoomId,
     settings: &RoomSettings<GameSettings>,
-  ) -> Result<InProcessRoomHandle<GameOp, PlayerId, GameState, GameSettings>, LobbyError> {
+  ) -> Result<Arc<dyn RoomHandle<PlayerId, GameSettings>>, LobbyError> {
     if self.fail {
       return Err(LobbyError::RoomSpawnFailed("factory told to fail".into()));
     }
@@ -116,14 +132,16 @@ impl RoomFactory for TestRoomFactory {
       custom_game_settings_summary: settings.custom_game_settings.clone(),
     };
 
-    Ok(InProcessRoomHandle::new(
+    let room = Arc::new(InProcessRoomHandle::new(
       room_id,
       metadata,
       command_tx,
       handle,
       format!("ws://test/game/{room_id}"),
       settings.password_hash.clone(),
-    ))
+    ));
+    self.spawned.lock().insert(room_id, Arc::clone(&room));
+    Ok(room)
   }
 }
 
@@ -146,7 +164,14 @@ fn settings(max_players: u32, password: Option<&str>) -> RoomSettings<GameSettin
 }
 
 fn manager() -> InMemoryLobbyManager<TestRoomFactory> {
-  InMemoryLobbyManager::new(Arc::new(TestRoomFactory::default()))
+  manager_with_factory().0
+}
+
+/// The lobby plus the factory that built its rooms, for a test that needs
+/// something of a room the seam does not carry.
+fn manager_with_factory() -> (InMemoryLobbyManager<TestRoomFactory>, Arc<TestRoomFactory>) {
+  let factory = Arc::new(TestRoomFactory::default());
+  (InMemoryLobbyManager::new(Arc::clone(&factory)), factory)
 }
 
 fn player() -> (PlayerId, Agent<PlayerId>) {
@@ -171,7 +196,7 @@ async fn creating_a_room_returns_its_metadata_and_lists_it() {
 
 #[tokio::test]
 async fn a_failing_factory_surfaces_its_error() {
-  let lobby = InMemoryLobbyManager::new(Arc::new(TestRoomFactory { fail: true }));
+  let lobby = InMemoryLobbyManager::new(Arc::new(TestRoomFactory { fail: true, ..Default::default() }));
   let (id, _) = player();
 
   let result = lobby.handle_create_room_request(&id, settings(4, None)).await;
@@ -298,18 +323,17 @@ async fn a_custom_verifier_replaces_the_default_comparison() {
 
 #[tokio::test]
 async fn a_full_room_refuses_new_players() {
-  let lobby = manager();
+  let (lobby, factory) = manager_with_factory();
   let (id, agent) = player();
   let metadata = lobby
     .handle_create_room_request(&id, settings(1, None))
     .await
     .expect("spawn");
 
-  // The room's own session owns the player count; simulate it filling up.
-  lobby
-    .room(&metadata.room_id)
-    .expect("room exists")
-    .update_player_count_in_metadata(1);
+  // The room's own session owns the player count; simulate it filling up
+  // through the factory's own handle, since the lobby holds a seam that
+  // deliberately cannot reach in and do this.
+  factory.concrete(&metadata.room_id).update_player_count_in_metadata(1);
 
   let result = lobby
     .handle_join_room_request(

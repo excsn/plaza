@@ -19,7 +19,7 @@ use plaza::controller::StateControllerBuilder;
 use plaza::tick_driver::TickDriver;
 use plaza_lobby::manager::InMemoryLobbyManager;
 use plaza_lobby::op_payloads::RoomSettings;
-use plaza_lobby::{RoomHandle, TicketRegistry};
+use plaza_lobby::TicketRegistry;
 use plaza_session::codec::JsonCodec;
 use plaza_session::ActixWsPlazaSession;
 use plaza_wire::frame::ProtocolVersion;

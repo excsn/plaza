@@ -38,6 +38,17 @@ where
 
   /// Where clients should connect to reach this room, e.g. `"ws://host/game/<id>"`.
   fn session_endpoint_info(&self) -> String;
+
+  /// The hash a join attempt's password is compared against, or `None` for a
+  /// public room.
+  ///
+  /// Never in [`metadata`](Self::metadata), which reports only whether a
+  /// password exists. The comparison is the lobby's, through its
+  /// `PasswordVerifier`, which is why this is readable at all; a room that
+  /// would rather answer "does this admit" than hand the hash over wants a
+  /// different method, and that is the better shape for a room in another
+  /// process.
+  fn password_hash(&self) -> Option<String>;
 }
 
 /// A `RoomHandle` for game rooms running as `StateController` tasks in the same
@@ -94,9 +105,6 @@ where
     meta.current_players = count;
   }
 
-  pub(crate) fn password_hash(&self) -> Option<String> {
-    self.password_hash.clone()
-  }
 }
 
 #[async_trait]
@@ -156,6 +164,10 @@ where
         self.room_id
       );
     }
+  }
+
+  fn password_hash(&self) -> Option<String> {
+    self.password_hash.clone()
   }
 
   fn is_finished(&self) -> bool {

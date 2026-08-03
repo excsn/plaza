@@ -1,6 +1,7 @@
 use crate::error::LobbyError;
 use crate::op_payloads::RoomSettings;
-use crate::room::InProcessRoomHandle;
+use crate::room::RoomHandle;
+use std::sync::Arc;
 use crate::RoomId;
 use async_trait::async_trait;
 use plaza::agent::AgentId;
@@ -20,8 +21,19 @@ pub trait RoomFactory: Send + Sync + 'static {
   /// The game-specific `StateType` for the rooms.
   type GameStateType: Clone + Debug + Send + Sync + 'static + Default;
 
-  /// Creates, configures, and spawns a new game room `StateController` task.
-  /// Returns an `InProcessRoomHandle` to manage and interact with the spawned room.
+  /// Creates, configures, and spawns a new game room, returning the handle the
+  /// lobby will hold it by.
+  ///
+  /// The handle is a trait object, and deliberately: it names neither
+  /// [`GameOp`](Self::GameOp) nor [`GameStateType`](Self::GameStateType), which
+  /// are the two a room in another process could not supply. Return an
+  /// [`InProcessRoomHandle`](crate::room::InProcessRoomHandle) for a room that
+  /// runs here, or your own type for one that does not.
+  ///
+  /// A lobby that needs to speak to its rooms in their own op vocabulary keeps
+  /// its own `RoomId -> CommandSender` map beside this: that is application
+  /// knowledge, and putting it on the handle would put `GameOp` back on a seam
+  /// that exists to avoid it.
   ///
   /// # Arguments
   /// * `room_id`: The unique ID pre-assigned to this room by the `LobbyManager`.
@@ -31,8 +43,5 @@ pub trait RoomFactory: Send + Sync + 'static {
     &self,
     room_id: RoomId,
     room_settings: &RoomSettings<Self::CustomGameSettings>,
-  ) -> Result<
-    InProcessRoomHandle<Self::GameOp, Self::GameID, Self::GameStateType, Self::CustomGameSettings>,
-    LobbyError,
-  >;
+  ) -> Result<Arc<dyn RoomHandle<Self::GameID, Self::CustomGameSettings>>, LobbyError>;
 }
