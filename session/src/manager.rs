@@ -789,12 +789,34 @@ impl<ID: AgentId> ConnectionManager<ID> {
 
   /// Removes a connection and announces the departure.
   pub async fn deregister(&self, conn_id: ConnectionId) {
+    self.remove(conn_id, true).await
+  }
+
+  /// Removes a connection, waiting to announce the departure only if `may_wait`.
+  ///
+  /// The fan-out path passes `false`. `PresenceOverflow::Backpressure` waits on
+  /// a controller draining presence, and a broadcast that disconnects a client
+  /// would otherwise wait on that controller while holding up every other
+  /// recipient of the same frame: the send that caused the departure would be
+  /// blocked by announcing it. Losing one `Left` event is a bounded failure the
+  /// counter records; a stalled fan-out is not.
+  async fn remove(&self, conn_id: ConnectionId, may_wait: bool) {
     let handle = self.connections.write().remove(conn_id);
     match handle {
       Some(handle) => {
         debug!(transport = self.transport, conn_id, agent = %handle.agent, "Connection deregistered.");
         if let Some(id) = handle.agent.id_cloned() {
-          if !self.announce(PresenceEvent::Left(id)).await {
+          let event = PresenceEvent::Left(id);
+          let announced = if may_wait {
+            self.announce(event).await
+          } else {
+            let taken = self.presence_tx.try_send(event).is_ok();
+            if !taken {
+              self.stats.record_presence_dropped();
+            }
+            taken
+          };
+          if !announced {
             warn!(transport = self.transport, conn_id, "Leave notification dropped.");
           }
         }
@@ -881,7 +903,12 @@ impl<ID: AgentId> ConnectionManager<ID> {
   ///
   /// Separate from the fan-out because `deregister` takes the registry's write
   /// guard, which the fan-out's read guard would deadlock against on the same
-  /// thread, and because announcing a departure may wait.
+  /// thread.
+  ///
+  /// The departures are announced without waiting even under
+  /// [`PresenceOverflow::Backpressure`]. A send that disconnects a client must
+  /// not then block on the controller hearing about it, because the controller
+  /// being behind is what filled the queue in the first place.
   pub async fn disconnect_overflowed(&self, overflowed: Vec<ConnectionId>) {
     for conn_id in overflowed {
       warn!(
@@ -890,7 +917,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
         depth = self.queues.outbound,
         "Disconnecting a client whose outbound queue was full."
       );
-      self.deregister(conn_id).await;
+      self.remove(conn_id, false).await;
     }
   }
 
@@ -1531,6 +1558,33 @@ mod tests {
 
     assert_eq!(manager.stats().presence_dropped(), 1);
     assert_eq!(manager.connection_count(), 2, "a lost announcement is not a lost connection");
+  }
+
+  #[tokio::test]
+  async fn disconnecting_a_client_never_waits_on_the_controller_that_caused_it() {
+    // What LossFree derives, against the case it is worst in: the controller is
+    // behind on presence, which is what filled the outbound queue.
+    let manager = manager_with(Overflow {
+      outbound: OutboundOverflow::Disconnect,
+      presence: PresenceOverflow::Backpressure,
+      ..Overflow::default()
+    });
+    let (tx, _rx) = session_channel(1);
+    // Depth one, nothing draining: this join fills the presence queue.
+    let conn_id = manager.register(Agent::new_human(1u32), tx).await;
+
+    let frame: OutboundFrame = Bytes::from_static(b"x");
+    let _ = manager.broadcast(&MessageTarget::All, frame.clone());
+    let overflowed = manager
+      .broadcast(&MessageTarget::All, frame)
+      .expect("disconnecting reports rather than erroring");
+    assert_eq!(overflowed, vec![conn_id]);
+
+    tokio::time::timeout(Duration::from_secs(2), manager.disconnect_overflowed(overflowed))
+      .await
+      .expect("the departure is announced without waiting for a full presence queue");
+    assert_eq!(manager.connection_count(), 0);
+    assert_eq!(manager.stats().presence_dropped(), 1, "the lost Left is counted");
   }
 
   #[tokio::test]

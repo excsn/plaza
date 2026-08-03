@@ -25,7 +25,7 @@ use futures_util::SinkExt;
 use plaza::agent::Agent;
 use plaza::session::{MessageTarget, Session, SessionMessage};
 use plaza_session::codec::{JsonCodec, WireCodec};
-use plaza_session::{DirectionProfile, LinkProfile, SessionOptions, TcpPlazaSession};
+use plaza_session::{DirectionProfile, LinkProfile, Queues, SessionOptions, TcpPlazaSession, Workload};
 use plaza_wire::frame;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
@@ -56,6 +56,11 @@ fn burst_for(depth: usize, frame_bytes: usize) -> u64 {
 const SETTLE: Duration = Duration::from_millis(400);
 
 const DEPTHS: [usize; 5] = [8, 16, 32, 64, 128];
+
+/// Connections behind the per-connection footprint. Enough that the fixed cost
+/// of a session divides away, and short of a preset's real peak, which is what
+/// the per-connection figure is for extrapolating to.
+const FOOTPRINT_CONNECTIONS: usize = 256;
 
 /// The outbound queue is measured across a socket, so the kernel's send buffer
 /// and the framed writer sit in the intercept and neither is stable run to run.
@@ -230,6 +235,56 @@ async fn conditioner_absorption(depth: usize) -> u64 {
   BURST - dropped
 }
 
+/// Resident kibibytes for this process.
+///
+/// Shelled out rather than taken through `libc`, because a dependency added to
+/// read one number in a bench is a dependency the crate carries.
+fn resident_kib() -> u64 {
+  let pid = std::process::id().to_string();
+  let out = std::process::Command::new("ps")
+    .args(["-o", "rss=", "-p", &pid])
+    .output()
+    .expect("ps reports resident size");
+  String::from_utf8_lossy(&out.stdout).trim().parse().unwrap_or(0)
+}
+
+/// What one connection costs a preset once its outbound queue is full.
+///
+/// Every client is silent, so the flood fills each queue to its derived depth
+/// and stops. Socket buffers do not appear here: they are the kernel's, not
+/// this process's.
+async fn workload_footprint(workload: &Workload, connections: usize) -> (u64, usize) {
+  let queues = Queues::for_workload(workload);
+  let options = SessionOptions::default().workload(workload);
+  let session = bind(options).await;
+  let addr = session.local_addr();
+
+  // A controller consuming presence, which a memory measurement has to model:
+  // without one, a preset carrying `PresenceOverflow::Backpressure` blocks
+  // every registration at the queue depth, and `Disconnect` then waits forever
+  // trying to announce the departure it just caused.
+  let presence = session.on_presence_change();
+  let draining = tokio::spawn(async move { while presence.recv().await.is_ok() {} });
+
+  let mut held = Vec::with_capacity(connections);
+  for _ in 0..connections {
+    held.push(TcpStream::connect(addr).await.expect("connect"));
+  }
+  connected(&session, connections).await;
+  tokio::time::sleep(SETTLE).await;
+
+  let before = resident_kib();
+  // Twice what the queues hold, so every one of them is full at the end.
+  let frames = (queues.outbound as u64 + 2) * 2;
+  flood(&session, workload.max_payload, frames).await;
+  tokio::time::sleep(SETTLE).await;
+  let after = resident_kib();
+
+  drop(held);
+  draining.abort();
+  ((after.saturating_sub(before)) * 1024 / connections as u64, queues.outbound)
+}
+
 /// Absorbed against depth, plus the line through the ends of the sweep.
 fn report(title: &str, unit: &str, rows: &[(usize, u64)]) -> f64 {
   println!("\n## {title}\n");
@@ -311,6 +366,28 @@ async fn main() {
       rows.push((depth, presence_absorption(depth).await));
     }
     report("presence", "joins accepted", &rows);
+  }
+
+  if run("workload") {
+    println!("\n## per-connection footprint with every outbound queue full\n");
+    println!("| preset | outbound | max payload | derived, B | measured, B |");
+    println!("|---|---|---|---|---|");
+    for (name, workload) in [
+      ("action", Workload::action()),
+      ("horde", Workload::horde()),
+      ("turn_based", Workload::turn_based()),
+      ("social_relay", Workload::social_relay()),
+      ("spectator", Workload::spectator()),
+      ("lobby", Workload::lobby()),
+      ("local", Workload::local()),
+    ] {
+      let (measured, depth) = workload_footprint(&workload, FOOTPRINT_CONNECTIONS).await;
+      println!(
+        "| {name} | {depth} | {} | {} | {measured} |",
+        workload.max_payload,
+        depth * workload.max_payload,
+      );
+    }
   }
 
   if run("conditioner") {

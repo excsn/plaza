@@ -60,6 +60,24 @@ One message taken every 2ms, single shot rather than a median.
 
 Both slope 0.93. Point-to-point deltas are irregular because what the drainer removes during the fill is timing-dependent, so 0.93 is not distinguishable from 1.00 here. What it does show is no separation between the two queues: the decode step between them was the candidate for splitting them and does not.
 
+## per-connection footprint
+
+256 silent connections per preset, flooded until every outbound queue is full, resident bytes divided by connections. A controller drains presence, which a measurement has to model: without one, a preset carrying `PresenceOverflow::Backpressure` blocks every registration at the queue depth.
+
+| preset | outbound | max payload | derived, B | measured, B |
+|---|---|---|---|---|
+| action | 4 | 512 | 2048 | 256 |
+| horde | 47 | 40960 | 1925120 | 65088 |
+| turn_based | 4 | 8192 | 32768 | 16896 |
+| social_relay | 4 | 512 | 2048 | 0 |
+| spectator | 4 | 8192 | 32768 | 192 |
+| lobby | 4 | 4096 | 16384 | 192 |
+| local | 4 | 4096 | 16384 | 128 |
+
+`derived` is `outbound * max_payload`, what `memory_budget` is checked against. Measured comes in far under it because a broadcast hands every recipient the same refcounted buffer, so 256 queues holding one frame cost one frame and 256 pointers. The derivation is the worst case rather than the usual one, and the worst case is real: a per-recipient snapshot builds a distinct payload per client, which this scenario does not exercise.
+
+**Everything under about 1 KiB per connection is below the floor.** `ps` reports resident size in KiB for the whole process, so across 256 connections the resolution is 4 B each and `social_relay`'s `0` means the delta never registered. Only `horde` and `turn_based` are above it.
+
 ## presence
 
 Connections arriving against a controller that never subscribes.
