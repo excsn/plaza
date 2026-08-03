@@ -1539,7 +1539,7 @@ mod tests {
       presence: PresenceOverflow::Backpressure,
       ..Overflow::default()
     }));
-    let mut presence = manager.take_presence();
+    let presence = manager.take_presence();
 
     manager.register(Agent::new_human(1u32), session_channel(4).0).await;
 

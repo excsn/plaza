@@ -407,6 +407,25 @@ mod tests {
   }
 
   #[test]
+  fn no_preset_spends_more_than_the_budget_it_names() {
+    for (name, workload) in presets() {
+      let Some(budget) = workload.memory_budget else { continue };
+      let spent = Queues::for_workload(&workload).outbound * workload.peak_players * workload.max_payload;
+      assert!(spent <= budget, "{name} derives {spent} B against a budget of {budget} B");
+    }
+  }
+
+  #[test]
+  fn priority_is_what_decides_whether_a_queue_waits() {
+    let waiting = Overflow::for_workload(&Workload::turn_based());
+    assert_eq!(waiting.inbound, InboundOverflow::Backpressure);
+    assert_eq!(waiting.outbound, OutboundOverflow::Disconnect);
+
+    let dropping = Overflow::for_workload(&Workload::action());
+    assert_eq!(dropping, Overflow::drop_everywhere());
+  }
+
+  #[test]
   fn an_audience_that_never_sends_still_gets_a_usable_inbound_queue() {
     let queues = Queues::for_workload(&Workload::spectator());
     assert_eq!(queues.inbound, MIN_CONTROLLER_CAPACITY);
