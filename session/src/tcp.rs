@@ -197,8 +197,10 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
 
   let mut up = Conditioner::new(conn_id, queues.conditioner);
   let mut down = Conditioner::new(conn_id ^ DOWN_SEED_FLIP, queues.conditioner);
-  let mut probe = ProbeState::with_slots(limits.probe_slots);
-  let mut next_probe = Instant::now() + control::RTT_FAST_INTERVAL;
+  let mut probe = ProbeState::new(manager.probes());
+  // `None` when this session does not probe, which parks the timer arm rather
+  // than firing it.
+  let mut next_probe = probe.first_due(Instant::now());
 
   // Either hand the frame back to be written now, or queue it behind whatever
   // the link is already holding. The emptiness check is what keeps order: a
@@ -234,10 +236,10 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
 
       // This transport has no ping frame of its own, so the probe riding the
       // frame path is the only round trip it can measure.
-      _ = tokio::time::sleep_until(next_probe) => {
+      _ = tokio::time::sleep_until(next_probe.unwrap_or_else(far_future)) => {
         let now = Instant::now();
         let frame = control::make_probe(&codec, &mut probe, now);
-        next_probe = now + probe.interval();
+        next_probe = probe.interval().map(|gap| now + gap);
         if let Some(frame) = queue_down!(frame, now) {
           if framed.send(frame).await.is_err() {
             break;

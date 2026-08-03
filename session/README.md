@@ -127,6 +127,20 @@ SessionOptions::with_protocol(ProtocolVersion(PROTOCOL))
 
 `SessionOptions::queues` holds the depths (`inbound`, `decoded`, `presence`, `outbound`, `conditioner`) and `limits` holds the caps (`max_frame_bytes` for TCP, `max_message_bytes` for WebSocket, `probe_slots`). Set a group wholesale with `.queues(..)` / `.limits(..)`, or one field at a time as above. `ConnectionManager::queues()` and `limits()` read them back, which is where a third-party transport picks them up.
 
+### Measuring, or not
+
+The link plane costs a `Kind::Ping` each way on a schedule, per connection. A build that never reads an RTT should not pay for one:
+
+```rust,ignore
+SessionOptions::with_protocol(ProtocolVersion(PROTOCOL)).without_probes()
+```
+
+An inbound `Ping` is still answered, because refusing would break a peer measuring its own side; what stops is this session originating them. `agent_link_rtt` and `link_rtt` then stay `None`.
+
+The schedule is yours too. `Probes` carries `enabled`, `slots`, `fast_pings`, `fast_interval` and `idle_interval`, set wholesale with `.probes(..)` or through `.probe_schedule(fast_pings, fast, idle)` and `.probe_slots(n)`. The defaults spend eight probes at 125ms before settling to one every five seconds, which puts several samples inside the first second and then keeps an eye on a link that changes later. A LAN server and a global one want different numbers for the same reason the queues do.
+
+`slots` is not one. A probe is answered a round trip after it goes out and the fast phase sends another every 125ms, so on any link slower than that the reply lands after its successor was sent; tracking one at a time discarded every such sample and left the link unmeasured at precisely the latencies worth measuring.
+
 ### What a full queue does
 
 Depth is half the decision; the other half is what happens when the depth runs out, and the right answer differs per queue because the producers differ.
@@ -241,7 +255,7 @@ The third half is not here, because it belongs on the wire: see [`plaza_wire::bu
 
 Both transports wrap one `TransportSession` and share everything that is not socket I/O: the connection registry, message targeting, serialization, and the task that turns raw bytes into typed messages. The per-protocol modules are just pumps, which is why adding a third is small: see the end of the API reference.
 
-Outbound sends use `try_send`, so a client that has stopped reading is skipped rather than stalling the controller for everyone else. Inbound traffic is awaited, so a busy controller applies backpressure instead of discarding ops.
+By default outbound sends use `try_send`, so a client that has stopped reading loses the frame rather than stalling the controller for everyone else, and inbound ops are dropped rather than blocking a connection task on a controller that is behind. The deserialize bridge between them awaits, so a slow controller backs the pipe up before either of those bites. All three are settable: see the sizing section above.
 
 ## Status
 

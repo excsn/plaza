@@ -37,13 +37,8 @@ use tokio::time::Instant;
 use tracing::trace;
 
 use crate::codec::WireCodec;
-use crate::manager::{ConnectionManager, SessionClock};
+use crate::manager::{ConnectionManager, Probes, SessionClock};
 
-/// How many probes go out at the fast rate before settling into upkeep. Enough
-/// that a caller can decide something inside the first second or so.
-pub(crate) const RTT_FAST_PINGS: u32 = 8;
-pub(crate) const RTT_FAST_INTERVAL: Duration = Duration::from_millis(125);
-pub(crate) const RTT_IDLE_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Keeps a connection's two directions from drawing the same jitter sequence.
 pub(crate) const DOWN_SEED_FLIP: u64 = 0x5DEE_CE66_A5A5_1234;
@@ -69,34 +64,44 @@ pub(crate) struct ProbeState {
   outstanding: VecDeque<(u64, Instant)>,
   seq: u64,
   sent: u32,
-  slots: usize,
+  schedule: Probes,
 }
 
 impl Default for ProbeState {
   fn default() -> Self {
-    Self::with_slots(crate::manager::DEFAULT_PROBE_SLOTS)
+    Self::new(&Probes::default())
   }
 }
 
 impl ProbeState {
-  pub(crate) fn with_slots(slots: usize) -> Self {
+  pub(crate) fn new(schedule: &Probes) -> Self {
     Self {
       outstanding: VecDeque::new(),
       seq: 0,
       sent: 0,
-      slots,
+      schedule: schedule.clone(),
     }
   }
 
-  /// How long until the next probe. Fast at first, then sparse: a caller
-  /// deciding whether a connection meets a schedule wants several samples in
-  /// the first second, and after that this is upkeep.
-  pub(crate) fn interval(&self) -> Duration {
-    if self.sent < RTT_FAST_PINGS {
-      RTT_FAST_INTERVAL
-    } else {
-      RTT_IDLE_INTERVAL
+  /// How long until the next probe, or `None` when this session does not probe.
+  ///
+  /// Fast at first, then sparse: a caller deciding whether a connection meets a
+  /// schedule wants several samples in the first second, and after that this is
+  /// upkeep.
+  pub(crate) fn interval(&self) -> Option<Duration> {
+    if !self.schedule.enabled {
+      return None;
     }
+    Some(if self.sent < self.schedule.fast_pings {
+      self.schedule.fast_interval
+    } else {
+      self.schedule.idle_interval
+    })
+  }
+
+  /// When the first probe is due, or `None` when this session does not probe.
+  pub(crate) fn first_due(&self, now: Instant) -> Option<Instant> {
+    self.interval().map(|gap| now + gap)
   }
 }
 
@@ -118,7 +123,7 @@ pub(crate) enum Inbound {
 pub(crate) fn make_probe<C: WireCodec>(codec: &C, probe: &mut ProbeState, now: Instant) -> Bytes {
   probe.seq = probe.seq.wrapping_add(1);
   probe.sent = probe.sent.saturating_add(1);
-  if probe.outstanding.len() >= probe.slots {
+  if probe.outstanding.len() >= probe.schedule.slots {
     probe.outstanding.pop_front();
   }
   probe.outstanding.push_back((probe.seq, now));
@@ -377,13 +382,21 @@ mod tests {
     assert_eq!(probe.outstanding.len(), DEFAULT_PROBE_SLOTS, "the oldest are abandoned");
   }
 
+  #[test]
+  fn a_session_that_does_not_probe_never_schedules_one() {
+    let probe = ProbeState::new(&Probes::off());
+    assert_eq!(probe.interval(), None);
+    assert_eq!(probe.first_due(Instant::now()), None, "nothing for the timer arm to wait on");
+  }
+
   #[tokio::test]
   async fn probes_start_fast_and_settle() {
     let mut probe = ProbeState::default();
-    for _ in 0..RTT_FAST_PINGS {
-      assert_eq!(probe.interval(), RTT_FAST_INTERVAL);
+    let schedule = Probes::default();
+    for _ in 0..schedule.fast_pings {
+      assert_eq!(probe.interval(), Some(schedule.fast_interval));
       make_probe(&JsonCodec, &mut probe, Instant::now());
     }
-    assert_eq!(probe.interval(), RTT_IDLE_INTERVAL);
+    assert_eq!(probe.interval(), Some(schedule.idle_interval));
   }
 }

@@ -13,7 +13,6 @@ use std::time::Duration;
 
 use crate::manager::{
   InboundOverflow, Limits, OutboundOverflow, Overflow, PresenceOverflow, Queues, DEFAULT_CONDITIONER_CAPACITY,
-  DEFAULT_PROBE_SLOTS,
 };
 
 /// Bytes buffered below the outbound queue: socket buffers plus the transport's
@@ -302,14 +301,14 @@ impl Limits {
   /// server allocate, and a build that sizes it to its own frames exactly will
   /// refuse the first one that grows.
   ///
-  /// `probe_slots` is left at its default. It follows from the round trip and
-  /// the probe schedule rather than from anything a workload says.
+  /// The probe schedule is not derived here. It follows from the round trip and
+  /// what a caller wants to learn, not from anything a workload says; see
+  /// [`Probes`](crate::manager::Probes).
   pub fn for_workload(workload: &Workload) -> Self {
     let cap = workload.max_payload.saturating_mul(2).max(64 * 1024);
     Self {
       max_frame_bytes: cap,
       max_message_bytes: cap,
-      probe_slots: DEFAULT_PROBE_SLOTS,
     }
   }
 }

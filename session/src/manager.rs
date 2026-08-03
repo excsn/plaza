@@ -43,6 +43,12 @@ pub const DEFAULT_CLIENT_QUEUE_CAPACITY: usize = 64;
 /// sends every tick otherwise grow memory without limit. Refusal here stands
 /// for a socket buffer running out rather than for anything the network did.
 pub const DEFAULT_CONDITIONER_CAPACITY: usize = 1024;
+/// Default probes sent at the fast rate before a connection settles into upkeep.
+pub const DEFAULT_PROBE_FAST_PINGS: u32 = 8;
+/// Default gap between probes while a connection is still being characterised.
+pub const DEFAULT_PROBE_FAST_INTERVAL: Duration = Duration::from_millis(125);
+/// Default gap between probes once it has been.
+pub const DEFAULT_PROBE_IDLE_INTERVAL: Duration = Duration::from_secs(5);
 /// Default number of latency probes a connection keeps in flight.
 ///
 /// Not one. A probe is answered a round trip after it goes out, and the fast
@@ -186,8 +192,6 @@ pub struct Limits {
   pub max_frame_bytes: usize,
   /// Largest inbound message once continuations are joined. WebSocket only.
   pub max_message_bytes: usize,
-  /// Probes in flight before the oldest is abandoned.
-  pub probe_slots: usize,
 }
 
 impl Default for Limits {
@@ -195,7 +199,53 @@ impl Default for Limits {
     Self {
       max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
       max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
-      probe_slots: DEFAULT_PROBE_SLOTS,
+    }
+  }
+}
+
+/// How a session measures the round trip on each of its connections.
+///
+/// The probe is a `Kind::Ping` frame riding the full path, so what it times is
+/// what an application message experiences. It costs a frame each way on the
+/// schedule below, which is why [`enabled`](Self::enabled) exists: a build that
+/// never reads an RTT should not pay for one.
+#[derive(Debug, Clone)]
+pub struct Probes {
+  /// Whether to probe at all. Turning this off leaves `agent_link_rtt` and
+  /// `link_rtt` permanently `None`, and leaves an inbound `Ping` still
+  /// answered: refusing to reply would break a peer that measures its own.
+  pub enabled: bool,
+  /// In flight before the oldest is abandoned.
+  pub slots: usize,
+  /// Sent at [`fast_interval`](Self::fast_interval) before settling into
+  /// [`idle_interval`](Self::idle_interval).
+  pub fast_pings: u32,
+  /// Gap while a connection is still being characterised. A caller deciding
+  /// whether a client meets a schedule wants several samples in the first
+  /// second.
+  pub fast_interval: Duration,
+  /// Gap once it has been. Upkeep, so that a link changing later is noticed.
+  pub idle_interval: Duration,
+}
+
+impl Default for Probes {
+  fn default() -> Self {
+    Self {
+      enabled: true,
+      slots: DEFAULT_PROBE_SLOTS,
+      fast_pings: DEFAULT_PROBE_FAST_PINGS,
+      fast_interval: DEFAULT_PROBE_FAST_INTERVAL,
+      idle_interval: DEFAULT_PROBE_IDLE_INTERVAL,
+    }
+  }
+}
+
+impl Probes {
+  /// No probing. Answers what a peer sends, measures nothing of its own.
+  pub fn off() -> Self {
+    Self {
+      enabled: false,
+      ..Self::default()
     }
   }
 }
@@ -224,6 +274,8 @@ pub struct SessionOptions {
   pub limits: Limits,
   /// What each queue does when it is full.
   pub overflow: Overflow,
+  /// How this session measures its connections, or whether it does.
+  pub probes: Probes,
 }
 
 impl Default for SessionOptions {
@@ -234,6 +286,7 @@ impl Default for SessionOptions {
       queues: Queues::default(),
       limits: Limits::default(),
       overflow: Overflow::default(),
+      probes: Probes::default(),
     }
   }
 }
@@ -351,7 +404,31 @@ impl SessionOptions {
 
   /// Probes in flight before the oldest is abandoned.
   pub fn probe_slots(mut self, slots: usize) -> Self {
-    self.limits.probe_slots = slots;
+    self.probes.slots = slots;
+    self
+  }
+
+  /// Replaces the whole probe configuration.
+  pub fn probes(mut self, probes: Probes) -> Self {
+    self.probes = probes;
+    self
+  }
+
+  /// Stops measuring round trips on this session's connections.
+  ///
+  /// An inbound `Ping` is still answered, so a peer measuring its own side is
+  /// unaffected; what stops is this side originating probes.
+  pub fn without_probes(mut self) -> Self {
+    self.probes.enabled = false;
+    self
+  }
+
+  /// How often a connection is probed while it is still being characterised,
+  /// and how many such probes go out before settling into upkeep.
+  pub fn probe_schedule(mut self, fast_pings: u32, fast: Duration, idle: Duration) -> Self {
+    self.probes.fast_pings = fast_pings;
+    self.probes.fast_interval = fast;
+    self.probes.idle_interval = idle;
     self
   }
 }
@@ -364,6 +441,7 @@ impl Debug for SessionOptions {
       .field("queues", &self.queues)
       .field("limits", &self.limits)
       .field("overflow", &self.overflow)
+      .field("probes", &self.probes)
       .finish()
   }
 }
@@ -639,6 +717,7 @@ pub struct ConnectionManager<ID: AgentId> {
   queues: Queues,
   limits: Limits,
   overflow: Overflow,
+  probes: Probes,
 }
 
 impl<ID: AgentId> Debug for ConnectionManager<ID> {
@@ -715,7 +794,14 @@ impl<ID: AgentId> ConnectionManager<ID> {
       queues: options.queues.clone(),
       limits: options.limits.clone(),
       overflow: options.overflow,
+      probes: options.probes.clone(),
     }
+  }
+
+  /// How this manager measures its connections. A transport adapter reads it
+  /// when it sets up a connection's probe timer.
+  pub fn probes(&self) -> &Probes {
+    &self.probes
   }
 
   /// What this manager does when a queue is full.

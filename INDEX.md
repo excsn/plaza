@@ -39,6 +39,8 @@ Examples live in [examples/](examples/), one crate each, in their own workspace 
 | `Agent`, and the `AgentId` blanket trait | [core/src/agent.rs](core/src/agent.rs) |
 | Live counters the controller writes and anyone reads: tick duration, queue depth, ops | [core/src/stats.rs](core/src/stats.rs) |
 | Error hierarchy | [core/src/error.rs](core/src/error.rs) |
+| What the command channel costs against producer count, and what an op path costs end to end | [core/benches/controller.rs](core/benches/controller.rs) |
+| Four ways to run a snapshot pass, against providers that return immediately, yield, or wait | [core/benches/snapshots.rs](core/benches/snapshots.rs) |
 
 **Reading order for a newcomer:** `state_logic.rs` → `controller.rs` → `session/mod.rs`. Everything else is optional.
 
@@ -84,7 +86,10 @@ Both transports share everything that is not socket I/O, which is why the adapte
 | actix-web WebSocket adapter: `handle_connection` is the whole integration | [session/src/actix_ws.rs](session/src/actix_ws.rs) |
 | Length-delimited TCP adapter | [session/src/tcp.rs](session/src/tcp.rs) |
 | The listen-server HTTP layer (feature `actix_host`): `Host`, the stamped index, no-cache assets, the preflight, `lan_address`, `init_logging` | [session/src/host/server.rs](session/src/host/server.rs) |
+| Queue depths, limits and overflow policy, derived from a named `Workload` or set field by field | [session/src/workload.rs](session/src/workload.rs) |
 | What routing a frame to a target costs, the agent index against the registry pass it replaced | [session/benches/broadcast.rs](session/benches/broadcast.rs) |
+| What it costs to build an outbound frame | [session/benches/encode.rs](session/benches/encode.rs) |
+| What each queue absorbs before it drops, and whether a workload parameter's derived depth sits on the knee | [session/benches/saturation.rs](session/benches/saturation.rs) |
 | What the transport carried and what it dropped rather than stalling for | [session/src/stats.rs](session/src/stats.rs) |
 | Transport errors | [session/src/error.rs](session/src/error.rs) |
 

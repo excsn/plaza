@@ -139,7 +139,8 @@ SessionOptions::with_protocol(ProtocolVersion(PROTOCOL))
 
 *   **`queues(Queues)`**, **`limits(Limits)`**: replace a whole group.
 *   **`inbound_capacity`**, **`decoded_capacity`**, **`presence_capacity`**, **`outbound_capacity`**, **`conditioner_capacity`**: one queue depth each.
-*   **`max_frame_bytes`**, **`max_message_bytes`**, **`probe_slots`**: one limit each.
+*   **`max_frame_bytes`**, **`max_message_bytes`**: one limit each.
+*   **`probes`**, **`without_probes`**, **`probe_schedule`**, **`probe_slots`**: the link plane, or none of it.
 
 The clock is read when answering a latency probe and its reading becomes `Pong.responder`. It is called on a connection task, so an authoritative clock living on the simulation loop is **published** rather than borrowed: store the tick into an `AtomicU64` and close over it. **The unit is the application's**; nothing here reads the value as a quantity, converts it, or has a default for it. Without a clock, `Pong.responder` is `None`, and a client can still measure a round trip but cannot estimate the offset between the two clocks.
 
@@ -196,9 +197,18 @@ pub struct Queues {
 pub struct Limits {
   pub max_frame_bytes: usize,    // largest inbound length-delimited frame, TCP only
   pub max_message_bytes: usize,  // largest inbound message once continuations are joined, WebSocket only
-  pub probe_slots: usize,        // probes in flight before the oldest is abandoned
+}
+
+pub struct Probes {
+  pub enabled: bool,             // false stops this side originating probes
+  pub slots: usize,              // in flight before the oldest is abandoned
+  pub fast_pings: u32,           // sent at fast_interval before settling
+  pub fast_interval: Duration,
+  pub idle_interval: Duration,
 }
 ```
+
+`Probes` is separate from `Limits` because a schedule is not a cap. `Probes::off()` and `SessionOptions::without_probes()` stop this session measuring; an inbound `Ping` is still answered, since refusing it would break a peer measuring its own side, and `agent_link_rtt` then stays `None`. `ConnectionManager::probes()` reads it back, which is where a transport adapter sets up its timer. Defaults: enabled, 16 slots, 8 probes at 125ms, then one every 5s.
 
 Both are plain structs with `Default`, reachable through [`SessionOptions`](#type-sessionclock-and-struct-sessionoptions) and readable off a manager with `ConnectionManager::queues()` / `limits()`, which is where a transport adapter picks them up. `Queues::for_workload` and `Limits::for_workload` derive them from a [`Workload`](#module-workload).
 
@@ -231,7 +241,8 @@ Both are reachable only because `forward_incoming`, `register`, `deregister` and
 *   `DEFAULT_CONDITIONER_CAPACITY: usize = 1024`: `Queues::conditioner`.
 *   `DEFAULT_MAX_FRAME_BYTES: usize = 8 * 1024 * 1024`: `Limits::max_frame_bytes`, which is what `LengthDelimitedCodec` enforces without being asked.
 *   `DEFAULT_MAX_MESSAGE_BYTES: usize = 1024 * 1024`: `Limits::max_message_bytes`.
-*   `DEFAULT_PROBE_SLOTS: usize = 16`: `Limits::probe_slots`, about two seconds of the probe's fast phase.
+*   `DEFAULT_PROBE_SLOTS: usize = 16`: `Probes::slots`, about two seconds of the probe's fast phase.
+*   `DEFAULT_PROBE_FAST_PINGS: u32 = 8`, `DEFAULT_PROBE_FAST_INTERVAL: Duration = 125ms`, `DEFAULT_PROBE_IDLE_INTERVAL: Duration = 5s`: the schedule.
 
 ## Module `workload`
 
@@ -361,7 +372,7 @@ Live counters for one transport, from `ActixWsPlazaSession::stats` or `Connectio
 
 *   **`inbound()`** / **`inbound_dropped()`**, **`outbound()`** / **`outbound_dropped()`**, **`presence_dropped()`**.
 
-Every fan-out here uses `try_send` by design: a wedged client must not stall the controller. That policy is right and it had a hole, because the drop was announced only with `warn!`, which a human reads afterwards and a server cannot read at all. Nothing about the policy changed; the events are now countable, so an application can shed load deliberately instead of degrading quietly.
+The fan-out uses `try_send` by default: a wedged client must not stall the controller. The drop used to be announced only with `warn!`, which a human reads afterwards and a server cannot read at all, so the events are countable and an application can shed load deliberately instead of degrading quietly. What the default does when a queue fills is now [`Overflow`](#struct-overflow)'s to say, and the counters read the same whichever arm is chosen.
 
 **Totals are kept beside the drops** because a drop count alone cannot tell "nothing is being dropped" from "nothing is being sent".
 

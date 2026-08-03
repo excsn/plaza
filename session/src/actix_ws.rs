@@ -26,8 +26,7 @@ use crate::codec::WireCodec;
 use crate::codec::JsonCodec;
 use crate::conditioner::{Conditioner, LinkProfile};
 use crate::control::{
-  self, earliest, far_future, route_inbound, ProbeState, DOWN_SEED_FLIP, RTT_FAST_INTERVAL, RTT_FAST_PINGS,
-  RTT_IDLE_INTERVAL,
+  self, earliest, far_future, route_inbound, ProbeState, DOWN_SEED_FLIP,
 };
 use crate::manager::{ConnectionManager, OutboundFrame, SessionOptions, TransportSession};
 
@@ -270,12 +269,12 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
   // costs a sample.
   let mut ping_sent_at: Option<std::time::Instant> = None;
   let mut pings_sent: u32 = 0;
-  let mut next_ping = tokio::time::Instant::now() + RTT_FAST_INTERVAL;
+  let mut next_ping = tokio::time::Instant::now() + manager.probes().fast_interval;
 
   let mut up = Conditioner::new(conn_id, queues.conditioner);
   let mut down = Conditioner::new(conn_id ^ DOWN_SEED_FLIP, queues.conditioner);
-  let mut probe = ProbeState::with_slots(limits.probe_slots);
-  let mut next_probe = tokio::time::Instant::now() + RTT_FAST_INTERVAL;
+  let mut probe = ProbeState::new(manager.probes());
+  let mut next_probe = probe.first_due(tokio::time::Instant::now());
 
   // Either hand the frame back to be written now, or queue it behind whatever
   // the link is already holding. The emptiness check is what keeps order: a
@@ -320,7 +319,8 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
       // this is upkeep. One sample decides nothing on a jittery link.
       _ = tokio::time::sleep_until(next_ping) => {
         pings_sent += 1;
-        next_ping = tokio::time::Instant::now() + if pings_sent < RTT_FAST_PINGS { RTT_FAST_INTERVAL } else { RTT_IDLE_INTERVAL };
+        next_ping = tokio::time::Instant::now()
+          + if pings_sent < manager.probes().fast_pings { manager.probes().fast_interval } else { manager.probes().idle_interval };
         if ws_session.ping(b"").await.is_err() {
           break None;
         }
@@ -329,10 +329,10 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
 
       // The other plane: a frame like any other, so what it measures includes
       // everything a real message goes through.
-      _ = tokio::time::sleep_until(next_probe) => {
+      _ = tokio::time::sleep_until(next_probe.unwrap_or_else(far_future)) => {
         let now = tokio::time::Instant::now();
         let frame = control::make_probe(&codec, &mut probe, now);
-        next_probe = now + probe.interval();
+        next_probe = probe.interval().map(|gap| now + gap);
         if let Some(frame) = queue_down!(frame, now) {
           if !write_frame(&mut ws_session, frame, send_as_text).await {
             break None;

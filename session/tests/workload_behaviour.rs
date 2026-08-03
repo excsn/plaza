@@ -11,11 +11,11 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures_util::SinkExt;
+use futures_util::{SinkExt, StreamExt};
 use plaza::agent::Agent;
 use plaza::session::{MessageTarget, Session, SessionMessage};
 use plaza_session::codec::{JsonCodec, WireCodec};
-use plaza_session::{SessionOptions, TcpPlazaSession, Workload};
+use plaza_session::{Probes, SessionOptions, TcpPlazaSession, Workload};
 use plaza_wire::frame;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
@@ -144,4 +144,47 @@ async fn turn_based_ends_a_client_it_cannot_reach_and_action_keeps_it() {
     session.manager().stats().outbound_dropped() > 0,
     "the frames went somewhere, and it was not the client"
   );
+}
+
+/// A build that never reads an RTT should not pay a frame each way for one.
+#[tokio::test]
+async fn probing_can_be_turned_off_and_is_on_otherwise() {
+  for (probes, want_measured) in [(Probes::default(), true), (Probes::off(), false)] {
+    let next_seat = Arc::new(AtomicU32::new(1));
+    let agent_factory: plaza_session::tcp::AgentFactory<Seat> =
+      Arc::new(move |_peer| Agent::new_human(next_seat.fetch_add(1, Ordering::Relaxed)));
+    let session: Arc<TcpPlazaSession<Op, Seat>> = TcpPlazaSession::bind_with_options(
+      "127.0.0.1:0",
+      agent_factory,
+      JsonCodec,
+      SessionOptions::default().probes(probes.clone()),
+    )
+    .await
+    .expect("bind");
+
+    // A client that answers whatever it is asked, which is what a probe needs.
+    let stream = TcpStream::connect(session.local_addr()).await.expect("connect");
+    let mut client = Framed::new(stream, LengthDelimitedCodec::new());
+    one_connection(&session).await;
+
+    let answering = tokio::spawn(async move {
+      while let Some(Ok(inbound)) = client.next().await {
+        let Some((tag, body)) = frame::split(&inbound) else { continue };
+        if frame::Kind::from_byte(tag) != Some(frame::Kind::Ping) {
+          continue;
+        }
+        let Some(reply) = frame::answer_ping(&JsonCodec, body, None) else { continue };
+        if client.send(reply.into()).await.is_err() {
+          return;
+        }
+      }
+    });
+
+    // Several fast-phase intervals, so a probing session has certainly measured.
+    tokio::time::sleep(probes.fast_interval * 6).await;
+    let measured = session.manager().agent_link_rtt(&1).is_some();
+    answering.abort();
+
+    assert_eq!(measured, want_measured, "enabled = {}", probes.enabled);
+  }
 }
