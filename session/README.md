@@ -61,6 +61,10 @@ let session = TcpPlazaSession::<Op, PlayerId>::bind(
 
 Binding happens before the accept loop starts, so a port already in use surfaces as an error rather than killing a detached task.
 
+## A tokio runtime is required
+
+Every constructor here spawns the task that decodes inbound frames, so it must be called from inside a tokio runtime. `TcpPlazaSession::bind*` is `async` and therefore already is. The ones worth knowing about are the **synchronous** ones, `ActixWsPlazaSession::{new, with_codec, with_protocol, with_options}` and `TransportSession::{new, with_protocol, with_options}`: called outside a runtime they panic, and the panic names tokio rather than plaza. In an actix `main` you are already inside one; anywhere else, construct inside `Runtime::block_on` or from an async fn.
+
 ## Measured latency per connection
 
 Two round trips are measured, both by the server, and neither is a number the client reported. Nothing is added to your protocol for either.

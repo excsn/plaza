@@ -24,7 +24,7 @@ use crate::codec::WireCodec;
 #[cfg(feature = "json")]
 use crate::codec::JsonCodec;
 use plaza_wire::frame::ProtocolVersion;
-use crate::conditioner::Conditioner;
+use crate::conditioner::{Conditioner, DirectionProfile};
 use crate::control::{self, earliest, far_future, route_inbound, ProbeState, DOWN_SEED_FLIP};
 use crate::error::SessionLayerError;
 use crate::manager::{ConnectionManager, OutboundFrame, SessionOptions, TransportSession};
@@ -207,10 +207,12 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
   // frame must not overtake ones still waiting, however the profile reads.
   macro_rules! queue_down {
     ($frame:expr, $now:expr) => {{
-      let profile = link.read().down;
-      if profile.is_passthrough() && down.is_empty() {
+      // One relaxed load on the common path: an unimpaired link never reads
+      // the profile at all, and never takes its lock.
+      if !link.impaired() && down.is_empty() {
         Some($frame)
       } else {
+        let profile = link.read().down;
         if !down.push($frame, &profile, $now) {
           manager.record_link_drop(conn_id);
         }
@@ -279,7 +281,7 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
         match frame {
           Some(Ok(bytes)) => {
             let now = Instant::now();
-            let profile = link.read().up;
+            let profile = if link.impaired() { link.read().up } else { DirectionProfile::default() };
             if profile.is_passthrough() && up.is_empty() {
               if let Some(reply) = route_inbound(bytes.freeze(), &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent).await {
                 if let Some(reply) = queue_down!(reply, now) {

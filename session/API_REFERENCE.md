@@ -6,7 +6,9 @@
 
 **One shared core, thin adapters.** Everything that is not socket I/O (connection registry, message targeting, serialization, and the bridge that turns raw bytes into typed `SessionMessage`s), lives in [`manager`](#4-module-manager). The per-protocol modules only pump bytes. Adding a transport means writing a pump and delegating the trait.
 
-**No actors.** Connection state sits behind a `parking_lot::RwLock` and atomics, so transports call the manager's methods directly from their connection tasks. There is no command channel and no mailbox round-trip.
+**No actors.** Connection state sits behind a `parking_lot::RwLock` and atomics, so transports call the manager's methods directly from their connection tasks. There is no command channel and no mailbox round-trip. The one question asked on every frame, whether a link is impaired, is a `bool` beside the profile rather than the profile itself, so an unimpaired connection never takes that lock.
+
+**A tokio runtime is required.** Every constructor spawns the deserialize bridge. `TcpPlazaSession::bind*` is `async` so this is implicit; the synchronous ones (`ActixWsPlazaSession::{new, with_codec, with_protocol, with_options}`, `TransportSession::{new, with_protocol, with_options}`) panic outside a runtime, and the panic comes from tokio rather than from here.
 
 **Pluggable wire format.** All encoding and decoding goes through [`WireCodec`](#trait-wirecodec). [`JsonCodec`](#struct-jsoncodec) is the default; supply your own for MessagePack, bincode, or anything else without touching transport code.
 

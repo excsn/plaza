@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 use std::sync::Arc;
 
@@ -510,7 +510,47 @@ struct ClientHandle<ID: AgentId> {
   link_dropped: AtomicU64,
   /// Read by the connection task on every frame, written by the application
   /// whenever it likes; the task picks a change up on its next frame or timer.
-  link: Arc<RwLock<LinkProfile>>,
+  link: Arc<LinkHandle>,
+}
+
+/// One connection's impairment, with a flag saying whether there is any.
+///
+/// The profile is 80 bytes, so it cannot be an atomic, and the question the
+/// frame path actually asks is one bit: is this passthrough. Reading the whole
+/// profile under a lock to answer that cost a `parking_lot` acquire per frame
+/// per direction on a path that is almost always passthrough in production.
+///
+/// The flag and the profile are not written atomically together, so a profile
+/// installed between one frame and the next may miss that frame. That is
+/// deliberate for a development impairment tool: the alternative is a lock on
+/// the path this exists to keep off.
+pub(crate) struct LinkHandle {
+  impaired: AtomicBool,
+  profile: RwLock<LinkProfile>,
+}
+
+impl LinkHandle {
+  fn new() -> Self {
+    Self {
+      impaired: AtomicBool::new(false),
+      profile: RwLock::new(LinkProfile::default()),
+    }
+  }
+
+  /// Whether anything at all is being done to this link. One relaxed load,
+  /// and the whole reason this type exists.
+  pub(crate) fn impaired(&self) -> bool {
+    self.impaired.load(Ordering::Acquire)
+  }
+
+  pub(crate) fn read(&self) -> LinkProfile {
+    *self.profile.read()
+  }
+
+  fn set(&self, profile: LinkProfile) {
+    *self.profile.write() = profile;
+    self.impaired.store(!profile.is_passthrough(), Ordering::Release);
+  }
 }
 
 impl<ID: AgentId> ClientHandle<ID> {
@@ -526,7 +566,7 @@ impl<ID: AgentId> ClientHandle<ID> {
       min_link_rtt_us: AtomicU64::new(0),
       link_samples: AtomicU64::new(0),
       link_dropped: AtomicU64::new(0),
-      link: Arc::new(RwLock::new(LinkProfile::default())),
+      link: Arc::new(LinkHandle::new()),
     }
   }
 }
@@ -1151,7 +1191,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
   pub fn set_link_profile(&self, conn_id: ConnectionId, profile: LinkProfile) {
     let connections = self.connections.read();
     if let Some(handle) = connections.get(conn_id) {
-      *handle.link.write() = profile;
+      handle.link.set(profile);
     }
   }
 
@@ -1162,7 +1202,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
   pub fn set_agent_link_profile(&self, id: &ID, profile: LinkProfile) {
     let connections = self.connections.read();
     for (_, handle) in connections.for_agent(id) {
-      *handle.link.write() = profile;
+      handle.link.set(profile);
     }
   }
 
@@ -1173,18 +1213,18 @@ impl<ID: AgentId> ConnectionManager<ID> {
   pub fn set_all_link_profiles(&self, profile: LinkProfile) {
     let connections = self.connections.read();
     for handle in connections.handles() {
-      *handle.link.write() = profile;
+      handle.link.set(profile);
     }
   }
 
   /// What a connection's impairment currently reads.
   pub fn link_profile(&self, conn_id: ConnectionId) -> Option<LinkProfile> {
-    self.connections.read().get(conn_id).map(|h| *h.link.read())
+    self.connections.read().get(conn_id).map(|h| h.link.read())
   }
 
   /// The shared profile cell, taken once by a connection task so that reading
   /// it per frame costs no lookup in the registry.
-  pub(crate) fn link_handle(&self, conn_id: ConnectionId) -> Option<Arc<RwLock<LinkProfile>>> {
+  pub(crate) fn link_handle(&self, conn_id: ConnectionId) -> Option<Arc<LinkHandle>> {
     self.connections.read().get(conn_id).map(|h| Arc::clone(&h.link))
   }
 
@@ -1300,7 +1340,13 @@ where
 
   /// Creates the session with everything it needs to answer for itself: the
   /// version it declares, the clock it stamps a `Pong` with, and how deep its
-  /// queues are.
+  /// queues are.  ///
+  /// # Requires a tokio runtime
+  ///
+  /// This spawns the deserialize bridge, so calling it outside a runtime
+  /// panics from tokio rather than from here. A synchronous constructor is
+  /// convenient in an actix `main`, which is already inside one; anywhere else,
+  /// construct it inside `Runtime::block_on` or from an async fn.
   pub fn with_options(transport: &'static str, codec: C, options: SessionOptions) -> Arc<Self> {
     let protocol = options.protocol;
     let hello = (protocol != ProtocolVersion::UNKNOWN).then(|| {
@@ -1507,6 +1553,7 @@ where
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::conditioner::DirectionProfile;
 
   fn handle(agent: Agent<u32>) -> ClientHandle<u32> {
     ClientHandle::new(agent, session_channel(4).0)
@@ -1644,6 +1691,32 @@ mod tests {
 
     assert_eq!(manager.stats().presence_dropped(), 1);
     assert_eq!(manager.connection_count(), 2, "a lost announcement is not a lost connection");
+  }
+
+  #[tokio::test]
+  async fn every_way_of_setting_a_profile_moves_the_flag_the_frame_path_reads() {
+    // The frame path asks `impaired()` and never reads the profile when it is
+    // false, so a setter that updated one and not the other would silently
+    // stop impairing.
+    let impaired = LinkProfile::symmetric(DirectionProfile::delayed(Duration::from_millis(50)));
+    let manager = manager_with(Overflow::default());
+    let conn_id = manager.register(Agent::new_human(1u32), session_channel(4).0).await;
+    let link = manager.link_handle(conn_id).expect("just registered");
+    assert!(!link.impaired(), "a fresh link is passthrough");
+
+    for set in [
+      &|m: &ConnectionManager<u32>, p| m.set_link_profile(1, p) as _,
+      &|m: &ConnectionManager<u32>, p| m.set_agent_link_profile(&1u32, p) as _,
+      &|m: &ConnectionManager<u32>, p| m.set_all_link_profiles(p) as _,
+    ] as [&dyn Fn(&ConnectionManager<u32>, LinkProfile); 3]
+    {
+      set(&manager, impaired);
+      assert!(link.impaired(), "an impaired link says so");
+      assert_eq!(manager.link_profile(conn_id), Some(impaired));
+
+      set(&manager, LinkProfile::default());
+      assert!(!link.impaired(), "clearing it says so too");
+    }
   }
 
   #[tokio::test]

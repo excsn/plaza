@@ -65,3 +65,7 @@ harness = false
 [[bench]]
 name = "saturation"
 harness = false
+
+[[bench]]
+name = "passthrough"
+harness = false

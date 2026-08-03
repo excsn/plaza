@@ -62,6 +62,9 @@ where
   ID: AgentId,
 {
   /// Creates a session that speaks JSON, the usual choice for browser clients.
+  ///
+  /// **Requires a tokio runtime**, like every constructor here: it spawns the
+  /// deserialize bridge. See [`with_options`](Self::with_options).
   pub fn new() -> Arc<Self> {
     Self::with_codec(JsonCodec)
   }
@@ -187,7 +190,13 @@ where
   }
 
   /// Creates a session with everything it answers for itself: the version it
-  /// declares, and the clock it stamps a `Pong` with.
+  /// declares, and the clock it stamps a `Pong` with.  ///
+  /// # Requires a tokio runtime
+  ///
+  /// This spawns the deserialize bridge, so calling it outside a runtime
+  /// panics from tokio rather than from here. A synchronous constructor is
+  /// convenient in an actix `main`, which is already inside one; anywhere else,
+  /// construct it inside `Runtime::block_on` or from an async fn.
   pub fn with_options(codec: C, options: SessionOptions) -> Arc<Self> {
     Arc::new(Self {
       inner: TransportSession::with_options(TRANSPORT, codec, options),
@@ -281,10 +290,10 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
   // frame must not overtake ones still waiting, however the profile reads.
   macro_rules! queue_down {
     ($frame:expr, $now:expr) => {{
-      let profile: LinkProfile = *link.read();
-      if profile.down.is_passthrough() && down.is_empty() {
+      if !link.impaired() && down.is_empty() {
         Some($frame)
       } else {
+        let profile: LinkProfile = link.read();
         if !down.push($frame, &profile.down, $now) {
           manager.record_link_drop(conn_id);
         }
@@ -397,7 +406,7 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
 
         if let Some(bytes) = inbound {
           let now = tokio::time::Instant::now();
-          let profile: LinkProfile = *link.read();
+          let profile: LinkProfile = if link.impaired() { link.read() } else { LinkProfile::default() };
           if profile.up.is_passthrough() && up.is_empty() {
             if let Some(reply) = route_inbound(bytes, &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent).await {
               if let Some(reply) = queue_down!(reply, now) {
