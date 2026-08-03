@@ -382,11 +382,21 @@ The fan-out uses `try_send` by default: a wedged client must not stall the contr
 
 ## 9. Writing Another Transport
 
-1.  Create a `TransportSession::new(name, codec, capacity)` and keep the `Arc`.
-2.  Per connection: make an outbound queue with `plaza::session::session_channel`, call `manager.register(agent, tx)`, and run a pump that
-    *   forwards inbound frames with `manager.forward_incoming(agent, bytes)`, and
-    *   writes queued outbound messages, encoding with the session's codec.
-3.  On exit, call `manager.deregister(conn_id)`.
-4.  Delegate the three `Session` methods to the inner `TransportSession`.
+1.  Create a `TransportSession::with_options(name, codec, options)` and keep the `Arc`. Requires a tokio runtime; see §1.
+2.  Per connection: make an outbound queue with `plaza::session::session_channel(manager.queues().outbound)`, `manager.register(agent, tx).await`, and run a pump that
+    *   **answers probes before forwarding anything.** A `Kind::Ping` handed to `forward_incoming` is not answered by anyone: the bridge drops it and warns once, and the client measuring its round trip waits forever. Split the tag with `frame::split`, and for `Kind::Ping` reply with `frame::answer_ping(codec, body, clock)` on the socket you read it from.
+    *   forwards everything else with `manager.forward_incoming(agent, bytes).await`, and
+    *   writes queued outbound messages.
+3.  On exit, `manager.deregister(conn_id).await`.
+4.  Delegate the three `Session` methods to the inner `TransportSession`, and after `broadcast` call `disconnect_overflowed` with what it returned.
 
-`tcp.rs` is the shorter of the two shipped adapters to copy.
+**What you get for free:** the registry, the agent index, the `Hello` handshake, the deserialize bridge, every counter in `TransportStats`, and the queue depths and limits off `manager.queues()` / `limits()`.
+
+**What you have to build, and what it costs to skip.**
+
+*   **Probes.** Without them `agent_link_rtt` and `link_rtt` stay `None` for every connection on your transport, and any application deciding admission on measured latency silently admits everyone. Originating them is a timer on the connection task plus `manager.record_link_rtt(conn_id, elapsed)`; the schedule is yours to read from `manager.probes()`. Answering a peer's probes is `frame::answer_ping` and is not optional.
+*   **Impairment.** `set_agent_link_profile` and `set_all_link_profiles` are public and an application will call them, but nothing applies a profile unless your pump does. Read the current one with `manager.link_profile(conn_id)`; report what you discard with `manager.record_link_drop(conn_id)`. The queue that implements delay, jitter and loss is `pub(crate)`, so this is the one part you cannot call and must reimplement, and it has four rules that are easy to get wrong: release times are made monotone so a delayed frame holds up what is behind it, a loss under `Delivery::Reliable` costs `RETRANSMIT_PENALTY` rather than deleting the frame, the queue cap refuses `Kind::Ops` only so a full queue never wedges a handshake, and a frame may skip the queue only when the profile is passthrough **and** the queue is already empty.
+
+Reading `manager.link_profile(conn_id)` per frame takes the registry's lock; the shipped adapters hold a cheaper handle that is `pub(crate)`. If that cost matters for your transport, say so, because it is the seam being narrower than it looks rather than a decision anyone defended.
+
+`tcp.rs` is the shorter of the two shipped adapters to copy, and copying it is currently the honest recommendation for anything that wants impairment.

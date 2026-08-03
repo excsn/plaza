@@ -1437,6 +1437,10 @@ async fn deserialize_bridge<Op, ID, C>(
   ID: AgentId,
   C: WireCodec,
 {
+  /// Agents already warned about a transport that forwards its probes. One
+  /// task owns this, so it needs no lock.
+  let mut probe_warned: std::collections::HashSet<ID> = std::collections::HashSet::new();
+
   loop {
     let Ok(raw) = raw_rx.recv().await else {
       debug!(transport, "Raw incoming channel closed; deserialize bridge stopping.");
@@ -1488,7 +1492,19 @@ async fn deserialize_bridge<Op, ID, C>(
       // reaching here means a transport forwarded it instead, so it goes
       // unanswered rather than being mistaken for ops.
       Some(frame::Kind::Ping) | Some(frame::Kind::Pong) => {
-        trace!(transport, kind = tag, agent = %from, "Skipping a probe frame the transport did not handle.");
+        // Once per agent, not per frame: a transport that forwards one forwards
+        // all of them, and this is a defect in that transport rather than a
+        // property of the traffic. At `trace!` it was invisible, which is how
+        // an adapter ships answering no probes at all.
+        if from.id().is_none_or(|id| probe_warned.insert(id.clone())) {
+          warn!(
+            transport,
+            agent = %from,
+            "A probe frame reached the deserialize bridge, so this transport is not answering probes. \
+             Call `control::route_inbound` (or at least `frame::answer_ping`) on the connection task \
+             before forwarding: a client measuring its round trip will never hear back."
+          );
+        }
         continue;
       }
       // Forward compatibility, and the reason the tag is read by hand rather
