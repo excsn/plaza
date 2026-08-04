@@ -15,7 +15,11 @@ Three players over `InProcessSession`, fixed cards, one scenario per round: ever
 
 ## The browser version
 
-`--bin serve` hosts on http://127.0.0.1:8081. Open **three tabs**: the table deals once three seats are filled. Click a card on your turn; stall and the turn timeout plays your best card for you.
+`--bin serve` hosts on http://127.0.0.1:8081. The table deals once three seats are filled, so open **three tabs**, or open one and wait: a bot takes an open seat after ten seconds, and another ten after that. Click a card on your turn; stall and the turn timeout plays your best card for you.
+
+The bots play from `player_view`, the same payload a browser is sent. That is not politeness. A bot reading `TableState` would hold every hand at the table, and an example whose entire claim is that a client cannot would be demonstrating it with a client that does.
+
+The turn timeout is a field on the state rather than a constant, because the two binaries want different answers: the scripted run wants one short enough to reach on purpose in a few seconds, and a person choosing a card wants one long enough to choose in.
 
 This is the part a log cannot show. Your tab holds three ranks and three face-down backs per opponent, and the backs are not a rendering choice: [`TableSnapshotter`](src/snapshot.rs) never put those ranks in your frame. Hidden information is visible as an absence, which is the only way to see it.
 

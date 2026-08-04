@@ -4,6 +4,7 @@
 //! scripted in-process run (`main.rs`) and the WebSocket host (`bin/serve.rs`)
 //! are the same game reached through different transports.
 
+pub mod bots;
 pub mod logic;
 pub mod snapshot;
 pub mod types;

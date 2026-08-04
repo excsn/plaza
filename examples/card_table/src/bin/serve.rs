@@ -26,6 +26,10 @@ use plaza_example_card_table::types::{CardOp, PlayerId, TableState};
 
 /// Drives the turn timeouts. Without it nothing ever times out.
 const TICK: Duration = Duration::from_millis(20);
+/// Ten seconds, which is what a person needs to look at a hand and click. The
+/// scripted run keeps the far shorter default so it reaches a timeout on
+/// purpose within a few seconds.
+const TURN_TIMEOUT: u64 = 500;
 
 type TableSession = ActixWsPlazaSession<CardOp, PlayerId>;
 
@@ -65,7 +69,7 @@ async fn main() -> std::io::Result<()> {
     Arc::new(TableLogic),
     session.clone(),
     Arc::new(TableSnapshotter),
-    TableState::new(),
+    TableState::new().with_turn_timeout(TURN_TIMEOUT),
   )
   .command_buffer(64)
   .build();
@@ -77,6 +81,12 @@ async fn main() -> std::io::Result<()> {
   });
 
   tokio::spawn(TickDriver::new(TICK).run(controller_tx.clone()));
+  // Seats fill with bots only after someone has waited: three tabs should get
+  // each other rather than a table of bots.
+  tokio::spawn(plaza_example_card_table::bots::fill_the_table(
+    controller_tx.clone(),
+    vec![PlayerId(901), PlayerId(902)],
+  ));
 
   let server_addr = "127.0.0.1:8081";
   info!("Serving http://{} (WebSocket at /ws). Three tabs seats the table.", server_addr);

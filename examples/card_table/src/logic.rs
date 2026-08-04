@@ -1,4 +1,4 @@
-use crate::types::{AutoPlay, Card, CardOp, PlayerId, RoundSummary, TablePhase, TableState, ROUNDS, TURN_TIMEOUT_TICKS};
+use crate::types::{AutoPlay, Card, CardOp, PlayerId, RoundSummary, TablePhase, TableState, ROUNDS};
 use async_trait::async_trait;
 use plaza::agent::Agent;
 use plaza::common::fsm::{FsmContext as _, OpsQueue};
@@ -9,8 +9,7 @@ use plaza::session::TargetedOp;
 use plaza::state_logic::{LogicInput, LogicOutput, SnapshotRequest, StateLogic};
 use tracing::{debug, info, warn};
 
-/// How many players must be seated before the table starts.
-const TABLE_SIZE: usize = 3;
+use crate::types::TABLE_SIZE;
 
 type Ctx = OpsQueue<CardOp, PlayerId>;
 
@@ -87,6 +86,12 @@ fn seat_player(state: &mut TableState, agent: &Agent<PlayerId>, ctx: &mut Ctx) -
   if state.agents.contains_key(&player) {
     return false;
   }
+  // Checked before seating, not after. Seating an extra player and then asking
+  // whether the table was full re-dealt the round every time a fourth arrived.
+  if state.seats.len() >= TABLE_SIZE {
+    info!(%player, "table is full; connected as a spectator");
+    return false;
+  }
 
   state.seats.push(player);
   state.agents.insert(player, agent.clone());
@@ -97,7 +102,7 @@ fn seat_player(state: &mut TableState, agent: &Agent<PlayerId>, ctx: &mut Ctx) -
     .push(TargetedOp::new_system_to(player, vec![CardOp::YouAre(player)]));
   info!(%player, seated = state.seats.len(), "player seated");
 
-  if state.seats.len() < TABLE_SIZE {
+  if state.seats.len() != TABLE_SIZE {
     return false;
   }
 
@@ -217,7 +222,7 @@ fn arm_turn_timeout(state: &mut TableState) {
     player,
     epoch: state.phase.epoch(),
   };
-  state.timeouts.schedule_after(state.tick, TURN_TIMEOUT_TICKS, event);
+  state.timeouts.schedule_after(state.tick, state.turn_timeout_ticks, event);
 }
 
 /// Fires any timeout that has come due, discarding the ones overtaken by events.

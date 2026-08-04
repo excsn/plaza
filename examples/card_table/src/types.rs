@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 
+/// How many players must be seated before the table starts.
+pub const TABLE_SIZE: usize = 3;
 /// Deals are fixed rather than shuffled, so a run is reproducible and the
 /// example needs no `rand` dependency.
 pub const HAND_SIZE: usize = 3;
@@ -123,6 +125,11 @@ pub struct TableState {
 
   pub tick: u64,
   pub timeouts: TickEventScheduler<AutoPlay>,
+  /// How long a player may sit on their turn. A field rather than the constant
+  /// because the two binaries want different answers: the scripted run wants a
+  /// timeout short enough to reach in a few seconds, and a person choosing a
+  /// card in a browser wants one long enough to choose in.
+  pub turn_timeout_ticks: u64,
 }
 
 impl TableState {
@@ -138,7 +145,14 @@ impl TableState {
       agents: HashMap::new(),
       tick: 0,
       timeouts: TickEventScheduler::new(),
+      turn_timeout_ticks: TURN_TIMEOUT_TICKS,
     }
+  }
+
+  /// Gives players longer on their turn, for a table people play at by hand.
+  pub fn with_turn_timeout(mut self, ticks: u64) -> Self {
+    self.turn_timeout_ticks = ticks;
+    self
   }
 
   /// Deals `HAND_SIZE` cards to each seated player from a fixed deck.
