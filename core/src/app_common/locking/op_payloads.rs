@@ -21,8 +21,8 @@ pub struct ReleaseLockPayload<R: Clone + Debug + Eq + Hash> {
 /// Payload for an Op (Server -> Client) notifying about a lock being successfully acquired.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(bound = "
+    ID: Serialize + for<'de2> Deserialize<'de2>,
     R: Serialize + for<'de2> Deserialize<'de2>,
-    ID: AgentId
 ")]
 pub struct LockAcquiredNoticePayload<R: Clone + Debug + Eq + Hash, ID: AgentId> {
   pub resource_id: R,
@@ -40,8 +40,8 @@ pub struct LockDeniedNoticePayload<R: Clone + Debug + Eq + Hash> {
 /// Payload for an Op (Server -> Client) notifying that a lock has been released.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(bound = "
+    ID: Serialize + for<'de2> Deserialize<'de2>,
     R: Serialize + for<'de2> Deserialize<'de2>,
-    ID: AgentId
 ")]
 pub struct LockReleasedNoticePayload<R: Clone + Debug + Eq + Hash, ID: AgentId> {
   pub resource_id: R,

@@ -19,15 +19,24 @@
 use std::fmt::{self, Debug};
 use std::hash::Hash;
 
+#[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
 /// What may identify an agent.
 ///
 /// A blanket impl, so a plain `PlayerId(u32)` or a `Uuid` qualifies without
 /// writing anything.
-pub trait AgentId: Clone + Debug + Eq + Hash + Send + Sync + Serialize + for<'de> Deserialize<'de> + 'static {}
+/// An identity plaza can route on.
+///
+/// **No serde bound**, because nothing plaza sends contains one: the wire is a
+/// kind byte and the application's ops, and `SessionMessage::from` is the
+/// server's own bookkeeping rather than anything a client is told. A type that
+/// genuinely embeds an id in a payload declares that itself, which is where the
+/// requirement belongs; `Agent` below is one such type.
 
-impl<T> AgentId for T where T: Clone + Debug + Eq + Hash + Send + Sync + Serialize + for<'de> Deserialize<'de> + 'static {}
+pub trait AgentId: Clone + Debug + Eq + Hash + Send + Sync + 'static {}
+
+impl<T> AgentId for T where T: Clone + Debug + Eq + Hash + Send + Sync + 'static {}
 
 /// An actor in the system: a person, a bot, or the server itself.
 ///
@@ -36,8 +45,9 @@ impl<T> AgentId for T where T: Clone + Debug + Eq + Hash + Send + Sync + Seriali
 /// every frame as a copy of something the application already had. Keep names
 /// in your own state, or in `ParticipantTracker`'s `app_data`, and send them
 /// like any other value: as an op, or as a field in your snapshot payload.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(bound = "")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(bound = "ID: Serialize + for<'de2> Deserialize<'de2>"))]
 pub enum Agent<ID: AgentId> {
   /// A human user.
   Human(ID),

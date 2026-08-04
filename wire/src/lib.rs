@@ -18,6 +18,7 @@
 
 pub mod envelope;
 pub mod frame;
+#[cfg(feature = "serde")]
 pub mod payloads;
 
 #[cfg(feature = "build")]
@@ -26,13 +27,16 @@ pub mod build;
 pub use envelope::{Agent, AgentId};
 pub use frame::Kind;
 
+#[cfg(feature = "serde")]
 use serde::de::DeserializeOwned;
+#[cfg(feature = "serde")]
 use serde::Serialize;
 
 /// Encodes and decodes values on the wire.
 ///
 /// Implementations must be stateless and cheap to clone: on the server one
 /// lives inside every session and is shared across all its connections.
+#[cfg(feature = "serde")]
 pub trait WireCodec: Clone + Send + Sync + 'static {
   /// Short name used in error messages, e.g. `"json"`.
   fn name(&self) -> &'static str;

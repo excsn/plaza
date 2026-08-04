@@ -14,6 +14,16 @@ This crate defines no error type. Both trait methods return `Box<dyn std::error:
 
 ## 3. Core API
 
+### Trait `AgentId`
+
+```rust
+pub trait AgentId: Clone + Debug + Eq + Hash + Send + Sync + 'static {}
+```
+
+Blanket-implemented, so nothing to write. **No serde bound**: nothing plaza sends contains an id. The wire is a kind byte and the application's ops, and `SessionMessage::from` is the server's own bookkeeping attached by the transport, never read off the wire and never written to it.
+
+A payload that genuinely embeds an id declares that itself, with a `#[serde(bound = "ID: Serialize + ...")]` on its own derive. That is where the requirement belongs, and it means an application whose ids never cross a wire never states how one would be written.
+
 ### Trait `WireCodec`
 
 ```rust

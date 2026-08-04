@@ -36,6 +36,7 @@ impl<T> ScoreValue for T where
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(bound = "
+    ID: Serialize + for<'de2> Deserialize<'de2>,
     ScoreType: ScoreValue
 ")]
 pub struct SetScorePayload<ID: AgentId, ScoreType: ScoreValue> {
@@ -45,6 +46,7 @@ pub struct SetScorePayload<ID: AgentId, ScoreType: ScoreValue> {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(bound = "
+    ID: Serialize + for<'de2> Deserialize<'de2>,
     ScoreType: ScoreValue
 ")]
 pub struct IncrementScorePayload<ID: AgentId, ScoreType: ScoreValue> {
@@ -54,6 +56,7 @@ pub struct IncrementScorePayload<ID: AgentId, ScoreType: ScoreValue> {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(bound = "
+    ID: Serialize + for<'de2> Deserialize<'de2>,
     ScoreType: ScoreValue
 ")]
 pub struct ScoreUpdatedNoticePayload<ID: AgentId, ScoreType: ScoreValue> {

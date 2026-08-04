@@ -83,7 +83,8 @@ impl Kind {
 /// The number comes from [`crate::build`], which hashes the type definitions
 /// that make up your wire format. Zero means "unknown": a peer that could not
 /// compute one is never mistaken for a peer that agrees.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ProtocolVersion(pub u32);
 
 impl ProtocolVersion {
@@ -107,13 +108,15 @@ impl ProtocolVersion {
 /// exactly as it went out, and only the sender ever interprets it. Stamp it
 /// with milliseconds, nanoseconds, a frame counter, or a sequence number, and
 /// document the choice wherever your application documents its protocol.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Ping {
   pub origin: u64,
 }
 
 /// The answer to a [`Ping`], the body of a [`Kind::Pong`] frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Pong {
   /// The probe's `origin`, echoed back unread.
   pub origin: u64,
@@ -128,6 +131,7 @@ pub struct Pong {
 /// does not decode.
 ///
 /// `responder` is the local clock in the local unit, if there is one to offer.
+#[cfg(feature = "serde")]
 pub fn answer_ping<C: crate::WireCodec>(codec: &C, ping_body: &[u8], responder: Option<u64>) -> Option<Vec<u8>> {
   let ping = codec.decode::<Ping>(ping_body).ok()?;
   let mut buf = Vec::with_capacity(PROBE_FRAME_HINT);
