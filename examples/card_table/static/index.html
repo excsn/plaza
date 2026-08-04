@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Plaza Card Table</title>
+    <style>
+        body { margin: 0; min-height: 100vh; display: flex; flex-direction: column;
+               align-items: center; justify-content: center; gap: 22px;
+               background: #16181d; color: #cfd3dc;
+               font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; }
+        h2 { margin: 0; font-size: 15px; font-weight: normal; color: #7f8794; }
+        #status { min-height: 20px; color: #7f8794; }
+        #status.turn { color: #4fb3ff; }
+        .row { display: flex; gap: 10px; align-items: flex-end; justify-content: center; flex-wrap: wrap; }
+        .card { width: 52px; height: 74px; border-radius: 6px; display: flex;
+                align-items: center; justify-content: center; font-size: 20px;
+                border: 1px solid #2b303b; background: #0d0f13; }
+        .card.mine { cursor: pointer; background: #1b1f27; color: #e8ecf4; }
+        .card.mine:hover { border-color: #4fb3ff; }
+        .card.mine.idle { cursor: default; opacity: 0.45; }
+        .card.back { background: repeating-linear-gradient(45deg, #23272f, #23272f 5px, #1b1f27 5px, #1b1f27 10px);
+                     color: transparent; }
+        .card.played { width: 44px; height: 62px; font-size: 17px; }
+        .seat { text-align: center; color: #7f8794; font-size: 12px; }
+        .seat b { display: block; color: #cfd3dc; font-size: 13px; font-weight: normal; }
+        .seat.acting b { color: #4fb3ff; }
+        #log { width: 620px; height: 130px; overflow-y: auto; border-top: 1px solid #2b303b;
+               padding-top: 8px; color: #7f8794; font-size: 12px; line-height: 1.6; }
+    </style>
+</head>
+<body>
+    <h2 id="phase">connecting…</h2>
+    <div class="row" id="opponents"></div>
+    <h2>table</h2>
+    <div class="row" id="table"></div>
+    <div id="status"></div>
+    <h2>your hand</h2>
+    <div class="row" id="hand"></div>
+    <div id="log"></div>
+    <script>
+        // Frame kinds, matching plaza_wire::frame::Kind.
+        const KIND_OPS = 0;
+        const KIND_PING = 2;
+        const KIND_PONG = 3;
+
+        let ws;
+        let me = null;
+        // The per-recipient view. `my_hand` holds ranks; `opponents` holds only
+        // counts, because the server never sent this tab anyone else's cards.
+        let view = null;
+
+        const el = (id) => document.getElementById(id);
+        const seatName = (p) => (me !== null && p === me ? 'you' : `P${p}`);
+
+        function connect() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+
+            ws.onmessage = (event) => {
+                const kind = event.data.charCodeAt(0);
+                if (kind === KIND_PING) {
+                    const ping = JSON.parse(event.data.slice(1));
+                    ws.send(String.fromCharCode(KIND_PONG) + JSON.stringify({ origin: ping.origin, responder: null }));
+                    return;
+                }
+                if (kind !== KIND_OPS) return;
+                (JSON.parse(event.data.slice(1)) || []).forEach(handleOp);
+                draw();
+            };
+
+            ws.onclose = () => { view = null; el('phase').textContent = 'disconnected'; };
+        }
+
+        // A snapshot here is per-recipient, so the server sends one only when the
+        // whole view changes: a deal, a resolved trick. Everything between is
+        // narrated, and a client that waited for the next snapshot to learn
+        // whose turn it is would sit out its own turn until the timeout played
+        // for it. So the notices are applied to the view, not merely logged.
+        function handleOp(op) {
+            if (op.Snapshot) {
+                view = op.Snapshot;
+            } else if (op.YouAre !== undefined) {
+                me = op.YouAre;
+                log(`you are P${me}`);
+            } else if (op.CardPlayed) {
+                onPlayed(op.CardPlayed.player, op.CardPlayed.card);
+                log(`${seatName(op.CardPlayed.player)} played ${op.CardPlayed.card}`);
+            } else if (op.PlayedForYou) {
+                onPlayed(op.PlayedForYou.player, op.PlayedForYou.card);
+                log(`${seatName(op.PlayedForYou.player)} ran out of time; the table played ${op.PlayedForYou.card}`);
+            } else if (op.TrickWon) {
+                log(`${seatName(op.TrickWon.player)} took the trick with ${op.TrickWon.card}`);
+            } else if (op.RoundStarted) {
+                log(`round ${op.RoundStarted.round_number} begins`);
+            } else if (op.RoundEnded) {
+                log(`round ${op.RoundEnded.round_number} ended`);
+            } else if (op.PhaseChanged) {
+                if (view) view.phase = op.PhaseChanged.new_phase;
+                log(`phase: ${op.PhaseChanged.new_phase}`);
+            } else if (op.TurnChanged) {
+                if (view) view.whose_turn = op.TurnChanged.new_turn_actor;
+            }
+        }
+
+        // A card reaching the table is public, so this much can be applied
+        // locally: the rank if it is on the table, and one fewer card held.
+        function onPlayed(player, rank) {
+            if (!view) return;
+            view.table = [...(view.table || []), [player, rank]];
+            if (player === me) {
+                const at = (view.my_hand || []).indexOf(rank);
+                if (at !== -1) view.my_hand.splice(at, 1);
+            } else {
+                view.opponents = (view.opponents || []).map(([p, n]) => [p, p === player ? Math.max(0, n - 1) : n]);
+            }
+        }
+
+        function log(line) {
+            const div = document.createElement('div');
+            div.textContent = line;
+            el('log').appendChild(div);
+            el('log').scrollTop = el('log').scrollHeight;
+        }
+
+        function playCard(card) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(String.fromCharCode(KIND_OPS) + JSON.stringify([{ PlayCard: card }]));
+            }
+        }
+
+        function card(text, classes) {
+            const div = document.createElement('div');
+            div.className = 'card ' + classes;
+            div.textContent = text;
+            return div;
+        }
+
+        function draw() {
+            if (!view) return;
+            const myTurn = view.whose_turn === me && view.phase === 'Playing';
+
+            el('phase').textContent = view.total_rounds
+                ? `${view.phase} — round ${view.round} of ${view.total_rounds}`
+                : view.phase;
+
+            // Opponents: a count, never a rank. This tab was never told what
+            // they hold, so there is nothing here to accidentally reveal.
+            const opps = el('opponents');
+            opps.innerHTML = '';
+            (view.opponents || []).forEach(([player, count]) => {
+                const seat = document.createElement('div');
+                seat.className = 'seat' + (view.whose_turn === player ? ' acting' : '');
+                const cards = document.createElement('div');
+                cards.className = 'row';
+                for (let i = 0; i < count; i++) cards.appendChild(card('?', 'back'));
+                const label = document.createElement('b');
+                label.textContent = `P${player} — ${count} card${count === 1 ? '' : 's'}`;
+                seat.appendChild(cards);
+                seat.appendChild(label);
+                opps.appendChild(seat);
+            });
+
+            const table = el('table');
+            table.innerHTML = '';
+            (view.table || []).forEach(([player, c]) => {
+                const seat = document.createElement('div');
+                seat.className = 'seat';
+                seat.appendChild(card(c, 'played'));
+                const label = document.createElement('b');
+                label.textContent = seatName(player);
+                seat.appendChild(label);
+                table.appendChild(seat);
+            });
+
+            const hand = el('hand');
+            hand.innerHTML = '';
+            (view.my_hand || []).forEach(c => {
+                const node = card(c, 'mine' + (myTurn ? '' : ' idle'));
+                if (myTurn) node.onclick = () => playCard(c);
+                hand.appendChild(node);
+            });
+
+            const status = el('status');
+            if (view.phase === 'Finished') {
+                const [top] = view.scores || [];
+                status.textContent = top ? `${seatName(top[0])} wins with ${top[1]}` : 'game over';
+                status.className = '';
+            } else if (myTurn) {
+                status.textContent = 'your turn, click a card';
+                status.className = 'turn';
+            } else if (view.whose_turn !== null && view.whose_turn !== undefined) {
+                status.textContent = `waiting on P${view.whose_turn}`;
+                status.className = '';
+            } else {
+                status.textContent = 'waiting for the table to fill (three seats)';
+                status.className = '';
+            }
+        }
+
+        connect();
+    </script>
+</body>
+</html>

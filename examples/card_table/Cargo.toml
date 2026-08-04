@@ -6,6 +6,9 @@ publish = false
 
 [dependencies]
 plaza = { workspace = true }
+plaza_session = { workspace = true, features = ["actix_ws", "json"] }
+
+actix-web = "^4"
 tokio = { workspace = true }
 serde = { workspace = true }
 async-trait = { workspace = true }

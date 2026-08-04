@@ -63,6 +63,10 @@ pub enum CardOp {
   /// A client asking to play one of its cards.
   PlayCard(Card),
 
+  /// Sent to one client, once, on being seated. Which seat is yours is not
+  /// part of the table, so it does not travel in the view of it.
+  YouAre(PlayerId),
+
   /// Broadcast when a card hits the table. Everyone sees every played card,
   /// which is why this is an op and not part of the hidden state.
   CardPlayed { player: PlayerId, card: Card },

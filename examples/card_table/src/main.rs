@@ -15,14 +15,14 @@
 //! The rules are deliberately trivial (highest card played wins the round) and
 //! the deal is fixed rather than shuffled, so the run is reproducible and what
 //! shows through is the plaza wiring.
+//!
+//! This binary is the scripted run: three players, fixed cards, and one
+//! scenario per round. To play it yourself, `cargo run -p
+//! plaza_example_card_table --bin serve` and open three browser tabs.
 
-mod logic;
-mod snapshot;
-mod types;
-
-use logic::TableLogic;
-use snapshot::TableSnapshotter;
-use types::{Card, CardOp, PlayerId, TableState};
+use plaza_example_card_table::logic::TableLogic;
+use plaza_example_card_table::snapshot::TableSnapshotter;
+use plaza_example_card_table::types::{Card, CardOp, PlayerId, TableState};
 
 use plaza::{
   agent::Agent,
@@ -62,6 +62,7 @@ fn spawn_player_listener(name: &'static str, inbox: ClientInbox<CardOp, PlayerId
           CardOp::RoundStarted(n) => info!("[{name}] round {} of {:?} begins", n.round_number, n.total_rounds),
           CardOp::RoundEnded(n) => info!("[{name}] round {} ended: {:?}", n.round_number, n.summary_data),
           CardOp::TurnChanged(n) => info!("[{name}] turn -> {:?}", n.new_turn_actor),
+          CardOp::YouAre(id) => info!("[{name}] seated as {id}"),
           CardOp::PlayCard(_) => {}
         }
       }

@@ -1,7 +1,7 @@
 use crate::types::{AutoPlay, Card, CardOp, PlayerId, RoundSummary, TablePhase, TableState, ROUNDS, TURN_TIMEOUT_TICKS};
 use async_trait::async_trait;
 use plaza::agent::Agent;
-use plaza::common::fsm::{FsmContext, OpsQueue};
+use plaza::common::fsm::{FsmContext as _, OpsQueue};
 use plaza::error::StateLogicError;
 use plaza::game_common::flow_control::{RoundManager, TurnManager};
 use plaza::game_common::scorekeeping::Scorekeeper;
@@ -92,6 +92,9 @@ fn seat_player(state: &mut TableState, agent: &Agent<PlayerId>, ctx: &mut Ctx) -
   state.agents.insert(player, agent.clone());
   state.turns.add_actor(player);
   state.scores.set_score(&player, 0);
+  ctx
+    .ops_q()
+    .push(TargetedOp::new_system_to(player, vec![CardOp::YouAre(player)]));
   info!(%player, seated = state.seats.len(), "player seated");
 
   if state.seats.len() < TABLE_SIZE {
