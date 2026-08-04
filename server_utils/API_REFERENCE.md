@@ -25,6 +25,28 @@ Bounds: `EntityId: Eq + Hash + Clone + Debug`; `EntityStateSnapshot: Clone + Deb
 *   **`get_state_at_or_before(&self, entity_id, target_server_time) -> Option<EntityStateSnapshot>`**: the rewind. Interpolates between the two recorded states bracketing the target; clamps to the oldest or newest when the target is outside the retained range; `None` if the entity is unknown. Requires `EntityStateSnapshot: Interpolatable<ServerTime>`.
 *   **`remove_entity_history(&mut self, entity_id)`**, **`clear_all_history(&mut self)`**
 
+### Function `render_error_at`
+
+```rust
+pub fn render_error_at<Id, State, Time, D>(
+  history: &HistoricalStateBuffer<Id, State, Time>,
+  at: Time,
+  drawn: impl IntoIterator<Item = (Id, State)>,
+  distance: D,
+) -> RenderError
+where D: Fn(&State, &State) -> f32
+```
+
+How wrong a client's screen was, asked **at the instant it was drawing**. Reads truth from the history buffer, which is usually already present because it is the same one a rewind uses.
+
+`at` is a required argument, deliberately: comparing against the present charges a client for a render delay it is taking on purpose, so the honest form is the one that falls out of calling this and the dishonest one has to be typed. `distance` is supplied by the caller because this crate can assume no metric on a state type, the same reason `Correction` hands back two states rather than a scalar. Entities absent from the history are skipped rather than scored zero.
+
+This is a **host or harness** measurement and cannot be anything else: it needs truth, and a joiner never has truth.
+
+### Struct `RenderError`
+
+An accumulation: `observe(f32)`, `merge(&RenderError)`, `mean() -> f32`, `worst() -> f32`, `samples() -> u32`, `is_empty() -> bool`. Holds the sum rather than the mean so results from several clients or frames fold together without weighting a client that can see two entities the same as one that can see two hundred. Non-finite distances are ignored rather than poisoning the mean.
+
 ### Struct `TimedState<ServerTime, State>`
 
 One recorded entry: `time`, `state`. Exposed for callers that inspect raw history.

@@ -290,6 +290,15 @@ impl Server {
     self.players.iter().map(|p| (p.id, PlayerSnap { pos: p.pos, alive: p.alive })).collect()
   }
 
+  /// The truth history, for anything that needs to ask where things were.
+  ///
+  /// The same buffer a rewind reads. An honest render error is a second reader
+  /// of it, which is why measuring one correctly costs almost nothing once a
+  /// game has lag compensation at all.
+  pub fn history(&self) -> &HistoricalStateBuffer<PlayerId, PlayerSnap, u64> {
+    &self.history
+  }
+
   /// Positions as they were, which is what a shooter saw.
   pub fn snaps_at(&self, at_ms: u64) -> Vec<(PlayerId, PlayerSnap)> {
     self

@@ -160,17 +160,29 @@ The example exists to settle questions by measurement rather than argument, and 
 
 **Relevance pays, clustered or not.** 91% of the broadcast culled with players spread, **90% clustered** (28.0 vs 325.0 KiB/s spread; 31.5 vs 325.3 clustered). An earlier guess that relevance mostly matters when players separate was wrong: the arena dwarfs the view either way. Clustering actually makes it slightly *worse*, because the horde converges on grouped players and raises local density.
 
-**Running the behaviour rule locally wins at every send rate** (mean / worst error, px):
+**Running the behaviour rule locally wins at every send rate** (mean / worst error, px, measured **at the instant each client is drawing**):
 
 | send rate | simulate | dead reckon | interpolate |
 |---|---|---|---|
-| 1 Hz | **12 / 23** | 33 / 99 | 55 / 88 |
-| 2 Hz | **11 / 18** | 12 / 34 | 19 / 30 |
-| 4 Hz | **10 / 17** | 11 / 30 | 19 / 30 |
-| 10 Hz | **9 / 15** | 10 / 19 | 12 / 19 |
-| 30 Hz | **9 / 15** | 10 / 17 | 11 / 17 |
+| 1 Hz | **3 / 38** | 24 / 81 | 43 / 69 |
+| 2 Hz | **1 / 6** | 2 / 14 | 7 / 11 |
+| 4 Hz | **0 / 6** | 1 / 11 | 7 / 11 |
+| 10 Hz | **0 / 6** | 2 / 22 | 10 / 22 |
+| 30 Hz | **0 / 1** | 1 / 19 | 8 / 24 |
 
 It is decisive at 1 Hz, which is what makes a very low send rate viable, and it stays ahead everywhere else. Interpolation is the most *consistent* (its worst case barely moves) but always renders about one send interval in the past, which at 1 Hz is a second.
+
+**These numbers used to be four to thirteen times larger, and the technique had nothing to do with it.** Every render-error figure this example published before compared a drawn position against server truth **now**, which charges a client the whole of a render delay it is taking deliberately. The same runs measured that way:
+
+| send rate | simulate | dead reckon | interpolate |
+|---|---|---|---|
+| 1 Hz | 15 | 34 | 55 |
+| 2 Hz | 13 | 13 | 19 |
+| 4 Hz | 13 | 13 | 19 |
+| 10 Hz | 13 | 13 | 22 |
+| 30 Hz | 13 | 13 | 20 |
+
+Look at the simulate column: **flat at 13 px from 2 Hz to 30 Hz**, because at that point it is not measuring the netcode at all, it is measuring the render delay. The honest metric shows the same runs converging to zero. A metric with a floor under it hides every improvement below the floor, and this one hid the entire result. `plaza_server_utils::render_error_at` is the extracted version, which takes the render instant as a required argument so the flattering comparison is not the convenient one.
 
 **This table used to say the opposite above 10 Hz, and the reason is worth more than the numbers.** Simulate used to get *worse* as the rate rose (10, then 16, then 20 px at 4, 10 and 30 Hz), and that was read as a property of the technique: a low-rate tool, not a general upgrade. It was a property of the *correction*. A 250 ms `ErrorSmoother` ease never completes when corrections arrive every 33 ms, so the smoother itself became the dominant error. Moving enemies onto `HeldInputPredictor`, which closes a fraction of the gap per correction and has no duration to outlast, removed the failure entirely. **A measurement of a technique was really a measurement of one tunable inside it**, which is the same shape as the extrapolation clamp that once flattered second-order dead reckoning.
 
@@ -298,15 +310,20 @@ The relevance stream sends `entered` and `left` and lets each client keep a mirr
 
 | loss | baseline | mismatches | phantoms | missing | held | resyncs | KiB/s | err px |
 |---|---|---|---|---|---|---|---|---|
-| 0% | either | 0 | 4 | 107 | 981 | 0 | 33.0 | 7.2 |
-| 5% | last sent | 240 | 290 | 101 | 1279 | 0 | 33.0 | 7.2 |
-| | last acked | 102 | 11 | 107 | 1024 | 11 | 37.9 | 9.0 |
-| 10% | last sent | 227 | 364 | 174 | 1302 | 0 | 33.0 | 19.1 |
-| | last acked | 70 | 4 | 107 | 981 | 18 | 40.1 | 6.7 |
-| 25% | last sent | 234 | 188 | 313 | 1156 | 0 | 33.0 | 44.7 |
-| | last acked | 126 | 7 | 263 | 831 | 24 | 39.7 | 9.2 |
+| 0% | last sent | 0 | 3 | 105 | 976 | 4 | 43.6 | 0.6 |
+| | last acked | 0 | 3 | 105 | 976 | 4 | 52.0 | 0.5 |
+| 2% | last sent | 853 | 9 | 114 | 1017 | 4 | 43.6 | 2.7 |
+| | last acked | 0 | 3 | 109 | 1006 | 17 | 66.1 | 0.6 |
+| 5% | last sent | 1066 | 205 | 174 | 1131 | 4 | 43.6 | 68.4 |
+| | last acked | 0 | 3 | 105 | 976 | 27 | 88.7 | 0.5 |
+| 10% | last sent | 1060 | 41 | 190 | 1012 | 4 | 43.5 | 14.2 |
+| | last acked | 0 | 3 | 105 | 976 | 37 | 88.0 | 0.4 |
+| 25% | last sent | 927 | 185 | 290 | 1199 | 4 | 44.1 | 73.7 |
+| | last acked | 0 | 4 | 115 | 1068 | 44 | 124.7 | 0.5 |
 
-The fix is to diff against **what the client acknowledged**, using `plaza_client_utils::ack::AckWindow` on the return path. Corpses fall from hundreds to single digits and render error from 44.7 px to 9.2 for about 19% more bandwidth. Four details are load-bearing, and three of them were wrong in the first working version.
+The fix is to diff against **what the client acknowledged**, using `plaza_client_utils::ack::AckWindow` on the return path. Corpses fall from hundreds to single digits, digest mismatches to zero at every loss rate, and render error from 73.7 px to 0.5.
+
+The recovered figure being half a pixel rather than the 9.2 this table used to quote is the render-error metric changing rather than the recovery improving: the old number was mostly the render delay, and once that is taken out what is left of a recovered stream is nothing. Four details are load-bearing, and three of them were wrong in the first working version.
 
 **The baseline must be the newest *contiguous* acknowledgement, not the newest bit set.** A bitmask answers "what arrived", which is what a *retransmitting* protocol wants: it names the holes to refill. A protocol that *re-derives* needs a state the client provably reached, and receiving packet N+1 after losing N does not put the client in the state N+1 implies. Taking the newest set bit hands the diff a state that never existed, and it made recovery statistically indistinguishable from no recovery.
 

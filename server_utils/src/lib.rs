@@ -31,6 +31,7 @@ pub mod history;
 pub mod input_schedule;
 pub mod meter;
 pub mod relevance;
+pub mod render_error;
 pub mod seats;
 
 pub use aggregate::{AggregateTree, Summary, WeightedPoint};
@@ -39,6 +40,7 @@ pub use history::{HistoricalStateBuffer, TimedState};
 pub use input_schedule::{InputSchedule, InputWindow, Submission};
 pub use meter::RateMeter;
 pub use relevance::{GridQuantizer, SetDigest, SpatialGrid, TierBoundary, VisibilitySet};
+pub use render_error::{RenderError, render_error_at};
 // The key space `DeltaBaseline` works in, and the client-side mirror that has to
 // agree with it. Both live in the client crate, because a browser client needs
 // them and must not inherit a server to get them.

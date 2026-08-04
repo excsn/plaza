@@ -70,6 +70,15 @@ pub struct Stats {
   pub bytes_total: u64,
   /// Peak enemy bullets alive at once, none of which was ever described.
   pub peak_curtain: usize,
+  /// Bullet-ticks: one bullet alive for one tick.
+  ///
+  /// The denominator for a byte comparison, and it has to be cumulative to
+  /// match a cumulative numerator. Dividing total bytes by the *instantaneous*
+  /// count is the mistake that made this comparison read as a hundred-thousand
+  /// to one: at the sampling instant the streamed half happened to hold no
+  /// bullets at all, so it was total bytes over one.
+  pub curtain_bullet_ticks: u64,
+  pub player_bullet_ticks: u64,
 }
 
 impl Stats {
@@ -300,6 +309,8 @@ impl Server {
     // and it does not depend on any of them.
     curtain_at(&self.waves, &self.downed, self.tick, &mut self.scratch);
     self.stats.peak_curtain = self.stats.peak_curtain.max(self.scratch.len());
+    self.stats.curtain_bullet_ticks += self.scratch.len() as u64;
+    self.stats.player_bullet_ticks += self.bullets.len() as u64;
 
     self.fire_due(controls, out);
     self.advance_player_bullets(dt, out);

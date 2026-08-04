@@ -4,7 +4,7 @@
 
 use plaza_client_utils::net_sim::{LatencyLink, Rng};
 
-use plaza_server_utils::RateMeter;
+use plaza_server_utils::{RateMeter, RenderError, render_error_at};
 
 use crate::sim::client::Client;
 use crate::sim::server::Server;
@@ -145,37 +145,49 @@ impl World {
   }
 
   /// Mean distance between where clients *draw* enemies and where the server
-  /// actually has them. The headline accuracy number.
+  /// had them **at the instant that client was drawing**. The headline accuracy
+  /// number.
+  ///
+  /// Against the render instant, not the present. Every figure this example
+  /// published before was against the present, which charges a client the whole
+  /// of a render delay it is taking deliberately: the number then grows with
+  /// the buffer depth rather than with anything going wrong.
+  /// [`Self::naive_render_error`] keeps the old comparison so the difference is
+  /// visible rather than asserted.
   pub fn mean_render_error(&self, controls: &Controls) -> f32 {
-    let truth: std::collections::BTreeMap<Handle, Vec2> = self.truth().into_iter().collect();
-    let mut sum = 0.0;
-    let mut n = 0u32;
-    for client in &self.clients {
-      let Some(at) = client.render_at() else { continue };
-      for (handle, drawn, _kind) in client.render(controls, at) {
-        // Compare only against the occupant the client believes it holds.
-        if let Some(t) = truth.get(&handle) {
-          sum += drawn.dist(*t);
-          n += 1;
-        }
-      }
-    }
-    if n == 0 { 0.0 } else { sum / n as f32 }
+    self.render_error(controls).mean()
   }
 
   /// The worst single error, which is what a player actually notices.
   pub fn max_render_error(&self, controls: &Controls) -> f32 {
+    self.render_error(controls).worst()
+  }
+
+  /// The honest figure, unreduced.
+  pub fn render_error(&self, controls: &Controls) -> RenderError {
+    let mut total = RenderError::new();
+    for client in &self.clients {
+      let Some(at) = client.render_at() else { continue };
+      let drawn = client.render(controls, at).into_iter().map(|(handle, pos, _kind)| (handle, pos));
+      total.merge(&render_error_at(self.server.history(), at.server_time_ms(), drawn, |a, b| a.dist(*b)));
+    }
+    total
+  }
+
+  /// The comparison against the present, kept so the distortion it introduces
+  /// can be shown next to the honest number rather than described.
+  pub fn naive_render_error(&self, controls: &Controls) -> f32 {
     let truth: std::collections::BTreeMap<Handle, Vec2> = self.truth().into_iter().collect();
-    let mut worst = 0.0f32;
+    let mut error = RenderError::new();
     for client in &self.clients {
       let Some(at) = client.render_at() else { continue };
       for (handle, drawn, _kind) in client.render(controls, at) {
         if let Some(t) = truth.get(&handle) {
-          worst = worst.max(drawn.dist(*t));
+          error.observe(drawn.dist(*t));
         }
       }
     }
-    worst
+    error.mean()
   }
 
   /// Bytes per second across all players, with compact ids and quantized

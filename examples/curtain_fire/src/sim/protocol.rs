@@ -257,11 +257,11 @@ mod tests {
 
   #[test]
   fn compact_msgpack_still_spells_out_every_variant_name() {
-    // The measurement `IMPROVEMENTS` gates the wire-encoding primitives on, and
-    // the answer is not the one the codec's own doc implies. `MsgPackCodec` is
-    // compact rather than named, which makes struct *fields* positional, and
-    // enum variants are still written as strings. A curtain of tiny messages is
-    // mostly tag, so this is where the share is largest.
+    // The measurement `IMPROVEMENTS` gates the wire-encoding primitives on.
+    // That compact MessagePack keeps variant names is already in
+    // `MsgPackCodec`'s own docs; the share of a frame they account for is not,
+    // and the share is what the backlog item is waiting on. A curtain of tiny
+    // messages is mostly tag, so this is where it is largest.
     let ops = vec![
       Op::InputAck { seq: 12 },
       Op::ArmDown(crate::sim::curtain::Downed { wave: 1, arm: 2, tick: 900 }),

@@ -1,5 +1,5 @@
 [package]
-name = "plaza-example-shared-counter"
+name = "plaza_example_shared_counter"
 version = "0.1.0"
 edition = { workspace = true }
 publish = false

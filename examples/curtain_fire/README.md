@@ -50,7 +50,7 @@ seed_defense established that sending causes instead of consequences works. What
 
 ### And a measurement nobody had taken
 
-`IMPROVEMENTS` gates float quantization, bit packing and numeric variant tags on one number: the share of a frame that is the names of its variants. It had never been measured, and the answer is not the one `MsgPackCodec`'s own documentation implies. Compact MessagePack makes **struct fields** positional; enum variants are still written out as strings. On this example's traffic the share is real and on the panel.
+`IMPROVEMENTS` gates float quantization, bit packing and numeric variant tags on one number: the share of a frame that is the names of its variants. `MsgPackCodec`'s own documentation already says compact MessagePack keeps them, and says short names are therefore worth something, but stops short of the share, which is the thing the backlog item is waiting on. On this example's traffic the share is measured and on the panel.
 
 The other half of the finding is why this stays a measurement rather than a rule: a tag is a fixed cost, so it dominates a stream of small events and disappears into a large frame. Anyone reaching for numeric tags should first find out which of the two they have. Both directions are pinned by tests.
 

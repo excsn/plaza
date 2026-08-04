@@ -147,17 +147,43 @@ impl World {
     }
   }
 
-  /// Bytes per enemy bullet on screen, against bytes per player bullet.
+  /// Bytes per bullet-tick: what it cost to have one bullet on screen for one
+  /// tick, derived against streamed.
   ///
-  /// The comparison the example is built to make. The first number falls
-  /// towards nothing as the curtain thickens; the second does not move.
-  pub fn cost_per_bullet(&self) -> (f32, f32) {
-    let curtain = self.server.curtain().len().max(1) as f32;
-    let streamed = self.server.bullets.len().max(1) as f32;
+  /// Per bullet-*tick* rather than per bullet, because the numerator is
+  /// cumulative and a denominator sampled at one instant is not comparable to
+  /// it. Getting that wrong once made the ratio read as five orders of
+  /// magnitude, which was flattering and meaningless.
+  ///
+  /// `None` for a half that never existed, rather than a number divided by a
+  /// nominal one: a run in which nobody fired has no streamed bullets to price
+  /// and should say so instead of reporting the whole frame budget as the cost
+  /// of a bullet that was never there.
+  pub fn cost_per_bullet_tick(&self) -> (Option<f32>, Option<f32>) {
+    let stats = &self.server.stats;
     (
-      self.server.stats.bytes_derivable as f32 / curtain,
-      self.server.stats.bytes_streamed as f32 / streamed,
+      (stats.curtain_bullet_ticks > 0).then(|| stats.bytes_derivable as f32 / stats.curtain_bullet_ticks as f32),
+      (stats.player_bullet_ticks > 0).then(|| stats.bytes_streamed as f32 / stats.player_bullet_ticks as f32),
     )
+  }
+
+  /// Runs with everybody flying a pattern and holding the trigger.
+  ///
+  /// The default `run` leaves every seat idle, because a `World` seats all of
+  /// its clients as connected players and bots only steer the seats nobody is
+  /// in. A byte comparison taken over an idle run prices a half that is not
+  /// there.
+  pub fn run_playing(&mut self, ms: u64, controls: &Controls) {
+    const DIRS: [Dir8; 6] = [Dir8::E, Dir8::S, Dir8::W, Dir8::N, Dir8::Se, Dir8::Nw];
+    let mut t = 0;
+    while t < ms {
+      for seat in 0..self.clients.len() {
+        self.fly(seat, DIRS[((t / 500) as usize + seat) % DIRS.len()], controls);
+        self.fire(seat, controls);
+      }
+      self.run(100, controls);
+      t += 100;
+    }
   }
 
   pub fn total_snaps(&self) -> u64 {
@@ -254,20 +280,24 @@ mod tests {
   }
 
   #[test]
-  fn the_derivable_half_gets_cheaper_per_bullet_and_the_streamed_half_does_not() {
+  fn the_derivable_half_is_cheaper_per_bullet_tick_than_the_streamed_half() {
     // The headline comparison. Both halves are on the same wire in the same
-    // game, so this is a like-for-like measurement rather than two examples
-    // quoted at each other.
+    // game, so this is like for like rather than two examples quoted at each
+    // other.
     let controls = base();
     let mut world = World::new(&controls, SEED);
-    world.run(10_000, &controls);
+    world.run_playing(10_000, &controls);
 
-    let (derived, streamed) = world.cost_per_bullet();
-    assert!(world.server.curtain().len() > 50, "there is a curtain");
-    assert!(
-      derived < streamed,
-      "derived {derived:.2} bytes per enemy bullet against {streamed:.2} per player bullet"
-    );
+    let (derived, streamed) = world.cost_per_bullet_tick();
+    // Asserted before the comparison, because the first version of this test
+    // ran with nobody firing: there were no player bullets at all, the
+    // denominator fell back to one, and it passed by pricing a half that did
+    // not exist.
+    assert!(world.server.stats.curtain_bullet_ticks > 0, "there was a curtain");
+    assert!(world.server.stats.player_bullet_ticks > 0, "and somebody actually fired");
+    let derived = derived.expect("curtain priced");
+    let streamed = streamed.expect("player fire priced");
+    assert!(derived < streamed, "derived {derived:.4} B/bullet-tick against streamed {streamed:.4}");
   }
 
   #[test]
@@ -277,7 +307,7 @@ mod tests {
     // message, because the share depends entirely on the mix.
     let controls = base();
     let mut world = World::new(&controls, SEED);
-    world.run(8000, &controls);
+    world.run_playing(8000, &controls);
     let share = world.server.stats.variant_name_share();
     assert!(world.server.stats.bytes_total > 1000, "there was traffic to measure");
     assert!(share > 0.0, "compact msgpack is positional for fields and not for variants");

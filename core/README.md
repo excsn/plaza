@@ -130,10 +130,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`examples/shared-counter` is this program, runnable:
+`examples/shared_counter` is this program, runnable:
 
 ```sh
-cargo run -p plaza-example-shared-counter
+cargo run -p plaza-example-shared_counter
 ```
 
 ## Driving time

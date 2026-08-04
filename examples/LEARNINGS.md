@@ -456,7 +456,41 @@ Every playground here ships a wasm bundle, so every one of them is one URL away 
 
 Two smaller decisions that were not obvious until they were made. **A discrete game wants buttons, not a stick**: three of these take one of a few values, and thresholding an analogue drag back into them is a threshold to get wrong, where a stick is right for the two that steer continuously. And **the controls stay hidden until the process sees its first touch**, latched rather than sampled, because a thumb pad drawn over a desktop window is clutter in the middle of what a player is looking at, and one that appeared and vanished between taps would be worse than one that was never there.
 
+### Three bugs that made the example look like it was working (hit_scan)
+
+**Symptom.** Nothing. That is the entry. The rifle was devastating, the bot stood its ground, and the movement looked smooth. Each of the three was found by a test that had been written to assert something else.
+
+**The shooter was in their own ray cast.** A ray starting at the centre of a body hits that body at zero distance, so every trigger pull resolved as a hit on the shooter and no shot ever reached anybody else. The first duel test came back `hit == Some(0)`, where 0 was the shooter. Read as a hit rate, it is a weapon that never misses.
+
+**The prediction ran a playout depth early.** `press` set the held direction as well as scheduling it for the tick it named, so the client walked from the keypress and the server walked from the tick, and the two took the same route out of step. 240 corrections in eight seconds, and on a continuous body every one of them is a few units that easing hides. This is exactly the second bullet of [bomb_grid's entry](#four-bugs-with-one-shape-bomb-grid), written down, cross-referenced, and then reintroduced by hand in a different file. **A lesson in a README is not a lesson in the code**; the thing that caught it was bomb_grid's *test* ported over, not bomb_grid's prose.
+
+**A bot wedged against a wall for the whole session.** Steering is quantised to eight directions, so a bot pressed against a vertical face while wanting to go a few degrees off due west resolves to due west, which has no vertical component left to slide along. It pushed into the wall for nine and a half seconds of test time without moving. A stationary bot is a *plausible* bot, which is why this is the same shape as pellet_maze's load-bearing bots one section up: the failure state and the healthy state look identical from outside.
+
+**The general form.** A bug that breaks an example loudly costs an afternoon. A bug that leaves it running costs however long it takes somebody to distrust a number. All three of these had a plausible reading, and none of them would have been found by playing the thing. The defence is not more care, it is asserting the *premise* as well as the logic: that a shot can miss, that latency alone produces no corrections, that a bot covers ground.
+
+### A curtain of forty bullets, measured very precisely (curtain_fire)
+
+**Symptom.** Every test passed and every number was wrong by an order of magnitude.
+
+**Cause.** The enemy curtain is a closed-form function of the tick, and the emitters were written to release one bullet per period regardless of pattern. That is correct for a spiral and wrong for a ring, which is *defined* by releasing a salvo at once. So the "ring" was a slow spiral, the field peaked at forty bullets, and the entire point of the example, that a derived half costs a fixed number of bytes where a streamed half costs per bullet, was being demonstrated on a field small enough for the streamed half to be perfectly affordable.
+
+**Fix.** Salvo size became a property of the pattern, and the emit loop starts at the oldest still-live salvo rather than at zero, so evaluating a wave costs the same at the end of it as at the beginning. The test now asserts density directly, per pattern, and separately asserts that the densest one is a real curtain.
+
+**The general form.** **A demo's premise needs a test as much as its logic does.** A thin curtain and a thick one take the same code path, so nothing failed; the byte comparison was arithmetically correct about a situation that was not the one being claimed. Any example whose point is "at scale, X beats Y" needs an assertion that the scale is present, or it will confirm itself at whatever scale it happens to have.
+
+### A harness that aimed like an oracle (hit_scan)
+
+**Symptom.** A skirmish test ran, ships shot each other, every verdict came back `Plain`, and the panel's whole reason to exist read as zero.
+
+**Cause.** The harness aimed at the server's position for each target, because that was the position it had to hand. Lag compensation exists to reconcile *the shooter's view* with the present, so a shooter that aims at the present has nothing to compensate: the rewound world and the current world both contain the target, every shot is `Plain`, and the granted-by-rewind counter is honestly zero. The test was measuring a scenario in which the feature is inert.
+
+**Fix.** The harness reads `client.render()` and aims at what that client is drawing, which is what a player does.
+
+**The general form.** This is [`mean_render_error`](#the-general-form-4)'s mistake one level up, and worth stating in its general shape because it has now appeared twice in this repository: **a measurement taken against the authority is not a measurement of what a client experiences.** Wherever a harness reaches for server state because it is convenient, ask whether the thing being measured is defined in terms of what a client had. If it is, the convenient number answers a different question and looks fine doing it.
+
 ### Smaller ones worth remembering
+
+**A test lane that ran straight through two pillars.** Every ray test in hit_scan's first draft failed, none of them for a reason involving the code: the obvious horizontal line across the arena at y 100 crosses both side pillars. It is a named constant now (`OPEN_LANE_Y`). Geometry fixtures deserve the same suspicion as the numbers they produce, and a fixture that is wrong fails loudly only when you are lucky.
 
 **Ctrl-C would not kill the windowed host.** Actix caught the signal for a graceful shutdown while the window kept running, and the controller sprayed queue-full errors into dead links. Fixed with `disable_signals`, leaving signal handling to the process.
 

@@ -38,7 +38,7 @@ Please refer to **[`core/README.md`](core/README.md)** for installation, the fou
 
 | Example | Shows |
 |---|---|
-| [`shared-counter`](examples/shared-counter/) | The smallest complete application. |
+| [`shared_counter`](examples/shared_counter/) | The smallest complete application. |
 | [`pong`](examples/pong/) | Real WebSockets, 60Hz simulation. Two browser tabs to play. |
 | [`whack_a_mole`](examples/whack_a_mole/) | A scheduler-driven game loop with scoring. |
 | [`ability_cooldowns`](examples/ability_cooldowns/) | Scheduled events that expire. |
@@ -58,7 +58,7 @@ Please refer to **[`core/README.md`](core/README.md)** for installation, the fou
 | [`ghost_trials`](examples/ghost_trials/) | The op stream as an **event-sourced record**: a ghost is a replay of an input log, and a lap time is decided by replaying the evidence rather than by believing a number. See its [README](examples/ghost_trials/README.md). |
 
 ```sh
-cargo run -p plaza-example-shared-counter
+cargo run -p plaza-example-shared_counter
 ```
 
 Turning the browser playgrounds into real listen-servers surfaced a run of bugs whose causes were consistently not where the symptoms pointed, and most of what is in `client_utils` and `server_utils` today is what those argued for. [`examples/LEARNINGS.md`](examples/LEARNINGS.md) is the record: the principles that prevent whole classes of bug, what broke and which reasonable theories were wrong, and what all of it changed in plaza itself.

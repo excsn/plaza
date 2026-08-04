@@ -9,11 +9,12 @@
 //! [`crate::net::client`]'s problem and is tested there.
 
 use plaza_client_utils::net_sim::{LatencyLink, Rng};
+use plaza_server_utils::{RenderError, render_error_at};
 
 use crate::sim::client::Client;
 use crate::sim::protocol::{Op, ServerPolicy};
 use crate::sim::server::Server;
-use crate::sim::types::{Controls, Dir8, PlayerId, SIM_STEP_MS, V2, Weapon};
+use crate::sim::types::{Controls, Dir8, PlayerId, PlayerSnap, SIM_STEP_MS, V2, Weapon};
 
 const IMPAIR_SEED: u64 = 0x5CA1_AB1E;
 
@@ -184,22 +185,23 @@ impl World {
   /// server already keeps to rewind a shot, so measuring it correctly costs a
   /// second call to a buffer that has to exist anyway.
   pub fn mean_render_error_honest(&self, controls: &Controls) -> f32 {
-    let mut sum = 0.0;
-    let mut n = 0u32;
+    self.honest_render_error(controls).mean()
+  }
+
+  /// The honest figure, unreduced, so a caller can have the worst case too.
+  pub fn honest_render_error(&self, controls: &Controls) -> RenderError {
+    let mut total = RenderError::new();
     for client in &self.clients {
       let Some(at) = client.render_at() else { continue };
-      let truth = self.server.snaps_at(at);
-      for (id, drawn, _) in client.render(controls) {
-        if id == client.me {
-          continue;
-        }
-        if let Some((_, snap)) = truth.iter().find(|(tid, _)| *tid == id) {
-          sum += drawn.dist(snap.pos);
-          n += 1;
-        }
-      }
+      let me = client.me;
+      let drawn = client
+        .render(controls)
+        .into_iter()
+        .filter(|(id, _, _)| *id != me)
+        .map(|(id, pos, alive)| (id, PlayerSnap { pos, alive }));
+      total.merge(&render_error_at(self.server.history(), at, drawn, |a, b| a.pos.dist(b.pos)));
     }
-    if n == 0 { 0.0 } else { sum / n as f32 }
+    total
   }
 
 }

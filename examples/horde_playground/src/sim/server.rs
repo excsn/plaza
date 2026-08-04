@@ -12,6 +12,7 @@ use std::collections::BTreeSet;
 
 use plaza_server_utils::aggregate::{AggregateTree, WeightedPoint};
 use plaza_server_utils::delta::{DeltaBaseline, RecoveryPolicy};
+use plaza_server_utils::history::HistoricalStateBuffer;
 use plaza_server_utils::input_schedule::{InputSchedule, InputWindow};
 use plaza_server_utils::relevance::{GridQuantizer, SetDigest, SpatialGrid, TierBoundary, VisibilitySet};
 
@@ -59,6 +60,14 @@ pub struct Server {
   /// this, and an allocator that owned the payload would compose with neither.
   enemies: Vec<Enemy>,
   pub projectiles: Vec<Projectile>,
+
+  /// Where every enemy was, recently.
+  ///
+  /// Kept so an accuracy figure can ask where things were **at the instant a
+  /// client was drawing**, rather than where they are now. Comparing a delayed
+  /// client against the present charges it for a delay it chose, which is the
+  /// distortion behind every render-error number this example has published.
+  history: HistoricalStateBuffer<Handle, Vec2, u64>,
 
   grid: SpatialGrid<EntityIndex>,
   cur_vis: Vec<VisibilitySet>,
@@ -185,6 +194,10 @@ pub struct Server {
 /// re-derived and forces a full rebuild.
 const SENT_HISTORY: usize = 24;
 
+/// Ticks of enemy positions kept, so an accuracy figure can be asked at a
+/// client's render instant rather than at the present.
+const TRUTH_HISTORY: usize = 80;
+
 /// How long a seat may go silent before [`DeltaBaseline`]'s flow control
 /// throttles it: see [`DeltaBaseline::with_flow`] for the pathology this
 /// prevents (a hidden tab streamed full baselines at full rate). Matches the
@@ -219,6 +232,9 @@ impl Server {
       pool,
       enemies,
       projectiles: Vec::new(),
+      // A second of truth at the tick rate, which comfortably covers the
+      // deepest render delay the panel offers.
+      history: HistoricalStateBuffer::new(TRUTH_HISTORY),
       grid: SpatialGrid::new(GridQuantizer::new((0.0, 0.0), CELL_SIZE)),
       cur_vis: (0..player_count).map(|_| VisibilitySet::with_capacity(enemy_count as u32)).collect(),
       announced_target,
@@ -390,6 +406,11 @@ impl Server {
     Vec::new()
   }
 
+  /// Truth, for anything that needs to ask where things were.
+  pub fn history(&self) -> &HistoricalStateBuffer<Handle, Vec2, u64> {
+    &self.history
+  }
+
   fn step(&mut self, seats: &[Seat], controls: &Controls) {
     let t = self.clock_ms as f32 / 1000.0;
     for (p, pos) in self.players.iter_mut().enumerate() {
@@ -418,6 +439,7 @@ impl Server {
     if controls.coins {
       self.step_coins();
     }
+    self.record_truth();
   }
 
   /// Touching an enemy costs one discrete hit, harder as the difficulty ramps,
@@ -452,6 +474,19 @@ impl Server {
       } else {
         self.player_invuln_until_ms[p] = now + HIT_INVULN_MS;
       }
+    }
+  }
+
+  /// Records where every enemy ended this tick.
+  ///
+  /// After everything has moved, so a lookup for a tick finds the world as that
+  /// tick left it, which is the same instant a client drawing at that tick was
+  /// shown.
+  fn record_truth(&mut self) {
+    let now = self.clock_ms;
+    let snapshot: Vec<(Handle, Vec2)> = self.pool.iter().map(|key| (key.into(), self.enemies[key.index as usize].pos)).collect();
+    for (handle, pos) in snapshot {
+      self.history.record_state(handle, now, pos);
     }
   }
 

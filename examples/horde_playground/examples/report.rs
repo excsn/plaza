@@ -83,15 +83,29 @@ fn main() {
     println!("{:<28}{:>12.1}{:>14.0}{:>14}", label, kib(w.bytes_per_sec()), w.mean_relevant(), w.known_entities(0));
   }
 
-  println!("\n== 2. sync rate vs drawing strategy (mean / max render error, px) ==");
+  println!("\n== 2. sync rate vs drawing strategy (mean / max render error, px, at the render instant) ==");
   println!("{:<10}{:>20}{:>20}{:>20}", "sync", "simulate", "dead-reckon", "interpolate");
+  let mut naive_rows: Vec<(u32, Vec<String>)> = Vec::new();
   for hz in [1u32, 2, 4, 10, 30] {
     let mut cells = Vec::new();
+    let mut naive = Vec::new();
     for mode in [RemoteMode::Simulate, RemoteMode::DeadReckon, RemoteMode::Interpolate] {
       let c = Controls { sync_hz: hz, mode, ..base };
       let w = run(&c, 6);
       cells.push(format!("{:.0} / {:.0}", w.mean_render_error(&c), w.max_render_error(&c)));
+      naive.push(format!("{:.0}", w.naive_render_error(&c)));
     }
+    println!("{:<10}{:>20}{:>20}{:>20}", format!("{hz} Hz"), cells[0], cells[1], cells[2]);
+    naive_rows.push((hz, naive));
+  }
+
+  // The same runs measured the way this example used to measure them, against
+  // truth *now*. A client rendering behind is supposed to be behind, so the
+  // difference between the two tables is the render delay being charged as
+  // error rather than anything the netcode did.
+  println!("\n== 2b. the same runs, measured against the present (mean px) ==");
+  println!("{:<10}{:>20}{:>20}{:>20}", "sync", "simulate", "dead-reckon", "interpolate");
+  for (hz, cells) in naive_rows {
     println!("{:<10}{:>20}{:>20}{:>20}", format!("{hz} Hz"), cells[0], cells[1], cells[2]);
   }
 
