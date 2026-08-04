@@ -41,3 +41,27 @@ It was written to expose gaps, and it did. Each of these is now closed, and this
 Framing, and enforcing `Limits::max_frame_bytes` with it. Those are what a transport *is*.
 
 And the parts, if the bundle does not suit. `Conditioner`, `ProbeState` and `LinkHandle` are public and each is useful alone, so a transport whose link genuinely reorders can keep the probe plane and write its own release queue: the shipped conditioner releases monotonically because a byte stream does not reorder, and that assumption is stated rather than hidden.
+
+## The second body: a link that is not a byte stream
+
+The Unix socket asked whether someone can follow the instructions. UDP asks whether the abstractions survive no connection, no framing, real loss and no head-of-line blocking. It deliberately does **not** use `LinkDriver`, because the bundle's conditioner is monotone; it assembles `ProbeState`, `LinkHandle` and `control` instead, which is the "parts are the swap" claim being tested rather than asserted.
+
+| question | answer |
+|---|---|
+| op round trip over datagrams | works |
+| link RTT measured | works: nothing about correlating a `Pong` to its `Ping` assumed a stream |
+| frames over one datagram | refused and counted |
+| head-of-line blocking | avoided, by an eleven-line release queue written from the public parts |
+| what a connection is | the adapter's invention |
+
+**What transferred cleanly.** The registry, the bridge, the outbound queue and the whole probe plane. None of them assume a stream, which is the result worth having: the seam is not secretly stream-shaped.
+
+**Where it assumes a stream, and what to do about it.**
+
+*Monotone release.* The shipped `Conditioner` holds a delayed frame in front of everything behind it, which is right for a stream and wrong for datagrams that genuinely arrive out of order. Using the bundle would have introduced a stall real UDP never produces. The parts being public turned that from a reason to abandon the seam into eleven lines.
+
+*`Delivery::Datagram` stops being a simulation.* It deletes a frame to model a link that loses one, because neither shipped transport can. This link loses them itself, so honouring that arm would double-count. Only delay and jitter are this adapter's to add.
+
+*No fragmentation, and that is the answer rather than a gap.* `[kind][body]` carries no sequence number and no fragment index, so a message over one datagram cannot be split without the adapter inventing a header, at which point the wire format stops being plaza's and a hand-written client cannot read it. This body refuses and counts. **Plaza is a stream wire format**, and a datagram transport keeps messages inside one datagram. Worth stating in the wire docs rather than leaving to be discovered.
+
+*A connection is a fact `register` expects the transport to have.* UDP has none. This adapter decides a datagram from an unseen address is one; a real one needs a handshake and an idle timeout, and neither is something the seam helps with. That is defensible, and it is not written down anywhere.

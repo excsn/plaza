@@ -7,6 +7,7 @@
 //! shows up here.
 
 mod transport;
+mod udp;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -237,4 +238,91 @@ async fn main() {
   );
 
   let _ = std::fs::remove_file(&path);
+
+  datagram_body().await;
+}
+
+/// The second body: a link with no connection, no framing, and no head-of-line
+/// blocking. It asks what the stream body could not.
+async fn datagram_body() {
+  use tokio::net::UdpSocket;
+
+  let factory: udp::AgentFactory<PlayerId> = Arc::new(|_peer| Agent::new_human(7));
+  let session = udp::UdpPlazaSession::<Op, PlayerId, JsonCodec>::bind(
+    "127.0.0.1:0",
+    factory,
+    JsonCodec,
+    SessionOptions::default(),
+  )
+  .await
+  .expect("bind");
+  let server = session.local_addr();
+
+  let (_commands, controller) = StateControllerBuilder::new(
+    Arc::new(Logic),
+    session.clone(),
+    Arc::new(NoViews),
+    World::default(),
+  )
+  .build();
+  tokio::spawn(controller.run());
+
+  let client = Arc::new(UdpSocket::bind("127.0.0.1:0").await.expect("client bind"));
+  client.connect(server).await.expect("connect");
+
+  let (saw_ops, mut ops_seen) = tokio::sync::mpsc::unbounded_channel();
+  {
+    let client = client.clone();
+    tokio::spawn(async move {
+      let mut buf = vec![0u8; 2048];
+      while let Ok(len) = client.recv(&mut buf).await {
+        let datagram = buf[..len].to_vec();
+        let Some((tag, body)) = frame::split(&datagram) else { continue };
+        match frame::Kind::from_byte(tag) {
+          Some(frame::Kind::Ping) => {
+            if let Some(reply) = frame::answer_ping(&JsonCodec, body, None) {
+              let _ = client.send(&reply).await;
+            }
+          }
+          Some(frame::Kind::Ops) => {
+            let _ = saw_ops.send(());
+          }
+          _ => {}
+        }
+      }
+    });
+  }
+
+  let _ = client.send(&ops_frame(&Op::Say("hello".into()))).await;
+  let round_trip = tokio::time::timeout(Duration::from_secs(3), ops_seen.recv())
+    .await
+    .is_ok();
+
+  let mut measured = None;
+  for _ in 0..100 {
+    if let Some((rtt, samples)) = session.manager().agent_link_rtt(&7) {
+      measured = Some((rtt, samples));
+      break;
+    }
+    tokio::time::sleep(Duration::from_millis(20)).await;
+  }
+
+  // A frame no datagram can carry.
+  let oversized_op = Op::Say("x".repeat(4096));
+  let _ = client.send(&ops_frame(&oversized_op)).await;
+  tokio::time::sleep(Duration::from_millis(200)).await;
+  let refused = session.oversized.load(std::sync::atomic::Ordering::Relaxed);
+
+  println!("\n## the same seam, on a link that is not a byte stream\n");
+  println!("| question | answer |");
+  println!("|---|---|");
+  println!("| op round trip over datagrams | {round_trip} |");
+  println!("| link RTT measured | {} |", measured.is_some());
+  println!("| frames over one datagram | refused, {refused} of them: plaza's frame has no fragment header |");
+  println!("| head-of-line blocking | avoided: the shipped conditioner is monotone, so this body wrote its own release queue from the public parts |");
+  println!("| what a connection is | the adapter's invention: `register` wants a fact UDP does not have |");
+
+  assert!(round_trip, "the registry and bridge do not assume a stream");
+  assert!(measured.is_some(), "probe correlation does not assume a stream either");
+  assert!(refused > 0, "an unfragmentable frame is refused rather than silently truncated");
 }
