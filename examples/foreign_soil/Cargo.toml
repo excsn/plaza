@@ -1,0 +1,26 @@
+[package]
+name = "plaza_example_foreign_soil"
+version = "0.1.0"
+edition = { workspace = true }
+publish = false
+
+# Deliberately no `actix_ws` and no `tcp`: this example exists to find out what
+# the published seam gives a transport plaza did not ship, and borrowing a
+# feature from a shipped adapter would hide the answer. Features are named
+# exactly, because the examples workspace unifies them across members and a
+# sibling would otherwise cover for anything left out.
+[dependencies]
+plaza = { workspace = true }
+plaza_session = { workspace = true, features = ["json"] }
+plaza_wire = { workspace = true, features = ["json"] }
+
+async-trait = { workspace = true }
+# Finding: `OutboundFrame` is `bytes::Bytes` and `plaza_session` re-exports
+# neither the type nor the crate, so an adapter depends on `bytes` itself and
+# hopes the version unifies. `session_channel` exists to spare a transport
+# exactly this for the channel crate; nothing does it for `bytes`.
+bytes = "^1" 
+serde = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

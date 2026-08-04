@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "foreign_soil",
   "ability_cooldowns",
   "auction_floor",
   "bomb_grid",
