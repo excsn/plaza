@@ -1,3 +1,4 @@
+use plaza::agent::Agent;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -90,7 +91,10 @@ impl Ball {
   }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+/// Server-side state. Not serializable, and deliberately: what clients are
+/// sent is [`PongSnapshotPayload`], which is a different shape because the
+/// roster and the physics clock are the server's business.
+#[derive(Debug, Clone)]
 pub struct PongGameState {
   pub game_id: Uuid,
   pub phase: GamePhase,
@@ -99,9 +103,20 @@ pub struct PongGameState {
   pub scores: HashMap<PlayerId, u32>,
   pub player1_id: Option<PlayerId>,
   pub player2_id: Option<PlayerId>,
-  #[serde(skip)] // Don't send this over network, used for server-side logic
+  /// Everyone connected, players and spectators alike. A uniform snapshot
+  /// names its recipients, so the roster has to live somewhere; the controller
+  /// does not keep one.
+  pub agents: HashMap<PlayerId, Agent<PlayerId>>,
   pub last_update_time: Option<std::time::Instant>,
   pub version: u64,
+}
+
+impl PongGameState {
+  /// Everyone who should receive the world, in one call, for
+  /// [`SnapshotRequest::uniform`](plaza::state_logic::SnapshotRequest::uniform).
+  pub fn everyone(&self) -> Vec<Agent<PlayerId>> {
+    self.agents.values().cloned().collect()
+  }
 }
 
 impl Default for PongGameState {
@@ -114,8 +129,37 @@ impl Default for PongGameState {
       scores: HashMap::new(),
       player1_id: None,
       player2_id: None,
+      agents: HashMap::new(),
       last_update_time: Some(std::time::Instant::now()),
       version: 0,
+    }
+  }
+}
+
+/// What a client is sent. The same for every recipient, which is what makes
+/// the pass uniform: pong has no hidden information, both paddles and the ball
+/// are on screen for everyone.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PongSnapshotPayload {
+  pub phase: GamePhase,
+  pub paddles: HashMap<PlayerId, Paddle>,
+  pub ball: Ball,
+  pub scores: HashMap<PlayerId, u32>,
+  pub player1_id: Option<PlayerId>,
+  pub player2_id: Option<PlayerId>,
+  pub version: u64,
+}
+
+impl From<&PongGameState> for PongSnapshotPayload {
+  fn from(state: &PongGameState) -> Self {
+    Self {
+      phase: state.phase.clone(),
+      paddles: state.paddles.clone(),
+      ball: state.ball.clone(),
+      scores: state.scores.clone(),
+      player1_id: state.player1_id,
+      player2_id: state.player2_id,
+      version: state.version,
     }
   }
 }
@@ -142,12 +186,9 @@ pub enum PongOp {
     player_id: PlayerId,
     side: PlayerSide,
   },
-  GameUpdate(Box<PongGameState>),
   ScoreUpdate {
     player_id: PlayerId,
     new_score: u32,
   },
   PhaseChange(GamePhase),
 }
-
-pub type PongSnapshotPayload = PongGameState;

@@ -28,10 +28,7 @@
             const host = window.location.host;
             ws = new WebSocket(`${protocol}//${host}/ws`);
 
-            ws.onopen = () => {
-                console.log('Connected to Pong server');
-                // Send ReadyToPlay if game expects it after connection
-            };
+            ws.onopen = () => console.log('Connected to Pong server');
 
             ws.onmessage = (event) => {
                 // A frame is one kind byte then the encoded body. An unknown
@@ -86,31 +83,28 @@
             // a single loop rather than an Ops-versus-StateData branch.
             (ops || []).forEach(op => {
                 if (op.Snapshot) {
+                    // The whole world, every tick. It replaces the local copy
+                    // outright rather than being merged into it, so nothing
+                    // here patches fields a later frame would overwrite.
                     gameState = op.Snapshot;
                     if (gameState && myPlayerId) {
                         if (gameState.player1_id === myPlayerId) mySide = "Left";
                         else if (gameState.player2_id === myPlayerId) mySide = "Right";
                     }
-                    sendReadyToPlay();
                     draw();
                 } else if (op.AssignPlayer) {
                     myPlayerId = op.AssignPlayer.player_id;
                     mySide = op.AssignPlayer.side;
                     console.log(`Assigned as ${mySide} player: ${myPlayerId}`);
-                } else if (op.GameUpdate) {
-                    gameState = op.GameUpdate;
-                    draw();
                 } else if (op.ScoreUpdate) {
-                    if (gameState && gameState.scores) {
-                        gameState.scores[op.ScoreUpdate.player_id] = op.ScoreUpdate.new_score;
-                    }
-                    draw();
+                    // An event, not state: the next snapshot carries the score.
+                    console.log(`Point to ${op.ScoreUpdate.player_id}: ${op.ScoreUpdate.new_score}`);
                 } else if (op.PhaseChange) {
-                    if (gameState) gameState.phase = op.PhaseChange;
+                    // Sent once per transition, so readiness is answered once
+                    // per transition rather than once per frame received.
                     if (op.PhaseChange === "Paused" || op.PhaseChange === "Starting") {
                         setTimeout(() => sendReadyToPlay(), 500);
                     }
-                    draw();
                 }
             });
         }
@@ -165,12 +159,16 @@
                 case "WaitingForPlayers": text = "Waiting for opponent..."; break;
                 case "Starting": text = "Get Ready!"; break;
                 case "Paused": text = "Paused"; break;
-                case "GameOver":
-                    let winner = "N/A";
-                    if (gameState.scores[gameState.player1_id] >= 5) winner = "Player 1"; // Needs better ID to name mapping
-                    else if (gameState.scores[gameState.player2_id] >= 5) winner = "Player 2";
-                    text = `Game Over! ${winner} wins!`;
+                case "GameOver": {
+                    const scores = gameState.scores || {};
+                    const [winnerId] = Object.entries(scores)
+                        .sort(([, a], [, b]) => b - a)[0] || [];
+                    const winner = winnerId === undefined ? "Nobody"
+                        : winnerId === myPlayerId ? "You"
+                        : gameState.player1_id === winnerId ? "Player 1" : "Player 2";
+                    text = `Game Over! ${winner} ${winner === "You" ? "win" : "wins"}!`;
                     break;
+                }
             }
             if (text) {
                  const textWidth = ctx.measureText(text).width;

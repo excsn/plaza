@@ -1,4 +1,4 @@
-use crate::types::{PlayerId, PongGameState, PongOp};
+use crate::types::{PlayerId, PongGameState, PongOp, PongSnapshotPayload};
 use plaza::{
     agent::Agent,
     error::SnapshotError,
@@ -27,8 +27,9 @@ impl SnapshotProvider<PlayerId, PongGameState, PongOp> for PongSnapshotter {
             "Creating Pong snapshot"
         );
 
-        let snapshot_payload = full_state.clone();
-
-        Ok(Some(PongOp::Snapshot(Box::new(snapshot_payload))))
+        // `target_agent` is read only for the log line above: pong has no
+        // hidden information, so every recipient gets this same payload, which
+        // is what lets the tick pass run as one uniform snapshot.
+        Ok(Some(PongOp::Snapshot(Box::new(PongSnapshotPayload::from(full_state)))))
     }
 }

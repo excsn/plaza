@@ -7,7 +7,7 @@ use plaza::{
   agent::Agent,
   error::StateLogicError,
   session::{MessageTarget, TargetedOp},
-  state_logic::{LogicInput, LogicOutput, StateLogic},
+  state_logic::{LogicInput, LogicOutput, SnapshotRequest, StateLogic},
 };
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -93,10 +93,7 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
                 });
               }
             }
-            PongOp::AssignPlayer { .. }
-            | PongOp::GameUpdate(_)
-            | PongOp::ScoreUpdate { .. }
-            | PongOp::PhaseChange(_) => {
+            PongOp::AssignPlayer { .. } | PongOp::ScoreUpdate { .. } | PongOp::PhaseChange(_) => {
               warn!(player_id = %player_id, "Client sent a server-originated op type: {:?}", op);
             }
           }
@@ -232,16 +229,18 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
         // they transition based on AgentOps or scoring.
 
         current_state.version += 1;
-        ops_to_broadcast.push(TargetedOp {
-          from_agent: Agent::system(),
-          target: MessageTarget::All,
-          ops: vec![PongOp::GameUpdate(Box::new(current_state.clone()))],
-        });
+        // The whole world, every tick, to everyone: one provider call and one
+        // encode rather than one per recipient. Pong is a state-sync game, and
+        // this is the line that says so.
+        return Ok(
+          LogicOutput::ops(ops_to_broadcast).and_snapshot(SnapshotRequest::uniform(current_state.everyone())),
+        );
       }
       LogicInput::AgentJoined { agent } => {
         let Some(player_id) = agent.id_cloned() else {
           return Ok(ops_to_broadcast.into());
         };
+        current_state.agents.insert(player_id, agent.clone());
 
         // Seat the player on the first free side; extra connections spectate.
         let side = if current_state.player1_id.is_none() {
@@ -255,11 +254,9 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
         };
 
         let Some(side) = side else {
+          // No explicit catch-up: the controller sends every joiner a snapshot
+          // already, and a spectator is now in the roster the tick pass names.
           info!(agent = %agent, "Game is full; joining as spectator.");
-          ops_to_broadcast.push(TargetedOp::new_system_to(
-            player_id,
-            vec![PongOp::GameUpdate(Box::new(current_state.clone()))],
-          ));
           return Ok(ops_to_broadcast.into());
         };
 
@@ -280,11 +277,9 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
         }
 
         current_state.version += 1;
-        ops_to_broadcast.push(TargetedOp::new_system_all(vec![PongOp::GameUpdate(Box::new(
-          current_state.clone(),
-        ))]));
       }
       LogicInput::AgentLeft { agent_id } => {
+        current_state.agents.remove(&agent_id);
         current_state.paddles.remove(&agent_id);
         current_state.scores.remove(&agent_id);
         if current_state.player1_id == Some(agent_id) {
@@ -304,9 +299,11 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
 
         info!(?agent_id, "Player left; seat freed.");
         current_state.version += 1;
-        ops_to_broadcast.push(TargetedOp::new_system_all(vec![PongOp::GameUpdate(Box::new(
-          current_state.clone(),
-        ))]));
+        // Unlike a join, a leave gets no snapshot from the controller, so the
+        // remaining players are told here.
+        return Ok(
+          LogicOutput::ops(ops_to_broadcast).and_snapshot(SnapshotRequest::uniform(current_state.everyone())),
+        );
       }
     }
     Ok(ops_to_broadcast.into())
