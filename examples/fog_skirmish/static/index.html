@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Plaza Fog Skirmish</title>
+    <style>
+        body { margin: 0; min-height: 100vh; display: flex; align-items: center;
+               justify-content: center; gap: 24px; background: #16181d; color: #cfd3dc;
+               font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
+        canvas { background: #0a0c10; border: 1px solid #2b303b; border-radius: 4px; cursor: crosshair; }
+        #side { width: 320px; display: flex; flex-direction: column; gap: 16px; }
+        h1 { font-size: 15px; font-weight: normal; margin: 0; color: #cfd3dc; }
+        p { margin: 0; color: #7f8794; line-height: 1.55; }
+        table { width: 100%; border-collapse: collapse; }
+        td { padding: 3px 0; }
+        td.n { text-align: right; color: #e8ecf4; }
+        .hdr { color: #7f8794; border-bottom: 1px solid #2b303b; padding-bottom: 4px; }
+        .leak td.n { color: #ff5f56; font-weight: bold; }
+        .leak.clean td.n { color: #4ec9a5; font-weight: normal; }
+        button { width: 100%; padding: 9px; border-radius: 5px; cursor: pointer;
+                 border: 1px solid #2b303b; background: #1b1f27; color: #cfd3dc;
+                 font: inherit; }
+        button.on { background: #40191a; border-color: #ff5f56; color: #ff9d97; }
+        #feed { height: 150px; overflow-y: auto; border-top: 1px solid #2b303b;
+                padding-top: 8px; color: #7f8794; line-height: 1.6; }
+        .late { color: #d8b25c; }
+    </style>
+</head>
+<body>
+    <canvas id="map"></canvas>
+    <div id="side">
+        <h1>fog skirmish</h1>
+        <p id="hint">Click the map to send your three scouts. You are shown only what they can see.</p>
+        <table id="panel"></table>
+        <button id="leak">loading…</button>
+        <p id="leakhint"></p>
+        <div id="feed"></div>
+    </div>
+    <script>
+        const KIND_OPS = 0, KIND_PING = 2, KIND_PONG = 3;
+        const FIELD = 200.0, VISION = 26.0, PX = 620;
+        const COLOURS = ['#4fb3ff', '#ff9d5c', '#a98cff', '#4ec9a5'];
+
+        const canvas = document.getElementById('map');
+        const ctx = canvas.getContext('2d');
+        canvas.width = PX; canvas.height = PX;
+
+        let ws, me = null, view = null;
+        // Fog of war means the client keeps what it last saw. The server stops
+        // sending a relic the moment it leaves your vision, so anything still
+        // drawn from here is memory, and may already be wrong.
+        const remembered = new Map();
+
+        const s = (v) => (v / FIELD) * PX;
+        const colour = (p) => COLOURS[p % COLOURS.length];
+
+        function connect() {
+            const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${proto}//${window.location.host}/ws`);
+            ws.onmessage = (e) => {
+                const kind = e.data.charCodeAt(0);
+                if (kind === KIND_PING) {
+                    const ping = JSON.parse(e.data.slice(1));
+                    ws.send(String.fromCharCode(KIND_PONG) + JSON.stringify({ origin: ping.origin, responder: null }));
+                    return;
+                }
+                if (kind !== KIND_OPS) return;
+                (JSON.parse(e.data.slice(1)) || []).forEach(op => {
+                    if (op.Snapshot) {
+                        view = op.Snapshot;
+                        view.relics.forEach(r => remembered.set(r.id, r));
+                    } else if (op.Welcome) {
+                        me = op.Welcome.you;
+                    } else if (op.Captured) {
+                        const c = op.Captured;
+                        // A late one is the whole demonstration: you are hearing
+                        // about a capture from tick N at tick N+k, because until
+                        // now you had no business knowing that place had changed.
+                        remembered.set(c.relic, { ...(remembered.get(c.relic) || {}), id: c.relic, x: c.x, y: c.y, owner: c.by });
+                        say(c.late
+                            ? `P${c.by} took relic ${c.relic} on tick ${c.tick} — you are only being told now`
+                            : `P${c.by} took relic ${c.relic}`, c.late);
+                    }
+                });
+            };
+            ws.onclose = () => { view = null; document.getElementById('hint').textContent = 'disconnected'; };
+        }
+
+        function send(ops) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(String.fromCharCode(KIND_OPS) + JSON.stringify(ops));
+            }
+        }
+
+        function say(text, late) {
+            const feed = document.getElementById('feed');
+            const div = document.createElement('div');
+            div.textContent = text;
+            if (late) div.className = 'late';
+            feed.appendChild(div);
+            while (feed.childElementCount > 60) feed.removeChild(feed.firstChild);
+            feed.scrollTop = feed.scrollHeight;
+        }
+
+        canvas.addEventListener('click', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            send([{ MoveTo: { x: (e.clientX - rect.left) / PX * FIELD, y: (e.clientY - rect.top) / PX * FIELD } }]);
+        });
+
+        document.getElementById('leak').onclick = () => {
+            if (!view) return;
+            send([{ SetLeakMode: !view.panel.leak_mode }]);
+        };
+
+        function draw() {
+            ctx.clearRect(0, 0, PX, PX);
+
+            if (view) {
+                // Everything outside a scout's circle is unlit. The dark is not
+                // a rendering effect over data we hold: there is no data.
+                ctx.save();
+                ctx.beginPath();
+                view.my_units.forEach(u => {
+                    ctx.moveTo(s(u.x) + s(VISION), s(u.y));
+                    ctx.arc(s(u.x), s(u.y), s(VISION), 0, Math.PI * 2);
+                });
+                ctx.fillStyle = '#12161d';
+                ctx.fill();
+                ctx.restore();
+
+                // Remembered, but not currently in sight: what you believe.
+                const live = new Set(view.relics.map(r => r.id));
+                remembered.forEach(r => {
+                    if (live.has(r.id)) return;
+                    ctx.globalAlpha = 0.28;
+                    dot(r, 2.6);
+                    ctx.globalAlpha = 1;
+                });
+
+                view.relics.forEach(r => {
+                    dot(r, 3.2);
+                    if (r.claimant !== null && r.claimant !== undefined && r.progress > 0) {
+                        ctx.beginPath();
+                        ctx.arc(s(r.x), s(r.y), 8, -Math.PI / 2, -Math.PI / 2 + (r.progress / 60) * Math.PI * 2);
+                        ctx.strokeStyle = colour(r.claimant);
+                        ctx.stroke();
+                    }
+                });
+
+                view.enemy_units.forEach(u => {
+                    ctx.beginPath();
+                    ctx.arc(s(u.x), s(u.y), 5, 0, Math.PI * 2);
+                    ctx.fillStyle = colour(u.owner);
+                    ctx.fill();
+                    ctx.strokeStyle = '#0a0c10';
+                    ctx.stroke();
+                });
+
+                view.my_units.forEach(u => {
+                    ctx.beginPath();
+                    ctx.arc(s(u.x), s(u.y), 5.5, 0, Math.PI * 2);
+                    ctx.fillStyle = colour(me === null ? 0 : me);
+                    ctx.fill();
+                    ctx.strokeStyle = '#ffffff';
+                    ctx.stroke();
+                });
+
+                panel();
+            }
+            requestAnimationFrame(draw);
+        }
+
+        function dot(r, radius) {
+            ctx.beginPath();
+            ctx.arc(s(r.x), s(r.y), radius, 0, Math.PI * 2);
+            ctx.fillStyle = (r.owner === null || r.owner === undefined) ? '#5b6472' : colour(r.owner);
+            ctx.fill();
+        }
+
+        function panel() {
+            const p = view.panel;
+            const rows = [
+                ['relics in the world', p.relics_in_world, ''],
+                ['sent to you', p.relics_visible, ''],
+                ['grid offered', p.relics_considered, ''],
+                ['captures told', p.told, ''],
+                ['told late', p.told_late, 'late'],
+                ['held back now', p.withheld_now, ''],
+                ['positions leaked', p.leaks, 'leak' + (p.leaks === 0 ? ' clean' : '')],
+            ];
+            document.getElementById('panel').innerHTML =
+                '<tr class="hdr"><td>the outbound op stream</td><td class="n">count</td></tr>' +
+                rows.map(([k, v, cls]) => `<tr class="${cls}"><td>${k}</td><td class="n">${v}</td></tr>`).join('') +
+                (view.scores.length ? '<tr class="hdr"><td>relics held</td><td class="n"></td></tr>' +
+                    view.scores.map(([id, sc]) =>
+                        `<tr><td style="color:${colour(id)}">${id === me ? 'you' : 'P' + id}</td><td class="n">${sc}</td></tr>`).join('') : '');
+
+            const btn = document.getElementById('leak');
+            btn.textContent = p.leak_mode ? 'deferral OFF — telling everyone' : 'turn the deferral off';
+            btn.className = p.leak_mode ? 'on' : '';
+            document.getElementById('leakhint').textContent = p.leak_mode
+                ? 'Captures now go out the moment they happen. The game plays identically; the leak counter is what changed.'
+                : 'A capture you cannot see is held until you can. Turn it off to watch the counter move.';
+        }
+
+        connect();
+        draw();
+    </script>
+</body>
+</html>
