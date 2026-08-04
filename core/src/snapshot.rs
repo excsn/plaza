@@ -110,7 +110,9 @@ impl Debug for SnapshotContext {
 /// ```
 ///
 /// The controller calls this once per recipient, so returning a different
-/// payload per agent costs nothing extra structurally.
+/// payload per agent costs nothing extra structurally. When the payload does
+/// not depend on the recipient, a uniform request collapses the pass to one
+/// call: see `SnapshotRequest::uniform`.
 ///
 /// **Every call in a pass is started before any is awaited.** A provider that
 /// reads a database or a cache therefore overlaps its waits rather than
@@ -131,7 +133,12 @@ pub trait SnapshotProvider<ID: AgentId, StateType, Op>: Send + Sync + 'static {
   /// snapshot concept at all, or one declining a particular agent, says so here
   /// rather than inventing an empty op.
   ///
-  /// `target_agent` is `None` only when no particular recipient applies.
+  /// `target_agent` is `None` only when no particular recipient applies. A
+  /// uniform pass ([`SnapshotRequest::uniform`]) calls this once with `None`
+  /// and sends the result to every recipient in the request, so the `None`
+  /// view must contain nothing any recipient may not see.
+  ///
+  /// [`SnapshotRequest::uniform`]: crate::state_logic::SnapshotRequest::uniform
   async fn create_snapshot(
     &self,
     full_state: &StateType,

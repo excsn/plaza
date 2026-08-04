@@ -105,8 +105,9 @@ What processing produced.
 
 #### Struct `SnapshotRequest<ID: AgentId>`
 
-*   **Fields**: `recipients: Vec<Agent<ID>>`, `context: Option<SnapshotContext>`.
-*   **Constructors**: `to(recipients)`, `with_context(recipients, context)`.
+*   **Fields**: `recipients: Vec<Agent<ID>>`, `context: Option<SnapshotContext>`, `uniform: bool`.
+*   **Constructors**: `to(recipients)`, `with_context(recipients, context)` (per-recipient); `uniform(recipients)`, `uniform_with_context(recipients, context)` (one shared payload).
+*   A uniform request runs the provider once with `target_agent: None` and sends the result to every recipient over `MessageTarget::Agents`, so a pass to N agents costs one snapshot build and one encode instead of N of each (145x at 40 KiB × 256 recipients, `session/benches/snapshot_fanout.rs`). The `None` view goes to everyone in the request, so it must contain nothing any recipient may not see: a game with hidden information keeps its per-player passes non-uniform.
 
 ### Trait `SnapshotProvider`
 
@@ -122,7 +123,7 @@ pub trait SnapshotProvider<ID: AgentId, StateType, Op>: Send + Sync + 'static {
 }
 ```
 
-**The seam for hidden information.** `target_agent` is who the snapshot is *for*, and the controller calls this once per recipient, so returning a different payload per agent (each player sees their own hand) is the normal path.
+**The seam for hidden information.** `target_agent` is who the snapshot is *for*, and the controller calls this once per recipient, so returning a different payload per agent (each player sees their own hand) is the normal path. A [uniform request](#struct-snapshotrequestid-agentid) instead calls it once with `target_agent: None`, and that view reaches every recipient in the request.
 
 **Every call in a pass is started before any is awaited**, so a provider that reads a database or a cache overlaps its waits rather than serialising them. That matters because the controller is one task: a pass awaiting per agent stalls ticks and ops behind it, and against a provider suspending ~1.3ms, 64 recipients cost 85ms in sequence and 1.4ms overlapped (`core/benches/snapshots.rs`). A provider that never awaits is unaffected. The consequence is that **calls interleave**: one that relies on finishing before the next begins cannot assume it, though taking `&self` already ruled out holding state across a call.
 
@@ -161,7 +162,7 @@ Which snapshot is wanted. **Plaza never reads this**: it carries it from caller 
 *   `ProcessTimeStep { delta_time }`
 *   `HandleAgentJoined { agent }` / `HandleAgentLeft { agent_id }`: the push-style alternative to the session's own notifications; the lobby uses the latter.
 *   `QueryCurrentState { response_tx: oneshot::ExclusiveSender<StateType> }`: the single-sender oneshot, since the sender is moved into the command and never cloned.
-*   `SendSnapshots { recipients: Vec<Agent<ID>>, context: Option<SnapshotContext> }`: re-sends state, building a snapshot per recipient, with every provider call started before any is awaited. Recipients are explicit because the roster lives in your state, not the controller.
+*   `SendSnapshots { recipients: Vec<Agent<ID>>, context: Option<SnapshotContext> }`: re-sends state, building a snapshot per recipient, with every provider call started before any is awaited. Recipients are explicit because the roster lives in your state, not the controller. Always per-recipient: a uniform pass is asked for from logic output, via `SnapshotRequest::uniform`.
 *   `Shutdown`
 
 ### Type Alias `CommandSender<Op, ID, StateType>`

@@ -6,9 +6,10 @@
 //! snapshots are for. Twelve of the eighteen shipped providers ignore the
 //! recipient entirely, and for those the N payloads are identical.
 //!
-//! `per_recipient` is what happens today. `uniform` is the same work when the
-//! provider's answer does not depend on who is asking: encode once, and let
-//! `MessageTarget::Agents` hand every recipient the same refcounted frame.
+//! `per_recipient` is what a per-recipient pass does. `uniform` is the same
+//! work when the provider's answer does not depend on who is asking: encode
+//! once, and let `MessageTarget::Agents` hand every recipient the same
+//! refcounted frame. It is the pass `SnapshotRequest::uniform` runs.
 //!
 //! `cargo bench -p plaza_session --bench snapshot_fanout`
 

@@ -184,8 +184,8 @@ impl ControllerStats {
     self.leaves.fetch_add(1, Ordering::Relaxed);
   }
 
-  pub(crate) fn record_snapshot(&self) {
-    self.snapshots.fetch_add(1, Ordering::Relaxed);
+  pub(crate) fn record_snapshots(&self, count: usize) {
+    self.snapshots.fetch_add(count as u64, Ordering::Relaxed);
   }
 }
 

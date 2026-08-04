@@ -170,6 +170,8 @@ Ok(Some(GameOp::Snapshot(Box::new(GameView {
 
 Return `Ok(None)` to send a recipient nothing, which is how an application declines a particular agent. If nothing you build ever needs catch-up on join, say so once instead: `StateControllerBuilder::without_snapshots(logic, session, state)` supplies the shipped `NoSnapshots` provider and you write no `create_snapshot` at all.
 
+When the view does not depend on who is asking, a world broadcast in a state-sync game, request it `SnapshotRequest::uniform(everyone)` instead: the provider runs once with `target_agent: None` and every recipient receives that one payload, so the pass costs one build and one encode instead of N. The `None` view goes to all of them, so it must be one anyone may see.
+
 ### Asking a running controller a question
 
 `query_state(&tx)` copies the whole state back to you, and is the only thing in the crate that needs `StateType: Clone`. When a field is what you want, ask for the field: the closure runs on the controller's task with the state borrowed, so nothing is copied.

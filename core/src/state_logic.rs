@@ -52,10 +52,23 @@ impl<Op, ID: AgentId> fmt::Display for LogicInput<Op, ID> {
 ///
 /// Each recipient's snapshot is built for that recipient, so this is how a game
 /// pushes a changed view: a new hand dealt, a phase that reveals information.
+///
+/// When the view does not depend on who is asking, request it
+/// [`uniform`](Self::uniform): the provider runs once and every recipient
+/// receives the same payload, so a pass to N agents costs one snapshot build
+/// and one encode instead of N of each.
 #[derive(Debug, Clone)]
 pub struct SnapshotRequest<ID: AgentId> {
   pub recipients: Vec<Agent<ID>>,
   pub context: Option<SnapshotContext>,
+  /// Build one recipient-free snapshot and send it to every recipient, rather
+  /// than building one per recipient.
+  ///
+  /// The provider is called once with `target_agent: None`, so its `None` view
+  /// is what everyone receives: it must contain nothing any recipient may not
+  /// see. A game with hidden information keeps its per-player passes
+  /// non-uniform and uses this only for views that are public anyway.
+  pub uniform: bool,
 }
 
 impl<ID: AgentId> SnapshotRequest<ID> {
@@ -64,6 +77,7 @@ impl<ID: AgentId> SnapshotRequest<ID> {
     Self {
       recipients,
       context: None,
+      uniform: false,
     }
   }
 
@@ -72,6 +86,25 @@ impl<ID: AgentId> SnapshotRequest<ID> {
     Self {
       recipients,
       context: Some(context),
+      uniform: false,
+    }
+  }
+
+  /// Sends these agents one shared snapshot, built once with no target agent.
+  pub fn uniform(recipients: Vec<Agent<ID>>) -> Self {
+    Self {
+      recipients,
+      context: None,
+      uniform: true,
+    }
+  }
+
+  /// Sends these agents one shared snapshot under the given context.
+  pub fn uniform_with_context(recipients: Vec<Agent<ID>>, context: SnapshotContext) -> Self {
+    Self {
+      recipients,
+      context: Some(context),
+      uniform: true,
     }
   }
 }

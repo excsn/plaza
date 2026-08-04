@@ -529,7 +529,11 @@ where
         // After the ops, so a client sees what happened before the state that
         // reflects it.
         for request in output.snapshots {
-          self.send_snapshots(&request.recipients, request.context).await;
+          if request.uniform {
+            self.send_uniform_snapshot(&request.recipients, request.context).await;
+          } else {
+            self.send_snapshots(&request.recipients, request.context).await;
+          }
         }
       }
       Err(e) => {
@@ -630,9 +634,52 @@ where
       if let Err(e) = self.session.send_message(MessageTarget::Agent(target_id), msg).await {
         error!(error = %e, agent = %agent, "Failed to send snapshot.");
       } else {
-        self.stats.record_snapshot();
+        self.stats.record_snapshots(1);
         debug!(agent = %agent, "Snapshot sent.");
       }
+    }
+  }
+
+  /// Sends every recipient one snapshot, built once with no target agent.
+  ///
+  /// What a [`SnapshotRequest::uniform`] pass runs instead of
+  /// [`send_snapshots`](Self::send_snapshots): one provider call with
+  /// `target_agent: None`, one encode, and a `MessageTarget::Agents` fan-out,
+  /// so N recipients cost one build instead of N. The `None` view goes to
+  /// everyone in the request, which is why the provider's `None` arm must be
+  /// safe for any recipient.
+  async fn send_uniform_snapshot(&self, recipients: &[Agent<ID>], context: Option<SnapshotContext>) {
+    let mut ids = Vec::with_capacity(recipients.len());
+    for agent in recipients {
+      match agent.id_cloned() {
+        Some(id) => ids.push(id),
+        None => warn!(agent = %agent, "Cannot snapshot an agent without an ID; skipping."),
+      }
+    }
+    if ids.is_empty() {
+      return;
+    }
+
+    let made = self
+      .snapshot_provider
+      .create_snapshot(&self.state_data, None, context)
+      .await;
+    let snapshot_op = match made {
+      Ok(Some(op)) => op,
+      Ok(None) => return,
+      Err(e) => {
+        error!(error = %e, "Failed to create uniform snapshot; skipping the pass.");
+        return;
+      }
+    };
+
+    let sent = ids.len();
+    let msg = SessionMessage::system(vec![snapshot_op]);
+    if let Err(e) = self.session.send_message(MessageTarget::Agents(ids), msg).await {
+      error!(error = %e, "Failed to send uniform snapshot.");
+    } else {
+      self.stats.record_snapshots(sent);
+      debug!(recipients = sent, "Uniform snapshot sent.");
     }
   }
 

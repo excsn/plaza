@@ -2,7 +2,7 @@
 
 `cargo bench -p plaza_session --bench snapshot_fanout`
 
-What a snapshot pass pays for addressing recipients one at a time, M4 Pro. `per_recipient` is what `send_snapshots` does today: one `encode_message` and one `MessageTarget::Agent` fan-out per recipient. `uniform` is the same pass when the provider's answer does not depend on who is asking: one encode, one `MessageTarget::Agents`, and a refcounted frame per recipient.
+What a snapshot pass pays for addressing recipients one at a time, M4 Pro. `per_recipient` is what a per-recipient `send_snapshots` pass does: one `encode_message` and one `MessageTarget::Agent` fan-out per recipient. `uniform` is the same pass when the provider's answer does not depend on who is asking: one encode, one `MessageTarget::Agents`, and a refcounted frame per recipient. It is what `SnapshotRequest::uniform` runs, and this measurement is why that request exists.
 
 Twelve of the eighteen shipped snapshot providers take `_target_agent` and never read it, so for those the N payloads are identical.
 

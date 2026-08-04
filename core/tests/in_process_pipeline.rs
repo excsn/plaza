@@ -2,6 +2,7 @@
 //! joins produce snapshots, client ops mutate state and broadcast, the tick
 //! driver advances simulation time, and shutdown terminates the actor.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -396,6 +397,110 @@ async fn logic_can_push_a_resnapshot_to_every_player() {
     let msg = recv_matching(inbox, |m| is_snapshot(m)).await;
     assert_eq!(snapshot_of(&msg).expect("a snapshot op").value, 3);
   }
+}
+
+/// Like [`ResnapshottingLogic`], but asks for one shared snapshot rather than
+/// one built per recipient.
+#[derive(Debug, Default)]
+struct UniformResnapshottingLogic;
+
+#[async_trait]
+impl StateLogic<CounterOp, UserId, CounterState> for UniformResnapshottingLogic {
+  async fn process_input(
+    &self,
+    state: &mut CounterState,
+    input: LogicInput<CounterOp, UserId>,
+  ) -> Result<LogicOutput<CounterOp, UserId>, StateLogicError> {
+    match input {
+      LogicInput::AgentJoined { agent } => {
+        if let Some(id) = agent.id_cloned() {
+          state.members.push(id);
+        }
+        Ok(LogicOutput::none())
+      }
+      LogicInput::AgentOps { ops, .. } => {
+        for op in ops {
+          if let CounterOp::Increment(by) = op {
+            state.value += by;
+          }
+        }
+        let everyone: Vec<_> = state
+          .members
+          .iter()
+          .map(|id| Agent::new_human(*id))
+          .collect();
+        Ok(LogicOutput::none().and_snapshot(SnapshotRequest::uniform(everyone)))
+      }
+      _ => Ok(LogicOutput::none()),
+    }
+  }
+}
+
+/// Counts provider calls, and how many carried no target agent.
+#[derive(Debug, Default)]
+struct CountingSnapshotter {
+  calls: AtomicU64,
+  recipient_free: AtomicU64,
+}
+
+#[async_trait]
+impl SnapshotProvider<UserId, CounterState, CounterOp> for CountingSnapshotter {
+  async fn create_snapshot(
+    &self,
+    state: &CounterState,
+    target: Option<&Agent<UserId>>,
+    _context: Option<SnapshotContext>,
+  ) -> Result<Option<CounterOp>, SnapshotError<UserId>> {
+    self.calls.fetch_add(1, Ordering::Relaxed);
+    if target.is_none() {
+      self.recipient_free.fetch_add(1, Ordering::Relaxed);
+    }
+    Ok(Some(CounterOp::Snapshot(Box::new(CounterSnapshot {
+      value: state.value,
+      members: state.members.clone(),
+    }))))
+  }
+}
+
+#[tokio::test]
+async fn a_uniform_request_builds_once_and_reaches_everyone() {
+  let session = InProcessSession::<CounterOp, UserId>::new();
+  let provider = Arc::new(CountingSnapshotter::default());
+  let (_tx, controller) = StateControllerBuilder::new(
+    Arc::new(UniformResnapshottingLogic),
+    session.clone(),
+    provider.clone(),
+    CounterState::default(),
+  )
+  .build();
+  tokio::spawn(controller.run());
+
+  let alice = Agent::new_human(1u64);
+  let (_a, alice_inbox) = session.connect(alice.clone()).await.expect("connect alice");
+  let (_b, bob_inbox) = session.connect(Agent::new_human(2u64)).await.expect("connect bob");
+
+  // Drain the join snapshots, which are per-recipient and carry a target.
+  for inbox in [&alice_inbox, &bob_inbox] {
+    recv_matching(inbox, |m| is_snapshot(m)).await;
+  }
+
+  session.client_send(alice, vec![CounterOp::Increment(3)]).await;
+
+  let for_alice = recv_matching(&alice_inbox, |m| is_snapshot(m)).await;
+  let for_bob = recv_matching(&bob_inbox, |m| is_snapshot(m)).await;
+  assert_eq!(snapshot_of(&for_alice), snapshot_of(&for_bob), "one payload for both");
+  assert_eq!(snapshot_of(&for_alice).expect("a snapshot op").value, 3);
+
+  assert_eq!(
+    provider.recipient_free.load(Ordering::Relaxed),
+    1,
+    "the uniform pass ran the provider once, with no target"
+  );
+  assert_eq!(
+    provider.calls.load(Ordering::Relaxed),
+    3,
+    "two join builds plus the one uniform build"
+  );
 }
 
 #[tokio::test]
