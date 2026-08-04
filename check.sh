@@ -12,3 +12,14 @@ set -e
 cargo test --workspace --features "plaza_client_utils/net-sim,plaza_ws/native,plaza_ws/json,plaza_session/actix_host,plaza_wire/build,plaza_wire/msgpack"
 cd examples
 CARGO_TARGET_DIR="$(cd .. && pwd)/target" cargo test --workspace
+
+# A workspace check unifies features across its members, so a crate that uses
+# something it never declared compiles anyway, on a neighbour's enable. Only a
+# per-package check says whether a manifest is honest. Three examples were
+# under-declared this way at once, all of them building green until asked alone.
+echo "--- each package on its own ---"
+for manifest in */Cargo.toml; do
+  pkg=$(grep -m1 '^name' "$manifest" | cut -d'"' -f2)
+  CARGO_TARGET_DIR="$(cd .. && pwd)/target" cargo check -q -p "$pkg" \
+    || { echo "$pkg does not build alone: its manifest is missing a feature it uses"; exit 1; }
+done
