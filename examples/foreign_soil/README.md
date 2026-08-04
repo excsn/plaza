@@ -31,7 +31,7 @@ A Unix socket rather than TCP is deliberate: no TLS, no HTTP upgrade, no address
 
 **Impairment, which is the real wall.** `set_agent_link_profile` is public and an application will call it, and `link_profile` lets an adapter see the result, but the queue that implements it is `pub(crate)`. This example honours the delay and nothing else, and says so rather than pretending. Reimplementing it means getting four rules right that are invisible when wrong: release times made monotone so a delayed frame holds up what is behind it, a loss under `Delivery::Reliable` costing `RETRANSMIT_PENALTY` rather than deleting the frame, a queue cap that refuses `Kind::Ops` only so a full queue never wedges a handshake, and the passthrough fast path applying only when the queue is also empty.
 
-**`bytes` itself.** `OutboundFrame` is `bytes::Bytes`, and neither the type alias nor the crate is re-exported from the crate root, so an adapter depends on `bytes` directly and hopes the version unifies. `session_channel` exists to spare a transport exactly this for the channel crate; nothing does it for `bytes`.
+**`bytes` itself, until this example said so.** `OutboundFrame` was an alias for `bytes::Bytes`, so an adapter took a direct dependency on that crate and hoped the version unified, which is exactly what `session_channel` exists to prevent for the channel crate. It is now a newtype: this example names `bytes` nowhere and its manifest does not list it. A transport that already holds a `Bytes` still converts for free.
 
 ## The privilege gap, now measurable
 

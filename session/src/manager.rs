@@ -466,19 +466,81 @@ pub struct IncomingFrame<ID: AgentId> {
   /// Attached by the transport from the connection, never read off the wire.
   pub from: Agent<ID>,
   /// The frame exactly as it arrived: kind tag, then the encoded body.
-  pub frame: Bytes,
+  pub frame: Frame,
 }
 
-/// One connection's outbound queue.
+/// One encoded frame: the kind tag, then the body.
 ///
-/// Encoded once and **shared**, not copied: a broadcast to N clients hands the
+/// **Cloning shares rather than copies.** A broadcast to N clients hands the
 /// same buffer to each, so fan-out costs a refcount bump rather than N
-/// allocations and N memcpys of the whole frame. That matters more than the
-/// arithmetic suggests, because the copies happened inside `broadcast`'s read
-/// guard, so every one of them widened the window a register or deregister had
-/// to wait through. `Bytes` also matches what both transports already speak:
-/// actix-ws hands over one, and `LengthDelimitedCodec` accepts one.
-pub type OutboundFrame = Bytes;
+/// allocations and N memcpys. That matters more than the arithmetic suggests,
+/// because the copies happened inside `broadcast`'s read guard, and every one
+/// of them widened the window a register or deregister had to wait through.
+///
+/// A newtype rather than an alias so that guarantee is this crate's to state
+/// rather than a detail of whichever buffer type it happens to hold. A
+/// transport that already speaks `bytes::Bytes`, which both shipped ones and
+/// most QUIC and WebSocket crates do, converts for free in either direction; a
+/// transport that reads into a `Vec<u8>` never needs that crate at all.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Frame(Bytes);
+
+impl Frame {
+  pub fn len(&self) -> usize {
+    self.0.len()
+  }
+
+  pub fn is_empty(&self) -> bool {
+    self.0.is_empty()
+  }
+
+  /// The shared buffer, for a transport whose writer wants one.
+  ///
+  /// Free: this hands over the same allocation, not a copy. Naming `Bytes` here
+  /// is deliberate and optional, since [`AsRef`] covers a transport that only
+  /// needs to write the frame out.
+  pub fn into_bytes(self) -> Bytes {
+    self.0
+  }
+}
+
+impl From<Bytes> for Frame {
+  fn from(bytes: Bytes) -> Self {
+    Self(bytes)
+  }
+}
+
+impl From<Vec<u8>> for Frame {
+  fn from(bytes: Vec<u8>) -> Self {
+    Self(Bytes::from(bytes))
+  }
+}
+
+impl AsRef<[u8]> for Frame {
+  fn as_ref(&self) -> &[u8] {
+    &self.0
+  }
+}
+
+impl std::ops::Deref for Frame {
+  type Target = [u8];
+
+  fn deref(&self) -> &[u8] {
+    &self.0
+  }
+}
+
+impl Debug for Frame {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(f, "Frame({} bytes)", self.0.len())
+  }
+}
+
+/// One connection's outbound queue carries these.
+///
+/// The same type as an inbound frame, under the name a transport adapter meets
+/// it by.
+pub type OutboundFrame = Frame;
 
 struct ClientHandle<ID: AgentId> {
   agent: Agent<ID>,
@@ -958,8 +1020,8 @@ impl<ID: AgentId> ConnectionManager<ID> {
   }
 
   /// Publishes one client frame toward the controller, still encoded.
-  pub async fn forward_incoming(&self, from: Agent<ID>, frame: Bytes) {
-    let incoming = IncomingFrame { from, frame };
+  pub async fn forward_incoming(&self, from: Agent<ID>, frame: impl Into<Frame>) {
+    let incoming = IncomingFrame { from, frame: frame.into() };
     let taken = match self.overflow.inbound {
       // Not reading this client's socket for as long as the controller is
       // behind, which is backpressure the client eventually feels.
@@ -1353,7 +1415,7 @@ where
       let mut buf = Vec::new();
       frame::begin(frame::Kind::Hello, &mut buf);
       codec.encode_into(&protocol, &mut buf).expect("a u32 always encodes");
-      Bytes::from(buf)
+      Frame::from(buf)
     });
     let manager = Arc::new(ConnectionManager::with_options(transport, hello, &options));
     let (deserialized_tx, deserialized_rx) = session_channel(options.queues.decoded);
@@ -1418,7 +1480,7 @@ where
     // of them still settles where it belongs.
     let hint = self.encode_hint.load(Ordering::Relaxed);
     self.encode_hint.store(buf.len().max(hint / 2), Ordering::Relaxed);
-    Ok(Bytes::from(buf))
+    Ok(Frame::from(buf))
   }
 }
 
@@ -1643,7 +1705,7 @@ mod tests {
     // into an allocation and a memcpy each, inside the read guard. Asserting on
     // the pointer rather than the contents is deliberate, because a `Vec<u8>`
     // queue passes any equality check and fails this one.
-    let frame: OutboundFrame = Bytes::from(vec![7u8; 4096]);
+    let frame: OutboundFrame = Frame::from(vec![7u8; 4096]);
 
     let queued: Vec<OutboundFrame> = (0..32).map(|_| frame.clone()).collect();
 
@@ -1682,7 +1744,7 @@ mod tests {
       let (tx, _rx) = session_channel(1);
       let conn_id = manager.register(Agent::new_human(1u32), tx).await;
 
-      let frame: OutboundFrame = Bytes::from_static(b"x");
+      let frame: OutboundFrame = Frame::from(b"x".to_vec());
       // The first fills the queue of one, the second has nowhere to go.
       let _ = manager.broadcast(&MessageTarget::All, frame.clone());
       let outcome = manager.broadcast(&MessageTarget::All, frame);
@@ -1749,7 +1811,7 @@ mod tests {
       inboxes.push(rx);
     }
 
-    let shared: OutboundFrame = Bytes::from(vec![9u8; 512]);
+    let shared: OutboundFrame = Frame::from(vec![9u8; 512]);
     manager.broadcast(&MessageTarget::All, shared.clone()).expect("fan out");
 
     for inbox in &inboxes {
@@ -1761,7 +1823,7 @@ mod tests {
     // the shape the budget has to survive.
     let mut addressed = Vec::new();
     for seat in 1..=4u32 {
-      let own: OutboundFrame = Bytes::from(vec![seat as u8; 512]);
+      let own: OutboundFrame = Frame::from(vec![seat as u8; 512]);
       addressed.push(own.as_ptr());
       manager.broadcast(&MessageTarget::Agent(seat), own).expect("one recipient");
     }
@@ -1810,7 +1872,7 @@ mod tests {
     // Depth one, nothing draining: this join fills the presence queue.
     let conn_id = manager.register(Agent::new_human(1u32), tx).await;
 
-    let frame: OutboundFrame = Bytes::from_static(b"x");
+    let frame: OutboundFrame = Frame::from(b"x".to_vec());
     let _ = manager.broadcast(&MessageTarget::All, frame.clone());
     let overflowed = manager
       .broadcast(&MessageTarget::All, frame)

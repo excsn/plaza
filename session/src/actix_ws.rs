@@ -240,7 +240,7 @@ async fn write_frame(ws_session: &mut actix_ws::Session, frame: OutboundFrame, s
     // `ByteString::try_from` validates UTF-8 in place and keeps the same
     // buffer, so the text path (which is the default JSON one) stays as
     // copy-free as the binary path.
-    match ByteString::try_from(frame) {
+    match ByteString::try_from(frame.into_bytes()) {
       Ok(text) => ws_session.text(text).await.is_ok(),
       Err(e) => {
         warn!(transport = TRANSPORT, error = %e, "Codec claims text but produced non-UTF-8; dropping the frame.");
@@ -248,7 +248,7 @@ async fn write_frame(ws_session: &mut actix_ws::Session, frame: OutboundFrame, s
       }
     }
   } else {
-    ws_session.binary(frame).await.is_ok()
+    ws_session.binary(frame.into_bytes()).await.is_ok()
   }
 }
 
@@ -362,7 +362,7 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
           break None;
         }
         while let Some(frame) = up.pop_ready(now) {
-          if let Some(reply) = route_inbound(frame, &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent).await {
+          if let Some(reply) = route_inbound(frame.into(), &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent).await {
             if let Some(reply) = queue_down!(reply, now) {
               if !write_frame(&mut ws_session, reply, send_as_text).await {
                 dead = true;
@@ -408,14 +408,14 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
           let now = tokio::time::Instant::now();
           let profile: LinkProfile = if link.impaired() { link.read() } else { LinkProfile::default() };
           if profile.up.is_passthrough() && up.is_empty() {
-            if let Some(reply) = route_inbound(bytes, &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent).await {
+            if let Some(reply) = route_inbound(bytes.into(), &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent).await {
               if let Some(reply) = queue_down!(reply, now) {
                 if !write_frame(&mut ws_session, reply, send_as_text).await {
                   break None;
                 }
               }
             }
-          } else if !up.push(bytes, &profile.up, now) {
+          } else if !up.push(bytes.into(), &profile.up, now) {
             manager.record_link_drop(conn_id);
           }
         }

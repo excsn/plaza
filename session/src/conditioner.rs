@@ -43,7 +43,7 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
-use bytes::Bytes;
+use crate::manager::Frame;
 use plaza_wire::frame;
 use tokio::time::Instant;
 
@@ -155,7 +155,7 @@ impl XorShift64 {
 
 /// One direction's delay queue.
 pub(crate) struct Conditioner {
-  queue: VecDeque<(Instant, Bytes)>,
+  queue: VecDeque<(Instant, Frame)>,
   last_release: Option<Instant>,
   rng: XorShift64,
   capacity: usize,
@@ -177,7 +177,7 @@ impl Conditioner {
 
   /// Queues a frame. Returns whether it was queued: false when the buffer is
   /// full, or when a datagram link lost it.
-  pub(crate) fn push(&mut self, frame_bytes: Bytes, profile: &DirectionProfile, now: Instant) -> bool {
+  pub(crate) fn push(&mut self, frame_bytes: Frame, profile: &DirectionProfile, now: Instant) -> bool {
     // A local resource running out, not the network losing anything. Control
     // frames are still admitted: refusing a handshake here would wedge a
     // connection for a reason that has nothing to do with the link.
@@ -210,7 +210,7 @@ impl Conditioner {
   }
 
   /// The next frame that has come due, or `None`.
-  pub(crate) fn pop_ready(&mut self, now: Instant) -> Option<Bytes> {
+  pub(crate) fn pop_ready(&mut self, now: Instant) -> Option<Frame> {
     match self.queue.front() {
       Some((at, _)) if *at <= now => self.queue.pop_front().map(|(_, frame_bytes)| frame_bytes),
       _ => None,
@@ -223,12 +223,12 @@ mod tests {
   use super::*;
   use crate::manager::DEFAULT_CONDITIONER_CAPACITY as CAP;
 
-  fn ops_frame(n: u8) -> Bytes {
-    Bytes::from(vec![frame::Kind::Ops.as_byte(), n])
+  fn ops_frame(n: u8) -> Frame {
+    Frame::from(vec![frame::Kind::Ops.as_byte(), n])
   }
 
-  fn ping_frame() -> Bytes {
-    Bytes::from(vec![frame::Kind::Ping.as_byte()])
+  fn ping_frame() -> Frame {
+    Frame::from(vec![frame::Kind::Ping.as_byte()])
   }
 
   #[test]

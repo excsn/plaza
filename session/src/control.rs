@@ -29,7 +29,7 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
-use bytes::Bytes;
+
 use plaza::agent::AgentId;
 use plaza::session::ConnectionId;
 use plaza_wire::frame;
@@ -37,7 +37,7 @@ use tokio::time::Instant;
 use tracing::trace;
 
 use crate::codec::WireCodec;
-use crate::manager::{ConnectionManager, Probes, SessionClock};
+use crate::manager::{ConnectionManager, Frame, Probes, SessionClock};
 
 
 /// Keeps a connection's two directions from drawing the same jitter sequence.
@@ -108,9 +108,9 @@ impl ProbeState {
 /// What the connection task should do with an inbound frame.
 pub(crate) enum Inbound {
   /// Not ours: hand it to the application.
-  Forward(Bytes),
+  Forward(Frame),
   /// Ours, and it wants an answer written back to the peer.
-  Reply(Bytes),
+  Reply(Frame),
   /// Ours, and finished with.
   Consumed,
 }
@@ -120,7 +120,7 @@ pub(crate) enum Inbound {
 /// The origin is a sequence number rather than a clock reading: the session
 /// times the round trip with an `Instant` it keeps, so its own probes need no
 /// unit and no clock.
-pub(crate) fn make_probe<C: WireCodec>(codec: &C, probe: &mut ProbeState, now: Instant) -> Bytes {
+pub(crate) fn make_probe<C: WireCodec>(codec: &C, probe: &mut ProbeState, now: Instant) -> Frame {
   probe.seq = probe.seq.wrapping_add(1);
   probe.sent = probe.sent.saturating_add(1);
   if probe.outstanding.len() >= probe.schedule.slots {
@@ -133,12 +133,12 @@ pub(crate) fn make_probe<C: WireCodec>(codec: &C, probe: &mut ProbeState, now: I
   codec
     .encode_into(&frame::Ping { origin: probe.seq }, &mut buf)
     .expect("a u64 always encodes");
-  Bytes::from(buf)
+  Frame::from(buf)
 }
 
 /// Handles one inbound frame, answering it if it is the session's business.
 pub(crate) fn handle_inbound<ID: AgentId, C: WireCodec>(
-  frame_bytes: Bytes,
+  frame_bytes: Frame,
   codec: &C,
   clock: Option<&SessionClock>,
   probe: &mut ProbeState,
@@ -153,7 +153,7 @@ pub(crate) fn handle_inbound<ID: AgentId, C: WireCodec>(
 
   match frame::Kind::from_byte(tag) {
     Some(frame::Kind::Ping) => match frame::answer_ping(codec, body, clock.map(|c| c())) {
-      Some(reply) => Inbound::Reply(Bytes::from(reply)),
+      Some(reply) => Inbound::Reply(Frame::from(reply)),
       None => {
         trace!(conn_id, "Discarding a malformed Ping.");
         Inbound::Consumed
@@ -184,14 +184,14 @@ pub(crate) fn handle_inbound<ID: AgentId, C: WireCodec>(
 /// The caller decides how that reply reaches the socket, because that is the
 /// one part the two transports do differently.
 pub(crate) async fn route_inbound<ID: AgentId, C: WireCodec>(
-  frame_bytes: Bytes,
+  frame_bytes: Frame,
   codec: &C,
   clock: Option<&SessionClock>,
   probe: &mut ProbeState,
   conn_id: ConnectionId,
   manager: &ConnectionManager<ID>,
   agent: &plaza::agent::Agent<ID>,
-) -> Option<Bytes> {
+) -> Option<Frame> {
   match handle_inbound(frame_bytes, codec, clock, probe, conn_id, manager) {
     Inbound::Forward(frame_bytes) => {
       manager.forward_incoming(agent.clone(), frame_bytes).await;
@@ -214,23 +214,23 @@ mod tests {
     Arc::new(ConnectionManager::new("test", 8))
   }
 
-  fn ping_frame(origin: u64) -> Bytes {
+  fn ping_frame(origin: u64) -> Frame {
     let mut buf = Vec::new();
     frame::begin(frame::Kind::Ping, &mut buf);
     JsonCodec.encode_into(&frame::Ping { origin }, &mut buf).unwrap();
-    Bytes::from(buf)
+    Frame::from(buf)
   }
 
-  fn pong_frame(origin: u64) -> Bytes {
+  fn pong_frame(origin: u64) -> Frame {
     let mut buf = Vec::new();
     frame::begin(frame::Kind::Pong, &mut buf);
     JsonCodec
       .encode_into(&frame::Pong { origin, responder: None }, &mut buf)
       .unwrap();
-    Bytes::from(buf)
+    Frame::from(buf)
   }
 
-  fn decode_pong(frame_bytes: &Bytes) -> frame::Pong {
+  fn decode_pong(frame_bytes: &Frame) -> frame::Pong {
     let (kind, body) = frame::split(frame_bytes).unwrap();
     assert_eq!(frame::Kind::from_byte(kind), Some(frame::Kind::Pong));
     JsonCodec.decode(body).unwrap()
@@ -289,7 +289,7 @@ mod tests {
       .unwrap();
 
     let out = handle_inbound(
-      Bytes::from(reply),
+      Frame::from(reply),
       &JsonCodec,
       None,
       &mut probe,
@@ -321,7 +321,7 @@ mod tests {
       .unwrap();
 
     handle_inbound(
-      Bytes::from(stray),
+      Frame::from(stray),
       &JsonCodec,
       None,
       &mut probe,
@@ -340,7 +340,7 @@ mod tests {
       let mut buf = Vec::new();
       frame::begin(kind, &mut buf);
       buf.extend_from_slice(b"[]");
-      let out = handle_inbound(Bytes::from(buf), &JsonCodec, None, &mut probe, 1, &manager);
+      let out = handle_inbound(Frame::from(buf), &JsonCodec, None, &mut probe, 1, &manager);
       assert!(matches!(out, Inbound::Forward(_)), "{kind:?} belongs to the bridge");
     }
   }

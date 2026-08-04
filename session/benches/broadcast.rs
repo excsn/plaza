@@ -111,7 +111,7 @@ fn registries(
 }
 
 fn frame() -> OutboundFrame {
-  Bytes::from(vec![0u8; 256])
+  OutboundFrame::from(vec![0u8; 256])
 }
 
 fn time<T>(mut call: impl FnMut() -> T) -> impl FnMut(u64) -> Duration {

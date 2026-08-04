@@ -12,14 +12,13 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bytes::Bytes;
 use plaza::agent::{Agent, AgentId};
 use plaza::error::PlazaError;
 use plaza::session::{
   session_channel, MessageTarget, PresenceEvent, Session, SessionMessage, SessionReceiver,
 };
 use plaza_session::codec::WireCodec;
-use plaza_session::manager::{ConnectionManager, OutboundFrame};
+use plaza_session::manager::{ConnectionManager, Frame, OutboundFrame};
 use plaza_session::{SessionOptions, TransportSession};
 use plaza_wire::frame;
 use serde::de::DeserializeOwned;
@@ -99,7 +98,13 @@ async fn write_frame(stream: &mut UnixStream, frame: &[u8]) -> std::io::Result<(
   stream.write_all(frame).await
 }
 
-async fn read_frame(stream: &mut UnixStream, max: usize) -> std::io::Result<Option<Bytes>> {
+/// Reads one frame as a `Frame`, built from a `Vec<u8>`.
+///
+/// This adapter never names `bytes`: `Frame` takes a `Vec<u8>` and derefs to
+/// `[u8]`, which covers both directions. A transport whose reader already
+/// yields a `Bytes`, which both shipped ones and most WebSocket and QUIC crates
+/// do, converts with `.into()` and pays nothing either.
+async fn read_frame(stream: &mut UnixStream, max: usize) -> std::io::Result<Option<Frame>> {
   let mut len = [0u8; 4];
   if stream.read_exact(&mut len).await.is_err() {
     return Ok(None);
@@ -110,7 +115,7 @@ async fn read_frame(stream: &mut UnixStream, max: usize) -> std::io::Result<Opti
   }
   let mut body = vec![0u8; len];
   stream.read_exact(&mut body).await?;
-  Ok(Some(Bytes::from(body)))
+  Ok(Some(Frame::from(body)))
 }
 
 /// One outstanding probe: what we sent and when.

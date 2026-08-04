@@ -134,12 +134,12 @@ impl Client {
   }
 }
 
-async fn read_one<R: tokio::io::AsyncRead + Unpin>(reader: &mut R) -> Option<bytes::Bytes> {
+async fn read_one<R: tokio::io::AsyncRead + Unpin>(reader: &mut R) -> Option<Vec<u8>> {
   let mut len = [0u8; 4];
   reader.read_exact(&mut len).await.ok()?;
   let mut body = vec![0u8; u32::from_be_bytes(len) as usize];
   reader.read_exact(&mut body).await.ok()?;
-  Some(bytes::Bytes::from(body))
+  Some(body)
 }
 
 fn ops_frame(op: &Op) -> Vec<u8> {

@@ -15,11 +15,6 @@ plaza_session = { workspace = true, features = ["json"] }
 plaza_wire = { workspace = true, features = ["json"] }
 
 async-trait = { workspace = true }
-# Finding: `OutboundFrame` is `bytes::Bytes` and `plaza_session` re-exports
-# neither the type nor the crate, so an adapter depends on `bytes` itself and
-# hopes the version unifies. `session_channel` exists to spare a transport
-# exactly this for the channel crate; nothing does it for `bytes`.
-bytes = "^1" 
 serde = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
