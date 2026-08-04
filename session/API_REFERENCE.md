@@ -384,21 +384,39 @@ The fan-out uses `try_send` by default: a wedged client must not stall the contr
 
 ## 9. Writing Another Transport
 
-1.  Create a `TransportSession::with_options(name, codec, options)` and keep the `Arc`. Requires a tokio runtime; see §1.
-2.  Per connection: make an outbound queue with `plaza::session::session_channel(manager.queues().outbound)`, `manager.register(agent, tx).await`, and run a pump that
-    *   **answers probes before forwarding anything.** A `Kind::Ping` handed to `forward_incoming` is not answered by anyone: the bridge drops it and warns once, and the client measuring its round trip waits forever. Split the tag with `frame::split`, and for `Kind::Ping` reply with `frame::answer_ping(codec, body, clock)` on the socket you read it from.
-    *   forwards everything else with `manager.forward_incoming(agent, bytes).await`, and
-    *   writes queued outbound messages.
-3.  On exit, `manager.deregister(conn_id).await`.
-4.  Delegate the three `Session` methods to the inner `TransportSession`, and after `broadcast` call `disconnect_overflowed` with what it returned.
+Requires a tokio runtime; see §1.
 
-**What you get for free:** the registry, the agent index, the `Hello` handshake, the deserialize bridge, every counter in `TransportStats`, and the queue depths and limits off `manager.queues()` / `limits()`.
+1.  `TransportSession::with_options(name, codec, options)`, and keep the `Arc`.
+2.  Per connection: `session_channel(manager.queues().outbound)`, `manager.register(agent, tx).await`, then `LinkDriver::new(&manager, conn_id, codec)`.
+3.  Run a loop over three things: a frame off your socket, a frame off the outbound queue, and `driver.deadline()`. Hand each to the driver and act on what it returns.
+4.  On exit, `manager.deregister(conn_id).await`.
+5.  Delegate the three `Session` methods to the inner `TransportSession`, and after `broadcast` call `disconnect_overflowed` with what it returned.
 
-**What you have to build, and what it costs to skip.**
+```rust,ignore
+loop {
+  tokio::select! {
+    inbound = socket.read_frame() => match driver.inbound(inbound?, Instant::now()) {
+      Inbound::Reply(reply) => socket.write(reply).await?,
+      Inbound::Forward(frame) => manager.forward_incoming(agent.clone(), frame).await,
+      Inbound::Consumed => {}
+    },
+    outbound = to_client_rx.recv() => {
+      if let Some(frame) = driver.outbound(outbound?, Instant::now()) {
+        socket.write(frame).await?;
+      }
+    }
+    _ = sleep_until(driver.deadline().unwrap_or_else(far_future)), if driver.deadline().is_some() => {
+      for frame in driver.due(Instant::now()) { socket.write(frame).await?; }
+      for frame in driver.take_forwarded() { manager.forward_incoming(agent.clone(), frame).await; }
+    }
+  }
+}
+```
 
-*   **Probes.** Without them `agent_link_rtt` and `link_rtt` stay `None` for every connection on your transport, and any application deciding admission on measured latency silently admits everyone. Originating them is a timer on the connection task plus `manager.record_link_rtt(conn_id, elapsed)`; the schedule is yours to read from `manager.probes()`. Answering a peer's probes is `frame::answer_ping` and is not optional.
-*   **Impairment.** `set_agent_link_profile` and `set_all_link_profiles` are public and an application will call them, but nothing applies a profile unless your pump does. Read the current one with `manager.link_profile(conn_id)`; report what you discard with `manager.record_link_drop(conn_id)`. The queue that implements delay, jitter and loss is `pub(crate)`, so this is the one part you cannot call and must reimplement, and it has four rules that are easy to get wrong: release times are made monotone so a delayed frame holds up what is behind it, a loss under `Delivery::Reliable` costs `RETRANSMIT_PENALTY` rather than deleting the frame, the queue cap refuses `Kind::Ops` only so a full queue never wedges a handshake, and a frame may skip the queue only when the profile is passthrough **and** the queue is already empty.
+`examples/foreign_soil` is a working transport built this way, in a crate with no privileged access and with neither shipped transport compiled in. Its connection loop is 65 lines, about 25 of them reading and writing a socket.
 
-Reading `manager.link_profile(conn_id)` per frame takes the registry's lock; the shipped adapters hold a cheaper handle that is `pub(crate)`. If that cost matters for your transport, say so, because it is the seam being narrower than it looks rather than a decision anyone defended.
+**What you still write.** Framing, and enforcing `Limits::max_frame_bytes` with it. Those are what a transport is.
 
-`tcp.rs` is the shorter of the two shipped adapters to copy, and copying it is currently the honest recommendation for anything that wants impairment.
+**If the driver does not suit.** It is a convenience, not a ceiling, and it reaches for nothing you cannot. `Conditioner`, `ProbeState` and `LinkHandle` are public and each is useful alone, so an adapter that needs different behaviour assembles them itself and loses nothing. The case to expect is a transport whose link genuinely reorders: the shipped conditioner releases monotonically because a byte stream does not, so a datagram transport keeps the probe plane and writes its own release queue.
+
+**Answer probes or say why not.** A `Kind::Ping` handed to `forward_incoming` is answered by nobody; the bridge drops it and warns once per connection, and the client measuring its round trip waits forever. The driver handles this, so the only way to get it wrong now is to bypass the driver and forget.

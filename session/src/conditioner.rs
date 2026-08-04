@@ -154,7 +154,7 @@ impl XorShift64 {
 }
 
 /// One direction's delay queue.
-pub(crate) struct Conditioner {
+pub struct Conditioner {
   queue: VecDeque<(Instant, Frame)>,
   last_release: Option<Instant>,
   rng: XorShift64,
@@ -162,7 +162,7 @@ pub(crate) struct Conditioner {
 }
 
 impl Conditioner {
-  pub(crate) fn new(seed: u64, capacity: usize) -> Self {
+  pub fn new(seed: u64, capacity: usize) -> Self {
     Self {
       queue: VecDeque::new(),
       last_release: None,
@@ -171,13 +171,13 @@ impl Conditioner {
     }
   }
 
-  pub(crate) fn is_empty(&self) -> bool {
+  pub fn is_empty(&self) -> bool {
     self.queue.is_empty()
   }
 
   /// Queues a frame. Returns whether it was queued: false when the buffer is
   /// full, or when a datagram link lost it.
-  pub(crate) fn push(&mut self, frame_bytes: Frame, profile: &DirectionProfile, now: Instant) -> bool {
+  pub fn push(&mut self, frame_bytes: Frame, profile: &DirectionProfile, now: Instant) -> bool {
     // A local resource running out, not the network losing anything. Control
     // frames are still admitted: refusing a handshake here would wedge a
     // connection for a reason that has nothing to do with the link.
@@ -205,12 +205,12 @@ impl Conditioner {
   }
 
   /// When the frame at the head comes due, if there is one.
-  pub(crate) fn next_release(&self) -> Option<Instant> {
+  pub fn next_release(&self) -> Option<Instant> {
     self.queue.front().map(|(at, _)| *at)
   }
 
   /// The next frame that has come due, or `None`.
-  pub(crate) fn pop_ready(&mut self, now: Instant) -> Option<Frame> {
+  pub fn pop_ready(&mut self, now: Instant) -> Option<Frame> {
     match self.queue.front() {
       Some((at, _)) if *at <= now => self.queue.pop_front().map(|(_, frame_bytes)| frame_bytes),
       _ => None,

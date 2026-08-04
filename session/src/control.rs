@@ -41,9 +41,9 @@ use crate::manager::{ConnectionManager, Frame, Probes, SessionClock};
 
 
 /// Keeps a connection's two directions from drawing the same jitter sequence.
-pub(crate) const DOWN_SEED_FLIP: u64 = 0x5DEE_CE66_A5A5_1234;
+pub const DOWN_SEED_FLIP: u64 = 0x5DEE_CE66_A5A5_1234;
 
-pub(crate) fn earliest(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> {
+pub fn earliest(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> {
   match (a, b) {
     (Some(a), Some(b)) => Some(a.min(b)),
     (a, b) => a.or(b),
@@ -52,12 +52,12 @@ pub(crate) fn earliest(a: Option<Instant>, b: Option<Instant>) -> Option<Instant
 
 /// A deadline for a `select!` arm that is switched off, so the timer it holds
 /// never fires before the guard re-enables it.
-pub(crate) fn far_future() -> Instant {
+pub fn far_future() -> Instant {
   Instant::now() + Duration::from_secs(86_400 * 365)
 }
 
 /// The probes this connection has in flight.
-pub(crate) struct ProbeState {
+pub struct ProbeState {
   /// Oldest first. A pong is matched by its echoed origin, so no correlation
   /// id beyond that is needed, and anything older than the one it answers is
   /// known lost and dropped with it.
@@ -74,7 +74,7 @@ impl Default for ProbeState {
 }
 
 impl ProbeState {
-  pub(crate) fn new(schedule: &Probes) -> Self {
+  pub fn new(schedule: &Probes) -> Self {
     Self {
       outstanding: VecDeque::new(),
       seq: 0,
@@ -88,7 +88,7 @@ impl ProbeState {
   /// Fast at first, then sparse: a caller deciding whether a connection meets a
   /// schedule wants several samples in the first second, and after that this is
   /// upkeep.
-  pub(crate) fn interval(&self) -> Option<Duration> {
+  pub fn interval(&self) -> Option<Duration> {
     if !self.schedule.enabled {
       return None;
     }
@@ -100,13 +100,13 @@ impl ProbeState {
   }
 
   /// When the first probe is due, or `None` when this session does not probe.
-  pub(crate) fn first_due(&self, now: Instant) -> Option<Instant> {
+  pub fn first_due(&self, now: Instant) -> Option<Instant> {
     self.interval().map(|gap| now + gap)
   }
 }
 
 /// What the connection task should do with an inbound frame.
-pub(crate) enum Inbound {
+pub enum Inbound {
   /// Not ours: hand it to the application.
   Forward(Frame),
   /// Ours, and it wants an answer written back to the peer.
@@ -120,7 +120,7 @@ pub(crate) enum Inbound {
 /// The origin is a sequence number rather than a clock reading: the session
 /// times the round trip with an `Instant` it keeps, so its own probes need no
 /// unit and no clock.
-pub(crate) fn make_probe<C: WireCodec>(codec: &C, probe: &mut ProbeState, now: Instant) -> Frame {
+pub fn make_probe<C: WireCodec>(codec: &C, probe: &mut ProbeState, now: Instant) -> Frame {
   probe.seq = probe.seq.wrapping_add(1);
   probe.sent = probe.sent.saturating_add(1);
   if probe.outstanding.len() >= probe.schedule.slots {
@@ -137,7 +137,7 @@ pub(crate) fn make_probe<C: WireCodec>(codec: &C, probe: &mut ProbeState, now: I
 }
 
 /// Handles one inbound frame, answering it if it is the session's business.
-pub(crate) fn handle_inbound<ID: AgentId, C: WireCodec>(
+pub fn handle_inbound<ID: AgentId, C: WireCodec>(
   frame_bytes: Frame,
   codec: &C,
   clock: Option<&SessionClock>,
@@ -183,7 +183,7 @@ pub(crate) fn handle_inbound<ID: AgentId, C: WireCodec>(
 ///
 /// The caller decides how that reply reaches the socket, because that is the
 /// one part the two transports do differently.
-pub(crate) async fn route_inbound<ID: AgentId, C: WireCodec>(
+pub async fn route_inbound<ID: AgentId, C: WireCodec>(
   frame_bytes: Frame,
   codec: &C,
   clock: Option<&SessionClock>,

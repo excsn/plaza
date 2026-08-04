@@ -8,9 +8,7 @@
 //! A Unix socket rather than TCP deliberately: it strips away TLS, HTTP upgrade
 //! and address handling, so what is left under test is the seam.
 
-use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::Duration;
 
 use plaza::agent::{Agent, AgentId};
 use plaza::error::PlazaError;
@@ -18,9 +16,10 @@ use plaza::session::{
   session_channel, MessageTarget, PresenceEvent, Session, SessionMessage, SessionReceiver,
 };
 use plaza_session::codec::WireCodec;
+use plaza_session::control::{far_future, Inbound};
+use plaza_session::LinkDriver;
 use plaza_session::manager::{ConnectionManager, Frame, OutboundFrame};
 use plaza_session::{SessionOptions, TransportSession};
-use plaza_wire::frame;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -118,134 +117,64 @@ async fn read_frame(stream: &mut UnixStream, max: usize) -> std::io::Result<Opti
   Ok(Some(Frame::from(body)))
 }
 
-/// One outstanding probe: what we sent and when.
-///
-/// **FINDING: the probe table is reimplemented.**
-///
-/// `Probes` is public and carries the schedule, and `record_link_rtt` is
-/// public, so this is the ~30 lines the ledger predicted. What is not public is
-/// the correlation itself: matching a `Pong` to the probe it answers, and
-/// discarding the older ones it skipped, is `ProbeState` and is `pub(crate)`.
-/// Getting the discard wrong leaks the table on a lossy link, which is a bug
-/// nobody sees until memory grows.
-struct Probes {
-  outstanding: VecDeque<(u64, Instant)>,
-  seq: u64,
-  sent: u32,
-}
-
-impl Probes {
-  fn new() -> Self {
-    Self {
-      outstanding: VecDeque::new(),
-      seq: 0,
-      sent: 0,
-    }
-  }
-
-  fn next(&mut self, slots: usize, now: Instant) -> u64 {
-    self.seq = self.seq.wrapping_add(1);
-    self.sent = self.sent.saturating_add(1);
-    if self.outstanding.len() >= slots {
-      self.outstanding.pop_front();
-    }
-    self.outstanding.push_back((self.seq, now));
-    self.seq
-  }
-
-  /// Everything older than the answered probe is lost, not late.
-  fn answered(&mut self, origin: u64) -> Option<Instant> {
-    let index = self.outstanding.iter().position(|(seq, _)| *seq == origin)?;
-    self.outstanding.drain(..=index).next_back().map(|(_, at)| at)
-  }
-}
-
 async fn connection_task<ID: AgentId, C: WireCodec>(
   mut stream: UnixStream,
   agent: Agent<ID>,
   manager: Arc<ConnectionManager<ID>>,
   codec: C,
 ) {
-  let queues = manager.queues().clone();
   let limits = manager.limits().clone();
-  let schedule = manager.probes().clone();
-
-  let (to_client_tx, to_client_rx) = session_channel::<OutboundFrame>(queues.outbound);
+  let (to_client_tx, to_client_rx) = session_channel::<OutboundFrame>(manager.queues().outbound);
   let conn_id = manager.register(agent.clone(), to_client_tx).await;
-  let clock = manager.clock().cloned();
 
-  let mut probes = Probes::new();
-  let mut next_probe = schedule
-    .enabled
-    .then(|| Instant::now() + schedule.fast_interval);
+  // Everything this transport does not have to write itself: probe schedule and
+  // correlation, impairment both ways, and the deadlines either of them wants.
+  // Built here in a crate that cannot see `pub(crate)`, which is the point.
+  let Some(mut driver) = LinkDriver::new(&manager, conn_id, codec) else {
+    return;
+  };
 
   loop {
-    let probe_at = next_probe.unwrap_or_else(|| Instant::now() + Duration::from_secs(86_400 * 365));
+    let deadline = driver.deadline().unwrap_or_else(far_future);
 
     tokio::select! {
       inbound = read_frame(&mut stream, limits.max_frame_bytes) => {
-        let Ok(Some(bytes)) = inbound else { break };
-        let Some((tag, body)) = frame::split(&bytes) else { continue };
-
-        match frame::Kind::from_byte(tag) {
-          // The recipe's correction, and the reason it needed one: forwarding
-          // this instead leaves a client's round trip unanswered forever.
-          Some(frame::Kind::Ping) => {
-            if let Some(reply) = frame::answer_ping(&codec, body, clock.as_ref().map(|c| c())) {
-              if write_frame(&mut stream, &reply).await.is_err() {
-                break;
-              }
+        let Ok(Some(frame)) = inbound else { break };
+        match driver.inbound(frame, Instant::now()) {
+          Inbound::Reply(reply) => {
+            if write_frame(&mut stream, &reply).await.is_err() {
+              break;
             }
           }
-          Some(frame::Kind::Pong) => {
-            if let Ok(pong) = codec.decode::<frame::Pong>(body) {
-              if let Some(sent) = probes.answered(pong.origin) {
-                manager.record_link_rtt(conn_id, sent.elapsed());
-              }
-            }
-          }
-          _ => manager.forward_incoming(agent.clone(), bytes).await,
+          Inbound::Forward(frame) => manager.forward_incoming(agent.clone(), frame).await,
+          Inbound::Consumed => {}
         }
       }
 
       outbound = to_client_rx.recv() => {
         let Ok(frame) = outbound else { break };
-        // **FINDING: impairment is read, not applied.**
-        //
-        // `link_profile` is public, so an adapter can see that a profile is
-        // set. What it cannot call is the queue that implements it: delay,
-        // jitter, loss, the monotone release that makes a stall arrive as a
-        // burst, the retransmit penalty that models a reliable link, and the
-        // ops-only cap. Reimplementing those four rules correctly is the one
-        // real wall, so this adapter honours only the coarsest part and says
-        // so rather than pretending.
-        if let Some(profile) = manager.link_profile(conn_id) {
-          if !profile.down.is_passthrough() {
-            tokio::time::sleep(profile.down.delay).await;
+        if let Some(frame) = driver.outbound(frame, Instant::now()) {
+          if write_frame(&mut stream, &frame).await.is_err() {
+            break;
           }
-        }
-        if write_frame(&mut stream, &frame).await.is_err() {
-          break;
         }
       }
 
-      _ = tokio::time::sleep_until(probe_at), if next_probe.is_some() => {
+      _ = tokio::time::sleep_until(deadline), if driver.deadline().is_some() => {
         let now = Instant::now();
-        let origin = probes.next(schedule.slots, now);
-        let mut buf = Vec::new();
-        frame::begin(frame::Kind::Ping, &mut buf);
-        if codec.encode_into(&frame::Ping { origin }, &mut buf).is_err() {
+        let mut dead = false;
+        for frame in driver.due(now) {
+          if write_frame(&mut stream, &frame).await.is_err() {
+            dead = true;
+            break;
+          }
+        }
+        for frame in driver.take_forwarded() {
+          manager.forward_incoming(agent.clone(), frame).await;
+        }
+        if dead {
           break;
         }
-        if write_frame(&mut stream, &buf).await.is_err() {
-          break;
-        }
-        let gap = if probes.sent < schedule.fast_pings {
-          schedule.fast_interval
-        } else {
-          schedule.idle_interval
-        };
-        next_probe = Some(now + gap);
       }
     }
   }

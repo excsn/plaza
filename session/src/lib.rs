@@ -16,8 +16,17 @@ pub mod manager;
 pub mod stats;
 pub mod workload;
 
-#[cfg(any(feature = "actix_ws", feature = "tcp"))]
-pub(crate) mod control;
+/// The frames a session answers for itself: latency probes and their
+/// correlation.
+///
+/// Not gated on the shipped transports, deliberately: a transport that enables
+/// neither still has a link plane to answer for, and gating this is what made
+/// the seam a privilege rather than a surface.
+pub mod control;
+
+/// The connection loop a transport writes, minus the socket: the parts above
+/// assembled the way plaza's own adapters assemble them.
+pub mod driver;
 
 pub use codec::WireCodec;
 #[cfg(feature = "json")]
@@ -25,6 +34,7 @@ pub use codec::JsonCodec;
 #[cfg(feature = "msgpack")]
 pub use codec::MsgPackCodec;
 pub use conditioner::{Delivery, DirectionProfile, LinkProfile, RETRANSMIT_PENALTY};
+pub use driver::LinkDriver;
 pub use error::SessionLayerError;
 pub use workload::{Priority, Workload, DEFAULT_SOCKET_BUFFER_BYTES};
 pub use manager::{

@@ -586,7 +586,7 @@ struct ClientHandle<ID: AgentId> {
 /// installed between one frame and the next may miss that frame. That is
 /// deliberate for a development impairment tool: the alternative is a lock on
 /// the path this exists to keep off.
-pub(crate) struct LinkHandle {
+pub struct LinkHandle {
   impaired: AtomicBool,
   profile: RwLock<LinkProfile>,
 }
@@ -601,11 +601,11 @@ impl LinkHandle {
 
   /// Whether anything at all is being done to this link. One relaxed load,
   /// and the whole reason this type exists.
-  pub(crate) fn impaired(&self) -> bool {
+  pub fn impaired(&self) -> bool {
     self.impaired.load(Ordering::Acquire)
   }
 
-  pub(crate) fn read(&self) -> LinkProfile {
+  pub fn read(&self) -> LinkProfile {
     *self.profile.read()
   }
 
@@ -1286,7 +1286,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
 
   /// The shared profile cell, taken once by a connection task so that reading
   /// it per frame costs no lookup in the registry.
-  pub(crate) fn link_handle(&self, conn_id: ConnectionId) -> Option<Arc<LinkHandle>> {
+  pub fn link_handle(&self, conn_id: ConnectionId) -> Option<Arc<LinkHandle>> {
     self.connections.read().get(conn_id).map(|h| Arc::clone(&h.link))
   }
 
@@ -1499,8 +1499,8 @@ async fn deserialize_bridge<Op, ID, C>(
   ID: AgentId,
   C: WireCodec,
 {
-  /// Agents already warned about a transport that forwards its probes. One
-  /// task owns this, so it needs no lock.
+  // Agents already warned about a transport that forwards its probes. One task
+  // owns this, so it needs no lock.
   let mut probe_warned: std::collections::HashSet<ID> = std::collections::HashSet::new();
 
   loop {

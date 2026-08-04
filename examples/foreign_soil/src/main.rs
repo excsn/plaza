@@ -217,16 +217,17 @@ async fn main() {
   println!("|---|---|---|");
   println!("| op round trip | {round_trip} | free: `register`, `forward_incoming`, the bridge, the outbound queue |");
   println!(
-    "| link RTT measured | {} | reimplemented: ~40 lines of probe table against `record_link_rtt` |",
+    "| link RTT measured | {} | free: `LinkDriver` owns the schedule and the correlation |",
     measured.is_some()
   );
   if let Some((rtt, samples)) = measured {
     println!("| | | {:.2}ms over {samples} samples |", rtt.as_secs_f64() * 1000.0);
   }
   println!(
-    "| impairment applied | {} | partial: delay only, by hand; jitter, loss, monotone release, retransmit penalty and the ops-only cap are `pub(crate)` |",
+    "| impairment applied | {} | free: the same `Conditioner` the shipped adapters use, delay and jitter and loss and all four ordering rules |",
     delayed_arrived && observed >= Duration::from_millis(100)
   );
+  println!("\nThe connection loop is 65 lines, of which about 25 are reading and writing a socket.");
   println!("\nA 120ms downstream profile produced {}ms.", observed.as_millis());
 
   assert!(round_trip, "the registry, bridge and outbound queue are the part that is genuinely free");
