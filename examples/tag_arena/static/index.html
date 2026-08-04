@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Plaza Tag Arena</title>
+    <style>
+        body { margin: 0; height: 100vh; display: flex; flex-direction: column;
+               align-items: center; justify-content: center; gap: 12px;
+               background: #16181d; color: #cfd3dc;
+               font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; }
+        canvas { background: #0d0f13; border: 1px solid #2b303b; border-radius: 4px; }
+        #hud { display: flex; gap: 20px; align-items: baseline; }
+        #status { color: #7f8794; }
+        .tag { color: #ff5f56; }
+    </style>
+</head>
+<body>
+    <canvas id="field"></canvas>
+    <div id="hud"><span id="status">connecting…</span></div>
+    <script>
+        // Frame kinds, matching plaza_wire::frame::Kind.
+        const KIND_OPS = 0;
+        const KIND_PING = 2;
+        const KIND_PONG = 3;
+
+        const FIELD = 100.0;      // world units, matching types.rs
+        const TAG_RADIUS = 2.5;
+        const PX = 640;
+
+        const canvas = document.getElementById('field');
+        const ctx = canvas.getContext('2d');
+        canvas.width = PX;
+        canvas.height = PX;
+
+        let ws;
+        let me = null;
+        // The whole client state: one snapshot. There is no op log to replay and
+        // nothing to reconcile, so a dropped or late frame costs nothing.
+        let world = null;
+
+        function connect() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+
+            ws.onmessage = (event) => {
+                const kind = event.data.charCodeAt(0);
+                if (kind === KIND_PING) {
+                    const ping = JSON.parse(event.data.slice(1));
+                    ws.send(String.fromCharCode(KIND_PONG) + JSON.stringify({ origin: ping.origin, responder: null }));
+                    return;
+                }
+                if (kind !== KIND_OPS) return;
+                (JSON.parse(event.data.slice(1)) || []).forEach(op => {
+                    if (op.Snapshot) {
+                        // Latest wins outright: this replaces the world rather
+                        // than being applied to it.
+                        world = op.Snapshot;
+                    } else if (op.Welcome) {
+                        me = op.Welcome.you;
+                    }
+                });
+            };
+
+            ws.onclose = () => { me = null; world = null; setStatus('disconnected'); };
+            ws.onerror = () => setStatus('connection error');
+        }
+
+        function sendOps(ops) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(String.fromCharCode(KIND_OPS) + JSON.stringify(ops));
+            }
+        }
+
+        // --- Input: a direction, sent only when it changes ---
+        //
+        // The server holds the last steer until told otherwise, so there is
+        // nothing to repeat every frame. Input is the only thing travelling up.
+        const held = new Set();
+        const KEYS = {
+            ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0],
+            w: [0, -1], s: [0, 1], a: [-1, 0], d: [1, 0],
+        };
+        let sent = null;
+
+        function pushSteer() {
+            let dx = 0, dy = 0;
+            held.forEach(key => { const [kx, ky] = KEYS[key]; dx += kx; dy += ky; });
+            if (dx === 0 && dy === 0) return;
+            const next = `${dx},${dy}`;
+            if (next === sent) return;
+            sent = next;
+            sendOps([{ Steer: { dx, dy } }]);
+        }
+
+        window.addEventListener('keydown', (e) => {
+            if (!(e.key in KEYS) || e.repeat) return;
+            e.preventDefault();
+            held.add(e.key);
+            pushSteer();
+        });
+        window.addEventListener('keyup', (e) => {
+            if (!(e.key in KEYS)) return;
+            held.delete(e.key);
+            pushSteer();
+        });
+
+        // --- Drawing ---
+        const scale = (v) => (v / FIELD) * PX;
+
+        function setStatus(text, cls) {
+            const el = document.getElementById('status');
+            el.textContent = text;
+            el.className = cls || '';
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, PX, PX);
+
+            if (!world) {
+                setStatus(ws && ws.readyState === WebSocket.OPEN ? 'waiting for the first snapshot…' : 'connecting…');
+                requestAnimationFrame(draw);
+                return;
+            }
+
+            for (const runner of world.runners) {
+                const isIt = world.it === runner.id;
+                const isMe = me === runner.id;
+                const safe = world.no_tag_back === runner.id;
+
+                if (isIt) {
+                    ctx.beginPath();
+                    ctx.arc(scale(runner.x), scale(runner.y), scale(TAG_RADIUS), 0, Math.PI * 2);
+                    ctx.strokeStyle = '#ff5f5644';
+                    ctx.stroke();
+                }
+
+                ctx.beginPath();
+                ctx.arc(scale(runner.x), scale(runner.y), 9, 0, Math.PI * 2);
+                ctx.fillStyle = isIt ? '#ff5f56' : safe ? '#57657f' : runner.bot ? '#8b93a3' : '#4fb3ff';
+                ctx.globalAlpha = runner.in_play ? 1 : 0.3;
+                ctx.fill();
+                ctx.globalAlpha = 1;
+                if (isMe) {
+                    ctx.strokeStyle = '#ffffff';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                    ctx.lineWidth = 1;
+                }
+
+                ctx.fillStyle = '#7f8794';
+                ctx.font = '11px ui-monospace, monospace';
+                ctx.textAlign = 'center';
+                const label = isMe ? 'you' : (runner.bot ? 'bot-' : 'player-') + runner.id;
+                ctx.fillText(label, scale(runner.x), scale(runner.y) - 14);
+                ctx.fillText(String(runner.tags), scale(runner.x), scale(runner.y) + 24);
+            }
+
+            const mine = me === null ? null : world.runners.find(r => r.id === me);
+            if (!mine) {
+                setStatus(`spectating, tick ${world.tick}`);
+            } else if (!mine.in_play) {
+                setStatus('out of play while you stand still — press a key to join in');
+            } else if (world.it === me) {
+                setStatus('you are IT, chase someone', 'tag');
+            } else if (world.no_tag_back === me) {
+                setStatus('just tagged, you cannot be tagged back yet');
+            } else {
+                setStatus('run, WASD or arrow keys');
+            }
+
+            requestAnimationFrame(draw);
+        }
+
+        connect();
+        draw();
+    </script>
+</body>
+</html>

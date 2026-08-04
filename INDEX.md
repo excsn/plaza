@@ -34,7 +34,7 @@ Examples live in [examples/](examples/), one crate each, in their own workspace 
 | What an app implements to change state: `StateLogic`, `LogicInput` | [core/src/state_logic.rs](core/src/state_logic.rs) |
 | The transport trait, `MessageTarget`, `TargetedOp`, `SessionMessage` | [core/src/session/mod.rs](core/src/session/mod.rs) |
 | Loopback transport for tests and local play | [core/src/session/in_process.rs](core/src/session/in_process.rs) |
-| What a client is sent, per recipient; `SnapshotProvider`, `SnapshotContext` | [core/src/snapshot.rs](core/src/snapshot.rs) |
+| What a client is sent, per recipient or one uniform view for all; `SnapshotProvider`, `SnapshotContext`. Worked examples: [card_table](examples/card_table/) (per-recipient), [tag_arena](examples/tag_arena/) (uniform) | [core/src/snapshot.rs](core/src/snapshot.rs) |
 | Fixed-rate and virtual time stepping | [core/src/tick_driver.rs](core/src/tick_driver.rs) |
 | `Agent`, and the `AgentId` blanket trait | [core/src/agent.rs](core/src/agent.rs) |
 | Live counters the controller writes and anyone reads: tick duration, queue depth, ops | [core/src/stats.rs](core/src/stats.rs) |
