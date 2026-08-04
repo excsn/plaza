@@ -176,6 +176,12 @@ A latency probe and its answer. `plaza_session` answers an inbound `Kind::Ping` 
 
 **Why the tag is not part of the encoded document.** A serde enum expresses the same thing, but then the codec decides what the tag costs: a quoted string under JSON, an array element under MessagePack, a field number under protobuf. A byte ahead of the body costs one byte in every format and is read without parsing. Measured on the same message: 39 bytes and 113ns to decode, against 42 bytes and 180ns for a serde enum tag, and 239ns for the variant that keeps the tag inside the document and dispatches on it, which needs a second parse.
 
+### A frame is not fragmentable
+
+`[kind byte][encoded body]` carries no sequence number and no fragment index, so one frame is one message and there is nowhere to say "part two of three". That is a deliberate consequence of the format being one byte plus a body, and it makes **plaza a stream wire format**: a transport that cannot carry a whole frame in one unit has no way to split it without inventing a header of its own, at which point a hand-written client can no longer read the wire.
+
+A datagram transport therefore keeps messages inside one datagram and refuses what does not fit, which is what `examples/foreign_soil`'s UDP body does. `Limits::max_frame_bytes` expresses the cap; nothing expresses the consequence, so it is written here.
+
 ## 6. Module `payloads`
 
 The netcode vocabulary both ends of a connection exchange. Pure serde, generic over your application types, no math dependency. Re-exported by `plaza` core under `game_common::reconciliation::op_payloads`.

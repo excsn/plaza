@@ -22,10 +22,14 @@
 //! occur. So [`Delivery::Reliable`] is the default and nothing is dropped.
 //!
 //! On a datagram link the frame is simply gone and the two ends reconcile.
-//! [`Delivery::Datagram`] over a WebSocket is therefore a *simulation* of a
-//! transport plaza has yet to grow, which is exactly what makes it worth
-//! having: an application's recovery can be exercised before the channel it
-//! was written for exists.
+//! [`Delivery::Datagram`] over a stream is therefore a *simulation*, which is
+//! what makes it worth having: an application's recovery can be exercised
+//! before the channel it was written for exists.
+//!
+//! **Over a link that really is a datagram link, do not honour it.** The
+//! network loses the frame itself, so applying this too counts the loss twice.
+//! `examples/foreign_soil`'s UDP body adds only delay and jitter for that
+//! reason.
 //!
 //! No frame kind is exempt under either model, and none needs to be. Under
 //! `Reliable` nothing is lost at all. Under `Datagram` a lost probe costs one
