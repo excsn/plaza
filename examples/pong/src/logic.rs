@@ -1,6 +1,6 @@
 use crate::types::{
-  GamePhase, Paddle, PlayerId, PlayerSide, PongGameState, PongOp, BALL_RADIUS, MAX_SCORE, PADDLE_HEIGHT, PADDLE_SPEED,
-  SCREEN_HEIGHT, SCREEN_WIDTH,
+  GamePhase, Paddle, PlayerId, PlayerSide, PongGameState, PongOp, BALL_RADIUS, GAMEOVER_TICKS, MAX_SCORE,
+  PADDLE_HEIGHT, PADDLE_SPEED, PAUSED_TICKS, SCREEN_HEIGHT, SCREEN_WIDTH, STARTING_TICKS,
 };
 use async_trait::async_trait;
 use plaza::{
@@ -9,7 +9,6 @@ use plaza::{
   session::{MessageTarget, TargetedOp},
   state_logic::{LogicInput, LogicOutput, SnapshotRequest, StateLogic},
 };
-use std::time::Duration;
 use tracing::{debug, info, warn};
 
 #[derive(Clone, Debug, Default)]
@@ -23,16 +22,6 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
     input: LogicInput<PongOp, PlayerId>,
   ) -> Result<LogicOutput<PongOp, PlayerId>, StateLogicError> {
     let mut ops_to_broadcast: Vec<TargetedOp<PongOp, PlayerId>> = Vec::new();
-
-    // This ensures physics updates are consistent even if controller's TimeStep is jittery
-    // or if ops are processed between TimeSteps.
-    let now = std::time::Instant::now();
-    let delta_time_for_physics = match current_state.last_update_time {
-      Some(last_update) => now.saturating_duration_since(last_update),
-      None => Duration::from_secs(0),
-    };
-    let dt_secs = delta_time_for_physics.as_secs_f32();
-    current_state.last_update_time = Some(now);
 
     match input {
       LogicInput::AgentOps { source, ops } => {
@@ -63,34 +52,12 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
               }
             }
             PongOp::ReadyToPlay => {
-              info!(player_id = %player_id, current_phase = ?current_state.phase, "Player sent ReadyToPlay");
-              if current_state.phase == GamePhase::Paused || current_state.phase == GamePhase::Starting {
-                current_state.phase = GamePhase::Playing;
-                current_state.ball.reset();
-                current_state.last_update_time = Some(std::time::Instant::now());
-                info!("Game phase changed to Playing due to ReadyToPlay op.");
-                ops_to_broadcast.push(TargetedOp {
-                  from_agent: Agent::system(),
-                  target: MessageTarget::All,
-                  ops: vec![PongOp::PhaseChange(GamePhase::Playing)],
-                });
-              } else if current_state.phase == GamePhase::GameOver {
-                info!("Game restarting from GameOver due to ReadyToPlay op.");
-                current_state.phase = GamePhase::WaitingForPlayers;
-                current_state.scores.clear();
-                if let Some(p1) = current_state.player1_id {
-                  current_state.scores.insert(p1, 0);
-                }
-                if let Some(p2) = current_state.player2_id {
-                  current_state.scores.insert(p2, 0);
-                }
-                current_state.ball.reset();
-                current_state.last_update_time = Some(std::time::Instant::now());
-                ops_to_broadcast.push(TargetedOp {
-                  from_agent: Agent::system(),
-                  target: MessageTarget::All,
-                  ops: vec![PongOp::PhaseChange(GamePhase::WaitingForPlayers)],
-                });
+              // Skips the rest of whatever is counting down. The phases run
+              // themselves now, so this says "do not make me wait" rather than
+              // being the only thing that advances the game.
+              if current_state.countdown > 0 {
+                info!(player_id = %player_id, phase = ?current_state.phase, "Player is ready; skipping the countdown");
+                current_state.countdown = 1;
               }
             }
             PongOp::AssignPlayer { .. } | PongOp::ScoreUpdate { .. } | PongOp::PhaseChange(_) => {
@@ -99,7 +66,12 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
           }
         }
       }
-      LogicInput::TimeStep { delta_time: _ } => {
+      LogicInput::TimeStep { delta_time } => {
+        // The tick's own interval, which is what it is for. This used to be
+        // wall-clock since the *last input of any kind*, so a client sending
+        // paddle ops between ticks left almost no elapsed time for the tick to
+        // integrate and the ball crawled. A bot playing at 40Hz stopped it dead.
+        let dt_secs = delta_time.as_secs_f32();
         if current_state.phase == GamePhase::Playing {
           current_state.ball.x += current_state.ball.vx * dt_secs;
           current_state.ball.y += current_state.ball.vy * dt_secs;
@@ -186,47 +158,44 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
             });
 
             if *score_entry >= MAX_SCORE {
-              current_state.phase = GamePhase::GameOver;
+              enter(current_state, GamePhase::GameOver, GAMEOVER_TICKS, &mut ops_to_broadcast);
               info!(winner_id = %scoring_player_id, "Game Over!");
-              ops_to_broadcast.push(TargetedOp {
-                from_agent: Agent::system(),
-                target: MessageTarget::All,
-                ops: vec![PongOp::PhaseChange(GamePhase::GameOver)],
-              });
             } else {
-              current_state.phase = GamePhase::Paused;
-              info!("Phase changed to Paused after score.");
-              ops_to_broadcast.push(TargetedOp {
-                from_agent: Agent::system(),
-                target: MessageTarget::All,
-                ops: vec![PongOp::PhaseChange(GamePhase::Paused)],
-              });
-              // Ball is reset by ReadyToPlay or if logic auto-resumes
+              enter(current_state, GamePhase::Paused, PAUSED_TICKS, &mut ops_to_broadcast);
             }
             current_state.last_update_time = Some(std::time::Instant::now());
-          }
-        } else if current_state.phase == GamePhase::WaitingForPlayers {
-          if current_state.player1_id.is_some() && current_state.player2_id.is_some() {
-            info!("Two players present. Transitioning to Starting phase.");
-            current_state.phase = GamePhase::Starting;
-            current_state.scores.clear();
-            if let Some(p1) = current_state.player1_id {
-              current_state.scores.insert(p1, 0);
-            }
-            if let Some(p2) = current_state.player2_id {
-              current_state.scores.insert(p2, 0);
-            }
-            current_state.ball.reset();
-            current_state.last_update_time = Some(std::time::Instant::now());
-            ops_to_broadcast.push(TargetedOp {
-              from_agent: Agent::system(),
-              target: MessageTarget::All,
-              ops: vec![PongOp::PhaseChange(GamePhase::Starting)],
-            });
           }
         }
-        // No specific logic for GamePhase::Starting, Paused, GameOver in TimeStep,
-        // they transition based on AgentOps or scoring.
+
+        // Seats are decided every tick rather than only when someone arrives,
+        // so a freed seat is taken by whoever is waiting and a bot gives one up
+        // the moment a person wants it.
+        reseat(current_state, &mut ops_to_broadcast);
+
+        // Every timed phase runs itself. Nothing here waits on a client op:
+        // a browser that never answered used to leave the game stopped for
+        // everyone, and the score screen was the end of the session.
+        if current_state.countdown > 0 {
+          current_state.countdown -= 1;
+          if current_state.countdown == 0 {
+            match current_state.phase {
+              GamePhase::Starting | GamePhase::Paused => {
+                current_state.ball.reset();
+                current_state.last_update_time = Some(std::time::Instant::now());
+                enter(current_state, GamePhase::Playing, 0, &mut ops_to_broadcast);
+              }
+              GamePhase::GameOver => {
+                new_game(current_state, &mut ops_to_broadcast);
+              }
+              _ => {}
+            }
+          }
+        } else if current_state.phase == GamePhase::WaitingForPlayers
+          && current_state.player1_id.is_some()
+          && current_state.player2_id.is_some()
+        {
+          new_game(current_state, &mut ops_to_broadcast);
+        }
 
         current_state.version += 1;
         // The whole world, every tick, to everyone: one provider call and one
@@ -240,46 +209,19 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
         let Some(player_id) = agent.id_cloned() else {
           return Ok(ops_to_broadcast.into());
         };
-        current_state.agents.insert(player_id, agent.clone());
-
-        // Seat the player on the first free side; extra connections spectate.
-        let side = if current_state.player1_id.is_none() {
-          current_state.player1_id = Some(player_id);
-          Some(PlayerSide::Left)
-        } else if current_state.player2_id.is_none() && current_state.player1_id != Some(player_id) {
-          current_state.player2_id = Some(player_id);
-          Some(PlayerSide::Right)
-        } else {
-          None
-        };
-
-        let Some(side) = side else {
-          // No explicit catch-up: the controller sends every joiner a snapshot
-          // already, and a spectator is now in the roster the tick pass names.
-          info!(agent = %agent, "Game is full; joining as spectator.");
-          return Ok(ops_to_broadcast.into());
-        };
-
-        current_state.paddles.insert(player_id, Paddle::new(player_id, side));
-        current_state.scores.insert(player_id, 0);
-        info!(agent = %agent, ?side, "Player seated.");
-
-        ops_to_broadcast.push(TargetedOp::new_system_to(
-          player_id,
-          vec![PongOp::AssignPlayer { player_id, side }],
-        ));
-
-        // With both seats filled the rally can begin.
-        if current_state.player1_id.is_some() && current_state.player2_id.is_some() {
-          current_state.phase = GamePhase::Playing;
-          info!("Both players present; starting play.");
-          ops_to_broadcast.push(TargetedOp::new_system_all(vec![PongOp::PhaseChange(GamePhase::Playing)]));
+        if current_state.agents.insert(player_id, agent.clone()).is_none() {
+          current_state.arrivals.push(player_id);
         }
-
+        // Seating is `reseat`'s job, on the tick. Doing it here as well was how
+        // a joiner skipped the countdown entirely and walked into a game that
+        // still held the previous one's scores.
+        info!(agent = %agent, "Connected.");
+        reseat(current_state, &mut ops_to_broadcast);
         current_state.version += 1;
       }
       LogicInput::AgentLeft { agent_id } => {
         current_state.agents.remove(&agent_id);
+        current_state.arrivals.retain(|id| *id != agent_id);
         current_state.paddles.remove(&agent_id);
         current_state.scores.remove(&agent_id);
         if current_state.player1_id == Some(agent_id) {
@@ -289,12 +231,13 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
           current_state.player2_id = None;
         }
 
-        // A rally needs two players; pause until someone takes the empty seat.
-        if current_state.phase == GamePhase::Playing {
-          current_state.phase = GamePhase::WaitingForPlayers;
-          ops_to_broadcast.push(TargetedOp::new_system_all(vec![PongOp::PhaseChange(
-            GamePhase::WaitingForPlayers,
-          )]));
+        reseat(current_state, &mut ops_to_broadcast);
+
+        // A rally needs two players; wait unless someone already took the seat.
+        if current_state.phase == GamePhase::Playing
+          && (current_state.player1_id.is_none() || current_state.player2_id.is_none())
+        {
+          enter(current_state, GamePhase::WaitingForPlayers, 0, &mut ops_to_broadcast);
         }
 
         info!(?agent_id, "Player left; seat freed.");
@@ -307,5 +250,90 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
       }
     }
     Ok(ops_to_broadcast.into())
+  }
+}
+
+/// Moves to a phase and announces it, with the ticks it should last.
+fn enter(
+  state: &mut PongGameState,
+  phase: GamePhase,
+  ticks: u32,
+  out: &mut Vec<TargetedOp<PongOp, PlayerId>>,
+) {
+  if state.phase == phase && state.countdown == ticks {
+    return;
+  }
+  state.phase = phase.clone();
+  state.countdown = ticks;
+  out.push(TargetedOp::new_system_all(vec![PongOp::PhaseChange(phase)]));
+}
+
+/// Clears the board for a fresh match.
+///
+/// The scores are cleared *here*, on the way in, rather than when the last one
+/// ended: a game that finished 5-3 and then sat on the score screen was still
+/// holding both numbers when the next one began.
+fn new_game(state: &mut PongGameState, out: &mut Vec<TargetedOp<PongOp, PlayerId>>) {
+  state.scores.clear();
+  for seat in [state.player1_id, state.player2_id].into_iter().flatten() {
+    state.scores.insert(seat, 0);
+  }
+  state.ball.reset();
+  state.last_update_time = Some(std::time::Instant::now());
+  info!("New game; scores cleared.");
+  enter(state, GamePhase::Starting, STARTING_TICKS, out);
+}
+
+/// Decides who holds the two seats, preferring whoever has waited longest and
+/// preferring a person to a bot.
+///
+/// Run every tick, so it covers a seat freed by a disconnect and a bot standing
+/// aside for an arriving player with the same rule, rather than one branch per
+/// occasion.
+fn reseat(state: &mut PongGameState, out: &mut Vec<TargetedOp<PongOp, PlayerId>>) {
+  let is_bot = |state: &PongGameState, id: &PlayerId| matches!(state.agents.get(id), Some(Agent::Bot(_)));
+
+  // Arrival order, people first.
+  let mut queue: Vec<PlayerId> = state.arrivals.iter().copied().filter(|id| !is_bot(state, id)).collect();
+  queue.extend(state.arrivals.iter().copied().filter(|id| is_bot(state, id)));
+
+  let wanted: Vec<PlayerId> = queue.into_iter().take(2).collect();
+  let seated_now = [state.player1_id, state.player2_id];
+
+  // Anyone holding a seat they should no longer have gives it up. In practice
+  // this is a bot, and only ever because someone arrived to take it.
+  for seat in seated_now.into_iter().flatten() {
+    if !wanted.contains(&seat) {
+      if state.player1_id == Some(seat) {
+        state.player1_id = None;
+      }
+      if state.player2_id == Some(seat) {
+        state.player2_id = None;
+      }
+      state.paddles.remove(&seat);
+      info!(%seat, "Seat given up.");
+    }
+  }
+
+  for id in wanted {
+    if state.player1_id == Some(id) || state.player2_id == Some(id) {
+      continue;
+    }
+    let side = if state.player1_id.is_none() {
+      state.player1_id = Some(id);
+      PlayerSide::Left
+    } else if state.player2_id.is_none() {
+      state.player2_id = Some(id);
+      PlayerSide::Right
+    } else {
+      continue;
+    };
+    state.paddles.insert(id, Paddle::new(id, side));
+    state.scores.entry(id).or_insert(0);
+    info!(%id, ?side, "Player seated.");
+    out.push(TargetedOp::new_system_to(
+      id,
+      vec![PongOp::AssignPlayer { player_id: id, side }],
+    ));
   }
 }

@@ -13,6 +13,13 @@ pub const BALL_INITIAL_SPEED_X: f32 = 250.0;
 pub const BALL_INITIAL_SPEED_Y: f32 = 250.0;
 pub const MAX_SCORE: u32 = 5;
 
+/// Ticks spent counting down before a new game, at the 60Hz this runs at.
+pub const STARTING_TICKS: u32 = 180;
+/// The pause after a point, long enough to see what happened.
+pub const PAUSED_TICKS: u32 = 90;
+/// How long a finished game sits on the final score before starting another.
+pub const GAMEOVER_TICKS: u32 = 300;
+
 pub type PlayerId = Uuid;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -107,6 +114,11 @@ pub struct PongGameState {
   /// names its recipients, so the roster has to live somewhere; the controller
   /// does not keep one.
   pub agents: HashMap<PlayerId, Agent<PlayerId>>,
+  /// Order of arrival, so a freed seat goes to whoever has waited longest
+  /// rather than to whichever key the map happened to yield first.
+  pub arrivals: Vec<PlayerId>,
+  /// Ticks left in whatever timed phase is running. Zero outside one.
+  pub countdown: u32,
   pub last_update_time: Option<std::time::Instant>,
   pub version: u64,
 }
@@ -130,6 +142,8 @@ impl Default for PongGameState {
       player1_id: None,
       player2_id: None,
       agents: HashMap::new(),
+      arrivals: Vec::new(),
+      countdown: 0,
       last_update_time: Some(std::time::Instant::now()),
       version: 0,
     }
@@ -147,6 +161,10 @@ pub struct PongSnapshotPayload {
   pub scores: HashMap<PlayerId, u32>,
   pub player1_id: Option<PlayerId>,
   pub player2_id: Option<PlayerId>,
+  /// Whole seconds left in the running phase, for the page to draw.
+  pub countdown: u32,
+  /// Who is a bot, so a page can say "bot" rather than invent a name.
+  pub bots: Vec<PlayerId>,
   pub version: u64,
 }
 
@@ -159,6 +177,13 @@ impl From<&PongGameState> for PongSnapshotPayload {
       scores: state.scores.clone(),
       player1_id: state.player1_id,
       player2_id: state.player2_id,
+      countdown: state.countdown.div_ceil(60),
+      bots: state
+        .agents
+        .iter()
+        .filter(|(_, agent)| matches!(agent, Agent::Bot(_)))
+        .map(|(id, _)| *id)
+        .collect(),
       version: state.version,
     }
   }

@@ -5,6 +5,7 @@
 //! WebSockets via `plaza_session`. Open http://127.0.0.1:8080 in two browser
 //! tabs to play.
 
+mod bots;
 mod logic;
 mod snapshot;
 mod types;
@@ -86,6 +87,8 @@ async fn main() -> std::io::Result<()> {
   // Without this the ball never moves: the controller only advances simulation
   // time when something sends it a time step.
   tokio::spawn(TickDriver::from_hz(TICK_HZ).run(controller_tx.clone()));
+  tokio::spawn(bots::keep_a_seat_warm(controller_tx.clone()));
+  tokio::spawn(bots::play(controller_tx.clone()));
 
   let server_addr = "127.0.0.1:8080";
   info!("Serving http://{} (WebSocket at /ws), {}Hz tick", server_addr, TICK_HZ);

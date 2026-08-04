@@ -100,11 +100,10 @@
                     // An event, not state: the next snapshot carries the score.
                     console.log(`Point to ${op.ScoreUpdate.player_id}: ${op.ScoreUpdate.new_score}`);
                 } else if (op.PhaseChange) {
-                    // Sent once per transition, so readiness is answered once
-                    // per transition rather than once per frame received.
-                    if (op.PhaseChange === "Paused" || op.PhaseChange === "Starting") {
-                        setTimeout(() => sendReadyToPlay(), 500);
-                    }
+                    // Nothing is answered automatically any more. The phases run
+                    // themselves on the server, and a client that replied here
+                    // was the only reason a countdown ever ended.
+                    console.log(`phase: ${op.PhaseChange}`);
                 }
             });
         }
@@ -154,19 +153,22 @@
             if (!gameState || !gameState.phase) return;
             ctx.font = '24px Arial';
             ctx.fillStyle = '#aaa';
+            const left = gameState.countdown;
             let text = "";
             switch(gameState.phase) {
                 case "WaitingForPlayers": text = "Waiting for opponent..."; break;
-                case "Starting": text = "Get Ready!"; break;
-                case "Paused": text = "Paused"; break;
+                case "Starting": text = left > 0 ? `Get Ready! ${left}` : "Get Ready!"; break;
+                case "Paused": text = left > 0 ? `Point! Resuming in ${left}` : "Paused"; break;
                 case "GameOver": {
                     const scores = gameState.scores || {};
                     const [winnerId] = Object.entries(scores)
                         .sort(([, a], [, b]) => b - a)[0] || [];
                     const winner = winnerId === undefined ? "Nobody"
                         : winnerId === myPlayerId ? "You"
+                        : (gameState.bots || []).includes(winnerId) ? "The bot"
                         : gameState.player1_id === winnerId ? "Player 1" : "Player 2";
-                    text = `Game Over! ${winner} ${winner === "You" ? "win" : "wins"}!`;
+                    text = `Game Over! ${winner} ${winner === "You" ? "win" : "wins"}!`
+                        + (left > 0 ? `  New game in ${left}` : "");
                     break;
                 }
             }
@@ -213,6 +215,14 @@
             }
         });
         
+        // A countdown you can cut short, which is what ReadyToPlay now means.
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' && gameState && gameState.countdown > 0) {
+                e.preventDefault();
+                sendReadyToPlay();
+            }
+        });
+
         // Initial connection
         connect();
         draw(); // Initial draw (e.g., "Connecting...")
