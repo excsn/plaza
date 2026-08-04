@@ -1,0 +1,17 @@
+[package]
+name = "plaza_example_table_manners"
+version = "0.1.0"
+edition = { workspace = true }
+publish = false
+
+[dependencies]
+plaza = { workspace = true }
+plaza_session = { workspace = true, features = ["json"] }
+plaza_wire = { workspace = true, features = ["json"] }
+
+async-trait = "0.1"
+parking_lot = "^0.12"
+serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "net", "io-util"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
