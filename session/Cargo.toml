@@ -69,3 +69,7 @@ harness = false
 [[bench]]
 name = "passthrough"
 harness = false
+
+[[bench]]
+name = "snapshot_fanout"
+harness = false

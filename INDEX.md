@@ -91,6 +91,7 @@ Both transports share everything that is not socket I/O, which is why the adapte
 | What it costs to build an outbound frame | [session/benches/encode.rs](session/benches/encode.rs) |
 | What each queue absorbs before it drops, and whether a workload parameter's derived depth sits on the knee | [session/benches/saturation.rs](session/benches/saturation.rs) |
 | What one frame pays to ask whether its link is impaired | [session/benches/passthrough.rs](session/benches/passthrough.rs) |
+| What a snapshot pass pays for addressing recipients one at a time | [session/benches/snapshot_fanout.rs](session/benches/snapshot_fanout.rs) |
 | What the transport carried and what it dropped rather than stalling for | [session/src/stats.rs](session/src/stats.rs) |
 | Transport errors | [session/src/error.rs](session/src/error.rs) |
 
