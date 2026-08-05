@@ -170,6 +170,13 @@ Naming a workload picks for you: `LossFree` disconnects and waits, `LatencyFirst
 
 Two of these are worth knowing about before you need them. `inbound`, `decoded` and `presence` default to the same number because they used to share a single constructor argument, not because a trickle of joins and every frame from every client are comparable traffic. And `max_frame_bytes` defaults to 8 MiB because that is what `LengthDelimitedCodec` enforces when nobody asks; it is the largest allocation a client can make this server perform, so a build that knows its own frames are small should say so.
 
+## Who is active, and how much they send
+
+Two per-connection readers sit beside the latency family, because the session is the only layer that can keep them honest:
+
+- `idle_for(conn_id)` / `agent_idle_for(&id)`: time since the last **data** frame. Probes do not count, and only the session can promise that: the control plane answers a `Ping` without the application ever seeing it, so an AFK rule written anywhere else either counts probe traffic as presence or never fires. No timer and no timeout ship with it; read it from your own tick and apply your own number.
+- `connection_inbound(conn_id)` / `agent_inbound(&id)`: monotonic frame and byte counters per connection. `TransportStats` counts the session as a whole, which can say *that* something floods but never *who*. Windows and thresholds stay yours: diff two readings, or feed a `RateMeter`.
+
 ## Impairment belongs to the link
 
 Delay, jitter and loss are properties of a connection, so they are applied where the connection is:

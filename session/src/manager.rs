@@ -560,11 +560,27 @@ pub enum ConnectionOrder {
 /// so this only needs to absorb a burst of redundant closes.
 const ORDER_QUEUE_DEPTH: usize = 4;
 
+/// Monotonic inbound counters for one connection: what it sent, not what
+/// survived the queues. Windowing and thresholds are the application's; diff
+/// two readings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct InboundVolume {
+  pub frames: u64,
+  pub bytes: u64,
+}
+
 struct ClientHandle<ID: AgentId> {
   agent: Agent<ID>,
   to_client_tx: SessionSender<OutboundFrame>,
   orders_tx: SessionSender<ConnectionOrder>,
   orders_rx: RwLock<Option<SessionReceiver<ConnectionOrder>>>,
+  /// Microseconds since the manager's epoch of the last **data** frame, or of
+  /// `register` if the connection has never spoken. Probes never move it: the
+  /// control plane stamps this at the one place a probe has already been told
+  /// apart from data, a distinction invisible above this layer.
+  last_activity_us: AtomicU64,
+  inbound_frames: AtomicU64,
+  inbound_bytes: AtomicU64,
   /// Round trip to this client, in microseconds, `0` before the first sample.
   ///
   /// Atomics rather than a lock, so a connection task recording a sample needs
@@ -636,13 +652,16 @@ impl LinkHandle {
 }
 
 impl<ID: AgentId> ClientHandle<ID> {
-  fn new(agent: Agent<ID>, to_client_tx: SessionSender<OutboundFrame>) -> Self {
+  fn new(agent: Agent<ID>, to_client_tx: SessionSender<OutboundFrame>, now_us: u64) -> Self {
     let (orders_tx, orders_rx) = session_channel::<ConnectionOrder>(ORDER_QUEUE_DEPTH);
     Self {
       agent,
       to_client_tx,
       orders_tx,
       orders_rx: RwLock::new(Some(orders_rx)),
+      last_activity_us: AtomicU64::new(now_us),
+      inbound_frames: AtomicU64::new(0),
+      inbound_bytes: AtomicU64::new(0),
       rtt_us: AtomicU64::new(0),
       min_rtt_us: AtomicU64::new(0),
       samples: AtomicU64::new(0),
@@ -831,6 +850,9 @@ impl<ID: AgentId> Registry<ID> {
 /// oneshot round-trips.
 pub struct ConnectionManager<ID: AgentId> {
   transport: &'static str,
+  /// Zero point for the activity stamps: process-local and monotonic, so the
+  /// readers need no application clock.
+  epoch: std::time::Instant,
   next_conn_id: AtomicU64,
   connections: RwLock<Registry<ID>>,
   raw_incoming_tx: SessionSender<IncomingFrame<ID>>,
@@ -911,6 +933,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
     let (presence_tx, presence_rx) = session_channel(options.queues.presence);
     Self {
       transport,
+      epoch: std::time::Instant::now(),
       next_conn_id: AtomicU64::new(1),
       connections: RwLock::new(Registry::new()),
       raw_incoming_tx,
@@ -971,7 +994,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
     self
       .connections
       .write()
-      .insert(conn_id, ClientHandle::new(agent.clone(), to_client_tx));
+      .insert(conn_id, ClientHandle::new(agent.clone(), to_client_tx, self.now_us()));
     debug!(transport = self.transport, conn_id, agent = %agent, "Connection registered.");
 
     if !self.announce(PresenceEvent::Joined { agent, conn_id }).await {
@@ -1010,6 +1033,69 @@ impl<ID: AgentId> ConnectionManager<ID> {
   /// socket and calls this itself.
   pub async fn deregister(&self, conn_id: ConnectionId) {
     self.remove(conn_id, true).await
+  }
+
+  fn now_us(&self) -> u64 {
+    self.epoch.elapsed().as_micros() as u64
+  }
+
+  /// Stamps activity and counts one data frame from this connection.
+  ///
+  /// Called by the control plane at the one place a probe has already been
+  /// told apart from data, which is what makes "probes do not count" true by
+  /// construction rather than by every transport remembering it.
+  pub fn record_inbound_activity(&self, conn_id: ConnectionId, bytes: usize) {
+    let now_us = self.now_us();
+    let connections = self.connections.read();
+    if let Some(handle) = connections.get(conn_id) {
+      handle.last_activity_us.store(now_us, Ordering::Relaxed);
+      handle.inbound_frames.fetch_add(1, Ordering::Relaxed);
+      handle.inbound_bytes.fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+  }
+
+  /// How long this connection has been silent: time since its last data frame,
+  /// or since `register` if it has never sent one. Probes do not count.
+  ///
+  /// No timer and no timeout live here; an application with an AFK rule reads
+  /// this from its own tick and applies its own number.
+  pub fn idle_for(&self, conn_id: ConnectionId) -> Option<Duration> {
+    let connections = self.connections.read();
+    let handle = connections.get(conn_id)?;
+    let last = handle.last_activity_us.load(Ordering::Relaxed);
+    Some(Duration::from_micros(self.now_us().saturating_sub(last)))
+  }
+
+  /// The shortest [`idle_for`](Self::idle_for) across an agent's connections:
+  /// an agent is as present as its most recently active connection.
+  pub fn agent_idle_for(&self, id: &ID) -> Option<Duration> {
+    let connections = self.connections.read();
+    let now_us = self.now_us();
+    connections
+      .for_agent(id)
+      .map(|(_, handle)| now_us.saturating_sub(handle.last_activity_us.load(Ordering::Relaxed)))
+      .min()
+      .map(Duration::from_micros)
+  }
+
+  /// Monotonic inbound counters for one connection. [`TransportStats`] counts
+  /// the session; this answers "who", which the session-wide numbers cannot.
+  pub fn connection_inbound(&self, conn_id: ConnectionId) -> Option<InboundVolume> {
+    let connections = self.connections.read();
+    let handle = connections.get(conn_id)?;
+    Some(InboundVolume {
+      frames: handle.inbound_frames.load(Ordering::Relaxed),
+      bytes: handle.inbound_bytes.load(Ordering::Relaxed),
+    })
+  }
+
+  /// The same, summed over an agent's connections.
+  pub fn agent_inbound(&self, id: &ID) -> InboundVolume {
+    let connections = self.connections.read();
+    connections.for_agent(id).fold(InboundVolume::default(), |sum, (_, handle)| InboundVolume {
+      frames: sum.frames + handle.inbound_frames.load(Ordering::Relaxed),
+      bytes: sum.bytes + handle.inbound_bytes.load(Ordering::Relaxed),
+    })
   }
 
   /// The live connections an agent holds, newest last. Empty for an agent with

@@ -665,3 +665,59 @@ async fn disconnect_all_is_the_same_close_for_everyone() {
   })
   .await;
 }
+
+#[tokio::test]
+async fn activity_counts_data_and_never_probes() {
+  let player_id = Uuid::new_v4();
+  let agent_factory: plaza_session::tcp::AgentFactory<PlayerId> =
+    Arc::new(move |_peer| Ok(Agent::new_human(player_id)));
+  let session: Arc<TcpPlazaSession<TestOp, PlayerId>> =
+    TcpPlazaSession::bind("127.0.0.1:0", agent_factory).await.expect("bind");
+  let presence = session.on_presence_change();
+  let _incoming = session.subscribe_to_incoming_messages();
+
+  let stream = TcpStream::connect(session.local_addr()).await.expect("connect");
+  let mut client = Framed::new(stream, LengthDelimitedCodec::new());
+  let conn_id = match with_timeout(presence.recv()).await.expect("presence") {
+    PresenceEvent::Joined { conn_id, .. } => conn_id,
+    other => panic!("expected a join, got {other:?}"),
+  };
+
+  // A connection that only answers probes is idle: the round trips are being
+  // measured, and the seat is still silent.
+  answer_probes(&mut client, 3).await;
+  let idle_before = session.manager().idle_for(conn_id).expect("live");
+  assert!(
+    idle_before >= Duration::from_millis(200),
+    "probe traffic moved the activity stamp: {idle_before:?}"
+  );
+  let volume = session.manager().connection_inbound(conn_id).expect("live");
+  assert_eq!(volume.frames, 0, "pongs are not data");
+
+  let mut op_frame = Vec::new();
+  plaza_wire::frame::begin(plaza_wire::frame::Kind::Ops, &mut op_frame);
+  JsonCodec
+    .encode_into(&vec![TestOp::Hello("still here".into())], &mut op_frame)
+    .unwrap();
+  let sent = op_frame.len();
+  client.send(op_frame.into()).await.expect("send");
+
+  let volume = with_patience(async {
+    loop {
+      let volume = session.manager().connection_inbound(conn_id).expect("live");
+      if volume.frames > 0 {
+        return volume;
+      }
+      tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+  })
+  .await;
+  assert_eq!(volume.frames, 1);
+  assert_eq!(volume.bytes, sent as u64);
+
+  let idle_after = session.manager().idle_for(conn_id).expect("live");
+  assert!(idle_after < idle_before, "one op moved the stamp: {idle_after:?}");
+  let agent_idle = session.manager().agent_idle_for(&player_id).expect("connected");
+  assert!(agent_idle <= idle_after + Duration::from_millis(50));
+  assert_eq!(session.manager().agent_inbound(&player_id), volume);
+}

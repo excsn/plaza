@@ -148,6 +148,7 @@ pub fn handle_inbound<ID: AgentId, C: WireCodec>(
   // An empty frame is malformed rather than unknown, and the bridge already
   // reports it; forwarding keeps that one voice.
   let Some((tag, body)) = frame::split(&frame_bytes) else {
+    manager.record_inbound_activity(conn_id, frame_bytes.len());
     return Inbound::Forward(frame_bytes);
   };
 
@@ -174,7 +175,10 @@ pub fn handle_inbound<ID: AgentId, C: WireCodec>(
       }
       Inbound::Consumed
     }
-    _ => Inbound::Forward(frame_bytes),
+    _ => {
+      manager.record_inbound_activity(conn_id, frame_bytes.len());
+      Inbound::Forward(frame_bytes)
+    }
   }
 }
 
