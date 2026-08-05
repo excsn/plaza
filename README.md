@@ -12,6 +12,8 @@ Each client's snapshot is built *for that client*, so a card game showing every 
 
 ***Building blocks, not a framework. Take what fits.***
 
+**Want to understand how it all fits together?** [The plaza guide](docs/guide/README.md) is the learning layer: fourteen short chapters from "what plaza is made of" to lag compensation, governance, and lobbies, each anchored to a runnable example. This README is for skimming; the guide is for the curious.
+
 ## Project Status: Experimental ⚠️
 
 The API changes, and breaking changes land without ceremony while the shape settles. It has no production users yet.
@@ -28,7 +30,7 @@ Where a decision belongs to your application (how long a disconnected player kee
 *   `wire/`: The `WireCodec` trait and message envelope shared by a server and its clients, kept runtime-free, plus a build-time protocol version so the two ends can tell they were built from the same definition. See [`wire/README.md`](wire/README.md).
 *   `ws_client/`: `plaza_ws`, the client-side socket: one interface over desktop, browser and in-process. The counterpart to `session/`, which is server-only by construction. See [`ws_client/README.md`](ws_client/README.md).
 
-Each crate carries an `API_REFERENCE.md` documenting its full public surface. [`INDEX.md`](INDEX.md) maps where everything lives.
+Each crate carries an `API_REFERENCE.md` documenting its full public surface. [`INDEX.md`](INDEX.md) maps where everything lives, and [the guide](docs/guide/README.md) explains how the pieces fit together and why they are shaped the way they are.
 
 ## Getting Started
 
@@ -57,8 +59,11 @@ Please refer to **[`core/README.md`](core/README.md)** for installation, the fou
 | [`seed_defense`](examples/seed_defense/) | A wire that carries **causes instead of consequences**: a seed and a wave number produce the whole world on every machine, and a digest proves they still agree. See its [README](examples/seed_defense/README.md). |
 | [`ghost_trials`](examples/ghost_trials/) | The op stream as an **event-sourced record**: a ghost is a replay of an input log, and a lap time is decided by replaying the evidence rather than by believing a number. See its [README](examples/ghost_trials/README.md). |
 
+The examples are their own workspace, so run them from `examples/`:
+
 ```sh
-cargo run -p plaza-example-shared_counter
+cd examples
+cargo run -p plaza_example_shared_counter
 ```
 
 Turning the browser playgrounds into real listen-servers surfaced a run of bugs whose causes were consistently not where the symptoms pointed, and most of what is in `client_utils` and `server_utils` today is what those argued for. [`examples/LEARNINGS.md`](examples/LEARNINGS.md) is the record: the principles that prevent whole classes of bug, what broke and which reasonable theories were wrong, and what all of it changed in plaza itself.

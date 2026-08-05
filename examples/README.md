@@ -4,7 +4,7 @@ One crate each, smallest first. Run any of them with `cargo run -p <crate>` (the
 
 | Example | Shows | Crate |
 |---|---|---|
-| [`shared_counter`](shared_counter/) | The smallest complete application: two clients share one value. | `plaza-example-shared_counter` |
+| [`shared_counter`](shared_counter/) | The smallest complete application: two clients share one value. | `plaza_example_shared_counter` |
 | [`pong`](pong/) | Real WebSockets, 60Hz simulation, the whole world to everyone each tick as one uniform snapshot. Two browser tabs to play, or one and a bot takes the other paddle. See its [README](pong/README.md). | `plaza_example_pong` |
 | [`whack_a_mole`](whack_a_mole/) | A scheduler-driven game loop with scoring. | `plaza_example_whack_a_mole` |
 | [`ability_cooldowns`](ability_cooldowns/) | Scheduled events that expire. | `plaza_example_ability_cooldowns` |
