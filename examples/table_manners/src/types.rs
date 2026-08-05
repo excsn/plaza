@@ -62,6 +62,36 @@ pub enum PartyOp {
   Snapshot(Box<Table>),
 }
 
+/// Encodes ops the way both ends put them on the wire: a kind byte, then one
+/// JSON document.
+pub fn encode_ops(ops: &[PartyOp]) -> Vec<u8> {
+  use plaza_session::codec::WireCodec;
+  let mut out = vec![plaza_wire::frame::Kind::Ops as u8];
+  out.extend_from_slice(
+    &plaza_session::codec::JsonCodec
+      .encode(&ops.to_vec())
+      .expect("ops encode"),
+  );
+  out
+}
+
+/// Reads ops from a frame, for the client side.
+pub fn decode_ops(frame: &[u8]) -> Vec<PartyOp> {
+  use plaza_session::codec::WireCodec;
+  if frame.first().copied() != Some(plaza_wire::frame::Kind::Ops as u8) {
+    return Vec::new();
+  }
+  plaza_session::codec::JsonCodec
+    .decode::<Vec<PartyOp>>(&frame[1..])
+    .unwrap_or_default()
+}
+
+/// One op as a pre-encoded frame: what a farewell hands the library, which
+/// carries the bytes without knowing the vocabulary.
+pub fn op_frame(op: PartyOp) -> plaza_session::Frame {
+  plaza_session::Frame::from(encode_ops(&[op]))
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Guest {
   pub seat: Seat,

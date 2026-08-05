@@ -1,13 +1,18 @@
 //! A guest, and optionally a badly behaved one.
+//!
+//! Answers the session's probes, so a guest who says nothing still has a live,
+//! measured link: exactly the case AFK must remove and the probe traffic must
+//! not save.
 
 use std::sync::Arc;
 
 use parking_lot::Mutex;
+use plaza_session::codec::JsonCodec;
+use plaza_wire::frame::Kind;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
-use crate::transport::{decode_ops, encode_ops};
-use crate::types::{Parting, PartyOp, Seat};
+use crate::types::{decode_ops, encode_ops, Parting, PartyOp, Seat};
 
 pub struct Guest {
   pub heard: Arc<Mutex<Vec<PartyOp>>>,
@@ -27,7 +32,9 @@ impl Guest {
       write_half.write_all(&frame).await?;
     }
 
+    let writer = Arc::new(tokio::sync::Mutex::new(write_half));
     let sink = heard.clone();
+    let pong_writer = writer.clone();
     let task = tokio::spawn(async move {
       use tokio::io::AsyncReadExt;
       loop {
@@ -39,6 +46,14 @@ impl Guest {
         if read_half.read_exact(&mut body).await.is_err() {
           return;
         }
+        if body.first().copied() == Some(Kind::Ping as u8) {
+          if let Some(reply) = plaza_wire::frame::answer_ping(&JsonCodec, &body[1..], None) {
+            let mut writer = pong_writer.lock().await;
+            let _ = writer.write_all(&(reply.len() as u32).to_be_bytes()).await;
+            let _ = writer.write_all(&reply).await;
+          }
+          continue;
+        }
         let ops = decode_ops(&body);
         if !ops.is_empty() {
           sink.lock().extend(ops);
@@ -46,11 +61,7 @@ impl Guest {
       }
     });
 
-    Ok(Self {
-      heard,
-      writer: Arc::new(tokio::sync::Mutex::new(write_half)),
-      task,
-    })
+    Ok(Self { heard, writer, task })
   }
 
   pub async fn say(&self, ops: &[PartyOp]) -> std::io::Result<()> {

@@ -1,6 +1,6 @@
 # table_manners
 
-Moderation as a live tool, and the surface a host needs to use one.
+Moderation as a live tool, built from the library's blocks with no transport of its own.
 
 ```sh
 cargo test -p plaza_example_table_manners
@@ -8,48 +8,47 @@ cargo test -p plaza_example_table_manners
 
 A four-seat party with host tools. Every claim is a count, and the counts are asserted rather than printed, because each one is a property that has to hold every time rather than a number to admire.
 
-## A kick must say why, and saying it races the close
+This example originally shipped a 252-line hand-written TCP transport, because AFK, flood attribution, the kick and the drain were impossible on the shipped one. Those became library primitives, and the rewrite deleted the transport. What follows is the recipe.
 
-The entry expected this to start imperfect by construction, since `deregister` drops the outbound queue along with the connection and a farewell queued behind it never leaves. It does, and the fix it forces is exactly the one predicted: **write the reason, flush, then shut the socket**. With that ordering, `reasons delivered == kicks`, and `silent closes == 0`, asserted on every kick and again on a room-wide drain.
+## The blocks, and what each tool sits on
 
-That ordering cannot be expressed through the shipped transports at all, for the reason [`door_policy`](../door_policy/) recorded: `deregister` is bookkeeping, not a close.
+| tool | block it uses | policy that stays here |
+|---|---|---|
+| kick with a reason | `deregister_agent(&key, farewell)` | who may kick, and what the reason says |
+| AFK removal | `agent_idle_for(&key)` | the timeout, and the steward that applies it |
+| flood attribution | `agent_inbound(&key)` | the window, the threshold, the removal |
+| drain | `disconnect_all(farewell)` | when the party ends |
+| seat fate | `Parting::keeps_the_seat()` on the `Left` | a drop holds the seat, everything else clears it |
+
+## A kick says why, and the reason wins the race
+
+The farewell is a `PartyOp` of this crate's own vocabulary, pre-encoded and handed to the close; the library flushes what was queued, writes it last, and shuts the socket. Delivery is asserted from the client's side, on every kick and again on a room-wide drain, which is where delivery is real: the server can order the farewell but cannot watch it land.
 
 ## A kick is not a netdrop
 
-The same guest leaving two ways, told apart by one field the socket cannot supply:
+The same guest leaving two ways, told apart by one fact the socket cannot supply:
 
 | how they left | seat | rejoin |
 |---|---|---|
 | socket cut | **held**, with grace | allowed |
-| removed by the host | **cleared** | refused at the door |
+| removed by the host | **cleared** | refused |
 
-A parting defaults to `Dropped` and only a deliberate close overrides it, which is the right default: a crash cannot announce itself. `ReconnectTracker` holds a seat through a drop on purpose, so the whole distinction is the difference between honouring that and clearing it, and nothing in the session layer records which happened.
+The parting reason lives in the `Host`, not in any transport. The host initiated every non-drop parting, so it already knows why; a `Left` with no pending reason *is* a netdrop. The first build put this in its hand-written transport because that was the easy place, and SESSION_GOVERNANCE overruled it: the transport never interprets a disconnect, and the rewrite confirms the division costs nothing.
 
-## AFK is a policy on a number the transport already sees
+## AFK is a policy on the session's reading
 
-Last activity is one store per inbound frame, on a path that already runs. Nothing keeps it, so an application either writes its own transport, as here, or invents a second heartbeat over the top of the link plane's existing one.
-
-**A probe is not activity, and only the transport can tell.** `LinkDriver::inbound` answers a `Ping` itself and returns `Consumed`; that distinction is invisible above the session layer. An AFK timeout written against decoded ops is correct only by accident, and one written against frames would never fire at all. Both halves are asserted: silence removes you, and talking across twice the timeout does not.
+`agent_idle_for` counts from the last **data** frame, and probes never move it: the control plane answers a `Ping` invisibly, so this reading has to be the session's or it cannot exist. The guest in the test answers every probe for the whole timeout, so the link is alive and measured while the seat is silent, and the removal still fires. Talking across twice the timeout does not. The steward that applies the number is the example's own 200ms loop, which is the division the doc wants: no timers in the session.
 
 ## The griefer floods
 
-Per-connection inbound rate, with the kick threshold as policy. The claim to falsify was that **the flood degrades the flooder's connection before it degrades anyone else's tick**, and it holds: the flooder's excess is shed on the connection that sent it, and the session-wide `inbound_dropped` does not move while the flood runs. A bystander keeps its seat and keeps receiving the table.
+`agent_inbound` answers "who", which the session-wide `TransportStats` cannot; the window and the threshold are the host's. The flooder is removed with `flooding` as its farewell, the shared queue drops nothing, and a bystander keeps its seat and keeps receiving the table.
 
-Throttling is deliberately out of scope, per the entry: surviving a flooder without ejecting them is a backpressure mechanism these meters do not force.
+**One honest downgrade from the first build.** The hand-written transport shed the flooder's excess before `forward_incoming`, surviving the flood without ejecting anyone; on the shipped transport the flood reaches the shared controller queue until the steward removes the sender. The isolation assertions still hold at this scale, but shedding-without-ejecting needs to stand between the socket and the controller, and there is still nowhere to stand. That is the observation-seam finding again, now with a second case: door_policy needs to *judge* there, this needs to *shed* there.
 
 ## Drain finishes the story
 
-The host ends the party: everyone is told, then closed, in seat order. `delivered == drained`, `silent closes == 0`. That is a graceful server restart, and it is the same flush semantic as the kick applied room-wide.
+`disconnect_all` with the same farewell for everyone: told, then closed, the same flush semantic as the kick applied room-wide. That is a graceful server restart in one call.
 
-## Extraction this earns
+## The wire question, still answered the same way
 
-On top of everything [`door_policy`](../door_policy/) already named:
-
-- **last activity per connection**, one relaxed store where the frames already arrive, readable per connection
-- **per-connection inbound meters** (ops, frames, bytes per window). `TransportStats` counts the *session*, so "who is flooding" and "did it cost anyone else" cannot be answered from it
-- **`disconnect_all`**, with the same flush-then-close ordering as a single kick
-- **a reason on the parting**, so the session layer can tell `ReconnectTracker` whether a seat survives. This is the one that cannot be worked around cheaply: an application can time its own AFK, but it cannot see the difference between a socket that died and one it closed
-
-## The wire question, answered by need
-
-Is a close reason a `Kind` or an `Op`? **An op.** TCP has no native close vocabulary, so a `Kind` would have to be invented for it there, while the op path already exists on both transports and already carries application meaning. WS has a close frame with a code, and it is the wrong shape anyway: the codes are a fixed registry, and `removed by the host` versus `away from the table` is application vocabulary. The close frame stays what it is, a transport event, and the farewell rides the ops path in front of it.
+The close reason is an `Op`, not a `Kind`. The library agrees: `close_connection` carries pre-encoded application bytes and the close frame stays a transport event, with the farewell riding the ops path in front of it.

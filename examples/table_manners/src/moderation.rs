@@ -1,31 +1,34 @@
-//! The tools a host needs, and the meters that make each claim a count.
+//! The host's tools, over the library's readers.
 //!
-//! All of it is the example's own, for the reasons `door_policy` established:
-//! there is no server-initiated close, no agent-to-connection index, and no
-//! per-connection accounting. What is new here is that moderation needs three
-//! numbers the transport already touches and does not keep:
+//! The transport this example used to carry is gone. Last activity comes from
+//! `agent_idle_for`, attribution from `agent_inbound`, the close from
+//! `deregister_agent`, and the drain from `disconnect_all`. What remains is
+//! policy: the timeout numbers, which seat survives which parting, and the
+//! book of seats held and barred.
 //!
-//! - **last activity**, one store per inbound frame, so AFK is a policy rather
-//!   than a second heartbeat
-//! - **inbound rate per connection**, so a flood is attributable
-//! - **whether a parting keeps the seat**, which is the difference between a
-//!   kick and a netdrop and cannot be inferred from the socket
+//! The parting reason lives *here*, not in a transport: the host initiated
+//! every non-drop parting, so it already knows why, and a departure with no
+//! pending reason is what a netdrop is. That is the division
+//! SESSION_GOVERNANCE records, kept on purpose.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use plaza::session::ConnectionId;
+use plaza_session::manager::ConnectionManager;
 
-use crate::types::{Parting, Seat, FLOOD_OPS, FLOOD_WINDOW_MS};
+use crate::types::{op_frame, Parting, PartyOp, Seat, FLOOD_OPS, FLOOD_WINDOW_MS};
+
+/// How long a dropped guest's seat stays warm.
+pub const GRACE: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[derive(Debug, Default)]
 pub struct Meters {
-  /// Farewells whose reason reached the client before the socket shut.
-  pub reasons_delivered: AtomicU64,
-  /// Closes where it did not. The number that must stay at zero.
-  pub silent_closes: AtomicU64,
+  /// Farewells handed to a close, riding ahead of it. Whether one reached the
+  /// client is asserted from the client's side; the server cannot watch its
+  /// own farewell land.
+  pub reasons_sent: AtomicU64,
   pub kicks: AtomicU64,
   pub drops: AtomicU64,
   pub afk_removals: AtomicU64,
@@ -37,89 +40,68 @@ pub struct Meters {
   pub seats_cleared: AtomicU64,
   /// Rejoins refused because the seat's owner was kicked rather than dropped.
   pub rejoins_refused: AtomicU64,
-  /// Ops accepted from a connection already told to go.
+  /// Ops accepted from a guest already told to go.
   pub ops_after_close: AtomicU64,
-  /// Ops the flooder's own connection refused to take.
-  pub flooder_shed: AtomicU64,
 }
 
-/// One connection's live numbers.
+/// One guest's book-keeping: the seat, and the flood window's baseline.
 #[derive(Debug)]
 pub struct Watch {
-  pub conn_id: ConnectionId,
   pub seat: Option<Seat>,
-  pub last_activity: tokio::time::Instant,
-  pub window_started: tokio::time::Instant,
-  pub ops_this_window: u64,
   pub griefer: bool,
+  window_started: tokio::time::Instant,
+  frames_at_window_start: u64,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Host {
-  watches: Mutex<HashMap<ConnectionId, Watch>>,
+  manager: Arc<ConnectionManager<u64>>,
+  watches: Mutex<HashMap<u64, Watch>>,
+  /// Partings this host ordered, awaiting the `Left` that confirms them. A
+  /// departure with no entry here is a netdrop.
+  pending: Mutex<HashMap<u64, Parting>>,
   /// Seats a dropped guest may return to, and when the grace expires.
   held: Mutex<HashMap<Seat, tokio::time::Instant>>,
   /// Seats whose owner was removed rather than dropped. A rejoin here is
-  /// refused, which is the ban memory `door_policy` owns, applied to a seat.
+  /// refused: the ban memory `door_policy` keeps per account, applied to a
+  /// seat.
   barred: Mutex<Vec<Seat>>,
-  keys: Mutex<HashMap<u64, ConnectionId>>,
-  pub meters: Arc<Meters>,
+  closed: Mutex<HashSet<u64>>,
+  pub meters: Meters,
 }
 
 impl Host {
-  pub fn new() -> Arc<Self> {
-    Arc::new(Self::default())
+  pub fn new(manager: Arc<ConnectionManager<u64>>) -> Arc<Self> {
+    Arc::new(Self {
+      manager,
+      watches: Default::default(),
+      pending: Default::default(),
+      held: Default::default(),
+      barred: Default::default(),
+      closed: Default::default(),
+      meters: Default::default(),
+    })
   }
 
-  pub fn bind_key(&self, key: u64, conn_id: ConnectionId) {
-    self.keys.lock().insert(key, conn_id);
+  pub fn manager(&self) -> &Arc<ConnectionManager<u64>> {
+    &self.manager
   }
 
-  pub fn unbind_key(&self, key: u64) {
-    self.keys.lock().remove(&key);
-  }
-
-  /// What `connections_of` would answer.
-  pub fn conn_of_key(&self, key: u64) -> Option<ConnectionId> {
-    self.keys.lock().get(&key).copied()
-  }
-
-  pub fn opened(&self, conn_id: ConnectionId, griefer: bool) {
-    let now = tokio::time::Instant::now();
+  pub fn opened(&self, key: u64) {
+    let volume = self.manager.agent_inbound(&key);
     self.watches.lock().insert(
-      conn_id,
+      key,
       Watch {
-        conn_id,
         seat: None,
-        last_activity: now,
-        window_started: now,
-        ops_this_window: 0,
-        griefer,
+        griefer: false,
+        window_started: tokio::time::Instant::now(),
+        frames_at_window_start: volume.frames,
       },
     );
   }
 
-  /// One store per inbound frame, which is all AFK needs.
-  ///
-  /// **Probes must not count.** A link that answers a ping is not a person at
-  /// the table, and counting it would make the timeout unreachable.
-  pub fn saw_activity(&self, conn_id: ConnectionId, ops: u64) -> bool {
-    let now = tokio::time::Instant::now();
-    let mut watches = self.watches.lock();
-    let Some(watch) = watches.get_mut(&conn_id) else {
-      return true;
-    };
-    watch.last_activity = now;
-    if now.duration_since(watch.window_started).as_millis() as u64 >= FLOOD_WINDOW_MS {
-      watch.window_started = now;
-      watch.ops_this_window = 0;
-    }
-    watch.ops_this_window += ops;
-    watch.ops_this_window <= FLOOD_OPS
-  }
-
-  pub fn seat_taken(&self, conn_id: ConnectionId, seat: Seat) {
-    if let Some(watch) = self.watches.lock().get_mut(&conn_id) {
+  pub fn seat_taken(&self, key: u64, seat: Seat) {
+    if let Some(watch) = self.watches.lock().get_mut(&key) {
       watch.seat = Some(seat);
     }
     self.held.lock().remove(&seat);
@@ -133,57 +115,68 @@ impl Host {
     true
   }
 
-  pub fn conn_of_seat(&self, seat: Seat) -> Option<ConnectionId> {
+  pub fn key_of_seat(&self, seat: Seat) -> Option<u64> {
     self
       .watches
       .lock()
-      .values()
-      .find(|w| w.seat == Some(seat))
-      .map(|w| w.conn_id)
+      .iter()
+      .find(|(_, w)| w.seat == Some(seat))
+      .map(|(key, _)| *key)
   }
 
-  pub fn seat_of(&self, conn_id: ConnectionId) -> Option<Seat> {
-    self.watches.lock().get(&conn_id).and_then(|w| w.seat)
+  pub fn seat_of(&self, key: u64) -> Option<Seat> {
+    self.watches.lock().get(&key).and_then(|w| w.seat)
   }
 
-  pub fn connections(&self) -> Vec<ConnectionId> {
-    self.watches.lock().keys().copied().collect()
-  }
-
-  /// Connections silent for longer than the timeout.
-  pub fn afk(&self, timeout: std::time::Duration) -> Vec<ConnectionId> {
-    let now = tokio::time::Instant::now();
+  pub fn seated_keys(&self) -> Vec<u64> {
     self
       .watches
       .lock()
-      .values()
-      .filter(|w| w.seat.is_some() && now.duration_since(w.last_activity) >= timeout)
-      .map(|w| w.conn_id)
+      .iter()
+      .filter(|(_, w)| w.seat.is_some())
+      .map(|(key, _)| *key)
       .collect()
   }
 
-  pub fn quiet_for(&self, conn_id: ConnectionId) -> u64 {
-    self
-      .watches
-      .lock()
-      .get(&conn_id)
-      .map(|w| tokio::time::Instant::now().duration_since(w.last_activity).as_millis() as u64)
-      .unwrap_or(0)
+  pub fn was_closed(&self, key: u64) -> bool {
+    self.closed.lock().contains(&key)
   }
 
-  pub fn ops_this_window(&self, conn_id: ConnectionId) -> u64 {
-    self.watches.lock().get(&conn_id).map(|w| w.ops_this_window).unwrap_or(0)
+  /// Ends a guest's session with the reason ahead of the close, and remembers
+  /// why so the `Left` that follows is not mistaken for a netdrop.
+  pub fn close(&self, key: u64, reason: Parting, detail: impl Into<String>) {
+    if !self.closed.lock().insert(key) {
+      return;
+    }
+    self.pending.lock().insert(key, reason);
+    let farewell = op_frame(PartyOp::Farewell {
+      reason,
+      detail: detail.into(),
+    });
+    if self.manager.deregister_agent(&key, Some(farewell)) > 0 {
+      self.meters.reasons_sent.fetch_add(1, Ordering::Relaxed);
+    }
   }
 
-  pub fn is_griefer(&self, conn_id: ConnectionId) -> bool {
-    self.watches.lock().get(&conn_id).map(|w| w.griefer).unwrap_or(false)
+  /// Ends the party: everyone told, then closed, through the same path.
+  pub fn drain(&self, reason: Parting) {
+    for key in self.watches.lock().keys() {
+      self.closed.lock().insert(*key);
+      self.pending.lock().insert(*key, reason);
+    }
+    let told = self.manager.disconnect_all(Some(op_frame(PartyOp::Farewell {
+      reason,
+      detail: reason.as_str().into(),
+    })));
+    self.meters.reasons_sent.fetch_add(told as u64, Ordering::Relaxed);
   }
 
-  /// Records how a connection ended, and decides what happens to its seat.
-  pub fn parted(&self, conn_id: ConnectionId, how: Parting, grace: std::time::Duration) {
-    let watch = self.watches.lock().remove(&conn_id);
-    let Some(watch) = watch else { return };
-
+  /// Applies a departure, deciding what happens to the seat.
+  ///
+  /// The reason is whatever this host recorded when it ordered the close;
+  /// nothing else knows one, so no entry means the network went away.
+  pub fn parted(&self, key: u64, grace: std::time::Duration) {
+    let how = self.pending.lock().remove(&key).unwrap_or(Parting::Dropped);
     match how {
       Parting::Dropped => self.meters.drops.fetch_add(1, Ordering::Relaxed),
       Parting::Kicked => self.meters.kicks.fetch_add(1, Ordering::Relaxed),
@@ -192,7 +185,8 @@ impl Host {
       Parting::Drained => self.meters.drained.fetch_add(1, Ordering::Relaxed),
     };
 
-    let Some(seat) = watch.seat else { return };
+    let watch = self.watches.lock().remove(&key);
+    let Some(seat) = watch.and_then(|w| w.seat) else { return };
     if how.keeps_the_seat() {
       // The seat stays warm. This is what `ReconnectTracker` is for, and the
       // reason a kick has to be told apart from a drop at all.
@@ -203,6 +197,46 @@ impl Host {
       self.barred.lock().push(seat);
       self.meters.seats_cleared.fetch_add(1, Ordering::Relaxed);
     }
+  }
+
+  /// Whether a guest's inbound rate has crossed the flood line, advancing its
+  /// window. The counters are the manager's; the window and the number are
+  /// this host's.
+  pub fn over_rate(&self, key: u64) -> bool {
+    let volume = self.manager.agent_inbound(&key);
+    let now = tokio::time::Instant::now();
+    let mut watches = self.watches.lock();
+    let Some(watch) = watches.get_mut(&key) else {
+      return false;
+    };
+    if now.duration_since(watch.window_started).as_millis() as u64 >= FLOOD_WINDOW_MS {
+      watch.window_started = now;
+      watch.frames_at_window_start = volume.frames;
+      return false;
+    }
+    volume.frames.saturating_sub(watch.frames_at_window_start) > FLOOD_OPS
+  }
+
+  pub fn quiet_for_ms(&self, key: u64) -> u64 {
+    self
+      .manager
+      .agent_idle_for(&key)
+      .map(|idle| idle.as_millis() as u64)
+      .unwrap_or(0)
+  }
+
+  pub fn ops_this_window(&self, key: u64) -> u64 {
+    let volume = self.manager.agent_inbound(&key);
+    self
+      .watches
+      .lock()
+      .get(&key)
+      .map(|w| volume.frames.saturating_sub(w.frames_at_window_start))
+      .unwrap_or(0)
+  }
+
+  pub fn is_griefer(&self, key: u64) -> bool {
+    self.watches.lock().get(&key).map(|w| w.griefer).unwrap_or(false)
   }
 
   pub fn held_seats(&self) -> Vec<(Seat, u64)> {
@@ -217,5 +251,26 @@ impl Host {
 
   pub fn is_held(&self, seat: Seat) -> bool {
     self.held.lock().contains_key(&seat)
+  }
+}
+
+/// Applies the timeouts the host set, from the manager's own readers.
+///
+/// The one timer in the example, and it is the application's: the session
+/// keeps the readings, the host owns the numbers and the sweep.
+pub async fn steward(host: Arc<Host>, afk: std::time::Duration) {
+  let mut ticker = tokio::time::interval(std::time::Duration::from_millis(200));
+  loop {
+    ticker.tick().await;
+    for key in host.seated_keys() {
+      if host.was_closed(key) {
+        continue;
+      }
+      if host.manager().agent_idle_for(&key).is_some_and(|idle| idle >= afk) {
+        host.close(key, Parting::Afk, Parting::Afk.as_str());
+      } else if host.over_rate(key) {
+        host.close(key, Parting::Flooding, Parting::Flooding.as_str());
+      }
+    }
   }
 }

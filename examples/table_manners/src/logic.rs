@@ -9,14 +9,9 @@ use plaza::{
   session::TargetedOp,
   state_logic::{LogicInput, LogicOutput, SnapshotRequest, StateLogic, StateLogicError},
 };
-use tokio::sync::mpsc;
 
-use crate::moderation::Host;
+use crate::moderation::{Host, GRACE};
 use crate::types::{Guest, Parting, PartyOp, Seat, Table, SEATS};
-
-/// A close the game asked for and cannot perform, for the reasons
-/// `door_policy` recorded.
-pub type CloseRequest = (plaza::session::ConnectionId, Parting, String);
 
 #[derive(Debug, Clone)]
 pub struct Player {
@@ -34,7 +29,6 @@ pub struct PartyState {
 #[derive(Debug)]
 pub struct PartyLogic {
   pub host: Arc<Host>,
-  pub closes: mpsc::UnboundedSender<CloseRequest>,
   /// Which agent key the host tools may be used from. A party has one host.
   pub host_key: parking_lot::Mutex<Option<u64>>,
 }
@@ -53,9 +47,14 @@ impl StateLogic<PartyOp, u64, PartyState> for PartyLogic {
         let Some(key) = source.id_cloned() else {
           return Ok(LogicOutput::none());
         };
-        let Some(conn_id) = self.doorman_conn(key) else {
+        if self.host.was_closed(key) {
+          self
+            .host
+            .meters
+            .ops_after_close
+            .fetch_add(ops.len() as u64, std::sync::atomic::Ordering::Relaxed);
           return Ok(LogicOutput::none());
-        };
+        }
 
         for op in ops {
           match op {
@@ -66,14 +65,10 @@ impl StateLogic<PartyOp, u64, PartyState> for PartyLogic {
               // A seat whose owner was removed is not available again. The ban
               // memory is the door's, applied to a seat rather than an account.
               if !self.host.may_sit(seat) {
-                let _ = self.closes.send((
-                  conn_id,
-                  Parting::Kicked,
-                  "that seat was taken away".into(),
-                ));
+                self.host.close(key, Parting::Kicked, "that seat was taken away");
                 continue;
               }
-              self.host.seat_taken(conn_id, seat);
+              self.host.seat_taken(key, seat);
               if self.host_key.lock().is_none() {
                 *self.host_key.lock() = Some(key);
               }
@@ -96,10 +91,8 @@ impl StateLogic<PartyOp, u64, PartyState> for PartyLogic {
               if *self.host_key.lock() != Some(key) {
                 continue;
               }
-              if let Some(target) = self.host.conn_of_seat(seat) {
-                let _ = self
-                  .closes
-                  .send((target, Parting::Kicked, Parting::Kicked.as_str().into()));
+              if let Some(target) = self.host.key_of_seat(seat) {
+                self.host.close(target, Parting::Kicked, Parting::Kicked.as_str());
               }
             }
             PartyOp::EndParty => {
@@ -114,8 +107,13 @@ impl StateLogic<PartyOp, u64, PartyState> for PartyLogic {
       }
       LogicInput::AgentLeft { agent_id } => {
         state.players.remove(&agent_id);
+        self.host.parted(agent_id, GRACE);
       }
-      LogicInput::AgentJoined { .. } => {}
+      LogicInput::AgentJoined { agent } => {
+        if let Some(key) = agent.id_cloned() {
+          self.host.opened(key);
+        }
+      }
       LogicInput::TimeStep { .. } => {}
     }
 
@@ -127,28 +125,17 @@ impl StateLogic<PartyOp, u64, PartyState> for PartyLogic {
   }
 }
 
-impl PartyLogic {
-  /// The agent-to-connection lookup again, kept by the host for want of one in
-  /// the library.
-  fn doorman_conn(&self, key: u64) -> Option<plaza::session::ConnectionId> {
-    self.host.conn_of_key(key)
-  }
-}
-
 impl PartyState {
   pub fn table(&self, host: &Host) -> Table {
     let mut guests: Vec<Guest> = self
       .players
-      .values()
-      .map(|p| {
-        let conn = host.conn_of_seat(p.seat);
-        Guest {
-          seat: p.seat,
-          said: p.said,
-          quiet_for_ms: conn.map(|c| host.quiet_for(c)).unwrap_or(0),
-          ops_this_window: conn.map(|c| host.ops_this_window(c)).unwrap_or(0),
-          griefer: conn.map(|c| host.is_griefer(c)).unwrap_or(false),
-        }
+      .iter()
+      .map(|(key, p)| Guest {
+        seat: p.seat,
+        said: p.said,
+        quiet_for_ms: host.quiet_for_ms(*key),
+        ops_this_window: host.ops_this_window(*key),
+        griefer: host.is_griefer(*key),
       })
       .collect();
     guests.sort_by_key(|g| g.seat);
