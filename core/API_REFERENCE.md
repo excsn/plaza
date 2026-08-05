@@ -216,7 +216,7 @@ pub trait Session<Op: Send + 'static, ID: AgentId>:
 ```
 
 *   **One consumer.** The two streams deliver each item to exactly one receiver: they are *taken*, not subscribed to, and taking one twice panics. A session feeds exactly one controller, which is already the architecture.
-*   **Membership is not on the trait.** Joins and leaves are transport-level facts the controller learns from the presence stream: a client joins by connecting, and a server-side disconnect is an inherent method on the transport that owns the connection (`InProcessSession::disconnect`, `ConnectionManager::deregister`).
+*   **Membership is not on the trait.** Joins and leaves are transport-level facts the controller learns from the presence stream: a client joins by connecting, and a server-side disconnect is an inherent method on the transport that owns the connection (`InProcessSession::disconnect`, `ConnectionManager::close_connection`).
 
 ### Enum `PresenceEvent<ID: AgentId>`
 

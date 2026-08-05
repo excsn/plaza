@@ -417,8 +417,8 @@ The fan-out uses `try_send` by default: a wedged client must not stall the contr
 Requires a tokio runtime; see §1.
 
 1.  `TransportSession::with_options(name, codec, options)`, and keep the `Arc`.
-2.  Per connection: `session_channel(manager.queues().outbound)`, `manager.register(agent, tx).await`, then `LinkDriver::new(&manager, conn_id, codec)`.
-3.  Run a loop over three things: a frame off your socket, a frame off the outbound queue, and `driver.deadline()`. Hand each to the driver and act on what it returns.
+2.  Per connection: `session_channel(manager.queues().outbound)`, `manager.register(agent, tx).await`, then `LinkDriver::new(&manager, conn_id, codec)` and `manager.take_orders(conn_id)`.
+3.  Run a loop over four things: a frame off your socket, a frame off the outbound queue, `driver.deadline()`, and the order stream. Hand the first three to the driver and act on what it returns; on `ConnectionOrder::Close`, flush (the conditioner's `drain()`, then the outbound queue's `try_recv`), write the farewell, close the socket, and exit the loop. The orders must be their own `select!` arm: the outbound arm is disabled once `deregister` drops the sender.
 4.  On exit, `manager.deregister(conn_id).await`.
 5.  Delegate the three `Session` methods to the inner `TransportSession`, and after `broadcast` call `disconnect_overflowed` with what it returned.
 
