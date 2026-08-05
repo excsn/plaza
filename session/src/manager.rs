@@ -753,6 +753,10 @@ impl<ID: AgentId> Registry<ID> {
     self.by_conn.values()
   }
 
+  fn handles_with_ids(&self) -> impl Iterator<Item = (ConnectionId, &ClientHandle<ID>)> {
+    self.by_conn.iter().map(|(conn_id, handle)| (*conn_id, handle))
+  }
+
   fn for_agent(&self, id: &ID) -> impl Iterator<Item = (ConnectionId, &ClientHandle<ID>)> {
     self
       .by_agent
@@ -1035,6 +1039,37 @@ impl<ID: AgentId> ConnectionManager<ID> {
       Some(handle) => handle.orders_tx.try_send(ConnectionOrder::Close { farewell }).is_ok(),
       None => false,
     }
+  }
+
+  /// Closes every connection an agent holds: [`connections_of`](Self::connections_of)
+  /// then [`close_connection`](Self::close_connection) on each. Returns how
+  /// many took the order.
+  pub fn deregister_agent(&self, id: &ID, farewell: Option<OutboundFrame>) -> usize {
+    self
+      .connections_of(id)
+      .into_iter()
+      .filter(|conn_id| self.close_connection(*conn_id, farewell.clone()))
+      .count()
+  }
+
+  /// Closes every live connection: everyone told, then closed. Returns how
+  /// many took the order.
+  ///
+  /// The same flush-then-farewell path as a single close, per connection, so a
+  /// drain differs from a kick only in who it names.
+  pub fn disconnect_all(&self, farewell: Option<OutboundFrame>) -> usize {
+    let connections = self.connections.read();
+    connections
+      .handles_with_ids()
+      .filter(|(_, handle)| {
+        handle
+          .orders_tx
+          .try_send(ConnectionOrder::Close {
+            farewell: farewell.clone(),
+          })
+          .is_ok()
+      })
+      .count()
   }
 
   /// Hands a connection's order stream to its transport task, once.

@@ -581,3 +581,87 @@ async fn deregister_alone_is_bookkeeping_not_a_close() {
     Ok(Some(Ok(_))) | Err(_) => {}
   }
 }
+
+#[tokio::test]
+async fn deregister_agent_closes_every_connection_the_agent_holds() {
+  let player_id = Uuid::new_v4();
+  let agent_factory: plaza_session::tcp::AgentFactory<PlayerId> =
+    Arc::new(move |_peer| Ok(Agent::new_human(player_id)));
+  let session: Arc<TcpPlazaSession<TestOp, PlayerId>> =
+    TcpPlazaSession::bind("127.0.0.1:0", agent_factory).await.expect("bind");
+  let presence = session.on_presence_change();
+
+  let first = TcpStream::connect(session.local_addr()).await.expect("connect");
+  let mut first = Framed::new(first, LengthDelimitedCodec::new());
+  let second = TcpStream::connect(session.local_addr()).await.expect("connect");
+  let mut second = Framed::new(second, LengthDelimitedCodec::new());
+  for _ in 0..2 {
+    with_timeout(presence.recv()).await.expect("join");
+  }
+  assert_eq!(session.manager().connections_of(&player_id).len(), 2);
+
+  let farewell = session
+    .encode_message(SessionMessage::system(vec![TestOp::Welcome("closing".into())]))
+    .expect("encode");
+  assert_eq!(session.manager().deregister_agent(&player_id, Some(farewell)), 2);
+
+  for client in [&mut first, &mut second] {
+    assert_eq!(
+      next_ops_frame(client).await.expect("farewell"),
+      vec![TestOp::Welcome("closing".into())]
+    );
+    loop {
+      match with_timeout(client.next()).await {
+        None | Some(Err(_)) => break,
+        Some(Ok(_)) => continue,
+      }
+    }
+  }
+  for _ in 0..2 {
+    match with_timeout(presence.recv()).await.expect("leave") {
+      PresenceEvent::Left { agent_id, .. } => assert_eq!(agent_id, player_id),
+      other => panic!("expected a leave, got {other:?}"),
+    }
+  }
+  assert!(session.manager().connections_of(&player_id).is_empty());
+}
+
+#[tokio::test]
+async fn disconnect_all_is_the_same_close_for_everyone() {
+  let agent_factory: plaza_session::tcp::AgentFactory<PlayerId> =
+    Arc::new(|_peer| Ok(Agent::new_human(Uuid::new_v4())));
+  let session: Arc<TcpPlazaSession<TestOp, PlayerId>> =
+    TcpPlazaSession::bind("127.0.0.1:0", agent_factory).await.expect("bind");
+  let presence = session.on_presence_change();
+
+  let mut clients = Vec::new();
+  for _ in 0..3 {
+    let stream = TcpStream::connect(session.local_addr()).await.expect("connect");
+    clients.push(Framed::new(stream, LengthDelimitedCodec::new()));
+    with_timeout(presence.recv()).await.expect("join");
+  }
+
+  let farewell = session
+    .encode_message(SessionMessage::system(vec![TestOp::Welcome("room closed".into())]))
+    .expect("encode");
+  assert_eq!(session.manager().disconnect_all(Some(farewell)), 3);
+
+  for client in &mut clients {
+    assert_eq!(
+      next_ops_frame(client).await.expect("farewell"),
+      vec![TestOp::Welcome("room closed".into())]
+    );
+    loop {
+      match with_timeout(client.next()).await {
+        None | Some(Err(_)) => break,
+        Some(Ok(_)) => continue,
+      }
+    }
+  }
+  with_patience(async {
+    while session.manager().connection_count() > 0 {
+      tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+  })
+  .await;
+}

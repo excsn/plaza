@@ -219,6 +219,8 @@ The connection task flushes what was queued, writes the farewell last, and close
 
 Which connection goes is policy, and it stays yours: a duplicate login can refuse the newcomer or kick the older session with the same two calls, and the library ships no default.
 
+`deregister_agent(&id, farewell)` closes every connection an agent holds, and `disconnect_all(farewell)` drains the room through the same path: everyone told, then closed. A drain differs from a kick only in who it names.
+
 ## Wire format
 
 Everything is encoded through `WireCodec`. `JsonCodec` is the default: readable from a browser console or `websocat`. Supply your own for MessagePack or bincode:
