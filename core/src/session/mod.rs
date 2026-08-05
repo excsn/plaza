@@ -45,10 +45,15 @@ pub fn session_channel<T: Send>(capacity: usize) -> (SessionSender<T>, SessionRe
 /// One stream rather than two, because the order between them matters: a client
 /// that drops and immediately reconnects must not have its departure applied
 /// after its return. Separate channels give no ordering guarantee.
+///
+/// Carries the connection as well as the agent: an agent may hold several
+/// connections, and acting on one (a close, a per-connection reader) needs the
+/// id of the connection the event was about, which nothing downstream can
+/// recover on its own.
 #[derive(Debug, Clone)]
 pub enum PresenceEvent<ID: AgentId> {
-  Joined(Agent<ID>),
-  Left(ID),
+  Joined { agent: Agent<ID>, conn_id: ConnectionId },
+  Left { agent_id: ID, conn_id: ConnectionId },
 }
 
 /// Who should receive a message.

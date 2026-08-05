@@ -89,7 +89,7 @@ async fn tcp_client_op_reaches_controller_and_broadcast_reaches_client() {
 
   // The join fires as soon as the connection is registered.
   match with_timeout(presence.recv()).await.expect("presence event") {
-    PresenceEvent::Joined(agent) => assert_eq!(agent.id(), Some(&player_id)),
+    PresenceEvent::Joined { agent, .. } => assert_eq!(agent.id(), Some(&player_id)),
     other => panic!("expected a join, got {:?}", other),
   }
 
@@ -460,4 +460,124 @@ async fn a_refused_socket_hears_the_farewell_and_registers_nothing() {
   );
   assert_eq!(session.manager().connection_count(), 1, "nothing was registered for it");
   assert_eq!(session.manager().stats().refused(), 1);
+}
+
+/// Reads frames until an `Ops` frame arrives, skipping probes.
+async fn next_ops_frame(
+  client: &mut Framed<TcpStream, LengthDelimitedCodec>,
+) -> Option<Vec<TestOp>> {
+  loop {
+    let frame = with_timeout(client.next()).await?.ok()?;
+    let (tag, body) = plaza_wire::frame::split(&frame)?;
+    if plaza_wire::frame::Kind::from_byte(tag) == Some(plaza_wire::frame::Kind::Ops) {
+      return JsonCodec.decode(body).ok();
+    }
+  }
+}
+
+#[tokio::test]
+async fn a_close_delivers_the_farewell_then_ends_the_session() {
+  let player_id = Uuid::new_v4();
+  let agent_factory: plaza_session::tcp::AgentFactory<PlayerId> =
+    Arc::new(move |_peer| Ok(Agent::new_human(player_id)));
+  let session: Arc<TcpPlazaSession<TestOp, PlayerId>> =
+    TcpPlazaSession::bind("127.0.0.1:0", agent_factory).await.expect("bind");
+  let presence = session.on_presence_change();
+
+  let stream = TcpStream::connect(session.local_addr()).await.expect("connect");
+  let mut client = Framed::new(stream, LengthDelimitedCodec::new());
+
+  let conn_id = match with_timeout(presence.recv()).await.expect("presence") {
+    PresenceEvent::Joined { agent, conn_id } => {
+      assert_eq!(agent.id(), Some(&player_id));
+      conn_id
+    }
+    other => panic!("expected a join, got {other:?}"),
+  };
+  assert_eq!(
+    session.manager().connections_of(&player_id),
+    vec![conn_id],
+    "the id on the event is the one the registry resolves"
+  );
+
+  let farewell = session
+    .encode_message(SessionMessage::system(vec![TestOp::Welcome("removed by the host".into())]))
+    .expect("encode farewell");
+  assert!(session.manager().close_connection(conn_id, Some(farewell)));
+
+  let heard = next_ops_frame(&mut client).await.expect("the farewell");
+  assert_eq!(heard, vec![TestOp::Welcome("removed by the host".into())]);
+  loop {
+    match with_timeout(client.next()).await {
+      None => break,
+      Some(Err(_)) => break,
+      Some(Ok(_)) => continue,
+    }
+  }
+
+  match with_timeout(presence.recv()).await.expect("presence") {
+    PresenceEvent::Left { agent_id, conn_id: left } => {
+      assert_eq!(agent_id, player_id);
+      assert_eq!(left, conn_id, "the departure names the connection that closed");
+    }
+    other => panic!("expected a leave, got {other:?}"),
+  }
+  assert!(session.manager().connections_of(&player_id).is_empty());
+  assert!(
+    !session.manager().close_connection(conn_id, None),
+    "a second close finds nobody to order"
+  );
+}
+
+#[tokio::test]
+async fn a_silent_close_still_closes() {
+  let player_id = Uuid::new_v4();
+  let agent_factory: plaza_session::tcp::AgentFactory<PlayerId> =
+    Arc::new(move |_peer| Ok(Agent::new_human(player_id)));
+  let session: Arc<TcpPlazaSession<TestOp, PlayerId>> =
+    TcpPlazaSession::bind("127.0.0.1:0", agent_factory).await.expect("bind");
+  let presence = session.on_presence_change();
+
+  let stream = TcpStream::connect(session.local_addr()).await.expect("connect");
+  let mut client = Framed::new(stream, LengthDelimitedCodec::new());
+  let conn_id = match with_timeout(presence.recv()).await.expect("presence") {
+    PresenceEvent::Joined { conn_id, .. } => conn_id,
+    other => panic!("expected a join, got {other:?}"),
+  };
+
+  assert!(session.manager().close_connection(conn_id, None));
+  loop {
+    match with_timeout(client.next()).await {
+      None | Some(Err(_)) => break,
+      Some(Ok(_)) => continue,
+    }
+  }
+  assert_eq!(session.manager().connection_count(), 0);
+}
+
+#[tokio::test]
+async fn deregister_alone_is_bookkeeping_not_a_close() {
+  let player_id = Uuid::new_v4();
+  let agent_factory: plaza_session::tcp::AgentFactory<PlayerId> =
+    Arc::new(move |_peer| Ok(Agent::new_human(player_id)));
+  let session: Arc<TcpPlazaSession<TestOp, PlayerId>> =
+    TcpPlazaSession::bind("127.0.0.1:0", agent_factory).await.expect("bind");
+  let presence = session.on_presence_change();
+
+  let stream = TcpStream::connect(session.local_addr()).await.expect("connect");
+  let mut client = Framed::new(stream, LengthDelimitedCodec::new());
+  let conn_id = match with_timeout(presence.recv()).await.expect("presence") {
+    PresenceEvent::Joined { conn_id, .. } => conn_id,
+    other => panic!("expected a join, got {other:?}"),
+  };
+
+  session.manager().deregister(conn_id).await;
+  assert_eq!(session.manager().connection_count(), 0, "the registry forgot it");
+
+  // The socket is still the task's: it keeps probing, so the client hears
+  // frames rather than an EOF.
+  match tokio::time::timeout(Duration::from_millis(500), client.next()).await {
+    Ok(None) | Ok(Some(Err(_))) => panic!("deregister must not close the socket"),
+    Ok(Some(Ok(_))) | Err(_) => {}
+  }
 }

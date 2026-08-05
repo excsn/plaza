@@ -423,12 +423,12 @@ where
         // Arrivals and departures, in the order the session saw them.
         Ok(presence) = session_presence_rx.recv() => {
           match presence {
-            PresenceEvent::Joined(agent) => {
-              debug!(agent = %agent, "Agent joined session");
+            PresenceEvent::Joined { agent, conn_id } => {
+              debug!(agent = %agent, conn_id, "Agent joined session");
               self.handle_agent_joined_event(&agent).await;
             }
-            PresenceEvent::Left(agent_id) => {
-              debug!(?agent_id, "Agent left session");
+            PresenceEvent::Left { agent_id, conn_id } => {
+              debug!(?agent_id, conn_id, "Agent left session");
               self.handle_agent_left_event(&agent_id).await;
             }
           }

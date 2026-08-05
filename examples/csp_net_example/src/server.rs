@@ -291,7 +291,7 @@ impl DummyServerSession {
     info!(player_id = %player_id, conn_id = %conn_id, "DummySession: client connected.");
 
     // StateController picks this up and sends the joining agent a snapshot.
-    if self.presence_tx.try_send(PresenceEvent::Joined(agent)).is_err() {
+    if self.presence_tx.try_send(PresenceEvent::Joined { agent, conn_id }).is_err() {
       warn!("DummySession: No subscribers for agent_joined (StateController might not be ready).");
     }
     Ok((conn_id, from_server_rx))

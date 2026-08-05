@@ -202,6 +202,23 @@ Two other things it guarantees, each of which an application queue had to rememb
 - **Order is preserved.** Release times are made monotone as frames are queued, so a delayed frame holds up everything behind it and a jitter spike arrives as a stall then a burst. That head-of-line blocking is also what makes one retransmission cost more than the frame that paid for it.
 - **Everything crosses it.** Including the link-plane probe, which is why `agent_link_rtt` moves when you drag a latency slider and `agent_rtt` does not.
 
+## Ending a session
+
+A departure the server initiates goes through `close_connection`:
+
+```rust,ignore
+let farewell = session.encode_message(SessionMessage::system(vec![Op::Kicked { why }]))?;
+for conn_id in session.manager().connections_of(&player) {
+  session.manager().close_connection(conn_id, Some(farewell.clone()));
+}
+```
+
+The connection task flushes what was queued, writes the farewell last, and closes the socket; the departure then arrives on the presence stream as an ordinary `Left`, so game logic keeps one disconnect story whether the cable was pulled or the host said go. The farewell is an op of your own vocabulary, not a transport code: "removed by the host" and "away from the table" are application words, and neither transport has (or needs) a close vocabulary of its own.
+
+`deregister` is not a close. It removes the connection from the registry and nothing else; the socket belongs to the connection task, and only an order through `close_connection` reaches it. `PresenceEvent` carries the `conn_id` at join and leave, and `connections_of(&id)` resolves an agent to its live connections, so a rule that decides "this one goes" always has a handle to act on.
+
+Which connection goes is policy, and it stays yours: a duplicate login can refuse the newcomer or kick the older session with the same two calls, and the library ships no default.
+
 ## Wire format
 
 Everything is encoded through `WireCodec`. `JsonCodec` is the default: readable from a browser console or `websocat`. Supply your own for MessagePack or bincode:

@@ -970,7 +970,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
       .insert(conn_id, ClientHandle::new(agent.clone(), to_client_tx));
     debug!(transport = self.transport, conn_id, agent = %agent, "Connection registered.");
 
-    if !self.announce(PresenceEvent::Joined(agent)).await {
+    if !self.announce(PresenceEvent::Joined { agent, conn_id }).await {
       warn!(
         transport = self.transport,
         conn_id,
@@ -1006,6 +1006,21 @@ impl<ID: AgentId> ConnectionManager<ID> {
   /// socket and calls this itself.
   pub async fn deregister(&self, conn_id: ConnectionId) {
     self.remove(conn_id, true).await
+  }
+
+  /// The live connections an agent holds, newest last. Empty for an agent with
+  /// none, which includes one that just left.
+  ///
+  /// The bridge between "I know who" and "I can act": a decoded op names an
+  /// agent, and a close, a deadline, or a per-connection reader needs a
+  /// connection.
+  pub fn connections_of(&self, id: &ID) -> Vec<ConnectionId> {
+    self
+      .connections
+      .read()
+      .for_agent(id)
+      .map(|(conn_id, _)| conn_id)
+      .collect()
   }
 
   /// Orders a connection's task to flush what is queued, write the farewell if
@@ -1048,7 +1063,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
       Some(handle) => {
         debug!(transport = self.transport, conn_id, agent = %handle.agent, "Connection deregistered.");
         if let Some(id) = handle.agent.id_cloned() {
-          let event = PresenceEvent::Left(id);
+          let event = PresenceEvent::Left { agent_id: id, conn_id };
           let announced = if may_wait {
             self.announce(event).await
           } else {

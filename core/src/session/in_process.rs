@@ -109,7 +109,7 @@ where
     );
     debug!(conn_id, agent = %agent, "Client connected to in-process session.");
 
-    if self.presence_tx.send(PresenceEvent::Joined(agent)).await.is_err() {
+    if self.presence_tx.send(PresenceEvent::Joined { agent, conn_id }).await.is_err() {
       warn!("No controller is consuming presence events; snapshot will not be sent.");
     }
     Ok((conn_id, inbox))
@@ -120,7 +120,13 @@ where
   pub async fn disconnect(&self, agent_id: &ID, conn_id: ConnectionId) {
     self.clients.lock().remove(&conn_id);
     debug!(conn_id, ?agent_id, "Client left in-process session.");
-    let _ = self.presence_tx.send(PresenceEvent::Left(agent_id.clone())).await;
+    let _ = self
+      .presence_tx
+      .send(PresenceEvent::Left {
+        agent_id: agent_id.clone(),
+        conn_id,
+      })
+      .await;
   }
 
   /// Sends ops to the server as if `from` were a connected client.

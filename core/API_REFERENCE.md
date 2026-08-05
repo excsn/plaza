@@ -220,9 +220,11 @@ pub trait Session<Op: Send + 'static, ID: AgentId>:
 
 ### Enum `PresenceEvent<ID: AgentId>`
 
-`Joined(Agent<ID>)` | `Left(ID)`.
+`Joined { agent: Agent<ID>, conn_id: ConnectionId }` | `Left { agent_id: ID, conn_id: ConnectionId }`.
 
 One stream rather than two **because order between them matters**: separate channels let a leave overtake the join that preceded it, which breaks reconnection.
+
+The connection rides along with the agent because an agent may hold several at once, and acting on one (a close, a per-connection reader, a duplicate-login rule) needs the id of the connection the event was about. Nothing downstream can recover it: without this field an application cannot build an agent-to-connection index from public events at all.
 
 ### Enum `MessageTarget<ID: AgentId>`
 
