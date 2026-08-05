@@ -36,6 +36,7 @@ pub struct TransportStats {
   outbound: AtomicU64,
   outbound_dropped: AtomicU64,
   presence_dropped: AtomicU64,
+  refused: AtomicU64,
 }
 
 impl TransportStats {
@@ -79,6 +80,16 @@ impl TransportStats {
   /// one of the three where a single drop is a correctness problem.
   pub fn presence_dropped(&self) -> u64 {
     self.presence_dropped.load(Ordering::Relaxed)
+  }
+
+  /// Connections turned away at the door, before anything was registered,
+  /// announced, or encoded for them.
+  pub fn refused(&self) -> u64 {
+    self.refused.load(Ordering::Relaxed)
+  }
+
+  pub(crate) fn record_refused(&self) {
+    self.refused.fetch_add(1, Ordering::Relaxed);
   }
 
   pub(crate) fn record_inbound(&self, dropped: bool) {

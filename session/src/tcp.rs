@@ -31,8 +31,33 @@ use crate::manager::{ConnectionManager, OutboundFrame, SessionOptions, Transport
 
 const TRANSPORT: &str = "tcp";
 
-/// Builds the `Agent` for a newly accepted connection.
-pub type AgentFactory<ID> = Arc<dyn Fn(SocketAddr) -> Agent<ID> + Send + Sync>;
+/// Builds the `Agent` for a newly accepted connection, or turns it away.
+///
+/// A refusal happens before `register`: nothing is allocated, announced, or
+/// snapshotted for the socket. The only rules that can fire here are ones
+/// keyed on what a socket shows; anything keyed on identity has to wait for
+/// an op that carries it.
+pub type AgentFactory<ID> = Arc<dyn Fn(SocketAddr) -> Result<Agent<ID>, Refusal> + Send + Sync>;
+
+/// Turned away at the door.
+///
+/// The farewell is bytes the application already encoded; the transport does
+/// not know or care what reason they spell.
+pub struct Refusal {
+  pub farewell: Option<OutboundFrame>,
+}
+
+impl Refusal {
+  pub fn silent() -> Self {
+    Self { farewell: None }
+  }
+
+  pub fn saying(farewell: OutboundFrame) -> Self {
+    Self {
+      farewell: Some(farewell),
+    }
+  }
+}
 
 /// A Plaza `Session` served over length-delimited TCP.
 ///
@@ -158,16 +183,33 @@ async fn accept_loop<ID: AgentId, C: WireCodec>(
 ) {
   loop {
     match listener.accept().await {
-      Ok((stream, peer)) => {
-        let agent = agent_factory(peer);
-        debug!(transport = TRANSPORT, %peer, agent = %agent, "Accepted connection.");
-        tokio::spawn(connection_task::<ID, C>(
-          stream,
-          agent,
-          manager.clone(),
-          codec.clone(),
-        ));
-      }
+      Ok((stream, peer)) => match agent_factory(peer) {
+        Ok(agent) => {
+          debug!(transport = TRANSPORT, %peer, agent = %agent, "Accepted connection.");
+          tokio::spawn(connection_task::<ID, C>(
+            stream,
+            agent,
+            manager.clone(),
+            codec.clone(),
+          ));
+        }
+        Err(refusal) => {
+          manager.stats().record_refused();
+          debug!(transport = TRANSPORT, %peer, "Refused at the door.");
+          if let Some(farewell) = refusal.farewell {
+            let max_frame_bytes = manager.limits().max_frame_bytes;
+            tokio::spawn(async move {
+              let mut framed = Framed::new(
+                stream,
+                LengthDelimitedCodec::builder()
+                  .max_frame_length(max_frame_bytes)
+                  .new_codec(),
+              );
+              let _ = framed.send(farewell.into_bytes()).await;
+            });
+          }
+        }
+      },
       Err(e) => {
         error!(transport = TRANSPORT, error = %e, "Accept failed; listener stopping.");
         return;

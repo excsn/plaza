@@ -55,11 +55,13 @@ async fn ws_route(
 ```rust,ignore
 let session = TcpPlazaSession::<Op, PlayerId>::bind(
   "127.0.0.1:9000",
-  Arc::new(|peer| Agent::new_human(id_for(peer))),
+  Arc::new(|peer| Ok(Agent::new_human(id_for(peer)))),
 ).await?;
 ```
 
 Binding happens before the accept loop starts, so a port already in use surfaces as an error rather than killing a detached task.
+
+The factory can also say no: return `Err(Refusal)` and the socket is turned away before anything is registered or announced, optionally after one pre-encoded farewell frame. Only rules keyed on what a socket shows (a per-address cap) can fire here; a ban keyed on an account has to wait for the op that names it.
 
 ## A tokio runtime is required
 

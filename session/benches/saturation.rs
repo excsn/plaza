@@ -112,7 +112,7 @@ fn ops_frame() -> Vec<u8> {
 async fn bind(options: SessionOptions) -> Arc<TcpPlazaSession<Op, Seat>> {
   let next_seat = Arc::new(AtomicU32::new(1));
   let agent_factory: plaza_session::tcp::AgentFactory<Seat> = Arc::new(move |_peer| {
-    Agent::new_human(next_seat.fetch_add(1, Ordering::Relaxed))
+    Ok(Agent::new_human(next_seat.fetch_add(1, Ordering::Relaxed)))
   });
   TcpPlazaSession::bind_with_options("127.0.0.1:0", agent_factory, JsonCodec, options)
     .await

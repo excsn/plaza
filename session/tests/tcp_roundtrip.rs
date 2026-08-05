@@ -70,7 +70,7 @@ async fn registered(session: &TcpPlazaSession<TestOp, PlayerId>) {
 async fn tcp_client_op_reaches_controller_and_broadcast_reaches_client() {
   let player_id = Uuid::new_v4();
   let agent_factory: plaza_session::tcp::AgentFactory<PlayerId> =
-    Arc::new(move |_peer| Agent::new_human(player_id));
+    Arc::new(move |_peer| Ok(Agent::new_human(player_id)));
 
   let session: Arc<TcpPlazaSession<TestOp, PlayerId>> =
     TcpPlazaSession::bind("127.0.0.1:0", agent_factory)
@@ -158,7 +158,7 @@ async fn a_tcp_connection_measures_a_round_trip_it_has_no_ping_frame_for() {
   // None here.
   let player_id = Uuid::new_v4();
   let agent_factory: plaza_session::tcp::AgentFactory<PlayerId> =
-    Arc::new(move |_peer| Agent::new_human(player_id));
+    Arc::new(move |_peer| Ok(Agent::new_human(player_id)));
 
   let session: Arc<TcpPlazaSession<TestOp, PlayerId>> =
     TcpPlazaSession::bind("127.0.0.1:0", agent_factory)
@@ -184,7 +184,7 @@ async fn an_impaired_link_delays_every_frame_including_the_probe() {
   // the probe would not be in the queue.
   let player_id = Uuid::new_v4();
   let agent_factory: plaza_session::tcp::AgentFactory<PlayerId> =
-    Arc::new(move |_peer| Agent::new_human(player_id));
+    Arc::new(move |_peer| Ok(Agent::new_human(player_id)));
 
   let session: Arc<TcpPlazaSession<TestOp, PlayerId>> =
     TcpPlazaSession::bind("127.0.0.1:0", agent_factory)
@@ -218,7 +218,7 @@ async fn a_probe_never_delays_what_the_application_sent() {
   // is that inserting them does not disturb what the application queued.
   let player_id = Uuid::new_v4();
   let agent_factory: plaza_session::tcp::AgentFactory<PlayerId> =
-    Arc::new(move |_peer| Agent::new_human(player_id));
+    Arc::new(move |_peer| Ok(Agent::new_human(player_id)));
 
   let session: Arc<TcpPlazaSession<TestOp, PlayerId>> =
     TcpPlazaSession::bind("127.0.0.1:0", agent_factory)
@@ -258,7 +258,7 @@ async fn a_probe_never_delays_what_the_application_sent() {
 #[tokio::test]
 async fn bind_failure_is_reported_to_the_caller() {
   let agent_factory: plaza_session::tcp::AgentFactory<PlayerId> =
-    Arc::new(|_peer| Agent::new_human(Uuid::new_v4()));
+    Arc::new(|_peer| Ok(Agent::new_human(Uuid::new_v4())));
 
   let first: Arc<TcpPlazaSession<TestOp, PlayerId>> =
     TcpPlazaSession::bind("127.0.0.1:0", agent_factory.clone())
@@ -280,7 +280,7 @@ async fn a_hello_is_dispatched_as_a_version_and_an_unknown_kind_is_skipped() {
   // kind later breaks every deployed client.
   let player_id = Uuid::new_v4();
   let agent_factory: plaza_session::tcp::AgentFactory<PlayerId> =
-    Arc::new(move |_peer| Agent::new_human(player_id));
+    Arc::new(move |_peer| Ok(Agent::new_human(player_id)));
 
   let session: Arc<TcpPlazaSession<TestOp, PlayerId>> =
     TcpPlazaSession::bind_with_protocol("127.0.0.1:0", agent_factory, JsonCodec, ProtocolVersion(42))
@@ -339,7 +339,7 @@ async fn a_disagreeing_client_is_reported_and_left_connected() {
   // reload is the application's, and this is where it reads it.
   let player_id = Uuid::new_v4();
   let agent_factory: plaza_session::tcp::AgentFactory<PlayerId> =
-    Arc::new(move |_peer| Agent::new_human(player_id));
+    Arc::new(move |_peer| Ok(Agent::new_human(player_id)));
 
   let session: Arc<TcpPlazaSession<TestOp, PlayerId>> =
     TcpPlazaSession::bind_with_protocol("127.0.0.1:0", agent_factory, JsonCodec, ProtocolVersion(42))
@@ -391,7 +391,7 @@ async fn a_link_slower_than_the_probe_interval_is_still_measured() {
     // at exactly the latencies worth measuring.
   let player_id = Uuid::new_v4();
   let agent_factory: plaza_session::tcp::AgentFactory<PlayerId> =
-    Arc::new(move |_peer| Agent::new_human(player_id));
+    Arc::new(move |_peer| Ok(Agent::new_human(player_id)));
 
   let session: Arc<TcpPlazaSession<TestOp, PlayerId>> =
     TcpPlazaSession::bind("127.0.0.1:0", agent_factory).await.expect("bind");
@@ -411,4 +411,53 @@ async fn a_link_slower_than_the_probe_interval_is_still_measured() {
   answer_probes(&mut client, 6).await;
   let (rtt, _) = measured(&session, &player_id).await;
   assert!(rtt >= one_way * 2, "a 200ms link measures 200ms, not nothing: {rtt:?}");
+}
+
+#[tokio::test]
+async fn a_refused_socket_hears_the_farewell_and_registers_nothing() {
+  let admitted = Uuid::new_v4();
+  let codec = JsonCodec;
+  let mut farewell = Vec::new();
+  plaza_wire::frame::begin(plaza_wire::frame::Kind::Ops, &mut farewell);
+  codec
+    .encode_into(&vec![TestOp::Welcome("full".into())], &mut farewell)
+    .unwrap();
+  let farewell = plaza_session::Frame::from(farewell);
+
+  let admissions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+  let agent_factory: plaza_session::tcp::AgentFactory<PlayerId> = {
+    let admissions = admissions.clone();
+    Arc::new(move |_peer| {
+      if admissions.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+        Ok(Agent::new_human(admitted))
+      } else {
+        Err(plaza_session::tcp::Refusal::saying(farewell.clone()))
+      }
+    })
+  };
+
+  let session: Arc<TcpPlazaSession<TestOp, PlayerId>> =
+    TcpPlazaSession::bind("127.0.0.1:0", agent_factory).await.expect("bind");
+  let addr = session.local_addr();
+  let _presence = session.on_presence_change();
+
+  let first = TcpStream::connect(addr).await.expect("connect");
+  let _first = Framed::new(first, LengthDelimitedCodec::new());
+  registered(&session).await;
+
+  let second = TcpStream::connect(addr).await.expect("connect");
+  let mut second = Framed::new(second, LengthDelimitedCodec::new());
+
+  let frame = with_timeout(second.next()).await.expect("a farewell").expect("frame ok");
+  let (tag, body) = plaza_wire::frame::split(&frame).expect("a non-empty frame");
+  assert_eq!(plaza_wire::frame::Kind::from_byte(tag), Some(plaza_wire::frame::Kind::Ops));
+  let ops: Vec<TestOp> = codec.decode(body).expect("decode farewell");
+  assert_eq!(ops, vec![TestOp::Welcome("full".into())]);
+
+  assert!(
+    with_timeout(second.next()).await.is_none(),
+    "the refused socket closes after the farewell"
+  );
+  assert_eq!(session.manager().connection_count(), 1, "nothing was registered for it");
+  assert_eq!(session.manager().stats().refused(), 1);
 }

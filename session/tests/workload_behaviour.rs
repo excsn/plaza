@@ -29,7 +29,7 @@ struct Op(String);
 async fn bind(workload: &Workload) -> Arc<TcpPlazaSession<Op, Seat>> {
   let next_seat = Arc::new(AtomicU32::new(1));
   let agent_factory: plaza_session::tcp::AgentFactory<Seat> =
-    Arc::new(move |_peer| Agent::new_human(next_seat.fetch_add(1, Ordering::Relaxed)));
+    Arc::new(move |_peer| Ok(Agent::new_human(next_seat.fetch_add(1, Ordering::Relaxed))));
   TcpPlazaSession::bind_with_options(
     "127.0.0.1:0",
     agent_factory,
@@ -152,7 +152,7 @@ async fn probing_can_be_turned_off_and_is_on_otherwise() {
   for (probes, want_measured) in [(Probes::default(), true), (Probes::off(), false)] {
     let next_seat = Arc::new(AtomicU32::new(1));
     let agent_factory: plaza_session::tcp::AgentFactory<Seat> =
-      Arc::new(move |_peer| Agent::new_human(next_seat.fetch_add(1, Ordering::Relaxed)));
+      Arc::new(move |_peer| Ok(Agent::new_human(next_seat.fetch_add(1, Ordering::Relaxed))));
     let session: Arc<TcpPlazaSession<Op, Seat>> = TcpPlazaSession::bind_with_options(
       "127.0.0.1:0",
       agent_factory,

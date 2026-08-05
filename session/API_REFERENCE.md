@@ -325,10 +325,19 @@ Binding happens **before** the accept loop is spawned, so an address already in 
 ### Type Alias `AgentFactory<ID>`
 
 ```rust,ignore
-pub type AgentFactory<ID> = Arc<dyn Fn(SocketAddr) -> Agent<ID> + Send + Sync>;
+pub type AgentFactory<ID> = Arc<dyn Fn(SocketAddr) -> Result<Agent<ID>, Refusal> + Send + Sync>;
 ```
 
-Builds the `Agent` for each accepted connection. For reconnection support, derive a stable ID here rather than generating a fresh one per connection.
+Builds the `Agent` for each accepted connection, or turns the socket away. For reconnection support, derive a stable ID here rather than generating a fresh one per connection.
+
+A refusal happens **before** `register`: nothing is allocated, announced, or snapshotted for the socket, and no presence event fires. The only rules that can be judged here are ones keyed on what a socket shows (its address); a rule keyed on identity has to wait for an op that carries it, which means accepting first. The WS transport needs no equivalent because the application owns the HTTP route and can refuse before calling `handle_connection`.
+
+### Struct `Refusal`
+
+*   **`farewell: Option<Frame>`**: bytes to write before the socket closes, already encoded; the transport does not know what reason they spell. Encode an op of your own vocabulary with [`TransportSession::encode_message`](#struct-transportsessionop-id-c) or by hand.
+*   **`silent()`** / **`saying(farewell: Frame)`**: constructors.
+
+Each refusal is counted on [`TransportStats::refused`](#struct-transportstats).
 
 ## 7. Module `host` (feature `actix_host`)
 
@@ -374,7 +383,7 @@ This is deliberately measurement only. What to do with it, admit, refuse, route 
 
 Live counters for one transport, from `ActixWsPlazaSession::stats` or `ConnectionManager::stats`.
 
-*   **`inbound()`** / **`inbound_dropped()`**, **`outbound()`** / **`outbound_dropped()`**, **`presence_dropped()`**.
+*   **`inbound()`** / **`inbound_dropped()`**, **`outbound()`** / **`outbound_dropped()`**, **`presence_dropped()`**, **`refused()`**.
 
 The fan-out uses `try_send` by default: a wedged client must not stall the controller. The drop used to be announced only with `warn!`, which a human reads afterwards and a server cannot read at all, so the events are countable and an application can shed load deliberately instead of degrading quietly. What the default does when a queue fills is now [`Overflow`](#struct-overflow)'s to say, and the counters read the same whichever arm is chosen.
 
