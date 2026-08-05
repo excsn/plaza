@@ -187,4 +187,9 @@ pub enum RoomOp {
   Rejected {
     reason: String,
   },
+  /// The arena is closing and this connection is about to be; the reason rides
+  /// ahead of the close.
+  Closed {
+    reason: String,
+  },
 }

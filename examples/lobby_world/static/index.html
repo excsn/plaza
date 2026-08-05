@@ -362,6 +362,8 @@ function handleArenaOp(op) {
     }
   } else if (op.Rejected) {
     log('rejected: ' + op.Rejected.reason, 'warn');
+  } else if (op.Closed) {
+    log('arena closed: ' + op.Closed.reason, 'warn');
   }
 }
 

@@ -37,6 +37,10 @@ const BIND: &str = "127.0.0.1:8090";
 /// Keeps the socket registry from outliving the lobby's own room map.
 const REAP_EVERY: Duration = Duration::from_secs(15);
 
+/// How long a dynamic room may carry no traffic before the reaper drains it.
+/// The pre-spawned arenas are the fixed offering and are never reaped.
+const ROOM_IDLE_AFTER: Duration = Duration::from_secs(45);
+
 /// Only the match queue needs the lobby to advance time, and it measures its
 /// patience in seconds.
 const LOBBY_TICK_HZ: u32 = 4;
@@ -180,12 +184,52 @@ async fn main() -> std::io::Result<()> {
     let rooms = rooms.clone();
     let tickets_for_sweep = tickets.clone();
     let wallets_for_sweep = wallets.clone();
+    let fixed_arenas: std::collections::HashSet<_> = manager.rooms().iter().map(|h| h.id()).collect();
     tokio::spawn(async move {
       let mut ticker = tokio::time::interval(REAP_EVERY);
+      let mut quiet: std::collections::HashMap<_, (u64, tokio::time::Instant)> = std::collections::HashMap::new();
       loop {
         ticker.tick().await;
+
+        // The reaper's other half: a dynamic room that has carried no traffic
+        // for a while is drained through the same flush-then-farewell close as
+        // a kick, then told to shut down; the reap below collects the finished
+        // handle on a later pass. Occupants hear `Closed` before the socket
+        // goes, never a silent EOF.
+        let now = tokio::time::Instant::now();
+        for handle in manager.rooms() {
+          let id = handle.id();
+          if fixed_arenas.contains(&id) {
+            continue;
+          }
+          let Some(entry) = rooms.get(&id) else { continue };
+          let inbound = entry.session.stats().inbound();
+          let (last_inbound, since) = quiet.entry(id).or_insert((inbound, now));
+          if inbound != *last_inbound {
+            (*last_inbound, *since) = (inbound, now);
+            continue;
+          }
+          if now.duration_since(*since) < ROOM_IDLE_AFTER {
+            continue;
+          }
+          let farewell = entry
+            .session
+            .encode_message(plaza::session::SessionMessage::system(vec![types::RoomOp::Closed {
+              reason: "closed for inactivity".into(),
+            }]))
+            .ok();
+          let told = entry.session.manager().disconnect_all(farewell);
+          warn!(room = %id, told, "Idle arena drained; shutting it down.");
+          let _ = entry
+            .commands
+            .send(plaza::controller::ControllerCommand::Shutdown)
+            .await;
+          quiet.remove(&id);
+        }
+
         let before: Vec<_> = manager.rooms().iter().map(|h| h.id()).collect();
         manager.reap_finished_rooms().await;
+        quiet.retain(|id, _| manager.room(id).is_some());
         for id in before {
           if manager.room(&id).is_none() {
             warn!(room = %id, "Arena ended; dropping its socket registration.");

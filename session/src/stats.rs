@@ -88,7 +88,8 @@ impl TransportStats {
     self.refused.load(Ordering::Relaxed)
   }
 
-  pub(crate) fn record_refused(&self) {
+  /// What a transport calls when it turns a socket away at the door.
+  pub fn record_refused(&self) {
     self.refused.fetch_add(1, Ordering::Relaxed);
   }
 

@@ -51,6 +51,8 @@ A budget is a property of the arena's own simulation, not a policy the lobby inv
 
 Every arena, including the three at startup, is spawned through `RoomFactory::spawn_room`. There is no second path that builds one directly, so the startup catalogue is a real exercise of the factory rather than a shortcut around it. The factory creates the arena's session, builds and spawns its controller, registers the socket so the HTTP layer can find it, and hands back an `InProcessRoomHandle` holding the join handle that lets `reap_finished_rooms` know when the arena is done.
 
+And a room that stops existing does it politely. A dynamic room that carries no traffic for `ROOM_IDLE_AFTER` is drained by the sweep through `disconnect_all`: every occupant hears `Closed` ahead of the socket going, never a silent EOF, and only then is the controller told to shut down, so `reap_finished_rooms` collects the handle on a later pass. The teardown is the same flush-then-farewell close a kick uses, which is the point: a room ending and a guest being removed are the same mechanism at different scopes. The three fixed arenas are the standing offering and are never reaped.
+
 One wrinkle worth naming: `RoomFactory::GameStateType` is bound `Default`, and `ArenaState`'s derived `Default` is not a usable arena. The factory always builds it explicitly from the room's settings. A `Default` that nothing should call is a bound asking for a constructor it cannot name.
 
 ### 2. Admission on a number the client cannot lie about
