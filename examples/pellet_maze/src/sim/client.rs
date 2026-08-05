@@ -36,6 +36,13 @@ const CATCH_UP_TICKS: u64 = 64;
 /// How many of this client's own turns are remembered while waiting for the
 /// server to say where it took them.
 const TURN_MEMORY: usize = 8;
+/// Frames held waiting for the prediction to reach their tick. A frame that
+/// overtakes the prediction does so by about the link's jitter, so this is a
+/// backstop against a clock that has stopped advancing, not a working depth.
+const PENDING_FRAMES: usize = 16;
+/// How long an event stays "recent" for the panel's warnings, in ticks. A
+/// lifetime counter that warns forever says nothing; five seconds says "now".
+const RECENT_TICKS: u64 = 310;
 
 /// One turn request sent and not yet run locally.
 #[derive(Clone, Copy, Debug)]
@@ -83,6 +90,9 @@ pub struct Client {
   /// disagreement out of arrival order. Same rule as a frame: no opinion about
   /// a tick not yet reached.
   incoming_turns: VecDeque<TurnTaken>,
+  /// Frames waiting for this client to reach the tick they describe, held for
+  /// the same reason as `incoming_turns`. Oldest first.
+  pending_frames: VecDeque<Frame>,
 
   server_now_ms: u64,
   render_delay_ms: u64,
@@ -112,6 +122,20 @@ pub struct Client {
   pub last_wrong_junction: Option<(Cell, Cell)>,
   pub frames_seen: u64,
   pub unreached_frames: u64,
+  /// Frames older than every tick still in `history`, so there is no prediction
+  /// left to compare them against. The opposite end of the window from
+  /// `unreached_frames`, and the dangerous end: an unreachable frame is
+  /// obviously unusable, while a stale one looks exactly like agreement.
+  pub stale_frames: u64,
+  /// Held frames discarded because the buffer overflowed: the clock has fallen
+  /// so far behind that corrections are being lost, which is the failure the
+  /// lead line warns about.
+  pub dropped_frames: u64,
+  last_stale_tick: Option<u64>,
+  last_drop_tick: Option<u64>,
+  /// The tick the current round began. A frame from before it describes a
+  /// world that no longer exists and is discarded whole.
+  round_tick: u64,
   newest_frame_tick: u64,
   pub rounds_seen: u32,
 }
@@ -136,6 +160,7 @@ impl Client {
       next_tick: 0,
       predicted_turns: VecDeque::new(),
       incoming_turns: VecDeque::new(),
+      pending_frames: VecDeque::new(),
       server_now_ms: 0,
       render_delay_ms: 140,
       turn_buffer_ms: TURN_BUFFER_MS,
@@ -148,6 +173,11 @@ impl Client {
       last_wrong_junction: None,
       frames_seen: 0,
       unreached_frames: 0,
+      stale_frames: 0,
+      dropped_frames: 0,
+      last_stale_tick: None,
+      last_drop_tick: None,
+      round_tick: 0,
       newest_frame_tick: 0,
       rounds_seen: 0,
     }
@@ -193,6 +223,14 @@ impl Client {
     }
   }
 
+  pub fn recently_stale(&self) -> bool {
+    self.last_stale_tick.is_some_and(|t| self.next_tick.saturating_sub(t) < RECENT_TICKS)
+  }
+
+  pub fn recently_dropped(&self) -> bool {
+    self.last_drop_tick.is_some_and(|t| self.next_tick.saturating_sub(t) < RECENT_TICKS)
+  }
+
   /// How far ahead of the newest frame this client's simulation is running.
   pub fn tick_lead(&self) -> i64 {
     self.next_tick.saturating_sub(1) as i64 - self.newest_frame_tick as i64
@@ -210,6 +248,7 @@ impl Client {
     self.history.clear();
     self.predicted_turns.clear();
     self.incoming_turns.clear();
+    self.pending_frames.clear();
     self.queue.clear();
     self.paused = false;
     self.server_now_ms = round.server_time_ms;
@@ -223,6 +262,10 @@ impl Client {
     if let Some(mine) = round.players.iter().find(|p| p.id == self.me) {
       self.predicted = mine.clone();
     }
+    self.round_tick = round.tick;
+    // The belief the round opens with. Without it, a frame stamped on the
+    // round's own tick lands on an empty history and reads as unverifiable.
+    self.history.push_back((round.tick, self.predicted.cell));
     self.rounds_seen += 1;
   }
 
@@ -270,16 +313,35 @@ impl Client {
         let tick = self.next_tick;
         self.next_tick += 1;
         self.step_once(tick);
+        self.record(tick);
       }
+      self.drain_pending_frames();
     } else {
       self.next_tick = target + 1;
+      self.pending_frames.clear();
+      // Standing still is a belief too. Without it a frame arriving during a
+      // countdown or a pause finds no history, and "no opinion" must not read
+      // as disagreement any more than as agreement.
+      self.record(target);
     }
 
     self.compare_turns();
+  }
 
+  /// Notes where the prediction stood at the end of `tick`.
+  ///
+  /// Once per simulated tick rather than once per poll: `believed_at_tick`
+  /// answers with the newest sample at or before the tick asked about, so a
+  /// history sampled per poll answers a mid-batch question with a cell from
+  /// however long ago the last poll was, and reports a disagreement that never
+  /// happened.
+  fn record(&mut self, tick: u64) {
     match self.history.back_mut() {
-      Some((t, cell)) if *t == target => *cell = self.predicted.cell,
-      _ => self.history.push_back((target, self.predicted.cell)),
+      Some((t, cell)) if *t == tick => *cell = self.predicted.cell,
+      // An estimated clock momentarily behind the round's seed must not write
+      // out of order: `believed_at_tick` walks this newest-first.
+      Some((t, _)) if *t > tick => {}
+      _ => self.history.push_back((tick, self.predicted.cell)),
     }
     while self.history.len() > HISTORY {
       self.history.pop_front();
@@ -382,6 +444,9 @@ impl Client {
 
   /// Folds in one authoritative frame.
   pub fn on_frame(&mut self, frame: &Frame, controls: &Controls) {
+    if frame.tick < self.round_tick {
+      return;
+    }
     self.frames_seen += 1;
     self.players = frame.players.clone();
     self.pellets_left = frame.pellets_left;
@@ -400,19 +465,59 @@ impl Client {
 
     let reached = self.next_tick.saturating_sub(1);
     if frame.tick > reached {
-      // No opinion about a tick this client has not simulated: comparing anyway
-      // reports its own lag as a misprediction.
+      // Early rather than useless. Comparing now would report this client's own
+      // lag as a misprediction, but discarding skips the correction outright,
+      // and on a link whose jitter is about one tick that is most of them.
       self.unreached_frames += 1;
+      self.pending_frames.push_back(frame.clone());
+      while self.pending_frames.len() > PENDING_FRAMES {
+        self.pending_frames.pop_front();
+        self.dropped_frames += 1;
+        self.last_drop_tick = Some(self.next_tick);
+      }
       return;
     }
-    let believed = self.believed_at_tick(frame.tick);
+    self.reconcile(&authoritative, frame.tick);
+  }
+
+  /// Reconciles against the newest held frame the prediction has caught up with.
+  ///
+  /// Only the newest: an older one anchors the replay further back for a worse
+  /// answer, having already been superseded by the frame behind it.
+  fn drain_pending_frames(&mut self) {
+    let reached = self.next_tick.saturating_sub(1);
+    let mut ready = None;
+    while self.pending_frames.front().is_some_and(|f| f.tick <= reached) {
+      ready = self.pending_frames.pop_front();
+    }
+    let Some(frame) = ready else {
+      return;
+    };
+    if let Some(authoritative) = frame.players.iter().find(|p| p.id == self.me) {
+      self.reconcile(&authoritative.clone(), frame.tick);
+    }
+  }
+
+  fn reconcile(&mut self, authoritative: &PlayerState, at_tick: u64) {
+    let believed = self.believed_at_tick(at_tick);
     let died = self.predicted.alive && !authoritative.alive;
 
-    if believed.is_some_and(|cell| cell != authoritative.cell) && !died {
-      let jump = believed.map_or(1, |cell| cell.distance(authoritative.cell)).max(1);
-      self.snaps += 1;
-      self.snapped_cells += jump as u64;
-      self.resync(authoritative, frame.tick);
+    // No belief at all is a frame that fell off the back of `history`, and it
+    // is not the same answer as one that matches. Taking the authoritative
+    // state is the only defensible reading: this client cannot show the frame
+    // wrong, and unverified truth is still truth.
+    if believed.is_none() {
+      self.stale_frames += 1;
+      self.last_stale_tick = Some(self.next_tick);
+    }
+
+    let drift = believed.unwrap_or(self.predicted.cell).distance(authoritative.cell);
+    if (believed.is_none() || drift > 0) && !died {
+      if drift > 0 {
+        self.snaps += 1;
+        self.snapped_cells += drift as u64;
+      }
+      self.resync(authoritative.clone(), at_tick);
     } else {
       self.predicted.alive = authoritative.alive;
       self.predicted.role = authoritative.role;
@@ -441,6 +546,13 @@ impl Client {
     let mut replay: Vec<Pending> = self.pending.iter().copied().filter(|p| p.tick > at_tick).collect();
     replay.sort_by_key(|p| p.tick);
 
+    // What the replay overwrites is no longer what this client believed, and a
+    // later frame comparing against it would be answered with a route that was
+    // abandoned.
+    while self.history.back().is_some_and(|(t, _)| *t > at_tick) {
+      self.history.pop_back();
+    }
+
     let mut next = 0usize;
     let mut tick = at_tick;
     while tick < last {
@@ -449,7 +561,13 @@ impl Client {
         self.queue.request(replay[next].dir, replay[next].tick);
         next += 1;
       }
-      rules::advance_player(&mut self.predicted, &mut self.queue, &self.maze, tick, self.turn_buffer_ms, SIM_STEP_MS);
+      // A tick inside the opening hold is replayed as what it was: standing.
+      // The live loop never simulates those ticks, and a replay that walks
+      // through them hands the player a head start the server never granted.
+      if tick * SIM_STEP_MS >= self.starts_at_ms {
+        rules::advance_player(&mut self.predicted, &mut self.queue, &self.maze, tick, self.turn_buffer_ms, SIM_STEP_MS);
+      }
+      self.record(tick);
     }
   }
 
@@ -675,5 +793,79 @@ mod tests {
     }
     assert_eq!(client.snaps, 0, "there is no prediction to be wrong");
     assert_eq!(client.my_player().cell, server.players[0].cell);
+  }
+
+  #[test]
+  fn a_frame_stamped_on_the_rounds_own_tick_is_not_stale() {
+    // The belief a round opens with is "standing at spawn on the round's
+    // tick". Without it seeded, the first frame of every round lands on an
+    // empty history and is adopted as unverifiable.
+    let c = controls();
+    let server = started(&c);
+    let mut client = joined(&server, 0);
+    client.on_frame(&server.frame(), &c);
+    assert_eq!(client.stale_frames, 0);
+    assert_eq!(client.snaps, 0);
+  }
+
+  #[test]
+  fn a_frame_from_before_the_round_is_discarded_whole() {
+    let c = controls();
+    let mut server = started(&c);
+    let old_frame = server.frame();
+
+    let at = server.players[0].occupied();
+    server.players[1].cell = at;
+    server.players[1].step = None;
+    server.advance(SIM_STEP_MS, &c);
+    let mut round = None;
+    for _ in 0..(ROUND_END_MS / SIM_STEP_MS + 4) {
+      if let Some(r) = server.advance(SIM_STEP_MS, &c).round_start {
+        round = Some(r);
+        break;
+      }
+    }
+    let round = round.expect("the next round begins");
+
+    let mut client = Client::new(0);
+    client.on_round(&round);
+    client.on_frame(&old_frame, &c);
+    assert_eq!(client.players, round.players, "an in-flight frame from a dead round changes nothing");
+    assert_eq!(client.stale_frames, 0);
+    assert_eq!(client.snaps, 0);
+  }
+
+  #[test]
+  fn a_frame_older_than_the_prediction_history_is_adopted_rather_than_ignored() {
+    // `believed_at_tick` answers `None` for a tick that has fallen out of
+    // `history`, which is not the same answer as "the same cell". Read as
+    // agreement it leaves the prediction running uncorrected for as long as the
+    // delay stays outside the window.
+    let c = controls();
+    let server = started(&c);
+    let mut client = joined(&server, 0);
+
+    let mut stale = server.frame();
+    let base = server.now_ms();
+    for i in 1..=(HISTORY as u64 + 16) {
+      client.tick(base + i * SIM_STEP_MS, &c);
+    }
+    assert!(
+      client.history.front().is_some_and(|(t, _)| *t > stale.tick),
+      "the frame's tick is off the back of the window"
+    );
+
+    let elsewhere = server
+      .maze
+      .corridors()
+      .into_iter()
+      .find(|cell| cell.distance(client.predicted.cell) > 2)
+      .expect("a corridor somewhere else");
+    stale.players[0].cell = elsewhere;
+    stale.players[0].step = None;
+    client.on_frame(&stale, &c);
+
+    assert_eq!(client.stale_frames, 1);
+    assert_eq!(client.snaps, 1, "and the position is corrected rather than left to drift");
   }
 }

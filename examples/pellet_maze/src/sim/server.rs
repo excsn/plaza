@@ -121,7 +121,7 @@ pub struct Server {
   clock_ms: u64,
   accumulated_ms: u64,
   round: u32,
-  /// Which round of the match this is, 1 through [`MATCH_ROUNDS`].
+  /// Which round of the match this is, 1 through [`Server::match_rounds`].
   match_round: u32,
   seed: u64,
   round_ends_at_ms: Option<u64>,
@@ -314,6 +314,11 @@ impl Server {
     self.seats.len()
   }
 
+  /// Rounds in a match: one per seat, so every player runs exactly once.
+  pub fn match_rounds(&self) -> u32 {
+    self.players.len().max(1) as u32
+  }
+
   /// The match table, highest score first, ties broken by id so two runs of
   /// the same game agree.
   pub fn standings(&self) -> Vec<(PlayerId, u32)> {
@@ -406,7 +411,7 @@ impl Server {
     RoundStart {
       round: self.round,
       match_round: self.match_round,
-      match_rounds: MATCH_ROUNDS,
+      match_rounds: self.match_rounds(),
       maze: self.maze.clone(),
       players: self.players.clone(),
       pellets: self.pellets.clone(),
@@ -439,7 +444,7 @@ impl Server {
       pellets_left: self.pellets.len() as u32 + self.withheld_for(recipient, |w| matches!(w, Withheld::Pellet { .. })),
       powerups: self.powerups_for(recipient),
       round: self.match_round,
-      match_rounds: MATCH_ROUNDS,
+      match_rounds: self.match_rounds(),
     }
   }
 
@@ -474,7 +479,7 @@ impl Server {
       pellets_left: self.pellets.len() as u32,
       powerups: self.powerups.clone(),
       round: self.match_round,
-      match_rounds: MATCH_ROUNDS,
+      match_rounds: self.match_rounds(),
     }
   }
 
@@ -498,9 +503,9 @@ impl Server {
         if self.awaiting_new_match {
           self.awaiting_new_match = false;
           out.round_start = Some(self.begin_match());
-        } else if self.match_round >= MATCH_ROUNDS {
+        } else if self.match_round >= self.match_rounds() {
           // The table gets an interval of its own rather than one frame
-          // between two countdowns. It is what the last five rounds were for,
+          // between two countdowns. It is what the rounds were for,
           // and the next round's `RoundStart` is what clears it from a client,
           // so sending both together shows it for no time at all.
           out.match_over = Some((self.standings(), MATCH_END_MS));
@@ -1160,7 +1165,7 @@ mod tests {
     let c = Controls { bots: true, players: 4, ..controls() };
     let mut server = started(&c);
     let laid_out = server.powerups.len();
-    run(&mut server, 60_000, &c);
+    run(&mut server, 70_000, &c);
     assert!(laid_out > 0, "the round should lay some out");
     assert_eq!(server.powerups.len(), 0, "and a runner that clears the board takes all of them");
     assert!(server.devoured > 0, "and uses them: {}", server.devoured);
@@ -1335,7 +1340,7 @@ mod tests {
     assert_eq!(server.match_round(), 1);
 
     let mut ended = None;
-    for _ in 0..(MATCH_ROUNDS + 2) {
+    for _ in 0..(server.match_rounds() + 2) {
       let seat = server.runner_seat();
       let at = server.players[seat].occupied();
       let other = (seat + 1) % 2;
@@ -1367,7 +1372,7 @@ mod tests {
     let mut server = started(&c);
 
     let mut ended_at = None;
-    for _ in 0..(MATCH_ROUNDS + 2) {
+    for _ in 0..(server.match_rounds() + 2) {
       let seat = server.runner_seat();
       let at = server.players[seat].occupied();
       let other = (seat + 1) % 2;

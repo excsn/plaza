@@ -83,11 +83,11 @@ The end to end test reads the wire rather than the intent: `nothing_on_the_wire_
 
 ## The match, and why the score is cumulative
 
-A round is rarely cleared of pellets. Three pursuers converging on one runner is not a fair fight and is not meant to be, so a round is a few seconds of pressure rather than a board to complete. What is played for is the **total over five rounds**, and the roles rotate every round, so every seat runs and every seat hunts.
+A round is rarely cleared of pellets. Three pursuers converging on one runner is not a fair fight and is not meant to be, so a round is a few seconds of pressure rather than a board to complete. What is played for is the **total over the match**, one round per seat, and the roles rotate every round, so every seat runs exactly once and hunts in all the others.
 
 Pellets pay one, a catch pays twenty-five, eating a pursuer while energized pays fifteen. A round you lose is not a round you scored nothing in. `a_match_runs_a_fixed_number_of_rounds_and_then_resets_the_scores` holds the shape.
 
-The final table gets five seconds to itself before the next match is laid out. It first went out in the same tick as the next `RoundStart`, and a client clears the table when a round starts, so the thing five rounds were played for was on screen for a single frame. `the_final_table_gets_an_interval_of_its_own` asserts both halves: nothing is laid out in that tick, and nothing starts until the interval is up.
+The final table gets five seconds to itself before the next match is laid out. It first went out in the same tick as the next `RoundStart`, and a client clears the table when a round starts, so the thing the match was played for was on screen for a single frame. `the_final_table_gets_an_interval_of_its_own` asserts both halves: nothing is laid out in that tick, and nothing starts until the interval is up.
 
 The role rotation is a seat rotation, not an identity one. `the_role_rotates_for_a_given_seat_while_its_identity_does_not` exists because the first version rotated by reassigning ids, and a client that drives `players[seat]` then finds itself playing somebody else's character between rounds.
 

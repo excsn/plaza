@@ -20,7 +20,7 @@ use plaza_server_utils::{SeatTable, Seating};
 
 use crate::sim::protocol::{Op, ServerPolicy};
 use crate::sim::server::{Audience, Server};
-use crate::sim::types::{Cell, Controls, Maze, PlayerId, PlayerState, MATCH_ROUNDS};
+use crate::sim::types::{Cell, Controls, Maze, PlayerId, PlayerState};
 
 pub type PlayerKey = u64;
 
@@ -121,7 +121,7 @@ impl Arena {
       pellets_eaten: self.sim.pellets_eaten,
       devoured: self.sim.devoured,
       match_round: self.sim.match_round(),
-      match_rounds: MATCH_ROUNDS,
+      match_rounds: self.sim.match_rounds(),
       turn_stats: self.sim.turn_stats(),
       input_verdicts: self.sim.input_verdicts(),
       seats_taken: self.seats.by_seat().len(),

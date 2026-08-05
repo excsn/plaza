@@ -462,7 +462,7 @@ mod tests {
 
   use super::*;
   use crate::sim::protocol::{Frame, RoundStart, TurnTaken};
-  use crate::sim::types::{Cell, Maze, PlayerState, Role, MATCH_ROUNDS, MAZE_SEED};
+  use crate::sim::types::{Cell, Maze, PlayerState, Role, MAZE_SEED};
 
   #[derive(Clone)]
   struct ScriptedSocket(Arc<Mutex<VecDeque<Event>>>);
@@ -516,7 +516,7 @@ mod tests {
     RoundStart {
       round: 1,
       match_round: 1,
-      match_rounds: MATCH_ROUNDS,
+      match_rounds: 1,
       players: vec![PlayerState::new(0, Role::Runner, start, heading)],
       pellets: maze.corridors(),
       powerups: Vec::new(),

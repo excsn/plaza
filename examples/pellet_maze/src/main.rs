@@ -206,8 +206,13 @@ async fn frame_loop(options: role::Options) {
 
       // The server's truth for your own player, hollow under your belief about
       // it. Only a host has this; a joiner legitimately cannot.
+      // Not while paused: between a catch and the next `RoundStart` the server
+      // may already hold the next round's spawns, and a ghost drawn from them
+      // is a comparison across two different rounds.
       #[cfg(feature = "server")]
-      if let Some(view) = &view {
+      if let Some(view) = &view
+        && !client.sim.is_paused()
+      {
         let truth = view.lock();
         if let Some(me) = client.me
           && let Some(authoritative) = truth.players.iter().find(|p| p.id == me)

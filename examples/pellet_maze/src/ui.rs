@@ -174,10 +174,17 @@ pub fn draw_net_ui(client: &pellet_maze::net::client::NetClient, url: &str, extr
         let lead = sim.tick_lead();
         warn_line(
           ui,
-          format!("simulation runs {lead:+} ticks ahead of the newest frame ({} not yet reached)", sim.unreached_frames),
-          lead <= 0,
+          format!("simulation runs {lead:+} ticks ahead of the newest frame ({} held for their tick)", sim.unreached_frames),
+          sim.recently_dropped(),
         )
-        .on_hover_text("Positive is healthy: this client runs at its clock's estimate of now while a frame describes a moment one delivery ago. At or below zero the estimate trails the stream and every boundary reads as a disagreement it is not.");
+        .on_hover_text("A frame can describe a tick this client has not simulated yet; it is held and reconciled the moment the prediction gets there, so a lead that dips to zero costs nothing. Warns only when held frames were recently discarded outright, which means the clock has fallen further behind than the buffer is deep and corrections are being lost.");
+
+        warn_line(
+          ui,
+          format!("frames older than the prediction history: {}", sim.stale_frames),
+          sim.recently_stale(),
+        )
+        .on_hover_text("The other end of the same window. A frame describing a tick this client no longer keeps a prediction for cannot be checked, so it is adopted rather than assumed correct. The count is lifetime; the colour is the last few seconds, because a correction arriving as a jump matters when it is happening, not forever after.");
       });
 
       section(ui, "the match", true, |ui| {
@@ -224,7 +231,7 @@ pub fn draw_net_ui(client: &pellet_maze::net::client::NetClient, url: &str, extr
         ui.label("The white arrow on your player is a turn waiting for a corner. If it stays there, the corner never came and the request expires.");
         ui.label("The round is a chase. Roles rotate every round, so you will run and you will hunt.");
         ui.label("The orange ring is an energizer: for a few seconds the runner eats pursuers instead of being caught by them. The blue one hides the runner, from the server outward, so the other clients are never told where they are.");
-        ui.label("Score is cumulative over five rounds. Pellets, catches and eaten pursuers all pay, so a round you lose is not a round you scored nothing in.");
+        ui.label("Score is cumulative over the match, one round per seat. Pellets, catches and eaten pursuers all pay, so a round you lose is not a round you scored nothing in.");
       });
     });
 

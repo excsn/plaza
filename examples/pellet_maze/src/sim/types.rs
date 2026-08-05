@@ -57,11 +57,10 @@ pub const PELLET_VALUE: u32 = 1;
 pub const CATCH_VALUE: u32 = 25;
 /// What eating a pursuer is worth, while energized.
 pub const EAT_VALUE: u32 = 15;
-/// Rounds in a match. Clearing a maze outright is rare with three pursuers
-/// hunting, so the game is a **cumulative score over a match** rather than a
-/// race to empty the board: every round contributes, and losing one early does
-/// not end your afternoon.
-pub const MATCH_ROUNDS: u32 = 5;
+/// What a client shows for rounds-in-a-match before the wire has said. The
+/// real number is the server's seat count, one round per player, and arrives
+/// with the first `RoundStart`.
+pub const MATCH_ROUNDS: u32 = 1;
 /// How long an energizer lasts.
 pub const ENERGIZE_MS: u64 = 6_000;
 
@@ -85,7 +84,7 @@ pub const ROUND_START_MS: u64 = 3000;
 /// How long the final table stays up before the next match is laid out.
 ///
 /// Longer than the interval between rounds, because it is the only moment in
-/// five rounds where the whole match is readable, and a table that clears into
+/// the match where the whole thing is readable, and a table that clears into
 /// a countdown is a table nobody read.
 pub const MATCH_END_MS: u64 = 5000;
 /// How close a pursuer must be to catch the runner: the same cell.
