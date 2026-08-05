@@ -6,7 +6,7 @@ publish = false
 
 [dependencies]
 plaza = { workspace = true }
-plaza_session = { workspace = true, features = ["json"] }
+plaza_session = { workspace = true, features = ["json", "tcp"] }
 plaza_wire = { workspace = true, features = ["json"] }
 
 async-trait = "0.1"

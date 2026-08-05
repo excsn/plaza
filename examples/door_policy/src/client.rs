@@ -6,8 +6,7 @@ use parking_lot::Mutex;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
-use crate::transport::{decode_ops, encode_ops};
-use crate::types::{Account, ArcadeOp, Refusal};
+use crate::types::{decode_ops, encode_ops, Account, ArcadeOp, Refusal};
 
 pub struct Knock {
   pub heard: Arc<Mutex<Vec<ArcadeOp>>>,
