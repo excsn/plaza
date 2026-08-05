@@ -84,6 +84,7 @@ Connections are held by id and **indexed by agent**, because both halves of the 
 *   **`idle_for(&self, conn_id) -> Option<Duration>`** / **`agent_idle_for(&self, id: &ID) -> Option<Duration>`**: how long a connection has been silent, counted from its last data frame or from `register` if it never sent one. **Probes do not count**, and that is only implementable here: the control plane answers a `Ping` invisibly, so an AFK rule written against decoded ops is right by accident and one written against frames would never fire. The agent form takes the shortest across its connections. No timers and no timeout policy live here; read it from your own tick and apply your own number.
 *   **`connection_inbound(&self, conn_id) -> Option<InboundVolume>`** / **`agent_inbound(&self, id: &ID) -> InboundVolume`**: monotonic per-connection inbound counters (`frames`, `bytes`), counting what the connection sent rather than what survived the queues. [`TransportStats`](#struct-transportstats) counts the session; this answers "who", which the session-wide numbers cannot. Windowing and thresholds are the application's: keep the last reading and diff, or feed a `plaza_server_utils::RateMeter`.
 *   **`record_inbound_activity(&self, conn_id, bytes: usize)`**: what the control plane calls for each inbound data frame; a custom transport that bypasses `handle_inbound` calls it itself.
+*   **`set_deadline(&self, conn_id, after: Option<Duration>, farewell: Option<OutboundFrame>) -> bool`**: arms, moves, or with `None` clears a deadline the connection task enforces; expiry goes through the same flush-then-farewell close. Setting again replaces the deadline, which is how a renewal extends a session (an arcade credit, an auth token's expiry). No timer exists outside the connection task's own loop; what stamps, renews, or revokes it is the application's.
 *   **`deregister_agent(&self, id: &ID, farewell: Option<OutboundFrame>) -> usize`**: `connections_of` then `close_connection` on each; how many took the order.
 *   **`disconnect_all(&self, farewell: Option<OutboundFrame>) -> usize`**: the same close for every live connection, everyone told then closed, so a drain differs from a kick only in who it names.
 *   **`take_orders(&self, conn_id: ConnectionId) -> Option<SessionReceiver<ConnectionOrder>>`**: for transport authors. The order stream a connection task selects on beside its outbound queue; it must be its own `select!` arm, because the outbound arm is disabled the moment `deregister` drops the sender, which is exactly when a close must still work. Single-consumer, like the `take_*` streams.
@@ -195,7 +196,10 @@ Get one with `Frame::from(Vec<u8>)` or `Frame::from(bytes::Bytes)`; read it thro
 
 ### Enum `ConnectionOrder`
 
-`Close { farewell: Option<OutboundFrame> }`: flush what is queued, write the farewell if any, then close the socket. What `close_connection` sends and a connection task receives through `take_orders`. It rides its own channel rather than the outbound queue because the queue's receive arm is disabled the moment `deregister` drops the sender, which is exactly when a close must still work.
+What `close_connection` and `set_deadline` send and a connection task receives through `take_orders`. It rides its own channel rather than the outbound queue because the queue's receive arm is disabled the moment `deregister` drops the sender, which is exactly when a close must still work.
+
+*   **`Close { farewell: Option<OutboundFrame> }`**: flush what is queued, write the farewell if any, then close the socket.
+*   **`Deadline { after: Option<Duration>, farewell: Option<OutboundFrame> }`**: arm, replace, or clear the task-local deadline; expiry performs the same close. The deadline is task state delivered by order rather than a shared cell, so a custom transport gets it through the same stream it already selects on.
 
 ### Struct `IncomingFrame<ID>`
 

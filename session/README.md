@@ -228,6 +228,8 @@ Which connection goes is policy, and it stays yours: a duplicate login can refus
 
 `deregister_agent(&id, farewell)` closes every connection an agent holds, and `disconnect_all(farewell)` drains the room through the same path: everyone told, then closed. A drain differs from a kick only in who it names.
 
+`set_deadline(conn_id, after, farewell)` bounds a session instead of ending it now: the connection task enforces the deadline in its own loop and expiry goes through the same flush-then-farewell close. Setting it again replaces it, which is how a renewal extends a session; what stamps, renews, or revokes it is yours.
+
 ## Wire format
 
 Everything is encoded through `WireCodec`. `JsonCodec` is the default: readable from a browser console or `websocat`. Supply your own for MessagePack or bincode:

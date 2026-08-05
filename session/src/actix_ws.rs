@@ -300,6 +300,8 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
   let mut down = Conditioner::new(conn_id ^ DOWN_SEED_FLIP, queues.conditioner);
   let mut probe = ProbeState::new(manager.probes());
   let mut next_probe = probe.first_due(tokio::time::Instant::now());
+  let mut deadline: Option<tokio::time::Instant> = None;
+  let mut deadline_farewell: Option<OutboundFrame> = None;
 
   // Either hand the frame back to be written now, or queue it behind whatever
   // the link is already holding. The emptiness check is what keeps order: a
@@ -332,12 +334,20 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
         }
       }
 
-      // The application ending the session. Flush order: what the link was
-      // holding is older than what the queue still holds, and the farewell
-      // goes last so it is the final thing the client reads. The close frame
-      // itself stays a transport event; the reason rode in front of it.
+      // The application ending or bounding the session. Flush order: what the
+      // link was holding is older than what the queue still holds, and the
+      // farewell goes last so it is the final thing the client reads. The
+      // close frame itself stays a transport event; the reason rode in front
+      // of it.
       Ok(order) = orders.recv() => {
-        let ConnectionOrder::Close { farewell } = order;
+        let farewell = match order {
+          ConnectionOrder::Close { farewell } => farewell,
+          ConnectionOrder::Deadline { after, farewell } => {
+            deadline = after.map(|gap| tokio::time::Instant::now() + gap);
+            deadline_farewell = farewell;
+            continue;
+          }
+        };
         for frame in down.drain() {
           if !write_frame(&mut ws_session, frame, send_as_text).await {
             break;
@@ -352,6 +362,24 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
           let _ = write_frame(&mut ws_session, farewell, send_as_text).await;
         }
         debug!(transport = TRANSPORT, conn_id, "Closed by the application.");
+        break Some(CloseReason::from(CloseCode::Normal));
+      }
+
+      _ = tokio::time::sleep_until(deadline.unwrap_or_else(far_future)), if deadline.is_some() => {
+        for frame in down.drain() {
+          if !write_frame(&mut ws_session, frame, send_as_text).await {
+            break;
+          }
+        }
+        while let Ok(frame) = to_client_rx.try_recv() {
+          if !write_frame(&mut ws_session, frame, send_as_text).await {
+            break;
+          }
+        }
+        if let Some(farewell) = deadline_farewell.take() {
+          let _ = write_frame(&mut ws_session, farewell, send_as_text).await;
+        }
+        debug!(transport = TRANSPORT, conn_id, "Deadline expired.");
         break Some(CloseReason::from(CloseCode::Normal));
       }
 

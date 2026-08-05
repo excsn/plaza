@@ -721,3 +721,45 @@ async fn activity_counts_data_and_never_probes() {
   assert!(agent_idle <= idle_after + Duration::from_millis(50));
   assert_eq!(session.manager().agent_inbound(&player_id), volume);
 }
+
+#[tokio::test]
+async fn a_deadline_closes_unless_renewed() {
+  let player_id = Uuid::new_v4();
+  let agent_factory: plaza_session::tcp::AgentFactory<PlayerId> =
+    Arc::new(move |_peer| Ok(Agent::new_human(player_id)));
+  let session: Arc<TcpPlazaSession<TestOp, PlayerId>> =
+    TcpPlazaSession::bind("127.0.0.1:0", agent_factory).await.expect("bind");
+  let presence = session.on_presence_change();
+
+  let stream = TcpStream::connect(session.local_addr()).await.expect("connect");
+  let mut client = Framed::new(stream, LengthDelimitedCodec::new());
+  let conn_id = match with_timeout(presence.recv()).await.expect("presence") {
+    PresenceEvent::Joined { conn_id, .. } => conn_id,
+    other => panic!("expected a join, got {other:?}"),
+  };
+
+  let farewell = session
+    .encode_message(SessionMessage::system(vec![TestOp::Welcome("credit spent".into())]))
+    .expect("encode");
+  assert!(session.manager().set_deadline(conn_id, Some(Duration::from_millis(700)), Some(farewell.clone())));
+
+  // A renewal half way through replaces the deadline, so the original expiry
+  // passes with the session still up.
+  tokio::time::sleep(Duration::from_millis(350)).await;
+  assert!(session.manager().set_deadline(conn_id, Some(Duration::from_millis(700)), Some(farewell)));
+  tokio::time::sleep(Duration::from_millis(450)).await;
+  assert_eq!(session.manager().connection_count(), 1, "renewed past the first expiry");
+
+  let heard = with_patience(next_ops_frame(&mut client)).await.expect("the farewell");
+  assert_eq!(heard, vec![TestOp::Welcome("credit spent".into())]);
+  loop {
+    match with_timeout(client.next()).await {
+      None | Some(Err(_)) => break,
+      Some(Ok(_)) => continue,
+    }
+  }
+  match with_timeout(presence.recv()).await.expect("presence") {
+    PresenceEvent::Left { agent_id, .. } => assert_eq!(agent_id, player_id),
+    other => panic!("expected a leave, got {other:?}"),
+  }
+}

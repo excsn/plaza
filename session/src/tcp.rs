@@ -253,6 +253,8 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
   // `None` when this session does not probe, which parks the timer arm rather
   // than firing it.
   let mut next_probe = probe.first_due(Instant::now());
+  let mut deadline: Option<Instant> = None;
+  let mut deadline_farewell: Option<OutboundFrame> = None;
 
   // Either hand the frame back to be written now, or queue it behind whatever
   // the link is already holding. The emptiness check is what keeps order: a
@@ -288,11 +290,18 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
         }
       }
 
-      // The application ending the session. Flush order: what the link was
-      // holding is older than what the queue still holds, and the farewell
-      // goes last so it is the final thing the client reads.
+      // The application ending or bounding the session. Flush order: what the
+      // link was holding is older than what the queue still holds, and the
+      // farewell goes last so it is the final thing the client reads.
       Ok(order) = orders.recv() => {
-        let ConnectionOrder::Close { farewell } = order;
+        let farewell = match order {
+          ConnectionOrder::Close { farewell } => farewell,
+          ConnectionOrder::Deadline { after, farewell } => {
+            deadline = after.map(|gap| Instant::now() + gap);
+            deadline_farewell = farewell;
+            continue;
+          }
+        };
         for frame in down.drain() {
           let _ = framed.send(frame.into_bytes()).await;
         }
@@ -304,6 +313,21 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
         }
         let _ = framed.close().await;
         debug!(transport = TRANSPORT, conn_id, "Closed by the application.");
+        break;
+      }
+
+      _ = tokio::time::sleep_until(deadline.unwrap_or_else(far_future)), if deadline.is_some() => {
+        for frame in down.drain() {
+          let _ = framed.send(frame.into_bytes()).await;
+        }
+        while let Ok(frame) = to_client_rx.try_recv() {
+          let _ = framed.send(frame.into_bytes()).await;
+        }
+        if let Some(farewell) = deadline_farewell.take() {
+          let _ = framed.send(farewell.into_bytes()).await;
+        }
+        let _ = framed.close().await;
+        debug!(transport = TRANSPORT, conn_id, "Deadline expired.");
         break;
       }
 

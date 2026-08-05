@@ -554,6 +554,14 @@ pub enum ConnectionOrder {
   /// The farewell is bytes the application already encoded; the transport does
   /// not know what reason they spell.
   Close { farewell: Option<OutboundFrame> },
+  /// Arm (or with `after: None` clear) a deadline this connection's task
+  /// enforces: when it expires, the task performs the same flush-then-farewell
+  /// close. Setting again replaces the previous deadline, which is how a
+  /// renewal extends a session.
+  Deadline {
+    after: Option<Duration>,
+    farewell: Option<OutboundFrame>,
+  },
 }
 
 /// Depth of a connection's order queue. Orders are rare and a close is final,
@@ -1123,6 +1131,24 @@ impl<ID: AgentId> ConnectionManager<ID> {
     let connections = self.connections.read();
     match connections.get(conn_id) {
       Some(handle) => handle.orders_tx.try_send(ConnectionOrder::Close { farewell }).is_ok(),
+      None => false,
+    }
+  }
+
+  /// Arms, moves, or with `after: None` clears this connection's deadline.
+  /// Returns whether a live connection took the order.
+  ///
+  /// The deadline is enforced by the connection task's own loop, so no timer
+  /// exists anywhere else; expiry goes through the same flush-then-farewell
+  /// close as [`close_connection`](Self::close_connection). What stamps,
+  /// renews, or revokes it, and what the farewell says, is the application's.
+  pub fn set_deadline(&self, conn_id: ConnectionId, after: Option<Duration>, farewell: Option<OutboundFrame>) -> bool {
+    let connections = self.connections.read();
+    match connections.get(conn_id) {
+      Some(handle) => handle
+        .orders_tx
+        .try_send(ConnectionOrder::Deadline { after, farewell })
+        .is_ok(),
       None => false,
     }
   }
@@ -1824,7 +1850,7 @@ mod tests {
   use crate::conditioner::DirectionProfile;
 
   fn handle(agent: Agent<u32>) -> ClientHandle<u32> {
-    ClientHandle::new(agent, session_channel(4).0)
+    ClientHandle::new(agent, session_channel(4).0, 0)
   }
 
   #[test]
