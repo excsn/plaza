@@ -27,7 +27,7 @@ use plaza_wire::frame::ProtocolVersion;
 use crate::conditioner::{Conditioner, DirectionProfile};
 use crate::control::{self, earliest, far_future, route_inbound, ProbeState, DOWN_SEED_FLIP};
 use crate::error::SessionLayerError;
-use crate::manager::{ConnectionManager, OutboundFrame, SessionOptions, TransportSession};
+use crate::manager::{ConnectionManager, ConnectionOrder, OutboundFrame, SessionOptions, TransportSession};
 
 const TRANSPORT: &str = "tcp";
 
@@ -173,6 +173,15 @@ where
   pub fn manager(&self) -> &Arc<ConnectionManager<ID>> {
     self.inner.manager()
   }
+
+  /// Encodes one message with this session's codec, kind byte included.
+  ///
+  /// For frames that bypass the targeting path: a farewell handed to
+  /// [`ConnectionManager::close_connection`], or a [`Refusal`]'s farewell
+  /// written before a socket is registered.
+  pub fn encode_message(&self, msg: SessionMessage<Op, ID>) -> Result<OutboundFrame, SessionLayerError> {
+    self.inner.encode_message(msg)
+  }
 }
 
 async fn accept_loop<ID: AgentId, C: WireCodec>(
@@ -235,6 +244,7 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
   let (to_client_tx, to_client_rx) = session_channel::<OutboundFrame>(queues.outbound);
   let conn_id = manager.register(agent.clone(), to_client_tx).await;
   let link = manager.link_handle(conn_id).expect("just registered");
+  let orders = manager.take_orders(conn_id).expect("just registered");
   let clock = manager.clock().cloned();
 
   let mut up = Conditioner::new(conn_id, queues.conditioner);
@@ -276,6 +286,25 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
             break;
           }
         }
+      }
+
+      // The application ending the session. Flush order: what the link was
+      // holding is older than what the queue still holds, and the farewell
+      // goes last so it is the final thing the client reads.
+      Ok(order) = orders.recv() => {
+        let ConnectionOrder::Close { farewell } = order;
+        for frame in down.drain() {
+          let _ = framed.send(frame.into_bytes()).await;
+        }
+        while let Ok(frame) = to_client_rx.try_recv() {
+          let _ = framed.send(frame.into_bytes()).await;
+        }
+        if let Some(farewell) = farewell {
+          let _ = framed.send(farewell.into_bytes()).await;
+        }
+        let _ = framed.close().await;
+        debug!(transport = TRANSPORT, conn_id, "Closed by the application.");
+        break;
       }
 
       // This transport has no ping frame of its own, so the probe riding the

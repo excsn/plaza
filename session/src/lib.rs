@@ -38,8 +38,8 @@ pub use driver::LinkDriver;
 pub use error::SessionLayerError;
 pub use workload::{Priority, Workload, DEFAULT_SOCKET_BUFFER_BYTES};
 pub use manager::{
-  ConnectionManager, Frame, InboundOverflow, Limits, OutboundOverflow, Overflow, PresenceOverflow, Probes, Queues, SessionClock,
-  SessionOptions, TransportSession,
+  ConnectionManager, ConnectionOrder, Frame, InboundOverflow, Limits, OutboundOverflow, Overflow, PresenceOverflow, Probes, Queues,
+  SessionClock, SessionOptions, TransportSession,
   DEFAULT_BROADCAST_CAPACITY, DEFAULT_CLIENT_QUEUE_CAPACITY, DEFAULT_CONDITIONER_CAPACITY,
   DEFAULT_MAX_FRAME_BYTES, DEFAULT_MAX_MESSAGE_BYTES, DEFAULT_PROBE_FAST_INTERVAL, DEFAULT_PROBE_FAST_PINGS,
   DEFAULT_PROBE_IDLE_INTERVAL, DEFAULT_PROBE_SLOTS,

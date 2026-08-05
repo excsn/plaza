@@ -220,6 +220,13 @@ impl Conditioner {
       _ => None,
     }
   }
+
+  /// Everything still held, in order, release times ignored. For a close that
+  /// flushes what was queued rather than waiting out a simulated delay.
+  pub fn drain(&mut self) -> Vec<Frame> {
+    self.last_release = None;
+    self.queue.drain(..).map(|(_, frame_bytes)| frame_bytes).collect()
+  }
 }
 
 #[cfg(test)]

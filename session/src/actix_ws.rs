@@ -9,7 +9,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use actix_web::{web, HttpRequest, HttpResponse};
-use actix_ws::AggregatedMessage;
+use actix_ws::{AggregatedMessage, CloseCode, CloseReason};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use bytestring::ByteString;
@@ -28,7 +28,7 @@ use crate::conditioner::{Conditioner, LinkProfile};
 use crate::control::{
   self, earliest, far_future, route_inbound, ProbeState, DOWN_SEED_FLIP,
 };
-use crate::manager::{ConnectionManager, OutboundFrame, SessionOptions, TransportSession};
+use crate::manager::{ConnectionManager, ConnectionOrder, OutboundFrame, SessionOptions, TransportSession};
 
 const TRANSPORT: &str = "actix_ws";
 
@@ -157,6 +157,21 @@ where
     self.inner.manager().stats()
   }
 
+  /// The connection registry, for everything keyed on a connection rather than
+  /// an agent: resolution, closes, and the per-connection readers.
+  pub fn manager(&self) -> &Arc<ConnectionManager<ID>> {
+    self.inner.manager()
+  }
+
+  /// Encodes one message with this session's codec, kind byte included.
+  ///
+  /// For frames that bypass the targeting path: a farewell handed to
+  /// [`ConnectionManager::close_connection`], or a refusal written before a
+  /// socket is registered.
+  pub fn encode_message(&self, msg: SessionMessage<Op, ID>) -> Result<OutboundFrame, crate::error::SessionLayerError> {
+    self.inner.encode_message(msg)
+  }
+
   /// What an agent declared it speaks, or `None` if it never sent a `Hello`.
   ///
   /// Reading it is where this layer's involvement ends. Whether a mismatch is
@@ -271,6 +286,7 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
   // recipient's task just writes bytes.
   let send_as_text = codec.is_text();
   let link = manager.link_handle(conn_id).expect("just registered");
+  let orders = manager.take_orders(conn_id).expect("just registered");
   let clock = manager.clock().cloned();
 
   // One outstanding ping at a time, so the reply needs no correlation id: the
@@ -314,6 +330,29 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
             break None;
           }
         }
+      }
+
+      // The application ending the session. Flush order: what the link was
+      // holding is older than what the queue still holds, and the farewell
+      // goes last so it is the final thing the client reads. The close frame
+      // itself stays a transport event; the reason rode in front of it.
+      Ok(order) = orders.recv() => {
+        let ConnectionOrder::Close { farewell } = order;
+        for frame in down.drain() {
+          if !write_frame(&mut ws_session, frame, send_as_text).await {
+            break;
+          }
+        }
+        while let Ok(frame) = to_client_rx.try_recv() {
+          if !write_frame(&mut ws_session, frame, send_as_text).await {
+            break;
+          }
+        }
+        if let Some(farewell) = farewell {
+          let _ = write_frame(&mut ws_session, farewell, send_as_text).await;
+        }
+        debug!(transport = TRANSPORT, conn_id, "Closed by the application.");
+        break Some(CloseReason::from(CloseCode::Normal));
       }
 
       // The transport times its own round trip, using the WebSocket's own ping

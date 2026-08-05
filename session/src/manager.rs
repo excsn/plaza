@@ -542,9 +542,29 @@ impl Debug for Frame {
 /// it by.
 pub type OutboundFrame = Frame;
 
+/// An instruction for one connection's task, sent through the manager.
+///
+/// Rides its own channel rather than the outbound queue, because the queue's
+/// receive arm is disabled the moment `deregister` drops the sender, which is
+/// exactly when a close must still work.
+#[derive(Debug)]
+pub enum ConnectionOrder {
+  /// Flush what is queued, write the farewell if any, then close the socket.
+  ///
+  /// The farewell is bytes the application already encoded; the transport does
+  /// not know what reason they spell.
+  Close { farewell: Option<OutboundFrame> },
+}
+
+/// Depth of a connection's order queue. Orders are rare and a close is final,
+/// so this only needs to absorb a burst of redundant closes.
+const ORDER_QUEUE_DEPTH: usize = 4;
+
 struct ClientHandle<ID: AgentId> {
   agent: Agent<ID>,
   to_client_tx: SessionSender<OutboundFrame>,
+  orders_tx: SessionSender<ConnectionOrder>,
+  orders_rx: RwLock<Option<SessionReceiver<ConnectionOrder>>>,
   /// Round trip to this client, in microseconds, `0` before the first sample.
   ///
   /// Atomics rather than a lock, so a connection task recording a sample needs
@@ -617,9 +637,12 @@ impl LinkHandle {
 
 impl<ID: AgentId> ClientHandle<ID> {
   fn new(agent: Agent<ID>, to_client_tx: SessionSender<OutboundFrame>) -> Self {
+    let (orders_tx, orders_rx) = session_channel::<ConnectionOrder>(ORDER_QUEUE_DEPTH);
     Self {
       agent,
       to_client_tx,
+      orders_tx,
+      orders_rx: RwLock::new(Some(orders_rx)),
       rtt_us: AtomicU64::new(0),
       min_rtt_us: AtomicU64::new(0),
       samples: AtomicU64::new(0),
@@ -976,8 +999,39 @@ impl<ID: AgentId> ConnectionManager<ID> {
   }
 
   /// Removes a connection and announces the departure.
+  ///
+  /// Bookkeeping only: the socket belongs to the connection task, and dropping
+  /// the outbound sender does not wake it. To *end* a session, use
+  /// [`close_connection`](Self::close_connection); the task then closes the
+  /// socket and calls this itself.
   pub async fn deregister(&self, conn_id: ConnectionId) {
     self.remove(conn_id, true).await
+  }
+
+  /// Orders a connection's task to flush what is queued, write the farewell if
+  /// any, and close the socket. Returns whether a live connection took the
+  /// order.
+  ///
+  /// The departure then arrives as an ordinary `Left`: a forced disconnect and
+  /// a cable pull look the same to the controller, on purpose.
+  pub fn close_connection(&self, conn_id: ConnectionId, farewell: Option<OutboundFrame>) -> bool {
+    let connections = self.connections.read();
+    match connections.get(conn_id) {
+      Some(handle) => handle.orders_tx.try_send(ConnectionOrder::Close { farewell }).is_ok(),
+      None => false,
+    }
+  }
+
+  /// Hands a connection's order stream to its transport task, once.
+  ///
+  /// A transport selects on this beside its outbound queue; it must be its own
+  /// arm, since the queue's arm is disabled once `deregister` drops the sender.
+  pub fn take_orders(&self, conn_id: ConnectionId) -> Option<SessionReceiver<ConnectionOrder>> {
+    self
+      .connections
+      .read()
+      .get(conn_id)
+      .map(|handle| take_stream(&handle.orders_rx, "connection orders"))
   }
 
   /// Removes a connection, waiting to announce the departure only if `may_wait`.
