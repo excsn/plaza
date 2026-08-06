@@ -47,6 +47,10 @@ pub struct Timeline {
   pub rtt: RttEstimator,
   pub clock: ClockSyncEstimator,
   epoch: u32,
+  /// The newest server stamp seen and the local time it was seen at, or `None`
+  /// until the first one: with no stamp there is no floor, since "carried
+  /// forward from nothing" would claim server time is at least local time.
+  stamp: Option<(u64, u64)>,
 }
 
 impl Timeline {
@@ -55,7 +59,12 @@ impl Timeline {
   }
 
   pub fn with_estimators(rtt: RttEstimator, clock: ClockSyncEstimator) -> Self {
-    Self { rtt, clock, epoch: 0 }
+    Self {
+      rtt,
+      clock,
+      epoch: 0,
+      stamp: None,
+    }
   }
 
   /// Starts a measurement. Send your ping stamped with `probe.sent_at`.
@@ -99,6 +108,40 @@ impl Timeline {
 
   pub fn epoch(&self) -> u32 {
     self.epoch
+  }
+
+  /// Records a timestamp the server wrote into a message.
+  ///
+  /// A stamp needs no synchronisation to trust: the server wrote it, so server
+  /// time is provably past it. Feed every arriving stamp through here and
+  /// [`server_time_ms`](Self::server_time_ms) gains a floor that holds even
+  /// while the clock fit is empty or trailing, which it does for hundreds of
+  /// milliseconds after a resume while its window refills.
+  pub fn note_stamp(&mut self, stamp_ms: u64, now_ms: u64) {
+    if stamp_ms >= self.stamp.map_or(0, |(newest, _)| newest) {
+      self.stamp = Some((stamp_ms, now_ms));
+    }
+  }
+
+  /// The newest server stamp seen, as recorded by [`note_stamp`](Self::note_stamp),
+  /// or zero before the first.
+  pub fn newest_stamp_ms(&self) -> u64 {
+    self.stamp.map_or(0, |(newest, _)| newest)
+  }
+
+  /// This client's best estimate of server time now: the fitted clock, floored
+  /// by the newest stamp carried forward at wall rate.
+  ///
+  /// The fit answers with `now_ms` itself until two exchanges are in, so this
+  /// is always usable. The floor only ever lifts the estimate, and never past
+  /// the truth: the stamp trails real server time by the one-way delay it took
+  /// to arrive.
+  pub fn server_time_ms(&self, now_ms: u64) -> u64 {
+    let fitted = self.clock.server_time_at(now_ms as f64).unwrap_or(now_ms as f64).max(0.0) as u64;
+    match self.stamp {
+      Some((newest, at_local)) => fitted.max(newest + now_ms.saturating_sub(at_local)),
+      None => fitted,
+    }
   }
 }
 
@@ -159,6 +202,31 @@ mod tests {
     t.on_resume();
     assert_eq!(t.rtt.rtt(), None);
     assert_eq!(t.clock.sample_count(), 0);
+  }
+
+  #[test]
+  fn the_newest_stamp_floors_the_estimate_and_is_carried_at_wall_rate() {
+    // The shape a resume leaves behind: the fit is empty (falls back to local
+    // time) while the stream's stamps are far ahead of it.
+    let mut t = Timeline::new();
+    t.note_stamp(100_000, 500);
+    assert_eq!(t.newest_stamp_ms(), 100_000);
+    assert_eq!(t.server_time_ms(500), 100_000);
+    assert_eq!(t.server_time_ms(700), 100_200, "carried forward at wall rate between messages");
+
+    t.note_stamp(99_000, 800);
+    assert_eq!(t.newest_stamp_ms(), 100_000, "an older stamp moves nothing");
+  }
+
+  #[test]
+  fn a_converged_fit_ahead_of_the_stamp_wins() {
+    // The floor is a lower bound, not the estimate: once the fit is past it,
+    // the fit answers.
+    let mut t = Timeline::new();
+    let probe = t.begin(1000);
+    t.complete(probe, 1100, Some(5550));
+    t.note_stamp(3000, 1100);
+    assert_eq!(t.server_time_ms(1100), 5600, "the fit (offset 4500) is past the carried stamp");
   }
 
   #[test]
