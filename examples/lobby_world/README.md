@@ -77,7 +77,7 @@ A reservation is cancelled only by the lobby, never by a closing socket. See bel
 
 ## Two things it says about plaza rather than about itself
 
-**There is no authorization hook ahead of `StateLogic`.** `RoomOp::Reserve` is server-originated and is the only thing standing between a client and a free seat, so the arena checks `source.is_system()` inside the rule that acts on it. Security and simulation end up mixed together because there is nowhere else to put the check. This is [an open item](../../IMPROVEMENTS.md), and this example is a small argument for it.
+**There is no authorization hook ahead of `StateLogic`.** `RoomOp::Reserve` is server-originated and is the only thing standing between a client and a free seat, so the arena checks `source.is_system()` inside the rule that acts on it. Security and simulation end up mixed together because there is nowhere else to put the check. This is an open item, and this example is a small argument for it.
 
 **`JoinRoomOutcomePayload::player_game_token` was an unused field.** It is used here. Without it the arena URL would have to carry the player id, and a client that can name its own id can name someone else's and walk off with their wallet. The lobby mints a one-use ticket and the arena route resolves it, so identity arrives from the lobby rather than from the client. The ticket itself is a counter, guessable in one try: it demonstrates *where the check goes*, not how to build a credential, and the reason it is not a real one is that plaza has no authentication story to be consistent with yet.
 

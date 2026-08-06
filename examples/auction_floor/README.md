@@ -4,7 +4,7 @@ Items drop, everyone grabs, the server awards each claim. **Minimal graphics, ma
 
 Three things are being shown. The server decides a contested claim **once**, from what each client *named* rather than when their packet arrived, so ping does not decide who wins. The earliest tick a client may legally name is a bound the server measured rather than one the client asserted. And one event is split across two audiences: the winner and each loser are told something different from the public record.
 
-The `req` field on `Grab` is **redundant** and is worth knowing about before copying this. Item ids are monotonic and never reused, and a player may hold only one claim per item, so `(player, item)` already identifies which claim a reply concerns. The example was designed around request correlation before that was checked, and the mechanics it settled on removed the need. See [the declined entry](../../IMPROVEMENTS.md#declined-outright) for why an action that names a unique target rarely needs a synthetic id.
+The `req` field on `Grab` is **redundant** and is worth knowing about before copying this. Item ids are monotonic and never reused, and a player may hold only one claim per item, so `(player, item)` already identifies which claim a reply concerns. The example was designed around request correlation before that was checked, and the mechanics it settled on removed the need. See the declined entry for why an action that names a unique target rarely needs a synthetic id.
 
 ## Running it
 

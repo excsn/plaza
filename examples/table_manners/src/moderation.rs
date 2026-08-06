@@ -8,8 +8,8 @@
 //!
 //! The parting reason lives *here*, not in a transport: the host initiated
 //! every non-drop parting, so it already knows why, and a departure with no
-//! pending reason is what a netdrop is. That is the division
-//! SESSION_GOVERNANCE records, kept on purpose.
+//! pending reason is what a netdrop is. The transport never interprets a
+//! disconnect, and keeping the division costs nothing.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};

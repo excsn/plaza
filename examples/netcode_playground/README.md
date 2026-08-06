@@ -77,7 +77,7 @@ The macroquad frame loop is the simulation clock, so there is no client-side tic
 
 ### What building it found, and what it added
 
-Writing a real consumer is how gaps surface (the same method that turned up the missing turn restart in `card_table`). Three showed up (see [IMPROVEMENTS-DONE.md](../../IMPROVEMENTS-DONE.md) for the reasoning):
+Writing a real consumer is how gaps surface (the same method that turned up the missing turn restart in `card_table`). Three showed up (see the improvement ledger for the reasoning):
 
 - **`InterpolationClock`** (new in `client_utils`): the interpolation render target was bookkeeping every client hand-rolls, an estimate of server time, advanced by frame delta, minus a fixed delay. It is now one small type. The client's `clock` field is it.
 - **`ErrorSmoother`** (new in `client_utils`): reconciliation snaps the corrected position in one frame, which is correct per Gambetta but abrupt under high latency. `ErrorSmoother` eases only the *rendered* position toward the exact logical state, and the smoothing toggle turns it on and off. It is a standalone primitive, not a method on `PredictedEntity`, because smoothing needs to blend states (which prediction does not) and any jumping entity can use it.

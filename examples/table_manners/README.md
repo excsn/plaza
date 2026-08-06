@@ -33,7 +33,7 @@ The same guest leaving two ways, told apart by one fact the socket cannot supply
 | socket cut | **held**, with grace | allowed |
 | removed by the host | **cleared** | refused |
 
-The parting reason lives in the `Host`, not in any transport. The host initiated every non-drop parting, so it already knows why; a `Left` with no pending reason *is* a netdrop. The first build put this in its hand-written transport because that was the easy place, and SESSION_GOVERNANCE overruled it: the transport never interprets a disconnect, and the rewrite confirms the division costs nothing.
+The parting reason lives in the `Host`, not in any transport. The host initiated every non-drop parting, so it already knows why; a `Left` with no pending reason *is* a netdrop. The first build put this in its hand-written transport because that was the easy place, and it is the wrong one: the transport never interprets a disconnect, and the rewrite onto the shipped transport confirms the division costs nothing.
 
 ## AFK is a policy on the session's reading
 

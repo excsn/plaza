@@ -534,7 +534,7 @@ What worked, repeatedly, after several rounds of confident wrong guesses:
 
 ## What this changed in plaza
 
-The principles above are guidance. These are the code changes the bugs argued for, all of them shipped, and each one stayed inside the north star in [IMPROVEMENTS.md](../IMPROVEMENTS.md): one concern, usable alone, generic over application types, additive to the existing primitives. The application still owns its payloads, its physics, its socket and its tick.
+The principles above are guidance. These are the code changes the bugs argued for, all of them shipped, and each one stayed inside the north star in plaza's north star: one concern, usable alone, generic over application types, additive to the existing primitives. The application still owns its payloads, its physics, its socket and its tick.
 
 **Prediction can see the world it predicts in.** `PredictedPlayer` gained a context parameter, because a client predicting a *forced* entity had nowhere to put the forces and black hole was smuggling the whole gravitational field through every buffered input. Being unable to pass the world in is exactly what pushes people into writing the second, lesser rule that the first principle warns about, so this was an API deficiency rather than a game problem.
 
