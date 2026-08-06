@@ -82,6 +82,26 @@ void main() {
       }
     });
 
+    /// A map whose keys are all strings decodes as `Map<String, Object?>`, the
+    /// type `jsonDecode` gives. Otherwise `body['rooms'] as Map<String, Object?>`
+    /// works under JSON and throws under any msgpack codec, and the app that
+    /// hits it blames the server.
+    test('an all-string map is typed like a decoded json one', () {
+      final nested = trip({
+        'link': {'rtt_ms': 40, 'extra_ms': 10},
+        'rooms': [
+          {'name': 'sprint'},
+        ],
+      }) as Map<String, Object?>;
+
+      expect(nested['link'], isA<Map<String, Object?>>());
+      expect((nested['rooms']! as List).cast<Map<String, Object?>>().first['name'], 'sprint');
+    });
+
+    test('a map with a non-string key stays loosely typed rather than throwing', () {
+      expect(trip({1: 'a', 2: 'b'}), isA<Map<Object?, Object?>>());
+    });
+
     test('nesting survives', () {
       final v = {
         'ops': [

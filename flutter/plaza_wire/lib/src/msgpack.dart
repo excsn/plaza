@@ -10,12 +10,20 @@ import 'dart:typed_data';
 ///
 /// # What maps to what
 ///
-/// Rust `rmp_serde` has two shapes for a struct and plaza's `MsgPackCodec`
-/// picks the compact one, so a Rust struct arrives as an **array** of its
-/// fields in declaration order, not as a map. `with_struct_map()` on the Rust
-/// side switches to a map keyed by field name. Both decode here; which you get
-/// is decided by the server's codec, so the two ends have to agree and the
-/// protocol version is what enforces that.
+/// Rust `rmp_serde` has two shapes for a struct and plaza ships a codec for
+/// each. Under `MsgPackCodec` a struct arrives as an **array** of its fields in
+/// declaration order; under `MsgPackNamedCodec` it arrives as a **map** keyed by
+/// field name, the same shape JSON gives. Both decode here, and which you get
+/// is decided by the server's codec alone.
+///
+/// The protocol version does not police that choice, and does not need to: a
+/// mismatch fails on the first frame rather than decoding into something
+/// plausible. What the version guards is field order, which is what compact
+/// depends on.
+///
+/// A map whose keys are all strings is returned as `Map<String, Object?>`, so
+/// it casts like a `jsonDecode` result. Anything else stays
+/// `Map<Object?, Object?>`.
 ///
 /// An externally-tagged enum is a one-entry map `{variant: body}`, except a
 /// unit variant, which is a bare string. See `variantName` in `enums.dart`.
@@ -275,12 +283,19 @@ class _Reader {
 
   List<Object?> _array(int n) => List<Object?>.generate(n, (_) => read(), growable: false);
 
+  /// MessagePack keys are any value, but a struct's are always strings, so an
+  /// all-string map comes back as `Map<String, Object?>` to match what
+  /// `jsonDecode` returns. Without that, `fields['x'] as Map<String, Object?>`
+  /// throws under a codec and passes under JSON, which is the worst way to
+  /// find out the two differ.
   Map<Object?, Object?> _map(int n) {
     final m = <Object?, Object?>{};
+    var allStrings = true;
     for (var i = 0; i < n; i++) {
       final k = read();
+      allStrings &= k is String;
       m[k] = read();
     }
-    return m;
+    return allStrings ? Map<String, Object?>.from(m) : m;
   }
 }
