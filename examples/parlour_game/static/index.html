@@ -228,10 +228,20 @@ function mpEncode(value, out = []) {
     else throw new Error('number too large for this encoder: ' + value);
     return out;
   }
+  if (typeof value === 'boolean') { out.push(value ? 0xc3 : 0xc2); return out; }
   if (typeof value === 'string') {
     const b = new TextEncoder().encode(value);
     if (b.length > 31) throw new Error('string too long for this encoder');
     out.push(0xa0 | b.length, ...b);
+    return out;
+  }
+  // Before the map branch: an array reaching `Object.keys` encodes as
+  // `{"0": ...}`, which decodes as a map where the server wants a sequence and
+  // is rejected one layer above anything this page can see.
+  if (Array.isArray(value)) {
+    if (value.length > 15) throw new Error('array too long for this encoder');
+    out.push(0x90 | value.length);
+    for (const v of value) mpEncode(v, out);
     return out;
   }
   const keys = Object.keys(value);
