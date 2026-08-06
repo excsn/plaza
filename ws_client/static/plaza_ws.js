@@ -145,7 +145,25 @@
     if (slot.ws) slot.ws.close(1000, "");
   }
 
+  // Where this page came from, as a WebSocket URL. A browser client that
+  // hardcoded 127.0.0.1 works only on the machine hosting it, which is the one
+  // case where you did not need a network. Deriving it means the page served by
+  // a host is already pointed at that host, over wss:// if the page was secure.
+  function plaza_ws_page_url(ptr) {
+    const url = (location.protocol === "https:" ? "wss:" : "ws:") + "//" + location.host + "/ws";
+    const bytes = encoder.encode(url);
+    new Uint8Array(wasm_memory.buffer, ptr, bytes.length).set(bytes);
+    return bytes.length;
+  }
+
+  function plaza_ws_page_url_len() {
+    const url = (location.protocol === "https:" ? "wss:" : "ws:") + "//" + location.host + "/ws";
+    return encoder.encode(url).length;
+  }
+
   function register_plugin(importObject) {
+    importObject.env.plaza_ws_page_url = plaza_ws_page_url;
+    importObject.env.plaza_ws_page_url_len = plaza_ws_page_url_len;
     importObject.env.plaza_ws_connect = plaza_ws_connect;
     importObject.env.plaza_ws_send_binary = plaza_ws_send_binary;
     importObject.env.plaza_ws_send_text = plaza_ws_send_text;
