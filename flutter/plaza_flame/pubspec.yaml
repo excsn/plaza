@@ -11,7 +11,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  flame: ^1.27.0
+  flame: ^1.38.0
   plaza_client:
     path: ../plaza_client
   plaza_client_utils:
