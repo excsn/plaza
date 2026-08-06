@@ -19,14 +19,20 @@ loopback = []
 json = ["dep:serde", "dep:serde_json"]
 native = ["dep:tungstenite"]
 miniquad = []
+scripted = ["dep:parking_lot"]
+pump = ["dep:plaza_wire", "dep:plaza_client_utils", "dep:serde"]
 
 [dependencies]
+parking_lot = { version = "^0.12", optional = true }
+plaza_client_utils = { version = "0.5", path = "../client_utils", optional = true }
+plaza_wire = { version = "0.6", path = "../wire", optional = true, default-features = false, features = ["serde"] }
 serde = { version = "^1", optional = true }
 serde_json = { version = "^1", optional = true }
 tungstenite = { version = "^0.24", optional = true, features = ["rustls-tls-webpki-roots"] }
 
 [dev-dependencies]
 macroquad = "=0.4.15"
+serde_json = "^1"
 
 [[example]]
 name = "echo"

@@ -78,6 +78,10 @@ pub mod loopback;
 pub mod miniquad;
 #[cfg(all(feature = "native", not(target_arch = "wasm32")))]
 pub mod native;
+#[cfg(feature = "pump")]
+pub mod pump;
+#[cfg(feature = "scripted")]
+pub mod scripted;
 
 /// Something that arrived, in order.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -238,19 +242,43 @@ impl<S: Socket + ?Sized> SendJson for S {
   }
 }
 
-/// Connects using whichever real transport this build has.
+/// Connects using whichever real transport this build has for its target.
 ///
-/// Present only when exactly one real backend is enabled, so that a build cannot
-/// silently pick a transport the author did not intend. With several, name the
-/// one you want: `native::connect` or `miniquad::connect`. [`loopback`] is
-/// never chosen here because it connects to a peer rather than to a URL.
+/// The choice is never ambiguous: [`native`] exists only off wasm and
+/// [`miniquad`] only on it, so a build that enables both features (the normal
+/// shape for an application shipping a desktop and a browser client from one
+/// crate) still has exactly one real backend per target. [`loopback`] is never
+/// chosen here because it connects to a peer rather than to a URL.
 #[cfg(any(
-  all(feature = "native", not(target_arch = "wasm32"), not(feature = "miniquad")),
-  all(feature = "miniquad", target_arch = "wasm32", not(feature = "native")),
+  all(feature = "native", not(target_arch = "wasm32")),
+  all(feature = "miniquad", target_arch = "wasm32"),
 ))]
-pub fn connect(url: &str) -> Result<impl Socket, WsError> {
+pub fn connect(url: &str) -> Result<impl Socket + use<>, WsError> {
   #[cfg(all(feature = "native", not(target_arch = "wasm32")))]
   return native::connect(url);
   #[cfg(all(feature = "miniquad", target_arch = "wasm32"))]
   return miniquad::connect(url);
+}
+
+/// [`connect`], boxed: the form an application holds when the backend is
+/// decided by the build rather than written at the call site.
+///
+/// Unlike [`connect`], this exists in every build. A build with no real backend
+/// gets a runtime [`WsError::Connect`] instead of a compile error, because such
+/// a build is legitimate (an offline teaching build still compiles its connect
+/// path) and every application ends up writing this same fallback arm itself.
+pub fn connect_boxed(url: &str) -> Result<Box<dyn Socket>, WsError> {
+  #[cfg(any(
+    all(feature = "native", not(target_arch = "wasm32")),
+    all(feature = "miniquad", target_arch = "wasm32"),
+  ))]
+  return connect(url).map(|s| Box::new(s) as Box<dyn Socket>);
+  #[cfg(not(any(
+    all(feature = "native", not(target_arch = "wasm32")),
+    all(feature = "miniquad", target_arch = "wasm32"),
+  )))]
+  {
+    let _ = url;
+    Err(WsError::Connect("this build has no socket backend compiled in".to_owned()))
+  }
 }
