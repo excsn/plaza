@@ -9,6 +9,7 @@ Dart packages so a Flutter app consumes plaza the way a Rust client does. **The 
 | [`plaza_client_utils`](plaza_client_utils/) | Real-time primitives: the whole Rust crate, ported. Pure Dart, no dependencies. | nothing |
 | [`plaza_ws`](plaza_ws/) | A WebSocket transport, over `web_socket_channel`. Kept apart so `plaza_client` stays dependency-free. | `plaza_client` |
 | [`plaza_flame`](plaza_flame/) | Flame glue: a game mixin that owns the connection, plus a drop-in debug readout. | `plaza_client`, `flame` |
+| [`parlour_client`](parlour_client/) | A Flame client for `examples/parlour_game`: two sockets with separate lifetimes, on two different codecs, and a turn-based table that animates between state changes. | `plaza_flame`, `plaza_ws` |
 | [`fixtures/`](fixtures/) | Golden wire bytes and golden behaviour vectors, written by Rust tests and replayed by Dart ones. | generated |
 
 A turn-based app needs `plaza_wire` and `plaza_client`. A Flame game adds `plaza_ws` and `plaza_flame`. Each package carries its own `README.md` and `API_REFERENCE.md`.
@@ -26,7 +27,7 @@ Each port carries its Rust unit tests transliterated, same names and tolerances,
 
 ## The examples
 
-Two, against the same server, because they answer the same question differently.
+Three. The first two run against the same server and answer the same question differently; the third answers one neither of them reaches.
 
 [`plaza_flame/example/`](plaza_flame/example/) is the Flame one: the arena list as a scene, tap to join, quick match, the debug readout, and a skew policy that blocks input and names both versions. It cannot exit the way a console client can and must not play on, so it blocks and says so. `flutter test` runs it against `LoopbackSocket`, no server and no display, and `check.sh` runs that.
 
@@ -44,6 +45,12 @@ dart run example/lobby_client.dart --protocol 1   # declares a wrong version
 `e2e.sh` runs both against the live server and asserts the exit codes, 0 and 2. An example nothing executes is documentation that happens to compile.
 
 Note what the skewed run prints: the ops keep arriving *after* the warning. That is the division of labour on screen, not a bug. Plaza recorded the disagreement and kept serving; the client is the thing that decided to stop.
+
+[`parlour_client/`](parlour_client/) is the two-socket one, against `examples/parlour_game`. Both of the above hold exactly one connection, and `Placed` is where they stop: the lobby names a room endpoint and neither of them dials it. This one does, on a **different codec** (the lobby is JSON, a table is named MessagePack), and plays a turn-based game across both.
+
+It carries the two things a second socket turns out to need. The lobby connection **stays open** after placement, because the server reads a closed lobby socket as the player giving up and withdraws the seat it just issued. And ops are **paced rather than applied**: a snapshot arrives on a deal and a resolved trick and nothing in between, so a client that applies the narration as fast as it arrives shows a hand that has already been played.
+
+`e2e.sh` stands `examples/parlour_game` up alongside `lobby_world` and runs this one's live suite against it, which is the only place named MessagePack written by `rmp_serde` is read by Dart over a real wire.
 
 ## Measuring the link
 
@@ -64,7 +71,9 @@ The two differ in what they keep. A **reconnect** changed the socket, probably n
 
 **1. A unit variant is a bare string.** Serde's externally-tagged representation puts struct variants in a one-entry map, `{"Placed": {...}}`, but a *unit* variant is just `"QueueLeft"`. A client that only ever reads `op['Placed']` silently drops every unit variant, and the symptom is indistinguishable from the server not sending. Use `variantName` and `variantBody`, which handle both shapes.
 
-**2. plaza's MessagePack is the compact one, so struct field names never cross the wire.** `Move { x, y }` arrives as `{"Move": [-7, 300]}`, not `{"Move": {"x": -7, "y": 300}}`. Field *order* is the contract, and the protocol version is what enforces it: it hashes the type definitions, so any reorder changes the version and the handshake reports it before a single op is mis-decoded. The same server under `JsonCodec` sends the names. Both shapes decode here; it is your types that have to match, and the conformance suite pins the difference so it cannot be discovered at runtime in an app.
+**2. plaza's default MessagePack is the compact one, so struct field names never cross the wire.** `Move { x, y }` arrives as `{"Move": [-7, 300]}`, not `{"Move": {"x": -7, "y": 300}}`. Field *order* is the contract, and the protocol version is what enforces it: it hashes the type definitions, so any reorder changes the version and the handshake reports it before a single op is mis-decoded. The same server under `JsonCodec` sends the names, and so does one under `MsgPackNamedCodec`, which exists for exactly this side of the wire: a client whose models are hand-written rather than generated from the Rust types has nothing to recover field order from.
+
+Both shapes decode here, so there is one `MsgPackCodec` class rather than two, and it is your own types that have to match whichever the server picked. The conformance suite pins both, decoded and re-encoded byte for byte, so the difference cannot be discovered at runtime in an app. What the version does *not* police is which codec is in use, and it does not need to: that mismatch fails on the first frame instead of decoding into something plausible.
 
 ## Conformance
 

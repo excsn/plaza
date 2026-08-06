@@ -177,13 +177,53 @@ void main() {
     });
   });
 
+  group('the named codec', () {
+    /// `MsgPackNamedCodec` exists for a client that cannot be built from the
+    /// server's struct definitions, so what has to hold is that the names
+    /// arrive: the decoded structure is the JSON one, in MessagePack bytes.
+    /// One assertion pins the whole shape.
+    test('decodes to the same structure as json', () {
+      for (final name in ['ops_batch', 'ops_empty', 'edges', 'hello']) {
+        expect(
+          msgPackDecode(bytesOf('$name.named.msgpack')),
+          jsonOf('$name.json'),
+          reason: '$name disagrees with its json twin',
+        );
+      }
+    });
+
+    test('a struct variant carries its field names', () {
+      final packed = msgPackDecode(bytesOf('ops_batch.named.msgpack')) as List;
+      expect(variantBody(packed[1]), {'x': -7, 'y': 300});
+    });
+
+    /// The trap is shared with the compact codec and with JSON, so it is worth
+    /// asserting on every shape a client will meet: a serde unit variant is a
+    /// bare string, and a client reading `op['Ping']` drops it silently.
+    test('a unit variant is still a bare string', () {
+      final packed = msgPackDecode(bytesOf('ops_batch.named.msgpack')) as List;
+      expect(packed[0], 'Ping');
+      expect(variantName(packed[0]), 'Ping');
+      expect(variantBody(packed[0]), isEmpty);
+    });
+
+    test('it is bigger than compact, and the names are the difference', () {
+      expect(
+        bytesOf('ops_batch.named.msgpack').length,
+        greaterThan(bytesOf('ops_batch.msgpack').length),
+      );
+    });
+  });
+
   /// The strong test. Decoding correctly is half a mirror: a client that reads
   /// the server and still sends something the server cannot read is no use.
   test('re-encoding reproduces the Rust bytes exactly', () {
     for (final name in ['ops_batch', 'ops_empty', 'edges', 'hello']) {
-      final original = bytesOf('$name.msgpack');
-      final reencoded = msgPackEncode(msgPackDecode(original));
-      expect(reencoded, original, reason: '$name did not round-trip byte for byte');
+      for (final ext in ['msgpack', 'named.msgpack']) {
+        final original = bytesOf('$name.$ext');
+        final reencoded = msgPackEncode(msgPackDecode(original));
+        expect(reencoded, original, reason: '$name.$ext did not round-trip byte for byte');
+      }
     }
   });
 }

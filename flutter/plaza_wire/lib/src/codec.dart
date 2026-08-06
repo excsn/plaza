@@ -48,9 +48,12 @@ class JsonCodec implements WireCodec {
 /// Note which *shape* the server uses. Plaza's `MsgPackCodec` encodes a Rust
 /// struct compactly, as an array of its fields in declaration order, so field
 /// order is part of the contract and the protocol version is what guards it.
-/// A server using `with_struct_map()` sends maps keyed by field name instead.
-/// This codec decodes either; it is the shape your types expect that has to
-/// match.
+/// Its `MsgPackNamedCodec` sends maps keyed by field name instead, which is the
+/// shape JSON gives and the one to ask a server for when this client's models
+/// are written by hand rather than generated from the Rust types.
+///
+/// This codec decodes either, so there is one class here and not two; it is the
+/// shape your own types expect that has to match the server's choice.
 class MsgPackCodec implements WireCodec {
   const MsgPackCodec();
 

@@ -200,7 +200,9 @@ class MsgPackCodec implements WireCodec {
 
 `name` is `'msgpack'`, `isText` is `false`.
 
-**Note which shape the server uses.** Plaza's Rust `MsgPackCodec` encodes a struct **compactly**, as an array of its fields in declaration order, so field order is part of the contract and the protocol version is what guards it. A server built with `with_struct_map()` sends maps keyed by field name instead. This codec decodes either; it is the shape your types expect that has to match.
+**Note which shape the server uses.** Plaza's Rust `MsgPackCodec` encodes a struct **compactly**, as an array of its fields in declaration order, so field order is part of the contract and the protocol version is what guards it. Its `MsgPackNamedCodec` sends maps keyed by field name instead, the same shape JSON gives, and is the one to ask a server for when this client's models are hand-written rather than generated from the Rust types.
+
+This codec decodes either, which is why there is one class here and not two; it is the shape your own types expect that has to match. The protocol version does not police the codec choice and does not need to, because that mismatch fails on the first frame rather than decoding into something plausible.
 
 `decode` throws `FormatException` on a text frame, and says specifically that the server is probably speaking JSON, because that is what a text frame reaching a MessagePack client almost always means.
 
@@ -285,9 +287,12 @@ Type mapping, in both directions:
 | str | `String` |
 | bin | `Uint8List` |
 | array | `List<Object?>` |
-| map | `Map<Object?, Object?>` |
+| map, all-string keys | `Map<String, Object?>` |
+| map, any other keys | `Map<Object?, Object?>` |
 
-A Rust struct under plaza's compact codec arrives as an **array**, not a map. A Rust enum arrives as described in [section 5](#5-serde-enums).
+A Rust struct under plaza's compact codec arrives as an **array**, not a map; under the named codec it arrives as a map. A Rust enum arrives as described in [section 5](#5-serde-enums).
+
+All-string maps are typed `Map<String, Object?>` so they cast exactly like a `jsonDecode` result. Without that, `body['link'] as Map<String, Object?>` would pass under JSON and throw under MessagePack, which is the worst way to learn the two differ.
 
 ### Function `msgPackEncode`
 
