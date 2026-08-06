@@ -61,7 +61,9 @@ pub struct Host {
   /// departure with no entry here is a netdrop.
   pending: Mutex<HashMap<u64, Parting>>,
   /// Seats a dropped guest may return to, and when the grace expires.
-  held: Mutex<HashMap<Seat, tokio::time::Instant>>,
+  held: Mutex<plaza::common::reconnect::ReconnectTracker<Seat, std::time::Duration>>,
+  /// The zero the tracker's time axis is measured from.
+  epoch: tokio::time::Instant,
   /// Seats whose owner was removed rather than dropped. A rejoin here is
   /// refused: the ban memory `door_policy` keeps per account, applied to a
   /// seat.
@@ -76,7 +78,8 @@ impl Host {
       manager,
       watches: Default::default(),
       pending: Default::default(),
-      held: Default::default(),
+      held: Mutex::new(plaza::common::reconnect::ReconnectTracker::new(GRACE)),
+      epoch: tokio::time::Instant::now(),
       barred: Default::default(),
       closed: Default::default(),
       meters: Default::default(),
@@ -104,7 +107,7 @@ impl Host {
     if let Some(watch) = self.watches.lock().get_mut(&key) {
       watch.seat = Some(seat);
     }
-    self.held.lock().remove(&seat);
+    self.held.lock().on_reconnect(&seat);
   }
 
   pub fn may_sit(&self, seat: Seat) -> bool {
@@ -175,7 +178,7 @@ impl Host {
   ///
   /// The reason is whatever this host recorded when it ordered the close;
   /// nothing else knows one, so no entry means the network went away.
-  pub fn parted(&self, key: u64, grace: std::time::Duration) {
+  pub fn parted(&self, key: u64) {
     let how = self.pending.lock().remove(&key).unwrap_or(Parting::Dropped);
     match how {
       Parting::Dropped => self.meters.drops.fetch_add(1, Ordering::Relaxed),
@@ -188,12 +191,12 @@ impl Host {
     let watch = self.watches.lock().remove(&key);
     let Some(seat) = watch.and_then(|w| w.seat) else { return };
     if how.keeps_the_seat() {
-      // The seat stays warm. This is what `ReconnectTracker` is for, and the
-      // reason a kick has to be told apart from a drop at all.
-      self.held.lock().insert(seat, tokio::time::Instant::now() + grace);
+      // The seat stays warm: the reason a kick has to be told apart from a
+      // drop at all.
+      self.held.lock().on_disconnect(seat, self.epoch.elapsed());
       self.meters.seats_held.fetch_add(1, Ordering::Relaxed);
     } else {
-      self.held.lock().remove(&seat);
+      self.held.lock().forget(&seat);
       self.barred.lock().push(seat);
       self.meters.seats_cleared.fetch_add(1, Ordering::Relaxed);
     }
@@ -240,17 +243,17 @@ impl Host {
   }
 
   pub fn held_seats(&self) -> Vec<(Seat, u64)> {
-    let now = tokio::time::Instant::now();
+    let now = self.epoch.elapsed();
     self
       .held
       .lock()
-      .iter()
-      .map(|(seat, until)| (*seat, until.saturating_duration_since(now).as_millis() as u64))
+      .awaiting()
+      .map(|(seat, until)| (*seat, until.saturating_sub(now).as_millis() as u64))
       .collect()
   }
 
   pub fn is_held(&self, seat: Seat) -> bool {
-    self.held.lock().contains_key(&seat)
+    self.held.lock().is_awaiting_reconnect(&seat)
   }
 }
 

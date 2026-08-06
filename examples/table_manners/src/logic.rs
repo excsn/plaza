@@ -10,7 +10,7 @@ use plaza::{
   state_logic::{LogicInput, LogicOutput, SnapshotRequest, StateLogic, StateLogicError},
 };
 
-use crate::moderation::{Host, GRACE};
+use crate::moderation::Host;
 use crate::types::{Guest, Parting, PartyOp, Seat, Table, SEATS};
 
 #[derive(Debug, Clone)]
@@ -107,7 +107,7 @@ impl StateLogic<PartyOp, u64, PartyState> for PartyLogic {
       }
       LogicInput::AgentLeft { agent_id } => {
         state.players.remove(&agent_id);
-        self.host.parted(agent_id, GRACE);
+        self.host.parted(agent_id);
       }
       LogicInput::AgentJoined { agent } => {
         if let Some(key) = agent.id_cloned() {
