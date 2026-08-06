@@ -168,6 +168,7 @@ The client-side socket, with one interface over three backends. `plaza_session` 
 | Browser under macroquad: `extern "C"` against our own JS plugin, no dependencies, because wasm-bindgen cannot coexist with miniquad's loader | [ws_client/src/miniquad.rs](ws_client/src/miniquad.rs), [ws_client/js/plaza_ws.js](ws_client/js/plaza_ws.js) |
 | Dropping a resume backlog before parsing it, under the resume contract | [ws_client/src/backlog.rs](ws_client/src/backlog.rs) |
 | Guards the silent-stub failure: parses a bundle's imports and fails if the plugin does not satisfy them | [ws_client/check_js_imports.py](ws_client/check_js_imports.py) |
+| Guards the browser pages nothing compiles: kind bytes against `Kind`, unhandled unit variants, and a page's own MessagePack codec run against the Rust fixtures | [examples/check_pages.py](examples/check_pages.py) |
 
 ## `plaza_server_utils`
 

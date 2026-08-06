@@ -13,6 +13,11 @@ cargo test --workspace --features "plaza_client_utils/net-sim,plaza_ws/native,pl
 cd examples
 CARGO_TARGET_DIR="$(cd .. && pwd)/target" cargo test --workspace
 
+# Nothing compiles the browser pages, so every way their hand-written frame
+# handling can be wrong is silent. One of them shipped wrong.
+echo "--- the browser pages ---"
+./check_pages.py
+
 # A workspace check unifies features across its members, so a crate that uses
 # something it never declared compiles anyway, on a neighbour's enable. Only a
 # per-package check says whether a manifest is honest. Three examples were
