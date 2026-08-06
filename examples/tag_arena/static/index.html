@@ -22,6 +22,13 @@
         const KIND_PING = 2;
         const KIND_PONG = 3;
 
+        // An externally-tagged serde enum puts struct variants in an object keyed
+        // by the variant name, but a *unit* variant is a bare string. A client
+        // that only ever reads `op.Something` silently drops every unit variant,
+        // which is a bug that looks exactly like the server not sending.
+        const opName = (op) => (typeof op === 'string' ? op : Object.keys(op)[0]);
+        const opBody = (op) => (typeof op === 'string' ? {} : op[opName(op)]);
+
         const FIELD = 100.0;      // world units, matching types.rs
         const TAG_RADIUS = 2.5;
         const PX = 640;
@@ -50,12 +57,16 @@
                 }
                 if (kind !== KIND_OPS) return;
                 (JSON.parse(event.data.slice(1)) || []).forEach(op => {
-                    if (op.Snapshot) {
+                    const body = opBody(op);
+                    switch (opName(op)) {
+                    case 'Snapshot':
                         // Latest wins outright: this replaces the world rather
                         // than being applied to it.
-                        world = op.Snapshot;
-                    } else if (op.Welcome) {
-                        me = op.Welcome.you;
+                        world = body;
+                        break;
+                    case 'Welcome':
+                        me = body.you;
+                        break;
                     }
                 });
             };

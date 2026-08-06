@@ -64,7 +64,10 @@
                     return;
                 }
                 if (kind !== KIND_OPS) return;
-                (JSON.parse(e.data.slice(1)) || []).forEach(op => {
+                let ops;
+                try { ops = JSON.parse(e.data.slice(1)); }
+                catch (err) { console.error('bad frame', err, e.data); return; }
+                (ops || []).forEach(op => {
                     if (op.Snapshot) {
                         view = op.Snapshot;
                         view.relics.forEach(r => remembered.set(r.id, r));

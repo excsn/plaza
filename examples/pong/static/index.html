@@ -72,6 +72,13 @@
         const KIND_PING = 2;
         const KIND_PONG = 3;
 
+        // An externally-tagged serde enum puts struct variants in an object keyed
+        // by the variant name, but a *unit* variant is a bare string. A client
+        // that only ever reads `op.Something` silently drops every unit variant,
+        // which is a bug that looks exactly like the server not sending.
+        const opName = (op) => (typeof op === 'string' ? op : Object.keys(op)[0]);
+        const opBody = (op) => (typeof op === 'string' ? {} : op[opName(op)]);
+
         // The body of a KIND_OPS frame is the ops array itself: `from` is the
         // server's own bookkeeping and is not sent.
         function sendOps(ops) {
@@ -82,28 +89,34 @@
             // One message kind. A snapshot is an op like any other, so there is
             // a single loop rather than an Ops-versus-StateData branch.
             (ops || []).forEach(op => {
-                if (op.Snapshot) {
+                const body = opBody(op);
+                switch (opName(op)) {
+                case 'Snapshot':
                     // The whole world, every tick. It replaces the local copy
                     // outright rather than being merged into it, so nothing
                     // here patches fields a later frame would overwrite.
-                    gameState = op.Snapshot;
+                    gameState = body;
                     if (gameState && myPlayerId) {
                         if (gameState.player1_id === myPlayerId) mySide = "Left";
                         else if (gameState.player2_id === myPlayerId) mySide = "Right";
                     }
                     draw();
-                } else if (op.AssignPlayer) {
-                    myPlayerId = op.AssignPlayer.player_id;
-                    mySide = op.AssignPlayer.side;
+                    break;
+                case 'AssignPlayer':
+                    myPlayerId = body.player_id;
+                    mySide = body.side;
                     console.log(`Assigned as ${mySide} player: ${myPlayerId}`);
-                } else if (op.ScoreUpdate) {
+                    break;
+                case 'ScoreUpdate':
                     // An event, not state: the next snapshot carries the score.
-                    console.log(`Point to ${op.ScoreUpdate.player_id}: ${op.ScoreUpdate.new_score}`);
-                } else if (op.PhaseChange) {
+                    console.log(`Point to ${body.player_id}: ${body.new_score}`);
+                    break;
+                case 'PhaseChange':
                     // Nothing is answered automatically any more. The phases run
                     // themselves on the server, and a client that replied here
                     // was the only reason a countdown ever ended.
-                    console.log(`phase: ${op.PhaseChange}`);
+                    console.log(`phase: ${body}`);
+                    break;
                 }
             });
         }
