@@ -147,6 +147,8 @@ pub mod coalesce;
 pub mod correction;
 pub mod digest;
 pub mod error;
+#[cfg(feature = "fixed")]
+pub mod fixed;
 pub mod filter;
 pub mod held_input;
 pub mod input_buffer;

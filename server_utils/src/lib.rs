@@ -19,6 +19,9 @@
 //!   saying out loud when a seat's accumulated state belongs to somebody else.
 //! - [`meter`]: turning running totals into rates, so a claim about bandwidth is
 //!   a number on screen rather than an assertion in a README.
+//! - [`oneshot`]: repeating an unacknowledged one-shot op (a `Welcome`, a
+//!   `Refused`) on a link that can lose one, until the peer's own traffic
+//!   proves it heard.
 //!
 //! Like the client crate it is pure logic with no async runtime, so a server
 //! simulation can run in wasm (the interactive `netcode_playground` example does
@@ -30,6 +33,7 @@ pub mod delta;
 pub mod history;
 pub mod input_schedule;
 pub mod meter;
+pub mod oneshot;
 pub mod relevance;
 pub mod render_error;
 pub mod seats;

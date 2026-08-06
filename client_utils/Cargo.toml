@@ -16,8 +16,10 @@ all-features = true
 
 [features]
 net-sim = []
+fixed = ["dep:serde"]
 
 [dependencies]
+serde = { version = "^1", features = ["derive"], optional = true }
 thiserror = { workspace = true }
 tracing = "^0"
 
