@@ -19,7 +19,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use plaza_wire::frame::ProtocolVersion;
-use plaza_wire::{frame, MsgPackCodec, WireCodec};
+use plaza_wire::{frame, MsgPackCodec, MsgPackNamedCodec, WireCodec};
 use serde::{Deserialize, Serialize};
 
 /// One of each variant shape serde produces, because the shapes are what a
@@ -85,6 +85,7 @@ fn golden(name: &str, ext: &str, bytes: &[u8]) {
 
 fn emit<T: Serialize>(name: &str, value: &T) {
   golden(name, "msgpack", &MsgPackCodec.encode(value).expect("msgpack"));
+  golden(name, "named.msgpack", &MsgPackNamedCodec.encode(value).expect("msgpack-named"));
   golden(name, "json", &serde_json::to_vec(value).expect("json"));
 }
 

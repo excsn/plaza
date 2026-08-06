@@ -15,4 +15,4 @@ pub use plaza_wire::WireCodec;
 pub use plaza_wire::JsonCodec;
 
 #[cfg(feature = "msgpack")]
-pub use plaza_wire::MsgPackCodec;
+pub use plaza_wire::{MsgPackCodec, MsgPackNamedCodec};

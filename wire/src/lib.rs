@@ -130,8 +130,14 @@ impl WireCodec for JsonCodec {
 /// positionally. Both compile, both round-trip, and picking the wrong one
 /// silently costs most of the benefit: measured on a ten-op message, named came
 /// out at 67% of JSON and compact at 40%. This uses compact, so a peer decoding
-/// it must be built from the same struct definitions, which is what the
-/// protocol version exists to enforce.
+/// it must be built from the same struct definitions, **in the same order**.
+/// [`MsgPackNamedCodec`] is the other choice.
+///
+/// The protocol version does not police that. It hashes type definitions, so
+/// the same types under either codec declare the same number: what it catches
+/// is a field renamed or reordered, not the encoding. Nothing needs to catch
+/// the encoding, because a mismatch fails on the first frame rather than
+/// decoding into something plausible.
 ///
 /// **What compact does not drop: enum variant names.** A struct becomes an
 /// array, but a variant is still a map keyed by its name, so
@@ -163,6 +169,58 @@ impl WireCodec for MsgPackCodec {
     // `to_vec` allocates four times on a ten-op message and `write` none, which
     // is why the trait has this method at all.
     rmp_serde::encode::write(buf, value).map_err(Into::into)
+  }
+
+  fn decode<T: DeserializeOwned>(&self, bytes: &[u8]) -> Result<T, Box<dyn std::error::Error + Send + Sync>> {
+    rmp_serde::from_slice(bytes).map_err(Into::into)
+  }
+}
+
+/// MessagePack with struct field names kept, for a peer that decodes by name.
+///
+/// [`MsgPackCodec`] is the one to reach for by default; this one exists for a
+/// client that cannot be built from the server's struct definitions and so has
+/// nothing to recover field order from. A hand-written decoder in another
+/// language is the usual case, and a generated model layer keyed by name is the
+/// other.
+///
+/// **It costs more than the usual figure suggests, and how much depends on your
+/// messages.** The often-quoted 67% of JSON against compact's 40% comes from a
+/// ten-op message. Measured instead on a whole match of real traffic
+/// (`examples/parlour_game --example parlour_report`), named came out at **76% of JSON
+/// where compact was 26%**, a premium of **+190%** rather than +67%.
+///
+/// The reason is worth knowing before choosing: a field name is paid **per
+/// field per message**, so the premium tracks how *wide* a message is, not how
+/// large. A per-recipient state view with fifteen fields pays far more than a
+/// two-field notice, and it is usually also the most frequent message. Measure
+/// your own mix before assuming the cheap end of that range.
+///
+/// **Decoding is shared, not merely similar.** `rmp_serde` dispatches on the
+/// MessagePack marker rather than on the type: a struct arrives as an array or
+/// as a map and both deserialize. So this codec's `decode` is
+/// [`MsgPackCodec`]'s, and a server reads either shape whichever it writes.
+/// A migration can therefore turn one direction at a time.
+#[cfg(feature = "msgpack")]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MsgPackNamedCodec;
+
+#[cfg(feature = "msgpack")]
+impl WireCodec for MsgPackNamedCodec {
+  fn name(&self) -> &'static str {
+    "msgpack-named"
+  }
+
+  fn encode<T: Serialize>(&self, value: &T) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+    rmp_serde::to_vec_named(value).map_err(Into::into)
+  }
+
+  fn encode_into<T: Serialize>(
+    &self,
+    value: &T,
+    buf: &mut Vec<u8>,
+  ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    rmp_serde::encode::write_named(buf, value).map_err(Into::into)
   }
 
   fn decode<T: DeserializeOwned>(&self, bytes: &[u8]) -> Result<T, Box<dyn std::error::Error + Send + Sync>> {
@@ -203,5 +261,44 @@ mod tests {
   #[test]
   fn the_name_reaches_error_messages() {
     assert_eq!(JsonCodec.name(), "json");
+  }
+
+  #[cfg(feature = "msgpack")]
+  #[test]
+  fn named_carries_the_field_names_and_compact_does_not() {
+    let value = Move { player: 7, dx: -1.5 };
+
+    let compact = MsgPackCodec.encode(&value).unwrap();
+    let named = MsgPackNamedCodec.encode(&value).unwrap();
+
+    assert!(!compact.windows(6).any(|w| w == b"player"));
+    assert!(named.windows(6).any(|w| w == b"player"));
+    assert!(named.len() > compact.len(), "the names are what named pays for");
+  }
+
+  /// The property a migration rests on: whichever shape a peer writes, it reads
+  /// both, so the two ends can be turned over one at a time.
+  #[cfg(feature = "msgpack")]
+  #[test]
+  fn either_msgpack_codec_decodes_the_other() {
+    let value = Move { player: 7, dx: -1.5 };
+
+    let compact = MsgPackCodec.encode(&value).unwrap();
+    let named = MsgPackNamedCodec.encode(&value).unwrap();
+
+    assert_eq!(MsgPackNamedCodec.decode::<Move>(&compact).unwrap(), value);
+    assert_eq!(MsgPackCodec.decode::<Move>(&named).unwrap(), value);
+  }
+
+  #[cfg(feature = "msgpack")]
+  #[test]
+  fn encode_into_appends_what_encode_returns() {
+    let value = Move { player: 7, dx: -1.5 };
+
+    let mut buf = vec![0xAB];
+    MsgPackNamedCodec.encode_into(&value, &mut buf).unwrap();
+
+    assert_eq!(buf[0], 0xAB);
+    assert_eq!(&buf[1..], &MsgPackNamedCodec.encode(&value).unwrap()[..]);
   }
 }

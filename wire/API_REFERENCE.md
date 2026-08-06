@@ -87,11 +87,32 @@ pub struct MsgPackCodec;
 
 MessagePack via `rmp_serde`. `name()` returns `"msgpack"`, `is_text()` stays `false`, so a WebSocket transport sends binary frames. Also zero-sized.
 
-**Compact, not named.** `rmp_serde` offers two encodings: `to_vec_named` keeps struct field names, `to_vec` drops them and encodes structs positionally. Both compile and both round-trip, so picking the wrong one silently costs most of the benefit: measured on a ten-op message, named came out at 67% of JSON and compact at 40%. This uses compact, which means a peer decoding it **must be built from the same struct definitions** (field order is the schema), and that is what the [`build`](#7-module-build-feature-build) version and the `Hello` handshake exist to enforce.
+**Compact, not named.** `rmp_serde` offers two encodings: `to_vec_named` keeps struct field names, `to_vec` drops them and encodes structs positionally. Both compile and both round-trip, so picking the wrong one silently costs most of the benefit: measured on a ten-op message, named came out at 67% of JSON and compact at 40%. This uses compact, which means a peer decoding it **must be built from the same struct definitions, in the same order** (field order is the schema). [`MsgPackNamedCodec`](#struct-msgpacknamedcodec) is the other choice.
+
+Field order is what the [`build`](#7-module-build-feature-build) version and the `Hello` handshake police, by hashing the type definitions. They do **not** police which of the two codecs is in use: the same types under either declare the same version. Nothing needs to, because that mismatch fails on the first frame rather than decoding into something plausible, and because a codec is a per-connection choice while a version is per-build, so a server running JSON on one transport and MessagePack on another could not express it in one number anyway.
 
 **What compact does not drop: enum variant names.** A struct becomes an array, but a variant is still a map keyed by its name, so `Op::Hello { protocol }` goes out as `{"Hello": [protocol]}` rather than as an index. Short variant names are worth real bytes and long ones cost on every frame carrying them, which is not obvious from the format's reputation. Where a fieldless enum rides a hot path, map it to a `u8` with `#[serde(into = "u8", try_from = "u8")]` and pin the numbers in the conversions; `examples/horde_playground` does this for its enemy kinds and leave reasons.
 
 Measured on horde's real traffic, the codec is worth 4.2x against JSON on its own, so the refinements above are refinements rather than reasons to hesitate.
+
+### Struct `MsgPackNamedCodec`
+
+```rust
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MsgPackNamedCodec;
+```
+
+*Requires the `msgpack` feature, which is off by default.*
+
+MessagePack with struct field names kept: `Move { x, y }` goes out as `{"x": -7, "y": 300}` where [`MsgPackCodec`](#struct-msgpackcodec) sends `[-7, 300]`. `name()` returns `"msgpack-named"`, `is_text()` stays `false`.
+
+Reach for `MsgPackCodec` by default. This one is for a peer that **cannot be built from the server's struct definitions** and so has nothing to recover field order from: a hand-written decoder in another language, or a generated model layer keyed by name.
+
+**It costs more than the usual figure suggests.** The often-quoted 67% of JSON against compact's 40% comes from a ten-op message. Measured on a whole match of real traffic in [`examples/parlour_game`](../examples/parlour_game/) (`cargo run -p plaza_example_parlour_game --example parlour_report`), named came out at **76% of JSON where compact was 26%**: a premium of **+190%**, not +67%. At that point the choice is close to "a quarter of JSON or three quarters of it", and adopting named to keep a hand-written client simple is nearly giving up MessagePack.
+
+The reason generalises. A field name is paid **per field per message**, so the premium tracks how *wide* a message is rather than how large. A per-recipient state view with fifteen fields pays far more than a two-field notice, and it is usually also the most frequent message on the wire. Note this runs opposite to the variant-name result in [`examples/curtain_fire`](../examples/curtain_fire/), where a fixed per-message tag made *small* messages the expensive ones: a per-message cost punishes small messages, a per-field cost punishes wide ones. Measure your own mix rather than assuming either end.
+
+**Decoding is shared, not merely similar.** `rmp_serde` dispatches on the MessagePack marker rather than on the type, so a struct arriving as an array and one arriving as a map both deserialize. This codec's `decode` is therefore identical to `MsgPackCodec`'s, and a server reads either shape whichever one it writes. That is what lets a deployment turn one direction at a time instead of flipping both ends together, and it is pinned by `either_msgpack_codec_decodes_the_other`.
 
 ## 4. Module `envelope`
 
@@ -231,5 +252,5 @@ Pairs with [`plaza_session::host::Host`](../session/API_REFERENCE.md), which cov
 | Feature | Default | Effect |
 |---|---|---|
 | `json` | yes | Compiles [`JsonCodec`](#struct-jsoncodec) and enables the `serde_json` dependency. With `default-features = false` the crate is the trait and payloads plus `serde` alone. |
-| `msgpack` | no | Compiles [`MsgPackCodec`](#struct-msgpackcodec) and enables the `rmp-serde` dependency. |
+| `msgpack` | no | Compiles [`MsgPackCodec`](#struct-msgpackcodec) and [`MsgPackNamedCodec`](#struct-msgpacknamedcodec), and enables the `rmp-serde` dependency. |
 | `build` | no | Compiles [`build`](#7-module-build-feature-build), for use from a `build.rs`. Put it under `[build-dependencies]`, not `[dependencies]`. |

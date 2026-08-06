@@ -20,7 +20,7 @@ plaza_session = { version = "0.1", default-features = false, features = ["actix_
 | `tcp` | yes | `TcpPlazaSession`: length-delimited TCP |
 | `actix_host` | no | `host::Host`: the listen-server HTTP layer, serving a browser client from the same origin as the socket |
 | `json` | yes | `JsonCodec`, and the codec a session type falls back to when it names none |
-| `msgpack` | no | `MsgPackCodec` |
+| `msgpack` | no | `MsgPackCodec` and `MsgPackNamedCodec` |
 
 The shared connection manager compiles either way.
 

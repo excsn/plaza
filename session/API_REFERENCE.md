@@ -22,7 +22,7 @@
 | `tcp` | yes | [`TcpPlazaSession`](#struct-tcpplazasessionop-id-c-jsoncodec): length-delimited TCP. |
 | `actix_host` | no | [`host::Host`](#7-module-host-feature-actix_host): the listen-server HTTP layer. Implies `actix_ws`. |
 | `json` | yes | `JsonCodec`, and the codec a session type falls back to when it names none. Enables `plaza_wire/json`, which is what pulls in `serde_json`. |
-| `msgpack` | no | `MsgPackCodec`. Enables `plaza_wire/msgpack`. |
+| `msgpack` | no | `MsgPackCodec` (compact) and `MsgPackNamedCodec` (struct field names kept, for a peer that decodes by name). Enables `plaza_wire/msgpack`. |
 
 [`manager`](#4-module-manager), [`codec`](#3-module-codec), and [`error`](#2-error-handling) compile unconditionally.
 

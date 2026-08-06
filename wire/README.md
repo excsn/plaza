@@ -111,6 +111,8 @@ let decoded: MyOp = codec.decode(&bytes)?;
 
 Swap in your own format for production without touching transport code. Implementations must be stateless and cheap to clone: on the server, one codec lives inside a session and is shared across every connection it holds.
 
+MessagePack itself needs no hand-writing: the `msgpack` feature ships `MsgPackCodec` (compact, structs as arrays) and `MsgPackNamedCodec` (structs as maps, for a peer that decodes by name). The implementation below is kept as the shortest illustration of the trait.
+
 ```rust
 use plaza_wire::WireCodec;
 
