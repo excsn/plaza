@@ -38,26 +38,9 @@ Please refer to **[`core/README.md`](core/README.md)** for installation, the fou
 
 ## Examples
 
-| Example | Shows |
-|---|---|
-| [`shared_counter`](examples/shared_counter/) | The smallest complete application. |
-| [`pong`](examples/pong/) | Real WebSockets, 60Hz simulation. Two browser tabs to play. |
-| [`whack_a_mole`](examples/whack_a_mole/) | A scheduler-driven game loop with scoring. |
-| [`ability_cooldowns`](examples/ability_cooldowns/) | Scheduled events that expire. |
-| [`timed_debuff`](examples/timed_debuff/) | A callback scheduler undoing an effect on a timer. |
-| [`typing_indicator`](examples/typing_indicator/) | Game-time timeouts that reset on activity. |
-| [`card_table`](examples/card_table/) | Turns, rounds, and phases, with hidden information: each player sees only their own cards. |
-| [`lobby_world`](examples/lobby_world/) | Rooms, placement and travel: arenas spawned on demand, admission on a latency the server measured rather than one the client claimed, quick-match with bots filling the empty seats, and a wallet that follows you between rooms. See its [README](examples/lobby_world/README.md). |
-| [`auction_floor`](examples/auction_floor/) | **Correlated replies**: everyone grabs the same item, the server decides once from what each client *named* rather than when it arrived, and every claimant learns the fate of their own claim. See its [README](examples/auction_floor/README.md). |
-| [`csp_net_example`](examples/csp_net_example/) | Client-side prediction and server reconciliation over a simulated network. |
-| [`netcode_playground`](examples/netcode_playground/) | The same, made interactive in the browser: drag the box, crank the latency, toggle each mechanism off to see it break. Also interpolation and lag compensation. See its [README](examples/netcode_playground/README.md). |
-| [`rollback_playground`](examples/rollback_playground/) | The other netcode family: peer-to-peer deterministic rollback, two peers predicting each other's inputs. See its [README](examples/rollback_playground/README.md). |
-| [`horde_playground`](examples/horde_playground/) | Scale, as a real listen-server: thousands of enemies, per-player relevance, host or join over a socket or deploy headless. See its [README](examples/horde_playground/README.md). |
-| [`blackhole_playground`](examples/blackhole_playground/) | Sending a *field* instead of its consequences, also a listen-server with four roles (headless / observer / host / client). See its [README](examples/blackhole_playground/README.md). |
-| [`bomb_grid`](examples/bomb_grid/) | Netcode on a **lattice**, where a correction cannot be eased away and has to be counted instead. Bombs, chain reactions, destructible walls. See its [README](examples/bomb_grid/README.md). |
-| [`pellet_maze`](examples/pellet_maze/) | An input that names a **place** rather than a time, which no schedule can settle. Also per-recipient frames, used to make a player genuinely invisible. See its [README](examples/pellet_maze/README.md). |
-| [`seed_defense`](examples/seed_defense/) | A wire that carries **causes instead of consequences**: a seed and a wave number produce the whole world on every machine, and a digest proves they still agree. See its [README](examples/seed_defense/README.md). |
-| [`ghost_trials`](examples/ghost_trials/) | The op stream as an **event-sourced record**: a ghost is a replay of an input log, and a lap time is decided by replaying the evidence rather than by believing a number. See its [README](examples/ghost_trials/README.md). |
+**[examples/](examples/) is the list**, one crate each, smallest first, with what each one demonstrates. Twenty-six of them, from a two-client shared counter to a listen-server running thousands of entities.
+
+Start with [`shared_counter`](examples/shared_counter/) for the smallest complete application, [`pong`](examples/pong/) for real WebSockets in two browser tabs, or [`card_table`](examples/card_table/) for turns and hidden information.
 
 The examples are their own workspace, so run them from `examples/`:
 

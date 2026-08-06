@@ -101,7 +101,7 @@ Both transports share everything that is not socket I/O, which is why the adapte
 
 | What | Entry |
 |---|---|
-| `WireCodec` trait (with `is_text` and `encode_into`), `JsonCodec`, and `MsgPackCodec` (feature `msgpack`) | [wire/src/lib.rs](wire/src/lib.rs) |
+| `WireCodec` trait (with `is_text` and `encode_into`), `JsonCodec`, and `MsgPackCodec` / `MsgPackNamedCodec` (feature `msgpack`). What the names cost on real traffic, measured: [parlour_game](examples/parlour_game/) | [wire/src/lib.rs](wire/src/lib.rs) |
 | Identity on the wire: `Agent`, `AgentId`. Here rather than in core because a wasm client cannot depend on core | [wire/src/envelope.rs](wire/src/envelope.rs) |
 | Framing: the kind byte in front of every message, the skip-unknown rule that lets a frame kind be added later, and `ProtocolVersion` for the `Hello` handshake | [wire/src/frame.rs](wire/src/frame.rs) |
 | What the codecs and the framing actually cost, with an allocation-counting allocator | [wire/benches/wire.rs](wire/benches/wire.rs) |
@@ -115,6 +115,8 @@ Split out from `plaza_session` so a client can share the server's encoding witho
 | What | Entry |
 |---|---|
 | Create / join / list / reap, and password verification | [lobby/src/manager.rs](lobby/src/manager.rs) |
+| Quick match: a queue with patience, and the seats it fills with bots. Worked examples: [lobby_world](examples/lobby_world/) (into standing rooms), [parlour_game](examples/parlour_game/) (spawning one per match) | [lobby/src/queue.rs](lobby/src/queue.rs) |
+| One-use placement tickets, so a room learns who connected without asking them | [lobby/src/tickets.rs](lobby/src/tickets.rs) |
 | `RoomFactory`: what an app implements per game type | [lobby/src/factory.rs](lobby/src/factory.rs) |
 | `RoomHandle` and the in-process implementation | [lobby/src/room.rs](lobby/src/room.rs) |
 | Request/notice payload shapes | [lobby/src/op_payloads.rs](lobby/src/op_payloads.rs) |
