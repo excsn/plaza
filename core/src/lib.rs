@@ -52,6 +52,6 @@ pub use controller::{
 };
 pub use error::PlazaError;
 pub use session::{InProcessSession, MessageTarget, Session, SessionMessage, TargetedOp};
-pub use snapshot::{NoSnapshots, SnapshotProvider};
+pub use snapshot::{NoSnapshots, SnapshotFn, SnapshotProvider};
 pub use state_logic::{LogicInput, StateLogic};
 pub use tick_driver::TickDriver;

@@ -147,6 +147,43 @@ pub trait SnapshotProvider<ID: AgentId, StateType, Op>: Send + Sync + 'static {
   ) -> Result<Option<Op>, SnapshotError<ID>>;
 }
 
+/// A [`SnapshotProvider`] that is just a view function.
+///
+/// Most providers are a pure function of the state and the recipient with an
+/// `async fn` and an `Ok(..)` wrapped around it. This is that wrapper, written
+/// once: hand it `fn view(state: &S, target: Option<&Agent<ID>>) -> Option<Op>`
+/// and it is a provider. Return `None` to send a recipient nothing.
+///
+/// ```ignore
+/// fn view(state: &Game, target: Option<&Agent<PlayerId>>) -> Option<GameOp> {
+///   Some(GameOp::Snapshot(Box::new(state.as_seen_by(target))))
+/// }
+/// let provider = Arc::new(SnapshotFn(view));
+/// ```
+///
+/// A named function coerces cleanly; a closure usually needs its argument
+/// types written out. Anything fallible, or anything that must await, still
+/// implements [`SnapshotProvider`] directly.
+pub struct SnapshotFn<F>(pub F);
+
+#[async_trait]
+impl<ID, StateType, Op, F> SnapshotProvider<ID, StateType, Op> for SnapshotFn<F>
+where
+  ID: AgentId,
+  StateType: Send + Sync + 'static,
+  Op: Send + 'static,
+  F: for<'a> Fn(&'a StateType, Option<&'a Agent<ID>>) -> Option<Op> + Send + Sync + 'static,
+{
+  async fn create_snapshot(
+    &self,
+    full_state: &StateType,
+    target_agent: Option<&Agent<ID>>,
+    _context: Option<SnapshotContext>,
+  ) -> Result<Option<Op>, SnapshotError<ID>> {
+    Ok((self.0)(full_state, target_agent))
+  }
+}
+
 /// A [`SnapshotProvider`] for an application that has no snapshot concept.
 ///
 /// Answers `Ok(None)` for every recipient, which the controller reads as

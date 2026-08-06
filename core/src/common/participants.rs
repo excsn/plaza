@@ -105,6 +105,22 @@ impl<ID: AgentId, Data: ParticipantAppSpecificData> ParticipantTracker<ID, Data>
     self.participants.keys().cloned().collect()
   }
 
+  /// Every tracked agent, cloned. The shape `SnapshotRequest::to` wants.
+  pub fn agents(&self) -> Vec<Agent<ID>> {
+    self.participants.values().map(|info| info.agent.clone()).collect()
+  }
+
+  /// Every tracked agent except one: the usual recipient list for reacting to
+  /// something `exclude` just did.
+  pub fn agents_except(&self, exclude: &ID) -> Vec<Agent<ID>> {
+    self
+      .participants
+      .iter()
+      .filter(|(id, _)| *id != exclude)
+      .map(|(_, info)| info.agent.clone())
+      .collect()
+  }
+
   /// Returns the number of active participants.
   pub fn count(&self) -> usize {
     self.participants.len()
