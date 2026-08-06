@@ -1,0 +1,22 @@
+name: parlour_client
+description: >-
+  A Flame client for examples/parlour_game: two sockets with separate
+  lifetimes, and a card table that animates between state changes.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.8.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flame: ^1.38.0
+  plaza_flame:
+    path: ../plaza_flame
+  plaza_ws:
+    path: ../plaza_ws
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter

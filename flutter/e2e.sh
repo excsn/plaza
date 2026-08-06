@@ -43,3 +43,24 @@ if [ "$skew" -ne 2 ]; then
   exit 1
 fi
 echo "   both paths behaved"
+
+# A second server and a second suite, because the two clients prove different
+# things. lobby_world proves the handshake and one JSON socket; parlour_game
+# proves the handoff to a *second* socket on a different codec, which is the
+# only place named MessagePack written by `rmp_serde` is read by Dart over a
+# real wire.
+echo "== parlour_client against examples/parlour_game"
+cd "$root/examples"
+CARGO_TARGET_DIR="$root/target" cargo build -q -p plaza_example_parlour_game
+"$root/target/debug/plaza_example_parlour_game" >/tmp/plaza_e2e_parlour.log 2>&1 &
+parlour=$!
+trap 'kill $server $parlour 2>/dev/null || true' EXIT
+
+for _ in $(seq 1 40); do
+  if curl -sf -o /dev/null http://127.0.0.1:8092/; then break; fi
+  sleep 0.25
+done
+
+cd "$here/parlour_client"
+flutter pub get >/dev/null
+flutter test --tags e2e

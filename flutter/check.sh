@@ -21,3 +21,7 @@ echo "== plaza_flame"
 # An example nothing executes is documentation wearing a .dart extension.
 echo "== plaza_flame/example"
 (cd "$here/plaza_flame/example" && flutter pub get >/dev/null && flutter test)
+
+# The parlour client's live suite needs a server, so ./e2e.sh runs that half.
+echo "== parlour_client"
+(cd "$here/parlour_client" && flutter pub get >/dev/null && flutter test --exclude-tags e2e)
