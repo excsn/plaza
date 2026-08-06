@@ -2,7 +2,7 @@
 //! what it buys in recovery, across loss rates.
 //!
 //! ```sh
-//! cargo run --release -p rollback_playground --example report
+//! cargo run --release -p rollback_playground --example rollback_report
 //! ```
 
 use rollback_playground::sim::{Controls, Input, Redundancy, World};

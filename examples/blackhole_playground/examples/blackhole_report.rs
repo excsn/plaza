@@ -2,7 +2,7 @@
 //! accuracy when the system it drives is divergent.
 //!
 //! ```sh
-//! cargo run --release -p blackhole_playground --example report
+//! cargo run --release -p blackhole_playground --example blackhole_report
 //! ```
 
 use blackhole_playground::sim::{Controls, SyncMode, Vec2, World};

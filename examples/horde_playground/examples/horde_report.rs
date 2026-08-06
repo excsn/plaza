@@ -3,7 +3,7 @@
 //! (`cargo run -p horde_playground --release`); this is for measuring.
 //!
 //! ```sh
-//! cargo run --release -p horde_playground --example report
+//! cargo run --release -p horde_playground --example horde_report
 //! ```
 
 use horde_playground::sim::{Controls, RemoteMode, Vec2, World};

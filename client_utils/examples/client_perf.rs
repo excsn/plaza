@@ -1,7 +1,7 @@
 //! Timing for the client-side primitives, so "this is cheap" is a number.
 //!
 //! ```sh
-//! cargo run --release -p plaza_client_utils --example perf
+//! cargo run --release -p plaza_client_utils --example client_perf
 //! ```
 //!
 //! Whole-operation timings at rates a real client would use. The question these

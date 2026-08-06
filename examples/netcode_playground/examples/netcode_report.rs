@@ -2,7 +2,7 @@
 //! against coasting on the last velocity, and how much of the fit to trust.
 //!
 //! ```sh
-//! cargo run --release -p netcode_playground --example report
+//! cargo run --release -p netcode_playground --example netcode_report
 //! ```
 
 use netcode_playground::sim::{Controls, MoveInput, World};

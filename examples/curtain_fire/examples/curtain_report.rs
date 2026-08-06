@@ -7,7 +7,7 @@
 //! 2. The share of outbound bytes that is the names of enum variants, which is
 //!    the number `IMPROVEMENTS` gates the wire-encoding primitives on.
 //!
-//! Run with `cargo run -p curtain_fire --release --example report`.
+//! Run with `cargo run -p curtain_fire --release --example curtain_report`.
 
 use curtain_fire::sim::types::{Controls, DeathRule};
 use curtain_fire::sim::world::World;

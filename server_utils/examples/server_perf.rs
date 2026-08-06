@@ -1,7 +1,7 @@
 //! Timing for the server-side primitives, so "this is cheap" is a number.
 //!
 //! ```sh
-//! cargo run --release -p plaza_server_utils --example perf
+//! cargo run --release -p plaza_server_utils --example server_perf
 //! ```
 //!
 //! Deliberately not a benchmark framework. These are whole-operation timings at
