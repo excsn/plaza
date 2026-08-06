@@ -126,6 +126,43 @@ impl LinkProfile {
   }
 }
 
+/// Where an application publishes a [`LinkProfile`] to the transport that owns
+/// the links: usually `move |profile| session.set_all_link_profiles(profile)`.
+///
+/// A closure rather than a session handle, so the logic that decides what the
+/// link should be stays testable without a socket.
+pub type LinkSink = std::sync::Arc<dyn Fn(LinkProfile) + Send + Sync>;
+
+/// A [`LinkSink`] with the latch that keeps an unchanged setting quiet: the
+/// profile reaches the sink when it differs from the last one published, and
+/// not otherwise.
+pub struct LinkPublisher {
+  sink: LinkSink,
+  published: parking_lot::Mutex<Option<LinkProfile>>,
+}
+
+impl LinkPublisher {
+  pub fn new(sink: LinkSink) -> Self {
+    Self {
+      sink,
+      published: parking_lot::Mutex::new(None),
+    }
+  }
+
+  /// Publishes `profile` if it differs from the last one published, returning
+  /// whether it went out.
+  pub fn publish(&self, profile: LinkProfile) -> bool {
+    let mut published = self.published.lock();
+    if *published == Some(profile) {
+      return false;
+    }
+    *published = Some(profile);
+    drop(published);
+    (self.sink)(profile);
+    true
+  }
+}
+
 /// xorshift64, seeded through splitmix64 so neighbouring connection ids do not
 /// produce correlated streams.
 ///

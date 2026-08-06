@@ -46,4 +46,8 @@
 #[cfg(feature = "actix_host")]
 mod server;
 #[cfg(feature = "actix_host")]
+mod sim;
+#[cfg(feature = "actix_host")]
 pub use server::{init_logging, lan_address, Host};
+#[cfg(feature = "actix_host")]
+pub use sim::{SimHost, SimWiring, DEFAULT_COMMAND_BUFFER, DEFAULT_WAKE_HZ};

@@ -33,7 +33,7 @@ pub use codec::WireCodec;
 pub use codec::JsonCodec;
 #[cfg(feature = "msgpack")]
 pub use codec::MsgPackCodec;
-pub use conditioner::{Delivery, DirectionProfile, LinkProfile, RETRANSMIT_PENALTY};
+pub use conditioner::{Delivery, DirectionProfile, LinkProfile, LinkPublisher, LinkSink, RETRANSMIT_PENALTY};
 pub use driver::LinkDriver;
 pub use error::SessionLayerError;
 pub use workload::{Priority, Workload, DEFAULT_SOCKET_BUFFER_BYTES};
