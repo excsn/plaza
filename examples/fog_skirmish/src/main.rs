@@ -11,8 +11,9 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer};
+use actix_web::{web, HttpRequest, HttpResponse};
 use plaza::{agent::Agent, controller::StateControllerBuilder, tick_driver::TickDriver};
+use plaza_session::host::Host;
 use plaza_session::ActixWsPlazaSession;
 use tracing::{error, info, Level};
 use tracing_subscriber::EnvFilter;
@@ -27,6 +28,8 @@ const TICK_HZ: u32 = 60;
 const BOTS: PlayerId = 2;
 const FIRST_HUMAN: PlayerId = 100;
 
+const STATIC_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/static");
+
 type FogSession = ActixWsPlazaSession<FogOp, PlayerId>;
 
 static NEXT_HUMAN: AtomicU32 = AtomicU32::new(FIRST_HUMAN);
@@ -39,12 +42,6 @@ async fn ws_route(
   let agent = Agent::new_human(NEXT_HUMAN.fetch_add(1, Ordering::Relaxed));
   info!(player = %agent, "WebSocket connection opening.");
   session.handle_connection(&req, stream, agent)
-}
-
-async fn index() -> HttpResponse {
-  HttpResponse::Ok()
-    .content_type("text/html; charset=utf-8")
-    .body(include_str!("../static/index.html"))
 }
 
 #[actix_web::main]
@@ -85,13 +82,11 @@ async fn main() -> std::io::Result<()> {
     server_addr, TICK_HZ, BOTS
   );
 
-  HttpServer::new(move || {
-    App::new()
-      .app_data(web::Data::new(session.clone()))
-      .route("/", web::get().to(index))
-      .route("/ws", web::get().to(ws_route))
-  })
-  .bind(server_addr)?
-  .run()
-  .await
+  let session = web::Data::new(session);
+  Host::new(server_addr)
+    .serve_dir(Some(STATIC_DIR.to_owned()))
+    .run(move |cfg| {
+      cfg.app_data(session.clone()).route("/ws", web::get().to(ws_route));
+    })
+    .await
 }

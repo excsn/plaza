@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer};
+use actix_web::{web, HttpRequest, HttpResponse};
 use plaza::agent::Agent;
 use plaza::controller::StateControllerBuilder;
 use plaza::tick_driver::TickDriver;
@@ -21,11 +21,11 @@ use plaza_lobby::manager::InMemoryLobbyManager;
 use plaza_lobby::op_payloads::RoomSettings;
 use plaza_lobby::TicketRegistry;
 use plaza_session::codec::JsonCodec;
+use plaza_session::host::{init_logging, Host};
 use plaza_session::ActixWsPlazaSession;
 use plaza_wire::frame::ProtocolVersion;
 use serde::Deserialize;
-use tracing::{error, info, warn, Level};
-use tracing_subscriber::EnvFilter;
+use tracing::{error, info, warn};
 
 use crate::factory::{ArenaFactory, RoomRegistry};
 use crate::lobby::{LobbyLogic, LobbySession, LobbyState, NoLobbySnapshot};
@@ -33,6 +33,7 @@ use crate::types::{PlayerId, ARENAS, PROTOCOL};
 use crate::wallets::WalletRegistry;
 
 const BIND: &str = "127.0.0.1:8090";
+const STATIC_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/static");
 
 /// Keeps the socket registry from outliving the lobby's own room map.
 const REAP_EVERY: Duration = Duration::from_secs(15);
@@ -59,12 +60,6 @@ struct Services {
 struct ArenaQuery {
   /// The lobby's ticket. An arena has no other way to learn who this is.
   t: Option<String>,
-}
-
-async fn index() -> HttpResponse {
-  HttpResponse::Ok()
-    .content_type("text/html; charset=utf-8")
-    .body(include_str!("../static/index.html"))
 }
 
 /// Identity is minted here and nowhere else.
@@ -113,14 +108,7 @@ async fn arena_route(
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-  tracing_subscriber::fmt()
-    .with_max_level(Level::DEBUG)
-    .with_env_filter(
-      EnvFilter::from_default_env()
-        .add_directive("info".parse().unwrap())
-        .add_directive("plaza_example_lobby_world=debug".parse().unwrap()),
-    )
-    .init();
+  init_logging();
 
   let wallets = Arc::new(WalletRegistry::new());
   let rooms = Arc::new(RoomRegistry::new());
@@ -255,16 +243,15 @@ async fn main() -> std::io::Result<()> {
     ids: PlayerIds(AtomicU64::new(1)),
   });
 
-  info!("Lobby world on http://{BIND} ({} arenas)", ARENAS.len());
+  info!("Lobby world with {} arenas", ARENAS.len());
 
-  HttpServer::new(move || {
-    App::new()
-      .app_data(services.clone())
-      .route("/", web::get().to(index))
-      .route("/ws/lobby", web::get().to(lobby_route))
-      .route("/ws/room/{room_id}", web::get().to(arena_route))
-  })
-  .bind(BIND)?
-  .run()
-  .await
+  Host::new(BIND)
+    .serve_dir(Some(STATIC_DIR.to_owned()))
+    .run(move |cfg| {
+      cfg
+        .app_data(services.clone())
+        .route("/ws/lobby", web::get().to(lobby_route))
+        .route("/ws/room/{room_id}", web::get().to(arena_route));
+    })
+    .await
 }

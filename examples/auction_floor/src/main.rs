@@ -10,28 +10,23 @@ mod types;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer};
+use actix_web::{web, HttpRequest, HttpResponse};
 use plaza::agent::Agent;
 use plaza::controller::StateControllerBuilder;
 use plaza::tick_driver::TickDriver;
+use plaza_session::host::{init_logging, Host};
 use plaza_session::ActixWsPlazaSession;
-use tracing::{error, info, Level};
-use tracing_subscriber::EnvFilter;
+use tracing::{error, info};
 
 use crate::logic::{AuctionLogic, Floor, FloorSession, FloorSnapshotter};
 use crate::types::{PlayerId, TICK_HZ};
 
 const BIND: &str = "127.0.0.1:8091";
+const STATIC_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/static");
 
 struct Services {
   session: Arc<FloorSession>,
   ids: AtomicU64,
-}
-
-async fn index() -> HttpResponse {
-  HttpResponse::Ok()
-    .content_type("text/html; charset=utf-8")
-    .body(include_str!("../static/index.html"))
 }
 
 async fn ws_route(
@@ -46,14 +41,7 @@ async fn ws_route(
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-  tracing_subscriber::fmt()
-    .with_max_level(Level::DEBUG)
-    .with_env_filter(
-      EnvFilter::from_default_env()
-        .add_directive("info".parse().unwrap())
-        .add_directive("plaza_example_auction_floor=debug".parse().unwrap()),
-    )
-    .init();
+  init_logging();
 
   let session: Arc<FloorSession> = ActixWsPlazaSession::new();
   let (commands, controller) = StateControllerBuilder::new(
@@ -77,15 +65,12 @@ async fn main() -> std::io::Result<()> {
     ids: AtomicU64::new(1),
   });
 
-  info!("Auction floor on http://{BIND} at {TICK_HZ}Hz");
+  info!("Auction floor at {TICK_HZ}Hz");
 
-  HttpServer::new(move || {
-    App::new()
-      .app_data(services.clone())
-      .route("/", web::get().to(index))
-      .route("/ws", web::get().to(ws_route))
-  })
-  .bind(BIND)?
-  .run()
-  .await
+  Host::new(BIND)
+    .serve_dir(Some(STATIC_DIR.to_owned()))
+    .run(move |cfg| {
+      cfg.app_data(services.clone()).route("/ws", web::get().to(ws_route));
+    })
+    .await
 }

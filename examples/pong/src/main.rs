@@ -12,15 +12,15 @@ mod types;
 
 use std::sync::Arc;
 
-use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer};
+use actix_web::{web, HttpRequest, HttpResponse};
 use plaza::{
   agent::Agent,
   controller::StateControllerBuilder,
   tick_driver::TickDriver,
 };
+use plaza_session::host::{init_logging, Host};
 use plaza_session::ActixWsPlazaSession;
-use tracing::{error, info, Level};
-use tracing_subscriber::EnvFilter;
+use tracing::{error, info};
 use uuid::Uuid;
 
 use crate::{
@@ -49,22 +49,9 @@ async fn ws_route(
   session.handle_connection(&req, stream, agent)
 }
 
-async fn index() -> HttpResponse {
-  HttpResponse::Ok()
-    .content_type("text/html; charset=utf-8")
-    .body(include_str!("../static/index.html"))
-}
-
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-  tracing_subscriber::fmt()
-    .with_max_level(Level::DEBUG)
-    .with_env_filter(
-      EnvFilter::from_default_env()
-        .add_directive("info".parse().unwrap())
-        .add_directive("plaza_example_pong=debug".parse().unwrap()),
-    )
-    .init();
+  init_logging();
 
   info!("Plaza Pong Example - Starting");
 
@@ -90,16 +77,13 @@ async fn main() -> std::io::Result<()> {
   tokio::spawn(bots::keep_a_seat_warm(controller_tx.clone()));
   tokio::spawn(bots::play(controller_tx.clone()));
 
-  let server_addr = "127.0.0.1:8080";
-  info!("Serving http://{} (WebSocket at /ws), {}Hz tick", server_addr, TICK_HZ);
+  let session = web::Data::new(session);
 
-  HttpServer::new(move || {
-    App::new()
-      .app_data(web::Data::new(session.clone()))
-      .route("/", web::get().to(index))
-      .route("/ws", web::get().to(ws_route))
-  })
-  .bind(server_addr)?
-  .run()
-  .await
+  info!(tick_hz = TICK_HZ, "pong listening");
+  Host::new("127.0.0.1:8080")
+    .serve_dir(Some(concat!(env!("CARGO_MANIFEST_DIR"), "/static").to_owned()))
+    .run(move |cfg| {
+      cfg.app_data(session.clone()).route("/ws", web::get().to(ws_route));
+    })
+    .await
 }
