@@ -1,0 +1,23 @@
+[package]
+name = "plaza_example_parlour_game"
+version = "0.1.0"
+edition = { workspace = true }
+publish = false
+
+[dependencies]
+plaza = { workspace = true }
+plaza_lobby = { workspace = true }
+plaza_session = { workspace = true, features = ["actix_ws", "json", "msgpack", "actix_host"] }
+plaza_wire = { workspace = true, features = ["msgpack"] }
+
+actix-web = "^4"
+async-trait = { workspace = true }
+parking_lot = "^0.12"
+serde = { workspace = true }
+serde_json = "^1"
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[build-dependencies]
+plaza_wire = { workspace = true, features = ["build"] }
