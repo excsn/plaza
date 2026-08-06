@@ -1,8 +1,13 @@
 //! A client that speaks the wire by hand, so the door can be knocked on.
+//!
+//! Answers the session's probes, so a client who says nothing still has a
+//! live, measured link.
 
 use std::sync::Arc;
 
 use parking_lot::Mutex;
+use plaza_session::codec::JsonCodec;
+use plaza_wire::frame::Kind;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
@@ -10,7 +15,7 @@ use crate::types::{decode_ops, encode_ops, Account, ArcadeOp, Refusal};
 
 pub struct Knock {
   pub heard: Arc<Mutex<Vec<ArcadeOp>>>,
-  pub writer: Arc<Mutex<Option<tokio::io::WriteHalf<TcpStream>>>>,
+  writer: Arc<tokio::sync::Mutex<tokio::io::WriteHalf<TcpStream>>>,
   task: tokio::task::JoinHandle<()>,
 }
 
@@ -27,11 +32,21 @@ impl Knock {
       write_half.write_all(&frame).await?;
     }
 
+    let writer = Arc::new(tokio::sync::Mutex::new(write_half));
     let sink = heard.clone();
+    let pong_writer = writer.clone();
     let task = tokio::spawn(async move {
       loop {
         match read_split(&mut read_half).await {
           Ok(Some(frame)) => {
+            if frame.first().copied() == Some(Kind::Ping as u8) {
+              if let Some(reply) = plaza_wire::frame::answer_ping(&JsonCodec, &frame[1..], None) {
+                let mut writer = pong_writer.lock().await;
+                let _ = writer.write_all(&(reply.len() as u32).to_be_bytes()).await;
+                let _ = writer.write_all(&reply).await;
+              }
+              continue;
+            }
             let ops = decode_ops(&frame);
             if !ops.is_empty() {
               sink.lock().extend(ops);
@@ -42,11 +57,7 @@ impl Knock {
       }
     });
 
-    Ok(Self {
-      heard,
-      writer: Arc::new(Mutex::new(Some(write_half))),
-      task,
-    })
+    Ok(Self { heard, writer, task })
   }
 
   pub fn refusal(&self) -> Option<Refusal> {
@@ -83,10 +94,7 @@ impl Knock {
   /// Sends ops, which is also how a closed connection proves it is closed.
   pub async fn say(&self, ops: &[ArcadeOp]) -> std::io::Result<()> {
     let frame = encode_ops(ops);
-    let mut guard = self.writer.lock();
-    let Some(writer) = guard.as_mut() else {
-      return Err(std::io::Error::other("no writer"));
-    };
+    let mut writer = self.writer.lock().await;
     writer.write_all(&(frame.len() as u32).to_be_bytes()).await?;
     writer.write_all(&frame).await
   }
