@@ -22,7 +22,7 @@ use crate::net::arena::{Arena, ArenaLogic, HostView, NoSnapshots, PlayerKey};
 use crate::sim::protocol::{Op, PROTOCOL};
 use crate::sim::types::Controls;
 
-type ArenaSession = ActixWsPlazaSession<Op, PlayerKey>;
+type ArenaSession = ActixWsPlazaSession<Op, PlayerKey, plaza_wire::MsgPackCodec>;
 
 /// The tick rate the simulation is advanced at. Distinct from the *send* rate,
 /// which is `Controls::sync_hz` and is usually far lower: simulating often and
@@ -59,8 +59,11 @@ pub async fn serve(bind: &str, controls: Arc<Mutex<Controls>>, view: Option<Arc<
   // clients synchronise against; the arena stores its tick here and the session
   // reads it from whichever connection task is answering.
   let sim_clock = Arc::new(std::sync::atomic::AtomicU64::new(0));
+  // The codec is named, not defaulted: the client is built with `MsgPackCodec`,
+  // and a defaulted session speaks JSON at it. The two ends of one example
+  // must name the same format.
   let session: Arc<ArenaSession> = ActixWsPlazaSession::with_options(
-    Default::default(),
+    plaza_wire::MsgPackCodec,
     plaza_session::SessionOptions::with_protocol(ProtocolVersion(PROTOCOL)).clock({
       let sim_clock = sim_clock.clone();
       move || sim_clock.load(std::sync::atomic::Ordering::Relaxed)
