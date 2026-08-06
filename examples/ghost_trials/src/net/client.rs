@@ -13,17 +13,15 @@
 //!
 //! [`sim::Client`]: crate::sim::client::Client
 
-use plaza_client_utils::{Probe, Timeline};
-use plaza_wire::frame::{self, ProtocolVersion};
 use plaza_wire::{MsgPackCodec, WireCodec};
-use plaza_ws::{CloseReason, Event, Socket};
+use plaza_ws::pump::{mismatch_message, Arrival, FramePump};
+use plaza_ws::Event;
 
 use crate::sim::client::Client as SimClient;
 use crate::sim::protocol::{Op, PROTOCOL};
 use crate::sim::types::{Controls, Input, PlayerId, Track};
 
 const WIRE: MsgPackCodec = MsgPackCodec;
-const PING_INTERVAL_MS: u64 = 1000;
 const BACKLOG_TRIGGER: usize = 128;
 const BACKLOG_KEEP: usize = 16;
 
@@ -37,82 +35,40 @@ pub enum Status {
 }
 
 pub struct NetClient {
-  socket: Box<dyn Socket>,
+  pump: FramePump<MsgPackCodec>,
   pub sim: SimClient,
   pub status: Status,
   pub me: Option<PlayerId>,
 
-  timeline: Timeline,
-  probe: Option<Probe>,
   events: Vec<Event>,
-  last_ping_ms: u64,
+  arrivals: Vec<Arrival>,
   now_ms: u64,
   /// Wall time carried between frames, so the simulation runs in whole ticks
   /// however long a frame took.
   spare_ms: u64,
   pub resume_drops: u64,
-  pub bytes_sent: u64,
-  pub bytes_received: u64,
-}
-
-fn send_hello(socket: &dyn Socket) -> usize {
-  let mut buf = Vec::with_capacity(16);
-  frame::begin(frame::Kind::Hello, &mut buf);
-  if WIRE.encode_into(&ProtocolVersion(PROTOCOL), &mut buf).is_err() {
-    debug_assert!(false, "a protocol version failed to serialise");
-    return 0;
-  }
-  let _ = socket.send(&buf);
-  buf.len()
-}
-
-/// Starts a latency probe. The stamp is this client's own clock in
-/// milliseconds; the server echoes it back without reading it.
-fn send_ping(socket: &dyn Socket, origin: u64) -> usize {
-  let mut buf = Vec::with_capacity(16);
-  frame::begin(frame::Kind::Ping, &mut buf);
-  if WIRE.encode_into(&frame::Ping { origin }, &mut buf).is_err() {
-    debug_assert!(false, "a ping failed to serialise");
-    return 0;
-  }
-  let n = buf.len();
-  let _ = socket.send(&buf);
-  n
-}
-
-fn send_framed(socket: &dyn Socket, op: &Op) -> usize {
-  let mut buf = Vec::with_capacity(256);
-  frame::begin(frame::Kind::Ops, &mut buf);
-  if WIRE.encode_into(&std::slice::from_ref(op), &mut buf).is_err() {
-    debug_assert!(false, "an op failed to serialise");
-    return 0;
-  }
-  let n = buf.len();
-  let _ = socket.send(&buf);
-  n
 }
 
 impl NetClient {
   pub fn connect(url: &str) -> Result<Self, String> {
-    let socket = open(url)?;
-    Ok(Self::from_socket(socket))
+    Ok(Self::from_pump(FramePump::connect(url, WIRE, PROTOCOL).map_err(|e| e.to_string())?))
   }
 
-  pub fn from_socket(socket: Box<dyn Socket>) -> Self {
+  pub fn from_socket(socket: Box<dyn plaza_ws::Socket>) -> Self {
+    Self::from_pump(FramePump::new(socket, WIRE, PROTOCOL))
+  }
+
+  fn from_pump(pump: FramePump<MsgPackCodec>) -> Self {
     Self {
-      socket,
+      pump,
       sim: SimClient::new(0, Track::circuit(), PROTOCOL),
       status: Status::Connecting,
       me: None,
-      timeline: Timeline::new(),
-      probe: None,
       events: Vec::new(),
-      last_ping_ms: 0,
+      arrivals: Vec::new(),
       now_ms: 0,
       spare_ms: 0,
       resume_drops: 0,
-      bytes_sent: 0,
-      bytes_received: 0,
     }
   }
 
@@ -121,13 +77,24 @@ impl NetClient {
   }
 
   pub fn rtt_ms(&self) -> Option<f32> {
-    self.timeline.rtt.rtt()
+    self.pump.rtt_ms()
+  }
+
+  /// Everything sent, in bytes, probes and answers included.
+  pub fn bytes_sent(&self) -> u64 {
+    self.pump.bytes_sent()
+  }
+
+  /// Everything received, in bytes, before any of it is decoded.
+  pub fn bytes_received(&self) -> u64 {
+    self.pump.bytes_received()
   }
 
   pub fn clock_diag(&self) -> (Option<f64>, usize) {
+    let clock = &self.pump.timeline().clock;
     (
-      self.timeline.clock.server_time_at(self.now_ms as f64).map(|s| s - self.now_ms as f64),
-      self.timeline.clock.sample_count(),
+      clock.server_time_at(self.now_ms as f64).map(|s| s - self.now_ms as f64),
+      clock.sample_count(),
     )
   }
 
@@ -143,46 +110,33 @@ impl NetClient {
 
   pub fn poll(&mut self, now_ms: u64, controls: &Controls) {
     self.now_ms = now_ms;
-    if now_ms.saturating_sub(self.last_ping_ms) >= PING_INTERVAL_MS && self.socket.is_open() {
-      self.last_ping_ms = now_ms;
-      let probe = self.timeline.begin(now_ms);
-      self.probe = Some(probe);
-      self.bytes_sent += send_ping(self.socket.as_ref(), probe.sent_at) as u64;
-    }
-
-    self.socket.poll(&mut self.events);
     let mut events = std::mem::take(&mut self.events);
+    self.pump.drain(now_ms, &mut events);
     if self.me.is_some() && plaza_ws::trim_backlog(&mut events, BACKLOG_TRIGGER, BACKLOG_KEEP).is_some() {
       self.resume_drops += 1;
       // A probe sent before the freeze and answered after it measures the
       // freeze, not the network, and its origin still matches so the echo
-      // check waves it through. The epoch is what discards it, along with
+      // check waves it through. `on_resume` is what discards it, along with
       // everything the estimators learned across a gap of unknown length.
-      self.timeline.on_resume();
-      self.probe = None;
+      self.pump.on_resume();
     }
+    let mut arrivals = std::mem::take(&mut self.arrivals);
+    self.pump.digest(&mut events, now_ms, &mut arrivals);
+    self.events = events;
 
-    for event in events {
-      match event {
-        Event::Open => {
+    for arrival in arrivals.drain(..) {
+      match arrival {
+        Arrival::Opened => {
           if self.status == Status::Connecting {
             self.status = Status::Waiting;
           }
-          self.bytes_sent += send_hello(self.socket.as_ref()) as u64;
         }
-        Event::Text(text) => self.on_message(text.as_bytes()),
-        Event::Message(bytes) => self.on_message(&bytes),
-        Event::Closed(reason) => {
-          self.status = Status::Gone(match reason {
-            CloseReason::Local => "you disconnected".to_owned(),
-            CloseReason::Remote { code, reason } if reason.is_empty() => format!("host closed the connection ({code})"),
-            CloseReason::Remote { reason, .. } => reason,
-            CloseReason::Error(e) => e,
-          });
-        }
+        Arrival::Ops(frame) => self.on_ops(frame.body()),
+        Arrival::Mismatch { ours, theirs } => self.status = Status::Gone(mismatch_message(ours, theirs)),
+        Arrival::Closed(reason) => self.status = Status::Gone(reason),
       }
     }
-    self.events.clear();
+    self.arrivals = arrivals;
     let _ = controls;
   }
 
@@ -207,55 +161,14 @@ impl NetClient {
       self.sim.step(input, controls);
     }
     if let Some((log, claimed_ms)) = self.sim.take_submission() {
-      self.bytes_sent += send_framed(
-        self.socket.as_ref(),
-        &Op::Submit {
-          log: Box::new(log),
-          claimed_ms,
-        },
-      ) as u64;
+      self.pump.send_op(&Op::Submit {
+        log: Box::new(log),
+        claimed_ms,
+      });
     }
   }
 
-  fn on_server_protocol(&mut self, body: &[u8]) {
-    let Ok(theirs) = WIRE.decode::<ProtocolVersion>(body) else {
-      return;
-    };
-    if ProtocolVersion(PROTOCOL).agrees_with(theirs) {
-      return;
-    }
-    self.status = Status::Gone(format!(
-      "this page was built for wire format {PROTOCOL} and the server speaks {}: reload to get the current client",
-      theirs.0
-    ));
-  }
-
-  fn on_message(&mut self, bytes: &[u8]) {
-    self.bytes_received += bytes.len() as u64;
-    let Some((tag, body)) = frame::split(bytes) else {
-      return;
-    };
-    match frame::Kind::from_byte(tag) {
-      Some(frame::Kind::Ops) => {}
-      Some(frame::Kind::Hello) => return self.on_server_protocol(body),
-      // The server's session answers this one; this end only echoes the stamp
-      // back, because the clock being measured is the server's.
-      Some(frame::Kind::Ping) => {
-        if let Some(reply) = frame::answer_ping(&WIRE, body, None) {
-          let _ = self.socket.send(&reply);
-        }
-        return;
-      }
-      Some(frame::Kind::Pong) => {
-        if let (Ok(pong), Some(probe)) = (WIRE.decode::<frame::Pong>(body), self.probe.take())
-          && pong.origin == probe.sent_at
-        {
-          self.timeline.complete(probe, self.now_ms, pong.responder);
-        }
-        return;
-      }
-      None => return,
-    }
+  fn on_ops(&mut self, body: &[u8]) {
     let Ok(ops) = WIRE.decode::<Vec<Op>>(body) else {
       return;
     };
@@ -283,76 +196,33 @@ impl NetClient {
   }
 }
 
-#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
-fn open(url: &str) -> Result<Box<dyn Socket>, String> {
-  plaza_ws::native::connect(url).map(|s| Box::new(s) as Box<dyn Socket>).map_err(|e| e.to_string())
-}
-
-#[cfg(all(feature = "web", target_arch = "wasm32"))]
-fn open(url: &str) -> Result<Box<dyn Socket>, String> {
-  plaza_ws::miniquad::connect(url).map(|s| Box::new(s) as Box<dyn Socket>).map_err(|e| e.to_string())
-}
-
-#[cfg(not(any(all(feature = "native", not(target_arch = "wasm32")), all(feature = "web", target_arch = "wasm32"))))]
-fn open(_url: &str) -> Result<Box<dyn Socket>, String> {
-  Err("this build has no socket backend compiled in".to_owned())
-}
-
 #[cfg(test)]
 mod tests {
-  use std::collections::VecDeque;
-  use std::sync::Arc;
-
-  use parking_lot::Mutex;
-  use plaza_ws::State;
+  use plaza_wire::frame;
+  use plaza_ws::scripted::ScriptedSocket;
 
   use super::*;
   use crate::sim::server::Server;
   use crate::sim::types::SIM_STEP_MS;
   use crate::sim::world::autopilot;
 
-  #[derive(Clone)]
-  struct ScriptedSocket {
-    inbox: Arc<Mutex<VecDeque<Event>>>,
-    sent: Arc<Mutex<Vec<Op>>>,
+  fn feed(socket: &ScriptedSocket, ops: Vec<Op>) {
+    let mut buf = Vec::new();
+    frame::begin(frame::Kind::Ops, &mut buf);
+    WIRE.encode_into(&ops, &mut buf).expect("encode");
+    socket.feed_message(buf);
   }
 
-  impl ScriptedSocket {
-    fn new() -> Self {
-      Self {
-        inbox: Arc::new(Mutex::new(VecDeque::new())),
-        sent: Arc::new(Mutex::new(Vec::new())),
-      }
-    }
-
-    fn feed(&self, ops: Vec<Op>) {
-      let mut buf = Vec::new();
-      frame::begin(frame::Kind::Ops, &mut buf);
-      WIRE.encode_into(&ops, &mut buf).expect("encode");
-      self.inbox.lock().push_back(Event::Message(buf));
-    }
-  }
-
-  impl Socket for ScriptedSocket {
-    fn send(&self, bytes: &[u8]) -> Result<(), plaza_ws::WsError> {
-      if let Some((tag, body)) = frame::split(bytes)
-        && frame::Kind::from_byte(tag) == Some(frame::Kind::Ops)
-        && let Ok(ops) = WIRE.decode::<Vec<Op>>(body)
-      {
-        self.sent.lock().extend(ops);
-      }
-      Ok(())
-    }
-    fn send_text(&self, _text: &str) -> Result<(), plaza_ws::WsError> {
-      Ok(())
-    }
-    fn poll(&mut self, out: &mut Vec<Event>) {
-      out.extend(self.inbox.lock().drain(..));
-    }
-    fn state(&self) -> State {
-      State::Open
-    }
-    fn close(&mut self) {}
+  fn sent_ops(socket: &ScriptedSocket) -> Vec<Op> {
+    socket
+      .sent()
+      .iter()
+      .filter_map(|bytes| {
+        let (tag, body) = frame::split(bytes)?;
+        (frame::Kind::from_byte(tag) == Some(frame::Kind::Ops)).then(|| WIRE.decode::<Vec<Op>>(body).ok())?
+      })
+      .flatten()
+      .collect()
   }
 
   fn controls() -> Controls {
@@ -364,19 +234,19 @@ mod tests {
     }
   }
 
-  fn welcomed(feed: &ScriptedSocket) -> NetClient {
-    let mut client = NetClient::from_socket(Box::new(feed.clone()));
+  fn welcomed(socket: &ScriptedSocket) -> NetClient {
+    let mut client = NetClient::from_socket(Box::new(socket.clone()));
     let mut server = Server::new(1);
     server.take_seat(0);
-    feed.feed(vec![server.welcome(0)]);
+    feed(socket, vec![server.welcome(0)]);
     client.poll(0, &controls());
     client
   }
 
   #[test]
   fn a_welcome_hands_over_the_track_and_starts_a_run() {
-    let feed = ScriptedSocket::new();
-    let client = welcomed(&feed);
+    let socket = ScriptedSocket::new();
+    let client = welcomed(&socket);
     assert_eq!(client.status, Status::Playing);
     assert_eq!(client.sim.track, Track::circuit());
   }
@@ -384,11 +254,11 @@ mod tests {
   #[test]
   fn the_simulation_runs_in_whole_ticks_however_long_a_frame_took() {
     let c = controls();
-    let feed = ScriptedSocket::new();
-    let mut smooth = welcomed(&feed);
+    let socket = ScriptedSocket::new();
+    let mut smooth = welcomed(&socket);
     smooth.restart_as(crate::sim::types::Mode::Trial, crate::sim::types::TrackSize::Medium, 1);
-    let feed2 = ScriptedSocket::new();
-    let mut lumpy = welcomed(&feed2);
+    let socket2 = ScriptedSocket::new();
+    let mut lumpy = welcomed(&socket2);
     lumpy.restart_as(crate::sim::types::Mode::Trial, crate::sim::types::TrackSize::Medium, 1);
 
     for _ in 0..300 {
@@ -407,8 +277,8 @@ mod tests {
   #[test]
   fn a_finished_run_puts_its_log_on_the_wire_once() {
     let c = controls();
-    let feed = ScriptedSocket::new();
-    let mut client = welcomed(&feed);
+    let socket = ScriptedSocket::new();
+    let mut client = welcomed(&socket);
     client.restart_as(crate::sim::types::Mode::Trial, crate::sim::types::TrackSize::Medium, 1);
     for _ in 0..crate::sim::log::MAX_TICKS {
       let input = autopilot(client.sim.racer(), &client.sim.track, client.sim.tick, 0);
@@ -419,8 +289,7 @@ mod tests {
     }
     assert!(client.sim.finished_ms.is_some(), "it finished");
 
-    let sent = feed.sent.lock().clone();
-    let count = sent.iter().filter(|op| matches!(op, Op::Submit { .. })).count();
+    let count = sent_ops(&socket).iter().filter(|op| matches!(op, Op::Submit { .. })).count();
     assert_eq!(count, 1, "one submission, carrying the inputs");
   }
 }

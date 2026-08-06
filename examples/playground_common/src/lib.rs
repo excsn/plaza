@@ -19,22 +19,13 @@
 //!
 //! # What else lives here
 //!
-//! [`fixed`], behind a feature, for the same reason: a playground whose wire
-//! carries causes rather than state has to reproduce arithmetic exactly, and
-//! two copies of a type that must agree to the bit is the "shared rule written
-//! twice" mistake with the stakes raised. It is optional so a crate that only
-//! wants the roles does not take a serde dependency for maths it never uses.
-//!
-//! [`touch`], behind another, for the third time the same argument came up:
+//! [`touch`], behind a feature, because the same argument kept coming up:
 //! every playground ships a browser build and is therefore reachable from a
 //! phone, and two of them had no pointer input at all. One set of on-screen
-//! controls rather than one per example.
-//!
-//! [`oneshot`], for the fourth: every playground has a `Welcome` with nothing
-//! behind it, and on a link that can lose a frame every one of them needs the
-//! same holding-and-repeating. Six copies of that bookkeeping is the same
-//! mistake again, and the copies had already begun to differ, three of them by
-//! being wired up and doing nothing at all.
+//! controls rather than one per example. It is the only remaining lodger:
+//! `oneshot` graduated to `plaza_server_utils::oneshot` and `fixed` to
+//! `plaza_client_utils::fixed` once it was clear they were library blocks
+//! that had merely been written here first.
 //!
 //! That is an argument about where it *cannot* go, though, not an argument that
 //! it belongs in the published library. Argument parsing is an opinion, and an
@@ -44,11 +35,6 @@
 //! is scaffolding, and scaffolding shared between two examples is exactly what
 //! this is. The genuinely reusable half of a listen server is
 //! `plaza_session::host::Host`, which is where the HTTP layer lives.
-
-pub mod oneshot;
-
-#[cfg(feature = "fixed")]
-pub mod fixed;
 
 #[cfg(feature = "touch")]
 pub mod touch;

@@ -22,7 +22,9 @@ use plaza_session::host::{init_logging, Host};
 
 use plaza_lobby::{RoomId, RoomMetadata};
 
-use crate::net::arena::{Arena, ArenaLogic, HostView, NoSnapshots, PlayerKey, Router};
+use plaza::NoSnapshots;
+
+use crate::net::arena::{Arena, ArenaLogic, HostView, PlayerKey, Router};
 use crate::net::rooms::{self, DEFAULT_ROOM};
 use crate::sim::types::MAX_PLAYERS;
 use crate::sim::protocol::{Op, PROTOCOL};

@@ -1,7 +1,7 @@
 pub mod client;
 /// The fixed-point maths, shared with the other playgrounds that need to
 /// reproduce arithmetic rather than correct it.
-pub use playground_common::fixed;
+pub use plaza_client_utils::fixed;
 pub mod protocol;
 pub mod rand;
 pub mod rules;

@@ -7,11 +7,8 @@ description = "What a listen-server example process is: the four roles, and the 
 
 [features]
 default = []
-# The fixed-point maths, which has to cross a wire and therefore needs serde.
-fixed = ["dep:serde"]
 # The on-screen controls, which need a window to draw into.
 touch = ["dep:macroquad"]
 
 [dependencies]
-serde = { workspace = true, optional = true }
 macroquad = { version = "=0.4.15", optional = true }

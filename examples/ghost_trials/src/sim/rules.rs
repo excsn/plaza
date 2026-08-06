@@ -12,7 +12,7 @@
 //! drives differently, and a version that moves when the handling does is what
 //! turns that from a mystery into a refusal.
 
-use playground_common::fixed::{Fx, P};
+use plaza_client_utils::fixed::{Fx, P};
 
 use crate::sim::types::*;
 

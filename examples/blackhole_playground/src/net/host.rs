@@ -18,7 +18,9 @@ use plaza_session::actix_ws::ActixWsPlazaSession;
 use plaza_wire::frame::ProtocolVersion;
 use plaza_session::host::{init_logging, Host};
 
-use crate::net::arena::{Arena, ArenaLogic, HostView, NoSnapshots, PlayerKey};
+use plaza::NoSnapshots;
+
+use crate::net::arena::{Arena, ArenaLogic, HostView, PlayerKey};
 use crate::sim::protocol::{Op, PROTOCOL};
 use crate::sim::types::Controls;
 

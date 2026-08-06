@@ -12,7 +12,7 @@
 //! across platforms or versions, and a ghost is a bet that today's arithmetic
 //! matches the arithmetic that recorded it.
 
-use playground_common::fixed::{Fx, P};
+use plaza_client_utils::fixed::{Fx, P};
 use serde::{Deserialize, Serialize};
 
 pub type PlayerId = u8;
@@ -650,7 +650,7 @@ pub fn format_ms(ms: u64) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use playground_common::fixed::ONE;
+  use plaza_client_utils::fixed::ONE;
 
   #[test]
   fn the_sine_table_is_a_sine() {

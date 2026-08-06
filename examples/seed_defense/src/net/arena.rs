@@ -15,8 +15,8 @@ use async_trait::async_trait;
 use parking_lot::Mutex;
 use plaza::session::TargetedOp;
 use plaza::state_logic::{LogicInput, LogicOutput, StateLogic, StateLogicError};
-use playground_common::oneshot::Pending as OneShots;
-use plaza_session::{Delivery, DirectionProfile, LinkProfile};
+use plaza_server_utils::oneshot::Pending as OneShots;
+use plaza_session::{Delivery, DirectionProfile, LinkProfile, LinkPublisher};
 use plaza_server_utils::{SeatTable, Seating};
 
 use crate::sim::protocol::{Op, ServerPolicy};
@@ -117,14 +117,12 @@ impl Arena {
 
 /// Publishes the panel's impairment sliders to the transport that owns the
 /// link. The arena states what the link should be and stops there.
-pub type LinkSink = Arc<dyn Fn(LinkProfile) + Send + Sync>;
+pub use plaza_session::LinkSink;
 
 pub struct ArenaLogic {
   controls: Arc<Mutex<Controls>>,
   view: Option<Arc<Mutex<HostView>>>,
-  link: Option<LinkSink>,
-  /// The profile last published, so an unchanged panel says nothing.
-  published: Mutex<Option<LinkProfile>>,
+  link: Option<LinkPublisher>,
   /// Where the arena publishes its simulation clock, so the session can stamp
   /// a `Pong` with the clock clients synchronise against.
   clock: Option<Arc<AtomicU64>>,
@@ -136,14 +134,13 @@ impl ArenaLogic {
       controls,
       view,
       link: None,
-      published: Mutex::new(None),
       clock: None,
     }
   }
 
   /// Where the impairment sliders take effect.
   pub fn with_link(mut self, link: LinkSink) -> Self {
-    self.link = Some(link);
+    self.link = Some(LinkPublisher::new(link));
     self
   }
 
@@ -155,7 +152,7 @@ impl ArenaLogic {
 
   /// Pushes the panel's link settings down to the transport when they change.
   fn publish_link(&self, controls: &Controls) {
-    let Some(sink) = &self.link else { return };
+    let Some(link) = &self.link else { return };
     // One way, applied in each direction, which is what the slider has always
     // meant here.
     let one_way = DirectionProfile {
@@ -168,13 +165,7 @@ impl ArenaLogic {
         Delivery::Reliable
       },
     };
-    let profile = LinkProfile::symmetric(one_way);
-    let mut published = self.published.lock();
-    if *published == Some(profile) {
-      return;
-    }
-    *published = Some(profile);
-    sink(profile);
+    link.publish(LinkProfile::symmetric(one_way));
   }
 }
 
@@ -300,22 +291,6 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         Ok(LogicOutput::ops(targeted))
       }
     }
-  }
-}
-
-/// State reaches a joiner as `Op::Welcome`, which carries the seed, the policy
-/// and the field together.
-pub struct NoSnapshots;
-
-#[async_trait]
-impl plaza::snapshot::SnapshotProvider<PlayerKey, Arena, Op> for NoSnapshots {
-  async fn create_snapshot(
-    &self,
-    _full_state: &Arena,
-    _target_agent: Option<&plaza::Agent<PlayerKey>>,
-    _context: Option<plaza::snapshot::SnapshotContext>,
-  ) -> Result<Option<Op>, plaza::snapshot::SnapshotError<PlayerKey>> {
-    Ok(None)
   }
 }
 

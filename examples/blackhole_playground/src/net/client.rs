@@ -10,15 +10,16 @@
 //!   through [`PredictedPlayer`]. Without it the camera follows a position a
 //!   round trip old and the game feels broken in a way no readout would show.
 //! - **The clock is estimated, not shared.** `age_ms = recv - packet.server_time_ms`
-//!   was exact offline because both halves read one clock. Here it needs
-//!   [`ClockSyncEstimator`] and [`RttEstimator`] over ping and pong.
+//!   was exact offline because both halves read one clock. Here it is
+//!   [`FramePump`]'s timeline over ping and pong, floored by the newest stamp
+//!   the stream has proven.
 //! - **The connection is a state, not an assumption.** Connecting, refused, and
 //!   dropped are things a player has to be told about.
 
-use plaza_client_utils::{CorrectionMonitor, PlayerConfig, PredictedPlayer, Probe, Timeline};
-use plaza_wire::frame::{self, ProtocolVersion};
+use plaza_client_utils::{CorrectionMonitor, PlayerConfig, PredictedPlayer};
 use plaza_wire::{MsgPackCodec, WireCodec};
-use plaza_ws::{CloseReason, Event, Socket, State};
+use plaza_ws::pump::{mismatch_message, Arrival, FramePump};
+use plaza_ws::State;
 
 /// One codec for the whole client, matching the one the host is built with.
 const WIRE: MsgPackCodec = MsgPackCodec;
@@ -100,11 +101,9 @@ fn lerp_pos(a: &Vec2, b: &Vec2, t: f32) -> Vec2 {
 
 /// How long a correction to your own hole is eased over.
 const SMOOTHING_SECS: f32 = 0.12;
-/// How often to probe the round trip.
-const PING_INTERVAL_MS: u64 = 1000;
 
 pub struct NetClient {
-  socket: Box<dyn Socket>,
+  pump: FramePump<MsgPackCodec>,
   /// The same client the offline build runs. Everything it does is unchanged.
   pub sim: SimClient,
   pub status: Status,
@@ -123,11 +122,8 @@ pub struct NetClient {
   /// hands out is the number that goes on the wire: two counters would be two
   /// things to keep in step.
   acked_seq: u64,
-  timeline: Timeline,
-  probe: Option<Probe>,
 
-  events: Vec<Event>,
-  last_ping_ms: u64,
+  arrivals: Vec<Arrival>,
   /// Frames applied, so a joiner can tell "connected but silent" from "playing".
   pub frames_seen: u64,
 
@@ -164,46 +160,11 @@ pub struct NetClient {
   pub ab_nodash_monitor: CorrectionMonitor,
 }
 
-/// Frames one op the way the transport expects: a kind tag, then the body.
-fn send_hello(socket: &dyn Socket) {
-  let mut buf = Vec::with_capacity(16);
-  frame::begin(frame::Kind::Hello, &mut buf);
-  if WIRE.encode_into(&ProtocolVersion(PROTOCOL), &mut buf).is_err() {
-    debug_assert!(false, "a protocol version failed to serialise");
-    return;
-  }
-  let _ = socket.send(&buf);
-}
-
-/// Through the codec rather than a hand-rolled `serde_json` call, so this end
-/// and the server cannot drift onto different formats: both name `WIRE`.
-/// Starts a latency probe. The stamp is this client's own clock in
-/// milliseconds; the server echoes it back without reading it.
-fn send_ping(socket: &dyn Socket, origin: u64) {
-  let mut buf = Vec::with_capacity(16);
-  frame::begin(frame::Kind::Ping, &mut buf);
-  if WIRE.encode_into(&frame::Ping { origin }, &mut buf).is_err() {
-    debug_assert!(false, "a ping failed to serialise");
-    return;
-  }
-  let _ = socket.send(&buf);
-}
-
-fn send_framed(socket: &dyn Socket, op: &Op) {
-  let mut buf = Vec::with_capacity(128);
-  frame::begin(frame::Kind::Ops, &mut buf);
-  if WIRE.encode_into(&std::slice::from_ref(op), &mut buf).is_err() {
-    debug_assert!(false, "an op failed to serialise");
-    return;
-  }
-  let _ = socket.send(&buf);
-}
-
 impl NetClient {
   pub fn connect(url: &str) -> Result<Self, String> {
-    let socket = open(url)?;
+    let pump = FramePump::connect(url, WIRE, PROTOCOL).map_err(|e| e.to_string())?;
     Ok(Self {
-      socket,
+      pump,
       sim: SimClient::new(0),
       status: Status::Connecting,
       me: None,
@@ -223,10 +184,7 @@ impl NetClient {
       ),
       predict_dash: true,
       acked_seq: 0,
-      timeline: Timeline::new(),
-      probe: None,
-      events: Vec::new(),
-      last_ping_ms: 0,
+      arrivals: Vec::new(),
       frames_seen: 0,
       now_ms: 0,
       dashing: Vec::new(),
@@ -279,13 +237,16 @@ impl NetClient {
   }
 
   pub fn rtt_ms(&self) -> Option<f32> {
-    self.timeline.rtt.rtt()
+    self.pump.rtt_ms()
   }
 
   /// The server's clock as this client estimates it, which is what the offline
-  /// build got for free by sharing one.
+  /// build got for free by sharing one. The fitted clock, floored by the newest
+  /// stamp carried forward at wall rate: see [`Timeline::server_time_ms`].
+  ///
+  /// [`Timeline::server_time_ms`]: plaza_client_utils::Timeline::server_time_ms
   pub fn server_time_ms(&self, now_ms: u64) -> u64 {
-    self.timeline.clock.server_time_at(now_ms as f64).unwrap_or(now_ms as f64).max(0.0) as u64
+    self.pump.server_time_ms(now_ms)
   }
 
   pub fn is_playing(&self) -> bool {
@@ -323,7 +284,7 @@ impl NetClient {
     // their corrections are a controlled comparison of predicting the dash or not.
     self.ab_dash.input(MoveInput { dir, dt, dash: dash_now });
     self.ab_nodash.input(MoveInput { dir, dt, dash: false });
-    send_framed(self.socket.as_ref(), &Op::Input {
+    self.pump.send_op(&Op::Input {
       seq,
       dx: dir.x,
       dy: dir.y,
@@ -337,80 +298,24 @@ impl NetClient {
     // Mirror the dash-prediction switch so `send_input`, which is not handed the
     // controls, can honour it.
     self.predict_dash = controls.predict_dash;
-    if now_ms.saturating_sub(self.last_ping_ms) >= PING_INTERVAL_MS && self.socket.is_open() {
-      self.last_ping_ms = now_ms;
-      let probe = self.timeline.begin(now_ms);
-      self.probe = Some(probe);
-      send_ping(self.socket.as_ref(), probe.sent_at);
-    }
-
-    self.socket.poll(&mut self.events);
-    let events = std::mem::take(&mut self.events);
-    for event in events {
-      match event {
-        Event::Open => {
+    let mut arrivals = std::mem::take(&mut self.arrivals);
+    self.pump.poll(now_ms, &mut arrivals);
+    for arrival in arrivals.drain(..) {
+      match arrival {
+        Arrival::Opened => {
           if self.status == Status::Connecting {
             self.status = Status::Waiting;
           }
-          // Before anything else: say which wire format this build speaks, so a
-          // stale page is told to reload rather than half-working.
-          send_hello(self.socket.as_ref());
         }
-        Event::Text(text) => self.on_frame(text.as_bytes(), now_ms, controls),
-        Event::Message(bytes) => self.on_frame(&bytes, now_ms, controls),
-        Event::Closed(reason) => {
-          self.status = Status::Gone(match reason {
-            CloseReason::Local => "you disconnected".to_owned(),
-            CloseReason::Remote { code, reason } if reason.is_empty() => format!("host closed the connection ({code})"),
-            CloseReason::Remote { reason, .. } => reason,
-            CloseReason::Error(e) => e,
-          });
-        }
+        Arrival::Ops(frame) => self.on_ops(frame.body(), now_ms, controls),
+        Arrival::Mismatch { ours, theirs } => self.status = Status::Gone(mismatch_message(ours, theirs)),
+        Arrival::Closed(reason) => self.status = Status::Gone(reason),
       }
     }
-    self.events.clear();
+    self.arrivals = arrivals;
   }
 
-  fn on_server_protocol(&mut self, body: &[u8]) {
-    let Ok(theirs) = WIRE.decode::<ProtocolVersion>(body) else {
-      return;
-    };
-    if ProtocolVersion(PROTOCOL).agrees_with(theirs) {
-      return;
-    }
-    self.status = Status::Gone(format!(
-      "this page was built for wire format {PROTOCOL} and the server speaks {}: reload to get the current client",
-      theirs.0
-    ));
-  }
-
-  fn on_frame(&mut self, bytes: &[u8], now_ms: u64, controls: &Controls) {
-    // The envelope is whatever `plaza_session` sends; only `Ops` matters here,
-    // since the arena is built with join snapshots off.
-    let Some((tag, body)) = frame::split(bytes) else {
-      return;
-    };
-    match frame::Kind::from_byte(tag) {
-      Some(frame::Kind::Ops) => {}
-      Some(frame::Kind::Hello) => return self.on_server_protocol(body),
-      // The server's session answers this one; this end only echoes the stamp
-      // back, because the clock being measured is the server's.
-      Some(frame::Kind::Ping) => {
-        if let Some(reply) = frame::answer_ping(&WIRE, body, None) {
-          let _ = self.socket.send(&reply);
-        }
-        return;
-      }
-      Some(frame::Kind::Pong) => {
-        if let (Ok(pong), Some(probe)) = (WIRE.decode::<frame::Pong>(body), self.probe.take())
-          && pong.origin == probe.sent_at
-        {
-          self.timeline.complete(probe, self.now_ms, pong.responder);
-        }
-        return;
-      }
-      None => return,
-    }
+  fn on_ops(&mut self, body: &[u8], now_ms: u64, controls: &Controls) {
     let Ok(ops) = WIRE.decode::<Vec<Op>>(body) else {
       return;
     };
@@ -429,7 +334,10 @@ impl NetClient {
           // disagree: pongs come straight back while the impairment link holds
           // frames, so a frame sample claims an offset a whole latency off and the
           // estimate wobbles every ping interval. Pongs are correct on a host
-          // (direct) and a remote (delayed like the frames).
+          // (direct) and a remote (delayed like the frames). The stamp still
+          // floors the estimate: the server wrote it, so server time is provably
+          // past it.
+          self.pump.timeline_mut().note_stamp(packet.server_time_ms, now_ms);
           // The field pulling on your hole: every other live hole as a point
           // source, your own excluded (its pull on itself is zero, but computed
           // from a stale packet position it would read as a spurious self-tug).
@@ -521,18 +429,8 @@ impl NetClient {
   pub fn tick(&mut self, dt_ms: u64, controls: &Controls) {
     self.sim.tick(dt_ms, controls);
     self.local.advance(dt_ms as f32 / 1000.0);
-    if self.socket.state() == State::Closed && !matches!(self.status, Status::Gone(_)) {
+    if self.pump.state() == State::Closed && !matches!(self.status, Status::Gone(_)) {
       self.status = Status::Gone("connection lost".to_owned());
     }
   }
-}
-
-#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
-fn open(url: &str) -> Result<Box<dyn Socket>, String> {
-  plaza_ws::native::connect(url).map(|s| Box::new(s) as Box<dyn Socket>).map_err(|e| e.to_string())
-}
-
-#[cfg(all(feature = "web", target_arch = "wasm32"))]
-fn open(url: &str) -> Result<Box<dyn Socket>, String> {
-  plaza_ws::miniquad::connect(url).map(|s| Box::new(s) as Box<dyn Socket>).map_err(|e| e.to_string())
 }

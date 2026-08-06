@@ -17,10 +17,9 @@ use async_trait::async_trait;
 use parking_lot::Mutex;
 use plaza::session::{MessageTarget, TargetedOp};
 use plaza::state_logic::{LogicInput, LogicOutput, StateLogic, StateLogicError};
-use plaza::Agent;
-use playground_common::oneshot::Pending as OneShots;
+use plaza_server_utils::oneshot::Pending as OneShots;
 use plaza_server_utils::{RateMeter, SeatTable, Seating};
-use plaza_session::{Delivery, DirectionProfile, LinkProfile};
+use plaza_session::{Delivery, DirectionProfile, LinkProfile, LinkPublisher};
 
 use crate::sim::protocol::{Op, ServerPolicy};
 use crate::sim::server::{Seat, Server};
@@ -441,19 +440,17 @@ pub type Router = Arc<dyn Fn(u32) -> Option<(u32, String, String)> + Send + Sync
 /// The arena states what the link should be and stops there. Applying it to
 /// every frame that crosses the connection, in both directions, is the
 /// session's, which is the only place that sees all of them.
-pub type LinkSink = Arc<dyn Fn(LinkProfile) + Send + Sync>;
+pub use plaza_session::LinkSink;
 
 pub struct ArenaLogic {
   controls: Arc<Mutex<Controls>>,
   view: Option<Arc<Mutex<HostView>>>,
   latency: Option<LatencySource>,
-  link: Option<LinkSink>,
+  link: Option<LinkPublisher>,
   /// Where the arena publishes its simulation clock, so the session can stamp
   /// a `Pong` with the clock clients actually synchronise against rather than
   /// with wall time.
   clock: Option<Arc<AtomicU64>>,
-  /// The profile last published, so an unchanged panel says nothing.
-  published: Mutex<Option<LinkProfile>>,
   router: Option<Router>,
   /// Which room this arena *is*, so it can tell whether a placement is somewhere
   /// else or right here.
@@ -468,7 +465,6 @@ impl ArenaLogic {
       latency: None,
       link: None,
       clock: None,
-      published: Mutex::new(None),
       router: None,
       room: 0,
     }
@@ -490,7 +486,7 @@ impl ArenaLogic {
 
   /// Where the impairment sliders take effect.
   pub fn with_link(mut self, link: LinkSink) -> Self {
-    self.link = Some(link);
+    self.link = Some(LinkPublisher::new(link));
     self
   }
 
@@ -502,7 +498,7 @@ impl ArenaLogic {
 
   /// Pushes the panel's link settings down to the transport when they change.
   fn publish_link(&self, controls: &Controls) {
-    let Some(sink) = &self.link else { return };
+    let Some(link) = &self.link else { return };
     // One way, applied in each direction, which is what the slider has always
     // meant: the render-delay budget the panel prints beside it reads
     // `latency + jitter + one send interval` against a single trip.
@@ -516,13 +512,7 @@ impl ArenaLogic {
         Delivery::Reliable
       },
     };
-    let profile = LinkProfile::symmetric(one_way);
-    let mut published = self.published.lock();
-    if *published == Some(profile) {
-      return;
-    }
-    *published = Some(profile);
-    sink(profile);
+    link.publish(LinkProfile::symmetric(one_way));
   }
 }
 
@@ -777,24 +767,6 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
   }
 }
 
-/// A snapshot provider that provides nothing: the world goes out as `Op::Frame`,
-/// which is a per-recipient delta on a fixed cadence, so join snapshots are off.
-pub struct NoSnapshots;
-
-#[async_trait]
-impl plaza::snapshot::SnapshotProvider<PlayerKey, Arena, Op> for NoSnapshots {
-  async fn create_snapshot(
-    &self,
-    _full_state: &Arena,
-    _target_agent: Option<&Agent<PlayerKey>>,
-    _context: Option<plaza::snapshot::SnapshotContext>,
-  ) -> Result<Option<Op>, plaza::snapshot::SnapshotError<PlayerKey>> {
-    // No snapshot concept: this arena streams deltas, and a joiner is caught
-    // up by the relevance stream rather than by a whole-state message.
-    Ok(None)
-  }
-}
-
 /// Unused, but `MessageTarget` has to be nameable for the logic above to compile
 /// against plaza's re-exports.
 #[allow(dead_code)]
@@ -803,6 +775,7 @@ fn _target_is_used(_: MessageTarget<PlayerKey>) {}
 #[cfg(test)]
 mod tests {
   use super::*;
+  use plaza::Agent;
   use crate::sim::types::Upgrade;
   use plaza_client_utils::net_sim::{LatencyLink, Rng};
   use std::time::Duration;

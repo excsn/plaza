@@ -24,9 +24,8 @@ use async_trait::async_trait;
 use parking_lot::Mutex;
 use plaza::session::{MessageTarget, TargetedOp};
 use plaza::state_logic::{LogicInput, LogicOutput, StateLogic, StateLogicError};
-use plaza::Agent;
-use playground_common::oneshot::Pending as OneShots;
-use plaza_session::{Delivery, DirectionProfile, LinkProfile};
+use plaza_server_utils::oneshot::Pending as OneShots;
+use plaza_session::{Delivery, DirectionProfile, LinkProfile, LinkPublisher};
 use plaza_server_utils::{RateMeter, SeatTable, Seating};
 
 use crate::sim::protocol::{Op, ServerPolicy};
@@ -248,14 +247,12 @@ impl Arena {
 /// launched with.
 /// Publishes the panel's impairment sliders to the transport that owns the
 /// link. The arena states what the link should be and stops there.
-pub type LinkSink = Arc<dyn Fn(LinkProfile) + Send + Sync>;
+pub use plaza_session::LinkSink;
 
 pub struct ArenaLogic {
   controls: Arc<Mutex<Controls>>,
   view: Option<Arc<Mutex<HostView>>>,
-  link: Option<LinkSink>,
-  /// The profile last published, so an unchanged panel says nothing.
-  published: Mutex<Option<LinkProfile>>,
+  link: Option<LinkPublisher>,
   /// Where the arena publishes its simulation clock, so the session can stamp
   /// a `Pong` with the clock clients synchronise against.
   clock: Option<Arc<AtomicU64>>,
@@ -267,14 +264,13 @@ impl ArenaLogic {
       controls,
       view,
       link: None,
-      published: Mutex::new(None),
       clock: None,
     }
   }
 
   /// Where the impairment sliders take effect.
   pub fn with_link(mut self, link: LinkSink) -> Self {
-    self.link = Some(link);
+    self.link = Some(LinkPublisher::new(link));
     self
   }
 
@@ -286,7 +282,7 @@ impl ArenaLogic {
 
   /// Pushes the panel's link settings down to the transport when they change.
   fn publish_link(&self, controls: &Controls) {
-    let Some(sink) = &self.link else { return };
+    let Some(link) = &self.link else { return };
     // One way, applied in each direction, which is what the slider has always
     // meant here.
     let one_way = DirectionProfile {
@@ -299,13 +295,7 @@ impl ArenaLogic {
         Delivery::Reliable
       },
     };
-    let profile = LinkProfile::symmetric(one_way);
-    let mut published = self.published.lock();
-    if *published == Some(profile) {
-      return;
-    }
-    *published = Some(profile);
-    sink(profile);
+    link.publish(LinkProfile::symmetric(one_way));
   }
 }
 
@@ -461,29 +451,6 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
   }
 }
 
-/// A snapshot provider that provides nothing.
-///
-/// The world goes out as `Op::Frame` rather than as snapshots, because frames
-/// are per-recipient deltas on a fixed cadence and `LogicOutput.ops` already
-/// targets individuals. Plaza asks for a snapshot on join anyway unless told
-/// otherwise, so the controller is built with that turned off and this exists
-/// only to satisfy the type.
-pub struct NoSnapshots;
-
-#[async_trait]
-impl plaza::snapshot::SnapshotProvider<PlayerKey, Arena, Op> for NoSnapshots {
-  async fn create_snapshot(
-    &self,
-    _full_state: &Arena,
-    _target_agent: Option<&Agent<PlayerKey>>,
-    _context: Option<plaza::snapshot::SnapshotContext>,
-  ) -> Result<Option<Op>, plaza::snapshot::SnapshotError<PlayerKey>> {
-    // No snapshot concept: this arena streams deltas, and a joiner is caught
-    // up by the relevance stream rather than by a whole-state message.
-    Ok(None)
-  }
-}
-
 /// Unused, but `MessageTarget` has to be nameable for the logic above to compile
 /// against plaza's re-exports.
 #[allow(dead_code)]
@@ -492,6 +459,7 @@ fn _target_is_used(_: MessageTarget<PlayerKey>) {}
 #[cfg(test)]
 mod tests {
   use super::*;
+  use plaza::Agent;
   use std::time::Duration;
 
   /// Drives the async logic once. The tests never actually await anything, so a

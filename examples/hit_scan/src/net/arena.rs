@@ -15,12 +15,11 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use parking_lot::Mutex;
-use plaza::Agent;
 use plaza::session::TargetedOp;
 use plaza::state_logic::{LogicInput, LogicOutput, StateLogic, StateLogicError};
 use plaza_server_utils::{SeatTable, Seating};
-use plaza_session::{Delivery, DirectionProfile, LinkProfile};
-use playground_common::oneshot::Pending as OneShots;
+use plaza_session::{Delivery, DirectionProfile, LinkProfile, LinkPublisher};
+use plaza_server_utils::oneshot::Pending as OneShots;
 
 use crate::sim::protocol::{Intent, Op, ServerPolicy};
 use crate::sim::server::{Server, Stats};
@@ -30,7 +29,7 @@ pub type PlayerKey = u64;
 
 /// Publishes the panel's impairment sliders to the transport that owns the
 /// link. The arena states what the link should be and stops there.
-pub type LinkSink = Arc<dyn Fn(LinkProfile) + Send + Sync>;
+pub use plaza_session::LinkSink;
 
 /// Answers "what one-way delay did the server measure for this agent".
 ///
@@ -134,9 +133,8 @@ impl Arena {
 pub struct ArenaLogic {
   controls: Arc<Mutex<Controls>>,
   view: Option<Arc<Mutex<HostView>>>,
-  link: Option<LinkSink>,
+  link: Option<LinkPublisher>,
   rtt: Option<RttSource>,
-  published: Mutex<Option<LinkProfile>>,
   clock: Option<Arc<AtomicU64>>,
 }
 
@@ -147,13 +145,12 @@ impl ArenaLogic {
       view,
       link: None,
       rtt: None,
-      published: Mutex::new(None),
       clock: None,
     }
   }
 
   pub fn with_link(mut self, link: LinkSink) -> Self {
-    self.link = Some(link);
+    self.link = Some(LinkPublisher::new(link));
     self
   }
 
@@ -168,20 +165,14 @@ impl ArenaLogic {
   }
 
   fn publish_link(&self, controls: &Controls) {
-    let Some(sink) = &self.link else { return };
+    let Some(link) = &self.link else { return };
     let one_way = DirectionProfile {
       delay: Duration::from_millis(controls.latency_ms),
       jitter: Duration::from_millis(controls.jitter_ms),
       loss: controls.loss_pct / 100.0,
       delivery: if controls.datagram_link { Delivery::Datagram } else { Delivery::Reliable },
     };
-    let profile = LinkProfile::symmetric(one_way);
-    let mut published = self.published.lock();
-    if *published == Some(profile) {
-      return;
-    }
-    *published = Some(profile);
-    sink(profile);
+    link.publish(LinkProfile::symmetric(one_way));
   }
 }
 
@@ -329,25 +320,6 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
   }
 }
 
-/// A snapshot provider that provides nothing.
-///
-/// State reaches a joiner as `Op::Welcome` on the tick it is seated. Plaza asks
-/// for a snapshot on join unless told otherwise, so the controller is built with
-/// that off and this exists to satisfy the type.
-pub struct NoSnapshots;
-
-#[async_trait]
-impl plaza::snapshot::SnapshotProvider<PlayerKey, Arena, Op> for NoSnapshots {
-  async fn create_snapshot(
-    &self,
-    _full_state: &Arena,
-    _target_agent: Option<&Agent<PlayerKey>>,
-    _context: Option<plaza::snapshot::SnapshotContext>,
-  ) -> Result<Option<Op>, plaza::snapshot::SnapshotError<PlayerKey>> {
-    Ok(None)
-  }
-}
-
 /// Mean distance between what a client drew and where the server had everybody
 /// **at the instant that client was drawing**.
 ///
@@ -389,6 +361,7 @@ pub fn naive_render_error(view: &HostView, drawn: &[(PlayerId, V2, bool)], me: P
 mod tests {
   use super::*;
   use crate::sim::types::{Dir8, SIM_STEP_MS, Weapon};
+  use plaza::Agent;
 
   fn step(logic: &ArenaLogic, state: &mut Arena, input: LogicInput<Op, PlayerKey>) -> LogicOutput<Op, PlayerKey> {
     tokio::runtime::Builder::new_current_thread()

@@ -7,12 +7,11 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use parking_lot::Mutex;
-use plaza::Agent;
 use plaza::session::TargetedOp;
 use plaza::state_logic::{LogicInput, LogicOutput, StateLogic, StateLogicError};
 use plaza_server_utils::{SeatTable, Seating};
-use plaza_session::{Delivery, DirectionProfile, LinkProfile};
-use playground_common::oneshot::Pending as OneShots;
+use plaza_session::{Delivery, DirectionProfile, LinkProfile, LinkPublisher};
+use plaza_server_utils::oneshot::Pending as OneShots;
 
 use crate::sim::curtain::{Bullet, Downed, Wave};
 use crate::sim::protocol::{Intent, Op, ServerPolicy, wire_cost};
@@ -20,7 +19,7 @@ use crate::sim::server::{Server, Stats};
 use crate::sim::types::{Controls, PlayerBullet, PlayerId, Ship};
 
 pub type PlayerKey = u64;
-pub type LinkSink = Arc<dyn Fn(LinkProfile) + Send + Sync>;
+pub use plaza_session::LinkSink;
 pub type RttSource = Arc<dyn Fn(&PlayerKey) -> Option<u64> + Send + Sync>;
 
 #[derive(Clone, Debug, Default)]
@@ -109,9 +108,8 @@ impl Arena {
 pub struct ArenaLogic {
   controls: Arc<Mutex<Controls>>,
   view: Option<Arc<Mutex<HostView>>>,
-  link: Option<LinkSink>,
+  link: Option<LinkPublisher>,
   rtt: Option<RttSource>,
-  published: Mutex<Option<LinkProfile>>,
   clock: Option<Arc<AtomicU64>>,
 }
 
@@ -122,13 +120,12 @@ impl ArenaLogic {
       view,
       link: None,
       rtt: None,
-      published: Mutex::new(None),
       clock: None,
     }
   }
 
   pub fn with_link(mut self, link: LinkSink) -> Self {
-    self.link = Some(link);
+    self.link = Some(LinkPublisher::new(link));
     self
   }
 
@@ -143,20 +140,14 @@ impl ArenaLogic {
   }
 
   fn publish_link(&self, controls: &Controls) {
-    let Some(sink) = &self.link else { return };
+    let Some(link) = &self.link else { return };
     let one_way = DirectionProfile {
       delay: Duration::from_millis(controls.latency_ms),
       jitter: Duration::from_millis(controls.jitter_ms),
       loss: controls.loss_pct / 100.0,
       delivery: if controls.datagram_link { Delivery::Datagram } else { Delivery::Reliable },
     };
-    let profile = LinkProfile::symmetric(one_way);
-    let mut published = self.published.lock();
-    if *published == Some(profile) {
-      return;
-    }
-    *published = Some(profile);
-    sink(profile);
+    link.publish(LinkProfile::symmetric(one_way));
   }
 }
 
@@ -296,24 +287,11 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
   }
 }
 
-pub struct NoSnapshots;
-
-#[async_trait]
-impl plaza::snapshot::SnapshotProvider<PlayerKey, Arena, Op> for NoSnapshots {
-  async fn create_snapshot(
-    &self,
-    _full_state: &Arena,
-    _target_agent: Option<&Agent<PlayerKey>>,
-    _context: Option<plaza::snapshot::SnapshotContext>,
-  ) -> Result<Option<Op>, plaza::snapshot::SnapshotError<PlayerKey>> {
-    Ok(None)
-  }
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
   use crate::sim::types::{DeathRule, Dir8, SIM_STEP_MS};
+  use plaza::Agent;
 
   const SEED: u64 = 0x11_22_33_44;
 

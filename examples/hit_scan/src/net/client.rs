@@ -17,10 +17,10 @@
 //!
 //! [`sim::Client`]: crate::sim::client::Client
 
-use plaza_client_utils::{InputCoalescer, Probe, Timeline};
-use plaza_wire::frame::{self, ProtocolVersion};
+use plaza_client_utils::InputCoalescer;
 use plaza_wire::{MsgPackCodec, WireCodec};
-use plaza_ws::{CloseReason, Event, Socket, State};
+use plaza_ws::pump::{mismatch_message, Arrival, FramePump};
+use plaza_ws::{Event, State};
 
 use crate::sim::client::Client as SimClient;
 use crate::sim::protocol::{Op, PROTOCOL, ServerPolicy};
@@ -30,8 +30,6 @@ use crate::sim::types::{Controls, Dir8, PlayerId, SIM_STEP_MS, V2, Weapon};
 /// Naming it once is the point: two ends cannot drift onto different formats if
 /// there is only one name for the format.
 const WIRE: MsgPackCodec = MsgPackCodec;
-
-const PING_INTERVAL_MS: u64 = 1000;
 
 /// Resend the held direction at least this often.
 ///
@@ -57,81 +55,45 @@ pub enum Status {
 }
 
 pub struct NetClient {
-  socket: Box<dyn Socket>,
+  pump: FramePump<MsgPackCodec>,
   pub sim: SimClient,
   pub status: Status,
   pub me: Option<PlayerId>,
   pub policy: Option<ServerPolicy>,
-
-  timeline: Timeline,
-  probe: Option<Probe>,
-  newest_stamp_ms: u64,
-  stamp_at_local_ms: u64,
 
   send_policy: InputCoalescer<Dir8>,
   last_input_tick: u64,
   last_input_ack: u64,
 
   events: Vec<Event>,
-  last_ping_ms: u64,
+  arrivals: Vec<Arrival>,
   now_ms: u64,
   last_frame_ms: u64,
   pub frames_seen: u64,
   pub resume_drops: u64,
 }
 
-fn send_hello(socket: &dyn Socket) {
-  let mut buf = Vec::with_capacity(16);
-  frame::begin(frame::Kind::Hello, &mut buf);
-  if WIRE.encode_into(&ProtocolVersion(PROTOCOL), &mut buf).is_err() {
-    debug_assert!(false, "a protocol version failed to serialise");
-    return;
-  }
-  let _ = socket.send(&buf);
-}
-
-fn send_ping(socket: &dyn Socket, origin: u64) {
-  let mut buf = Vec::with_capacity(16);
-  frame::begin(frame::Kind::Ping, &mut buf);
-  if WIRE.encode_into(&frame::Ping { origin }, &mut buf).is_err() {
-    debug_assert!(false, "a ping failed to serialise");
-    return;
-  }
-  let _ = socket.send(&buf);
-}
-
-fn send_framed(socket: &dyn Socket, op: &Op) {
-  let mut buf = Vec::with_capacity(64);
-  frame::begin(frame::Kind::Ops, &mut buf);
-  if WIRE.encode_into(&std::slice::from_ref(op), &mut buf).is_err() {
-    debug_assert!(false, "an op failed to serialise");
-    return;
-  }
-  let _ = socket.send(&buf);
-}
-
 impl NetClient {
   pub fn connect(url: &str) -> Result<Self, String> {
-    let socket = open(url)?;
-    Ok(Self::from_socket(socket))
+    Ok(Self::from_pump(FramePump::connect(url, WIRE, PROTOCOL).map_err(|e| e.to_string())?))
   }
 
-  pub fn from_socket(socket: Box<dyn Socket>) -> Self {
+  pub fn from_socket(socket: Box<dyn plaza_ws::Socket>) -> Self {
+    Self::from_pump(FramePump::new(socket, WIRE, PROTOCOL))
+  }
+
+  fn from_pump(pump: FramePump<MsgPackCodec>) -> Self {
     Self {
-      socket,
+      pump,
       sim: SimClient::new(0, Controls::default().render_delay_ms),
       status: Status::Connecting,
       me: None,
       policy: None,
-      timeline: Timeline::new(),
-      probe: None,
-      newest_stamp_ms: 0,
-      stamp_at_local_ms: 0,
       send_policy: InputCoalescer::new(INPUT_KEEPALIVE_MS),
       last_input_tick: 0,
       last_input_ack: 0,
       events: Vec::new(),
-      last_ping_ms: 0,
+      arrivals: Vec::new(),
       now_ms: 0,
       last_frame_ms: 0,
       frames_seen: 0,
@@ -144,29 +106,23 @@ impl NetClient {
   }
 
   pub fn rtt_ms(&self) -> Option<f32> {
-    self.timeline.rtt.rtt()
+    self.pump.rtt_ms()
   }
 
   /// This client's best estimate of server time now.
   ///
   /// The fitted clock, **floored by the newest stamp carried forward at wall
-  /// rate**. A stamp the server wrote is a lower bound needing no
-  /// synchronisation to trust, so a cold fit cannot drag this below what the
-  /// stream has already proven. And it has to *advance*: a floor pinned at the
-  /// last stamp freezes between frames, and this clock decides when this client
-  /// runs its own scheduled inputs, so a frozen one parks every input in the
-  /// client's own future where it never runs at all.
+  /// rate** ([`Timeline::server_time_ms`]). A stamp the server wrote is a
+  /// lower bound needing no synchronisation to trust, so a cold fit cannot
+  /// drag this below what the stream has already proven. And it has to
+  /// *advance*: a floor pinned at the last stamp freezes between frames, and
+  /// this clock decides when this client runs its own scheduled inputs, so a
+  /// frozen one parks every input in the client's own future where it never
+  /// runs at all.
+  ///
+  /// [`Timeline::server_time_ms`]: plaza_client_utils::Timeline::server_time_ms
   pub fn server_time_ms(&self) -> u64 {
-    let fitted = self.timeline.clock.server_time_at(self.now_ms as f64).unwrap_or(self.now_ms as f64).max(0.0) as u64;
-    let carried = self.newest_stamp_ms + self.now_ms.saturating_sub(self.stamp_at_local_ms);
-    fitted.max(carried)
-  }
-
-  fn note_stamp(&mut self, stamp_ms: u64) {
-    if stamp_ms >= self.newest_stamp_ms {
-      self.newest_stamp_ms = stamp_ms;
-      self.stamp_at_local_ms = self.now_ms;
-    }
+    self.pump.server_time_ms(self.now_ms)
   }
 
   pub fn input_ack_lag(&self) -> (u64, u64) {
@@ -179,13 +135,14 @@ impl NetClient {
   /// dropped, which plays as a player who cannot move while everything else
   /// looks healthy.
   pub fn input_aim_ticks(&self) -> i64 {
-    self.last_input_tick as i64 - (self.newest_stamp_ms / SIM_STEP_MS) as i64
+    self.last_input_tick as i64 - (self.pump.timeline().newest_stamp_ms() / SIM_STEP_MS) as i64
   }
 
   pub fn clock_diag(&self) -> (Option<f64>, usize) {
+    let clock = &self.pump.timeline().clock;
     (
-      self.timeline.clock.server_time_at(self.now_ms as f64).map(|s| s - self.now_ms as f64),
-      self.timeline.clock.sample_count(),
+      clock.server_time_at(self.now_ms as f64).map(|s| s - self.now_ms as f64),
+      clock.sample_count(),
     )
   }
 
@@ -200,7 +157,7 @@ impl NetClient {
     if let Op::Move { tick, .. } = op {
       self.last_input_tick = tick;
     }
-    send_framed(self.socket.as_ref(), &op);
+    self.pump.send_op(&op);
   }
 
   /// Pulls the trigger, aimed where the player is aiming on their own screen.
@@ -213,94 +170,44 @@ impl NetClient {
     if let Op::Shoot { tick, .. } = op {
       self.last_input_tick = tick;
     }
-    send_framed(self.socket.as_ref(), &op);
+    self.pump.send_op(&op);
   }
 
   /// Drains the socket and folds in whatever arrived. Call once per frame.
   pub fn poll(&mut self, now_ms: u64, controls: &Controls) {
     self.now_ms = now_ms;
-    if now_ms.saturating_sub(self.last_ping_ms) >= PING_INTERVAL_MS && self.socket.is_open() {
-      self.last_ping_ms = now_ms;
-      let probe = self.timeline.begin(now_ms);
-      self.probe = Some(probe);
-      send_ping(self.socket.as_ref(), probe.sent_at);
-    }
-
-    self.socket.poll(&mut self.events);
     let mut events = std::mem::take(&mut self.events);
+    self.pump.drain(now_ms, &mut events);
     // A resumed tab hands over minutes of traffic at once, none of which
     // describes a moment worth acting on. Dropped on message lengths alone,
     // before any of it is parsed.
     if self.frames_seen > 0 && plaza_ws::trim_backlog(&mut events, BACKLOG_TRIGGER, BACKLOG_KEEP).is_some() {
       self.resume_drops += 1;
       // A probe sent before the freeze and answered after it measures the
-      // freeze, not the network. The epoch is what discards it, along with
+      // freeze, not the network. `on_resume` is what discards it, along with
       // everything the estimators learned across a gap of unknown length.
-      self.timeline.on_resume();
-      self.probe = None;
+      self.pump.on_resume();
     }
+    let mut arrivals = std::mem::take(&mut self.arrivals);
+    self.pump.digest(&mut events, now_ms, &mut arrivals);
+    self.events = events;
 
-    for event in events {
-      match event {
-        Event::Open => {
+    for arrival in arrivals.drain(..) {
+      match arrival {
+        Arrival::Opened => {
           if self.status == Status::Connecting {
             self.status = Status::Waiting;
           }
-          send_hello(self.socket.as_ref());
         }
-        Event::Text(text) => self.on_wire(text.as_bytes(), controls),
-        Event::Message(bytes) => self.on_wire(&bytes, controls),
-        Event::Closed(reason) => {
-          self.status = Status::Gone(match reason {
-            CloseReason::Local => "you disconnected".to_owned(),
-            CloseReason::Remote { code, reason } if reason.is_empty() => format!("host closed the connection ({code})"),
-            CloseReason::Remote { reason, .. } => reason,
-            CloseReason::Error(e) => e,
-          });
-        }
+        Arrival::Ops(frame) => self.on_ops(frame.body(), controls),
+        Arrival::Mismatch { ours, theirs } => self.status = Status::Gone(mismatch_message(ours, theirs)),
+        Arrival::Closed(reason) => self.status = Status::Gone(reason),
       }
     }
-    self.events.clear();
+    self.arrivals = arrivals;
   }
 
-  fn on_server_protocol(&mut self, body: &[u8]) {
-    let Ok(theirs) = WIRE.decode::<ProtocolVersion>(body) else {
-      return;
-    };
-    if ProtocolVersion(PROTOCOL).agrees_with(theirs) {
-      return;
-    }
-    self.status = Status::Gone(format!(
-      "this page was built for wire format {PROTOCOL} and the server speaks {}: reload to get the current client",
-      theirs.0
-    ));
-  }
-
-  fn on_wire(&mut self, bytes: &[u8], controls: &Controls) {
-    let Some((tag, body)) = frame::split(bytes) else {
-      return;
-    };
-    // Skip-unknown rather than fail: a server speaking a newer protocol may
-    // send kinds this build has never heard of.
-    match frame::Kind::from_byte(tag) {
-      Some(frame::Kind::Ops) => {}
-      Some(frame::Kind::Hello) => return self.on_server_protocol(body),
-      Some(frame::Kind::Ping) => {
-        if let Some(reply) = frame::answer_ping(&WIRE, body, None) {
-          let _ = self.socket.send(&reply);
-        }
-        return;
-      }
-      Some(frame::Kind::Pong) => {
-        if let (Ok(pong), Some(probe)) = (WIRE.decode::<frame::Pong>(body), self.probe.take())
-          && pong.origin == probe.sent_at
-        {
-          self.timeline.complete(probe, self.now_ms, pong.responder);
-        }
-        return;
-      }
-      None => return,
-    }
+  fn on_ops(&mut self, body: &[u8], controls: &Controls) {
     let Ok(ops) = WIRE.decode::<Vec<Op>>(body) else {
       return;
     };
@@ -311,17 +218,17 @@ impl NetClient {
           self.me = Some(*player);
           self.policy = Some(*policy);
           self.sim = SimClient::new(*player, policy.render_delay_ms);
-          self.note_stamp(start.server_time_ms);
+          self.pump.timeline_mut().note_stamp(start.server_time_ms, self.now_ms);
           self.status = Status::Playing;
           self.send_policy.reset();
         }
         Op::Policy(policy) => self.policy = Some(*policy),
         Op::Frame(frame) => {
-          self.note_stamp(frame.server_time_ms);
+          self.pump.timeline_mut().note_stamp(frame.server_time_ms, self.now_ms);
           self.frames_seen += 1;
         }
-        Op::Shot(shot) => self.note_stamp(shot.resolved_tick * SIM_STEP_MS),
-        Op::Died(death) => self.note_stamp(death.at_ms),
+        Op::Shot(shot) => self.pump.timeline_mut().note_stamp(shot.resolved_tick * SIM_STEP_MS, self.now_ms),
+        Op::Died(death) => self.pump.timeline_mut().note_stamp(death.at_ms, self.now_ms),
         Op::InputAck { seq } => self.last_input_ack = self.last_input_ack.max(*seq),
         Op::NoSeat { seats } => self.status = Status::NoSeat { seats: *seats },
         Op::Refused { measured_one_way_ms, allowed_one_way_ms } => {
@@ -343,64 +250,29 @@ impl NetClient {
     self.last_frame_ms = self.now_ms;
     let server_now = self.server_time_ms();
     self.sim.advance(elapsed, server_now, controls);
-    if self.socket.state() == State::Closed && !matches!(self.status, Status::Gone(_)) {
+    if self.pump.state() == State::Closed && !matches!(self.status, Status::Gone(_)) {
       self.status = Status::Gone("connection lost".to_owned());
     }
   }
 }
 
-#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
-fn open(url: &str) -> Result<Box<dyn Socket>, String> {
-  plaza_ws::native::connect(url).map(|s| Box::new(s) as Box<dyn Socket>).map_err(|e| e.to_string())
-}
-
-#[cfg(all(feature = "web", target_arch = "wasm32"))]
-fn open(url: &str) -> Result<Box<dyn Socket>, String> {
-  plaza_ws::miniquad::connect(url).map(|s| Box::new(s) as Box<dyn Socket>).map_err(|e| e.to_string())
-}
-
-#[cfg(not(any(all(feature = "native", not(target_arch = "wasm32")), all(feature = "web", target_arch = "wasm32"))))]
-fn open(_url: &str) -> Result<Box<dyn Socket>, String> {
-  Err("this build has no socket backend compiled in".to_owned())
-}
-
 #[cfg(test)]
 mod tests {
+  use plaza_wire::frame::{self, ProtocolVersion};
+  use plaza_ws::scripted::ScriptedSocket;
+
   use super::*;
-  use parking_lot::Mutex;
-  use std::collections::VecDeque;
-  use std::sync::Arc;
 
-  /// A socket that replays whatever a test queues into it.
-  struct ScriptedSocket(Arc<Mutex<VecDeque<Event>>>);
-
-  impl Socket for ScriptedSocket {
-    fn send(&self, _bytes: &[u8]) -> Result<(), plaza_ws::WsError> {
-      Ok(())
-    }
-    fn send_text(&self, _text: &str) -> Result<(), plaza_ws::WsError> {
-      Ok(())
-    }
-    fn poll(&mut self, out: &mut Vec<Event>) {
-      out.extend(self.0.lock().drain(..));
-    }
-    fn state(&self) -> State {
-      State::Open
-    }
-    fn close(&mut self) {}
-  }
-
-  fn framed(ops: &[Op]) -> Event {
+  fn framed(socket: &ScriptedSocket, ops: &[Op]) {
     let mut buf = Vec::new();
     frame::begin(frame::Kind::Ops, &mut buf);
     WIRE.encode_into(&ops, &mut buf).expect("encode");
-    Event::Message(buf)
+    socket.feed_message(buf);
   }
 
-  fn client() -> (NetClient, Arc<Mutex<VecDeque<Event>>>) {
-    let queue = Arc::new(Mutex::new(VecDeque::new()));
-    let socket = Box::new(ScriptedSocket(queue.clone())) as Box<dyn Socket>;
-    (NetClient::from_socket(socket), queue)
+  fn client() -> (NetClient, ScriptedSocket) {
+    let socket = ScriptedSocket::new();
+    (NetClient::from_socket(Box::new(socket.clone())), socket)
   }
 
   fn welcome() -> Op {
@@ -417,8 +289,8 @@ mod tests {
 
   #[test]
   fn a_welcome_seats_this_client_and_starts_its_clock() {
-    let (mut c, queue) = client();
-    queue.lock().push_back(framed(&[welcome()]));
+    let (mut c, socket) = client();
+    framed(&socket, &[welcome()]);
     c.poll(0, &Controls::default());
     assert_eq!(c.status, Status::Playing);
     assert_eq!(c.me, Some(0));
@@ -427,11 +299,11 @@ mod tests {
 
   #[test]
   fn a_refusal_carries_both_numbers_rather_than_a_verdict() {
-    let (mut c, queue) = client();
-    queue.lock().push_back(framed(&[Op::Refused {
+    let (mut c, socket) = client();
+    framed(&socket, &[Op::Refused {
       measured_one_way_ms: 900,
       allowed_one_way_ms: 164,
-    }]));
+    }]);
     c.poll(0, &Controls::default());
     assert_eq!(c.status, Status::Refused { measured_ms: 900, allowed_ms: 164 });
   }
@@ -442,8 +314,8 @@ mod tests {
     // when the client runs its own scheduled inputs. Frozen, every input is
     // parked in the client's own future and never runs locally at all, which
     // the player reports as the controls sticking.
-    let (mut c, queue) = client();
-    queue.lock().push_back(framed(&[welcome()]));
+    let (mut c, socket) = client();
+    framed(&socket, &[welcome()]);
     c.poll(0, &Controls::default());
     let at_zero = c.server_time_ms();
     c.poll(500, &Controls::default());
@@ -453,8 +325,8 @@ mod tests {
 
   #[test]
   fn an_input_aims_at_a_tick_the_server_has_not_run_yet() {
-    let (mut c, queue) = client();
-    queue.lock().push_back(framed(&[welcome()]));
+    let (mut c, socket) = client();
+    framed(&socket, &[welcome()]);
     c.poll(0, &Controls::default());
     c.send_walk(Dir8::E);
     assert!(c.input_aim_ticks() > 0, "aimed {} ticks past the newest frame", c.input_aim_ticks());
@@ -464,8 +336,8 @@ mod tests {
   fn a_held_direction_is_resent_on_the_keepalive_and_a_shot_is_never_resent() {
     // The asymmetry that matters: a lost direction leaves the server holding a
     // wrong one for ever, and a resent shot fires twice.
-    let (mut c, queue) = client();
-    queue.lock().push_back(framed(&[welcome()]));
+    let (mut c, socket) = client();
+    framed(&socket, &[welcome()]);
     c.poll(0, &Controls::default());
 
     c.poll(0, &Controls::default());
@@ -491,17 +363,17 @@ mod tests {
       }))
     }
 
-    let (mut c, queue) = client();
-    queue.lock().push_back(framed(&[welcome()]));
+    let (mut c, socket) = client();
+    framed(&socket, &[welcome()]);
     // The trim only arms once this client has read a frame: a slow first load
     // is a backlog nobody should throw away, because none of it has been seen.
-    queue.lock().push_back(framed(&[frame_at(1016)]));
+    framed(&socket, &[frame_at(1016)]);
     c.poll(0, &Controls::default());
     let seen_before = c.frames_seen;
     assert_eq!(seen_before, 1);
 
     for i in 0..400u64 {
-      queue.lock().push_back(framed(&[frame_at(1032 + i * 16)]));
+      framed(&socket, &[frame_at(1032 + i * 16)]);
     }
     c.poll(100, &Controls::default());
     assert_eq!(c.resume_drops, 1);
@@ -510,11 +382,11 @@ mod tests {
 
   #[test]
   fn a_disagreement_about_the_wire_format_is_said_rather_than_half_worked_around() {
-    let (mut c, queue) = client();
+    let (mut c, socket) = client();
     let mut buf = Vec::new();
     frame::begin(frame::Kind::Hello, &mut buf);
     WIRE.encode_into(&ProtocolVersion(PROTOCOL.wrapping_add(1)), &mut buf).expect("encode");
-    queue.lock().push_back(Event::Message(buf));
+    socket.feed_message(buf);
     c.poll(0, &Controls::default());
     assert!(matches!(c.status, Status::Gone(_)));
   }
@@ -523,9 +395,9 @@ mod tests {
   fn an_unknown_frame_kind_is_skipped_rather_than_fatal() {
     // The skip-unknown rule: a server speaking a newer protocol may send kinds
     // this build has never heard of, and the connection has to survive them.
-    let (mut c, queue) = client();
-    queue.lock().push_back(framed(&[welcome()]));
-    queue.lock().push_back(Event::Message(vec![250, 1, 2, 3]));
+    let (mut c, socket) = client();
+    framed(&socket, &[welcome()]);
+    socket.feed_message(vec![250, 1, 2, 3]);
     c.poll(0, &Controls::default());
     assert_eq!(c.status, Status::Playing);
   }

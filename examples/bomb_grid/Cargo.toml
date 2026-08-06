@@ -19,7 +19,7 @@ playground_common = { workspace = true, features = ["touch"] }
 parking_lot = "0.12"
 serde = { workspace = true }
 
-plaza_ws = { workspace = true, optional = true }
+plaza_ws = { workspace = true, optional = true, features = ["pump"] }
 plaza_wire = { workspace = true, optional = true, features = ["default", "msgpack"] }
 plaza = { workspace = true, optional = true }
 plaza_session = { workspace = true, features = ["default", "actix_host"], optional = true }
@@ -30,6 +30,9 @@ tracing = { workspace = true, optional = true }
 
 macroquad = "=0.4.15"
 egui-macroquad = "=0.17.3"
+
+[dev-dependencies]
+plaza_ws = { workspace = true, features = ["scripted"] }
 
 [build-dependencies]
 plaza_wire = { workspace = true, features = ["build"] }

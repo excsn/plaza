@@ -167,7 +167,7 @@ pub fn draw_net_ui(client: &ghost_trials::net::client::NetClient, url: &str, ext
             Some(rtt) => ui.label(format!("round trip: {rtt:.0} ms")),
             None => ui.label("round trip: measuring"),
           };
-          ui.label(format!("{} B sent, {} B received", client.bytes_sent, client.bytes_received))
+          ui.label(format!("{} B sent, {} B received", client.bytes_sent(), client.bytes_received()))
             .on_hover_text("For a whole session. There is no frame and no state stream: a client speaks when it has finished a run, and hears when somebody else has.");
           let (offset, samples) = client.clock_diag();
           ui.label(
