@@ -61,23 +61,24 @@ def page_kinds(text):
 
 
 def unit_variants(example):
-  """Fieldless variants of any `*Op*` enum the example defines.
+  """The `*Op*` enums an example defines, and which of their variants are fieldless.
 
   A bare `Name,` line inside the enum body. Doc comments and attributes are
   skipped, which is why this reads lines rather than splitting on commas.
   """
-  found = {}
+  found, seen = {}, []
   src = HERE / example / "src"
   if not src.is_dir():
-    return found
+    return seen, found
   for path in sorted(src.rglob("*.rs")):
     text = path.read_text()
     for enum in re.finditer(r"pub enum (\w*Op\w*)\s*\{(.*?)\n\}", text, re.S):
+      seen.append(enum.group(1))
       units = [line.strip().rstrip(",") for line in enum.group(2).split("\n")
                if re.match(r"^\s*[A-Z]\w*\s*,\s*$", line)]
       if units:
         found[enum.group(1)] = units
-  return found
+  return seen, found
 
 
 def extract(text, name):
@@ -169,7 +170,12 @@ def main():
       elif kinds[name] != value:
         fail(example, f"KIND_{name} is {value}, but Kind::{name.capitalize()} is {kinds[name]}")
 
-    units = unit_variants(example)
+    enums, units = unit_variants(example)
+    if not enums:
+      # Zero unit variants and no enum found are the same answer from here, and
+      # only one of them is a pass. Every op enum is named `*Op*` today; one
+      # named otherwise would make this check silently vacuous.
+      fail(example, "has a page but no `*Op*` enum was found, so its variants were never checked")
     if units and not re.search(r"\b(opName|variantName)\b", text):
       named = ", ".join(f"{k}::{v}" for k, vs in units.items() for v in vs)
       fail(example, f"reads ops without a variant-name helper, and {named} is a bare string on the wire")
