@@ -170,12 +170,22 @@ Send a **bare message, never an envelope**. A server attaches who a message came
 ### Function `connect`
 
 ```rust
-pub fn connect(url: &str) -> Result<impl Socket, WsError>
+pub fn connect(url: &str) -> Result<impl Socket + use<>, WsError>
 ```
 
-Connects using whichever real transport this build has.
+Connects using whichever real transport this build has for its target.
 
-**Present only when exactly one real backend is enabled**, so that a build cannot silently pick a transport the author did not intend. Concretely, the `cfg` requires either (`native`, not wasm32, not `miniquad`) or (`miniquad`, wasm32, not `native`). With several backends enabled, name the one you want: [`native::connect`](#function-nativeconnect) or [`miniquad::connect`](#function-miniquadconnect). [`loopback`](#5-module-loopback-feature-loopback-on-by-default) is never chosen here because it connects to a peer rather than to a URL.
+The choice is never ambiguous: `native` exists only off wasm and `miniquad` only on it, so a build that enables both features (the normal shape for an application shipping a desktop and a browser client from one crate) still has exactly one real backend per target. Present when the enabled backend exists for the target: (`native`, not wasm32) or (`miniquad`, wasm32). [`loopback`](#5-module-loopback-feature-loopback-on-by-default) is never chosen here because it connects to a peer rather than to a URL.
+
+### Function `connect_boxed`
+
+```rust
+pub fn connect_boxed(url: &str) -> Result<Box<dyn Socket>, WsError>
+```
+
+[`connect`](#function-connect), boxed: the form an application holds when the backend is decided by the build rather than written at the call site.
+
+Unlike `connect`, this exists in **every** build. A build with no real backend gets a runtime `WsError::Connect("this build has no socket backend compiled in")` instead of a compile error, because such a build is legitimate (an offline teaching build still compiles its connect path) and every application ends up writing this same fallback arm itself.
 
 ## 4. Module `backlog`
 
@@ -311,7 +321,73 @@ pub extern "C" fn plaza_ws_crate_version() -> u32
 
 Not for calling from Rust; it is the version export miniquad's loader checks the JS plugin against. Without it the loader logs that the plugin "is present in JS bundle, but is not used in the rust code". Exporting it turns that into a real check: a page serving an older `plaza_ws.js` than the wasm was built against now says so, instead of failing somewhere later for no visible reason.
 
-## 8. Feature Flags
+## 8. Module `pump` (feature `pump`)
+
+The client side of plaza's framed protocol, pumped once per frame. Owns the [`Socket`](#trait-socket), a `plaza_client_utils::Timeline`, and the kind dispatch: it schedules pings, answers the server's probes, feeds pongs to the clock estimators, sends and checks the `Hello`, and hands the application only what it owns. Pulls in `plaza_wire` (with `serde`) and `plaza_client_utils`.
+
+### Struct `FramePump<C: WireCodec>`
+
+```rust
+impl<C: WireCodec> FramePump<C> {
+  pub fn new(socket: Box<dyn Socket>, wire: C, protocol: u32) -> Self;
+  pub fn connect(url: &str, wire: C, protocol: u32) -> Result<Self, WsError>;
+  pub fn ping_interval_ms(self, ms: u64) -> Self;               // default PING_INTERVAL_MS = 1000
+
+  pub fn poll(&mut self, now_ms: u64, out: &mut Vec<Arrival>);  // drain + digest in one call
+  pub fn drain(&mut self, now_ms: u64, events: &mut Vec<Event>);
+  pub fn digest(&mut self, events: &mut Vec<Event>, now_ms: u64, out: &mut Vec<Arrival>);
+
+  pub fn send_ops<T: Serialize>(&mut self, ops: &[T]) -> Option<usize>;
+  pub fn send_op<T: Serialize>(&mut self, op: &T) -> Option<usize>;
+
+  pub fn timeline(&self) -> &Timeline;
+  pub fn timeline_mut(&mut self) -> &mut Timeline;
+  pub fn rtt_ms(&self) -> Option<f32>;
+  pub fn pong_rtts(&self) -> (u64, u64);                        // last raw, worst since resume
+  pub fn server_time_ms(&self, now_ms: u64) -> u64;
+  pub fn on_resume(&mut self);
+
+  pub fn bytes_sent(&self) -> u64;                              // cumulative, probes included
+  pub fn bytes_received(&self) -> u64;
+  pub fn messages_received(&self) -> u64;
+  pub fn is_open(&self) -> bool;
+  pub fn state(&self) -> State;
+  pub fn close(&mut self);
+}
+```
+
+`poll` is `drain` plus `digest` glued together. A client that trims a resume backlog needs its hands between the socket and the dispatch, so the two halves are also public: `drain` into a caller-owned event buffer, [`trim_backlog`](#4-module-backlog), call `on_resume` if anything was dropped, then `digest` the survivors.
+
+`protocol` is the build's wire format number (from `plaza_wire::build`); it goes out as the `Hello` when the socket opens and is compared against the server's. `send_ops` returns the frame's wire length, or `None` if the value would not serialise. The byte counters are cumulative so a windowed meter diffs them; they count everything, probes and answers included.
+
+### Enum `Arrival`
+
+```rust
+pub enum Arrival {
+  Opened,
+  Ops(OpsFrame),
+  Mismatch { ours: u32, theirs: u32 },
+  Closed(String),
+}
+```
+
+Something the application has to act on; everything the session could finish by itself already has been. `Ops` carries the frame undecoded ([`OpsFrame::body`] feeds your codec's `decode::<Vec<Op>>`, [`OpsFrame::wire_len`] is what it cost tag byte included), because the pump cannot know your `Op` type and the decode is work worth timing where it happens. `Closed` carries the reason worded for a person.
+
+### Function `mismatch_message`
+
+```rust
+pub fn mismatch_message(ours: u32, theirs: u32) -> String
+```
+
+The standard wording for a protocol mismatch, for the common client whose build is a cached browser bundle ("...reload to get the current client"). Word your own if yours is not.
+
+## 9. Module `scripted` (feature `scripted`)
+
+### Struct `ScriptedSocket`
+
+A socket whose arrivals the test scripts: what a hidden tab's receive queue looks like from the Rust side, without a browser. `feed(Event)` / `feed_message(Vec<u8>)` queue arrivals for the next `poll`; `sent()` returns everything sent so far as raw bytes; `close_by_peer(code, reason)` flips the state and queues the `Closed` event behind whatever is already waiting, exactly as a real socket delivers it. Clones share the same queues, so the test keeps one handle while the code under test owns another as its `Box<dyn Socket>`. Pulls in `parking_lot`.
+
+## 10. Feature Flags
 
 | Feature | Default | Effect |
 |---|---|---|
@@ -319,5 +395,7 @@ Not for calling from Rust; it is the version export miniquad's loader checks the
 | `native` | no | Compiles [`native`](#6-module-native-feature-native-non-wasm32-only) (non-wasm32 targets only) and pulls in `tungstenite` with rustls TLS. |
 | `miniquad` | no | Compiles [`miniquad`](#7-module-miniquad-feature-miniquad-wasm32-only) (wasm32 targets only). No dependencies; requires `js/plaza_ws.js` in the page. |
 | `json` | no | Compiles [`SendJson`](#trait-sendjson-feature-json) and pulls in `serde` and `serde_json`. Off by default because the transport itself has no opinion about what rides on it. |
+| `pump` | no | Compiles [`pump`](#8-module-pump-feature-pump) and pulls in `plaza_wire` (with `serde`) and `plaza_client_utils`. |
+| `scripted` | no | Compiles [`scripted`](#9-module-scripted-feature-scripted) and pulls in `parking_lot`. Meant for `dev-dependencies`. |
 
-The module `cfg`s combine feature and target: `native` code exists only when the target is not wasm32, and `miniquad` code only when it is, so enabling both features is safe and each build gets the one that applies. The free [`connect`](#function-connect) function additionally requires that only one of the two is enabled, so a multi-backend build must name its transport explicitly.
+The module `cfg`s combine feature and target: `native` code exists only when the target is not wasm32, and `miniquad` code only when it is, so enabling both features is safe and each build gets the one that applies, including through the free [`connect`](#function-connect) function.

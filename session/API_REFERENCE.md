@@ -175,6 +175,16 @@ Impairment applied where the link is. `up` is what the client sends, `down` what
 
 **`Conditioner::drain()`** empties the queue in order with release times ignored: what a close uses to flush what was queued rather than wait out a simulated delay.
 
+### Type Alias `LinkSink` and struct `LinkPublisher`
+
+```rust
+pub type LinkSink = Arc<dyn Fn(LinkProfile) + Send + Sync>;
+```
+
+Where an application publishes a profile to the transport that owns the links: usually `move |profile| session.set_all_link_profiles(profile)`. A closure rather than a session handle, so the logic that decides what the link should be stays testable without a socket.
+
+`LinkPublisher` is a `LinkSink` with the latch that keeps an unchanged setting quiet: **`new(sink)`**, **`publish(profile) -> bool`** (the profile reaches the sink when it differs from the last one published, and not otherwise).
+
 A mismatch is **recorded and left connected**, at `debug!`. That is the whole of this layer's involvement, and the division is deliberate: a version is a build hash, so a peer that merely recompiled is indistinguishable here from one whose shapes changed, and refusing would drop clients that are fine. Whether the mismatch is fatal, cosmetic, or worth telling the client to reload is the application's call, made by reading [`ConnectionManager::protocol`](#struct-connectionmanagerid-agentid) and answering in its own ops. It is not a `warn!` for the same reason it is not a disconnect: on a fleet mid-rollout that is one warning per connection about nothing, and it would be this layer forming an opinion on the application's behalf.
 *   Implements `Session`. Joins are transport-implicit: a client joins by connecting, and the adapter calls `register`; a server-side disconnect is [`ConnectionManager::close_connection`](#struct-connectionmanagerid-agentid).
 
@@ -375,6 +385,29 @@ The HTTP half of a listen server: bind a port, serve a browser client from it, a
 **Why the cache busting is not optional.** A browser client is a build product that does **not** rebuild when the server does, so a page built before a wire change still loads, still appears to run, and only the messages whose shape changed are rejected. That reads as a netcode bug and is a deployment one; it cost two rounds of diagnosis. Two halves are needed together: the stamp, and `no-cache` on static assets, because a cached page would keep quoting the old stamp, which is the trap that makes cache busting look like it does not work. The third half is [`plaza_wire::build`](../wire/API_REFERENCE.md), which gives a client a protocol version to announce so it can be told to reload.
 
 **Signals stay with the process** deliberately. Actix catching Ctrl-C for a graceful shutdown while a game window keeps running is why a windowed host could not be killed, and why the controller then sprayed queue-full errors into dead links.
+
+### Struct `SimHost` and struct `SimWiring`
+
+A [`Host`](#struct-host) with the simulation stack behind it: everything between "I have a `StateLogic`" and "it is listening". A prescription built from blocks, and every choice in it is one the blocks let you unmake by using them directly:
+
+*   **Joiners get no snapshot** (`snapshot_context_on_join(None)` over `plaza::NoSnapshots`). This stack is for worlds streamed as deltas on a cadence, where a joiner is caught up by the stream itself. A world that catches joiners up with state wants `StateControllerBuilder` and its join snapshot instead.
+*   **Connections are numbered, and the number is the agent id** (`u64`, assigned at accept, never client-supplied), on a `/ws` route it registers itself. An application with identity has its own id type and registers its own route on a plain `Host`.
+*   **The driver is `run_fixed`**, never `run`: delivering measured elapsed time would make the simulation's rate a property of the host's scheduler.
+
+```rust,ignore
+SimHost::new(bind, Duration::from_millis(SIM_STEP_MS))
+  .serve_dir(static_dir)
+  .cache_bust("my_game.wasm")
+  .run(MsgPackCodec, PROTOCOL, Arena::new(initial), |wiring| {
+    ArenaLogic::new(controls, view)
+      .with_link(wiring.link_sink())
+      .with_clock(wiring.sim_clock.clone())
+  })
+  .await
+```
+
+*   **`new(bind, step)`**: `step` is the simulation's step, the unit its ticks are counted in. **`serve_dir`**, **`cache_bust`**, **`announce`** forward to `Host`. **`wake_hz(hz)`** (default `DEFAULT_WAKE_HZ` = 120: waking more often than you step keeps the phase error small) and **`command_buffer(n)`** (default `DEFAULT_COMMAND_BUFFER` = 256).
+*   **`run(codec, protocol, initial_state, logic_for)`**: builds the session with the given protocol version and a simulation clock for its pongs, the controller, the fixed-step driver and the route, then serves until the process ends. `logic_for` receives a **`SimWiring`** (`session: Arc<ActixWsPlazaSession<Op, u64, C>>`, `sim_clock: Arc<AtomicU64>`, and **`link_sink()`**, the usual destination for a panel's impairment sliders) so measurement sources and sinks can be wired into the logic it returns. Store the simulation's clock into `sim_clock` each tick and clients synchronise against simulation time rather than wall time.
 
 ### Function `lan_address() -> Option<String>`
 

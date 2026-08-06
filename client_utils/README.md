@@ -37,6 +37,8 @@ You do not need a Plaza server to use it. Anything speaking a sequence-numbered-
 | The render clock drifts as latency changes | `InterpolationClock::resync` (position) or `observe_rate` (playback-rate glide) |
 | A variable frame has to drive a fixed-step simulation | `timestep::FixedTimestep` (and `Periodic` for "is it time yet") |
 | Measuring round-trip latency to the other end | `Timeline` (a probe's bookkeeping), over a `plaza_wire` `Kind::Ping` frame |
+| Estimating server time when the clock fit is cold or trailing the stream | `Timeline::server_time_ms`, floored by the newest server stamp (`note_stamp`) carried forward at wall rate |
+| Arithmetic that must agree to the bit across builds, because the wire carries causes rather than state | `fixed` (`Fx`, `P`), feature `fixed` |
 | Tracking clock offset **and drift** against a server | `ClockSyncEstimator` (least-squares offset + skew) |
 | Optimally smoothing one noisy signal (jitter, latency) | `ScalarKalman` (a 1D Kalman filter) |
 | Telling the other side what arrived, in twelve bytes, however bad the link | `ack::AckWindow` (a sliding-window bitmask) |

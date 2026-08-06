@@ -264,9 +264,11 @@ timeline.complete(probe, now, pong.responder);   // feeds both estimators
 
 *   **`begin(now) -> Probe`**, **`complete(probe, now, responder: Option<u64>) -> bool`**: `false` when the probe was discarded. With a `responder` the clock fit gets an exchange too; without one, only the round trip is recorded.
 *   **`on_reconnect()`**, **`on_resume()`**, **`epoch()`**.
+*   **`note_stamp(stamp_ms, now_ms)`**, **`newest_stamp_ms()`**: records a timestamp the server wrote into a message. A stamp needs no synchronisation to trust: the server wrote it, so server time is provably past it.
+*   **`server_time_ms(now_ms) -> u64`**: the best estimate of server time now. The fitted clock (falling back to `now_ms` until two exchanges are in), **floored by the newest stamp carried forward at wall rate**. The floor holds even while the fit is empty or trailing, which it does for hundreds of milliseconds after a resume while its window refills, and it only ever lifts the estimate, never past the truth: the stamp trails real server time by the one-way delay it took to arrive.
 *   **`rtt`** and **`clock`** are public: read the estimates straight off them.
 
-**A probe carries the epoch it started in, and one that outlives its epoch is discarded rather than recorded.** A probe sent before a suspend and answered after it measures the suspend, not the network, and a smoothed estimator carries one such sample for minutes. A **reconnect** invalidates measurements in flight but keeps what has been learned, because the socket changed and the link probably did not. A **resume** invalidates both, because arbitrary wall time passed and a least-squares fit across a ten-minute gap produces a meaningless skew.
+**A probe carries the epoch it started in, and one that outlives its epoch is discarded rather than recorded.** A probe sent before a suspend and answered after it measures the suspend, not the network, and a smoothed estimator carries one such sample for minutes. A **reconnect** invalidates measurements in flight but keeps what has been learned, because the socket changed and the link probably did not. A **resume** invalidates both, because arbitrary wall time passed and a least-squares fit across a ten-minute gap produces a meaningless skew. The newest stamp survives both: it is a fact about the stream, not a measurement of the link.
 
 ### Struct `RttEstimator`
 
@@ -574,6 +576,21 @@ A deterministic latency / jitter / loss queue, so prediction and reconciliation 
 ### Struct `Rng`
 
 A seeded, reproducible generator: **`new(seed)`**, **`unit() -> f32`**, **`up_to(n) -> u64`**. It is a test and demo aid; it is deliberately not a "deterministic shared stream" block, because identical seeds fed divergent inputs still diverge.
+
+## 8c. Module `fixed` (feature `fixed`)
+
+Fixed-point arithmetic, for a wire that carries causes instead of state. A wire that sends positions forgives arithmetic (a client wrong by one part in a million is corrected on the next frame); a wire that sends nothing but a seed and the inputs is never corrected, and `f32` cannot be relied on to give the same answer in a wasm build and a native one: compilers may contract a multiply-add, widen an intermediate, or reassociate a sum, and one last bit fed back into a position every tick is a visible gap in twenty seconds.
+
+### Struct `Fx` and struct `P`
+
+**`Fx(pub i32)`**: signed 32-bit fixed point, 24 integer bits and 8 fractional (`FRAC_BITS`, `ONE`). Serialized as the raw `i32` (`serde(transparent)`), so a snapshot carries exactly what the simulation holds.
+
+*   **`ZERO`**, **`ONE`**, **`from_int(n)`**, **`ratio(num, den)`**, **`to_int()`**.
+*   **`to_f32()`**: the only float in the vocabulary, one way, for the renderer. Nothing in a simulation may call it.
+*   **`mul`**, **`div`** (carried in `i64` so the intermediate cannot overflow; truncating, because rounding has a tie case two implementations can disagree about), **`abs`**, **`min`**, **`max`**, and `Add`/`Sub`/`Neg`/`AddAssign` (wrapping).
+*   **`sqrt()`**: defined as the largest `r` with `r*r <= n`, a property of the input alone. Newton to get close, then a correction to the definition, because "iterate until it stops changing" does not terminate for integer Newton (it can settle into a two-value cycle) and "iterate N times" makes the answer a function of N.
+
+**`P { x: Fx, y: Fx }`**: a point. **`new`**, **`from_ints`**, **`dist_sq`** (what a range check wants: comparing squares removes the square root, and with it an implementation, from the path), **`dist`**.
 
 ## 9. Putting It Together
 

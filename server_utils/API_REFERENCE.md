@@ -280,3 +280,15 @@ A running total, a sample count, an elapsed clock, and the three questions over 
 **A reset meter measures only what it saw.** The clock a meter is given is usually the simulation's, and that does not restart when the meter does. `lifetime_per_sec` is therefore measured from when *this meter* started, not from zero on the caller's clock: without that, a meter reset twenty minutes into a session divides its fresh total by the whole twenty minutes, reads a fraction of the truth, and then creeps up toward it for hours. **`running_ms()`** is how long the meter has been running, which is not the same as the clock it is given once it has been reset.
 
 Trivial arithmetic, and every hand-rolled copy had to remember the same divide-by-zero guard, whose absence renders as `NaN` on the first frame and looks like the thing being measured is broken. `share_of` is here because **measuring a stream's share of the packet before optimising its encoding** is the check that would have saved three separate rounds of optimising the wrong thing: despawn ids were 1.2% of horde's traffic while position samples were 86.1%.
+
+## 11. One-shot ops (module `oneshot`)
+
+### Struct `Pending<K, Op>`
+
+Saying a one-shot thing until the other end proves it heard. Every server has a handful of ops with nothing behind them: a `Welcome` that hands out a seat, a `Refused` that explains why there is not one. The streams around them recover by themselves; losing a `Welcome` costs the session, because the client waits for a seat it already holds and nothing in the protocol will ever mention it again.
+
+*   **`new()`** (`RETRY_MS` 400, `ATTEMPTS` 8), **`with_schedule(retry_ms, attempts)`**.
+*   **`declare(key, op, now_ms) -> Op`**: records an op as sent and returns it for sending. A newer verdict for the same key supersedes the old.
+*   **`due(now_ms, lossy: bool) -> Vec<(K, Op)>`**: whatever is due to be said again. `lossy` is false on a link that cannot lose a frame, where this forgets everything instead: on a reliable stream a lost segment is retransmitted, so repeating anything is noise on the wire. A peer past its attempts is dropped rather than retried for ever; the transport will confirm it is gone soon enough.
+*   **`confirm(&key)`**: the peer said something, which proves it heard. Call it from the op path; no ack op has to exist, because a client that is talking has plainly received whatever let it talk.
+*   **`is_empty()`**.

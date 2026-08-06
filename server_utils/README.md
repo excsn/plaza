@@ -25,6 +25,7 @@ Its only dependency is `plaza_client_utils`, for the shared `Interpolatable` and
 | Streaming that set as *entered* and *left* assumes every packet arrives, and one that does not is lost for good | `delta` (`DeltaBaseline`) |
 | A bounded number of seats, where a fresh occupant must not inherit the last one's accumulated state | `seats` (`SeatTable`, `Seating`) |
 | A claim about bandwidth should be a number on screen, not an assertion in a README | `meter` (`RateMeter`) |
+| A one-shot op with nothing behind it (a `Welcome`, a `Refused`) is lost for good on a lossy link, and nothing in the protocol will ever mention it again | `oneshot` (`Pending`) |
 | An accuracy figure taken against the *present* charges a client for a render delay it chose, so the number grows with the buffer depth rather than with anything going wrong | `render_error` (`render_error_at`) |
 | ...and that number should be a **rate**, not the session's average, which climbs for ever toward a level it never reaches | `RateMeter::per_sec` (windowed) against `lifetime_per_sec` |
 

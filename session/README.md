@@ -285,6 +285,8 @@ The third half is not here, because it belongs on the wire: see [`plaza_wire::bu
 
 `lan_address()` returns a local address somebody else could actually reach, and `init_logging()` turns on a console subscriber once (a convenience for binaries; a library or an application with its own subscriber should not call it).
 
+For a delta-streaming simulation, `SimHost` is the whole stack behind that `Host`: the session with your protocol version and a simulation clock for its pongs, the controller with join snapshots off, a fixed-step driver, and a `/ws` route that numbers its connections. You hand it a codec, a protocol, a state and a closure that builds your `StateLogic` from the wiring (session handle, clock slot, a `link_sink()` for impairment panels). It is a prescription built from the blocks around it, so anything it decides for you (no join snapshot, numbered `u64` agents, `run_fixed`) is unmade by using those blocks directly.
+
 ## How it is put together
 
 Both transports wrap one `TransportSession` and share everything that is not socket I/O: the connection registry, message targeting, serialization, and the task that turns raw bytes into typed messages. The per-protocol modules are just pumps, which is why adding a third is small: see the end of the API reference.

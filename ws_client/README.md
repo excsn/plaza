@@ -41,9 +41,30 @@ Everything an application can decide for itself is left to it: reconnection poli
 | `native` | desktop | `tungstenite` on a worker thread | `tungstenite` |
 | `miniquad` | browser, under macroquad | our own JS plugin | none |
 
-`connect` is present only when exactly one real backend is enabled, so a build cannot silently pick a transport its author did not intend; with several, name the one you mean.
+`connect` picks whichever real backend this build has for its target, and the choice is never ambiguous: `native` exists only off wasm and `miniquad` only on it, so enabling both (the normal shape for a crate shipping a desktop and a browser client) still leaves exactly one per target. `connect_boxed` is the same choice as a `Box<dyn Socket>`, and it exists in every build: with no backend it reports "no socket backend compiled in" at runtime, because an offline teaching build still has to compile its connect path.
 
 They compose. A listen-server that also plays enables `native` **and** `loopback` and talks to both through the same trait.
+
+## The pump (feature `pump`)
+
+Every client of a `plaza_session` server repeats the same loop: schedule a ping, split each message on its kind byte, answer the server's probes, feed pongs to the clock estimators, check the `Hello` against its own protocol, and hand everything else to the application. `pump::FramePump` is that loop written once, over any `WireCodec`. What comes out of `poll` is only what the application owns:
+
+```rust,ignore
+let mut pump = FramePump::connect(&url, MsgPackCodec, PROTOCOL)?;
+let mut arrivals = Vec::new();
+// once per frame
+pump.poll(now_ms, &mut arrivals);
+for arrival in arrivals.drain(..) {
+  match arrival {
+    Arrival::Opened => { /* ask to join */ }
+    Arrival::Ops(frame) => { /* decode frame.body() with your codec */ }
+    Arrival::Mismatch { ours, theirs } => { /* a stale build: see mismatch_message */ }
+    Arrival::Closed(reason) => { /* say why */ }
+  }
+}
+```
+
+It owns the socket and a `plaza_client_utils::Timeline`, so the round trip, the clock fit and the newest-stamp floor are read from it, and it counts every byte both ways so a bandwidth panel diffs its counters instead of taping a meter to every call site. `drain`/`digest` are the two halves of `poll`, split so a resume-backlog trim can run between them. `scripted::ScriptedSocket` (feature `scripted`, for `dev-dependencies`) is the test double the pump's own tests use: feed events in, read sent bytes out.
 
 ### `loopback` is not a shortcut
 

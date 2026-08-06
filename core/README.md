@@ -168,7 +168,7 @@ Ok(Some(GameOp::Snapshot(Box::new(GameView {
 }))))
 ```
 
-Return `Ok(None)` to send a recipient nothing, which is how an application declines a particular agent. If nothing you build ever needs catch-up on join, say so once instead: `StateControllerBuilder::without_snapshots(logic, session, state)` supplies the shipped `NoSnapshots` provider and you write no `create_snapshot` at all.
+Return `Ok(None)` to send a recipient nothing, which is how an application declines a particular agent. If nothing you build ever needs catch-up on join, say so once instead: `StateControllerBuilder::without_snapshots(logic, session, state)` supplies the shipped `NoSnapshots` provider and you write no `create_snapshot` at all. And when your provider is a pure function of the state and the recipient, which most are, `SnapshotFn(view)` wraps it without the `async fn` and the `Ok(..)` ceremony.
 
 When the view does not depend on who is asking, a world broadcast in a state-sync game, request it `SnapshotRequest::uniform(everyone)` instead: the provider runs once with `target_agent: None` and every recipient receives that one payload, so the pass costs one build and one encode instead of N. The `None` view goes to all of them, so it must be one anyone may see.
 

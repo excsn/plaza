@@ -133,6 +133,19 @@ pub trait SnapshotProvider<ID: AgentId, StateType, Op>: Send + Sync + 'static {
 
 The shipped provider for an application with no snapshot concept at all: a chat relay, an event log, a client that rebuilds from the op stream. It answers `Ok(None)` for every recipient, so joining carries no catch-up. Implemented for every `ID`/`StateType`/`Op`, and `StateControllerBuilder::without_snapshots(logic, session, state)` takes it for you rather than making you write the `Ok(None)` yourself.
 
+### Struct `SnapshotFn<F>`
+
+A provider that is just a view function. Most providers are a pure function of the state and the recipient with an `async fn` and an `Ok(..)` wrapped around it; this is that wrapper, written once:
+
+```rust,ignore
+fn view(state: &Game, target: Option<&Agent<PlayerId>>) -> Option<GameOp> {
+  Some(GameOp::Snapshot(Box::new(state.as_seen_by(target))))
+}
+let provider = Arc::new(SnapshotFn(view));
+```
+
+Return `None` to send a recipient nothing. A named function coerces cleanly; a closure usually needs its argument types written out. Anything fallible, or anything that must await, still implements [`SnapshotProvider`](#trait-snapshotprovider) directly.
+
 #### Enum `SnapshotContext`
 
 Which snapshot is wanted. **Plaza never reads this**: it carries it from caller to provider, both of which are yours.
@@ -335,7 +348,7 @@ Repeating schedules skip ahead past `now` after a stall rather than replaying ev
 
 *   **Trait `ParticipantAppSpecificData`**: blanket marker for per-participant data.
 *   **Struct `ParticipantInfo<ID, Data>`**: `agent`, `app_data`. A display name goes in `app_data`: `Agent` is identity, and this is the tracker's slot for everything else.
-*   **Struct `ParticipantTracker<ID, Data>`**: `add_participant`, `remove_participant`, `get_participant[_mut]`, `get_participant_app_data[_mut]`, `contains_participant`, `iter[_mut]`, `all_agent_ids`, `count`, `is_empty`.
+*   **Struct `ParticipantTracker<ID, Data>`**: `add_participant`, `remove_participant`, `get_participant[_mut]`, `get_participant_app_data[_mut]`, `contains_participant`, `iter[_mut]`, `all_agent_ids`, `agents` (every tracked agent cloned, the shape `SnapshotRequest::to` wants), `agents_except` (the usual recipient list for reacting to something one agent just did), `count`, `is_empty`.
 
 ### `common::math`
 
