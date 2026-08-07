@@ -13,8 +13,9 @@
 //!   including filling the seats nobody came for.
 //! - [`SeatReservations`] for the window between a lobby admitting a player and
 //!   that player's socket arriving.
-//! - [`TicketRegistry`] so a room learns who connected from the lobby rather
-//!   than from the client.
+//! - [`TicketStore`] so a room learns who connected from the lobby rather than
+//!   from the client, as either [`MapTicketRegistry`] or, behind the `cache`
+//!   feature, `CachedTicketRegistry`.
 //! - [`routing`] for placing a connection in the room whose schedule fits it.
 
 pub mod error;
@@ -35,5 +36,7 @@ pub use op_payloads::*;
 pub use queue::{Formed, MatchQueue};
 pub use reservations::SeatReservations;
 pub use room::{InProcessRoomHandle, RoomHandle};
-pub use tickets::{Ticket, TicketRegistry};
+#[cfg(feature = "cache")]
+pub use tickets::CachedTicketRegistry;
+pub use tickets::{MapTicketRegistry, Ticket, TicketStore};
 pub use types::{GameMode, RoomId};

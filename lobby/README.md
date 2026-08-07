@@ -106,7 +106,7 @@ When nothing fits, `LobbyError::UnsuitableConnection` carries both numbers, so a
 |---|---|
 | `MatchQueue` | Being paired rather than choosing. Forms full matches, and when patience runs out reports how many seats to fill with bots rather than refusing to start. |
 | `SeatReservations` | The gap between admission and arrival. A closing socket deliberately does **not** cancel a reservation: a room hop closes the old connection *after* the new seat is reserved, so treating a disconnect as a cancellation silently demotes a player the lobby already promised. |
-| `TicketRegistry` | Filling `JoinRoomOutcomePayload::player_game_token`, so a room resolves the connecting player from a one-use ticket instead of trusting a URL. Placement, not authentication: supply your own signed value via `issue_with`. |
+| `TicketStore` | Filling `JoinRoomOutcomePayload::player_game_token`, so a room resolves the connecting player from a one-use ticket instead of trusting a URL. Placement, not authentication: supply your own signed value via `issue_with`. Ships as `MapTicketRegistry`, or as `CachedTicketRegistry` behind the `cache` feature when you would rather `fibre_cache`'s janitor drove expiry than sweep from `issue`. |
 | `routing` | Placing a connection in the tightest room its measured latency can carry. |
 
 All four are exercised by [`examples/lobby_world`](../examples/lobby_world/).

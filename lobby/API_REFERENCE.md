@@ -172,17 +172,42 @@ The window between the lobby admitting a player and that player's socket arrivin
 
 Distinct from `plaza_server_utils::SeatTable`, which allocates seat *indices* among agents already connected.
 
-### Struct `TicketRegistry<ID: AgentId>` and `Ticket<ID>`
+### Trait `TicketStore<ID: AgentId>` and `Ticket<ID>`
 
-Fills `JoinRoomOutcomePayload::player_game_token`. Internally synchronised, so the lobby that issues and the route that redeems share one by `Arc`.
+Fills `JoinRoomOutcomePayload::player_game_token`. Object-safe, so a route can hold `Arc<dyn TicketStore<ID>>` and be written once whichever store a deployment picked. Every implementation is internally synchronised, because the lobby that issues and the route that redeems are different callers sharing one by `Arc`.
 
 *   **`issue(player, room) -> String`**: mints a token and records it.
 *   **`issue_with(token, player, room)`**: records a token you minted, for a real credential.
-*   **`redeem(&token) -> Option<Ticket<ID>>`**: spends it. One use, so a leaked token cannot be replayed alongside the connection already holding it.
-*   **`revoke(&token) -> bool`**, **`outstanding() -> usize`**: a count that climbs rather than hovering means placements are issued and abandoned.
+*   **`redeem(&token, &room) -> Option<Ticket<ID>>`**: spends it for that room. One use, so a leaked token cannot be replayed alongside the connection already holding it.
+*   **`revoke(&token) -> bool`**, **`outstanding() -> usize`**: a count that climbs rather than hovering means placements are issued and abandoned. A diagnostic: both shipped stores walk their contents to answer it.
 *   **`Ticket<ID> { player: ID, room: RoomId }`**.
 
+**The room is checked before the ticket is spent.** Spending first and comparing afterwards burns a ticket the room had no claim on, so under a guessable token anyone could destroy anyone else's placement by presenting it at the wrong door.
+
 **Placement, not authentication.** Without a ticket, a room's only source for the connecting player's identity is the client, and a client that can name its own id can name somebody else's. `issue` mints a counter, which closes that and is not a secret; anything facing untrusted clients supplies its own signed, expiring value through `issue_with`. Plaza has no authentication story for this to be consistent with, which is why the crate provides the bookkeeping and not the secret.
+
+### Struct `MapTicketRegistry<ID: AgentId>`
+
+A `TicketStore` over a `HashMap` behind a mutex, adding no dependency the crate did not already have.
+
+*   **`new()`**: never expires anything. A ticket issued and never dialled is held until the process ends.
+*   **`with_expiry(window)`**: refuses and drops a ticket older than `window`. Sweeping runs from `issue`, the operation that grows the map, and at most once per `window`, so at most one window's worth of dead tickets is held however fast placements arrive. Nothing is spawned and nothing ticks.
+*   **`expiry() -> Option<Duration>`**.
+
+### Struct `CachedTicketRegistry<ID: AgentId>` (feature `cache`)
+
+A `TicketStore` over `fibre_cache`, whose janitor sweeps on its own schedule and whose shards replace the single mutex the lobby and every room route otherwise share. Off by default, so nothing downstream pays for it unasked.
+
+*   **`with_expiry(window)`**: a TTL, with no capacity set, so nothing is ever evicted for pressure and a ticket leaves only by being spent, revoked, or timing out.
+*   **`run_maintenance()`**: forces the expiry pass deterministically, so a test need not sleep past the window and hope.
+
+### Writing a third
+
+A room in another process cannot share a map. Implement `TicketStore` to verify a signed token and build the `Ticket` from its claims, storing nothing at all; that case is why this is a trait rather than a mode on either type above.
+
+### Expiry does not stand alone
+
+A ticket outliving its `SeatReservations` entry lands a placed player as a spectator holding a spent ticket, and the reverse orphans a seat. Redemption is two steps in two places, the route spending the ticket and the room's logic consuming the reservation, so a ticket window must be **shorter** than the reservation's by at least the time a session takes to come up. Equal windows look correct and are not. `SeatReservations` currently has no window of its own.
 
 ## 6. Putting It Together
 

@@ -13,7 +13,7 @@ use plaza::agent::Agent;
 use plaza::controller::StateControllerBuilder;
 use plaza::tick_driver::TickDriver;
 use plaza_lobby::manager::InMemoryLobbyManager;
-use plaza_lobby::TicketRegistry;
+use plaza_lobby::{CachedTicketRegistry, TicketStore};
 use plaza_session::codec::JsonCodec;
 use plaza_session::host::{init_logging, Host};
 use plaza_session::ActixWsPlazaSession;
@@ -38,6 +38,10 @@ const TABLE_IDLE_AFTER: Duration = Duration::from_secs(45);
 
 /// Only the match queue needs the lobby to advance time, and it measures its
 /// patience in seconds.
+/// Longer than a placement takes to dial, shorter than the seat reservation it
+/// pairs with, which currently has no window of its own.
+const PLACEMENT_WINDOW: Duration = Duration::from_secs(30);
+
 const LOBBY_TICK_HZ: u32 = 4;
 
 /// The only place a `PlayerId` is created.
@@ -46,7 +50,7 @@ struct PlayerIds(AtomicU64);
 struct Services {
   lobby_session: Arc<LobbySession>,
   tables: Arc<TableRegistry>,
-  tickets: Arc<TicketRegistry<PlayerId>>,
+  tickets: Arc<CachedTicketRegistry<PlayerId>>,
   ids: PlayerIds,
 }
 
@@ -87,12 +91,9 @@ async fn table_route(
   let Some(token) = query.into_inner().t else {
     return Ok(HttpResponse::Unauthorized().body("no ticket: ask the lobby for a placement"));
   };
-  let Some(ticket) = services.tickets.redeem(&token) else {
-    return Ok(HttpResponse::Unauthorized().body("ticket unknown or already spent"));
+  let Some(ticket) = services.tickets.redeem(&token, &room_id) else {
+    return Ok(HttpResponse::Unauthorized().body("ticket unknown, already spent, expired, or for another table"));
   };
-  if ticket.room != room_id {
-    return Ok(HttpResponse::Forbidden().body("ticket is for a different table"));
-  }
 
   info!(player = ticket.player, room = %room_id, "Table connection opening.");
   entry
@@ -106,7 +107,7 @@ async fn main() -> std::io::Result<()> {
 
   let wallets = Arc::new(WalletRegistry::new());
   let tables = Arc::new(TableRegistry::new());
-  let tickets = Arc::new(TicketRegistry::new());
+  let tickets = Arc::new(CachedTicketRegistry::with_expiry(PLACEMENT_WINDOW));
 
   let factory = Arc::new(TableFactory::new(wallets.clone(), tables.clone(), BIND.to_string()));
   let manager = Arc::new(InMemoryLobbyManager::new(factory));

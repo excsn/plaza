@@ -14,11 +14,16 @@ readme = "README.md"
 [package.metadata.docs.rs]
 all-features = true
 
+[features]
+default = []
+cache = ["dep:fibre_cache"]
+
 [dependencies]
 plaza = { version = "0.6.0", path = "../core" }
 
 async-trait = { workspace = true }
 fibre = { workspace = true }
+fibre_cache = { version = "0.4", optional = true }
 serde = { workspace = true }
 uuid = { version = "1", features = ["v4", "serde"] }
 tokio = { version = "1", features = ["sync", "rt"] }

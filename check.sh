@@ -9,7 +9,7 @@
 # Dart behaviour vectors, so dropping it would stop asserting them.
 set -e
 
-cargo test --workspace --features "plaza_client_utils/net-sim,plaza_ws/native,plaza_ws/json,plaza_session/actix_host,plaza_wire/build,plaza_wire/msgpack"
+cargo test --workspace --features "plaza_client_utils/net-sim,plaza_ws/native,plaza_ws/json,plaza_session/actix_host,plaza_wire/build,plaza_wire/msgpack,plaza_lobby/cache"
 cd examples
 CARGO_TARGET_DIR="$(cd .. && pwd)/target" cargo test --workspace
 

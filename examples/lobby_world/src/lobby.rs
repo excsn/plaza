@@ -16,7 +16,7 @@ use plaza::snapshot::{SnapshotContext, SnapshotError, SnapshotProvider};
 use plaza::state_logic::{LogicInput, LogicOutput, StateLogic, StateLogicError};
 use plaza_lobby::manager::InMemoryLobbyManager;
 use plaza_lobby::op_payloads::JoinRoomRequestPayload;
-use plaza_lobby::{Formed, LobbyError, MatchQueue, RoomId, TicketRegistry};
+use plaza_lobby::{Formed, LobbyError, MapTicketRegistry, MatchQueue, RoomId, TicketStore};
 use plaza_session::ActixWsPlazaSession;
 use tracing::{info, warn};
 
@@ -66,7 +66,7 @@ pub struct LobbyLogic {
   pub manager: Arc<InMemoryLobbyManager<ArenaFactory>>,
   pub registry: Arc<RoomRegistry>,
   pub wallets: Arc<WalletRegistry>,
-  pub tickets: Arc<TicketRegistry<PlayerId>>,
+  pub tickets: Arc<MapTicketRegistry<PlayerId>>,
   /// For `agent_rtt`. The controller holds the same `Arc`.
   pub session: Arc<LobbySession>,
   next_link: AtomicUsize,
@@ -78,7 +78,7 @@ impl LobbyLogic {
     manager: Arc<InMemoryLobbyManager<ArenaFactory>>,
     registry: Arc<RoomRegistry>,
     wallets: Arc<WalletRegistry>,
-    tickets: Arc<TicketRegistry<PlayerId>>,
+    tickets: Arc<MapTicketRegistry<PlayerId>>,
     session: Arc<LobbySession>,
   ) -> Self {
     Self {
