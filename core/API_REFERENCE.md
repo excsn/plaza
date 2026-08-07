@@ -388,6 +388,7 @@ All three types are `Clone` and hold no timers, channels, or boxed closures, so 
 
 *   **Trait `Scorekeeper<ID, ScoreType>`**, **Trait `ScoreValue`** (blanket bounds).
 *   **Struct `HashMapScorekeeper<ID, ScoreType>`**.
+*   **Staying versus leaving are different questions.** `reset_player_score` sets someone to zero and leaves them on the board; `forget_player` takes them off it and returns what it discarded. `reset_all_scores` keeps the roster for a new round; `clear_all_scores` drops it for a new roster. **Call `forget_player` from your own rules, never from a disconnect**: a scorekeeper is never told a socket closed and could not read one correctly if it were, which is `SeatReservations::withdraw`'s lesson from the other end. A room that lives for one match usually keeps departed players so the board does not reshuffle mid-game; a standing room cycling players for hours has to forget them or its leaderboard fills with zeroes for people who left.
 *   **Payloads**: `SetScorePayload`, `IncrementScorePayload`, `ScoreUpdatedNoticePayload`.
 
 ### `game_common::input_intent`
