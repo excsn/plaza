@@ -67,7 +67,7 @@ Every block, one line each, sorted by the itch it scratches. Links go to the cra
 | Block | Reach for this when | Lives in |
 |---|---|---|
 | `frame` (kinds, split, begin) | the `[kind][body]` layout and the skip-unknown rule | [wire](../../wire/API_REFERENCE.md) |
-| `JsonCodec` / `MsgPackCodec` / `WireCodec` | readable by default, compact when measured to pay, yours when neither fits | [wire](../../wire/API_REFERENCE.md) and [session](../../session/API_REFERENCE.md) |
+| `JsonCodec` / `MsgPackCodec` / `MsgPackNamedCodec` / `WireCodec` | readable by default, compact when measured to pay, named when the other end cannot be built from your struct definitions, yours when none fits | [wire](../../wire/API_REFERENCE.md) and [session](../../session/API_REFERENCE.md) |
 | `build::emit` / `ProtocolVersion` | a wire version nobody has to remember to bump | [wire](../../wire/API_REFERENCE.md) |
 | `answer_ping` | answering probes from a hand-written read loop | [wire](../../wire/API_REFERENCE.md) |
 | `AckWindow` | telling the other side what arrived, in twelve bytes | [client_utils](../../client_utils/API_REFERENCE.md) |
@@ -105,7 +105,7 @@ Every block, one line each, sorted by the itch it scratches. Links go to the cra
 | `InMemoryLobbyManager` | the assembled directory: create, list, join, reap | [lobby](../../lobby/API_REFERENCE.md) |
 | `MatchQueue` | quick match with patience, driven from your tick | [lobby](../../lobby/API_REFERENCE.md) |
 | `SeatReservations` | promises that survive the socket closing behind a room hop | [lobby](../../lobby/API_REFERENCE.md) |
-| `TicketRegistry` | placement handed to a client to present elsewhere (placement, not authentication) | [lobby](../../lobby/API_REFERENCE.md) |
+| `TicketStore` | placement handed to a client to present elsewhere (placement, not authentication), as `MapTicketRegistry` or `CachedTicketRegistry` | [lobby](../../lobby/API_REFERENCE.md) |
 
 ## Testing and odds and ends
 
