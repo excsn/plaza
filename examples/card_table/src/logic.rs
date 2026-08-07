@@ -1,9 +1,9 @@
-use crate::types::{AutoPlay, Card, CardOp, PlayerId, RoundSummary, TablePhase, TableState, ROUNDS};
+use crate::types::{Card, CardOp, PlayerId, RoundSummary, TableEvent, TablePhase, TableState, INTERMISSION_TICKS, ROUNDS};
 use async_trait::async_trait;
 use plaza::agent::Agent;
 use plaza::common::fsm::{FsmContext as _, OpsQueue};
 use plaza::error::StateLogicError;
-use plaza::game_common::flow_control::{RoundManager, TurnManager};
+use plaza::game_common::flow_control::{RoundManager, SequentialRoundManager, TurnManager};
 use plaza::game_common::scorekeeping::Scorekeeper;
 use plaza::session::TargetedOp;
 use plaza::state_logic::{LogicInput, LogicOutput, SnapshotRequest, StateLogic};
@@ -208,6 +208,26 @@ fn finish_match(state: &mut TableState, ctx: &mut Ctx) {
 
   let standings = state.scores.get_all_scores_sorted();
   info!(?standings, "match over");
+
+  // Taken after the transition, so it names the intermission rather than the
+  // match that just ended. Anything that moves the phase first, a player
+  // arriving to fill the table, makes this stale and it is dropped.
+  let epoch = state.phase.epoch();
+  state.timeouts.schedule_after(state.tick, INTERMISSION_TICKS, TableEvent::NewMatch { epoch });
+}
+
+/// Wipes the last match off the table and deals the next one.
+///
+/// The roster is kept and the scores are zeroed, which is the difference between
+/// `reset_all_scores` and `clear_all_scores`: these are the same players playing
+/// again, not a new table.
+fn start_match(state: &mut TableState, ctx: &mut Ctx) {
+  state.scores.reset_all_scores();
+  // `SequentialRoundManager` counts up and has no reset, so a second match takes
+  // a second manager.
+  state.rounds = SequentialRoundManager::new(Some(ROUNDS), CardOp::RoundStarted, CardOp::RoundEnded);
+  info!("intermission over, dealing a new match");
+  begin_round(state, ctx);
 }
 
 /// Schedules the table to play for whoever is on turn, if they take too long.
@@ -218,7 +238,7 @@ fn arm_turn_timeout(state: &mut TableState) {
   let Some(player) = state.turns.current_turn_actor() else {
     return;
   };
-  let event = AutoPlay {
+  let event = TableEvent::AutoPlay {
     player,
     epoch: state.phase.epoch(),
   };
@@ -230,28 +250,169 @@ fn run_due_timeouts(state: &mut TableState, ctx: &mut Ctx) -> bool {
   let mut round_ended = false;
 
   for due in state.timeouts.tick(state.tick) {
-    // The phase moved on: this timeout belongs to a round that is already over.
-    // Nothing cancelled it; the token simply no longer matches.
-    if !state.phase.is_current(due.epoch) {
-      debug!(player = %due.player, "timeout dropped: the phase moved on");
-      continue;
-    }
-    // Still the right phase, but they played in time and the turn moved. This
-    // check is the game's, not plaza's: `Phased` does not know about turns.
-    if state.turns.current_turn_actor() != Some(due.player) {
-      debug!(player = %due.player, "timeout dropped: they already played");
-      continue;
-    }
+    match due {
+      TableEvent::AutoPlay { player, epoch } => {
+        // The phase moved on: this timeout belongs to a round that is already
+        // over. Nothing cancelled it; the token simply no longer matches.
+        if !state.phase.is_current(epoch) {
+          debug!(%player, "timeout dropped: the phase moved on");
+          continue;
+        }
+        // Still the right phase, but they played in time and the turn moved.
+        // This check is the game's, not plaza's: `Phased` does not know about
+        // turns.
+        if state.turns.current_turn_actor() != Some(player) {
+          debug!(%player, "timeout dropped: they already played");
+          continue;
+        }
 
-    // Choosing the card is a search: `best_play_for` clones the state and tries
-    // each candidate. That it can is the point, and it is why nothing in
-    // `TableState` holds a timer, a channel, or a boxed closure.
-    let Some(card) = state.best_play_for(&due.player) else {
-      continue;
-    };
-    warn!(player = %due.player, %card, "out of time, the table plays for them");
-    round_ended |= play_card(state, due.player, card, true, ctx);
+        // Choosing the card is a search: `best_play_for` clones the state and
+        // tries each candidate. That it can is the point, and it is why nothing
+        // in `TableState` holds a timer, a channel, or a boxed closure.
+        let Some(card) = state.best_play_for(&player) else {
+          continue;
+        };
+        warn!(%player, %card, "out of time, the table plays for them");
+        round_ended |= play_card(state, player, card, true, ctx);
+      }
+
+      TableEvent::NewMatch { epoch } => {
+        // A player arriving to fill the table deals immediately, which moves the
+        // phase and makes this stale. Without the check the table would deal
+        // twice.
+        if !state.phase.is_current(epoch) {
+          debug!("rematch dropped: the table started without waiting");
+          continue;
+        }
+        // Everyone left during the intermission. Dealing to nobody would leave a
+        // table mid-round that the next arrival could not join; `seat_player`
+        // deals when the seats fill again.
+        if state.seats.len() < TABLE_SIZE {
+          debug!(seated = state.seats.len(), "rematch skipped: not enough players left");
+          continue;
+        }
+        start_match(state, ctx);
+        round_ended = true;
+      }
+    }
   }
 
   round_ended
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::types::TABLE_SIZE;
+
+  async fn tick(state: &mut TableState) {
+    TableLogic
+      .process_input(state, LogicInput::TimeStep {
+        delta_time: std::time::Duration::from_millis(20),
+      })
+      .await
+      .unwrap();
+  }
+
+  async fn seat_everyone() -> TableState {
+    let mut state = TableState::new();
+    for player in 0..TABLE_SIZE as u32 {
+      TableLogic
+        .process_input(&mut state, LogicInput::AgentJoined {
+          agent: Agent::new_human(PlayerId(player)),
+        })
+        .await
+        .unwrap();
+    }
+    state
+  }
+
+  /// Plays whatever the player on turn is holding, until the match ends.
+  async fn play_out_the_match(state: &mut TableState) {
+    for _ in 0..(ROUNDS as usize * TABLE_SIZE * 2) {
+      if *state.phase.current() == TablePhase::Finished {
+        return;
+      }
+      let Some(player) = state.turns.current_turn_actor() else {
+        tick(state).await;
+        continue;
+      };
+      let Some(card) = state.hands.get(&player).and_then(|hand| hand.first().copied()) else {
+        tick(state).await;
+        continue;
+      };
+      TableLogic
+        .process_input(state, LogicInput::AgentOps {
+          source: Agent::new_human(player),
+          ops: vec![CardOp::PlayCard(card)],
+        })
+        .await
+        .unwrap();
+    }
+    panic!("the match never reached Finished");
+  }
+
+  #[tokio::test]
+  async fn a_finished_match_deals_another_instead_of_stopping() {
+    let mut state = seat_everyone().await;
+    play_out_the_match(&mut state).await;
+    assert_eq!(*state.phase.current(), TablePhase::Finished);
+
+    for _ in 0..INTERMISSION_TICKS {
+      tick(&mut state).await;
+    }
+
+    assert_eq!(*state.phase.current(), TablePhase::Playing, "the table deals again");
+    assert!(state.hands.values().all(|hand| hand.len() == crate::types::HAND_SIZE));
+  }
+
+  #[tokio::test]
+  async fn the_intermission_lasts_as_long_as_it_says() {
+    let mut state = seat_everyone().await;
+    play_out_the_match(&mut state).await;
+
+    for _ in 0..(INTERMISSION_TICKS - 1) {
+      tick(&mut state).await;
+    }
+    assert_eq!(*state.phase.current(), TablePhase::Finished, "standings still up");
+  }
+
+  #[tokio::test]
+  async fn a_rematch_keeps_the_roster_and_zeroes_the_scores() {
+    let mut state = seat_everyone().await;
+    play_out_the_match(&mut state).await;
+    assert!(
+      state.scores.get_all_scores_sorted().iter().any(|(_, score)| *score > 0),
+      "somebody won a trick"
+    );
+
+    for _ in 0..INTERMISSION_TICKS {
+      tick(&mut state).await;
+    }
+
+    let standings = state.scores.get_all_scores_sorted();
+    assert_eq!(standings.len(), TABLE_SIZE, "same players");
+    assert!(standings.iter().all(|(_, score)| *score == 0), "new match, from zero");
+    assert_eq!(state.rounds.current_round(), 1, "and round one again");
+  }
+
+  #[tokio::test]
+  async fn a_table_that_emptied_during_the_intermission_does_not_deal_to_nobody() {
+    let mut state = seat_everyone().await;
+    play_out_the_match(&mut state).await;
+
+    for player in 0..TABLE_SIZE as u32 {
+      TableLogic
+        .process_input(&mut state, LogicInput::AgentLeft {
+          agent_id: PlayerId(player),
+        })
+        .await
+        .unwrap();
+    }
+    for _ in 0..INTERMISSION_TICKS {
+      tick(&mut state).await;
+    }
+
+    assert_eq!(*state.phase.current(), TablePhase::Finished, "nothing to deal");
+  }
 }

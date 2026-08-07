@@ -21,6 +21,8 @@ The bots play from `player_view`, the same payload a browser is sent. That is no
 
 The turn timeout is a field on the state rather than a constant, because the two binaries want different answers: the scripted run wants one short enough to reach on purpose in a few seconds, and a person choosing a card wants one long enough to choose in.
 
+**A finished match is an intermission, not a terminus.** The standings stay up for `INTERMISSION_TICKS`, then the table zeroes the scores and deals again, so nobody reloads to play a second match. It is scheduled through the same `TickEventScheduler` as the turn timeout and carries the same epoch token, which is what makes it drop itself if a player arriving fills the table and deals first. Two things it deliberately does not do: it keeps the roster rather than clearing it, which is the difference between `reset_all_scores` and `clear_all_scores`; and it declines to deal to an emptied table, leaving that to the next arrival.
+
 This is the part a log cannot show. Your tab holds three ranks and three face-down backs per opponent, and the backs are not a rendering choice: [`TableSnapshotter`](src/snapshot.rs) never put those ranks in your frame. Hidden information is visible as an absence, which is the only way to see it.
 
 ## Snapshots are not the only thing a client learns from

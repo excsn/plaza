@@ -20,6 +20,10 @@ pub const ROUNDS: u32 = 3;
 /// in ticks. Short enough that the example actually reaches it.
 pub const TURN_TIMEOUT_TICKS: u64 = 12;
 
+/// How long the standings stay up before the table deals again. A match ending
+/// is an intermission, not a terminus: nobody has to reload to play a second one.
+pub const INTERMISSION_TICKS: u64 = 250;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct PlayerId(pub u32);
 
@@ -91,13 +95,20 @@ pub struct RoundSummary {
 
 /// Work scheduled against one occupancy of a phase.
 ///
-/// The `epoch` is the whole point: by the time this fires, the round may have
-/// ended, the player may have played, or someone may have disconnected. The
+/// The `epoch` is the whole point: by the time one of these fires, the round may
+/// have ended, the player may have played, or someone may have disconnected. The
 /// token says whether the world it was scheduled in still exists.
 #[derive(Clone, Debug)]
-pub struct AutoPlay {
-  pub player: PlayerId,
-  pub epoch: plaza::game_common::flow_control::Epoch,
+pub enum TableEvent {
+  /// Play for whoever is sitting on their turn.
+  AutoPlay {
+    player: PlayerId,
+    epoch: plaza::game_common::flow_control::Epoch,
+  },
+  /// Deal a fresh match, once the standings have been up long enough to read.
+  NewMatch {
+    epoch: plaza::game_common::flow_control::Epoch,
+  },
 }
 
 /// The authoritative state. Only [`crate::logic::TableLogic`] mutates it.
@@ -124,7 +135,7 @@ pub struct TableState {
   pub agents: HashMap<PlayerId, Agent<PlayerId>>,
 
   pub tick: u64,
-  pub timeouts: TickEventScheduler<AutoPlay>,
+  pub timeouts: TickEventScheduler<TableEvent>,
   /// How long a player may sit on their turn. A field rather than the constant
   /// because the two binaries want different answers: the scripted run wants a
   /// timeout short enough to reach in a few seconds, and a person choosing a

@@ -185,7 +185,9 @@
             const status = el('status');
             if (view.phase === 'Finished') {
                 const [top] = view.scores || [];
-                status.textContent = top ? `${seatName(top[0])} wins with ${top[1]}` : 'game over';
+                status.textContent = top
+                    ? `${seatName(top[0])} wins with ${top[1]}, dealing again shortly`
+                    : 'match over, dealing again shortly';
                 status.className = '';
             } else if (myTurn) {
                 status.textContent = 'your turn, click a card';
