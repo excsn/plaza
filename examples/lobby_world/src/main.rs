@@ -46,7 +46,12 @@ const ROOM_IDLE_AFTER: Duration = Duration::from_secs(45);
 /// patience in seconds.
 /// Longer than a placement takes to dial, shorter than the seat reservation it
 /// pairs with, which currently has no window of its own.
-const PLACEMENT_WINDOW: Duration = Duration::from_secs(30);
+pub(crate) const PLACEMENT_WINDOW: Duration = Duration::from_secs(30);
+
+/// Deliberately longer than `PLACEMENT_WINDOW`. The ticket is spent at the route
+/// and the reservation is consumed a moment later inside the room, so equal
+/// windows strand a client that dialled at the edge.
+pub(crate) const RESERVATION_WINDOW: Duration = Duration::from_secs(45);
 
 const LOBBY_TICK_HZ: u32 = 4;
 

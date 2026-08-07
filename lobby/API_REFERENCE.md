@@ -163,10 +163,17 @@ For games where a player is paired rather than choosing a room.
 
 The window between the lobby admitting a player and that player's socket arriving.
 
-*   **`reserve(player) -> bool`**: promises a seat; `false` if already held.
+*   **`new()`**: reservations held until consumed or withdrawn, however long that takes.
+*   **`with_expiry(window)`**: reservations that lapse `window` after they were made.
+*   **`reserve(player) -> bool`**: promises a seat; `false` if already held. Re-reserving does not restart the window, so a lobby that re-issues on every quick-match press cannot keep an undialled seat alive indefinitely.
 *   **`consume(&player) -> bool`**: takes the reservation, on `AgentJoined`. Spent once, so a second connection on one id is not a second seat.
 *   **`withdraw(&player) -> bool`**: cancels one that will never be used.
-*   **`holds`**, **`count`**, **`is_empty`**, **`iter`**, **`clear`**.
+*   **`tick(delta) -> Vec<ID>`**: advances this type's own clock and drops what lapsed, returning those players so the lobby can clear its records too. Call it from `LogicInput::TimeStep` with the same `delta_time`; nothing here reads a clock.
+*   **`expiry()`**, **`holds`**, **`count`**, **`is_empty`**, **`iter`**, **`clear`**.
+
+**A promise with a duration is still the lobby's word.** `with_expiry` does not contradict the rule below: the lobby sets the window when it reserves, so a lapse is the lobby having said "for this long" rather than the transport having said anything.
+
+**Expiry cannot race an arrival**, because `consume` removes the reservation. A player who got in is already out of the sweep's reach, whatever happens on later ticks.
 
 **A closing socket must not cancel a reservation.** This is why the type exists rather than a bare `HashSet`. Moving between rooms reserves the new seat and *then* closes the old socket, so the room sees `AgentLeft` after the promise was made. A room that withdraws on disconnect throws away a seat the lobby already granted, and the player silently lands as a spectator while the lobby reports them seated. Only the lobby can tell "gone" from "the same player, one second later", so `withdraw` is the lobby's word and never the transport's.
 
@@ -207,7 +214,7 @@ A room in another process cannot share a map. Implement `TicketStore` to verify 
 
 ### Expiry does not stand alone
 
-A ticket outliving its `SeatReservations` entry lands a placed player as a spectator holding a spent ticket, and the reverse orphans a seat. Redemption is two steps in two places, the route spending the ticket and the room's logic consuming the reservation, so a ticket window must be **shorter** than the reservation's by at least the time a session takes to come up. Equal windows look correct and are not. `SeatReservations` currently has no window of its own.
+A ticket outliving its `SeatReservations` entry lands a placed player as a spectator holding a spent ticket, and the reverse orphans a seat. Redemption is two steps in two places, the route spending the ticket and the room's logic consuming the reservation, so a ticket window must be **shorter** than the reservation's by at least the time a session takes to come up. Equal windows look correct and are not. `lobby_world` states both numbers adjacently for that reason: `PLACEMENT_WINDOW` at 30s and `RESERVATION_WINDOW` at 45s.
 
 ## 6. Putting It Together
 

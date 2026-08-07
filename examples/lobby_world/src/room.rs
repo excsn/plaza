@@ -11,7 +11,9 @@ use plaza::session::{MessageTarget, TargetedOp};
 use plaza::snapshot::{SnapshotContext, SnapshotError, SnapshotProvider};
 use plaza::state_logic::{LogicInput, LogicOutput, SnapshotRequest, StateLogic, StateLogicError};
 use plaza_lobby::SeatReservations;
+use tracing::info;
 
+use crate::RESERVATION_WINDOW;
 use crate::types::{ArenaSettings, Occupant, PlayerId, RoomOp, RoomView, Seat};
 use crate::wallets::WalletRegistry;
 
@@ -67,7 +69,7 @@ impl ArenaState {
       max_players,
       pot: POT_STEP,
       occupants: ParticipantTracker::new(),
-      reserved: SeatReservations::new(),
+      reserved: SeatReservations::with_expiry(RESERVATION_WINDOW),
       since_refresh: Duration::ZERO,
       elapsed: Duration::ZERO,
       wallets,
@@ -230,6 +232,12 @@ impl StateLogic<RoomOp, PlayerId, ArenaState> for ArenaLogic {
       LogicInput::TimeStep { delta_time } => {
         state.elapsed += delta_time;
         let mut out = Vec::new();
+
+        // Seated players are already out of reach of this: `consume` removed
+        // them. What lapses is only ever a placement nobody dialled.
+        for player in state.reserved.tick(delta_time) {
+          info!(player, arena = %state.arena, "Seat reservation lapsed unclaimed.");
+        }
 
         // Bots have nobody to play against once the last human seat empties, and
         // an arena left alone would otherwise keep them for ever.
@@ -529,6 +537,41 @@ mod tests {
 
     join(&mut state, 1).await;
     assert_eq!(state.view_for(Some(&1)).your_seat, Some(Seat::Player));
+  }
+
+  #[tokio::test]
+  async fn a_reservation_nobody_dials_lapses_instead_of_holding_the_seat_for_ever() {
+    let mut state = arena();
+    reserve(&mut state, 1).await;
+
+    ArenaLogic
+      .process_input(&mut state, LogicInput::TimeStep {
+        delta_time: RESERVATION_WINDOW,
+      })
+      .await
+      .unwrap();
+
+    assert!(state.reserved.is_empty(), "the seat is released");
+    join(&mut state, 1).await;
+    assert_eq!(state.view_for(Some(&1)).your_seat, Some(Seat::Spectator));
+  }
+
+  #[tokio::test]
+  async fn arriving_inside_the_window_beats_the_sweep() {
+    // The ordering that makes expiry safe: consuming removes the reservation, so
+    // a player who got in is already out of the sweep's reach.
+    let mut state = arena();
+    reserve(&mut state, 1).await;
+    join(&mut state, 1).await;
+
+    ArenaLogic
+      .process_input(&mut state, LogicInput::TimeStep {
+        delta_time: RESERVATION_WINDOW * 3,
+      })
+      .await
+      .unwrap();
+
+    assert_eq!(state.view_for(Some(&1)).your_seat, Some(Seat::Player), "still seated");
   }
 
   #[tokio::test]

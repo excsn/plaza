@@ -104,7 +104,7 @@ Every block, one line each, sorted by the itch it scratches. Links go to the cra
 | `RoomFactory` / `RoomHandle` | rooms spawned on demand behind a seam that names none of their types | [lobby](../../lobby/API_REFERENCE.md) |
 | `InMemoryLobbyManager` | the assembled directory: create, list, join, reap | [lobby](../../lobby/API_REFERENCE.md) |
 | `MatchQueue` | quick match with patience, driven from your tick | [lobby](../../lobby/API_REFERENCE.md) |
-| `SeatReservations` | promises that survive the socket closing behind a room hop | [lobby](../../lobby/API_REFERENCE.md) |
+| `SeatReservations` | promises that survive the socket closing behind a room hop, and lapse if nobody dials | [lobby](../../lobby/API_REFERENCE.md) |
 | `TicketStore` | placement handed to a client to present elsewhere (placement, not authentication), as `MapTicketRegistry` or `CachedTicketRegistry` | [lobby](../../lobby/API_REFERENCE.md) |
 
 ## Testing and odds and ends
