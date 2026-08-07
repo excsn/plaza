@@ -16,7 +16,9 @@ Two details of the ticket that are easy to get wrong and are worth stating once.
 
 ## Two shapes of lobby, and they are not the same shape
 
-[lobby_world](../../examples/lobby_world/) places players into **standing** rooms: arenas exist, quick-match finds one with a free seat and the right latency budget. [parlour_game](../../examples/parlour_game/) **creates a room per match**: two players pair, a table is spawned for exactly them, and it dies when the match does. Both go through the same seam, but the second is what most matchmade games actually want, and three things follow from it that the first never surfaces.
+[lobby_world](../../examples/lobby_world/) places players into **standing** rooms: arenas exist, quick-match finds one with a free seat and the right latency budget. [parlour_game](../../examples/parlour_game/) **creates a room per match**: players pair, a table is spawned for exactly them, and it dies with that group rather than outliving it. Both go through the same seam, but the second is what most matchmade games actually want, and three things follow from it that the first never surfaces.
+
+Note the seam is per *group*, not per hand. A settled match deals another after an intermission, because sending three people who want to keep playing back through the queue is a worse answer than keeping the room they are already in. The room still dies when they drift off and the reaper collects it, which is what "per match" was ever protecting.
 
 Reservations die with the room, so an abandoned placement costs nothing and the reservation window only earns its keep for standing rooms. Room lifetime becomes the reaper's problem rather than a capacity question. And the client must **hold its lobby socket open until it is seated at the table**: closing it on `Placed`, the obvious move once you have an endpoint, makes the lobby emit `AgentLeft`, which withdraws the reservation it just issued, and the player arrives as a spectator. Two sockets, separate lifetimes, and the first gates the second. That one is invisible to single-socket tests and was found only by driving both.
 
