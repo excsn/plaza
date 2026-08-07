@@ -9,13 +9,16 @@ use async_trait::async_trait;
 use plaza::agent::Agent;
 use plaza::common::fsm::{FsmContext as _, OpsQueue};
 use plaza::error::StateLogicError;
-use plaza::game_common::flow_control::{RoundManager, TurnManager};
+use plaza::game_common::flow_control::{RoundManager, SequentialRoundManager, TurnManager};
 use plaza::game_common::scorekeeping::Scorekeeper;
 use plaza::session::TargetedOp;
 use plaza::state_logic::{LogicInput, LogicOutput, SnapshotRequest, StateLogic};
 use tracing::{debug, info, warn};
 
-use crate::types::{AutoPlay, Card, Occupancy, PlayerId, RoundSummary, Seat, TableOp, TablePhase, TableState, ROUNDS};
+use crate::types::{
+  Card, Occupancy, PlayerId, RoundSummary, Seat, TableEvent, TableOp, TablePhase, TableState, INTERMISSION_TICKS, ROUNDS,
+  TABLE_SIZE,
+};
 
 type Ctx = OpsQueue<TableOp, PlayerId>;
 
@@ -286,6 +289,26 @@ fn finish_match(state: &mut TableState, ctx: &mut Ctx) {
     .ops_q()
     .push(TargetedOp::new_system_all(vec![TableOp::Settled { winner, coins }]));
   info!(?standings, ?winner, pot, "Match over, stake settled.");
+
+  // Taken after the transition, so it names the intermission rather than the
+  // match that just ended.
+  let epoch = state.phase.epoch();
+  state.timeouts.schedule_after(state.tick, INTERMISSION_TICKS, TableEvent::Rematch { epoch });
+}
+
+/// Deals another match for whoever is still sitting here.
+///
+/// The room stays per-match in the sense that matters: it was created for this
+/// match-up and dies with it. What it stops doing is dying between *hands*,
+/// which forced three players who wanted to play again back through the queue.
+fn start_match(state: &mut TableState, ctx: &mut Ctx) {
+  // Same players, new match, so the roster is kept and only the scores go. The
+  // stake settles once per match, which is what `settled` guards.
+  state.scores.reset_all_scores();
+  state.rounds = SequentialRoundManager::new(Some(ROUNDS), TableOp::RoundStarted, TableOp::RoundEnded);
+  state.settled = false;
+  info!(table = %state.name, "Intermission over, dealing a new match.");
+  begin_round(state, ctx);
 }
 
 /// Schedules the table to play for whoever is on turn, if they take too long.
@@ -296,7 +319,7 @@ fn arm_turn_timeout(state: &mut TableState) {
   let Some(player) = state.turns.current_turn_actor() else {
     return;
   };
-  let event = AutoPlay {
+  let event = TableEvent::AutoPlay {
     player,
     epoch: state.phase.epoch(),
   };
@@ -309,25 +332,46 @@ fn run_due_timeouts(state: &mut TableState, ctx: &mut Ctx) -> bool {
   let mut round_ended = false;
 
   for due in state.timeouts.tick(state.tick) {
-    // The phase moved on: this timeout belongs to a round that is already over.
-    // Nothing cancelled it; the token simply no longer matches.
-    if !state.phase.is_current(due.epoch) {
-      debug!(player = due.player, "Timeout dropped: the phase moved on.");
-      continue;
-    }
-    // Still the right phase, but they played in time and the turn moved. An
-    // identity check, not a generation one: a turn that wrapped back around to
-    // the same player is still their turn.
-    if state.turns.current_turn_actor() != Some(due.player) {
-      debug!(player = due.player, "Timeout dropped: they already played.");
-      continue;
-    }
+    match due {
+      TableEvent::AutoPlay { player, epoch } => {
+        // The phase moved on: this timeout belongs to a round that is already
+        // over. Nothing cancelled it; the token simply no longer matches.
+        if !state.phase.is_current(epoch) {
+          debug!(player, "Timeout dropped: the phase moved on.");
+          continue;
+        }
+        // Still the right phase, but they played in time and the turn moved. An
+        // identity check, not a generation one: a turn that wrapped back around
+        // to the same player is still their turn.
+        if state.turns.current_turn_actor() != Some(player) {
+          debug!(player, "Timeout dropped: they already played.");
+          continue;
+        }
 
-    let Some(card) = state.best_play_for(&due.player) else {
-      continue;
-    };
-    warn!(player = due.player, %card, "Out of time; the table plays for them.");
-    round_ended |= play_card(state, due.player, card, true, ctx);
+        let Some(card) = state.best_play_for(&player) else {
+          continue;
+        };
+        warn!(player, %card, "Out of time; the table plays for them.");
+        round_ended |= play_card(state, player, card, true, ctx);
+      }
+
+      TableEvent::Rematch { epoch } => {
+        // A late arrival filling the table deals immediately, which moves the
+        // phase and makes this stale. Without the check the table deals twice.
+        if !state.phase.is_current(epoch) {
+          debug!("Rematch dropped: the table dealt without waiting.");
+          continue;
+        }
+        // Players drifted off during the intermission. Dealing to a short table
+        // would leave a hand nobody can finish; the next arrival deals instead.
+        if state.seats.len() < TABLE_SIZE {
+          debug!(seated = state.seats.len(), "Rematch skipped: not enough players left.");
+          continue;
+        }
+        start_match(state, ctx);
+        round_ended = true;
+      }
+    }
   }
 
   round_ended
@@ -571,6 +615,99 @@ mod tests {
     assert_eq!(after, opening);
   }
 
+  async fn step(state: &mut TableState) {
+    run(state, LogicInput::TimeStep {
+      delta_time: std::time::Duration::from_millis(50),
+    })
+    .await;
+  }
+
+  /// Plays whatever the player on turn holds, until the match settles.
+  async fn play_out_the_match(state: &mut TableState) {
+    for _ in 0..(ROUNDS as usize * TABLE_SIZE * 3) {
+      if *state.phase.current() == TablePhase::Finished {
+        return;
+      }
+      let Some(player) = state.turns.current_turn_actor() else {
+        step(state).await;
+        continue;
+      };
+      let Some(card) = state.hands.get(&player).and_then(|hand| hand.first().copied()) else {
+        step(state).await;
+        continue;
+      };
+      play(state, player, card).await;
+    }
+    panic!("the match never settled");
+  }
+
+  #[tokio::test]
+  async fn a_settled_match_deals_another_instead_of_sending_everyone_back_to_the_queue() {
+    let mut state = table();
+    seat_all(&mut state).await;
+    play_out_the_match(&mut state).await;
+    assert_eq!(*state.phase.current(), TablePhase::Finished);
+
+    for _ in 0..INTERMISSION_TICKS {
+      step(&mut state).await;
+    }
+
+    assert_eq!(*state.phase.current(), TablePhase::Playing, "the table deals again");
+    assert!(!state.settled, "the next match has its own stake to settle");
+    assert_eq!(state.rounds.current_round(), 1);
+  }
+
+  #[tokio::test]
+  async fn a_rematch_keeps_the_roster_and_zeroes_the_scores() {
+    let mut state = table();
+    seat_all(&mut state).await;
+    play_out_the_match(&mut state).await;
+
+    for _ in 0..INTERMISSION_TICKS {
+      step(&mut state).await;
+    }
+
+    let standings = state.scores.get_all_scores_sorted();
+    assert_eq!(standings.len(), SEATS as usize, "same players");
+    assert!(standings.iter().all(|(_, score)| *score == 0), "new match, from zero");
+  }
+
+  #[tokio::test]
+  async fn the_stake_settles_once_per_match_and_again_on_the_next() {
+    let mut state = table();
+    seat_all(&mut state).await;
+    play_out_the_match(&mut state).await;
+
+    let after_one: u64 = (1..=SEATS as PlayerId).map(|id| state.wallets.balance(id)).sum();
+    for _ in 0..INTERMISSION_TICKS {
+      step(&mut state).await;
+    }
+    play_out_the_match(&mut state).await;
+    let after_two: u64 = (1..=SEATS as PlayerId).map(|id| state.wallets.balance(id)).sum();
+
+    // A stake moves between players rather than into the table, so the totals
+    // match; what this pins is that the second match settled at all, which
+    // `settled` would have suppressed had the rematch not cleared it.
+    assert_eq!(after_one, after_two, "the pot is redistributed, never created");
+    assert!(state.settled, "the second match settled too");
+  }
+
+  #[tokio::test]
+  async fn a_table_that_emptied_during_the_intermission_does_not_deal_to_nobody() {
+    let mut state = table();
+    seat_all(&mut state).await;
+    play_out_the_match(&mut state).await;
+
+    for id in 1..=SEATS as PlayerId {
+      run(&mut state, LogicInput::AgentLeft { agent_id: id }).await;
+    }
+    for _ in 0..INTERMISSION_TICKS {
+      step(&mut state).await;
+    }
+
+    assert_eq!(*state.phase.current(), TablePhase::Finished, "nothing to deal");
+  }
+
   /// The turn timeout is armed against one occupancy of `Playing`. When the
   /// phase moves on, the pending event is stale and nothing cancelled it.
   #[tokio::test]
@@ -578,7 +715,7 @@ mod tests {
     let mut state = table();
     seat_all(&mut state).await;
 
-    let stale = AutoPlay {
+    let stale = TableEvent::AutoPlay {
       player: state.turns.current_turn_actor().unwrap(),
       epoch: state.phase.epoch(),
     };

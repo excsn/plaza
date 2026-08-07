@@ -44,6 +44,11 @@ pub const TABLE_SIZE: usize = 3;
 /// How long a player may sit on their turn before the table plays for them.
 pub const TURN_TIMEOUT_TICKS: u64 = 100;
 
+/// How long the standings and the settled stake stay up before the table deals
+/// again. The room is still per-match; it just serves the same match-up until
+/// the players leave, at which point the reaper collects it.
+pub const INTERMISSION_TICKS: u64 = 100;
+
 /// A card is just its rank. The game is trivial on purpose: what this example
 /// shows is the plaza wiring, not the rules.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -234,9 +239,16 @@ pub enum TableOp {
 /// ended, the player may have played, or someone may have disconnected. The
 /// token says whether the world it was scheduled in still exists.
 #[derive(Clone, Debug)]
-pub struct AutoPlay {
-  pub player: PlayerId,
-  pub epoch: plaza::game_common::flow_control::Epoch,
+pub enum TableEvent {
+  /// Play for whoever is sitting on their turn.
+  AutoPlay {
+    player: PlayerId,
+    epoch: plaza::game_common::flow_control::Epoch,
+  },
+  /// Deal a fresh match for whoever is still at the table.
+  Rematch {
+    epoch: plaza::game_common::flow_control::Epoch,
+  },
 }
 
 /// Per-table, per-occupant. The wallet lives in the shared registry: it
@@ -285,7 +297,7 @@ pub struct TableState {
   pub reserved: SeatReservations<PlayerId>,
 
   pub tick: u64,
-  pub timeouts: TickEventScheduler<AutoPlay>,
+  pub timeouts: TickEventScheduler<TableEvent>,
   pub settled: bool,
 
   pub wallets: Arc<WalletRegistry>,

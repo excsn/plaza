@@ -22,6 +22,8 @@ Open the page in **three tabs** and press quick match in each, or press it in on
 
 That is a two-line difference in `seat_formed` and a completely different lifecycle around it: `handle_create_room_request` runs inside the match-forming path, `max_players` is the size of the match rather than a property of the room, and nothing is pre-spawned at boot.
 
+**The room outlives the hand, not the match-up.** A settled match deals another after `INTERMISSION_TICKS` rather than sending three people who want to keep playing back through the queue. The stake settles once per match, which is what `settled` guards and what the rematch clears. When they do drift off, the table goes quiet and the reaper collects it, so "per match" still means what it says: the room was created for this group and dies with it, it just does not die between hands.
+
 ### 2. Two codecs, one server, one port
 
 The lobby session speaks `JsonCodec`. Every table session speaks `MsgPackNamedCodec`. Same binary, same port, different wires, because **a codec belongs to a session and a session belongs to a controller**, so nothing about plaza ties a deployment to one encoding.
