@@ -39,8 +39,11 @@ pub enum Phase {
   /// Before the first wave, and between waves. Towers may be built.
   Prep { until_tick: u64 },
   Running,
-  /// The only ending. There is no last wave: they keep coming, and each one is
-  /// harder than the one before, so every run ends here eventually.
+  /// How every run ends. There is no last wave: they keep coming, and each one
+  /// is harder than the one before, so a run always arrives here.
+  ///
+  /// The *session* does not end here. After `RESTART_AFTER_TICKS` the field is
+  /// laid out fresh and the next run begins from `Prep`.
   Lost,
 }
 
@@ -66,6 +69,9 @@ pub struct Server {
   /// comparison of every wave.
   pending_wave: Option<(u32, u64)>,
   last_digest_tick: u64,
+  /// When the overrun board makes way for a fresh field, set on entering
+  /// [`Phase::Lost`].
+  restart_at: Option<u64>,
 
   pub builds_admitted: u64,
   pub builds_refused: u64,
@@ -87,6 +93,7 @@ impl Server {
       schedule: InputSchedule::new(),
       pending_wave: None,
       last_digest_tick: 0,
+      restart_at: None,
       builds_admitted: 0,
       builds_refused: 0,
       snapshots_sent: 0,
@@ -213,6 +220,11 @@ impl Server {
   fn step(&mut self, controls: &Controls, out: &mut Tickout) {
     let next_tick = self.field.tick + 1;
 
+    if self.restart_at.is_some_and(|at| next_tick >= at) {
+      self.restart(out);
+      return;
+    }
+
     // Builds land on their named tick, before the step that tick performs, so
     // a tower placed for tick T fires on tick T everywhere.
     if let Some((wave, at)) = self.pending_wave
@@ -245,10 +257,34 @@ impl Server {
     }
   }
 
+  /// Lays out a fresh field for the next run, keeping the clock.
+  ///
+  /// Sent as a `Snapshot` rather than as a new op, because that is already the
+  /// message meaning "stop computing and adopt this", and every client handles
+  /// it. The tick keeps running: it is the session's clock, and resetting it
+  /// would invalidate every tick-keyed thing in flight.
+  fn restart(&mut self, out: &mut Tickout) {
+    let tick = self.field.tick;
+    self.field = Field::default();
+    self.field.tick = tick;
+    self.phase = Phase::Prep {
+      until_tick: tick + PREP_TICKS,
+    };
+    self.pending_wave = None;
+    self.restart_at = None;
+    self.schedule = InputSchedule::new();
+    self.snapshots_sent += 1;
+    out.ops.push(Op::Snapshot {
+      field: Box::new(self.field.clone()),
+      server_time_ms: self.field.now_ms(),
+    });
+  }
+
   fn advance_phase(&mut self, out: &mut Tickout) {
     if self.field.lives <= 0 {
       if self.phase != Phase::Lost {
         out.ops.push(Op::Over { wave: self.field.wave });
+        self.restart_at = Some(self.field.tick + RESTART_AFTER_TICKS);
       }
       self.phase = Phase::Lost;
       return;
@@ -321,6 +357,7 @@ impl Clone for Server {
       schedule: InputSchedule::new(),
       pending_wave: self.pending_wave,
       last_digest_tick: self.last_digest_tick,
+      restart_at: self.restart_at,
       builds_admitted: self.builds_admitted,
       builds_refused: self.builds_refused,
       snapshots_sent: self.snapshots_sent,
@@ -427,19 +464,31 @@ mod tests {
     assert_eq!(server.field.towers.len(), 1, "and exactly on it");
   }
 
+  /// Runs until the line breaks, without running past the restart that follows.
+  fn run_until_lost(server: &mut Server, controls: &Controls) -> Vec<Op> {
+    let mut ops = Vec::new();
+    for _ in 0..(180_000 / SIM_STEP_MS) {
+      ops.extend(server.advance(SIM_STEP_MS, controls).ops);
+      if server.phase == Phase::Lost {
+        return ops;
+      }
+    }
+    panic!("twenty lives and no defence, and the line never broke");
+  }
+
   #[test]
   fn a_run_with_no_towers_is_eventually_lost() {
     let c = controls();
     let mut server = Server::new(1, 7);
-    run(&mut server, 120_000, &c);
+    run_until_lost(&mut server, &c);
     assert_eq!(server.phase, Phase::Lost, "twenty lives and no defence");
   }
 
   #[test]
-  fn the_only_ending_is_being_overrun_and_it_is_announced_once() {
+  fn being_overrun_ends_the_run_and_is_announced_once() {
     let c = controls();
     let mut server = Server::new(1, 7);
-    let ops = run(&mut server, 120_000, &c);
+    let ops = run_until_lost(&mut server, &c);
     let overs: Vec<u32> = ops
       .iter()
       .filter_map(|op| match op {
@@ -449,12 +498,47 @@ mod tests {
       .collect();
     assert_eq!(overs.len(), 1, "announced exactly once: {overs:?}");
     assert_eq!(server.phase, Phase::Lost);
+  }
 
-    let after = run(&mut server, 30_000, &c);
+  #[test]
+  fn the_overrun_board_stays_up_and_then_the_next_run_is_laid_out() {
+    let c = controls();
+    let mut server = Server::new(1, 7);
+    run_until_lost(&mut server, &c);
+    let lost_at = server.field.tick;
+
+    // The board is still the one the run ended on, so the standings can be read.
+    let waiting = run(&mut server, (RESTART_AFTER_TICKS - 2) * SIM_STEP_MS, &c);
+    assert_eq!(server.phase, Phase::Lost, "the overrun board is still up");
+    assert!(!waiting.iter().any(|op| matches!(op, Op::Snapshot { .. })));
+
+    let after = run(&mut server, 4 * SIM_STEP_MS, &c);
     assert!(
-      !after.iter().any(|op| matches!(op, Op::Wave { .. } | Op::Over { .. })),
-      "and nothing further happens"
+      matches!(server.phase, Phase::Prep { .. }),
+      "a fresh field, not a dead one: {:?}",
+      server.phase
     );
+    assert_eq!(server.field.lives, STARTING_LIVES, "lives back");
+    assert_eq!(server.field.wave, 0, "and the wave count with them");
+    assert!(server.field.tick > lost_at, "the session clock never restarted");
+    assert!(
+      after.iter().any(|op| matches!(op, Op::Snapshot { .. })),
+      "the new field is sent, not left to be guessed"
+    );
+  }
+
+  #[test]
+  fn a_second_run_is_announced_exactly_as_the_first_was() {
+    // `Over` is once per run, not once per session, which is the assertion the
+    // single-run version of this test used to make.
+    let c = controls();
+    let mut server = Server::new(1, 7);
+    run_until_lost(&mut server, &c);
+    run(&mut server, RESTART_AFTER_TICKS * SIM_STEP_MS + 2 * SIM_STEP_MS, &c);
+
+    let second = run_until_lost(&mut server, &c);
+    let overs = second.iter().filter(|op| matches!(op, Op::Over { .. })).count();
+    assert_eq!(overs, 1, "the second run ends the same way the first did");
   }
 
   #[test]

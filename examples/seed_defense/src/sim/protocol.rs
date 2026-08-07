@@ -83,8 +83,9 @@ pub enum Op {
     field: Box<Field>,
     server_time_ms: u64,
   },
-  /// The line broke. Sent once, and it is the only ending there is: the waves
-  /// do not stop coming, they stop being survivable.
+  /// The line broke. Sent once per run, and it is the only way a run ends: the
+  /// waves do not stop coming, they stop being survivable. The next run arrives
+  /// as a [`Op::Snapshot`] once the board has been up long enough to read.
   Over {
     wave: u32,
   },

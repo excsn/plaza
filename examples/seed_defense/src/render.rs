@@ -500,7 +500,7 @@ pub fn draw_hud(board: &Board, wave: u32, in_ms: u64, lives: i32, gold: i32) {
   );
 }
 
-/// The end of the run, which is the only ending there is: the waves do not
+/// The end of the run, which is the only way a run ends: the waves do not
 /// stop coming, they stop being survivable.
 ///
 /// Drawn from the server's announcement rather than inferred from the lives

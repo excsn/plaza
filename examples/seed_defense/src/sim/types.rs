@@ -36,6 +36,12 @@ pub const DIGEST_INTERVAL_MS: u64 = 500;
 pub const DIGEST_MEMORY: usize = 64;
 
 pub const STARTING_LIVES: i32 = 20;
+
+/// How long the overrun screen stays up before the field is laid out fresh.
+///
+/// A run ends, a session does not. Everyone at the arena would otherwise be
+/// looking at a board that will never change again.
+pub const RESTART_AFTER_TICKS: u64 = 200;
 pub const STARTING_GOLD: i32 = 260;
 
 /// How long the wave takes to start, and the gap after it clears.

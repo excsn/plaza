@@ -18,6 +18,8 @@ cargo test -p seed_defense                   # every claim below, as a test
 
 Pick a tower in the strip along the bottom, click a buildable tile to place it, click a tower to upgrade it. Hovering a tower shows what it does now and what the next level costs and buys.
 
+The waves never stop and each is harder than the last, so every run ends overrun. The **session** does not: the board stays up long enough to read, then the server lays out a fresh field and sends it as a `Snapshot`, which is the message that already means "stop computing and adopt this". A restart needs no new op and no new agreement rule for exactly that reason, and the tick keeps running throughout, because it is the session's clock rather than the run's.
+
 ## What you are looking at
 
 | On screen | Meaning |

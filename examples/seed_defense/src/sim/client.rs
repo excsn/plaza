@@ -118,6 +118,11 @@ impl Client {
   /// Replaces the whole field. The expensive path, and the only one that ever
   /// moves state across the wire.
   pub fn adopt(&mut self, field: &Field) {
+    // A field with lives in it is not an overrun field, which is how a client
+    // learns the next run started: the server lays one out and sends it here.
+    if field.lives > 0 {
+      self.over = None;
+    }
     self.field = field.clone();
     self.history.clear();
     self.incoming.clear();
