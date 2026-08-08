@@ -8,25 +8,101 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::time::Duration;
 
-/// Trait for managing discrete turns for players or teams.
+/// What one advance did to the order.
+///
+/// The variant carries the fact a caller would otherwise have to reconstruct,
+/// and reconstruct wrongly: whether the order just completed a pass over its
+/// roster. The manager is the only thing that knows, because *how* a pass ends
+/// is the thing implementations differ about. Round-robin wraps; a snake
+/// reverses and hands the same actor two turns in a row, so a caller comparing
+/// the new actor against the old gets the opposite of the truth exactly at the
+/// boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Advanced<TurnActorId> {
+  /// The order moved on inside the current pass.
+  Next(TurnActorId),
+  /// The order moved on and a pass over the roster closed.
+  PassClosed(TurnActorId),
+}
+
+impl<TurnActorId> Advanced<TurnActorId> {
+  /// Whoever is now on turn, whichever happened.
+  pub fn actor(&self) -> &TurnActorId {
+    match self {
+      Advanced::Next(actor) | Advanced::PassClosed(actor) => actor,
+    }
+  }
+
+  pub fn into_actor(self) -> TurnActorId {
+    match self {
+      Advanced::Next(actor) | Advanced::PassClosed(actor) => actor,
+    }
+  }
+
+  /// Whether a pass over the roster just completed.
+  pub fn pass_closed(&self) -> bool {
+    matches!(self, Advanced::PassClosed(_))
+  }
+}
+
+/// Whose turn it is, and how that moves.
 ///
 /// - `Op`: The application's operation type.
 /// - `AppID`: The application's `AgentId` type.
-/// - `TurnActorId`: Application-defined type representing whose turn it is (e.g., PlayerId, TeamId).
+/// - `TurnActorId`: whose turn it is (a `PlayerId`, a `TeamId`, a unit).
+///
+/// # This is a conformance target, not a dispatch mechanism
+///
+/// Nothing in this workspace holds a `dyn TurnManager`, and probably nothing
+/// will: a game knows which order it plays in. What the trait is for is the
+/// question "I am writing initiative order of my own, what must it provide?",
+/// and it is sized to answer that rather than to be called through.
+///
+/// It was sized wrongly until [`draft_board`] wrote the second implementation
+/// and found out. For a long time this held two methods while every consumer
+/// called five, so a conforming manager could be written that no application
+/// could actually seat, restart, or change the roster of. Seating and roster
+/// are not optional; a manager that cannot do them is not usable, and the trait
+/// now says so.
+///
+/// [`draft_board`]: https://github.com/excsn/plaza/tree/main/examples/draft_board
 pub trait TurnManager<Op, AppID: AgentId, TurnActorId> {
-  /// Gets the ID of the entity whose turn it currently is.
+  /// Whose turn it currently is, or `None` before the order has begun.
   fn current_turn_actor(&self) -> Option<TurnActorId>;
 
-  /// Attempts to end the current turn and advance to the next.
-  /// Implementation determines turn order (e.g., round-robin, custom logic).
-  /// Returns `Ok(Option<NextTurnActorId>)` where `None` might indicate end of round/all turns.
-  /// This method is expected to enqueue a `TurnChangedNoticeOp` (via op_payloads)
-  /// into the context's operation queue upon successful advancement.
+  /// Seats the first actor and emits a notice. No-op once a turn is active.
+  fn begin(&mut self, context: &mut dyn FsmContext<Op, AppID>) -> Option<TurnActorId>;
+
+  /// Returns to the start of the order and counts from one again.
+  ///
+  /// What "the start" costs is the implementation's business: round-robin moves
+  /// a cursor, a snake also resets its direction. Same intent, different
+  /// mechanics, which is what a trait method is for.
+  fn restart(&mut self, context: &mut dyn FsmContext<Op, AppID>) -> Option<TurnActorId>;
+
+  /// Adds an actor to the order without disturbing the current turn.
+  fn add_actor(&mut self, actor: TurnActorId);
+
+  /// Removes an actor, e.g. one who disconnected. Returns whether it was there.
+  ///
+  /// Where the turn lands afterwards is the implementation's business too, and
+  /// the two shipped answers genuinely differ: round-robin wraps to the first
+  /// seat, a snake pulls back to the last, because a snake at the end of its
+  /// roster is about to turn around rather than start over.
+  fn remove_actor(&mut self, actor: &TurnActorId) -> bool;
+
+  /// Ends the current turn and moves the order on, emitting a
+  /// [`TurnChangedNoticePayload`](op_payloads::TurnChangedNoticePayload).
+  ///
+  /// Returns [`Advanced`], which says whether a pass closed as well as who is
+  /// now on turn. `Err` if the roster is empty or no turn has begun.
+  ///
+  /// **The next actor may be the same actor.** This promises the next turn, not
+  /// a different holder of it, and a snake depends on the difference.
   fn end_current_turn_and_advance(
     &mut self,
     context: &mut dyn FsmContext<Op, AppID>,
-  ) -> Result<Option<TurnActorId>, String>;
-
+  ) -> Result<Advanced<TurnActorId>, String>;
 }
 
 /// Round-robin [`TurnManager`] over an ordered roster.
@@ -118,77 +194,6 @@ where
     self
   }
 
-  /// Starts the first turn, emitting a notice. No-op if the roster is empty or
-  /// a turn is already active.
-  pub fn begin(&mut self, context: &mut dyn FsmContext<Op, AppID>) -> Option<TurnActorId> {
-    if self.current.is_some() || self.actors.is_empty() {
-      return self.current_turn_actor();
-    }
-    self.current = Some(0);
-    self.turn_number = 1;
-    self.emit_notice(context, None);
-    self.current_turn_actor()
-  }
-
-  /// Seats the first actor again and starts the count over, emitting a notice.
-  ///
-  /// For a game whose order restarts, most often at the top of each round.
-  /// [`begin`](Self::begin) will not do this: it returns early while a turn is
-  /// active, and after the last actor of a round plays there still is one,
-  /// because the turn only advances when someone is left to play.
-  ///
-  /// ```ignore
-  /// rounds.start_next_round(&mut ctx)?;
-  /// turns.restart(&mut ctx);   // back to the first seat, turn 1
-  /// ```
-  ///
-  /// [`turn_number`](Self::turn_number) resets to 1, because it counts turns
-  /// since the order began and this begins it again. A game that instead wants
-  /// one continuous count across rounds does not want `restart` at all: keep a
-  /// single manager and keep advancing, letting the roster wrap.
-  ///
-  /// Safe to call before the first [`begin`](Self::begin), where it does the
-  /// same thing. Does nothing on an empty roster.
-  pub fn restart(&mut self, context: &mut dyn FsmContext<Op, AppID>) -> Option<TurnActorId> {
-    if self.actors.is_empty() {
-      self.current = None;
-      return None;
-    }
-
-    let previous = self.current_turn_actor();
-    self.current = Some(0);
-    self.turn_number = 1;
-    self.emit_notice(context, previous);
-    self.current_turn_actor()
-  }
-
-  /// Adds an actor to the end of the order. Does not disturb the current turn.
-  pub fn add_actor(&mut self, actor: TurnActorId) {
-    self.actors.push(actor);
-  }
-
-  /// Removes an actor, e.g. a player who disconnected.
-  ///
-  /// Removing the actor whose turn it is leaves the turn pointing at whoever now
-  /// occupies that slot, so play continues rather than stalling on someone who
-  /// left. Returns whether the actor was present.
-  pub fn remove_actor(&mut self, actor: &TurnActorId) -> bool {
-    let Some(index) = self.actors.iter().position(|a| a == actor) else {
-      return false;
-    };
-    self.actors.remove(index);
-
-    match self.current {
-      _ if self.actors.is_empty() => self.current = None,
-      Some(current) if index < current => self.current = Some(current - 1),
-      // The removed actor held the turn: the slot now holds the next player,
-      // except at the end of the order, where it wraps.
-      Some(current) if index == current && current >= self.actors.len() => self.current = Some(0),
-      _ => {}
-    }
-    true
-  }
-
   pub fn actors(&self) -> &[TurnActorId] {
     &self.actors
   }
@@ -219,13 +224,85 @@ where
     self.current.and_then(|i| self.actors.get(i).cloned())
   }
 
+  /// Starts the first turn, emitting a notice. No-op if the roster is empty or
+  /// a turn is already active.
+  fn begin(&mut self, context: &mut dyn FsmContext<Op, AppID>) -> Option<TurnActorId> {
+    if self.current.is_some() || self.actors.is_empty() {
+      return self.current_turn_actor();
+    }
+    self.current = Some(0);
+    self.turn_number = 1;
+    self.emit_notice(context, None);
+    self.current_turn_actor()
+  }
+
+  /// Seats the first actor again and starts the count over, emitting a notice.
+  ///
+  /// For a game whose order restarts, most often at the top of each round.
+  /// [`begin`](Self::begin) will not do this: it returns early while a turn is
+  /// active, and after the last actor of a round plays there still is one,
+  /// because the turn only advances when someone is left to play.
+  ///
+  /// ```ignore
+  /// rounds.start_next_round(&mut ctx)?;
+  /// turns.restart(&mut ctx);   // back to the first seat, turn 1
+  /// ```
+  ///
+  /// [`turn_number`](Self::turn_number) resets to 1, because it counts turns
+  /// since the order began and this begins it again. A game that instead wants
+  /// one continuous count across rounds does not want `restart` at all: keep a
+  /// single manager and keep advancing, letting the roster wrap.
+  ///
+  /// Safe to call before the first [`begin`](Self::begin), where it does the
+  /// same thing. Does nothing on an empty roster.
+  fn restart(&mut self, context: &mut dyn FsmContext<Op, AppID>) -> Option<TurnActorId> {
+    if self.actors.is_empty() {
+      self.current = None;
+      return None;
+    }
+
+    let previous = self.current_turn_actor();
+    self.current = Some(0);
+    self.turn_number = 1;
+    self.emit_notice(context, previous);
+    self.current_turn_actor()
+  }
+
+  /// Adds an actor to the end of the order. Does not disturb the current turn.
+  fn add_actor(&mut self, actor: TurnActorId) {
+    self.actors.push(actor);
+  }
+
+  /// Removes an actor, e.g. a player who disconnected.
+  ///
+  /// Removing the actor whose turn it is leaves the turn pointing at whoever now
+  /// occupies that slot, so play continues rather than stalling on someone who
+  /// left. Returns whether the actor was present.
+  fn remove_actor(&mut self, actor: &TurnActorId) -> bool {
+    let Some(index) = self.actors.iter().position(|a| a == actor) else {
+      return false;
+    };
+    self.actors.remove(index);
+
+    match self.current {
+      _ if self.actors.is_empty() => self.current = None,
+      Some(current) if index < current => self.current = Some(current - 1),
+      // The removed actor held the turn: the slot now holds the next player,
+      // except at the end of the order, where it wraps.
+      Some(current) if index == current && current >= self.actors.len() => self.current = Some(0),
+      _ => {}
+    }
+    true
+  }
+
   /// Advances to the next actor, wrapping at the end of the order.
   ///
-  /// Returns the new actor, or `Err` if no turn has begun or the roster is empty.
+  /// The wrap is the pass boundary, so that is where [`Advanced::PassClosed`]
+  /// is reported.
   fn end_current_turn_and_advance(
     &mut self,
     context: &mut dyn FsmContext<Op, AppID>,
-  ) -> Result<Option<TurnActorId>, String> {
+  ) -> Result<Advanced<TurnActorId>, String> {
     if self.actors.is_empty() {
       return Err("no actors in the turn order".to_string());
     }
@@ -234,10 +311,20 @@ where
     };
 
     let previous = self.actors.get(current).cloned();
-    self.current = Some((current + 1) % self.actors.len());
+    let next = (current + 1) % self.actors.len();
+    let wrapped = next == 0;
+    self.current = Some(next);
     self.turn_number = self.turn_number.saturating_add(1);
     self.emit_notice(context, previous);
-    Ok(self.current_turn_actor())
+
+    let actor = self
+      .current_turn_actor()
+      .ok_or_else(|| "the turn order lost its actor while advancing".to_string())?;
+    Ok(if wrapped {
+      Advanced::PassClosed(actor)
+    } else {
+      Advanced::Next(actor)
+    })
   }
 }
 
@@ -316,9 +403,36 @@ mod tests {
     turns.begin(&mut ctx);
 
     for expected in [2, 3, 1] {
-      assert_eq!(turns.end_current_turn_and_advance(&mut ctx).unwrap(), Some(expected));
+      let moved = turns.end_current_turn_and_advance(&mut ctx).unwrap();
+      assert_eq!(*moved.actor(), expected);
     }
     assert_eq!(turns.turn_number(), 4);
+  }
+
+  #[test]
+  fn the_wrap_is_reported_as_a_closed_pass() {
+    // The fact two examples were reconstructing by counting: only the manager
+    // knows where its pass ends, because how a pass ends is what implementations
+    // differ about.
+    let mut turns = manager(vec![1, 2, 3]);
+    let mut ctx = Ctx::new();
+    turns.begin(&mut ctx);
+
+    assert_eq!(turns.end_current_turn_and_advance(&mut ctx).unwrap(), Advanced::Next(2));
+    assert_eq!(turns.end_current_turn_and_advance(&mut ctx).unwrap(), Advanced::Next(3));
+    assert_eq!(
+      turns.end_current_turn_and_advance(&mut ctx).unwrap(),
+      Advanced::PassClosed(1),
+      "back to the top is the end of a pass"
+    );
+  }
+
+  #[test]
+  fn a_single_actor_closes_a_pass_every_turn() {
+    let mut turns = manager(vec![7]);
+    let mut ctx = Ctx::new();
+    turns.begin(&mut ctx);
+    assert!(turns.end_current_turn_and_advance(&mut ctx).unwrap().pass_closed());
   }
 
   #[test]

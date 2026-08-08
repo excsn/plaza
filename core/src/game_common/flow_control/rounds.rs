@@ -24,6 +24,15 @@ pub trait RoundManager<Op, AppID: AgentId> {
   /// into the context's operation queue.
   fn start_next_round(&mut self, context: &mut dyn FsmContext<Op, AppID>) -> Result<(), String>;
 
+  /// Puts the count back to zero for a fresh match, keeping the configuration.
+  ///
+  /// A round manager counts up and has no other way back, so both card examples
+  /// were replacing the whole manager to play again, restating the notice
+  /// constructors and the round limit at a call site that has no business
+  /// knowing them. Two consumers writing the same workaround is what this is
+  /// for.
+  fn reset(&mut self);
+
   /// Ends the current round explicitly.
   /// This method is expected to enqueue a `RoundEndedNoticeOp` (via op_payloads).
   fn end_current_round(
@@ -144,6 +153,11 @@ impl<Op, AppID: AgentId, Summary: Clone + Debug> RoundManager<Op, AppID> for Seq
     self.current_round
   }
 
+  fn reset(&mut self) {
+    self.current_round = 0;
+    self.in_progress = false;
+  }
+
   fn max_rounds(&self) -> Option<u32> {
     self.max_rounds
   }
@@ -224,6 +238,35 @@ mod tests {
 
   fn manager(max: Option<u32>) -> Rounds {
     SequentialRoundManager::new(max, TestOp::Started, TestOp::Ended)
+  }
+
+  #[test]
+  fn resetting_counts_from_the_start_again() {
+    let mut rounds = manager(Some(2));
+    let mut ctx = Ctx::new();
+    rounds.start_next_round(&mut ctx).unwrap();
+    rounds.end_current_round(&mut ctx, "done".to_string());
+    rounds.start_next_round(&mut ctx).unwrap();
+    rounds.end_current_round(&mut ctx, "done".to_string());
+    assert!(rounds.is_finished());
+
+    rounds.reset();
+    assert_eq!(rounds.current_round(), 0);
+    assert!(!rounds.is_finished(), "a second match, not a stuck one");
+    assert!(rounds.start_next_round(&mut ctx).is_ok());
+    assert_eq!(rounds.current_round(), 1);
+  }
+
+  #[test]
+  fn resetting_mid_round_abandons_it_rather_than_leaving_it_open() {
+    let mut rounds = manager(Some(3));
+    let mut ctx = Ctx::new();
+    rounds.start_next_round(&mut ctx).unwrap();
+    assert!(rounds.round_in_progress());
+
+    rounds.reset();
+    assert!(!rounds.round_in_progress());
+    assert!(rounds.start_next_round(&mut ctx).is_ok(), "a round can begin again");
   }
 
   fn ops(ctx: Ctx) -> Vec<TestOp> {

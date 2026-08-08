@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use plaza::agent::Agent;
 use plaza::common::fsm::{FsmContext as _, OpsQueue};
 use plaza::error::StateLogicError;
-use plaza::game_common::flow_control::{RoundManager, SequentialRoundManager, TurnManager};
+use plaza::game_common::flow_control::{RoundManager, TurnManager};
 use plaza::game_common::scorekeeping::Scorekeeper;
 use plaza::session::TargetedOp;
 use plaza::state_logic::{LogicInput, LogicOutput, SnapshotRequest, StateLogic};
@@ -223,9 +223,7 @@ fn finish_match(state: &mut TableState, ctx: &mut Ctx) {
 /// again, not a new table.
 fn start_match(state: &mut TableState, ctx: &mut Ctx) {
   state.scores.reset_all_scores();
-  // `SequentialRoundManager` counts up and has no reset, so a second match takes
-  // a second manager.
-  state.rounds = SequentialRoundManager::new(Some(ROUNDS), CardOp::RoundStarted, CardOp::RoundEnded);
+  state.rounds.reset();
   info!("intermission over, dealing a new match");
   begin_round(state, ctx);
 }

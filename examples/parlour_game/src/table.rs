@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use plaza::agent::Agent;
 use plaza::common::fsm::{FsmContext as _, OpsQueue};
 use plaza::error::StateLogicError;
-use plaza::game_common::flow_control::{RoundManager, SequentialRoundManager, TurnManager};
+use plaza::game_common::flow_control::{RoundManager, TurnManager};
 use plaza::game_common::scorekeeping::Scorekeeper;
 use plaza::session::TargetedOp;
 use plaza::state_logic::{LogicInput, LogicOutput, SnapshotRequest, StateLogic};
@@ -305,7 +305,7 @@ fn start_match(state: &mut TableState, ctx: &mut Ctx) {
   // Same players, new match, so the roster is kept and only the scores go. The
   // stake settles once per match, which is what `settled` guards.
   state.scores.reset_all_scores();
-  state.rounds = SequentialRoundManager::new(Some(ROUNDS), TableOp::RoundStarted, TableOp::RoundEnded);
+  state.rounds.reset();
   state.settled = false;
   info!(table = %state.name, "Intermission over, dealing a new match.");
   begin_round(state, ctx);

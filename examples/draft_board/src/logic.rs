@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use plaza::agent::Agent;
 use plaza::common::fsm::{FsmContext as _, OpsQueue};
 use plaza::error::StateLogicError;
-use plaza::game_common::flow_control::{RoundManager, SequentialRoundManager, TurnManager};
+use plaza::game_common::flow_control::{RoundManager, TurnManager};
 use plaza::game_common::scorekeeping::Scorekeeper;
 use plaza::session::TargetedOp;
 use plaza::state_logic::{LogicInput, LogicOutput, SnapshotRequest, StateLogic};
@@ -114,7 +114,6 @@ fn open_draft(state: &mut DraftState, ctx: &mut Ctx) {
     return;
   }
   state.phase.transition_to(DraftPhase::Picking, ctx, DraftOp::PhaseChanged);
-  state.picks_this_round = 0;
   state.turns.begin(ctx);
   arm_clock(state);
 }
@@ -157,7 +156,6 @@ fn take(state: &mut DraftState, player: PlayerId, id: u8, ctx: &mut Ctx) -> bool
 fn record(state: &mut DraftState, player: PlayerId, prospect: Prospect, on_their_behalf: bool, ctx: &mut Ctx) {
   state.rosters.entry(player).or_default().push(prospect);
   state.scores.increment_score(&player, prospect.value);
-  state.picks_this_round += 1;
   ctx.ops_q().push(TargetedOp::new_system_all(vec![DraftOp::Taken {
     player,
     prospect,
@@ -165,16 +163,13 @@ fn record(state: &mut DraftState, player: PlayerId, prospect: Prospect, on_their
   }]));
   info!(player, %prospect, auto = on_their_behalf, "prospect taken");
 
-  // The pass, not the manager, decides when a round ends. `TurnManager` returns
-  // only the next actor, and under a snake that actor is the *same* one across
-  // the boundary, so "did it change" cannot stand in for "did the pass close".
-  if state.picks_this_round >= state.seats.len() {
-    end_round(state, ctx);
-    return;
+  // The manager says when the pass closed, because it is the only thing that
+  // knows: a snake reverses onto the *same* actor there, so a caller comparing
+  // the new turn against the old would read the boundary backwards.
+  match state.turns.end_current_turn_and_advance(ctx) {
+    Ok(moved) if moved.pass_closed() => end_round(state, ctx),
+    _ => arm_clock(state),
   }
-
-  let _ = state.turns.end_current_turn_and_advance(ctx);
-  arm_clock(state);
 }
 
 /// Closes the pass and opens the next, or finishes the draft.
@@ -201,11 +196,6 @@ fn end_round(state: &mut DraftState, ctx: &mut Ctx) {
     return;
   }
 
-  // The reversal happens here, on the boundary, which is the one thing a
-  // round-robin manager cannot express: the drafter who just picked last picks
-  // again first.
-  let _ = state.turns.end_current_turn_and_advance(ctx);
-  state.picks_this_round = 0;
   if let Err(reason) = state.rounds.start_next_round(ctx) {
     debug!(%reason, "no further rounds");
     finish_draft(state, ctx);
@@ -236,7 +226,7 @@ fn finish_draft(state: &mut DraftState, ctx: &mut Ctx) {
 /// Racks a fresh board and drafts again with the same seats.
 fn rack_and_redraft(state: &mut DraftState, ctx: &mut Ctx) {
   state.scores.reset_all_scores();
-  state.rounds = SequentialRoundManager::new(Some(ROUNDS), DraftOp::RoundStarted, DraftOp::RoundEnded);
+  state.rounds.reset();
   state.available = DraftState::rack();
   for roster in state.rosters.values_mut() {
     roster.clear();
@@ -245,7 +235,6 @@ fn rack_and_redraft(state: &mut DraftState, ctx: &mut Ctx) {
   // the snake from wherever the last draft left it: a new draft is not the next
   // pass of the old one.
   state.turns.restart(ctx);
-  state.picks_this_round = 0;
   info!("intermission over, racking a new board");
   open_draft(state, ctx);
 }

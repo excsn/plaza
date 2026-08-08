@@ -13,15 +13,15 @@ cargo run -p plaza_example_draft_board --bin serve        # the browser version,
 
 [`SnakeTurnManager`](src/snake.rs) runs down the roster and then back along it, so with three drafters the order is `1,2,3` then `3,2,1` then `1,2,3`. That is the order every real draft uses, and picking last is compensated by picking first next round.
 
-## What the trait carried, and what it did not
+## The answer: half a seam, and it has since been closed
 
-**Both trait methods carried it, including the part that looks illegal.** `current_turn_actor` is a lookup. `end_current_turn_and_advance` returns the **same actor** at a reversal, because the drafter closing one pass opens the next, and the trait's contract permits that: it promises the next actor rather than a different one. A wrapping manager cannot express that boundary at all, which is the whole reason a draft needs its own.
+**The advance carried it, including the part that looks illegal.** `end_current_turn_and_advance` returns the **same actor** at a reversal, because the drafter closing one pass opens the next, and the contract permits that: it promises the next turn rather than a different holder of it. A wrapping manager cannot express that boundary at all, which is why a draft needs its own.
 
-**What did not carry is everything around them.** `begin`, `restart`, `add_actor` and `remove_actor` are inherent on `RoundRobinTurnManager` and absent from the trait. This manager had to declare its own by hand, and nothing checks that the two agree. So the honest answer to the question is **half a seam**: a caller holding `dyn TurnManager` can read whose turn it is and advance it, and cannot seat the first actor, restart the order, or remove somebody who left. Those are three of the five operations every existing consumer calls.
+**Everything around it did not.** The trait held `current_turn_actor` and the advance while every consumer called five methods: `begin`, `restart`, `add_actor` and `remove_actor` were inherent on `RoundRobinTurnManager` alone. A conforming manager could be written that no application could seat, restart, or change the roster of. The trait now carries all six, and `it_is_usable_behind_the_trait_it_implements` seats, advances, and mutates the roster entirely through `dyn TurnManager`, which it could not do when it was first written.
 
-`it_is_usable_behind_the_trait_it_implements` is the test that shows the gap rather than describing it: it has to reach past the trait to a concrete `begin` before it can use the trait at all.
+**And a pass boundary was invisible from the return value.** Round-robin hides this: its actor changes at the wrap, so a caller can infer the boundary. Under a snake the actor is *unchanged* there, so the same inference reports the exact opposite of the truth at the only moment it matters. That is now [`Advanced::PassClosed`](../../core/API_REFERENCE.md), returned by the advance, and this example's dedicated pick counter was deleted when it landed.
 
-**And a pass boundary is invisible from the trait's return value.** A round-robin caller can watch for the actor coming back around. Under a snake the actor is *unchanged* across the boundary, so "did it change" reports the exact opposite of the truth where it matters most. The application counts picks instead, and `SnakeTurnManager::in_pass` exists because the trait has no way to say it.
+**What deliberately still differs, and why it matters.** `remove_actor` at the end of the roster **wraps** in round-robin and **pulls back** here, since a snake at the end is about to turn around rather than start over; there is a test on each. Two implementations differing in the advance, in the removal fixup, and in what `restart` resets is more variation than a single "give me the next index" hook would carry, which is the argument against factoring these into shared machinery plus a policy until a third order exists to design against.
 
 ## What else is in here
 

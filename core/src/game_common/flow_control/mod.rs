@@ -24,4 +24,4 @@ pub mod turns;
 
 pub use phases::{Epoch, Phased};
 pub use rounds::{RoundManager, SequentialRoundManager};
-pub use turns::{RoundRobinTurnManager, TurnManager};
+pub use turns::{Advanced, RoundRobinTurnManager, TurnManager};

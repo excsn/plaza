@@ -152,10 +152,6 @@ pub struct DraftState {
   pub seats: Vec<PlayerId>,
   pub agents: HashMap<PlayerId, Agent<PlayerId>>,
 
-  /// Picks made in the current pass, because the trait cannot report that a
-  /// pass closed. See [`SnakeTurnManager::in_pass`].
-  pub picks_this_round: usize,
-
   pub tick: u64,
   pub timeouts: TickEventScheduler<BoardEvent>,
   /// A field rather than the constant, because the scripted run wants a clock
@@ -181,7 +177,6 @@ impl DraftState {
       rosters: HashMap::new(),
       seats: Vec::new(),
       agents: HashMap::new(),
-      picks_this_round: 0,
       tick: 0,
       timeouts: TickEventScheduler::new(),
       pick_timeout_ticks: PICK_TIMEOUT_TICKS,
