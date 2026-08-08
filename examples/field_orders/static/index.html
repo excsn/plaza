@@ -1,175 +1,23 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<title>field orders</title>
-<style>
-  body { font: 15px/1.5 system-ui, sans-serif; margin: 2rem auto; max-width: 40rem; color: #1b1b1b; }
-  h1 { font-size: 1.2rem; margin: 0 0 .2rem; }
-  #phase { font-size: 1rem; font-weight: 600; margin: 0 0 .4rem; }
-  #status { min-height: 1.5rem; margin: 0 0 .8rem; }
-  #status.turn { font-weight: 600; color: #0a6; }
-  #board { display: grid; grid-template-columns: repeat(8, 3.2rem); gap: 3px; margin-bottom: 1rem; }
-  .cell { width: 3.2rem; height: 3.2rem; background: #eef1e8; border-radius: 4px; display: flex;
-          align-items: center; justify-content: center; font-weight: 600; position: relative; }
-  .cell.reach { outline: 2px dashed #0a6; cursor: pointer; }
-  .unit { width: 2.6rem; height: 2.6rem; border-radius: 50%; display: flex; align-items: center;
-          justify-content: center; color: #fff; cursor: default; }
-  .unit.Blue { background: #2b5fc0; }
-  .unit.Red { background: #c0392b; }
-  .unit.mine { cursor: pointer; }
-  .unit.spent { opacity: .45; }
-  .unit.selected { outline: 3px solid #0a6; }
-  .hp { position: absolute; bottom: 1px; right: 4px; font-size: 11px; color: #333; }
-  button { padding: .4rem .8rem; }
-  #log { margin-top: 1rem; font-size: 13px; color: #777; max-height: 10rem; overflow-y: auto; }
-  #log div { padding: .1rem 0; }
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Plaza Field Orders</title>
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+    /* Fill the viewport; macroquad sizes its drawing buffer to the canvas. */
+    canvas#glcanvas { display: block; width: 100%; height: 100%; }
+  </style>
 </head>
 <body>
-<h1>field orders</h1>
-<p id="phase">connecting…</p>
-<p id="status"></p>
-<div id="board"></div>
-<button id="endphase">End Phase</button>
-<div id="log"></div>
-
-<script>
-(() => {
-  // The wire is [kind: u8][json]. These must match `plaza_wire::frame::Kind`;
-  // `examples/check_pages.py` is what says so, because nothing compiles this.
-  const KIND_OPS = 0;
-  const KIND_PING = 2;
-  const KIND_PONG = 3;
-
-  const el = (id) => document.getElementById(id);
-  let battle = null;
-  let me = null;
-  let selected = null;
-  let sock = null;
-
-  function log(line) {
-    const row = document.createElement('div');
-    row.textContent = line;
-    el('log').prepend(row);
-    while (el('log').childElementCount > 40) el('log').lastElementChild.remove();
-  }
-
-  function myArmy() {
-    if (!battle || me === null) return null;
-    const seat = battle.commanders.find(([p]) => p === me);
-    return seat ? seat[1] : null;
-  }
-
-  function send(op) {
-    sock.send(String.fromCharCode(KIND_OPS) + JSON.stringify([op]));
-  }
-
-  function connect() {
-    const ws = new WebSocket(`ws://${location.host}/ws`);
-    sock = ws;
-    ws.onopen = () => log('connected');
-    ws.onclose = () => { battle = null; el('phase').textContent = 'disconnected'; };
-
-    ws.onmessage = (event) => {
-      const kind = event.data.charCodeAt(0);
-      if (kind === KIND_PING) {
-        const ping = JSON.parse(event.data.slice(1));
-        ws.send(String.fromCharCode(KIND_PONG) + JSON.stringify({ origin: ping.origin, responder: null }));
-        return;
-      }
-      if (kind !== KIND_OPS) return;
-
-      let ops;
-      try { ops = JSON.parse(event.data.slice(1)); }
-      catch (e) { log(`undecodable frame: ${e.message}`); return; }
-
-      // Dispatch on the variant's name: serde writes a fieldless variant as a
-      // bare string, which `op.X` would silently miss.
-      const opName = (op) => typeof op === 'string' ? op : Object.keys(op)[0];
-      for (const op of ops) {
-        switch (opName(op)) {
-          case 'Snapshot': battle = op.Snapshot; break;
-          case 'YouAre': me = op.YouAre; log(`you are P${me}`); break;
-          case 'Struck': {
-            const s = op.Struck;
-            log(`unit ${s.unit} struck ${s.target}: ${s.felled ? 'felled' : s.hp_left + ' hp left'}`);
-            break;
-          }
-          case 'BattleOver': log(`${op.BattleOver.winner} takes the field`); break;
-          case 'Refused': log(`refused: ${op.Refused}`); selected = null; break;
-          case 'PhaseChanged': if (op.PhaseChanged.reason) log(op.PhaseChanged.reason); break;
-        }
-      }
-      render();
-    };
-  }
-
-  function render() {
-    if (!battle) return;
-    const army = myArmy();
-    const phase = battle.phase;
-    const commanding = typeof phase === 'object' && phase.Command === army && army !== null;
-
-    el('phase').textContent = typeof phase === 'object'
-      ? `${phase.Command} commands, round ${battle.round} (battle ${battle.games})`
-      : `${phase}${phase === 'Over' && battle.winner ? ': ' + battle.winner + ' took the field' : ''}`;
-
-    const status = el('status');
-    if (commanding) {
-      status.textContent = selected !== null
-        ? `unit ${selected}: click a cell to march, an adjacent enemy to strike, the unit to hold`
-        : 'your phase: click one of your units';
-      status.className = 'turn';
-    } else {
-      status.textContent = army ? 'the other army commands' : 'you are watching';
-      status.className = '';
-    }
-
-    const chosen = battle.units.find((u) => u.id === selected);
-    const board = el('board');
-    board.innerHTML = '';
-    for (let y = 0; y < 6; y++) {
-      for (let x = 0; x < 8; x++) {
-        const cell = document.createElement('div');
-        cell.className = 'cell';
-        const unit = battle.units.find((u) => u.at[0] === x && u.at[1] === y);
-        const dist = chosen ? Math.abs(chosen.at[0] - x) + Math.abs(chosen.at[1] - y) : 99;
-
-        if (unit) {
-          const node = document.createElement('div');
-          const mine = unit.army === army;
-          node.className = 'unit ' + unit.army
-            + (mine && commanding ? ' mine' : '')
-            + (unit.activation === 'Done' ? ' spent' : '')
-            + (unit.id === selected ? ' selected' : '');
-          node.textContent = unit.id;
-          if (commanding && mine) {
-            node.onclick = () => {
-              if (selected === unit.id) { send({ Hold: { unit: unit.id } }); selected = null; }
-              else { selected = unit.id; render(); }
-            };
-          } else if (commanding && chosen && dist === 1 && chosen.activation !== 'Done') {
-            node.onclick = () => { send({ Strike: { unit: selected, target: unit.id } }); selected = null; };
-            cell.classList.add('reach');
-          }
-          cell.appendChild(node);
-          const hp = document.createElement('span');
-          hp.className = 'hp';
-          hp.textContent = unit.hp;
-          cell.appendChild(hp);
-        } else if (commanding && chosen && chosen.activation === 'Fresh' && dist <= 3) {
-          cell.classList.add('reach');
-          cell.onclick = () => { send({ Move: { unit: selected, to: [x, y] } }); };
-        }
-        board.appendChild(cell);
-      }
-    }
-  }
-
-  el('endphase').onclick = () => { send('EndPhase'); selected = null; };
-  connect();
-})();
-</script>
+  <!-- macroquad renders into this canvas; the id is required by the loader. -->
+  <canvas id="glcanvas" tabindex="1"></canvas>
+  <!-- Vendored macroquad/miniquad JS loader; defines load(). -->
+  <script src="mq_js_bundle.js"></script>
+  <!-- The WebSocket plugin. Must come after the bundle (which defines
+       miniquad_add_plugin) and before load() (which instantiates). -->
+  <script src="plaza_ws.js"></script>
+  <script>load("field_orders.wasm");</script>
 </body>
 </html>

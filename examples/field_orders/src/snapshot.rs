@@ -10,7 +10,8 @@ use plaza::agent::Agent;
 use plaza::error::SnapshotError;
 use plaza::snapshot::{SnapshotContext, SnapshotProvider};
 
-use crate::types::{BattleOp, BattleState, BattleView, PlayerId};
+use crate::protocol::{BattleOp, BattleView, PlayerId};
+use crate::state::BattleState;
 
 #[derive(Debug, Default)]
 pub struct BattleSnapshotter;
