@@ -32,6 +32,8 @@ For `Kind::Ops`, the body is the ops array itself. Nothing else is on the wire. 
 
 `MessageTarget`, `PresenceEvent`, `TargetedOp` and `SessionMessage` stay in core. They are server-side routing and plumbing, they are not `Serialize`, and no client ever sees one.
 
+For plain JavaScript clients, the frame layer ships as a single vendorable file: [js/plaza_protocol.js](js/plaza_protocol.js), documented in [js/README.md](js/README.md).
+
 
 ## Text or binary
 

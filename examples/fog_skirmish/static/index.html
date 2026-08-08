@@ -35,8 +35,8 @@
         <p id="leakhint"></p>
         <div id="feed"></div>
     </div>
+    <script src="plaza_protocol.js"></script>
     <script>
-        const KIND_OPS = 0, KIND_PING = 2, KIND_PONG = 3;
         const FIELD = 200.0, VISION = 26.0, PX = 620;
         const COLOURS = ['#4fb3ff', '#ff9d5c', '#a98cff', '#4ec9a5'];
 
@@ -56,41 +56,29 @@
         function connect() {
             const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             ws = new WebSocket(`${proto}//${window.location.host}/ws`);
-            ws.onmessage = (e) => {
-                const kind = e.data.charCodeAt(0);
-                if (kind === KIND_PING) {
-                    const ping = JSON.parse(e.data.slice(1));
-                    ws.send(String.fromCharCode(KIND_PONG) + JSON.stringify({ origin: ping.origin, responder: null }));
-                    return;
+            ws.onmessage = (e) => onJsonFrame(ws, e.data, op => {
+                if (op.Snapshot) {
+                    view = op.Snapshot;
+                    view.relics.forEach(r => remembered.set(r.id, r));
+                } else if (op.Welcome) {
+                    me = op.Welcome.you;
+                } else if (op.Captured) {
+                    const c = op.Captured;
+                    // A late one is the whole demonstration: you are hearing
+                    // about a capture from tick N at tick N+k, because until
+                    // now you had no business knowing that place had changed.
+                    remembered.set(c.relic, { ...(remembered.get(c.relic) || {}), id: c.relic, x: c.x, y: c.y, owner: c.by });
+                    say(c.late
+                        ? `P${c.by} took relic ${c.relic} on tick ${c.tick} — you are only being told now`
+                        : `P${c.by} took relic ${c.relic}`, c.late);
                 }
-                if (kind !== KIND_OPS) return;
-                let ops;
-                try { ops = JSON.parse(e.data.slice(1)); }
-                catch (err) { console.error('bad frame', err, e.data); return; }
-                (ops || []).forEach(op => {
-                    if (op.Snapshot) {
-                        view = op.Snapshot;
-                        view.relics.forEach(r => remembered.set(r.id, r));
-                    } else if (op.Welcome) {
-                        me = op.Welcome.you;
-                    } else if (op.Captured) {
-                        const c = op.Captured;
-                        // A late one is the whole demonstration: you are hearing
-                        // about a capture from tick N at tick N+k, because until
-                        // now you had no business knowing that place had changed.
-                        remembered.set(c.relic, { ...(remembered.get(c.relic) || {}), id: c.relic, x: c.x, y: c.y, owner: c.by });
-                        say(c.late
-                            ? `P${c.by} took relic ${c.relic} on tick ${c.tick} — you are only being told now`
-                            : `P${c.by} took relic ${c.relic}`, c.late);
-                    }
-                });
-            };
+            });
             ws.onclose = () => { view = null; document.getElementById('hint').textContent = 'disconnected'; };
         }
 
         function send(ops) {
             if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(String.fromCharCode(KIND_OPS) + JSON.stringify(ops));
+                ws.send(jsonFrame(KIND_OPS, ops));
             }
         }
 

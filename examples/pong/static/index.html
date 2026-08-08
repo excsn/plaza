@@ -9,6 +9,7 @@
 </head>
 <body>
     <canvas id="pongCanvas"></canvas>
+    <script src="plaza_protocol.js"></script>
     <script>
         const canvas = document.getElementById('pongCanvas');
         const ctx = canvas.getContext('2d');
@@ -30,26 +31,7 @@
 
             ws.onopen = () => console.log('Connected to Pong server');
 
-            ws.onmessage = (event) => {
-                // A frame is one kind byte then the encoded body. An unknown
-                // kind is skipped rather than treated as an error, so a server
-                // speaking a newer protocol does not break this page.
-                const kind = event.data.charCodeAt(0);
-                if (kind === KIND_PING) {
-                    const ping = JSON.parse(event.data.slice(1));
-                    ws.send(String.fromCharCode(KIND_PONG) + JSON.stringify({ origin: ping.origin, responder: null }));
-                    return;
-                }
-                if (kind !== KIND_OPS) {
-                    console.debug('skipping frame of unknown kind', kind);
-                    return;
-                }
-                try {
-                    handleServerMessage(JSON.parse(event.data.slice(1)));
-                } catch (e) {
-                    console.error('Error parsing message from server:', e, event.data);
-                }
-            };
+            ws.onmessage = (event) => onJsonFrame(ws, event.data, handleServerOp);
 
             ws.onclose = () => {
                 console.log('Disconnected from Pong server');
@@ -64,61 +46,44 @@
             };
         }
 
-        // Frame kinds, matching plaza_wire::frame::Kind.
-        const KIND_OPS = 0;
-        // A latency probe. The server's session sends these and answers them; this
-        // page only has to echo the stamp back untouched, which is what lets the
-        // server report a round trip for a browser client at all.
-        const KIND_PING = 2;
-        const KIND_PONG = 3;
-
-        // An externally-tagged serde enum puts struct variants in an object keyed
-        // by the variant name, but a *unit* variant is a bare string. A client
-        // that only ever reads `op.Something` silently drops every unit variant,
-        // which is a bug that looks exactly like the server not sending.
-        const opName = (op) => (typeof op === 'string' ? op : Object.keys(op)[0]);
-        const opBody = (op) => (typeof op === 'string' ? {} : op[opName(op)]);
-
         // The body of a KIND_OPS frame is the ops array itself: `from` is the
         // server's own bookkeeping and is not sent.
         function sendOps(ops) {
-            ws.send(String.fromCharCode(KIND_OPS) + JSON.stringify(ops));
+            ws.send(jsonFrame(KIND_OPS, ops));
         }
 
-        function handleServerMessage(ops) {
-            // One message kind. A snapshot is an op like any other, so there is
-            // a single loop rather than an Ops-versus-StateData branch.
-            (ops || []).forEach(op => {
-                const body = opBody(op);
-                switch (opName(op)) {
-                case 'Snapshot':
-                    // The whole world, every tick. It replaces the local copy
-                    // outright rather than being merged into it, so nothing
-                    // here patches fields a later frame would overwrite.
-                    gameState = body;
-                    if (gameState && myPlayerId) {
-                        if (gameState.player1_id === myPlayerId) mySide = "Left";
-                        else if (gameState.player2_id === myPlayerId) mySide = "Right";
-                    }
-                    draw();
-                    break;
-                case 'AssignPlayer':
-                    myPlayerId = body.player_id;
-                    mySide = body.side;
-                    console.log(`Assigned as ${mySide} player: ${myPlayerId}`);
-                    break;
-                case 'ScoreUpdate':
-                    // An event, not state: the next snapshot carries the score.
-                    console.log(`Point to ${body.player_id}: ${body.new_score}`);
-                    break;
-                case 'PhaseChange':
-                    // Nothing is answered automatically any more. The phases run
-                    // themselves on the server, and a client that replied here
-                    // was the only reason a countdown ever ended.
-                    console.log(`phase: ${body}`);
-                    break;
+        // One message kind. A snapshot is an op like any other, so there is
+        // a single handler rather than an Ops-versus-StateData branch.
+        function handleServerOp(op) {
+            const body = opBody(op);
+            switch (opName(op)) {
+            case 'Snapshot':
+                // The whole world, every tick. It replaces the local copy
+                // outright rather than being merged into it, so nothing
+                // here patches fields a later frame would overwrite.
+                gameState = body;
+                if (gameState && myPlayerId) {
+                    if (gameState.player1_id === myPlayerId) mySide = "Left";
+                    else if (gameState.player2_id === myPlayerId) mySide = "Right";
                 }
-            });
+                draw();
+                break;
+            case 'AssignPlayer':
+                myPlayerId = body.player_id;
+                mySide = body.side;
+                console.log(`Assigned as ${mySide} player: ${myPlayerId}`);
+                break;
+            case 'ScoreUpdate':
+                // An event, not state: the next snapshot carries the score.
+                console.log(`Point to ${body.player_id}: ${body.new_score}`);
+                break;
+            case 'PhaseChange':
+                // Nothing is answered automatically any more. The phases run
+                // themselves on the server, and a client that replied here
+                // was the only reason a countdown ever ended.
+                console.log(`phase: ${body}`);
+                break;
+            }
         }
 
         function sendPaddleMove(targetY) {

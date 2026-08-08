@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Checks the hand-written frame handling in the browser pages against the Rust.
+"""Checks the browser pages' frame handling against the Rust.
 
-Seven examples ship a static page that speaks the wire by hand: a kind byte, a
-body, and a serde enum. Nothing compiles them and nothing ran them, so every way
-they can be wrong is silent, and one of them shipped wrong. This checks the three
-things that have actually bitten.
+The pages share one frame layer, `wire/js/plaza_protocol.js`, each serving its
+own copy beside the page (`sync_protocol_js.sh` refreshes them). Nothing
+compiles a page and nothing ran one, so every way it can be wrong is silent,
+and one of them shipped wrong. This checks the canonical file's constants
+against `plaza_wire::frame::Kind`, every copy against the canonical bytes, and
+the three page-level things that have actually bitten.
 
 **A codec that encodes the wrong container.** `parlour_game`'s page built its ops
 batch with `Object.keys([op])`, which is `["0"]`, so a play went out as a one-key
@@ -13,8 +15,9 @@ timeout played for the player, which reads exactly like a game rule rather than 
 bug. The fix is one branch; the reason it survived is that the page's decoder was
 exercised constantly and its encoder never.
 
-**A kind byte that drifts.** The constants are copied into each page. Nothing ties
-them to `plaza_wire::frame::Kind`.
+**A kind byte that drifts.** The constants live in `plaza_protocol.js`, and each
+page serves a copy. This ties the canonical file to `plaza_wire::frame::Kind`
+and each copy to the canonical file.
 
 **A unit variant nobody handles.** Serde writes a fieldless variant as a bare
 string, not a one-entry map, so a page reading `op.Something` drops it with no
@@ -151,6 +154,17 @@ if (JSON.stringify(mpDecode(batch)) !== JSON.stringify([{{ PlayCard: 9 }}])) {{
 
 def main():
   kinds = rust_kinds()
+
+  canonical = ROOT / "wire" / "js" / "plaza_protocol.js"
+  declared = page_kinds(canonical.read_text())
+  for name, value in declared.items():
+    if name not in kinds:
+      fail("plaza_protocol.js", f"declares KIND_{name}, which plaza_wire::frame::Kind does not have")
+    elif kinds[name] != value:
+      fail("plaza_protocol.js", f"KIND_{name} is {value}, but Kind::{name.capitalize()} is {kinds[name]}")
+  for name in sorted(set(kinds) - set(declared)):
+    fail("plaza_protocol.js", f"is missing KIND_{name}, which plaza_wire::frame::Kind has")
+
   pages = sorted(HERE.glob("*/static/index.html"))
   if not pages:
     sys.exit("no example pages found; is this running from examples/?")
@@ -159,12 +173,20 @@ def main():
   for path in pages:
     example = path.parts[-3]
     text = path.read_text()
-    declared = page_kinds(text)
-    if not declared:
+    shared = "plaza_protocol.js" in text
+    inline = page_kinds(text)
+    if not shared and not inline:
       continue  # A wasm page: its framing is Rust, and check_js_imports.py covers it.
     checked += 1
 
-    for name, value in declared.items():
+    if shared:
+      copy = path.parent / "plaza_protocol.js"
+      if not copy.is_file():
+        fail(example, "loads plaza_protocol.js but ships no copy beside the page")
+      elif copy.read_bytes() != canonical.read_bytes():
+        fail(example, "plaza_protocol.js copy differs from wire/js; run sync_protocol_js.sh")
+
+    for name, value in inline.items():
       if name not in kinds:
         fail(example, f"declares KIND_{name}, which plaza_wire::frame::Kind does not have")
       elif kinds[name] != value:

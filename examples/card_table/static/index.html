@@ -36,12 +36,8 @@
     <h2>your hand</h2>
     <div class="row" id="hand"></div>
     <div id="log"></div>
+    <script src="plaza_protocol.js"></script>
     <script>
-        // Frame kinds, matching plaza_wire::frame::Kind.
-        const KIND_OPS = 0;
-        const KIND_PING = 2;
-        const KIND_PONG = 3;
-
         let ws;
         let me = null;
         // The per-recipient view. `my_hand` holds ranks; `opponents` holds only
@@ -55,20 +51,7 @@
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
 
-            ws.onmessage = (event) => {
-                const kind = event.data.charCodeAt(0);
-                if (kind === KIND_PING) {
-                    const ping = JSON.parse(event.data.slice(1));
-                    ws.send(String.fromCharCode(KIND_PONG) + JSON.stringify({ origin: ping.origin, responder: null }));
-                    return;
-                }
-                if (kind !== KIND_OPS) return;
-                let ops;
-                try { ops = JSON.parse(event.data.slice(1)); }
-                catch (e) { console.error('bad frame', e, event.data); return; }
-                (ops || []).forEach(handleOp);
-                draw();
-            };
+            ws.onmessage = (event) => onJsonFrame(ws, event.data, (op) => { handleOp(op); draw(); });
 
             ws.onclose = () => { view = null; el('phase').textContent = 'disconnected'; };
         }
@@ -126,7 +109,7 @@
 
         function playCard(card) {
             if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(String.fromCharCode(KIND_OPS) + JSON.stringify([{ PlayCard: card }]));
+                ws.send(jsonFrame(KIND_OPS, [{ PlayCard: card }]));
             }
         }
 

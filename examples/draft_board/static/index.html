@@ -34,14 +34,9 @@
 <div id="rosters"></div>
 <div id="log"></div>
 
+<script src="plaza_protocol.js"></script>
 <script>
 (() => {
-  // The wire is [kind: u8][json]. These must match `plaza_wire::frame::Kind`;
-  // `examples/check_pages.py` is what says so, because nothing compiles this.
-  const KIND_OPS = 0;
-  const KIND_PING = 2;
-  const KIND_PONG = 3;
-
   const el = (id) => document.getElementById(id);
   let board = null;
   let me = null;
@@ -63,32 +58,18 @@
     ws.onopen = () => log('connected');
     ws.onclose = () => { board = null; el('phase').textContent = 'disconnected'; };
 
-    ws.onmessage = (event) => {
-      const kind = event.data.charCodeAt(0);
-      if (kind === KIND_PING) {
-        const ping = JSON.parse(event.data.slice(1));
-        ws.send(String.fromCharCode(KIND_PONG) + JSON.stringify({ origin: ping.origin, responder: null }));
-        return;
+    ws.onmessage = (event) => onJsonFrame(ws, event.data, (op) => {
+      if (op.Snapshot) board = op.Snapshot;
+      else if (op.YouAre !== undefined) { me = op.YouAre; log(`you are P${me}`); }
+      else if (op.Taken) {
+        const how = op.Taken.on_their_behalf ? ' (clock ran out)' : '';
+        log(`${seatName(op.Taken.player)} took #${op.Taken.prospect.id} worth ${op.Taken.prospect.value}${how}`);
       }
-      if (kind !== KIND_OPS) return;
-
-      let ops;
-      try { ops = JSON.parse(event.data.slice(1)); }
-      catch (e) { log(`undecodable frame: ${e.message}`); return; }
-
-      for (const op of ops) {
-        if (op.Snapshot) board = op.Snapshot;
-        else if (op.YouAre !== undefined) { me = op.YouAre; log(`you are P${me}`); }
-        else if (op.Taken) {
-          const how = op.Taken.on_their_behalf ? ' (clock ran out)' : '';
-          log(`${seatName(op.Taken.player)} took #${op.Taken.prospect.id} worth ${op.Taken.prospect.value}${how}`);
-        }
-        else if (op.Refused) log(`refused: ${op.Refused}`);
-        else if (op.DraftOver) log(`draft over: ${op.DraftOver.standings.map(([p, v]) => `P${p} ${v}`).join(', ')}`);
-        else if (op.RoundStarted) log(`round ${op.RoundStarted.round_number}`);
-      }
+      else if (op.Refused) log(`refused: ${op.Refused}`);
+      else if (op.DraftOver) log(`draft over: ${op.DraftOver.standings.map(([p, v]) => `P${p} ${v}`).join(', ')}`);
+      else if (op.RoundStarted) log(`round ${op.RoundStarted.round_number}`);
       render(ws);
-    };
+    });
   }
 
   function render(ws) {
@@ -124,7 +105,7 @@
       node.className = 'prospect' + (mine ? ' pickable' : '');
       node.textContent = `#${prospect.id} · ${prospect.value}`;
       if (mine) {
-        node.onclick = () => ws.send(String.fromCharCode(KIND_OPS) + JSON.stringify([{ Take: prospect.id }]));
+        node.onclick = () => ws.send(jsonFrame(KIND_OPS, [{ Take: prospect.id }]));
       }
       el('pool').appendChild(node);
     }

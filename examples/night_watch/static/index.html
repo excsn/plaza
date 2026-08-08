@@ -34,14 +34,9 @@
 <div id="reveal"></div>
 <div id="log"></div>
 
+<script src="plaza_protocol.js"></script>
 <script>
 (() => {
-  // The wire is [kind: u8][json]. These must match `plaza_wire::frame::Kind`;
-  // `examples/check_pages.py` is what says so, because nothing compiles this.
-  const KIND_OPS = 0;
-  const KIND_PING = 2;
-  const KIND_PONG = 3;
-
   const el = (id) => document.getElementById(id);
   let village = null;
   let me = null;
@@ -62,34 +57,20 @@
     ws.onopen = () => log('connected');
     ws.onclose = () => { village = null; el('phase').textContent = 'disconnected'; };
 
-    ws.onmessage = (event) => {
-      const kind = event.data.charCodeAt(0);
-      if (kind === KIND_PING) {
-        const ping = JSON.parse(event.data.slice(1));
-        ws.send(String.fromCharCode(KIND_PONG) + JSON.stringify({ origin: ping.origin, responder: null }));
-        return;
+    ws.onmessage = (event) => onJsonFrame(ws, event.data, (op) => {
+      if (op.Snapshot) village = op.Snapshot;
+      else if (op.YouAre !== undefined) { me = op.YouAre; log(`you are P${me}`); }
+      else if (op.Dawn) log(`dawn: ${name(op.Dawn.victim)} was taken, a ${op.Dawn.role}`);
+      else if (op.VotesTallied) {
+        const t = op.VotesTallied;
+        const exiled = t.exiled ? `${name(t.exiled[0])} the ${t.exiled[1]} is exiled` : 'nobody is exiled';
+        log(`dusk: ${exiled}`);
       }
-      if (kind !== KIND_OPS) return;
-
-      let ops;
-      try { ops = JSON.parse(event.data.slice(1)); }
-      catch (e) { log(`undecodable frame: ${e.message}`); return; }
-
-      for (const op of ops) {
-        if (op.Snapshot) village = op.Snapshot;
-        else if (op.YouAre !== undefined) { me = op.YouAre; log(`you are P${me}`); }
-        else if (op.Dawn) log(`dawn: ${name(op.Dawn.victim)} was taken, a ${op.Dawn.role}`);
-        else if (op.VotesTallied) {
-          const t = op.VotesTallied;
-          const exiled = t.exiled ? `${name(t.exiled[0])} the ${t.exiled[1]} is exiled` : 'nobody is exiled';
-          log(`dusk: ${exiled}`);
-        }
-        else if (op.GameOver) log(`game over: ${op.GameOver.winner} wins`);
-        else if (op.Refused) log(`refused: ${op.Refused}`);
-        else if (op.PhaseChanged && op.PhaseChanged.reason) log(op.PhaseChanged.reason);
-      }
+      else if (op.GameOver) log(`game over: ${op.GameOver.winner} wins`);
+      else if (op.Refused) log(`refused: ${op.Refused}`);
+      else if (op.PhaseChanged && op.PhaseChanged.reason) log(op.PhaseChanged.reason);
       render(ws);
-    };
+    });
   }
 
   function render(ws) {
@@ -121,7 +102,7 @@
       if (clickable) {
         node.onclick = () => {
           const op = canHunt ? { Hunt: p } : { Vote: p };
-          ws.send(String.fromCharCode(KIND_OPS) + JSON.stringify([op]));
+          ws.send(jsonFrame(KIND_OPS, [op]));
         };
       }
       el('living').appendChild(node);

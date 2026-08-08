@@ -98,17 +98,8 @@
   </div>
 </div>
 
+<script src="plaza_protocol.js"></script>
 <script>
-const KIND_OPS = 0;
-// A latency probe. The server's session sends these and answers them; this
-// page only has to echo the stamp back untouched, which is what lets the
-// server report a round trip for a browser client at all.
-const KIND_PING = 2;
-const KIND_PONG = 3;
-
-// Unit variants arrive as bare strings, struct variants as one-key objects.
-const opName = (op) => (typeof op === 'string' ? op : Object.keys(op)[0]);
-const opBody = (op) => (typeof op === 'string' ? {} : op[opName(op)]);
 const $ = (id) => document.getElementById(id);
 
 let ws = null, me = null, hz = 20, windowTicks = 10;
@@ -120,7 +111,7 @@ const claimedItems = new Set(); // items this page has already asked for
 
 function send(ops) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  const frame = String.fromCharCode(KIND_OPS) + JSON.stringify(ops);
+  const frame = jsonFrame(KIND_OPS, ops);
   const lag = Number($('lag').value);
   // Delays only the sending. What was named happened before this, which is
   // exactly the separation the server's arbitration relies on.
@@ -134,16 +125,7 @@ const estTick = () => tick + Math.floor((performance.now() - tickAt) / (1000 / h
 function connect() {
   const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${scheme}//${location.host}/ws`);
-  ws.onmessage = (e) => {
-    const kind = e.data.charCodeAt(0);
-    if (kind === KIND_PING) {
-      const ping = JSON.parse(e.data.slice(1));
-      ws.send(String.fromCharCode(KIND_PONG) + JSON.stringify({ origin: ping.origin, responder: null }));
-      return;
-    }
-    if (kind !== KIND_OPS) return;
-    for (const op of JSON.parse(e.data.slice(1))) handle(op);
-  };
+  ws.onmessage = (e) => onJsonFrame(ws, e.data, handle);
   ws.onclose = () => { $('me').textContent = 'disconnected'; };
 }
 

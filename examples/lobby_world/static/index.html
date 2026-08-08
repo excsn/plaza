@@ -132,15 +132,8 @@
   </div>
 </div>
 
+<script src="plaza_protocol.js"></script>
 <script>
-// Frame kinds, matching plaza_wire::frame::Kind.
-const KIND_OPS = 0;
-// A latency probe. The server's session sends these and answers them; this
-// page only has to echo the stamp back untouched, which is what lets the
-// server report a round trip for a browser client at all.
-const KIND_PING = 2;
-const KIND_PONG = 3;
-
 let lobby = null;
 let arena = null;
 let me = null;
@@ -163,36 +156,11 @@ function log(msg, cls) {
 // The body is the ops array itself; `from` is server-side and is not sent.
 function sendOps(sock, ops) {
   if (sock && sock.readyState === WebSocket.OPEN) {
-    sock.send(String.fromCharCode(KIND_OPS) + JSON.stringify(ops));
+    sock.send(jsonFrame(KIND_OPS, ops));
   }
-}
-
-// One kind byte then the body. Unknown kinds are skipped, not fatal, so a
-// newer server does not break this page.
-function onFrame(event, handle, sock) {
-  const kind = event.data.charCodeAt(0);
-  if (kind === KIND_PING) {
-    const ping = JSON.parse(event.data.slice(1));
-    if (sock && sock.readyState === WebSocket.OPEN) {
-      sock.send(String.fromCharCode(KIND_PONG) + JSON.stringify({ origin: ping.origin, responder: null }));
-    }
-    return;
-  }
-  if (kind !== KIND_OPS) return;
-  let ops;
-  try { ops = JSON.parse(event.data.slice(1)); }
-  catch (e) { console.error('bad frame', e, event.data); return; }
-  (ops || []).forEach(handle);
 }
 
 function ms(v) { return (v === null || v === undefined) ? 'none' : v + ' ms'; }
-
-// An externally-tagged serde enum puts struct variants in an object keyed by the
-// variant name, but a *unit* variant is a bare string. A client that only ever
-// reads `op.Something` silently drops every unit variant, which is a bug that
-// looks exactly like the server not sending.
-const opName = (op) => (typeof op === 'string' ? op : Object.keys(op)[0]);
-const opBody = (op) => (typeof op === 'string' ? {} : op[opName(op)]);
 
 /* ---------- lobby ---------- */
 
@@ -201,7 +169,7 @@ function connectLobby() {
   lobby = new WebSocket(`${scheme}//${location.host}/ws/lobby`);
   lobby.onopen = () => log('lobby connected');
   lobby.onclose = () => { log('lobby disconnected', 'warn'); $('me').textContent = 'disconnected'; };
-  lobby.onmessage = (e) => onFrame(e, handleLobbyOp, lobby);
+  lobby.onmessage = (e) => onJsonFrame(lobby, e.data, handleLobbyOp);
 }
 
 function handleLobbyOp(op) {
@@ -324,7 +292,7 @@ function enterArena(placed) {
   inArena = placed;
   arena = new WebSocket(placed.endpoint);
   arena.onopen = () => log('arena socket open: ' + placed.name);
-  arena.onmessage = (e) => onFrame(e, handleArenaOp, arena);
+  arena.onmessage = (e) => onJsonFrame(arena, e.data, handleArenaOp);
   arena.onclose = () => {
     log('arena socket closed');
     showNoArena();

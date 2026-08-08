@@ -136,17 +136,8 @@
   </div>
 </div>
 
+<script src="plaza_protocol.js"></script>
 <script>
-/* ------------------------------------------------------------------ frames */
-
-// Frame kinds, matching plaza_wire::frame::Kind.
-const KIND_OPS = 0;
-// A latency probe. The server's session sends these and answers them; this page
-// only has to echo the stamp back untouched, which is what lets the server
-// report a round trip for a browser client at all.
-const KIND_PING = 2;
-const KIND_PONG = 3;
-
 /* --------------------------------------------------------------- messagepack
 
 The table's session uses `MsgPackNamedCodec`, so this page is exactly the client
@@ -251,13 +242,6 @@ function mpEncode(value, out = []) {
   return out;
 }
 
-/* An externally-tagged serde enum puts struct variants in an object keyed by the
-   variant name, but a *unit* variant is a bare string. A client that only ever
-   reads `op.Something` silently drops every unit variant, which is a bug that
-   looks exactly like the server not sending. */
-const opName = (op) => (typeof op === 'string' ? op : Object.keys(op)[0]);
-const opBody = (op) => (typeof op === 'string' ? {} : op[opName(op)]);
-
 /* ------------------------------------------------------------------- state */
 
 let lobby = null;
@@ -283,24 +267,12 @@ function log(msg, cls) {
 
 function sendLobby(ops) {
   if (lobby && lobby.readyState === WebSocket.OPEN) {
-    lobby.send(String.fromCharCode(KIND_OPS) + JSON.stringify(ops));
+    lobby.send(jsonFrame(KIND_OPS, ops));
   }
 }
 
 function onLobbyFrame(event) {
-  const kind = event.data.charCodeAt(0);
-  if (kind === KIND_PING) {
-    const ping = JSON.parse(event.data.slice(1));
-    if (lobby && lobby.readyState === WebSocket.OPEN) {
-      lobby.send(String.fromCharCode(KIND_PONG) + JSON.stringify({ origin: ping.origin, responder: null }));
-    }
-    return;
-  }
-  if (kind !== KIND_OPS) return;
-  let ops;
-  try { ops = JSON.parse(event.data.slice(1)); }
-  catch (e) { console.error('bad lobby frame', e); return; }
-  (ops || []).forEach(handleLobbyOp);
+  onJsonFrame(lobby, event.data, handleLobbyOp);
 }
 
 function connectLobby() {
@@ -409,32 +381,16 @@ function drawTables(tables) {
 
 /* ---------------------------------------------- table socket, named msgpack */
 
+const mpCodec = { encode: mpEncode, decode: mpDecode };
+
 function sendTable(op) {
   if (table && table.readyState === WebSocket.OPEN) {
-    const body = mpEncode([op]);
-    table.send(new Uint8Array([KIND_OPS, ...body]));
+    table.send(binaryFrame(KIND_OPS, Uint8Array.from(mpEncode([op]))));
   }
 }
 
 function onTableFrame(event) {
-  const bytes = new Uint8Array(event.data);
-  const kind = bytes[0];
-  const body = bytes.subarray(1);
-
-  if (kind === KIND_PING) {
-    const ping = mpDecode(body);
-    if (table && table.readyState === WebSocket.OPEN) {
-      const reply = mpEncode({ origin: ping.origin, responder: null });
-      table.send(new Uint8Array([KIND_PONG, ...reply]));
-    }
-    return;
-  }
-  if (kind !== KIND_OPS) return;
-
-  let ops;
-  try { ops = mpDecode(body); }
-  catch (e) { console.error('bad table frame', e); return; }
-  (ops || []).forEach(handleTableOp);
+  onBinaryFrame(table, event.data, mpCodec, handleTableOp);
 }
 
 function enterTable(placed) {

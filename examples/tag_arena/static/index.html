@@ -16,19 +16,8 @@
 <body>
     <canvas id="field"></canvas>
     <div id="hud"><span id="status">connecting…</span></div>
+    <script src="plaza_protocol.js"></script>
     <script>
-        // Frame kinds, matching plaza_wire::frame::Kind.
-        const KIND_OPS = 0;
-        const KIND_PING = 2;
-        const KIND_PONG = 3;
-
-        // An externally-tagged serde enum puts struct variants in an object keyed
-        // by the variant name, but a *unit* variant is a bare string. A client
-        // that only ever reads `op.Something` silently drops every unit variant,
-        // which is a bug that looks exactly like the server not sending.
-        const opName = (op) => (typeof op === 'string' ? op : Object.keys(op)[0]);
-        const opBody = (op) => (typeof op === 'string' ? {} : op[opName(op)]);
-
         const FIELD = 100.0;      // world units, matching types.rs
         const TAG_RADIUS = 2.5;
         const PX = 640;
@@ -48,28 +37,19 @@
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
 
-            ws.onmessage = (event) => {
-                const kind = event.data.charCodeAt(0);
-                if (kind === KIND_PING) {
-                    const ping = JSON.parse(event.data.slice(1));
-                    ws.send(String.fromCharCode(KIND_PONG) + JSON.stringify({ origin: ping.origin, responder: null }));
-                    return;
+            ws.onmessage = (event) => onJsonFrame(ws, event.data, op => {
+                const body = opBody(op);
+                switch (opName(op)) {
+                case 'Snapshot':
+                    // Latest wins outright: this replaces the world rather
+                    // than being applied to it.
+                    world = body;
+                    break;
+                case 'Welcome':
+                    me = body.you;
+                    break;
                 }
-                if (kind !== KIND_OPS) return;
-                (JSON.parse(event.data.slice(1)) || []).forEach(op => {
-                    const body = opBody(op);
-                    switch (opName(op)) {
-                    case 'Snapshot':
-                        // Latest wins outright: this replaces the world rather
-                        // than being applied to it.
-                        world = body;
-                        break;
-                    case 'Welcome':
-                        me = body.you;
-                        break;
-                    }
-                });
-            };
+            });
 
             ws.onclose = () => { me = null; world = null; setStatus('disconnected'); };
             ws.onerror = () => setStatus('connection error');
@@ -77,7 +57,7 @@
 
         function sendOps(ops) {
             if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(String.fromCharCode(KIND_OPS) + JSON.stringify(ops));
+                ws.send(jsonFrame(KIND_OPS, ops));
             }
         }
 
