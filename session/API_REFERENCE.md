@@ -392,7 +392,7 @@ A [`Host`](#struct-host) with the simulation stack behind it: everything between
 
 *   **Joiners get no snapshot** (`snapshot_context_on_join(None)` over `plaza::NoSnapshots`). This stack is for worlds streamed as deltas on a cadence, where a joiner is caught up by the stream itself. A world that catches joiners up with state wants `StateControllerBuilder` and its join snapshot instead.
 *   **Connections are numbered, and the number is the agent id** (`u64`, assigned at accept, never client-supplied), on a `/ws` route it registers itself. An application with identity has its own id type and registers its own route on a plain `Host`.
-*   **The driver is `run_fixed`**, never `run`: delivering measured elapsed time would make the simulation's rate a property of the host's scheduler.
+*   **The driver is `run_fixed` by default**: delivering measured elapsed time would make the simulation's rate a property of the host's scheduler, which no predicting, replaying or rolling-back client can reproduce. **`SimHost::measured(bind, tick_hz)`** is the deliberate exception for logic that only integrates over elapsed time (corrections-based prediction is the standing example, `blackhole_playground`); there the driver is `run` at `tick_hz` and `delta_time` is what the scheduler delivered.
 
 ```rust,ignore
 SimHost::new(bind, Duration::from_millis(SIM_STEP_MS))
@@ -406,7 +406,7 @@ SimHost::new(bind, Duration::from_millis(SIM_STEP_MS))
   .await
 ```
 
-*   **`new(bind, step)`**: `step` is the simulation's step, the unit its ticks are counted in. **`serve_dir`**, **`cache_bust`**, **`announce`** forward to `Host`. **`wake_hz(hz)`** (default `DEFAULT_WAKE_HZ` = 120: waking more often than you step keeps the phase error small) and **`command_buffer(n)`** (default `DEFAULT_COMMAND_BUFFER` = 256).
+*   **`new(bind, step)`**: `step` is the simulation's step, the unit its ticks are counted in. **`measured(bind, tick_hz)`**: the measured-time variant above. **`serve_dir`**, **`cache_bust`**, **`announce`** forward to `Host`. **`wake_hz(hz)`** (default `DEFAULT_WAKE_HZ` = 120 under `new`, `tick_hz` under `measured`: waking more often than you step keeps the phase error small) and **`command_buffer(n)`** (default `DEFAULT_COMMAND_BUFFER` = 256).
 *   **`run(codec, protocol, initial_state, logic_for)`**: builds the session with the given protocol version and a simulation clock for its pongs, the controller, the fixed-step driver and the route, then serves until the process ends. `logic_for` receives a **`SimWiring`** (`session: Arc<ActixWsPlazaSession<Op, u64, C>>`, `sim_clock: Arc<AtomicU64>`, and **`link_sink()`**, the usual destination for a panel's impairment sliders) so measurement sources and sinks can be wired into the logic it returns. Store the simulation's clock into `sim_clock` each tick and clients synchronise against simulation time rather than wall time.
 
 ### Function `lan_address() -> Option<String>`

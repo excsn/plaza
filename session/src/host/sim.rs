@@ -16,8 +16,11 @@
 //! - **Connections are numbered, and the number is the agent id.** Assigned at
 //!   accept, never client-supplied. An application with identity has its own
 //!   id type and registers its own route on a plain [`Host`].
-//! - **The driver is `run_fixed`**, never `run`: delivering measured elapsed
-//!   time would make the simulation's rate a property of the host's scheduler.
+//! - **The driver is `run_fixed` by default**: delivering measured elapsed
+//!   time would make the simulation's rate a property of the host's scheduler,
+//!   which no predicting, replaying or rolling-back client can reproduce.
+//!   [`SimHost::measured`] is the one deliberate exception, for logic that
+//!   only integrates over elapsed time; `TickDriver::run` documents the line.
 
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -95,9 +98,18 @@ where
 /// ```
 pub struct SimHost {
   host: Host,
-  step: Duration,
+  stepping: Stepping,
   wake_hz: u32,
   command_buffer: usize,
+}
+
+/// How the driver advances the simulation.
+#[derive(Clone, Copy, Debug)]
+enum Stepping {
+  /// Whole steps of exactly this duration, whatever the scheduler did.
+  Fixed(Duration),
+  /// Measured elapsed time, delivered at the wake cadence.
+  Measured,
 }
 
 impl SimHost {
@@ -105,8 +117,26 @@ impl SimHost {
   pub fn new(bind: impl Into<String>, step: Duration) -> Self {
     Self {
       host: Host::new(bind),
-      step,
+      stepping: Stepping::Fixed(step),
       wake_hz: DEFAULT_WAKE_HZ,
+      command_buffer: DEFAULT_COMMAND_BUFFER,
+    }
+  }
+
+  /// The stack on measured elapsed time instead of fixed steps: each tick's
+  /// `delta_time` is what the scheduler actually delivered, at `tick_hz`.
+  ///
+  /// For logic that only integrates over elapsed time, where being late means
+  /// integrating a larger dt rather than falling behind; corrections-based
+  /// prediction is the standing example. Anything a client predicts, replays
+  /// or rolls back needs [`new`](Self::new), because no client can reproduce
+  /// a step size the host's scheduler chose (`TickDriver::run` documents the
+  /// failure modes).
+  pub fn measured(bind: impl Into<String>, tick_hz: u32) -> Self {
+    Self {
+      host: Host::new(bind),
+      stepping: Stepping::Measured,
+      wake_hz: tick_hz,
       command_buffer: DEFAULT_COMMAND_BUFFER,
     }
   }
@@ -129,8 +159,10 @@ impl SimHost {
     self
   }
 
-  /// How often the driver wakes (default [`DEFAULT_WAKE_HZ`]). The *step* is
-  /// what was given to [`new`](Self::new) whatever this is set to.
+  /// How often the driver wakes (default [`DEFAULT_WAKE_HZ`], or `tick_hz`
+  /// under [`measured`](Self::measured)). Under [`new`](Self::new) the *step*
+  /// stays what was given there whatever this is set to; under `measured` this
+  /// is the tick cadence itself.
   pub fn wake_hz(mut self, hz: u32) -> Self {
     self.wake_hz = hz;
     self
@@ -180,13 +212,21 @@ impl SimHost {
       .command_buffer(self.command_buffer)
       .build();
     tokio::spawn(controller.run());
-    tokio::spawn(TickDriver::from_hz(self.wake_hz).run_fixed(commands, self.step));
+    match self.stepping {
+      Stepping::Fixed(step) => {
+        tracing::info!(wake_hz = self.wake_hz, step_ms = step.as_millis() as u64, "sim host starting");
+        tokio::spawn(TickDriver::from_hz(self.wake_hz).run_fixed(commands, step));
+      }
+      Stepping::Measured => {
+        tracing::info!(tick_hz = self.wake_hz, "sim host starting on measured time");
+        tokio::spawn(TickDriver::from_hz(self.wake_hz).run(commands));
+      }
+    }
 
     let route_state = web::Data::new(RouteState {
       session,
       next_key: AtomicU64::new(1),
     });
-    tracing::info!(wake_hz = self.wake_hz, step_ms = self.step.as_millis() as u64, "sim host starting");
     self
       .host
       .run(move |cfg| {
