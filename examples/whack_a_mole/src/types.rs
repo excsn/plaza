@@ -1,6 +1,5 @@
-use plaza::{
-  common::scheduler::TickEventScheduler,
-};
+use plaza::game_common::flow_control::phases::op_payloads::PhaseChangedNoticePayload;
+use plaza::game_common::flow_control::{Phased, PhasedScheduler};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -52,6 +51,15 @@ pub enum MoleOp {
     current_mole_slot: Option<usize>,
     server_tick: u64,
   },
+  PhaseChanged(PhaseChangedNoticePayload<MolePhase>),
+}
+
+/// One mole's visibility is one occupancy: the hide scheduled for this mole
+/// belongs to this `Up` and to no other.
+#[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub enum MolePhase {
+  Up,
+  Down,
 }
 
 #[derive(Clone, Debug)]
@@ -76,23 +84,25 @@ pub struct MoleGameState {
   pub player_info: HashMap<PlayerId, PlayerSessionInfo>,
   /// Server's current tick.
   pub current_tick: u64,
+  pub phase: Phased<MolePhase>,
   /// Scheduler for game events like mole spawning/hiding.
-  pub scheduler: TickEventScheduler<MoleGameEvent>,
+  pub scheduler: PhasedScheduler<MoleGameEvent>,
   pub version: u64,
 }
 
 
 impl Default for MoleGameState {
   fn default() -> Self {
-    let mut scheduler = TickEventScheduler::new();
-    // Initial event to start the mole spawning cycle
-    scheduler.schedule_after(0, MOLE_SPAWN_INTERVAL_TICKS / 2, MoleGameEvent::SpawnMoleRequest);
+    let phase = Phased::new(MolePhase::Down);
+    let mut scheduler = PhasedScheduler::new();
+    scheduler.schedule_after(0, MOLE_SPAWN_INTERVAL_TICKS / 2, &phase, MoleGameEvent::SpawnMoleRequest);
 
     Self {
       current_mole_slot: None,
       mole_spawn_tick: None,
       player_info: HashMap::new(),
       current_tick: 0,
+      phase,
       scheduler,
       version: 0,
     }
