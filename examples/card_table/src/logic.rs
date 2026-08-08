@@ -95,7 +95,12 @@ fn seat_player(state: &mut TableState, agent: &Agent<PlayerId>, ctx: &mut Ctx) -
 
   state.seats.push(player);
   state.agents.insert(player, agent.clone());
-  state.turns.add_actor(player);
+  // Mid-round, the newcomer stays out of the turn order until the next deal:
+  // the live round was dealt to the players it started with, and a handless
+  // player on turn is a turn nobody can end. `begin_round` seats them.
+  if !state.rounds.round_in_progress() {
+    state.turns.add_actor(player);
+  }
   state.scores.set_score(&player, 0);
   ctx
     .ops_q()
@@ -106,8 +111,13 @@ fn seat_player(state: &mut TableState, agent: &Agent<PlayerId>, ctx: &mut Ctx) -
     return false;
   }
 
+  if state.rounds.round_in_progress() {
+    info!(%player, "seated mid-round; dealt in at the next deal");
+    return true;
+  }
+
   info!("table is full, dealing");
-  begin_round(state, ctx);
+  start_match(state, ctx);
   true
 }
 
@@ -133,6 +143,18 @@ fn unseat_player(state: &mut TableState, player: &PlayerId) {
 
 /// Deals, starts a round, and seats the first turn.
 fn begin_round(state: &mut TableState, ctx: &mut Ctx) {
+  // A deal seats whoever arrived since the last one: a mid-round joiner waits
+  // out the round they walked in on and enters the order here.
+  let waiting: Vec<PlayerId> = state
+    .seats
+    .iter()
+    .filter(|seat| !state.turns.actors().contains(seat))
+    .copied()
+    .collect();
+  for player in waiting {
+    state.turns.add_actor(player);
+  }
+
   state.phase.transition_to(TablePhase::Dealing, ctx, CardOp::PhaseChanged);
   state.deal();
 
@@ -170,7 +192,10 @@ fn play_card(state: &mut TableState, player: PlayerId, card: Card, on_their_beha
   ctx.ops_q().push(TargetedOp::new_system_all(vec![notice]));
   info!(%player, %card, auto = on_their_behalf, "card played");
 
-  if state.table.len() < state.seats.len() {
+  // Measured against the turn order, not the seats: a mid-round joiner is
+  // seated but not in this round, and the round they walked in on resolves
+  // without them.
+  if state.table.len() < state.turns.actors().len() {
     // Still someone to play: hand off and restart the clock.
     let _ = state.turns.end_current_turn_and_advance(ctx);
     arm_turn_timeout(state);
@@ -232,7 +257,7 @@ fn finish_match(state: &mut TableState, ctx: &mut Ctx) {
 fn start_match(state: &mut TableState, ctx: &mut Ctx) {
   state.scores.reset_all_scores();
   state.rounds.reset();
-  info!("intermission over, dealing a new match");
+  info!("dealing a fresh match");
   begin_round(state, ctx);
 }
 
@@ -375,6 +400,91 @@ mod tests {
       tick(&mut state).await;
     }
     assert!(!state.table.is_empty(), "the successor's clock fired and played");
+  }
+
+  #[tokio::test]
+  async fn a_mid_match_joiner_waits_out_the_round_instead_of_ending_the_match() {
+    // The bug this pins: filling a seat mid-match called begin_round, whose
+    // start_next_round error (a round was in progress) was misread as the round
+    // limit, finishing the match instantly.
+    let mut state = seat_everyone().await;
+    let card = state.hands[&PlayerId(0)][0];
+    TableLogic
+      .process_input(&mut state, LogicInput::AgentOps {
+        source: Agent::new_human(PlayerId(0)),
+        ops: vec![CardOp::PlayCard(card)],
+      })
+      .await
+      .unwrap();
+    TableLogic
+      .process_input(&mut state, LogicInput::AgentLeft {
+        agent_id: PlayerId(2),
+      })
+      .await
+      .unwrap();
+
+    TableLogic
+      .process_input(&mut state, LogicInput::AgentJoined {
+        agent: Agent::new_human(PlayerId(9)),
+      })
+      .await
+      .unwrap();
+
+    assert_eq!(*state.phase.current(), TablePhase::Playing, "the match did not end");
+    assert_eq!(state.rounds.current_round(), 1, "the live round is still the live round");
+    assert!(
+      !state.turns.actors().contains(&PlayerId(9)),
+      "the joiner is seated but not in the round they walked in on"
+    );
+
+    // The round resolves among the players it was dealt to, and the next deal
+    // brings the joiner in.
+    let card = state.hands[&PlayerId(1)][0];
+    TableLogic
+      .process_input(&mut state, LogicInput::AgentOps {
+        source: Agent::new_human(PlayerId(1)),
+        ops: vec![CardOp::PlayCard(card)],
+      })
+      .await
+      .unwrap();
+
+    assert_eq!(state.rounds.current_round(), 2);
+    assert!(state.turns.actors().contains(&PlayerId(9)), "dealt in at the next deal");
+    assert_eq!(state.hands[&PlayerId(9)].len(), crate::types::HAND_SIZE);
+  }
+
+  #[tokio::test]
+  async fn a_finished_table_that_refills_deals_a_fresh_match() {
+    // The sibling of draft_board's dead end: the rematch event fires into a
+    // short table and is skipped, so the seat that refills afterwards has to
+    // open the fresh match itself.
+    let mut state = seat_everyone().await;
+    play_out_the_match(&mut state).await;
+    TableLogic
+      .process_input(&mut state, LogicInput::AgentLeft {
+        agent_id: PlayerId(2),
+      })
+      .await
+      .unwrap();
+    for _ in 0..INTERMISSION_TICKS {
+      tick(&mut state).await;
+    }
+    assert_eq!(*state.phase.current(), TablePhase::Finished, "the rematch was skipped short-handed");
+
+    TableLogic
+      .process_input(&mut state, LogicInput::AgentJoined {
+        agent: Agent::new_human(PlayerId(9)),
+      })
+      .await
+      .unwrap();
+
+    assert_eq!(*state.phase.current(), TablePhase::Playing, "the refilled table deals");
+    assert_eq!(state.rounds.current_round(), 1);
+    assert!(state.turns.actors().contains(&PlayerId(9)));
+    assert!(
+      state.scores.get_all_scores_sorted().iter().all(|(_, s)| *s == 0),
+      "a fresh match, from zero"
+    );
   }
 
   #[tokio::test]
