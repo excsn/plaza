@@ -21,7 +21,9 @@ use tracing_subscriber::EnvFilter;
 
 use plaza_example_night_watch::logic::VillageLogic;
 use plaza_example_night_watch::snapshot::VillageSnapshotter;
-use plaza_example_night_watch::types::{PlayerId, VillageOp, VillageState};
+use plaza_example_night_watch::types::{PlayerId, VillageOp, VillageState, PROTOCOL};
+use plaza_session::codec::JsonCodec;
+use plaza_wire::frame::ProtocolVersion;
 
 const TICK: Duration = Duration::from_millis(20);
 /// Twenty seconds of night, forty of day: enough to read the board and choose.
@@ -57,7 +59,7 @@ async fn main() -> std::io::Result<()> {
 
   info!("Plaza Night Watch - Starting");
 
-  let session: Arc<VillageSession> = ActixWsPlazaSession::new();
+  let session: Arc<VillageSession> = ActixWsPlazaSession::with_protocol(JsonCodec, ProtocolVersion(PROTOCOL));
   let (controller_tx, controller) = StateControllerBuilder::new(
     Arc::new(VillageLogic),
     session.clone(),
@@ -80,6 +82,7 @@ async fn main() -> std::io::Result<()> {
   let session = web::Data::new(session);
   Host::new(server_addr)
     .serve_dir(Some(STATIC_DIR.to_owned()))
+    .protocol(ProtocolVersion(PROTOCOL))
     .run(move |cfg| {
       cfg.app_data(session.clone()).route("/ws", web::get().to(ws_route));
     })

@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 plaza = { workspace = true }
+plaza_wire = { workspace = true }
 plaza_session = { workspace = true, features = ["actix_ws", "json", "actix_host"] }
 
 actix-web = "^4"
@@ -13,3 +14,6 @@ async-trait = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+
+[build-dependencies]
+plaza_wire = { workspace = true, features = ["build"] }

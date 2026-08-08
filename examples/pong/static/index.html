@@ -29,7 +29,7 @@
             const host = window.location.host;
             ws = new WebSocket(`${protocol}//${host}/ws`);
 
-            ws.onopen = () => console.log('Connected to Pong server');
+            ws.onopen = () => { announceHello(ws); console.log('Connected to Pong server'); };
 
             ws.onmessage = (event) => onJsonFrame(ws, event.data, handleServerOp);
 

@@ -23,7 +23,9 @@ use tracing_subscriber::EnvFilter;
 
 use plaza_example_draft_board::logic::DraftLogic;
 use plaza_example_draft_board::snapshot::BoardSnapshotter;
-use plaza_example_draft_board::types::{DraftOp, DraftState, PlayerId};
+use plaza_example_draft_board::types::{DraftOp, DraftState, PlayerId, PROTOCOL};
+use plaza_session::codec::JsonCodec;
+use plaza_wire::frame::ProtocolVersion;
 
 /// Drives the pick clock. Without it nothing ever times out.
 const TICK: Duration = Duration::from_millis(20);
@@ -61,7 +63,7 @@ async fn main() -> std::io::Result<()> {
 
   info!("Plaza Draft Board - Starting");
 
-  let session: Arc<BoardSession> = ActixWsPlazaSession::new();
+  let session: Arc<BoardSession> = ActixWsPlazaSession::with_protocol(JsonCodec, ProtocolVersion(PROTOCOL));
   let (controller_tx, controller) = StateControllerBuilder::new(
     Arc::new(DraftLogic),
     session.clone(),
@@ -85,6 +87,7 @@ async fn main() -> std::io::Result<()> {
   let session = web::Data::new(session);
   Host::new(server_addr)
     .serve_dir(Some(STATIC_DIR.to_owned()))
+    .protocol(ProtocolVersion(PROTOCOL))
     .run(move |cfg| {
       cfg.app_data(session.clone()).route("/ws", web::get().to(ws_route));
     })

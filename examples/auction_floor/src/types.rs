@@ -1,5 +1,12 @@
 use serde::{Deserialize, Serialize};
 
+/// The wire format's version, derived at build time from this file (see
+/// `build.rs`). The session declares it in its `Hello`, and the served page is
+/// stamped with it so a tab that outlives a redeploy can tell.
+pub const PROTOCOL: u32 = WIRE_PROTOCOL;
+
+include!(concat!(env!("OUT_DIR"), "/wire_protocol.rs"));
+
 pub type PlayerId = u64;
 pub type ItemId = u32;
 pub type Tick = u64;

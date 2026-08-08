@@ -167,7 +167,7 @@ function ms(v) { return (v === null || v === undefined) ? 'none' : v + ' ms'; }
 function connectLobby() {
   const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
   lobby = new WebSocket(`${scheme}//${location.host}/ws/lobby`);
-  lobby.onopen = () => log('lobby connected');
+  lobby.onopen = () => { announceHello(lobby); log('lobby connected'); };
   lobby.onclose = () => { log('lobby disconnected', 'warn'); $('me').textContent = 'disconnected'; };
   lobby.onmessage = (e) => onJsonFrame(lobby, e.data, handleLobbyOp);
 }
@@ -291,7 +291,7 @@ function enterArena(placed) {
   if (arena) { arena.onclose = null; arena.close(); arena = null; }
   inArena = placed;
   arena = new WebSocket(placed.endpoint);
-  arena.onopen = () => log('arena socket open: ' + placed.name);
+  arena.onopen = () => { announceHello(arena); log('arena socket open: ' + placed.name); };
   arena.onmessage = (e) => onJsonFrame(arena, e.data, handleArenaOp);
   arena.onclose = () => {
     log('arena socket closed');

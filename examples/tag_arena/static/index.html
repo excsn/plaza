@@ -36,6 +36,7 @@
         function connect() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+            ws.onopen = () => announceHello(ws);
 
             ws.onmessage = (event) => onJsonFrame(ws, event.data, op => {
                 const body = opBody(op);

@@ -56,6 +56,7 @@
         function connect() {
             const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             ws = new WebSocket(`${proto}//${window.location.host}/ws`);
+            ws.onopen = () => announceHello(ws);
             ws.onmessage = (e) => onJsonFrame(ws, e.data, op => {
                 if (op.Snapshot) {
                     view = op.Snapshot;

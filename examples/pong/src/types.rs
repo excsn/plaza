@@ -3,6 +3,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+/// The wire format's version, derived at build time from this file (see
+/// `build.rs`). The session declares it in its `Hello`, and the served page is
+/// stamped with it so a tab that outlives a redeploy can tell.
+pub const PROTOCOL: u32 = WIRE_PROTOCOL;
+
+include!(concat!(env!("OUT_DIR"), "/wire_protocol.rs"));
+
 pub const SCREEN_WIDTH: f32 = 800.0;
 pub const SCREEN_HEIGHT: f32 = 600.0;
 pub const PADDLE_WIDTH: f32 = 15.0;

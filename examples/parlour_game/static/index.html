@@ -278,7 +278,7 @@ function onLobbyFrame(event) {
 function connectLobby() {
   const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
   lobby = new WebSocket(`${scheme}//${location.host}/ws/lobby`);
-  lobby.onopen = () => log('lobby connected');
+  lobby.onopen = () => { announceHello(lobby); log('lobby connected'); };
   lobby.onclose = () => { log('lobby disconnected', 'warn'); $('me').textContent = 'disconnected'; };
   lobby.onmessage = onLobbyFrame;
 }
@@ -399,7 +399,7 @@ function enterTable(placed) {
   // frames arrive as Blobs and every read below is asynchronous for no reason.
   table = new WebSocket(placed.endpoint);
   table.binaryType = 'arraybuffer';
-  table.onopen = () => log(`seated at ${placed.name}`, 'good');
+  table.onopen = () => { announceHello(table, mpCodec); log(`seated at ${placed.name}`, 'good'); };
   table.onclose = () => log('table connection closed', 'warn');
   table.onmessage = onTableFrame;
   $('t-name').textContent = placed.name;

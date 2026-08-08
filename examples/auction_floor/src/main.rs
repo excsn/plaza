@@ -18,8 +18,11 @@ use plaza_session::host::{init_logging, Host};
 use plaza_session::ActixWsPlazaSession;
 use tracing::{error, info};
 
+use plaza_session::codec::JsonCodec;
+use plaza_wire::frame::ProtocolVersion;
+
 use crate::logic::{AuctionLogic, Floor, FloorSession, FloorSnapshotter};
-use crate::types::{PlayerId, TICK_HZ};
+use crate::types::{PlayerId, PROTOCOL, TICK_HZ};
 
 const BIND: &str = "127.0.0.1:8091";
 const STATIC_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/static");
@@ -43,7 +46,7 @@ async fn ws_route(
 async fn main() -> std::io::Result<()> {
   init_logging();
 
-  let session: Arc<FloorSession> = ActixWsPlazaSession::new();
+  let session: Arc<FloorSession> = ActixWsPlazaSession::with_protocol(JsonCodec, ProtocolVersion(PROTOCOL));
   let (commands, controller) = StateControllerBuilder::new(
     Arc::new(AuctionLogic::new(session.clone())),
     session.clone(),
@@ -69,6 +72,7 @@ async fn main() -> std::io::Result<()> {
 
   Host::new(BIND)
     .serve_dir(Some(STATIC_DIR.to_owned()))
+    .protocol(ProtocolVersion(PROTOCOL))
     .run(move |cfg| {
       cfg.app_data(services.clone()).route("/ws", web::get().to(ws_route));
     })

@@ -125,6 +125,7 @@ const estTick = () => tick + Math.floor((performance.now() - tickAt) / (1000 / h
 function connect() {
   const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${scheme}//${location.host}/ws`);
+  ws.onopen = () => announceHello(ws);
   ws.onmessage = (e) => onJsonFrame(ws, e.data, handle);
   ws.onclose = () => { $('me').textContent = 'disconnected'; };
 }

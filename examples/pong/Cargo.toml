@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 plaza = { workspace = true }
+plaza_wire = { workspace = true }
 plaza_session = { workspace = true, features = ["actix_ws", "json", "actix_host"] }
 
 actix-web = "^4"
@@ -15,3 +16,6 @@ serde = { version = "^1.0", features = ["derive"] }
 tokio = { version = "^1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 tracing = "^0.1"
 uuid = { version = "^1", features = ["v4", "serde"] }
+
+[build-dependencies]
+plaza_wire = { workspace = true, features = ["build"] }

@@ -23,7 +23,9 @@ use tracing_subscriber::EnvFilter;
 
 use plaza_example_card_table::logic::TableLogic;
 use plaza_example_card_table::snapshot::TableSnapshotter;
-use plaza_example_card_table::types::{CardOp, PlayerId, TableState};
+use plaza_example_card_table::types::{CardOp, PlayerId, TableState, PROTOCOL};
+use plaza_session::codec::JsonCodec;
+use plaza_wire::frame::ProtocolVersion;
 
 /// Drives the turn timeouts. Without it nothing ever times out.
 const TICK: Duration = Duration::from_millis(20);
@@ -61,7 +63,7 @@ async fn main() -> std::io::Result<()> {
 
   info!("Plaza Card Table - Starting");
 
-  let session: Arc<TableSession> = ActixWsPlazaSession::new();
+  let session: Arc<TableSession> = ActixWsPlazaSession::with_protocol(JsonCodec, ProtocolVersion(PROTOCOL));
   let (controller_tx, controller) = StateControllerBuilder::new(
     Arc::new(TableLogic),
     session.clone(),
@@ -91,6 +93,7 @@ async fn main() -> std::io::Result<()> {
   let session = web::Data::new(session);
   Host::new(server_addr)
     .serve_dir(Some(STATIC_DIR.to_owned()))
+    .protocol(ProtocolVersion(PROTOCOL))
     .run(move |cfg| {
       cfg.app_data(session.clone()).route("/ws", web::get().to(ws_route));
     })

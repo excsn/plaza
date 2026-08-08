@@ -8,6 +8,7 @@ default-run = "plaza_example_card_table"
 
 [dependencies]
 plaza = { workspace = true }
+plaza_wire = { workspace = true }
 plaza_session = { workspace = true, features = ["actix_ws", "json", "actix_host"] }
 
 actix-web = "^4"
@@ -16,3 +17,6 @@ serde = { workspace = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[build-dependencies]
+plaza_wire = { workspace = true, features = ["build"] }

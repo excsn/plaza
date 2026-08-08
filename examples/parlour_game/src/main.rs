@@ -214,6 +214,7 @@ async fn main() -> std::io::Result<()> {
 
   Host::new(BIND)
     .serve_dir(Some(STATIC_DIR.to_owned()))
+    .protocol(ProtocolVersion(PROTOCOL))
     .run(move |cfg| {
       cfg
         .app_data(services.clone())

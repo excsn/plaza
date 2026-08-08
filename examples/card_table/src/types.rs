@@ -9,6 +9,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 
+/// The wire format's version, derived at build time from this file (see
+/// `build.rs`). The session declares it in its `Hello`, and the served page is
+/// stamped with it so a tab that outlives a redeploy can tell.
+pub const PROTOCOL: u32 = WIRE_PROTOCOL;
+
+include!(concat!(env!("OUT_DIR"), "/wire_protocol.rs"));
+
 /// How many players must be seated before the table starts.
 pub const TABLE_SIZE: usize = 3;
 /// Deals are fixed rather than shuffled, so a run is reproducible and the

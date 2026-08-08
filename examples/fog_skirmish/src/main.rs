@@ -21,7 +21,9 @@ use tracing_subscriber::EnvFilter;
 use plaza_example_fog_skirmish::bots;
 use plaza_example_fog_skirmish::logic::FogLogic;
 use plaza_example_fog_skirmish::snapshot::FogSnapshotter;
-use plaza_example_fog_skirmish::types::{FogOp, FogState, PlayerId};
+use plaza_example_fog_skirmish::types::{FogOp, FogState, PlayerId, PROTOCOL};
+use plaza_session::codec::JsonCodec;
+use plaza_wire::frame::ProtocolVersion;
 
 const TICK_HZ: u32 = 60;
 /// Bots take 1..=BOTS, browsers start at 100.
@@ -57,7 +59,7 @@ async fn main() -> std::io::Result<()> {
 
   info!("Plaza Fog Skirmish - Starting");
 
-  let session: Arc<FogSession> = ActixWsPlazaSession::new();
+  let session: Arc<FogSession> = ActixWsPlazaSession::with_protocol(JsonCodec, ProtocolVersion(PROTOCOL));
   let (controller_tx, controller) = StateControllerBuilder::new(
     Arc::new(FogLogic),
     session.clone(),
@@ -85,6 +87,7 @@ async fn main() -> std::io::Result<()> {
   let session = web::Data::new(session);
   Host::new(server_addr)
     .serve_dir(Some(STATIC_DIR.to_owned()))
+    .protocol(ProtocolVersion(PROTOCOL))
     .run(move |cfg| {
       cfg.app_data(session.clone()).route("/ws", web::get().to(ws_route));
     })

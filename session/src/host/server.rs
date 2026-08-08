@@ -2,6 +2,7 @@
 //! it, and put the WebSocket route on the same origin.
 
 use actix_web::{middleware, web, App, HttpResponse, HttpServer};
+use plaza_wire::frame::ProtocolVersion;
 
 /// One page and its assets, served with the stamping that keeps a browser from
 /// running yesterday's bundle against today's server.
@@ -11,6 +12,9 @@ struct Page {
   /// Assets whose URL is rewritten with a version stamp wherever the index
   /// mentions them.
   cache_busted: Vec<String>,
+  /// The protocol version injected into the served index, or `None` to inject
+  /// nothing.
+  protocol: Option<ProtocolVersion>,
 }
 
 impl Page {
@@ -32,6 +36,16 @@ impl Page {
         .map(|d| d.as_secs())
         .unwrap_or(0);
       html = html.replace(asset.as_str(), &format!("{asset}?v={stamp}"));
+    }
+    if let Some(protocol) = self.protocol {
+      // Before `</head>`, so the value exists before any body script runs. A
+      // static page has no build to bake a version into; being told at serve
+      // time is the only way it can ever say what it speaks.
+      let tag = format!("<script>window.PLAZA_PROTOCOL = {};</script>", protocol.0);
+      match html.find("</head>") {
+        Some(at) => html.insert_str(at, &tag),
+        None => html.insert_str(0, &tag),
+      }
     }
     Some(html)
   }
@@ -123,7 +137,11 @@ impl Host {
 
   /// Serves a browser client from this directory, or nothing when `None`.
   pub fn serve_dir(mut self, dir: Option<String>) -> Self {
-    self.page = dir.map(|dir| Page { dir, cache_busted: Vec::new() });
+    self.page = dir.map(|dir| Page {
+      dir,
+      cache_busted: Vec::new(),
+      protocol: None,
+    });
     self
   }
 
@@ -134,6 +152,18 @@ impl Host {
   pub fn cache_bust(mut self, asset: impl Into<String>) -> Self {
     if let Some(page) = &mut self.page {
       page.cache_busted.push(asset.into());
+    }
+    self
+  }
+
+  /// Injects `window.PLAZA_PROTOCOL` into the served index, so a page can
+  /// announce a `Hello` and recognise a server it has outlived. Pass the same
+  /// version the session declares. [`ProtocolVersion::UNKNOWN`] injects
+  /// nothing, mirroring the session, which sends no `Hello` for it. Has no
+  /// effect without [`serve_dir`](Self::serve_dir).
+  pub fn protocol(mut self, protocol: ProtocolVersion) -> Self {
+    if let Some(page) = &mut self.page {
+      page.protocol = (protocol != ProtocolVersion::UNKNOWN).then_some(protocol);
     }
     self
   }
@@ -275,7 +305,7 @@ mod tests {
     write_page(&dir, "<script src=\"client.wasm\"></script>");
     std::fs::write(dir.join("client.wasm"), b"\0asm").unwrap();
 
-    let page = Page { dir: dir.to_string_lossy().into_owned(), cache_busted: vec!["client.wasm".to_owned()] };
+    let page = Page { dir: dir.to_string_lossy().into_owned(), cache_busted: vec!["client.wasm".to_owned()], protocol: None };
     let html = page.stamped_html().expect("the index is there");
     assert!(html.contains("client.wasm?v="), "the asset URL was not stamped: {html}");
 
@@ -300,15 +330,33 @@ mod tests {
     // rewritten out from under the application.
     let dir = scratch("untouched");
     write_page(&dir, "<img src=\"logo.png\">");
-    let page = Page { dir: dir.to_string_lossy().into_owned(), cache_busted: vec!["client.wasm".to_owned()] };
+    let page = Page { dir: dir.to_string_lossy().into_owned(), cache_busted: vec!["client.wasm".to_owned()], protocol: None };
     assert_eq!(page.stamped_html().unwrap(), "<img src=\"logo.png\">");
+  }
+
+  #[test]
+  fn the_declared_protocol_is_stamped_into_the_head() {
+    let dir = scratch("protocol");
+    write_page(&dir, "<head><title>x</title></head><body></body>");
+    let mut page = Page {
+      dir: dir.to_string_lossy().into_owned(),
+      cache_busted: Vec::new(),
+      protocol: Some(ProtocolVersion(7)),
+    };
+    assert!(page
+      .stamped_html()
+      .unwrap()
+      .contains("<script>window.PLAZA_PROTOCOL = 7;</script></head>"));
+
+    page.protocol = None;
+    assert!(!page.stamped_html().unwrap().contains("PLAZA_PROTOCOL"));
   }
 
   #[test]
   fn a_missing_index_is_a_404_rather_than_a_panic() {
     let dir = scratch("empty");
     std::fs::create_dir_all(&dir).unwrap();
-    let page = Page { dir: dir.to_string_lossy().into_owned(), cache_busted: Vec::new() };
+    let page = Page { dir: dir.to_string_lossy().into_owned(), cache_busted: Vec::new(), protocol: None };
     assert_eq!(page.index().status(), actix_web::http::StatusCode::NOT_FOUND);
   }
 

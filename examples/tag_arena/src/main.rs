@@ -29,11 +29,14 @@ use plaza_session::host::{init_logging, Host};
 use plaza_session::ActixWsPlazaSession;
 use tracing::{error, info};
 
+use plaza_session::codec::JsonCodec;
+use plaza_wire::frame::ProtocolVersion;
+
 use crate::{
   bots::ArenaCommands,
   logic::TagLogic,
   snapshot::WorldSnapshotProvider,
-  types::{ArenaOp, ArenaState, PlayerId},
+  types::{ArenaOp, ArenaState, PlayerId, PROTOCOL},
 };
 
 /// Simulation rate. Tag is a chase, so it runs at 60Hz like `pong`.
@@ -101,7 +104,7 @@ async fn main() -> std::io::Result<()> {
 
   info!("Plaza Tag Arena - Starting");
 
-  let session: Arc<ArenaSession> = ActixWsPlazaSession::new();
+  let session: Arc<ArenaSession> = ActixWsPlazaSession::with_protocol(JsonCodec, ProtocolVersion(PROTOCOL));
   let (controller_tx, controller) = StateControllerBuilder::new(
     Arc::new(TagLogic),
     session.clone(),
@@ -128,6 +131,7 @@ async fn main() -> std::io::Result<()> {
   info!(tick_hz = TICK_HZ, bots = BOTS, "tag arena listening");
   Host::new("127.0.0.1:8080")
     .serve_dir(Some(concat!(env!("CARGO_MANIFEST_DIR"), "/static").to_owned()))
+    .protocol(ProtocolVersion(PROTOCOL))
     .run(move |cfg| {
       cfg.app_data(session.clone()).route("/ws", web::get().to(ws_route));
     })

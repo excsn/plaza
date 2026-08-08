@@ -54,7 +54,7 @@
 
   function connect() {
     const ws = new WebSocket(`ws://${location.host}/ws`);
-    ws.onopen = () => log('connected');
+    ws.onopen = () => { announceHello(ws); log('connected'); };
     ws.onclose = () => { village = null; el('phase').textContent = 'disconnected'; };
 
     ws.onmessage = (event) => onJsonFrame(ws, event.data, (op) => {

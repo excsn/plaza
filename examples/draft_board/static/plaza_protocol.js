@@ -21,7 +21,7 @@
 // See README.md beside this file for the full contract and versioning.
 "use strict";
 
-const PLAZA_PROTOCOL_JS_VERSION = "0.1.0";
+const PLAZA_PROTOCOL_JS_VERSION = "0.2.0";
 
 // Frame kinds, mirroring plaza_wire::frame::Kind. Pinned to the Rust enum by
 // examples/check_pages.py.
@@ -33,13 +33,51 @@ const KIND_PONG = 3;
 const opName = (op) => (typeof op === "string" ? op : Object.keys(op)[0]);
 const opBody = (op) => (typeof op === "string" ? {} : op[opName(op)]);
 
+// The protocol version this client speaks. A served page is stamped with it
+// (`Host::protocol` injects `window.PLAZA_PROTOCOL`); anything else can set the
+// global itself. 0 means "unknown", which announces nothing and agrees with
+// everything, the same contract as `ProtocolVersion::UNKNOWN`.
+function ownProtocol() {
+  return (typeof globalThis !== "undefined" && globalThis.PLAZA_PROTOCOL) || 0;
+}
+
+// Announces this client's version, the same once-on-open Hello every plaza
+// peer sends. Call from the socket's `onopen`. Silent when the version is
+// unknown, mirroring the Rust session. Pass `codec` on a binary socket.
+function announceHello(sock, codec) {
+  const version = ownProtocol();
+  if (!version) return;
+  if (codec) {
+    sock.send(binaryFrame(KIND_HELLO, Uint8Array.from(codec.encode(version))));
+  } else {
+    sock.send(jsonFrame(KIND_HELLO, version));
+  }
+}
+
+// The default reaction to a server's Hello: reload once when the page provably
+// outlived the server it was stamped by. Guarded so a still-mismatched reload
+// (a cached page, a proxy) degrades to a console error instead of a loop.
+// No-op when either side's version is unknown, and outside a browser.
+function staleCheck(theirs) {
+  const mine = ownProtocol();
+  if (!mine || !theirs || theirs === mine) return;
+  if (typeof location === "undefined") return;
+  const key = "plaza-protocol-reload-" + theirs;
+  if (typeof sessionStorage !== "undefined" && sessionStorage.getItem(key)) {
+    console.error("server speaks protocol " + theirs + ", this page was served for " + mine + "; reloading did not resolve it");
+    return;
+  }
+  if (typeof sessionStorage !== "undefined") sessionStorage.setItem(key, "1");
+  location.reload();
+}
+
 function jsonFrame(kind, value) {
   return String.fromCharCode(kind) + JSON.stringify(value);
 }
 
 // One received text frame: answers pings, hands each op to `onOp`, skips the
-// rest. `onHello` is optional; the body is the server's ProtocolVersion, which
-// a served page usually has nothing to compare against.
+// rest. The server's Hello goes to `onHello` when given, else to `staleCheck`,
+// so a stamped page reacts to a redeploy without writing anything.
 function onJsonFrame(sock, data, onOp, onHello) {
   const kind = data.charCodeAt(0);
   if (kind === KIND_PING) {
@@ -52,7 +90,7 @@ function onJsonFrame(sock, data, onOp, onHello) {
     return;
   }
   if (kind === KIND_HELLO) {
-    if (onHello) onHello(JSON.parse(data.slice(1)));
+    (onHello || staleCheck)(JSON.parse(data.slice(1)));
     return;
   }
   if (kind !== KIND_OPS) return;
@@ -89,7 +127,7 @@ function onBinaryFrame(sock, data, codec, onOp, onHello) {
     return;
   }
   if (kind === KIND_HELLO) {
-    if (onHello) onHello(codec.decode(body));
+    (onHello || staleCheck)(codec.decode(body));
     return;
   }
   if (kind !== KIND_OPS) return;
@@ -112,6 +150,9 @@ if (typeof module !== "undefined" && module.exports) {
     KIND_PONG,
     opName,
     opBody,
+    ownProtocol,
+    announceHello,
+    staleCheck,
     jsonFrame,
     onJsonFrame,
     binaryFrame,

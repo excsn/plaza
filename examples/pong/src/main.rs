@@ -23,10 +23,13 @@ use plaza_session::ActixWsPlazaSession;
 use tracing::{error, info};
 use uuid::Uuid;
 
+use plaza_session::codec::JsonCodec;
+use plaza_wire::frame::ProtocolVersion;
+
 use crate::{
   logic::PongLogic,
   snapshot::PongSnapshotter,
-  types::{PlayerId, PongGameState, PongOp},
+  types::{PlayerId, PongGameState, PongOp, PROTOCOL},
 };
 
 /// Simulation rate. Pong is latency-sensitive, so it runs at 60Hz.
@@ -55,7 +58,7 @@ async fn main() -> std::io::Result<()> {
 
   info!("Plaza Pong Example - Starting");
 
-  let session: Arc<PongSession> = ActixWsPlazaSession::new();
+  let session: Arc<PongSession> = ActixWsPlazaSession::with_protocol(JsonCodec, ProtocolVersion(PROTOCOL));
   let (controller_tx, controller) = StateControllerBuilder::new(
     Arc::new(PongLogic::default()),
     session.clone(),
@@ -82,6 +85,7 @@ async fn main() -> std::io::Result<()> {
   info!(tick_hz = TICK_HZ, "pong listening");
   Host::new("127.0.0.1:8080")
     .serve_dir(Some(concat!(env!("CARGO_MANIFEST_DIR"), "/static").to_owned()))
+    .protocol(ProtocolVersion(PROTOCOL))
     .run(move |cfg| {
       cfg.app_data(session.clone()).route("/ws", web::get().to(ws_route));
     })
