@@ -95,16 +95,42 @@ fn seat_drafter(state: &mut DraftState, agent: &Agent<PlayerId>, ctx: &mut Ctx) 
     return false;
   }
   info!("board is full, opening the draft");
-  open_draft(state, ctx);
+  start_draft(state, ctx);
   true
+}
+
+/// Opens a draft from a clean board, voiding whatever a previous one left.
+///
+/// The resets are no-ops on a genuinely fresh board and are what make a
+/// refilled one openable at all: an abandoned draft leaves a round in progress
+/// and a finished one leaves the limit reached, and `start_next_round` refuses
+/// both. Before this existed, a board that emptied and refilled sat in
+/// `Picking` with no actor and refused every take.
+fn start_draft(state: &mut DraftState, ctx: &mut Ctx) {
+  state.scores.reset_all_scores();
+  state.rounds.reset();
+  state.available = DraftState::rack();
+  for roster in state.rosters.values_mut() {
+    roster.clear();
+  }
+  state.turns.restart(ctx);
+  open_draft(state, ctx);
 }
 
 /// Drops a drafter who disconnected, leaving their picks on the board.
 fn unseat_drafter(state: &mut DraftState, player: &PlayerId) {
+  let held_the_clock = state.turns.current_turn_actor() == Some(*player);
   state.seats.retain(|p| p != player);
   state.agents.remove(player);
   state.turns.remove_actor(player);
   info!(player, "drafter left the board");
+
+  // The leaver's pending clock names them, so the identity check will drop it.
+  // Without one of its own the successor's pick never times out and the draft
+  // waits forever on somebody who may also have walked away.
+  if held_the_clock && *state.phase.current() == DraftPhase::Picking {
+    arm_clock(state);
+  }
 }
 
 /// Starts the first round and puts the first seat on the clock.
@@ -225,18 +251,8 @@ fn finish_draft(state: &mut DraftState, ctx: &mut Ctx) {
 
 /// Racks a fresh board and drafts again with the same seats.
 fn rack_and_redraft(state: &mut DraftState, ctx: &mut Ctx) {
-  state.scores.reset_all_scores();
-  state.rounds.reset();
-  state.available = DraftState::rack();
-  for roster in state.rosters.values_mut() {
-    roster.clear();
-  }
-  // Back to the top of the order travelling forwards, rather than continuing
-  // the snake from wherever the last draft left it: a new draft is not the next
-  // pass of the old one.
-  state.turns.restart(ctx);
   info!("intermission over, racking a new board");
-  open_draft(state, ctx);
+  start_draft(state, ctx);
 }
 
 /// Puts the clock on whoever is picking.
@@ -477,6 +493,75 @@ mod tests {
       tick(&mut state).await;
     }
     assert_eq!(*state.phase.current(), DraftPhase::Finished);
+  }
+
+  #[tokio::test]
+  async fn the_clock_survives_the_drafter_on_it_leaving() {
+    // The leaver's pending clock names them and is dropped by the identity
+    // check, so without a re-arm the successor holds the pick with no clock and
+    // the draft waits forever.
+    let mut state = open_board().await;
+    let on_clock = state.turns.current_turn_actor().expect("open and picking");
+    run(&mut state, LogicInput::AgentLeft { agent_id: on_clock }).await;
+
+    let before = state.available.len();
+    for _ in 0..=state.pick_timeout_ticks {
+      tick(&mut state).await;
+    }
+    assert_eq!(state.available.len(), before - 1, "the successor's clock picked for them");
+  }
+
+  #[tokio::test]
+  async fn a_board_abandoned_mid_draft_opens_cleanly_when_it_refills() {
+    // Before `start_draft`, this sat in Picking with no actor and refused every
+    // take: the abandoned round was still in progress, so `start_next_round`
+    // errored and `open_draft` returned without seating anybody.
+    let mut state = open_board().await;
+    let id = state.available.last().unwrap().id;
+    take_for(&mut state, 1, id).await;
+    for player in 1..=SEATS as PlayerId {
+      run(&mut state, LogicInput::AgentLeft { agent_id: player }).await;
+    }
+    assert!(state.seats.is_empty());
+
+    for player in 4..=(3 + SEATS as PlayerId) {
+      run(&mut state, LogicInput::AgentJoined {
+        agent: Agent::new_human(player),
+      })
+      .await;
+    }
+
+    assert_eq!(*state.phase.current(), DraftPhase::Picking);
+    assert_eq!(state.turns.current_turn_actor(), Some(4), "the new first seat is on the clock");
+    assert_eq!(state.available.len(), crate::types::POOL, "a fresh pool, the abandoned pick returned");
+
+    let id = state.available.last().unwrap().id;
+    take_for(&mut state, 4, id).await;
+    assert_eq!(state.available.len(), crate::types::POOL - 1, "and it is genuinely playable");
+  }
+
+  #[tokio::test]
+  async fn a_board_that_emptied_after_finishing_still_opens_when_it_refills() {
+    // The sibling dead end: the rack event fires into an empty board and is
+    // skipped, so a later refill found the round limit reached and stalled.
+    let mut state = open_board().await;
+    draft_it_out(&mut state).await;
+    for player in 1..=SEATS as PlayerId {
+      run(&mut state, LogicInput::AgentLeft { agent_id: player }).await;
+    }
+    for _ in 0..INTERMISSION_TICKS {
+      tick(&mut state).await;
+    }
+    assert_eq!(*state.phase.current(), DraftPhase::Finished, "nothing to rack for");
+
+    for player in 4..=(3 + SEATS as PlayerId) {
+      run(&mut state, LogicInput::AgentJoined {
+        agent: Agent::new_human(player),
+      })
+      .await;
+    }
+    assert_eq!(*state.phase.current(), DraftPhase::Picking, "the refilled board opens");
+    assert_eq!(state.available.len(), crate::types::POOL);
   }
 
   #[tokio::test]

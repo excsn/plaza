@@ -169,11 +169,19 @@ fn play_requested(state: &mut TableState, player: PlayerId, card: Card, ctx: &mu
 /// `remove_actor` passes the turn to whoever now occupies the slot, so play
 /// continues rather than stalling on someone who left.
 fn unseat(state: &mut TableState, player: &PlayerId) {
+  let held_the_turn = state.turns.current_turn_actor() == Some(*player);
   state.occupants.remove_participant(player);
   state.seats.retain(|p| p != player);
   state.hands.remove(player);
   state.turns.remove_actor(player);
   info!(player, table = %state.name, "Left the table.");
+
+  // The leaver's pending timeout names them, so the identity check will drop
+  // it. Without a clock of its own the successor's turn never times out and a
+  // table of absent players waits forever.
+  if held_the_turn && *state.phase.current() == TablePhase::Playing {
+    arm_turn_timeout(state);
+  }
 }
 
 /// Deals, starts a round, and seats the first turn.
@@ -639,6 +647,23 @@ mod tests {
       play(state, player, card).await;
     }
     panic!("the match never settled");
+  }
+
+  #[tokio::test]
+  async fn the_table_plays_on_when_the_player_on_turn_leaves() {
+    // The leaver's pending timeout names them and is dropped by the identity
+    // check, so without a re-arm the successor holds a turn with no clock and
+    // a table of absent players waits forever.
+    let mut state = table();
+    seat_all(&mut state).await;
+    let on_turn = state.turns.current_turn_actor().expect("seated and playing");
+    run(&mut state, LogicInput::AgentLeft { agent_id: on_turn }).await;
+
+    assert!(state.played.is_empty());
+    for _ in 0..=state.settings.turn_timeout_ticks {
+      step(&mut state).await;
+    }
+    assert!(!state.played.is_empty(), "the successor's clock fired and played");
   }
 
   #[tokio::test]
