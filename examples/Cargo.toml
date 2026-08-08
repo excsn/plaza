@@ -22,6 +22,7 @@ members = [
   "hit_scan",
   "horde_playground",
   "lobby_world",
+  "map_forge",
   "netcode_playground",
   "pong",
   "puck_rink",
@@ -37,6 +38,7 @@ members = [
 default-members = [
   "ability_cooldowns",
   "grace_run",
+  "map_forge",
   "auction_floor",
   "playground_common",
   "card_table",
