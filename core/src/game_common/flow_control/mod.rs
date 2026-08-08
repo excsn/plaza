@@ -18,10 +18,12 @@
 //! manager cannot know your `Op` type, so you hand it a closure that wraps each
 //! notice payload into your enum.
 
+pub mod deferred;
 pub mod phases;
 pub mod rounds;
 pub mod turns;
 
+pub use deferred::PhasedScheduler;
 pub use phases::{Epoch, Phased};
 pub use rounds::{RoundManager, SequentialRoundManager};
 pub use turns::{Advanced, RoundRobinTurnManager, TurnManager};

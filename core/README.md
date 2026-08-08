@@ -206,7 +206,7 @@ None of this is required; take what fits. Each is a trait plus at most a ready-m
 - **`common::participants`**: `ParticipantTracker`.
 - **`common::math`**: plain `Vec2`/`Vec3`/`Quat` for op payloads.
 - **`game_common::reconciliation`**: the server half of client-side prediction. Input sequence tracking, delayed input buffers, and a rewind buffer for lag compensation.
-- **`game_common::flow_control`**: turns and rounds, with `RoundRobinTurnManager` and `SequentialRoundManager`.
+- **`game_common::flow_control`**: turns, rounds, phases, and deferred work that belongs to a phase, with `RoundRobinTurnManager`, `SequentialRoundManager`, `Phased`/`Epoch`, and `PhasedScheduler`.
 - **`game_common::scorekeeping`**: `Scorekeeper` and a `HashMap` implementation.
 - **`app_common`**: op payload shapes for collaborative apps: locking, presence, ordered collections, object/property CRUD.
 

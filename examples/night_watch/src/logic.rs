@@ -217,10 +217,9 @@ fn begin_night(state: &mut VillageState, ctx: &mut Ctx) {
     Some(state.tick_interval * state.night_ticks as u32),
   );
   state.hunt = None;
-  let epoch = state.phase.epoch();
   state
     .timeouts
-    .schedule_after(state.tick, state.night_ticks, VillageEvent::NightEnds { epoch });
+    .schedule_after(state.tick, state.night_ticks, &state.phase, VillageEvent::NightEnds);
 }
 
 /// The wolf's choice. Applied at dawn, not on receipt: the phase resolves once.
@@ -271,10 +270,9 @@ fn begin_day(state: &mut VillageState, ctx: &mut Ctx) {
     Some(state.tick_interval * state.day_ticks as u32),
   );
   state.votes.clear();
-  let epoch = state.phase.epoch();
   state
     .timeouts
-    .schedule_after(state.tick, state.day_ticks, VillageEvent::DayEnds { epoch });
+    .schedule_after(state.tick, state.day_ticks, &state.phase, VillageEvent::DayEnds);
 }
 
 /// A ballot. Collected, not applied: dusk resolves them all at once.
@@ -377,46 +375,33 @@ fn game_over(state: &mut VillageState, winner: Side, reason: &str, ctx: &mut Ctx
   }]));
   info!(?winner, %reason, "game over");
 
-  let epoch = state.phase.epoch();
   state
     .timeouts
-    .schedule_after(state.tick, INTERMISSION_TICKS, VillageEvent::NewGame { epoch });
+    .schedule_after(state.tick, INTERMISSION_TICKS, &state.phase, VillageEvent::NewGame);
 }
 
 /// Fires whatever came due, discarding what the world overtook.
 fn run_due_events(state: &mut VillageState, ctx: &mut Ctx) -> bool {
   let mut changed = false;
 
-  for due in state.timeouts.tick(state.tick) {
+  for due in state.timeouts.due(state.tick, &state.phase) {
     match due {
-      VillageEvent::NightEnds { epoch } => {
-        if !state.phase.is_current(epoch) {
-          debug!("night deadline dropped: the phase moved on");
-          continue;
-        }
+      VillageEvent::NightEnds => {
         warn!("the wolf overslept; the night chooses");
         dawn(state, ctx);
         changed = true;
       }
 
-      VillageEvent::DayEnds { epoch } => {
-        // The early-close case: every living player voted, dusk fell, the
-        // phase moved, and this deadline is a letter to a house that burned
-        // down. Nothing cancelled it; the token just stopped matching.
-        if !state.phase.is_current(epoch) {
-          debug!("day deadline dropped: dusk already fell");
-          continue;
-        }
+      // The early-close case never reaches this arm: every living player
+      // voted, dusk fell, the phase moved, and the scheduler dropped the
+      // deadline as a letter to a house that burned down.
+      VillageEvent::DayEnds => {
         info!("the day ends; abstainers abstain");
         dusk(state, ctx);
         changed = true;
       }
 
-      VillageEvent::NewGame { epoch } => {
-        if !state.phase.is_current(epoch) {
-          debug!("new game dropped: the village moved on");
-          continue;
-        }
+      VillageEvent::NewGame => {
         if state.seats.len() < SEATS {
           debug!(seated = state.seats.len(), "new game skipped: seats to fill");
           continue;

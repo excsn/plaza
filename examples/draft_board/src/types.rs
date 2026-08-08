@@ -4,11 +4,11 @@ use std::collections::HashMap;
 use std::fmt;
 
 use plaza::agent::Agent;
-use plaza::common::scheduler::TickEventScheduler;
+
 use plaza::game_common::flow_control::phases::op_payloads::PhaseChangedNoticePayload;
 use plaza::game_common::flow_control::rounds::op_payloads::{RoundEndedNoticePayload, RoundStartedNoticePayload};
 use plaza::game_common::flow_control::turns::op_payloads::TurnChangedNoticePayload;
-use plaza::game_common::flow_control::{Epoch, Phased, RoundManager, SequentialRoundManager, TurnManager};
+use plaza::game_common::flow_control::{Phased, PhasedScheduler, RoundManager, SequentialRoundManager, TurnManager};
 use plaza::game_common::scorekeeping::local::HashMapScorekeeper;
 use plaza::game_common::scorekeeping::Scorekeeper;
 use serde::{Deserialize, Serialize};
@@ -132,9 +132,9 @@ pub enum Refusal {
 #[derive(Clone, Debug)]
 pub enum BoardEvent {
   /// Take the best remaining prospect for whoever is out of time.
-  AutoPick { player: PlayerId, epoch: Epoch },
+  AutoPick { player: PlayerId },
   /// Rack the board and draft again.
-  Rack { epoch: Epoch },
+  Rack,
 }
 
 /// The authoritative state. Only [`crate::logic::DraftLogic`] mutates it.
@@ -153,7 +153,7 @@ pub struct DraftState {
   pub agents: HashMap<PlayerId, Agent<PlayerId>>,
 
   pub tick: u64,
-  pub timeouts: TickEventScheduler<BoardEvent>,
+  pub timeouts: PhasedScheduler<BoardEvent>,
   /// A field rather than the constant, because the scripted run wants a clock
   /// short enough to reach on purpose and a person wants one long enough to
   /// think in.
@@ -178,7 +178,7 @@ impl DraftState {
       seats: Vec::new(),
       agents: HashMap::new(),
       tick: 0,
-      timeouts: TickEventScheduler::new(),
+      timeouts: PhasedScheduler::new(),
       pick_timeout_ticks: PICK_TIMEOUT_TICKS,
     }
   }

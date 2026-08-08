@@ -2,7 +2,7 @@ use std::fmt;
 
 use plaza::agent::Agent;
 use plaza::common::participants::ParticipantTracker;
-use plaza::common::scheduler::TickEventScheduler;
+use plaza::game_common::flow_control::PhasedScheduler;
 use plaza::game_common::flow_control::phases::op_payloads::PhaseChangedNoticePayload;
 use plaza::game_common::flow_control::rounds::op_payloads::{RoundEndedNoticePayload, RoundStartedNoticePayload};
 use plaza::game_common::flow_control::turns::op_payloads::TurnChangedNoticePayload;
@@ -241,14 +241,9 @@ pub enum TableOp {
 #[derive(Clone, Debug)]
 pub enum TableEvent {
   /// Play for whoever is sitting on their turn.
-  AutoPlay {
-    player: PlayerId,
-    epoch: plaza::game_common::flow_control::Epoch,
-  },
+  AutoPlay { player: PlayerId },
   /// Deal a fresh match for whoever is still at the table.
-  Rematch {
-    epoch: plaza::game_common::flow_control::Epoch,
-  },
+  Rematch,
 }
 
 /// Per-table, per-occupant. The wallet lives in the shared registry: it
@@ -297,7 +292,7 @@ pub struct TableState {
   pub reserved: SeatReservations<PlayerId>,
 
   pub tick: u64,
-  pub timeouts: TickEventScheduler<TableEvent>,
+  pub timeouts: PhasedScheduler<TableEvent>,
   pub settled: bool,
 
   pub wallets: Arc<WalletRegistry>,
@@ -333,7 +328,7 @@ impl TableState {
       occupants: ParticipantTracker::new(),
       reserved: SeatReservations::new(),
       tick: 0,
-      timeouts: TickEventScheduler::new(),
+      timeouts: PhasedScheduler::new(),
       settled: false,
       wallets,
       seats_taken,

@@ -241,12 +241,11 @@ fn finish_draft(state: &mut DraftState, ctx: &mut Ctx) {
   }]));
   info!(?standings, "draft over");
 
-  // Taken after the transition, so it names the intermission rather than the
-  // draft that just ended.
-  let epoch = state.phase.epoch();
+  // Scheduled after the transition, so it belongs to the intermission rather
+  // than the draft that just ended.
   state
     .timeouts
-    .schedule_after(state.tick, INTERMISSION_TICKS, BoardEvent::Rack { epoch });
+    .schedule_after(state.tick, INTERMISSION_TICKS, &state.phase, BoardEvent::Rack);
 }
 
 /// Racks a fresh board and drafts again with the same seats.
@@ -260,28 +259,23 @@ fn arm_clock(state: &mut DraftState) {
   let Some(player) = state.turns.current_turn_actor() else {
     return;
   };
-  let event = BoardEvent::AutoPick {
-    player,
-    epoch: state.phase.epoch(),
-  };
-  state.timeouts.schedule_after(state.tick, state.pick_timeout_ticks, event);
+  state
+    .timeouts
+    .schedule_after(state.tick, state.pick_timeout_ticks, &state.phase, BoardEvent::AutoPick { player });
 }
 
 /// Fires whatever came due, discarding what the world overtook.
 fn run_due_events(state: &mut DraftState, ctx: &mut Ctx) -> bool {
   let mut changed = false;
 
-  for due in state.timeouts.tick(state.tick) {
+  for due in state.timeouts.due(state.tick, &state.phase) {
     match due {
-      BoardEvent::AutoPick { player, epoch } => {
-        if !state.phase.is_current(epoch) {
-          debug!(player, "clock dropped: the phase moved on");
-          continue;
-        }
-        // An identity check rather than a generation one, and under a snake it
-        // earns its keep twice over: the same drafter legitimately holds two
-        // turns in a row at a reversal, so a counter would call the second one
-        // stale.
+      BoardEvent::AutoPick { player } => {
+        // The scheduler already dropped anything from a closed draft. The
+        // game's half is an identity check rather than a generation one, and
+        // under a snake it earns its keep twice over: the same drafter
+        // legitimately holds two turns in a row at a reversal, so a counter
+        // would call the second one stale.
         if state.turns.current_turn_actor() != Some(player) {
           debug!(player, "clock dropped: they already picked");
           continue;
@@ -295,11 +289,7 @@ fn run_due_events(state: &mut DraftState, ctx: &mut Ctx) -> bool {
         changed = true;
       }
 
-      BoardEvent::Rack { epoch } => {
-        if !state.phase.is_current(epoch) {
-          debug!("rack dropped: the board opened without waiting");
-          continue;
-        }
+      BoardEvent::Rack => {
         if state.seats.len() < SEATS {
           debug!(seated = state.seats.len(), "rack skipped: not enough drafters left");
           continue;

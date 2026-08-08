@@ -298,10 +298,11 @@ fn finish_match(state: &mut TableState, ctx: &mut Ctx) {
     .push(TargetedOp::new_system_all(vec![TableOp::Settled { winner, coins }]));
   info!(?standings, ?winner, pot, "Match over, stake settled.");
 
-  // Taken after the transition, so it names the intermission rather than the
-  // match that just ended.
-  let epoch = state.phase.epoch();
-  state.timeouts.schedule_after(state.tick, INTERMISSION_TICKS, TableEvent::Rematch { epoch });
+  // Scheduled after the transition, so it belongs to the intermission rather
+  // than the match that just ended.
+  state
+    .timeouts
+    .schedule_after(state.tick, INTERMISSION_TICKS, &state.phase, TableEvent::Rematch);
 }
 
 /// Deals another match for whoever is still sitting here.
@@ -327,30 +328,23 @@ fn arm_turn_timeout(state: &mut TableState) {
   let Some(player) = state.turns.current_turn_actor() else {
     return;
   };
-  let event = TableEvent::AutoPlay {
-    player,
-    epoch: state.phase.epoch(),
-  };
   let after = state.settings.turn_timeout_ticks;
-  state.timeouts.schedule_after(state.tick, after, event);
+  state
+    .timeouts
+    .schedule_after(state.tick, after, &state.phase, TableEvent::AutoPlay { player });
 }
 
 /// Fires any timeout that has come due, discarding the ones overtaken by events.
 fn run_due_timeouts(state: &mut TableState, ctx: &mut Ctx) -> bool {
   let mut round_ended = false;
 
-  for due in state.timeouts.tick(state.tick) {
+  for due in state.timeouts.due(state.tick, &state.phase) {
     match due {
-      TableEvent::AutoPlay { player, epoch } => {
-        // The phase moved on: this timeout belongs to a round that is already
-        // over. Nothing cancelled it; the token simply no longer matches.
-        if !state.phase.is_current(epoch) {
-          debug!(player, "Timeout dropped: the phase moved on.");
-          continue;
-        }
-        // Still the right phase, but they played in time and the turn moved. An
-        // identity check, not a generation one: a turn that wrapped back around
-        // to the same player is still their turn.
+      TableEvent::AutoPlay { player } => {
+        // The scheduler already dropped anything from a finished round. The
+        // game's half remains: an identity check, not a generation one, since
+        // a turn that wrapped back around to the same player is still their
+        // turn.
         if state.turns.current_turn_actor() != Some(player) {
           debug!(player, "Timeout dropped: they already played.");
           continue;
@@ -363,13 +357,7 @@ fn run_due_timeouts(state: &mut TableState, ctx: &mut Ctx) -> bool {
         round_ended |= play_card(state, player, card, true, ctx);
       }
 
-      TableEvent::Rematch { epoch } => {
-        // A late arrival filling the table deals immediately, which moves the
-        // phase and makes this stale. Without the check the table deals twice.
-        if !state.phase.is_current(epoch) {
-          debug!("Rematch dropped: the table dealt without waiting.");
-          continue;
-        }
+      TableEvent::Rematch => {
         // Players drifted off during the intermission. Dealing to a short table
         // would leave a hand nobody can finish; the next arrival deals instead.
         if state.seats.len() < TABLE_SIZE {
@@ -740,11 +728,10 @@ mod tests {
     let mut state = table();
     seat_all(&mut state).await;
 
-    let stale = TableEvent::AutoPlay {
-      player: state.turns.current_turn_actor().unwrap(),
-      epoch: state.phase.epoch(),
-    };
-    state.timeouts.schedule_after(state.tick, 1, stale);
+    let player = state.turns.current_turn_actor().unwrap();
+    state
+      .timeouts
+      .schedule_after(state.tick, 1, &state.phase, TableEvent::AutoPlay { player });
 
     let mut ctx = Ctx::new();
     state.phase.transition_to(TablePhase::Scoring, &mut ctx, TableOp::PhaseChanged);

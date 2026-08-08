@@ -4,10 +4,10 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use plaza::agent::Agent;
-use plaza::common::scheduler::TickEventScheduler;
+
 use plaza::game_common::flow_control::phases::op_payloads::PhaseChangedNoticePayload;
 use plaza::game_common::flow_control::rounds::op_payloads::{RoundEndedNoticePayload, RoundStartedNoticePayload};
-use plaza::game_common::flow_control::{Epoch, Phased, SequentialRoundManager};
+use plaza::game_common::flow_control::{Phased, PhasedScheduler, SequentialRoundManager};
 use plaza::game_common::scorekeeping::local::HashMapScorekeeper;
 use plaza::game_common::scorekeeping::Scorekeeper;
 use serde::{Deserialize, Serialize};
@@ -156,16 +156,17 @@ pub enum Refusal {
   NoSuchTarget,
 }
 
-/// Work scheduled against one occupancy of a phase.
+/// Work scheduled against one occupancy of a phase; the scheduler carries the
+/// occupancy token, so the events need none.
 #[derive(Clone, Debug)]
 pub enum VillageEvent {
   /// The wolf overslept: the night chooses for it.
-  NightEnds { epoch: Epoch },
+  NightEnds,
   /// The deadline the village votes against. Stale the moment every living
   /// player has voted, because dusk falls early and moves the phase.
-  DayEnds { epoch: Epoch },
+  DayEnds,
   /// Deal the next game, once the reveal has been up long enough to read.
-  NewGame { epoch: Epoch },
+  NewGame,
 }
 
 /// The authoritative state. Only [`crate::logic::VillageLogic`] mutates it.
@@ -194,7 +195,7 @@ pub struct VillageState {
   pub games: u32,
 
   pub tick: u64,
-  pub timeouts: TickEventScheduler<VillageEvent>,
+  pub timeouts: PhasedScheduler<VillageEvent>,
   /// Fields rather than the constants, because the scripted run wants
   /// deadlines it can reach on purpose and a browser wants ones a person can
   /// think inside.
@@ -225,7 +226,7 @@ impl VillageState {
       votes: HashMap::new(),
       games: 0,
       tick: 0,
-      timeouts: TickEventScheduler::new(),
+      timeouts: PhasedScheduler::new(),
       night_ticks: NIGHT_TICKS,
       day_ticks: DAY_TICKS,
       tick_interval: Duration::from_millis(20),

@@ -242,11 +242,12 @@ fn finish_match(state: &mut TableState, ctx: &mut Ctx) {
   let standings = state.scores.get_all_scores_sorted();
   info!(?standings, "match over");
 
-  // Taken after the transition, so it names the intermission rather than the
-  // match that just ended. Anything that moves the phase first, a player
-  // arriving to fill the table, makes this stale and it is dropped.
-  let epoch = state.phase.epoch();
-  state.timeouts.schedule_after(state.tick, INTERMISSION_TICKS, TableEvent::NewMatch { epoch });
+  // Scheduled after the transition, so it belongs to the intermission rather
+  // than the match that just ended. Anything that moves the phase first, a
+  // player arriving to fill the table, makes it stale and it is dropped.
+  state
+    .timeouts
+    .schedule_after(state.tick, INTERMISSION_TICKS, &state.phase, TableEvent::NewMatch);
 }
 
 /// Wipes the last match off the table and deals the next one.
@@ -269,29 +270,21 @@ fn arm_turn_timeout(state: &mut TableState) {
   let Some(player) = state.turns.current_turn_actor() else {
     return;
   };
-  let event = TableEvent::AutoPlay {
-    player,
-    epoch: state.phase.epoch(),
-  };
-  state.timeouts.schedule_after(state.tick, state.turn_timeout_ticks, event);
+  state
+    .timeouts
+    .schedule_after(state.tick, state.turn_timeout_ticks, &state.phase, TableEvent::AutoPlay { player });
 }
 
 /// Fires any timeout that has come due, discarding the ones overtaken by events.
 fn run_due_timeouts(state: &mut TableState, ctx: &mut Ctx) -> bool {
   let mut round_ended = false;
 
-  for due in state.timeouts.tick(state.tick) {
+  for due in state.timeouts.due(state.tick, &state.phase) {
     match due {
-      TableEvent::AutoPlay { player, epoch } => {
-        // The phase moved on: this timeout belongs to a round that is already
-        // over. Nothing cancelled it; the token simply no longer matches.
-        if !state.phase.is_current(epoch) {
-          debug!(%player, "timeout dropped: the phase moved on");
-          continue;
-        }
-        // Still the right phase, but they played in time and the turn moved.
-        // This check is the game's, not plaza's: `Phased` does not know about
-        // turns.
+      TableEvent::AutoPlay { player } => {
+        // The scheduler already dropped anything from a finished round. What
+        // it cannot know is the game's half: still the right phase, but they
+        // played in time and the turn moved on.
         if state.turns.current_turn_actor() != Some(player) {
           debug!(%player, "timeout dropped: they already played");
           continue;
@@ -307,14 +300,7 @@ fn run_due_timeouts(state: &mut TableState, ctx: &mut Ctx) -> bool {
         round_ended |= play_card(state, player, card, true, ctx);
       }
 
-      TableEvent::NewMatch { epoch } => {
-        // A player arriving to fill the table deals immediately, which moves the
-        // phase and makes this stale. Without the check the table would deal
-        // twice.
-        if !state.phase.is_current(epoch) {
-          debug!("rematch dropped: the table started without waiting");
-          continue;
-        }
+      TableEvent::NewMatch => {
         // Everyone left during the intermission. Dealing to nobody would leave a
         // table mid-round that the next arrival could not join; `seat_player`
         // deals when the seats fill again.
