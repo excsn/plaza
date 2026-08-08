@@ -98,17 +98,32 @@ pub fn step(world: &World, inputs: &[PaddleInput]) -> World {
     let paddle = &mut next.paddles[seat];
     paddle.x = paddle.x + speed.mul(Fx::from_int(input.dx.clamp(-1, 1) as i32));
     paddle.y = paddle.y + speed.mul(Fx::from_int(input.dy.clamp(-1, 1) as i32));
+    confine(paddle, seat);
+  }
 
-    // Each team is confined to its own half; the puck is the only thing that
-    // crosses the line.
-    let r = Fx::from_int(PADDLE_R);
-    let (lo_x, hi_x) = if team(seat) == 0 {
-      (r, Fx::from_int(RINK_W / 2) - r)
-    } else {
-      (Fx::from_int(RINK_W / 2) + r, Fx::from_int(RINK_W) - r)
-    };
-    paddle.x = paddle.x.max(lo_x).min(hi_x);
-    paddle.y = paddle.y.max(r).min(Fx::from_int(RINK_H) - r);
+  // Paddles are solid to each other: overlapping pairs split the overlap, in
+  // pair order so every machine resolves a triple pile-up identically. Only
+  // teammates can meet; the half clamps keep opposing centres a diameter
+  // apart.
+  let sep = Fx::from_int(2 * PADDLE_R);
+  for i in 0..SEATS {
+    for j in (i + 1)..SEATS {
+      let dx = next.paddles[j].x - next.paddles[i].x;
+      let dy = next.paddles[j].y - next.paddles[i].y;
+      let d2 = dx.mul(dx) + dy.mul(dy);
+      if d2 >= sep.mul(sep) {
+        continue;
+      }
+      let d = d2.sqrt();
+      let (nx, ny) = if d == Fx::ZERO { (Fx::ONE, Fx::ZERO) } else { (dx.div(d), dy.div(d)) };
+      let push = (sep - d).mul(Fx::ratio(1, 2));
+      next.paddles[i].x = next.paddles[i].x - nx.mul(push);
+      next.paddles[i].y = next.paddles[i].y - ny.mul(push);
+      next.paddles[j].x = next.paddles[j].x + nx.mul(push);
+      next.paddles[j].y = next.paddles[j].y + ny.mul(push);
+      confine(&mut next.paddles[i], i);
+      confine(&mut next.paddles[j], j);
+    }
   }
 
   next.puck.x = next.puck.x + next.puck_vel.x;
@@ -169,11 +184,26 @@ pub fn step(world: &World, inputs: &[PaddleInput]) -> World {
     next.puck.x = paddle.x + nx.mul(reach + Fx::ONE);
     next.puck.y = paddle.y + ny.mul(reach + Fx::ONE);
 
-    let input = inputs.get(seat).copied().unwrap_or_default();
+    // A reflection rather than a re-aim: the tangential component survives,
+    // so a puck pinched between two paddles keeps its slide along their gap
+    // and walks out instead of shuttling forever. The normal component is
+    // topped up to shot speed so a hit still feels like a hit.
+    let vn = next.puck_vel.x.mul(nx) + next.puck_vel.y.mul(ny);
+    if vn < Fx::ZERO {
+      let twice = Fx::from_int(2).mul(vn);
+      next.puck_vel.x = next.puck_vel.x - twice.mul(nx);
+      next.puck_vel.y = next.puck_vel.y - twice.mul(ny);
+    }
+    let out = next.puck_vel.x.mul(nx) + next.puck_vel.y.mul(ny);
     let shot = Fx::from_int(SHOT_SPEED);
+    if out < shot {
+      next.puck_vel.x = next.puck_vel.x + nx.mul(shot - out);
+      next.puck_vel.y = next.puck_vel.y + ny.mul(shot - out);
+    }
+    let input = inputs.get(seat).copied().unwrap_or_default();
     let carry = Fx::ratio(PADDLE_SPEED, 2);
-    next.puck_vel.x = nx.mul(shot) + carry.mul(Fx::from_int(input.dx.clamp(-1, 1) as i32));
-    next.puck_vel.y = ny.mul(shot) + carry.mul(Fx::from_int(input.dy.clamp(-1, 1) as i32));
+    next.puck_vel.x = next.puck_vel.x + carry.mul(Fx::from_int(input.dx.clamp(-1, 1) as i32));
+    next.puck_vel.y = next.puck_vel.y + carry.mul(Fx::from_int(input.dy.clamp(-1, 1) as i32));
   }
 
   // Contact placement can land past the boards, and a puck cornered under a
@@ -210,6 +240,19 @@ pub fn step(world: &World, inputs: &[PaddleInput]) -> World {
   next.puck_vel.y = next.puck_vel.y.mul(drag);
 
   next
+}
+
+/// Each team is confined to its own half; the puck is the only thing that
+/// crosses the line.
+fn confine(paddle: &mut V2, seat: usize) {
+  let r = Fx::from_int(PADDLE_R);
+  let (lo_x, hi_x) = if team(seat) == 0 {
+    (r, Fx::from_int(RINK_W / 2) - r)
+  } else {
+    (Fx::from_int(RINK_W / 2) + r, Fx::from_int(RINK_W) - r)
+  };
+  paddle.x = paddle.x.max(lo_x).min(hi_x);
+  paddle.y = paddle.y.max(r).min(Fx::from_int(RINK_H) - r);
 }
 
 fn serve(world: &mut World, toward_x: i32) {
@@ -262,7 +305,14 @@ pub fn bot_chase(world: &World, seat: usize) -> PaddleInput {
   // the line, and a puck nobody contests is a stalled game.
   let puck_still = world.puck_vel.x == Fx::ZERO;
 
-  let target = if puck_on_my_half || puck_coming || puck_still {
+  // One skater on the puck, the partner minding the net: whichever seat is
+  // nearer chases, so a pair never swarms as a wall.
+  let partner = seat ^ 1;
+  let my_d2 = me.dist_sq(world.puck);
+  let partner_d2 = world.paddles[partner].dist_sq(world.puck);
+  let nearest = my_d2 < partner_d2 || (my_d2 == partner_d2 && seat < partner);
+
+  let target = if nearest && (puck_on_my_half || puck_coming || puck_still) {
     let goal = V2 {
       x: if mine == 0 { Fx::from_int(RINK_W) } else { Fx::ZERO },
       y: Fx::from_int(RINK_H / 2),
@@ -285,7 +335,7 @@ pub fn bot_chase(world: &World, seat: usize) -> PaddleInput {
     V2::ints(guard_x, guard_y)
   };
 
-  let dead = Fx::from_int(2);
+  let dead = Fx::from_int(4);
   let axis = |from: Fx, to: Fx| -> i8 {
     if to - from > dead {
       1
@@ -379,6 +429,19 @@ mod tests {
   }
 
   #[test]
+  fn teammates_cannot_pass_through_each_other() {
+    let mut world = World::new();
+    let inputs = [press(0, 1), press(0, -1), press(0, 0), press(0, 0)];
+    let sep = Fx::from_int(2 * PADDLE_R - 1);
+    for _ in 0..40 {
+      world = step(&world, &inputs);
+      let d2 = world.paddles[0].dist_sq(world.paddles[1]);
+      assert!(d2 >= sep.mul(sep), "d2 = {d2:?}");
+    }
+    assert!(world.paddles[0].y < world.paddles[1].y, "they pressed, they did not swap");
+  }
+
+  #[test]
   fn a_puck_squeezed_on_the_boards_stays_on_the_ice() {
     let mut world = World::new();
     world.paddles[0] = V2::ints(100, RINK_H - PADDLE_R);
@@ -412,6 +475,43 @@ mod tests {
       escaped |= y < RINK_H - 40;
     }
     assert!(escaped, "the puck left the pocket at the boards");
+  }
+
+  #[test]
+  fn a_glancing_contact_keeps_the_pucks_slide() {
+    let mut world = World::new();
+    world.paddles[0] = V2::ints(100, 60);
+    world.puck = V2::ints(114, 60);
+    world.puck_vel = V2::ints(0, 3);
+    world = step(&world, &[PaddleInput::default(); SEATS]);
+    assert!(world.puck_vel.y > Fx::from_int(2), "the slide survives: {:?}", world.puck_vel);
+    assert!(world.puck_vel.x > Fx::ZERO, "and the touch still pushes away");
+  }
+
+  #[test]
+  fn two_bots_cannot_pin_the_puck_on_the_fence() {
+    let mut world = World::new();
+    world.paddles[0] = V2::ints(RINK_W / 2 - PADDLE_R, 40);
+    world.paddles[2] = V2::ints(RINK_W / 2 + PADDLE_R, 40);
+    world.puck = V2::ints(RINK_W / 2, 40);
+    world.puck_vel = V2::ints(0, 1);
+
+    let mut escaped = false;
+    for _ in 0..600 {
+      let inputs = [
+        bot_chase(&world, 0),
+        PaddleInput::default(),
+        bot_chase(&world, 2),
+        PaddleInput::default(),
+      ];
+      world = step(&world, &inputs);
+      let x = world.puck.x.to_int();
+      let y = world.puck.y.to_int();
+      assert!((0..=RINK_W).contains(&x), "x = {x}");
+      assert!((0..=RINK_H).contains(&y), "y = {y}");
+      escaped |= (x - RINK_W / 2).abs() > 40 || (y - 40).abs() > 40;
+    }
+    assert!(escaped, "the puck left the pocket at the fence");
   }
 
   #[test]

@@ -46,9 +46,9 @@ pub fn draw_rink(rink: &Rink) {
   draw_rectangle(x + w, y + mouth_top, 5.0, mouth_h, EAST);
 }
 
-/// Paddles and puck, at positions the caller already resolved: the predicted
-/// present for `my_seat` (which gets a ring), the delayed blend for the rest,
-/// and the puck by whichever treatment the panel picked.
+/// Paddles and puck, at positions the caller already resolved: the eased
+/// present, the puck by whichever treatment the panel picked, and a ring on
+/// `my_seat`.
 pub fn draw_world(rink: &Rink, paddles_px: &[(f32, f32); SEATS], puck_px: (f32, f32), my_seat: Option<usize>) {
   for seat in 0..SEATS {
     let (cx, cy) = rink.px(paddles_px[seat].0, paddles_px[seat].1);

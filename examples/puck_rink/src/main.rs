@@ -134,6 +134,7 @@ async fn frame_loop(options: role::Options) {
 
     client.poll(clock_ms);
     client.advance(read_input());
+    client.ease.decay(dt);
 
     let moments: Vec<Moment> = client.moments.drain(..).collect();
     for moment in moments {
@@ -158,25 +159,22 @@ async fn frame_loop(options: role::Options) {
       let rink = render::Rink::fit();
       render::draw_rink(&rink);
 
-      let puck_override = match client.mode {
-        Mode::Rollback => None,
-        Mode::Interpolate => client.interpolated_puck(),
+      let eased_puck = (
+        world.puck.x.to_f32() + client.ease.puck.0,
+        world.puck.y.to_f32() + client.ease.puck.1,
+      );
+      let shown = match client.mode {
+        Mode::Rollback => eased_puck,
+        Mode::Interpolate => client.interpolated_puck().unwrap_or(eased_puck),
       };
-      let shown = puck_override.unwrap_or((world.puck.x.to_f32(), world.puck.y.to_f32()));
       client.note_shown(shown);
 
-      // Remote inputs at the present are guesses that snap on every disproof,
-      // so only this seat's paddle is drawn from the session.
       let mut paddles = [(0.0f32, 0.0f32); SEATS];
       for seat in 0..SEATS {
-        paddles[seat] = (world.paddles[seat].x.to_f32(), world.paddles[seat].y.to_f32());
-      }
-      if let Some(delayed) = client.interpolated_paddles() {
-        for (seat, px) in delayed.into_iter().enumerate() {
-          if client.seat != Some(seat) {
-            paddles[seat] = px;
-          }
-        }
+        paddles[seat] = (
+          world.paddles[seat].x.to_f32() + client.ease.paddles[seat].0,
+          world.paddles[seat].y.to_f32() + client.ease.paddles[seat].1,
+        );
       }
 
       render::draw_world(&rink, &paddles, shown, client.seat);

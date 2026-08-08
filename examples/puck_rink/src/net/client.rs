@@ -43,9 +43,11 @@ pub enum Status {
   Gone(String),
 }
 
-/// How the puck reaches the screen. Remote paddles always take the delayed
-/// blend regardless of mode: their inputs are guesses out at the predicted
-/// present, and drawing guesses is what makes them jump on every disproof.
+/// How the puck reaches the screen. Everything else is always the predicted
+/// present with corrections eased, so the screen holds one timeline and a
+/// bounce lands where the paddles are drawn; splitting the paddles onto
+/// delayed frames made the puck carom off empty ice their drawn past had not
+/// reached yet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
   /// The session's present: predicted inputs, rolled back on every disproof.
@@ -53,6 +55,37 @@ pub enum Mode {
   /// Delayed server frames, blended: the treatment every *owned-by-someone-
   /// else* entity gets, worn by a body nobody owns.
   Interpolate,
+}
+
+/// What a rollback rewrote, kept on screen and bled off over ~100ms so a
+/// correction reads as a nudge rather than a teleport. Presentation only:
+/// nothing here feeds back into the session or an input.
+#[derive(Default)]
+pub struct VisualEase {
+  pub paddles: [(f32, f32); SEATS],
+  pub puck: (f32, f32),
+}
+
+impl VisualEase {
+  fn absorb(&mut self, before: &World, after: &World) {
+    for seat in 0..SEATS {
+      self.paddles[seat].0 += before.paddles[seat].x.to_f32() - after.paddles[seat].x.to_f32();
+      self.paddles[seat].1 += before.paddles[seat].y.to_f32() - after.paddles[seat].y.to_f32();
+    }
+    self.puck.0 += before.puck.x.to_f32() - after.puck.x.to_f32();
+    self.puck.1 += before.puck.y.to_f32() - after.puck.y.to_f32();
+  }
+
+  /// Call once per render frame.
+  pub fn decay(&mut self, dt: f32) {
+    let keep = (-dt * 10.0).exp();
+    for p in &mut self.paddles {
+      p.0 *= keep;
+      p.1 *= keep;
+    }
+    self.puck.0 *= keep;
+    self.puck.1 *= keep;
+  }
 }
 
 /// A running mean, hand-rolled: two words and no divide-by-zero to forget.
@@ -106,6 +139,7 @@ pub struct NetClient {
   pub snap_px: Meter,
   pub corrections: u64,
   pub resim_frames: u64,
+  pub ease: VisualEase,
   pub moments: Vec<Moment>,
 
   events: Vec<Event>,
@@ -142,6 +176,7 @@ impl NetClient {
       snap_px: Meter::default(),
       corrections: 0,
       resim_frames: 0,
+      ease: VisualEase::default(),
       moments: Vec::new(),
       events: Vec::new(),
       arrivals: Vec::new(),
@@ -290,16 +325,17 @@ impl NetClient {
 
       let before_count = session.rollback_count();
       let cf = session.current_frame();
-      let puck_before = session.state().puck;
+      let before = session.state().clone();
       session.advance_frame();
       let rolled = session.rollback_count() - before_count;
       if rolled > 0 {
         self.corrections += rolled;
         self.resim_frames += session.last_rollback_frames() as u64;
         if let Some(rewritten) = session.state_at(cf) {
-          let dx = rewritten.puck.x.to_f32() - puck_before.x.to_f32();
-          let dy = rewritten.puck.y.to_f32() - puck_before.y.to_f32();
+          let dx = rewritten.puck.x.to_f32() - before.puck.x.to_f32();
+          let dy = rewritten.puck.y.to_f32() - before.puck.y.to_f32();
           self.snap_px.add((dx * dx + dy * dy).sqrt());
+          self.ease.absorb(&before, &rewritten);
         }
       }
     }
@@ -345,9 +381,8 @@ impl NetClient {
     }
   }
 
-  /// The world to draw: the session's present. The caller overrides remote
-  /// paddles with [`Self::interpolated_paddles`], and the puck too when the
-  /// mode says so.
+  /// The world to draw: the session's present. The caller adds [`Self::ease`]
+  /// on top, and swaps the puck for the delayed blend when the mode says so.
   pub fn present(&self) -> Option<World> {
     Some(self.session.as_ref()?.state().clone())
   }
@@ -389,25 +424,6 @@ impl NetClient {
       }
       None => (ax, ay),
     })
-  }
-
-  /// Every paddle from the same delayed blend, indexed by seat. The caller
-  /// keeps its own seat out of this and draws it from the predicted present.
-  pub fn interpolated_paddles(&self) -> Option<[(f32, f32); SEATS]> {
-    let (a, b, t) = self.delayed_frames()?;
-    let mut out = [(0.0f32, 0.0f32); SEATS];
-    for (seat, slot) in out.iter_mut().enumerate() {
-      let pa = a.world.paddles[seat];
-      let (ax, ay) = (pa.x.to_f32(), pa.y.to_f32());
-      *slot = match b {
-        Some(b) => {
-          let pb = b.world.paddles[seat];
-          (ax + (pb.x.to_f32() - ax) * t, ay + (pb.y.to_f32() - ay) * t)
-        }
-        None => (ax, ay),
-      };
-    }
-    Some(out)
   }
 }
 
@@ -495,24 +511,31 @@ mod tests {
   }
 
   #[test]
-  fn remote_paddles_are_blended_from_delayed_frames() {
+  fn a_correction_is_absorbed_into_the_visual_ease_and_bleeds_off() {
     let socket = ScriptedSocket::new();
-    let w0 = World::new();
-    let mut w1 = w0.clone();
-    w1.paddles[2] = crate::sim::V2::ints(200, 90);
-    feed(&socket, vec![
-      frame_op(100, &w0, [PaddleInput::default(); SEATS]),
-      frame_op(106, &w1, [PaddleInput::default(); SEATS]),
-    ]);
+    let world0 = World::new();
+    feed(&socket, vec![frame_op(100, &world0, [PaddleInput::default(); SEATS])]);
 
     let mut client = NetClient::from_socket(Box::new(socket.clone()));
     client.poll(0);
-    client.poll(40);
-    let paddles = client.interpolated_paddles().expect("two frames straddle the delayed present");
-    let a = w0.paddles[2].x.to_f32();
-    let b = w1.paddles[2].x.to_f32();
-    let x = paddles[2].0;
-    assert!(x > a.min(b) && x < a.max(b), "x = {x}, not between {a} and {b}");
+    client.advance(PaddleInput::default());
+
+    let mut applied = [PaddleInput::default(); SEATS];
+    applied[2] = PaddleInput { dx: 1, dy: 0 };
+    let world1 = sim::step(&world0, &applied);
+    let world2 = sim::step(&world1, &applied);
+    feed(&socket, vec![frame_op(101, &world1, applied), frame_op(102, &world2, applied)]);
+
+    client.poll(50);
+    client.advance(PaddleInput::default());
+
+    assert!(client.corrections > 0, "the disproof rolled the session back");
+    let absorbed = client.ease.paddles[2].0.abs();
+    assert!(absorbed > 0.0, "the rewritten paddle left its snap in the ease");
+
+    client.ease.decay(0.1);
+    let after = client.ease.paddles[2].0.abs();
+    assert!(after < absorbed && after > 0.0, "the ease bleeds off rather than snapping to zero");
   }
 
   #[test]

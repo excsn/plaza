@@ -9,7 +9,7 @@ Two-on-two air hockey, built for the one thing no server-authoritative example h
 cargo run -p puck_rink --bin scripted    # the headless re-simulation audit
 ```
 
-Every seat always has an actor: bots skate until humans take their paddles, one leaver at a time. WASD or arrows; push the puck through the far mouth.
+Every seat always has an actor: bots skate until humans take their paddles, one leaver at a time. WASD or arrows; push the puck through the far mouth. Paddles are solid to each other, each team is fenced to its own half, and only the puck crosses the line. A touch reflects the puck (the tangential component survives, topped up to shot speed along the normal), which is what keeps a puck pinched between two paddles walking out instead of shuttling forever. Bots are deliberately human-grade: they re-decide on a 200ms reaction (twelve ticks, staggered by seat) rather than at 60Hz, coast for the tail of every hold so their sustained speed sits below a held key, and only the nearer of a pair chases while the partner minds the net. The cadence is also what keeps every client's repeat-last predictor mostly right about them; a bot chattering between held directions defeats it, and the correction smear that causes is visible.
 
 ## The topology: rollback under a server
 
@@ -27,7 +27,7 @@ The panel draws the puck one of two ways and measures both the same way, recordi
 - **Interpolate**: delayed server frames blended, the standard treatment for anything owned by someone else. Smooth, and late by the render delay plus the one-way, which on a contested puck is exactly the window where your paddle visibly passes through it.
 - **Rollback**: the re-simulated present. On the beam, corrections arrive as re-simulations instead of position lerps, and the panel prices them: corrections count, mean snap size, and re-simulated frames, the cost the IDEAS entry asked to see beside the error.
 
-The toggle covers the puck alone. Remote paddles take the delayed blend in both modes and only your own paddle is drawn from the predicted present: a remote input at the present is a guess, and a drawn guess jumps on every disproof, which for a bot flipping its held direction is constantly.
+The toggle covers the puck alone. Paddles are always drawn from the predicted present with corrections **eased**: whatever a rollback rewrites stays on screen as an offset that bleeds off over ~100ms, so a disproof reads as a nudge rather than a teleport. The whole screen therefore holds one timeline, and a bounce lands where the paddles are drawn; splitting the paddles onto delayed frames was tried and made the puck carom off empty ice their drawn past had not reached yet.
 
 ## The digest, or why fixed point is not a style choice
 

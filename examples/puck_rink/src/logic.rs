@@ -18,6 +18,30 @@ use crate::state::{RinkState, WINDOW};
 
 type Ctx = OpsQueue<RinkOp, PlayerId>;
 
+/// Ticks a bot holds its input before re-running the chase, staggered by
+/// seat: a human reaction time, not a 60Hz one. Re-deciding every tick also
+/// chatters between -1, 0 and 1, and every flip is a guaranteed misprediction
+/// for every client's repeat-last predictor; a held decision is what makes
+/// repeat-last mostly right.
+pub const BOT_DECIDE_EVERY: u64 = 12;
+/// Ticks at the tail of each hold a bot coasts with no input, so its
+/// sustained speed sits below a human's held key.
+pub const BOT_REST_TICKS: u64 = 4;
+
+/// What a bot seat applies at `tick`, deciding and resting on the cadence
+/// above. `held` is the seat's decision slot between re-decisions.
+pub fn bot_held(tick: u64, seat: usize, world: &sim::World, held: &mut PaddleInput) -> PaddleInput {
+  let phase = (tick + seat as u64) % BOT_DECIDE_EVERY;
+  if phase == 0 {
+    *held = sim::bot_chase(world, seat);
+  }
+  if phase >= BOT_DECIDE_EVERY - BOT_REST_TICKS {
+    PaddleInput::default()
+  } else {
+    *held
+  }
+}
+
 #[derive(Default)]
 pub struct RinkLogic {
   clock: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
@@ -137,7 +161,7 @@ fn step_once(state: &mut RinkState, ctx: &mut Ctx) {
         }
         state.held[seat]
       }
-      Occupant::Bot => sim::bot_chase(&state.world, seat),
+      Occupant::Bot => bot_held(state.tick, seat, &state.world, &mut state.held[seat]),
     };
   }
 
