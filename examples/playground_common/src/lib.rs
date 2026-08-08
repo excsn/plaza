@@ -254,6 +254,69 @@ pub fn check_supported(role: Role, support: Support) -> Result<(), String> {
   Ok(())
 }
 
+/// Expands to a playground's whole `role` module: the crate's defaults, `parse`,
+/// and `check_supported`.
+///
+/// A macro rather than library functions because two of the pieces can only be
+/// evaluated in the leaf crate. `cfg!(feature = ...)` reads the features of the
+/// crate being compiled, so a check written as code in this library would read
+/// *this* crate's features and cheerfully approve a role the binary has no code
+/// for; and `env!("CARGO_MANIFEST_DIR")` names the leaf crate's `static/`, not
+/// this one's. Expansion happens at the call site, which is what makes both
+/// read the right crate.
+///
+/// ```ignore
+/// // src/role.rs, the whole file:
+/// playground_common::playground_role!(port: 8097);   // or `!()` for 8080
+/// ```
+#[macro_export]
+macro_rules! playground_role {
+  ($(port: $port:literal)?) => {
+    pub use $crate::{usage, Options, Role};
+
+    /// This crate's `static/`, as an absolute path.
+    ///
+    /// Absolute, and baked in at compile time. A relative default resolves
+    /// against the working directory, so running from anywhere but the
+    /// repository root would serve nothing and answer every request with a
+    /// 404: a server that looks healthy and is not.
+    pub const DEFAULT_STATIC_DIR: &str = ::core::concat!(::core::env!("CARGO_MANIFEST_DIR"), "/static");
+
+    /// Where this example starts before the command line has its say.
+    pub fn defaults() -> $crate::Options {
+      $crate::Options {
+        static_dir: ::core::option::Option::Some(DEFAULT_STATIC_DIR.to_owned()),
+        $(
+          bind: ::core::concat!("0.0.0.0:", $port).to_owned(),
+          connect: ::core::concat!("ws://127.0.0.1:", $port, "/ws").to_owned(),
+        )?
+        ..$crate::Options::default()
+      }
+    }
+
+    /// Parses argv, or returns a message to print and exit on.
+    pub fn parse<I: ::core::iter::IntoIterator<Item = ::std::string::String>>(
+      args: I,
+    ) -> ::core::result::Result<$crate::Options, ::std::string::String> {
+      $crate::parse(args, defaults())
+    }
+
+    /// Rejects a role this build cannot perform, naming the feature that is
+    /// missing. The `cfg!`s read this crate's features, which is the reason
+    /// this is macro-expanded here rather than written in the library.
+    pub fn check_supported(role: $crate::Role) -> ::core::result::Result<(), ::std::string::String> {
+      $crate::check_supported(
+        role,
+        $crate::Support {
+          server: ::core::cfg!(feature = "server"),
+          websocket: ::core::cfg!(feature = "websocket"),
+          client: ::core::cfg!(feature = "client"),
+        },
+      )
+    }
+  };
+}
+
 
 #[cfg(test)]
 mod tests {
