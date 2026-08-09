@@ -1,6 +1,6 @@
 [package]
 name = "plaza_server_utils"
-version = "0.5.1"
+version = "0.6.0"
 edition = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
@@ -14,7 +14,7 @@ categories = ["game-development", "network-programming"]
 all-features = true
 
 [dependencies]
-plaza_client_utils = { version = "0.5.0", path = "../client_utils" }
+plaza_client_utils = { version = "0.6.0", path = "../client_utils" }
 tracing = "^0"
 
 [dev-dependencies]

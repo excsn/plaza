@@ -1,6 +1,6 @@
 [package]
 name = "plaza_session"
-version = "0.6.1"
+version = "0.7.0"
 edition = { workspace = true }
 description = "WebSocket and TCP transports for the Plaza real-time shared-state framework, with a pluggable wire format."
 readme = "README.md"
@@ -26,8 +26,8 @@ json = ["plaza_wire/json"]
 msgpack = ["plaza_wire/msgpack"]
 
 [dependencies]
-plaza = { version = "0.6.0", path = "../core" }
-plaza_wire = { version = "0.6.0", path = "../wire", default-features = false }
+plaza = { version = "0.7.0", path = "../core" }
+plaza_wire = { version = "0.7.0", path = "../wire", default-features = false }
 
 serde = { version = "^1.0", features = ["derive"] }
 tokio = { version = "^1", features = ["sync", "rt", "macros", "time"] }
