@@ -18,8 +18,9 @@ use uuid::Uuid;
 
 use crate::wallets::WalletRegistry;
 
-/// The wire format's version, derived at build time from this file (see
-/// `build.rs`). Both sessions declare it, so the lobby and a table cannot drift
+/// The wire format's version, derived at build time from the sources listed in
+/// `build.rs`: this file, plus the core files defining the notice payloads the
+/// ops carry. Both sessions declare it, so the lobby and a table cannot drift
 /// apart even though they carry different op enums.
 ///
 /// It does not cover which codec is in use, and does not need to: the lobby

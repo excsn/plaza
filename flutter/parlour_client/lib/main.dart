@@ -4,6 +4,7 @@ import 'package:plaza_flame/plaza_flame.dart';
 import 'package:plaza_ws/plaza_ws.dart';
 
 import 'parlour_game.dart';
+import 'wire_protocol.dart';
 
 /// A Flame client for `examples/parlour_game`.
 ///
@@ -29,6 +30,7 @@ class _ParlourAppState extends State<ParlourApp> {
   late final ParlourGame game = ParlourGame(
     lobbyUrl: widget.lobbyUrl,
     connect: webSocketConnect,
+    protocol: const ProtocolVersion(wireProtocol),
   );
 
   @override

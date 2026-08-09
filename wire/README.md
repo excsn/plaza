@@ -164,6 +164,17 @@ include!(concat!(env!("OUT_DIR"), "/wire_protocol.rs"));
 
 A client then announces `PROTOCOL` on connect and a server speaking a different one can reply "reload" rather than flooding its log with per-message decode warnings. **A version that has to be bumped by hand is skipped precisely during the change that needed it**, which is why this is derived rather than declared. It errs toward asking for a reload that was not strictly needed, since it changes when those files change at all, comments included: the cost is a page load, and the opposite mistake is a silent half-working session. It cannot rescue a client older than the handshake itself, which is the bootstrapping floor every protocol version has.
 
+For a paired Dart client, `emit_dart` writes the same derived number as a committed `const int wireProtocol` the client imports, so both ends compute the version instead of one computing it and the other declaring `unknown`, which makes the handshake decorative. The Dart build cannot run a cargo build script, which is why the file is committed and the server's build keeps it current; pin it from the server's tests so a wire change committed without a build fails CI.
+
+```rust,ignore
+// build.rs
+fn main() {
+  let sources = ["src/types.rs"];
+  plaza_wire::build::emit(&sources);
+  plaza_wire::build::emit_dart(&sources, "../../flutter/my_client/lib/wire_protocol.dart");
+}
+```
+
 The other half of that failure is caching, and it lives in [`plaza_session::host::Host`](../session/): a browser serving the page from cache cannot quote a new version however well you derived it.
 
 ## Features
