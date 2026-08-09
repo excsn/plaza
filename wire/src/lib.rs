@@ -18,6 +18,7 @@
 
 pub mod envelope;
 pub mod frame;
+pub mod framing;
 #[cfg(feature = "serde")]
 pub mod payloads;
 

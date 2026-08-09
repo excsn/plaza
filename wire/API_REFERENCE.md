@@ -201,6 +201,8 @@ A latency probe and its answer. `plaza_session` answers an inbound `Kind::Ping` 
 ### Functions
 
 *   `answer_ping(codec, ping_body, responder: Option<u64>) -> Option<Vec<u8>>`: builds the `Kind::Pong` frame answering a ping body, or `None` if it does not decode. What `plaza_session` calls, and what a client with its own read loop should call so both ends answer identically.
+*   `encode_ops(codec, ops: &[Op]) -> Result<Vec<u8>, _>`: one `Kind::Ops` frame, the kind byte then the codec's one document. The body is the ops array itself; who sent it is the server's bookkeeping and does not ride the wire.
+*   `decode_ops(codec, frame) -> Option<Vec<Op>>`: the frame's ops, or `None` when the frame is not `Kind::Ops` or its body does not decode, the same skip-silently rule unknown kinds get.
 *   `split(frame: &[u8]) -> Option<(u8, &[u8])>`: the tag and the body, or `None` for an empty frame, which is malformed rather than unknown. An unrecognised tag still splits; deciding what to do about it is `Kind::from_byte`'s job.
 *   `begin(kind: Kind, buf: &mut Vec<u8>)`: clears `buf` and writes the tag, so the body can be appended after it. Capacity survives the clear, which is the point of clearing rather than starting fresh.
 *   `PROBE_FRAME_HINT: usize = 64`: enough for a `Ping` or a `Pong` under either shipped codec. `answer_ping` starts its buffer here, and `plaza_session` does the same for the probes it sends, so a control frame costs one allocation rather than the several a `Vec` growing from nothing needs to reach twenty-odd bytes.
@@ -212,6 +214,14 @@ A latency probe and its answer. `plaza_session` answers an inbound `Kind::Ping` 
 `[kind byte][encoded body]` carries no sequence number and no fragment index, so one frame is one message and there is nowhere to say "part two of three". That is a deliberate consequence of the format being one byte plus a body, and it makes **plaza a stream wire format**: a transport that cannot carry a whole frame in one unit has no way to split it without inventing a header of its own, at which point a hand-written client can no longer read the wire.
 
 A datagram transport therefore keeps messages inside one datagram and refuses what does not fit, which is what `examples/foreign_soil`'s UDP body does. `Limits::max_frame_bytes` expresses the cap; nothing expresses the consequence, so it is written here.
+
+## 5b. Module `framing`
+
+Length-delimited stream framing: how frames ride a transport with no message boundaries. The contract is a 4-byte big-endian length then that many bytes of frame, the length not counting the prefix, which is also what `tokio-util`'s `LengthDelimitedCodec` speaks by default and therefore what `plaza_session`'s TCP transport puts on the wire. Nothing here reads or writes a socket; whoever owns the stream feeds bytes in and takes frames out, so the same decoder serves a tokio client, a blocking one, and a transport adapter.
+
+*   `LENGTH_PREFIX_BYTES = 4`, `delimit(frame, &mut out)` (prefix and frame in one buffer for one write), `length_prefix(frame_len) -> [u8; 4]`.
+*   **Struct `LengthDelimited`**: `new(max_frame_bytes)` (the limit is required, not defaulted: how much to tolerate from a peer is policy, and `Limits::max_frame_bytes` is the same number server-side), `feed(bytes)`, `next_frame() -> Result<Option<Vec<u8>>, Oversize>` (call in a loop; one feed can complete any number of frames), `buffered()`.
+*   **Struct `Oversize`**: a declared length past the limit, caught before any body bytes are read. Not recoverable: a stream is only re-synchronisable by its lengths, so once one cannot be trusted the only safe move is to drop the connection.
 
 ## 6. Module `payloads`
 

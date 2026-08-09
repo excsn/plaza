@@ -59,7 +59,8 @@ impl Refusal {
   }
 }
 
-/// A Plaza `Session` served over length-delimited TCP.
+/// A Plaza `Session` served over length-delimited TCP. The framing contract
+/// is [`plaza_wire::framing`]: a 4-byte big-endian length, then the frame.
 ///
 /// `C` defaults to [`JsonCodec`] only while the `json` feature is on, which is
 /// why the declaration appears twice: a default type parameter has to name a

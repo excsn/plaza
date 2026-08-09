@@ -94,9 +94,7 @@ async fn tcp_client_op_reaches_controller_and_broadcast_reaches_client() {
   }
 
   // Client -> server: a kind tag, then the encoded ops.
-  let mut op_frame = Vec::new();
-  plaza_wire::frame::begin(plaza_wire::frame::Kind::Ops, &mut op_frame);
-  codec.encode_into(&vec![TestOp::Hello("hi".into())], &mut op_frame).unwrap();
+  let op_frame = plaza_wire::frame::encode_ops(&codec, &[TestOp::Hello("hi".into())]).unwrap();
   client.send(op_frame.into()).await.expect("client send");
 
   let received = with_timeout(incoming.recv()).await.expect("incoming message");

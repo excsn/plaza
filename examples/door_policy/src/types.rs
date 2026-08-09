@@ -89,25 +89,12 @@ pub enum ArcadeOp {
 /// Encodes ops the way both ends put them on the wire: a kind byte, then one
 /// JSON document.
 pub fn encode_ops(ops: &[ArcadeOp]) -> Vec<u8> {
-  use plaza_session::codec::WireCodec;
-  let mut out = vec![plaza_wire::frame::Kind::Ops as u8];
-  out.extend_from_slice(
-    &plaza_session::codec::JsonCodec
-      .encode(&ops.to_vec())
-      .expect("ops encode"),
-  );
-  out
+  plaza_wire::frame::encode_ops(&plaza_session::codec::JsonCodec, ops).expect("ops encode")
 }
 
 /// Reads ops from a frame, for the client side.
 pub fn decode_ops(frame: &[u8]) -> Vec<ArcadeOp> {
-  use plaza_session::codec::WireCodec;
-  if frame.first().copied() != Some(plaza_wire::frame::Kind::Ops as u8) {
-    return Vec::new();
-  }
-  plaza_session::codec::JsonCodec
-    .decode::<Vec<ArcadeOp>>(&frame[1..])
-    .unwrap_or_default()
+  plaza_wire::frame::decode_ops(&plaza_session::codec::JsonCodec, frame).unwrap_or_default()
 }
 
 /// One op as a pre-encoded frame: what a refusal or a farewell hands the

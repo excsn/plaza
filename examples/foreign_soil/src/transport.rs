@@ -20,6 +20,7 @@ use plaza_session::control::{far_future, Inbound};
 use plaza_session::LinkDriver;
 use plaza_session::manager::{ConnectionManager, Frame, OutboundFrame};
 use plaza_session::{SessionOptions, TransportSession};
+use plaza_wire::framing;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -85,16 +86,13 @@ async fn accept_loop<ID: AgentId, C: WireCodec>(
   }
 }
 
-/// **FINDING: framing is the adapter's own.**
-///
-/// `tokio-util`'s `LengthDelimitedCodec` is what the shipped TCP transport
-/// uses, but it arrives through `plaza_session`'s `tcp` feature, so an adapter
-/// that does not want a TCP transport compiled in writes its own. Fine here,
-/// and worth knowing that `Limits::max_frame_bytes` is then a number the
-/// adapter has to enforce itself rather than one the crate enforces for it.
+/// The framing contract is `plaza_wire::framing`, published: an adapter no
+/// longer reverse-engineers the prefix out of the shipped TCP transport, and
+/// `Limits::max_frame_bytes` is enforced by the decoder it feeds.
 async fn write_frame(stream: &mut UnixStream, frame: &[u8]) -> std::io::Result<()> {
-  stream.write_all(&(frame.len() as u32).to_be_bytes()).await?;
-  stream.write_all(frame).await
+  let mut wire = Vec::new();
+  framing::delimit(frame, &mut wire);
+  stream.write_all(&wire).await
 }
 
 /// Reads one frame as a `Frame`, built from a `Vec<u8>`.
@@ -103,18 +101,20 @@ async fn write_frame(stream: &mut UnixStream, frame: &[u8]) -> std::io::Result<(
 /// `[u8]`, which covers both directions. A transport whose reader already
 /// yields a `Bytes`, which both shipped ones and most WebSocket and QUIC crates
 /// do, converts with `.into()` and pays nothing either.
-async fn read_frame(stream: &mut UnixStream, max: usize) -> std::io::Result<Option<Frame>> {
-  let mut len = [0u8; 4];
-  if stream.read_exact(&mut len).await.is_err() {
-    return Ok(None);
+async fn read_frame(stream: &mut UnixStream, framing: &mut framing::LengthDelimited) -> std::io::Result<Option<Frame>> {
+  loop {
+    match framing.next_frame() {
+      Ok(Some(frame)) => return Ok(Some(Frame::from(frame))),
+      Ok(None) => {}
+      Err(oversize) => return Err(std::io::Error::other(oversize)),
+    }
+    let mut chunk = [0u8; 8192];
+    let n = stream.read(&mut chunk).await?;
+    if n == 0 {
+      return Ok(None);
+    }
+    framing.feed(&chunk[..n]);
   }
-  let len = u32::from_be_bytes(len) as usize;
-  if len > max {
-    return Err(std::io::Error::other("frame over max_frame_bytes"));
-  }
-  let mut body = vec![0u8; len];
-  stream.read_exact(&mut body).await?;
-  Ok(Some(Frame::from(body)))
 }
 
 async fn connection_task<ID: AgentId, C: WireCodec>(
@@ -134,11 +134,12 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
     return;
   };
 
+  let mut framing = framing::LengthDelimited::new(limits.max_frame_bytes);
   loop {
     let deadline = driver.deadline().unwrap_or_else(far_future);
 
     tokio::select! {
-      inbound = read_frame(&mut stream, limits.max_frame_bytes) => {
+      inbound = read_frame(&mut stream, &mut framing) => {
         let Ok(Some(frame)) = inbound else { break };
         match driver.inbound(frame, Instant::now()) {
           Inbound::Reply(reply) => {

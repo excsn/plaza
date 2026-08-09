@@ -26,6 +26,8 @@ For `Kind::Ops`, the body is the ops array itself. Nothing else is on the wire. 
 
 **There is no `from` on the wire.** Who sent a message is the server's own bookkeeping, attached by the transport from the connection. Every shipped client already ignored it, and an application that needs to say who did something puts that in its own op at the width it actually needs, which is usually a seat index rather than a 64-bit identity.
 
+**On a stream transport, a length prefix rides ahead of the frame.** A WebSocket hands each message over whole; TCP hands over bytes, so both ends must agree where a frame ends before either can read a kind byte. That contract is `framing`: a 4-byte big-endian length then the frame, with `delimit` for writers and the `LengthDelimited` decoder (fed bytes, yielding frames, enforcing your `max_frame_bytes`) for clients and transport adapters that own their own I/O. It is the same layout `plaza_session`'s TCP transport speaks, named where both ends can see it.
+
 ## What lives here
 
 `Agent`, `AgentId`, `Kind` and the framing helpers, the `WireCodec` trait, and the netcode payloads. All of it is genuinely serialized or genuinely shared, which is the rule for this crate: it exists so a **browser client can name what it sends** without depending on core, which pulls tokio and does not target `wasm32-unknown-unknown`.

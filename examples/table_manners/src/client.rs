@@ -8,8 +8,10 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 use plaza_session::codec::JsonCodec;
+use plaza_session::DEFAULT_MAX_FRAME_BYTES;
 use plaza_wire::frame::Kind;
-use tokio::io::AsyncWriteExt;
+use plaza_wire::framing::{delimit, LengthDelimited};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use crate::types::{decode_ops, encode_ops, Parting, PartyOp, Seat};
@@ -27,36 +29,35 @@ impl Guest {
     let (mut read_half, mut write_half) = tokio::io::split(stream);
 
     if let Some(seat) = seat {
-      let frame = encode_ops(&[PartyOp::Sit { seat }]);
-      write_half.write_all(&(frame.len() as u32).to_be_bytes()).await?;
-      write_half.write_all(&frame).await?;
+      let mut wire = Vec::new();
+      delimit(&encode_ops(&[PartyOp::Sit { seat }]), &mut wire);
+      write_half.write_all(&wire).await?;
     }
 
     let writer = Arc::new(tokio::sync::Mutex::new(write_half));
     let sink = heard.clone();
     let pong_writer = writer.clone();
     let task = tokio::spawn(async move {
-      use tokio::io::AsyncReadExt;
+      let mut framing = LengthDelimited::new(DEFAULT_MAX_FRAME_BYTES);
+      let mut chunk = [0u8; 8192];
       loop {
-        let mut len = [0u8; 4];
-        if read_half.read_exact(&mut len).await.is_err() {
-          return;
-        }
-        let mut body = vec![0u8; u32::from_be_bytes(len) as usize];
-        if read_half.read_exact(&mut body).await.is_err() {
-          return;
-        }
-        if body.first().copied() == Some(Kind::Ping as u8) {
-          if let Some(reply) = plaza_wire::frame::answer_ping(&JsonCodec, &body[1..], None) {
-            let mut writer = pong_writer.lock().await;
-            let _ = writer.write_all(&(reply.len() as u32).to_be_bytes()).await;
-            let _ = writer.write_all(&reply).await;
+        while let Ok(Some(frame)) = framing.next_frame() {
+          if frame.first().copied() == Some(Kind::Ping as u8) {
+            if let Some(reply) = plaza_wire::frame::answer_ping(&JsonCodec, &frame[1..], None) {
+              let mut wire = Vec::new();
+              delimit(&reply, &mut wire);
+              let _ = pong_writer.lock().await.write_all(&wire).await;
+            }
+            continue;
           }
-          continue;
+          let ops = decode_ops(&frame);
+          if !ops.is_empty() {
+            sink.lock().extend(ops);
+          }
         }
-        let ops = decode_ops(&body);
-        if !ops.is_empty() {
-          sink.lock().extend(ops);
+        match read_half.read(&mut chunk).await {
+          Ok(0) | Err(_) => return,
+          Ok(n) => framing.feed(&chunk[..n]),
         }
       }
     });
@@ -65,10 +66,9 @@ impl Guest {
   }
 
   pub async fn say(&self, ops: &[PartyOp]) -> std::io::Result<()> {
-    let frame = encode_ops(ops);
-    let mut writer = self.writer.lock().await;
-    writer.write_all(&(frame.len() as u32).to_be_bytes()).await?;
-    writer.write_all(&frame).await
+    let mut wire = Vec::new();
+    delimit(&encode_ops(ops), &mut wire);
+    self.writer.lock().await.write_all(&wire).await
   }
 
   pub fn farewell(&self) -> Option<Parting> {

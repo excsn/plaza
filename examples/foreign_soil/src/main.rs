@@ -22,6 +22,7 @@ use plaza::state_logic::{LogicInput, LogicOutput, StateLogic, StateLogicError};
 use plaza_session::codec::{JsonCodec, WireCodec};
 use plaza_session::{DirectionProfile, LinkProfile, SessionOptions};
 use plaza_wire::frame;
+use plaza_wire::framing;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
@@ -90,25 +91,26 @@ impl Client {
 
     tokio::spawn(async move {
       let (mut reader, mut writer) = tokio::io::split(stream);
+      let mut framing = framing::LengthDelimited::new(plaza_session::DEFAULT_MAX_FRAME_BYTES);
       loop {
         tokio::select! {
           outgoing = outbox.recv() => {
             let Some(frame_bytes) = outgoing else { return };
-            if writer.write_all(&(frame_bytes.len() as u32).to_be_bytes()).await.is_err()
-              || writer.write_all(&frame_bytes).await.is_err()
-            {
+            let mut wire = Vec::new();
+            framing::delimit(&frame_bytes, &mut wire);
+            if writer.write_all(&wire).await.is_err() {
               return;
             }
           }
-          incoming = read_one(&mut reader) => {
+          incoming = read_one(&mut reader, &mut framing) => {
             let Some(frame_bytes) = incoming else { return };
             let Some((tag, body)) = frame::split(&frame_bytes) else { continue };
             match frame::Kind::from_byte(tag) {
               Some(frame::Kind::Ping) => {
                 if let Some(reply) = frame::answer_ping(&JsonCodec, body, None) {
-                  if writer.write_all(&(reply.len() as u32).to_be_bytes()).await.is_err()
-                    || writer.write_all(&reply).await.is_err()
-                  {
+                  let mut wire = Vec::new();
+                  framing::delimit(&reply, &mut wire);
+                  if writer.write_all(&wire).await.is_err() {
                     return;
                   }
                 }
@@ -135,12 +137,17 @@ impl Client {
   }
 }
 
-async fn read_one<R: tokio::io::AsyncRead + Unpin>(reader: &mut R) -> Option<Vec<u8>> {
-  let mut len = [0u8; 4];
-  reader.read_exact(&mut len).await.ok()?;
-  let mut body = vec![0u8; u32::from_be_bytes(len) as usize];
-  reader.read_exact(&mut body).await.ok()?;
-  Some(body)
+async fn read_one<R: tokio::io::AsyncRead + Unpin>(reader: &mut R, framing: &mut framing::LengthDelimited) -> Option<Vec<u8>> {
+  loop {
+    if let Ok(Some(frame)) = framing.next_frame() {
+      return Some(frame);
+    }
+    let mut chunk = [0u8; 8192];
+    match reader.read(&mut chunk).await {
+      Ok(0) | Err(_) => return None,
+      Ok(n) => framing.feed(&chunk[..n]),
+    }
+  }
 }
 
 fn ops_frame(op: &Op) -> Vec<u8> {

@@ -148,6 +148,32 @@ pub fn answer_ping<C: crate::WireCodec>(codec: &C, ping_body: &[u8], responder: 
   Some(buf)
 }
 
+/// Encodes a batch of ops as one [`Kind::Ops`] frame: the kind byte, then
+/// the codec's one document. The body is the ops array itself; who sent it is
+/// the server's bookkeeping and does not ride the wire.
+#[cfg(feature = "serde")]
+pub fn encode_ops<C: crate::WireCodec, Op: serde::Serialize>(
+  codec: &C,
+  ops: &[Op],
+) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+  let mut out = Vec::new();
+  begin(Kind::Ops, &mut out);
+  codec.encode_into(&ops, &mut out)?;
+  Ok(out)
+}
+
+/// Decodes a frame's ops, or `None` when the frame is not [`Kind::Ops`] or
+/// its body does not decode. Skipping either case silently is the same rule
+/// unknown kinds get; a client that must tell them apart splits by hand.
+#[cfg(feature = "serde")]
+pub fn decode_ops<C: crate::WireCodec, Op: serde::de::DeserializeOwned>(codec: &C, frame: &[u8]) -> Option<Vec<Op>> {
+  let (tag, body) = split(frame)?;
+  if Kind::from_byte(tag) != Some(Kind::Ops) {
+    return None;
+  }
+  codec.decode::<Vec<Op>>(body).ok()
+}
+
 /// Splits a frame into its kind byte and its body.
 ///
 /// Returns `None` for an empty frame, which is malformed rather than unknown.
@@ -293,5 +319,18 @@ mod tests {
     let mut buf = Vec::new();
     MsgPackCodec.encode_into(&pong, &mut buf).unwrap();
     assert_eq!(MsgPackCodec.decode::<Pong>(&buf).unwrap(), pong);
+  }
+
+  #[test]
+  #[cfg(feature = "json")]
+  fn ops_ride_one_frame_and_other_kinds_decode_to_none() {
+    use crate::JsonCodec;
+    let frame = encode_ops(&JsonCodec, &["a", "b"]).unwrap();
+    assert_eq!(frame[0], Kind::Ops.as_byte());
+    assert_eq!(decode_ops::<_, String>(&JsonCodec, &frame), Some(vec!["a".to_owned(), "b".to_owned()]));
+
+    let mut hello = Vec::new();
+    begin(Kind::Hello, &mut hello);
+    assert_eq!(decode_ops::<_, String>(&JsonCodec, &hello), None, "not ops, not an error");
   }
 }
