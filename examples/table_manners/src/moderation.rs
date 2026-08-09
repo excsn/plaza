@@ -11,11 +11,12 @@
 //! pending reason is what a netdrop is. The transport never interprets a
 //! disconnect, and keeping the division costs nothing.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
+use plaza::common::closure::{ClosureLog, Departed};
 use plaza_session::manager::ConnectionManager;
 
 use crate::types::{op_frame, Parting, PartyOp, Seat, FLOOD_OPS, FLOOD_WINDOW_MS};
@@ -59,7 +60,7 @@ pub struct Host {
   watches: Mutex<HashMap<u64, Watch>>,
   /// Partings this host ordered, awaiting the `Left` that confirms them. A
   /// departure with no entry here is a netdrop.
-  pending: Mutex<HashMap<u64, Parting>>,
+  partings: Mutex<ClosureLog<u64, Parting>>,
   /// Seats a dropped guest may return to, and when the grace expires.
   held: Mutex<plaza::common::reconnect::ReconnectTracker<Seat, std::time::Duration>>,
   /// The zero the tracker's time axis is measured from.
@@ -68,7 +69,6 @@ pub struct Host {
   /// refused: the ban memory `door_policy` keeps per account, applied to a
   /// seat.
   barred: Mutex<Vec<Seat>>,
-  closed: Mutex<HashSet<u64>>,
   pub meters: Meters,
 }
 
@@ -77,11 +77,10 @@ impl Host {
     Arc::new(Self {
       manager,
       watches: Default::default(),
-      pending: Default::default(),
+      partings: Default::default(),
       held: Mutex::new(plaza::common::reconnect::ReconnectTracker::new(GRACE)),
       epoch: tokio::time::Instant::now(),
       barred: Default::default(),
-      closed: Default::default(),
       meters: Default::default(),
     })
   }
@@ -142,16 +141,15 @@ impl Host {
   }
 
   pub fn was_closed(&self, key: u64) -> bool {
-    self.closed.lock().contains(&key)
+    self.partings.lock().was_ordered(&key)
   }
 
   /// Ends a guest's session with the reason ahead of the close, and remembers
   /// why so the `Left` that follows is not mistaken for a netdrop.
   pub fn close(&self, key: u64, reason: Parting, detail: impl Into<String>) {
-    if !self.closed.lock().insert(key) {
+    if !self.partings.lock().order(key, reason) {
       return;
     }
-    self.pending.lock().insert(key, reason);
     let farewell = op_frame(PartyOp::Farewell {
       reason,
       detail: detail.into(),
@@ -164,8 +162,7 @@ impl Host {
   /// Ends the party: everyone told, then closed, through the same path.
   pub fn drain(&self, reason: Parting) {
     for key in self.watches.lock().keys() {
-      self.closed.lock().insert(*key);
-      self.pending.lock().insert(*key, reason);
+      self.partings.lock().order(*key, reason);
     }
     let told = self.manager.disconnect_all(Some(op_frame(PartyOp::Farewell {
       reason,
@@ -179,7 +176,10 @@ impl Host {
   /// The reason is whatever this host recorded when it ordered the close;
   /// nothing else knows one, so no entry means the network went away.
   pub fn parted(&self, key: u64) {
-    let how = self.pending.lock().remove(&key).unwrap_or(Parting::Dropped);
+    let how = match self.partings.lock().departed(&key) {
+      Departed::Ordered(reason) => reason,
+      Departed::Netdrop => Parting::Dropped,
+    };
     match how {
       Parting::Dropped => self.meters.drops.fetch_add(1, Ordering::Relaxed),
       Parting::Kicked => self.meters.kicks.fetch_add(1, Ordering::Relaxed),

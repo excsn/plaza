@@ -7,12 +7,13 @@
 //! only what plaza must never own: which rules exist, what they refuse for,
 //! and who loses a duplicate login.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
+use plaza::common::closure::ClosureLog;
 
 use crate::types::{Account, AgentKey, DuplicateLogin, Refusal, PER_IP, SEATS};
 
@@ -65,9 +66,10 @@ pub struct Door {
   by_account: Mutex<HashMap<Account, Vec<AgentKey>>>,
   accounts: Mutex<HashMap<AgentKey, Account>>,
   banned: Mutex<Vec<Account>>,
-  /// Keys this door has ordered closed; an op arriving for one afterwards is
-  /// the number the panel must keep at zero.
-  closed: Mutex<HashSet<AgentKey>>,
+  /// Closes this door ordered; an op arriving for one afterwards is the
+  /// number the panel must keep at zero. The reason rode the farewell op, so
+  /// the log only needs the fact.
+  closed: Mutex<ClosureLog<AgentKey, ()>>,
   next_key: AtomicU64,
   pub ledger: Ledger,
   pub duplicate_login: Mutex<DuplicateLogin>,
@@ -148,16 +150,18 @@ impl Door {
   /// Marks a close this door ordered, so a later op from the same key can be
   /// recognised as arriving after the goodbye.
   pub fn closing(&self, key: AgentKey) {
-    self.closed.lock().insert(key);
-    self.ledger.reasons_sent.fetch_add(1, Ordering::Relaxed);
+    if self.closed.lock().order(key, ()) {
+      self.ledger.reasons_sent.fetch_add(1, Ordering::Relaxed);
+    }
   }
 
   pub fn was_closed(&self, key: AgentKey) -> bool {
-    self.closed.lock().contains(&key)
+    self.closed.lock().was_ordered(&key)
   }
 
   /// Forgets a departed key, freeing its address slot and its account claim.
   pub fn left(&self, key: AgentKey) {
+    self.closed.lock().departed(&key);
     if let Some(ip) = self.addrs.lock().remove(&key) {
       if let Some(held) = self.per_ip.lock().get_mut(&ip) {
         *held = held.saturating_sub(1);

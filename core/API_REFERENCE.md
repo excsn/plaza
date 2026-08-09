@@ -337,6 +337,14 @@ Repeating schedules skip ahead past `now` after a stall rather than replaying ev
     *   `is_awaiting_reconnect`, `deadline_for`, `awaiting`, `count`, `is_empty`, `forget` (a deliberate quit), `clear`.
 *   A returning client must present the *same* agent ID: derive it from an auth token in your route handler, not per connection.
 
+### `common::closure`
+
+*   **Struct `ClosureLog<ID: AgentId, Reason>`**: the closes this host ordered, and the difference between them and a netdrop. Plaza reports every departure the same way (`AgentLeft`); only whoever ordered a close knows why, so the pending reason is the discrimination. Holds no sockets and sends nothing: the application sends its farewell op and closes the connection itself, and tells the log what it did.
+    *   `order(id, reason) -> bool`: `true` exactly once per key, so the goodbye is sent once however many rules conclude the same guest must go; a second order neither re-sends nor rewrites, the first reason being the honest one.
+    *   `was_ordered(&id) -> bool`: the ops-after-close guard. Still `true` after the departure, because ops and presence travel on different streams and an op can trail the close it lost the race to.
+    *   `departed(&id) -> Departed<Reason>`: call on `AgentLeft`. `Ordered(reason)` is the close this host ordered, confirmed; `Netdrop` means nobody ordered anything and the network went away. Consumes the reason, so a repeated report reads as a netdrop.
+    *   `forget(&id)` (once a key can never speak again, on hosts that live long enough to care), `pending_count`, `is_empty`.
+
 ### `common::fsm`
 
 *   **Trait `FsmContext<Op, AppID>`**: `ops_q()` and `as_any_mut()`.

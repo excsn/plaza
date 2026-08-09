@@ -202,6 +202,7 @@ None of this is required; take what fits. Each is a trait plus at most a ready-m
 
 - **`common::scheduler`**: fires events or runs callbacks on a tick (`u64`) or game-time (`Duration`) axis. `TickEventScheduler`, `TimeEventScheduler`, and the callback equivalents.
 - **`common::reconnect`**: `ReconnectTracker`, bookkeeping for disconnect grace periods. Holds no timers; you drive it and decide what expiry means.
+- **`common::closure`**: `ClosureLog`, the closes this host ordered. Tells an ordered close apart from a netdrop at `AgentLeft`, guards against ops that trail the close, and sends nothing itself.
 - **`common::fsm`**: `StateMachine`, with `OpsQueue` as the minimal context.
 - **`common::participants`**: `ParticipantTracker`.
 - **`common::math`**: plain `Vec2`/`Vec3`/`Quat` for op payloads.
