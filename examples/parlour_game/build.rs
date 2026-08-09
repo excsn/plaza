@@ -1,20 +1,12 @@
-//! Derives the wire format's version from the sources that define it.
+//! Derives the wire format's version by resolving types from the tagged roots.
 //!
-//! The mechanism lives in `plaza_wire::build`, which documents what it hashes
-//! and why; all this decides is which sources define the wire. The ops live in
-//! `types.rs`, but the notice payloads they carry are defined in plaza core,
-//! and the hash reads text without resolving types, so those files are listed
-//! too or a payload shape change would not move the version. The managers
-//! sharing those files over-bump it, which is the direction the mechanism is
-//! documented to err in.
+//! `LobbyOp` and `TableOp` carry the `plaza-wire: root` tag in `types.rs`;
+//! everything they reach is hashed, plaza's own payload vocabulary rides in
+//! through the baked-in constant, and a reference the resolver cannot place
+//! fails this build by name.
 
 fn main() {
-  let sources = [
-    "src/types.rs",
-    "../../core/src/game_common/flow_control/phases.rs",
-    "../../core/src/game_common/flow_control/turns.rs",
-    "../../core/src/game_common/flow_control/rounds.rs",
-  ];
-  plaza_wire::build::emit(&sources);
-  plaza_wire::build::emit_dart(&sources, "../../flutter/parlour_client/lib/wire_protocol.dart");
+  plaza_wire::build::Wire::detect()
+    .dart("../../flutter/parlour_client/lib/wire_protocol.dart")
+    .emit();
 }

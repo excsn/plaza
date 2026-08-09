@@ -2,4 +2,4 @@
 // Do not edit; the server's build script rewrites it when the wire changes.
 
 /// The wire format's version, hashed from the Rust sources that define it.
-const int wireProtocol = 3122450851;
+const int wireProtocol = 225361261;

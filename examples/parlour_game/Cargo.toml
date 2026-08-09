@@ -20,5 +20,8 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 
+[dev-dependencies]
+plaza_wire = { workspace = true, features = ["build"] }
+
 [build-dependencies]
 plaza_wire = { workspace = true, features = ["build"] }

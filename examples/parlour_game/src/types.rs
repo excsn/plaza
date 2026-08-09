@@ -18,10 +18,10 @@ use uuid::Uuid;
 
 use crate::wallets::WalletRegistry;
 
-/// The wire format's version, derived at build time from the sources listed in
-/// `build.rs`: this file, plus the core files defining the notice payloads the
-/// ops carry. Both sessions declare it, so the lobby and a table cannot drift
-/// apart even though they carry different op enums.
+/// The wire format's version, resolved at build time from the tagged root ops
+/// (see `build.rs`): every type they reach is hashed, plaza's own payload
+/// vocabulary included. Both sessions declare it, so the lobby and a table
+/// cannot drift apart even though they carry different op enums.
 ///
 /// It does not cover which codec is in use, and does not need to: the lobby
 /// speaks JSON and a table speaks named MessagePack in this very example, and a
@@ -121,6 +121,7 @@ pub struct TableCard {
   pub fit_rank: Option<u32>,
 }
 
+/// plaza-wire: root
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LobbyOp {
   ListTables,
@@ -197,6 +198,8 @@ pub struct RoundSummary {
   pub winning_card: Option<Card>,
 }
 
+/// plaza-wire: root
+///
 /// What clients send, and what a table broadcasts back.
 ///
 /// The four notice variants exist so the flow-control managers have something

@@ -30,7 +30,7 @@ For `Kind::Ops`, the body is the ops array itself. Nothing else is on the wire. 
 
 ## What lives here
 
-`Agent`, `AgentId`, `Kind` and the framing helpers, the `WireCodec` trait, and the netcode payloads. All of it is genuinely serialized or genuinely shared, which is the rule for this crate: it exists so a **browser client can name what it sends** without depending on core, which pulls tokio and does not target `wasm32-unknown-unknown`.
+`Agent`, `AgentId`, `Kind` and the framing helpers, the `WireCodec` trait, the netcode payloads, and the flow-control notice payloads (`flow_payloads`: what the turn, round and phase managers wrap into your ops; core re-exports them at their old paths). All of it is genuinely serialized or genuinely shared, which is the rule for this crate: it exists so a **browser client can name what it sends** without depending on core, which pulls tokio and does not target `wasm32-unknown-unknown`.
 
 `MessageTarget`, `PresenceEvent`, `TargetedOp` and `SessionMessage` stay in core. They are server-side routing and plumbing, they are not `Serialize`, and no client ever sees one.
 
@@ -144,7 +144,7 @@ Pass it where a transport takes a codec, for example `TcpPlazaSession::bind_with
 
 A wire format only agrees if both ends were built from the same definition of it, and the ends are separate builds. A browser client especially: it is a build product and does **not** rebuild when the server does, so a page from before a wire change is the normal state of affairs. Without a version the failure is silent in the worst way, because the page loads, the game appears to run, and only the messages whose shape changed are rejected, which reads as a netcode bug and is a deployment one.
 
-`plaza_wire::build` derives the version by hashing the sources that define your messages, from a `build.rs`:
+`plaza_wire::build` derives the version by resolving your wire from its roots. Tag each op enum with a doc line, and everything else is discovered:
 
 ```toml
 [build-dependencies]
@@ -152,28 +152,35 @@ plaza_wire = { version = "0.1", default-features = false, features = ["build"] }
 ```
 
 ```rust,ignore
+/// plaza-wire: root
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum TableOp { ... }
+
 // build.rs
 fn main() {
-  plaza_wire::build::emit(&["src/sim/protocol.rs", "src/sim/types.rs"]);
+  plaza_wire::build::Wire::detect()
+    .dart("../../flutter/my_client/lib/wire_protocol.dart")   // only if you have a Dart client
+    .emit();
 }
 
-// src/sim/protocol.rs
+// src/types.rs
 pub const PROTOCOL: u32 = WIRE_PROTOCOL;
 include!(concat!(env!("OUT_DIR"), "/wire_protocol.rs"));
 ```
 
-A client then announces `PROTOCOL` on connect and a server speaking a different one can reply "reload" rather than flooding its log with per-message decode warnings. **A version that has to be bumped by hand is skipped precisely during the change that needed it**, which is why this is derived rather than declared. It errs toward asking for a reload that was not strictly needed, since it changes when those files change at all, comments included: the cost is a page load, and the opposite mistake is a silent half-working session. It cannot rescue a client older than the handshake itself, which is the bootstrapping floor every protocol version has.
+The resolver parses `src/`, starts from the tagged roots, and walks field types transitively, generic arguments included, so the version hashes exactly the types on the wire: an off-wire neighbour sharing a file moves nothing, and a payload two files away counts. Plaza's own vocabulary (the notice payloads, the netcode payloads, `Agent`) is covered by a constant baked into this crate, so it is never yours to list. A referenced type the resolver cannot place **fails the build naming the reference**; a serde type unreachable from every root gets a warning naming it and both tags (`plaza-wire: root` to include it, `plaza-wire: off-wire` to silence it), because a forgotten tag is the one miss no resolver can catch. `Wire::ops(&["TableOp"])` names roots explicitly for a crate that would rather not tag, `.also_scan(dir)` covers a workspace keeping wire types in a sibling crate, and `.leaf("Name")` acknowledges a type whose shape is pinned elsewhere. The older file-list `emit(&[paths])` remains underneath; note the two derive *different numbers* for the same wire (per-definition against per-file hashing), so switching bumps your version once.
 
-For a paired Dart client, `emit_dart` writes the same derived number as a committed `const int wireProtocol` the client imports, so both ends compute the version instead of one computing it and the other declaring `unknown`, which makes the handshake decorative. The Dart build cannot run a cargo build script, which is why the file is committed and the server's build keeps it current; pin it from the server's tests so a wire change committed without a build fails CI.
+A client then announces `PROTOCOL` on connect and a server speaking a different one can reply "reload" rather than flooding its log with per-message decode warnings. **A version that has to be bumped by hand is skipped precisely during the change that needed it**, which is why this is derived rather than declared. It errs toward asking for a reload that was not strictly needed: the cost is a page load, and the opposite mistake is a silent half-working session. It cannot rescue a client older than the handshake itself, which is the bootstrapping floor every protocol version has.
 
-```rust,ignore
-// build.rs
-fn main() {
-  let sources = ["src/types.rs"];
-  plaza_wire::build::emit(&sources);
-  plaza_wire::build::emit_dart(&sources, "../../flutter/my_client/lib/wire_protocol.dart");
-}
-```
+**How the version reaches each client family** differs by what serves it, and each channel is the right one for its medium, not a legacy of the others:
+
+| Client | Channel | Client work |
+|---|---|---|
+| Browser page | [`Host`](../session/) stamps `window.PLAZA_PROTOCOL` into the HTML at serve time | none |
+| Dart / Flutter app | `.dart(path)` writes a committed `const int wireProtocol` the app imports | one import, one constructor argument |
+| Native Rust client | shares the server's crate and its `PROTOCOL` const | none |
+
+The Dart file is committed because a Dart build cannot run a cargo build script; the server's build keeps it current, and `assert_dart_protocol(path, PROTOCOL)` is a one-line test that fails CI when a wire change was committed without a build. Either way a stale client also self-announces at runtime through the `Hello` handshake, so the test moves discovery earlier rather than being the only net.
 
 The other half of that failure is caching, and it lives in [`plaza_session::host::Host`](../session/): a browser serving the page from cache cannot quote a new version however well you derived it.
 
@@ -182,4 +189,4 @@ The other half of that failure is caching, and it lives in [`plaza_session::host
 | Feature | Default | Effect |
 |---|---|---|
 | `json` | yes | Provides `JsonCodec` and pulls in `serde_json`. Disable to take the trait alone. |
-| `build` | no | The build-script half above. Belongs in `[build-dependencies]`, not `[dependencies]`. |
+| `build` | no | The build-script half above, including the `Wire` resolver (pulls `syn`, build-time only). Belongs in `[build-dependencies]`, not `[dependencies]`. |

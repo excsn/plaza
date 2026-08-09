@@ -17,6 +17,8 @@
 //! older format can be told to reload instead of half working.
 
 pub mod envelope;
+#[cfg(feature = "serde")]
+pub mod flow_payloads;
 pub mod frame;
 pub mod framing;
 #[cfg(feature = "serde")]

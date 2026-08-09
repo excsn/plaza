@@ -234,11 +234,29 @@ The netcode vocabulary both ends of a connection exchange. Pure serde, generic o
 
 ## 7. Module `build` (feature `build`)
 
-A protocol version derived at build time from the source files that define your messages, so it cannot drift out of date the way a manual constant does. Used from a `build.rs`, which is why it is behind its own feature: nothing at runtime needs it.
+A protocol version derived at build time from the source that defines your messages, so it cannot drift out of date the way a manual constant does. Used from a `build.rs`, which is why it is behind its own feature: nothing at runtime needs it. The feature pulls `syn` for the resolver, build-time only.
 
-*   **`emit(sources: &[P])`**: hash the sources and publish the result two ways, so a crate uses whichever suits it. `$OUT_DIR/wire_protocol.rs` defines `pub const WIRE_PROTOCOL: u32` and is meant to be `include!`d (preferred: already a number, no parsing to reach a `const`), and `cargo:rustc-env=WIRE_PROTOCOL` is there for a crate that would rather use `env!` and parse it itself. It also emits `cargo:rerun-if-changed` per source, so the version tracks edits without a clean build.
-*   **`emit_dart(sources: &[P], dart_path)`**: the Dart half of `emit`. Writes the same derived version as `const int wireProtocol` at `dart_path`, where a paired Dart client imports it, so the handshake is computed on both ends instead of computed on one and declared `unknown` on the other. The file is meant to be **committed**, because a Dart build cannot run this build script; the write is skipped when the content already matches, a hand edit is healed on the next build (the file itself is watched), and a missing parent directory panics rather than being skipped. Pin the committed copy from the server's own tests so drift fails CI even when nothing rebuilds; `examples/parlour_game/tests/dart_protocol_pin.rs` is the model.
-*   **`version_of(sources: &[P]) -> u32`** / **`version_of_sources(iter) -> u32`**: the hash itself, if you would rather place it yourself.
+### Struct `Wire`
+
+The resolver: the version derived from tagged roots instead of listed files, and the entry point new code should use.
+
+*   **`Wire::detect()`**: roots are the types carrying a doc line `/// plaza-wire: root` anywhere under `src/`. No tagged root anywhere is a build error naming the tag.
+*   **`Wire::ops(&["TableOp", ..])`**: roots named explicitly, for a crate that would rather not tag.
+*   **`.dart(path)`**: also write the committed Dart const (see `emit_dart` below for the contract).
+*   **`.also_scan(dir)`**: scan another directory, for a workspace keeping wire types in a sibling crate it owns.
+*   **`.leaf(name)`**: acknowledge a name the resolver should not chase (a macro-generated type, a shape pinned elsewhere). Explicitly **uncovered by the version**.
+*   **`.emit()`** / **`.version() -> u32`**: publish (as `emit` does, plus the Dart const), or take the number and place it yourself.
+
+The walk starts at the roots and follows field types transitively, generic arguments included, so the version hashes exactly the reachable definitions: an off-wire neighbour sharing a file moves nothing, a doc edit or reformat moves nothing, and a payload two files away counts. Type aliases are followed and their targets count as wire shape. Plaza's own vocabulary is covered by **`VOCAB_VERSION`**, a constant baked into this crate from its own sources and mixed into every derived number, so `Agent`, the netcode payloads and the flow-control notice payloads are never yours to list; their shape changing moves every consumer's version on its next `cargo update`. A reference the resolver cannot place **fails the build naming both ends**. A serde-derived type unreachable from every root and referenced by nothing gets a `cargo:warning` naming it and both tags (`plaza-wire: root` / `plaza-wire: off-wire`), because a forgotten tag is the one miss no resolver catches. Two definitions sharing one bare name is an error: the index is by name.
+
+`Wire` and the file-list `emit` derive **different numbers** for the same wire (per-definition against per-file hashing), so migrating bumps your version once.
+
+### File-list functions
+
+*   **`emit(sources: &[P])`**: hash the listed files and publish the result two ways, so a crate uses whichever suits it. `$OUT_DIR/wire_protocol.rs` defines `pub const WIRE_PROTOCOL: u32` and is meant to be `include!`d (preferred: already a number, no parsing to reach a `const`), and `cargo:rustc-env=WIRE_PROTOCOL` is there for a crate that would rather use `env!` and parse it itself. It also emits `cargo:rerun-if-changed` per source, so the version tracks edits without a clean build. It reads text without resolving types, so a payload defined in an unlisted file silently does not count, which is the limit `Wire` exists to lift.
+*   **`emit_dart(sources: &[P], dart_path)`**: the Dart half of `emit`. Writes the same derived version as `const int wireProtocol` at `dart_path`, where a paired Dart client imports it, so the handshake is computed on both ends instead of computed on one and declared `unknown` on the other. The file is meant to be **committed**, because a Dart build cannot run this build script; the write is skipped when the content already matches, a hand edit is healed on the next build (the file itself is watched), and a missing parent directory panics rather than being skipped.
+*   **`assert_dart_protocol(dart_path, expected: u32)`**: the one-line pin test beside a server whose build writes the Dart const; fails naming both numbers and the fix when the committed copy drifted. Defence-in-depth: a stale client also self-announces at runtime through the `Hello` handshake. `examples/parlour_game/tests/dart_protocol_pin.rs` is the model.
+*   **`version_of(sources: &[P]) -> u32`** / **`version_of_sources(iter) -> u32`**: the file-list hash itself, if you would rather place it yourself.
 *   **`type_definitions(source: &[u8]) -> String`**: the declarations the hash is taken over, with everything else stripped. What makes the version reproducible rather than a hash of whole files.
 
 ```rust,ignore
