@@ -43,7 +43,7 @@ pub async fn fill_the_table(tx: TableCommands, ids: Vec<PlayerId>) {
         .values()
         .filter(|agent| matches!(agent, Agent::Human(_)))
         .count();
-      (humans, state.seats.len())
+      (humans, state.seats.occupied_count())
     })
     .await
     else {

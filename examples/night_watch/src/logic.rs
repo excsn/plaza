@@ -18,6 +18,7 @@ use plaza::game_common::scorekeeping::Scorekeeper;
 use plaza::session::TargetedOp;
 use plaza::state_logic::{LogicInput, LogicOutput, SnapshotRequest, StateLogic};
 use std::collections::BTreeMap;
+use plaza_server_utils::{Admission, Shuffle};
 use tracing::{debug, info, warn};
 
 use crate::types::{
@@ -64,7 +65,8 @@ impl StateLogic<VillageOp, PlayerId, VillageState> for VillageLogic {
 
       LogicInput::TimeStep { .. } => {
         state.tick += 1;
-        resnapshot = run_due_events(state, &mut ctx);
+        resnapshot = seat_the_waiting(state, &mut ctx);
+        resnapshot |= run_due_events(state, &mut ctx);
       }
     }
 
@@ -84,7 +86,7 @@ impl StateLogic<VillageOp, PlayerId, VillageState> for VillageLogic {
 /// One place, checked before any handler touches state. See the module docs:
 /// this is the shape an authorization hook would lift out of the application.
 fn guard(state: &VillageState, player: PlayerId, phase: VillagePhase, role: Option<Role>) -> Option<Refusal> {
-  if !state.seats.contains(&player) {
+  if state.seats.seat_of(&player).is_none() {
     return Some(Refusal::Spectating);
   }
   if state.is_dead(player) {
@@ -120,20 +122,20 @@ fn seat_villager(state: &mut VillageState, agent: &Agent<PlayerId>, ctx: &mut Ct
   if state.agents.contains_key(&player) {
     return false;
   }
-  if matches!(*state.phase.current(), VillagePhase::Night | VillagePhase::Day) || state.seats.len() >= SEATS {
-    info!(player, "village is mid-game or full; connected as a spectator");
+  sync_lock(state);
+  if !matches!(state.seats.admit(player), Admission::Seated { .. }) {
+    info!(player, "village is mid-game or full; watching until a deal has a seat");
     return false;
   }
 
-  state.seats.push(player);
   state.agents.insert(player, agent.clone());
   state.wins.set_score(&player, 0);
   ctx
     .ops_q()
     .push(TargetedOp::new_system_to(player, vec![VillageOp::YouAre(player)]));
-  info!(player, seated = state.seats.len(), "villager seated");
+  info!(player, seated = state.seats.occupied_count(), "villager seated");
 
-  if state.seats.len() != SEATS {
+  if state.seats.occupied_count() != SEATS {
     return true;
   }
   info!("the village is full, dealing");
@@ -141,17 +143,51 @@ fn seat_villager(state: &mut VillageState, agent: &Agent<PlayerId>, ctx: &mut Ct
   true
 }
 
+/// The lock is the phase's shadow: a village mid-story has no seat to give.
+fn sync_lock(state: &mut VillageState) {
+  if matches!(*state.phase.current(), VillagePhase::Night | VillagePhase::Day) {
+    state.seats.lock();
+  } else {
+    state.seats.unlock();
+  }
+}
+
+/// Deals the queue into seats freed since, once the story is over: a watcher
+/// becomes a villager at the next deal, never a reconnect away from one.
+fn seat_the_waiting(state: &mut VillageState, ctx: &mut Ctx) -> bool {
+  sync_lock(state);
+  let mut changed = false;
+  for shuffle in state.seats.resolve() {
+    let Shuffle::Promoted { key: player, .. } = shuffle else {
+      continue;
+    };
+    state.wins.set_score(&player, 0);
+    ctx
+      .ops_q()
+      .push(TargetedOp::new_system_to(player, vec![VillageOp::YouAre(player)]));
+    info!(player, "dealt in from the waitlist");
+    changed = true;
+  }
+  // `NewGame` is scheduled once and a skip never reschedules, so the deal
+  // that a promotion completes has to be triggered here, as a join would.
+  if changed && state.seats.occupied_count() == SEATS {
+    info!("the village is full, dealing");
+    start_game(state, ctx);
+  }
+  changed
+}
+
 /// Handles a departure: a spectator vanishes, a living player dies of it.
 fn depart(state: &mut VillageState, player: PlayerId, ctx: &mut Ctx) -> bool {
   state.agents.remove(&player);
   state.votes.remove(&player);
-  if !state.seats.contains(&player) {
+  if state.seats.seat_of(&player).is_none() {
     return false;
   }
 
   let was_alive = state.is_alive(player);
   let role = state.roles.get(&player).copied();
-  state.seats.retain(|p| p != &player);
+  state.seats.depart(&player);
   // Off the board entirely, not zeroed on it: a village lives for hours and a
   // leaver at zero forever is the leak `forget_player` exists for.
   state.wins.forget_player(&player);
@@ -193,9 +229,9 @@ fn start_game(state: &mut VillageState, ctx: &mut Ctx) {
 
   // The wolf rotates by deal, deterministically: same seats, same sequence of
   // wolves, so the scripted run reads the same every time.
-  let wolf = state.seats[(state.games as usize - 1) % state.seats.len()];
-  state.roles = state
-    .seats
+  let players = state.players();
+  let wolf = players[(state.games as usize - 1) % players.len()];
+  state.roles = players
     .iter()
     .map(|p| (*p, if *p == wolf { Role::Wolf } else { Role::Villager }))
     .collect();
@@ -360,9 +396,9 @@ fn game_over(state: &mut VillageState, winner: Side, reason: &str, ctx: &mut Ctx
   );
 
   let roles: Vec<(PlayerId, Role)> = state
-    .seats
-    .iter()
-    .filter_map(|p| state.roles.get(p).map(|r| (*p, *r)))
+    .players()
+    .into_iter()
+    .filter_map(|p| state.roles.get(&p).map(|r| (p, *r)))
     .collect();
   for (player, role) in &roles {
     if role.side() == winner {
@@ -402,8 +438,8 @@ fn run_due_events(state: &mut VillageState, ctx: &mut Ctx) -> bool {
       }
 
       VillageEvent::NewGame => {
-        if state.seats.len() < SEATS {
-          debug!(seated = state.seats.len(), "new game skipped: seats to fill");
+        if state.seats.occupied_count() < SEATS {
+          debug!(seated = state.seats.occupied_count(), "new game skipped: seats to fill");
           continue;
         }
         info!("the reveal has been read; dealing again");
@@ -658,7 +694,7 @@ mod tests {
     for player in 1..=SEATS as PlayerId {
       run(&mut state, LogicInput::AgentLeft { agent_id: player }).await;
     }
-    assert!(state.seats.is_empty());
+    assert_eq!(state.seats.occupied_count(), 0);
 
     for player in 11..=(10 + SEATS as PlayerId) {
       run(&mut state, LogicInput::AgentJoined {
@@ -672,6 +708,37 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn a_mid_game_watcher_is_dealt_in_at_the_next_game() {
+    // The dead end this pins: the game dies under-seated with a willing
+    // player watching, and `NewGame` skips for seats to fill while they sit
+    // there. The waitlist deals them in instead of demanding a reconnect.
+    let mut state = village().await;
+    run(&mut state, LogicInput::AgentJoined {
+      agent: Agent::new_human(9),
+    })
+    .await;
+    assert!(state.seats.seat_of(&9).is_none(), "mid-story, they watch");
+
+    // Villagers leave until the wolf wins and the story ends.
+    for villager in [2, 3, 4] {
+      run(&mut state, LogicInput::AgentLeft { agent_id: villager }).await;
+    }
+    assert_eq!(*state.phase.current(), VillagePhase::Over);
+
+    tick(&mut state).await;
+    assert!(state.seats.seat_of(&9).is_some(), "the watcher was dealt in, no reconnect required");
+
+    for player in [10, 11] {
+      run(&mut state, LogicInput::AgentJoined {
+        agent: Agent::new_human(player),
+      })
+      .await;
+    }
+    assert_eq!(state.games, 2, "the refilled village deals");
+    assert!(state.roles.contains_key(&9), "and the watcher is in the story");
+  }
+
+  #[tokio::test]
   async fn a_mid_game_joiner_watches_instead_of_playing() {
     let mut state = village().await;
     act(&mut state, 1, VillageOp::Hunt(3)).await;
@@ -680,7 +747,7 @@ mod tests {
       agent: Agent::new_human(9),
     })
     .await;
-    assert!(!state.seats.contains(&9), "a village mid-story has no seat to give");
+    assert!(state.seats.seat_of(&9).is_none(), "a village mid-story has no seat to give");
 
     act(&mut state, 9, VillageOp::Vote(2)).await;
     assert!(state.votes.is_empty(), "and no ballot to accept");

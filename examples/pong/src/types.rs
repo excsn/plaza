@@ -1,4 +1,5 @@
 use plaza::agent::Agent;
+use plaza_server_utils::{Roster, SeatState};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -115,15 +116,14 @@ pub struct PongGameState {
   pub paddles: HashMap<PlayerId, Paddle>,
   pub ball: Ball,
   pub scores: HashMap<PlayerId, u32>,
-  pub player1_id: Option<PlayerId>,
-  pub player2_id: Option<PlayerId>,
+  /// Seat 0 is [`PlayerSide::Left`], seat 1 is [`PlayerSide::Right`]. People
+  /// admit at rank 0 and bots at rank 1, so a bot holds a paddle only until a
+  /// person wants one, and the swap lands on the tick in `resolve`.
+  pub seats: Roster<PlayerId>,
   /// Everyone connected, players and spectators alike. A uniform snapshot
   /// names its recipients, so the roster has to live somewhere; the controller
   /// does not keep one.
   pub agents: HashMap<PlayerId, Agent<PlayerId>>,
-  /// Order of arrival, so a freed seat goes to whoever has waited longest
-  /// rather than to whichever key the map happened to yield first.
-  pub arrivals: Vec<PlayerId>,
   /// Ticks left in whatever timed phase is running. Zero outside one.
   pub countdown: u32,
   pub last_update_time: Option<std::time::Instant>,
@@ -136,6 +136,21 @@ impl PongGameState {
   pub fn everyone(&self) -> Vec<Agent<PlayerId>> {
     self.agents.values().cloned().collect()
   }
+
+  fn seated(&self, seat: usize) -> Option<PlayerId> {
+    match self.seats.seat_state(seat) {
+      SeatState::Human(id) => Some(*id),
+      _ => None,
+    }
+  }
+
+  pub fn player1_id(&self) -> Option<PlayerId> {
+    self.seated(0)
+  }
+
+  pub fn player2_id(&self) -> Option<PlayerId> {
+    self.seated(1)
+  }
 }
 
 impl Default for PongGameState {
@@ -146,10 +161,8 @@ impl Default for PongGameState {
       paddles: HashMap::new(),
       ball: Ball::new(),
       scores: HashMap::new(),
-      player1_id: None,
-      player2_id: None,
+      seats: Roster::new(2).with_waitlist(),
       agents: HashMap::new(),
-      arrivals: Vec::new(),
       countdown: 0,
       last_update_time: Some(std::time::Instant::now()),
       version: 0,
@@ -182,8 +195,8 @@ impl From<&PongGameState> for PongSnapshotPayload {
       paddles: state.paddles.clone(),
       ball: state.ball.clone(),
       scores: state.scores.clone(),
-      player1_id: state.player1_id,
-      player2_id: state.player2_id,
+      player1_id: state.player1_id(),
+      player2_id: state.player2_id(),
       countdown: state.countdown.div_ceil(60),
       bots: state
         .agents

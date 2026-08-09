@@ -19,6 +19,7 @@ use plaza::common::fsm::{FsmContext as _, OpsQueue};
 use plaza::error::StateLogicError;
 use plaza::session::TargetedOp;
 use plaza::state_logic::{LogicInput, LogicOutput, SnapshotRequest, StateLogic};
+use plaza_server_utils::{Admission, Departure};
 use tracing::{debug, info, warn};
 
 use crate::protocol::{
@@ -107,42 +108,40 @@ fn arrive(state: &mut RunState, agent: &Agent<PlayerId>, ctx: &mut Ctx) -> bool 
   };
   state.agents.insert(player, agent.clone());
 
-  if state.tracker.on_reconnect(&player) {
-    state.meters.resumes += 1;
-    ctx
-      .ops_q()
-      .push(TargetedOp::new_system_all(vec![RunOp::SeatResumed { player }]));
-    info!(player, "back inside the window; the seat was held");
-    // The hold may have been the only thing keeping the party at an open
-    // door.
-    maybe_advance(state, ctx);
-    return true;
+  match state.roster.admit(player) {
+    Admission::Resumed { .. } => {
+      state.tracker.on_reconnect(&player);
+      state.meters.resumes += 1;
+      ctx
+        .ops_q()
+        .push(TargetedOp::new_system_all(vec![RunOp::SeatResumed { player }]));
+      info!(player, "back inside the window; the seat was held");
+      // The hold may have been the only thing keeping the party at an open
+      // door.
+      maybe_advance(state, ctx);
+    }
+    Admission::Seated { fresh: true, .. } => {
+      state.seats.push(Seat {
+        player,
+        keys: 0,
+        coins: 0,
+        pocketed: false,
+        acked_seq: 0,
+      });
+      ctx
+        .ops_q()
+        .push(TargetedOp::new_system_to(player, vec![RunOp::YouAre(player)]));
+      info!(player, seated = state.seats.len(), "joined the party");
+    }
+    Admission::Seated { fresh: false, .. } => {}
+    _ => info!(player, "the party is full; watching"),
   }
-
-  if state.seat_of(player).is_some() {
-    return true;
-  }
-  if state.seats.len() >= SEATS {
-    info!(player, "the party is full; watching");
-    return true;
-  }
-  state.seats.push(Seat {
-    player,
-    keys: 0,
-    coins: 0,
-    pocketed: false,
-    acked_seq: 0,
-  });
-  ctx
-    .ops_q()
-    .push(TargetedOp::new_system_to(player, vec![RunOp::YouAre(player)]));
-  info!(player, seated = state.seats.len(), "joined the party");
   true
 }
 
 fn drop_link(state: &mut RunState, player: PlayerId, ctx: &mut Ctx) -> bool {
   state.agents.remove(&player);
-  if state.seat_of(player).is_none() {
+  if !matches!(state.roster.depart(&player), Departure::Held { .. }) {
     return false;
   }
   state.tracker.on_disconnect(player, state.tick);
@@ -279,6 +278,7 @@ fn tick(state: &mut RunState, ctx: &mut Ctx) -> bool {
 
   for player in state.tracker.expired(state.tick) {
     state.meters.expiries += 1;
+    state.roster.expire(&player);
     if let Some(seat) = state.seat_of(player) {
       let left = state.seats.remove(seat);
       // Their keys stay behind for whoever is still standing.
@@ -338,20 +338,22 @@ fn drive_bots(state: &mut RunState, ctx: &mut Ctx) -> bool {
   }
 
   let mut changed = false;
-  if state.seats.len() < SEATS {
+  if state.roster.occupied_count() < SEATS {
     state.bot_wait += 1;
     if state.bot_wait >= BOT_WAIT_MS / TICK_MS {
       state.bot_wait = 0;
       let bot = BOT_BASE + state.seats.len() as PlayerId;
-      state.seats.push(Seat {
-        player: bot,
-        keys: 0,
-        coins: 0,
-        pocketed: false,
-        acked_seq: 0,
-      });
-      info!(bot, "a hireling takes an empty seat");
-      changed = true;
+      if matches!(state.roster.admit(bot), Admission::Seated { fresh: true, .. }) {
+        state.seats.push(Seat {
+          player: bot,
+          keys: 0,
+          coins: 0,
+          pocketed: false,
+          acked_seq: 0,
+        });
+        info!(bot, "a hireling takes an empty seat");
+        changed = true;
+      }
     }
   } else {
     state.bot_wait = 0;

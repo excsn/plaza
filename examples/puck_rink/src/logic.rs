@@ -10,9 +10,10 @@ use plaza::common::fsm::{FsmContext as _, OpsQueue};
 use plaza::error::StateLogicError;
 use plaza::session::TargetedOp;
 use plaza::state_logic::{LogicInput, LogicOutput, StateLogic};
+use plaza_server_utils::{Admission, Departure, SeatState};
 use tracing::{debug, info};
 
-use crate::protocol::{frame_to_ms, FrameUpdate, Occupant, PlayerId, RinkOp};
+use crate::protocol::{frame_to_ms, FrameUpdate, PlayerId, RinkOp};
 use crate::sim::{self, PaddleInput, SEATS};
 use crate::state::{RinkState, WINDOW};
 
@@ -116,11 +117,10 @@ fn seat_player(state: &mut RinkState, agent: &Agent<PlayerId>, ctx: &mut Ctx) {
   }
   state.agents.insert(player, agent.clone());
 
-  let Some(seat) = state.seats.iter().position(|s| *s == Occupant::Bot) else {
+  let Admission::Seated { seat, .. } = state.roster.admit(player) else {
     info!(player, "rink is full of people; watching");
     return;
   };
-  state.seats[seat] = Occupant::Human(player);
   state.schedules[seat].clear();
   state.held[seat] = PaddleInput::default();
   ctx
@@ -131,8 +131,7 @@ fn seat_player(state: &mut RinkState, agent: &Agent<PlayerId>, ctx: &mut Ctx) {
 
 fn depart(state: &mut RinkState, player: PlayerId) {
   state.agents.remove(&player);
-  if let Some(seat) = state.seat_of(player) {
-    state.seats[seat] = Occupant::Bot;
+  if let Departure::Freed { seat } = state.roster.depart(&player) {
     state.schedules[seat].clear();
     state.held[seat] = PaddleInput::default();
     info!(player, seat, "left; the bot takes the paddle back");
@@ -154,14 +153,14 @@ fn step_once(state: &mut RinkState, ctx: &mut Ctx) {
 
   let mut applied = [PaddleInput::default(); SEATS];
   for seat in 0..SEATS {
-    applied[seat] = match state.seats[seat] {
-      Occupant::Human(_) => {
+    applied[seat] = match state.roster.seat_state(seat) {
+      SeatState::Human(_) => {
         if let Some(input) = state.schedules[seat].execute_due(state.tick) {
           state.held[seat] = input;
         }
         state.held[seat]
       }
-      Occupant::Bot => bot_held(state.tick, seat, &state.world, &mut state.held[seat]),
+      _ => bot_held(state.tick, seat, &state.world, &mut state.held[seat]),
     };
   }
 
@@ -175,13 +174,14 @@ fn step_once(state: &mut RinkState, ctx: &mut Ctx) {
       world: state.world.clone(),
       applied,
       digest: sim::digest(&state.world),
-      occupants: state.seats,
+      occupants: state.occupants(),
     }))]));
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::protocol::Occupant;
   use crate::sim::PADDLE_R;
 
   async fn run(state: &mut RinkState, input: LogicInput<RinkOp, PlayerId>) {
@@ -217,11 +217,11 @@ mod tests {
   async fn a_human_takes_a_bot_seat_and_a_leaver_hands_it_back() {
     let mut state = RinkState::new();
     join(&mut state, 7).await;
-    assert_eq!(state.seats[0], Occupant::Human(7));
+    assert_eq!(state.occupants()[0], Occupant::Human(7));
     assert_eq!(state.seat_of(7), Some(0));
 
     run(&mut state, LogicInput::AgentLeft { agent_id: 7 }).await;
-    assert_eq!(state.seats[0], Occupant::Bot);
+    assert_eq!(state.occupants()[0], Occupant::Bot);
   }
 
   #[tokio::test]
@@ -275,7 +275,7 @@ mod tests {
       join(&mut state, player).await;
     }
     assert_eq!(state.seat_of(5), None);
-    assert!(state.seats.iter().all(|s| matches!(s, Occupant::Human(_))));
+    assert!(state.occupants().iter().all(|s| matches!(s, Occupant::Human(_))));
 
     // A spectator's input goes nowhere.
     let before = state.world.paddles;

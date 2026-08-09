@@ -11,6 +11,7 @@ use plaza::session::{MessageTarget, TargetedOp};
 use plaza::snapshot::{SnapshotContext, SnapshotError, SnapshotProvider};
 use plaza::state_logic::{LogicInput, LogicOutput, SnapshotRequest, StateLogic, StateLogicError};
 use plaza_lobby::SeatReservations;
+use plaza_server_utils::Roster;
 use tracing::info;
 
 use crate::RESERVATION_WINDOW;
@@ -30,7 +31,6 @@ const BOT_CLAIM_EVERY: Duration = Duration::from_secs(3);
 /// Per-arena only. The wallet lives in the shared registry: it outlives this room.
 #[derive(Debug, Clone)]
 pub struct Occupancy {
-  pub seat: Seat,
   pub claims_here: u32,
   pub bot: bool,
   /// When this bot may next claim. Meaningless for humans, who claim by asking.
@@ -46,6 +46,8 @@ pub struct ArenaState {
   pub max_players: u32,
   pub pot: u64,
   pub occupants: ParticipantTracker<PlayerId, Occupancy>,
+  /// Who holds a player seat; everyone else present is a spectator.
+  pub seats: Roster<PlayerId>,
   pub reserved: SeatReservations<PlayerId>,
   pub since_refresh: Duration,
   /// Arena time, the axis bot cooldowns are measured on.
@@ -69,6 +71,7 @@ impl ArenaState {
       max_players,
       pot: POT_STEP,
       occupants: ParticipantTracker::new(),
+      seats: Roster::new(max_players as usize),
       reserved: SeatReservations::with_expiry(RESERVATION_WINDOW),
       since_refresh: Duration::ZERO,
       elapsed: Duration::ZERO,
@@ -77,12 +80,16 @@ impl ArenaState {
     }
   }
 
+  fn seat_for(&self, id: &PlayerId) -> Seat {
+    if self.seats.seat_of(id).is_some() {
+      Seat::Player
+    } else {
+      Seat::Spectator
+    }
+  }
+
   fn seated_players(&self) -> u32 {
-    self
-      .occupants
-      .iter()
-      .filter(|(_, info)| info.app_data.seat == Seat::Player)
-      .count() as u32
+    self.seats.occupied_count() as u32
   }
 
   fn bots(&self) -> u32 {
@@ -99,7 +106,7 @@ impl ArenaState {
     self
       .occupants
       .iter()
-      .filter(|(_, info)| info.app_data.seat == Seat::Player && !info.app_data.bot)
+      .filter(|(id, info)| self.seats.seat_of(id).is_some() && !info.app_data.bot)
       .count() as u32
   }
 
@@ -107,7 +114,7 @@ impl ArenaState {
     self
       .occupants
       .iter()
-      .filter(|(_, info)| info.app_data.seat == Seat::Spectator)
+      .filter(|(id, _)| self.seats.seat_of(id).is_none())
       .count() as u32
   }
 
@@ -126,8 +133,8 @@ impl ArenaState {
     let mut ready: Vec<(PlayerId, Duration)> = self
       .occupants
       .iter()
-      .filter(|(_, info)| {
-        info.app_data.bot && info.app_data.seat == Seat::Player && info.app_data.next_claim <= self.elapsed
+      .filter(|(id, info)| {
+        info.app_data.bot && self.seats.seat_of(id).is_some() && info.app_data.next_claim <= self.elapsed
       })
       .map(|(id, info)| (*id, info.app_data.next_claim))
       .collect();
@@ -159,7 +166,7 @@ impl ArenaState {
       .iter()
       .map(|(id, info)| Occupant {
         player: *id,
-        seat: info.app_data.seat,
+        seat: self.seat_for(id),
         bot: info.app_data.bot,
         coins: self.wallets.balance(*id),
         claims_here: info.app_data.claims_here,
@@ -176,9 +183,9 @@ impl ArenaState {
       spectators: self.spectators(),
       bots: self.bots(),
       occupants,
-      your_seat: viewer
-        .and_then(|id| self.occupants.get_participant_app_data(id))
-        .map(|occupancy| occupancy.seat),
+      your_seat: viewer.map(|id| self.seat_for(id)).filter(|_| {
+        viewer.is_some_and(|id| self.occupants.get_participant_app_data(id).is_some())
+      }),
     }
   }
 }
@@ -200,16 +207,15 @@ impl StateLogic<RoomOp, PlayerId, ArenaState> for ArenaLogic {
 
         // Both checks: the lobby's capacity check and this connect are not
         // atomic, so the room may have filled in between.
-        let admitted = state.reserved.consume(&id);
-        let seat = if admitted && state.seated_players() < state.max_players {
-          Seat::Player
-        } else {
-          Seat::Spectator
-        };
+        // Both gates: a consumed reservation, then a seat. The lobby's
+        // capacity check and this connect are not atomic, so the room may
+        // have filled in between; an unreserved or unseated arrival watches.
+        if state.reserved.consume(&id) {
+          let _ = state.seats.admit(id);
+        }
 
         let bot = matches!(agent, Agent::Bot(_));
         state.occupants.add_participant(agent, Occupancy {
-          seat,
           claims_here: 0,
           bot,
           next_claim: state.elapsed + BOT_CLAIM_EVERY,
@@ -222,6 +228,7 @@ impl StateLogic<RoomOp, PlayerId, ArenaState> for ArenaLogic {
 
       LogicInput::AgentLeft { agent_id } => {
         state.occupants.remove_participant(&agent_id);
+        state.seats.depart(&agent_id);
         // The reservation deliberately survives: a room hop closes the old
         // socket after the new seat is reserved. Only `Withdraw` cancels.
         state.publish_seat_count();
@@ -244,6 +251,7 @@ impl StateLogic<RoomOp, PlayerId, ArenaState> for ArenaLogic {
         if state.bots() > 0 && state.seated_humans() == 0 {
           for id in state.bot_ids() {
             state.occupants.remove_participant(&id);
+            state.seats.depart(&id);
           }
           state.publish_seat_count();
         }
@@ -296,7 +304,7 @@ impl StateLogic<RoomOp, PlayerId, ArenaState> for ArenaLogic {
             RoomOp::Claim => {
               let Some(id) = source.id_cloned() else { continue };
 
-              match state.occupants.get_participant_app_data(&id).map(|o| o.seat) {
+              match state.occupants.get_participant_app_data(&id).map(|_| state.seat_for(&id)) {
                 Some(Seat::Player) => {}
                 Some(Seat::Spectator) => {
                   out.push(TargetedOp::new_system_to(

@@ -7,6 +7,7 @@ use plaza::game_common::flow_control::{RoundManager, TurnManager};
 use plaza::game_common::scorekeeping::Scorekeeper;
 use plaza::session::TargetedOp;
 use plaza::state_logic::{LogicInput, LogicOutput, SnapshotRequest, StateLogic};
+use plaza_server_utils::Admission;
 use tracing::{debug, info, warn};
 
 use crate::types::TABLE_SIZE;
@@ -86,14 +87,14 @@ fn seat_player(state: &mut TableState, agent: &Agent<PlayerId>, ctx: &mut Ctx) -
   if state.agents.contains_key(&player) {
     return false;
   }
-  // Checked before seating, not after. Seating an extra player and then asking
-  // whether the table was full re-dealt the round every time a fourth arrived.
-  if state.seats.len() >= TABLE_SIZE {
+  // Admission is checked before anything else happens to the table: seating an
+  // extra player and then asking whether it was full re-dealt the round every
+  // time a fourth arrived.
+  if !matches!(state.seats.admit(player), Admission::Seated { .. }) {
     info!(%player, "table is full; connected as a spectator");
     return false;
   }
 
-  state.seats.push(player);
   state.agents.insert(player, agent.clone());
   // Mid-round, the newcomer stays out of the turn order until the next deal:
   // the live round was dealt to the players it started with, and a handless
@@ -105,9 +106,9 @@ fn seat_player(state: &mut TableState, agent: &Agent<PlayerId>, ctx: &mut Ctx) -
   ctx
     .ops_q()
     .push(TargetedOp::new_system_to(player, vec![CardOp::YouAre(player)]));
-  info!(%player, seated = state.seats.len(), "player seated");
+  info!(%player, seated = state.seats.occupied_count(), "player seated");
 
-  if state.seats.len() != TABLE_SIZE {
+  if state.seats.occupied_count() != TABLE_SIZE {
     return false;
   }
 
@@ -127,7 +128,7 @@ fn seat_player(state: &mut TableState, agent: &Agent<PlayerId>, ctx: &mut Ctx) -
 /// continues rather than stalling on someone who left.
 fn unseat_player(state: &mut TableState, player: &PlayerId) {
   let held_the_turn = state.turns.current_turn_actor() == Some(*player);
-  state.seats.retain(|p| p != player);
+  state.seats.depart(player);
   state.agents.remove(player);
   state.hands.remove(player);
   state.turns.remove_actor(player);
@@ -146,10 +147,9 @@ fn begin_round(state: &mut TableState, ctx: &mut Ctx) {
   // A deal seats whoever arrived since the last one: a mid-round joiner waits
   // out the round they walked in on and enters the order here.
   let waiting: Vec<PlayerId> = state
-    .seats
-    .iter()
+    .players()
+    .into_iter()
     .filter(|seat| !state.turns.actors().contains(seat))
-    .copied()
     .collect();
   for player in waiting {
     state.turns.add_actor(player);
@@ -304,8 +304,8 @@ fn run_due_timeouts(state: &mut TableState, ctx: &mut Ctx) -> bool {
         // Everyone left during the intermission. Dealing to nobody would leave a
         // table mid-round that the next arrival could not join; `seat_player`
         // deals when the seats fill again.
-        if state.seats.len() < TABLE_SIZE {
-          debug!(seated = state.seats.len(), "rematch skipped: not enough players left");
+        if state.seats.occupied_count() < TABLE_SIZE {
+          debug!(seated = state.seats.occupied_count(), "rematch skipped: not enough players left");
           continue;
         }
         start_match(state, ctx);

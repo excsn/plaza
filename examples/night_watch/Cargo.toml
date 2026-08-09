@@ -7,6 +7,7 @@ default-run = "plaza_example_night_watch"
 
 [dependencies]
 plaza = { workspace = true }
+plaza_server_utils = { workspace = true }
 plaza_wire = { workspace = true }
 plaza_session = { workspace = true, features = ["actix_ws", "json", "actix_host"] }
 

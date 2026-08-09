@@ -4,8 +4,9 @@ use std::collections::HashMap;
 
 use plaza::agent::Agent;
 use plaza::common::reconnect::ReconnectTracker;
+use plaza_server_utils::{Roster, SeatState};
 
-use crate::protocol::{Meters, PlayerId, Presence, RunView, SeatView, CHEST_KEYS, DEFAULT_GRACE_MS, ROOMS, TICK_MS};
+use crate::protocol::{Meters, PlayerId, Presence, RunView, SeatView, CHEST_KEYS, DEFAULT_GRACE_MS, ROOMS, SEATS, TICK_MS};
 
 #[derive(Debug)]
 pub struct Seat {
@@ -24,6 +25,9 @@ pub struct RunState {
   pub door_locked: bool,
   pub chest_keys: u8,
   pub seats: Vec<Seat>,
+  /// The seat lifecycle: who is seated, whose seat is held. The tracker below
+  /// is the clock that decides when a hold ends; this is what a hold *is*.
+  pub roster: Roster<PlayerId>,
   pub agents: HashMap<PlayerId, Agent<PlayerId>>,
 
   /// The grace machinery, plaza's own: held seats, driven from the tick.
@@ -61,6 +65,7 @@ impl RunState {
       door_locked: true,
       chest_keys: CHEST_KEYS,
       seats: Vec::new(),
+      roster: Roster::new(SEATS).holding_seats(),
       agents: HashMap::new(),
       tracker: ReconnectTracker::new(grace_ticks),
       grace_ticks,
@@ -81,7 +86,7 @@ impl RunState {
   }
 
   pub fn any_seat_held(&self) -> bool {
-    self.seats.iter().any(|s| self.tracker.is_awaiting_reconnect(&s.player))
+    self.roster.seats().any(|state| matches!(state, SeatState::Held(_)))
   }
 
   pub fn view(&self) -> RunView {

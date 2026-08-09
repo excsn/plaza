@@ -15,6 +15,7 @@ websocket = ["dep:plaza_ws", "dep:plaza_wire"]
 
 [dependencies]
 plaza = { workspace = true }
+plaza_server_utils = { workspace = true }
 playground_common = { workspace = true }
 serde = { workspace = true }
 

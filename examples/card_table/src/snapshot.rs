@@ -32,10 +32,10 @@ pub fn player_view(state: &TableState, me: Option<PlayerId>) -> PlayerView {
 
   // Everyone who is not the recipient, reduced to a card count.
   let opponents = state
-    .seats
-    .iter()
-    .filter(|id| Some(**id) != me)
-    .map(|id| (*id, state.hands.get(id).map_or(0, Vec::len)))
+    .players()
+    .into_iter()
+    .filter(|id| Some(*id) != me)
+    .map(|id| (id, state.hands.get(&id).map_or(0, Vec::len)))
     .collect();
 
   PlayerView {

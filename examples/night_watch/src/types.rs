@@ -1,5 +1,6 @@
 //! The village's vocabulary and its authoritative state.
 
+use plaza_server_utils::{Roster, SeatState};
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -188,7 +189,7 @@ pub struct VillageState {
   /// the board entirely rather than haunting it at zero.
   pub wins: HashMapScorekeeper<PlayerId, u32>,
 
-  pub seats: Vec<PlayerId>,
+  pub seats: Roster<PlayerId>,
   pub agents: HashMap<PlayerId, Agent<PlayerId>>,
   pub roles: HashMap<PlayerId, Role>,
   pub dead: Vec<(PlayerId, Role)>,
@@ -220,12 +221,24 @@ impl Default for VillageState {
 }
 
 impl VillageState {
+  /// The seated villagers in seat order, the order the wolf rotation reads.
+  pub fn players(&self) -> Vec<PlayerId> {
+    self
+      .seats
+      .seats()
+      .filter_map(|state| match state {
+        SeatState::Human(id) => Some(*id),
+        _ => None,
+      })
+      .collect()
+  }
+
   pub fn new() -> Self {
     Self {
       phase: Phased::new(VillagePhase::Waiting),
       rounds: SequentialRoundManager::new(None, VillageOp::RoundStarted, VillageOp::RoundEnded),
       wins: HashMapScorekeeper::new(),
-      seats: Vec::new(),
+      seats: Roster::new(SEATS).with_waitlist(),
       agents: HashMap::new(),
       roles: HashMap::new(),
       dead: Vec::new(),
@@ -252,13 +265,13 @@ impl VillageState {
   }
 
   pub fn is_alive(&self, player: PlayerId) -> bool {
-    self.seats.contains(&player) && !self.is_dead(player)
+    self.seats.seat_of(&player).is_some() && !self.is_dead(player)
   }
 
   /// The living, in seat order, which is also what makes the night's fallback
   /// choice deterministic.
   pub fn living(&self) -> Vec<PlayerId> {
-    self.seats.iter().copied().filter(|p| !self.is_dead(*p)).collect()
+    self.players().into_iter().filter(|p| !self.is_dead(*p)).collect()
   }
 
   pub fn living_villagers(&self) -> usize {
@@ -283,9 +296,9 @@ impl VillageState {
     let reveal = over || me_seated_dead;
     let everyone = reveal.then(|| {
       self
-        .seats
-        .iter()
-        .filter_map(|p| self.roles.get(p).map(|r| (*p, *r)))
+        .players()
+        .into_iter()
+        .filter_map(|p| self.roles.get(&p).map(|r| (p, *r)))
         .collect()
     });
 
@@ -297,7 +310,7 @@ impl VillageState {
       round: self.rounds_current(),
       living: self.living(),
       dead: self.dead.clone(),
-      your_role: me.filter(|p| self.seats.contains(p)).and_then(|p| self.roles.get(&p)).copied(),
+      your_role: me.filter(|p| self.seats.seat_of(p).is_some()).and_then(|p| self.roles.get(&p)).copied(),
       voted,
       your_vote: me.and_then(|p| self.votes.get(&p)).copied(),
       everyone,
@@ -316,7 +329,7 @@ impl VillageState {
   /// a wolf win. Only meaningful at [`VillagePhase::Over`].
   pub fn winner(&self) -> Option<Side> {
     let wolf = self.the_wolf()?;
-    if self.is_dead(wolf) || !self.seats.contains(&wolf) {
+    if self.is_dead(wolf) || self.seats.seat_of(&wolf).is_none() {
       return Some(Side::Village);
     }
     (self.living_villagers() <= 1).then_some(Side::Wolf)

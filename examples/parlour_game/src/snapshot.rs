@@ -34,10 +34,10 @@ pub fn player_view(state: &TableState, me: Option<PlayerId>) -> PlayerView {
     .unwrap_or_default();
 
   let opponents = state
-    .seats
-    .iter()
-    .filter(|id| Some(**id) != me)
-    .map(|id| (*id, state.hands.get(id).map_or(0, Vec::len)))
+    .players()
+    .into_iter()
+    .filter(|id| Some(*id) != me)
+    .map(|id| (id, state.hands.get(&id).map_or(0, Vec::len)))
     .collect();
 
   PlayerView {

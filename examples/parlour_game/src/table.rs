@@ -13,6 +13,7 @@ use plaza::game_common::flow_control::{RoundManager, TurnManager};
 use plaza::game_common::scorekeeping::Scorekeeper;
 use plaza::session::TargetedOp;
 use plaza::state_logic::{LogicInput, LogicOutput, SnapshotRequest, StateLogic};
+use plaza_server_utils::Admission;
 use tracing::{debug, info, warn};
 
 use crate::types::{
@@ -44,16 +45,15 @@ impl StateLogic<TableOp, PlayerId, TableState> for TableLogic {
         // Both checks: the lobby's capacity check and this connect are not
         // atomic, so the table may have filled in between.
         let admitted = state.reserved.consume(&player);
-        let seat = if admitted && state.seated_players() < state.max_players {
+        let seat = if admitted && matches!(state.seats.admit(player), Admission::Seated { .. }) {
           Seat::Player
         } else {
           Seat::Spectator
         };
         let bot = matches!(agent, Agent::Bot(_));
 
-        state.occupants.add_participant(agent, Occupancy { seat, bot });
+        state.occupants.add_participant(agent, Occupancy { bot });
         if seat == Seat::Player {
-          state.seats.push(player);
           state.turns.add_actor(player);
           state.scores.set_score(&player, 0);
         }
@@ -171,7 +171,7 @@ fn play_requested(state: &mut TableState, player: PlayerId, card: Card, ctx: &mu
 fn unseat(state: &mut TableState, player: &PlayerId) {
   let held_the_turn = state.turns.current_turn_actor() == Some(*player);
   state.occupants.remove_participant(player);
-  state.seats.retain(|p| p != player);
+  state.seats.depart(player);
   state.hands.remove(player);
   state.turns.remove_actor(player);
   info!(player, table = %state.name, "Left the table.");
@@ -222,7 +222,7 @@ fn play_card(state: &mut TableState, player: PlayerId, card: Card, on_their_beha
   ctx.ops_q().push(TargetedOp::new_system_all(vec![notice]));
   info!(player, %card, auto = on_their_behalf, "Card played.");
 
-  if state.played.len() < state.seats.len() {
+  if state.played.len() < state.seats.occupied_count() {
     let _ = state.turns.end_current_turn_and_advance(ctx);
     arm_turn_timeout(state);
     return false;
@@ -283,9 +283,9 @@ fn finish_match(state: &mut TableState, ctx: &mut Ctx) {
   let stake = state.settings.stake;
 
   let mut pot = 0;
-  for player in &state.seats {
-    if Some(*player) != winner {
-      pot += state.wallets.debit(*player, stake);
+  for player in state.players() {
+    if Some(player) != winner {
+      pot += state.wallets.debit(player, stake);
     }
   }
   let coins = match winner {
@@ -360,8 +360,8 @@ fn run_due_timeouts(state: &mut TableState, ctx: &mut Ctx) -> bool {
       TableEvent::Rematch => {
         // Players drifted off during the intermission. Dealing to a short table
         // would leave a hand nobody can finish; the next arrival deals instead.
-        if state.seats.len() < TABLE_SIZE {
-          debug!(seated = state.seats.len(), "Rematch skipped: not enough players left.");
+        if state.seats.occupied_count() < TABLE_SIZE {
+          debug!(seated = state.seats.occupied_count(), "Rematch skipped: not enough players left.");
           continue;
         }
         start_match(state, ctx);

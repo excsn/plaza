@@ -8,6 +8,7 @@ use plaza::game_common::flow_control::rounds::op_payloads::{RoundEndedNoticePayl
 use plaza::game_common::flow_control::turns::op_payloads::TurnChangedNoticePayload;
 use plaza::game_common::flow_control::{Phased, RoundRobinTurnManager, SequentialRoundManager};
 use plaza::game_common::scorekeeping::local::HashMapScorekeeper;
+use plaza_server_utils::{Roster, SeatState};
 use plaza_lobby::SeatReservations;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -250,7 +251,6 @@ pub enum TableEvent {
 /// outlives this table.
 #[derive(Debug, Clone)]
 pub struct Occupancy {
-  pub seat: Seat,
   pub bot: bool,
 }
 
@@ -285,8 +285,9 @@ pub struct TableState {
   pub hands: HashMap<PlayerId, Vec<Card>>,
   /// Cards face up this round. Public.
   pub played: Vec<(PlayerId, Card)>,
-  /// Seating order, kept so a re-deal knows who is still here.
-  pub seats: Vec<PlayerId>,
+  /// Who holds a player seat, in the order a deal runs; everyone else
+  /// present is a spectator.
+  pub seats: Roster<PlayerId>,
 
   pub occupants: ParticipantTracker<PlayerId, Occupancy>,
   pub reserved: SeatReservations<PlayerId>,
@@ -324,7 +325,7 @@ impl TableState {
       scores: HashMapScorekeeper::new(),
       hands: HashMap::new(),
       played: Vec::new(),
-      seats: Vec::new(),
+      seats: Roster::new(max_players as usize),
       occupants: ParticipantTracker::new(),
       reserved: SeatReservations::new(),
       tick: 0,
@@ -335,12 +336,20 @@ impl TableState {
     }
   }
 
-  pub fn seated_players(&self) -> u32 {
+  /// The seated players in seat order, the order the deal runs in.
+  pub fn players(&self) -> Vec<PlayerId> {
     self
-      .occupants
-      .iter()
-      .filter(|(_, info)| info.app_data.seat == Seat::Player)
-      .count() as u32
+      .seats
+      .seats()
+      .filter_map(|state| match state {
+        SeatState::Human(id) => Some(*id),
+        _ => None,
+      })
+      .collect()
+  }
+
+  pub fn seated_players(&self) -> u32 {
+    self.seats.occupied_count() as u32
   }
 
   pub fn bots(&self) -> u32 {
@@ -355,15 +364,18 @@ impl TableState {
     self
       .occupants
       .iter()
-      .filter(|(_, info)| info.app_data.seat == Seat::Spectator)
+      .filter(|(id, _)| self.seats.seat_of(id).is_none())
       .count() as u32
   }
 
   pub fn seat_of(&self, player: &PlayerId) -> Option<Seat> {
-    self
-      .occupants
-      .get_participant_app_data(player)
-      .map(|occupancy| occupancy.seat)
+    self.occupants.get_participant_app_data(player).map(|_| {
+      if self.seats.seat_of(player).is_some() {
+        Seat::Player
+      } else {
+        Seat::Spectator
+      }
+    })
   }
 
   pub fn everyone(&self) -> Vec<Agent<PlayerId>> {
@@ -392,7 +404,7 @@ impl TableState {
   pub fn deal(&mut self) {
     self.hands.clear();
     self.played.clear();
-    for (seat, player) in self.seats.iter().enumerate() {
+    for (seat, player) in self.players().iter().enumerate() {
       let base = (seat * HAND_SIZE) as u8;
       let hand = (0..HAND_SIZE).map(|i| Card(base + i as u8 + 2)).collect();
       self.hands.insert(*player, hand);
