@@ -18,6 +18,7 @@
 //! To play it yourself, `cargo run -p plaza_example_night_watch --bin serve`
 //! and open five browser tabs.
 
+use plaza_example_night_watch::guard::VillageGuard;
 use plaza_example_night_watch::logic::VillageLogic;
 use plaza_example_night_watch::snapshot::VillageSnapshotter;
 use plaza_example_night_watch::types::{PlayerId, VillageOp, VillageState};
@@ -85,6 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Arc::new(VillageSnapshotter),
     VillageState::new(),
   )
+  .guard(Arc::new(VillageGuard))
   .command_buffer(64)
   .build();
 

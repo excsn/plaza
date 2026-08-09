@@ -186,6 +186,29 @@ When a change alters what players may see, logic can push fresh views rather tha
 Ok(LogicOutput::ops(ops).and_snapshot(SnapshotRequest::to(state.seated_players())))
 ```
 
+## Guarding ops
+
+"May this agent do this at all" is authorization, not rules, and mixing it into `StateLogic` smears security checks through the handlers. An `OpGuard` is the one auditable place for it: the controller runs it per op, ahead of `process_input`, with the state read-only, and a refused op never reaches the rules.
+
+```rust,ignore
+use plaza::op_guard::{GuardFn, OpClearance};
+
+fn screen(state: &Game, source: &Agent<PlayerId>, op: &GameOp) -> OpClearance<GameOp> {
+  match op {
+    GameOp::Play(_) if !state.seated(source) => OpClearance::Refused {
+      reply: Some(GameOp::Refused(Refusal::Spectating)),
+    },
+    _ => OpClearance::Cleared,
+  }
+}
+
+let (tx, controller) = StateControllerBuilder::new(logic, session, snapshotter, state)
+  .guard(Arc::new(GuardFn(screen)))
+  .build();
+```
+
+The reply, if any, goes back to the source as a system op, so a client can say what happened instead of appearing to freeze; `ControllerStats::ops_refused` counts every refusal. System submissions and time steps are never screened, and the guard judges the actor's standing rather than the act's content: whether this player may vote in this phase is the guard's, whether their target exists stays in the rules. It is sync on purpose, since it runs per op on the controller's task; a permission that lives in a database belongs loaded into state, not fetched mid-stream. The default is `NoGuard`, which admits everything, and anything stateful implements `OpGuard` directly, as `examples/night_watch`'s `VillageGuard` does for seat, liveness, phase and role.
+
 ## Shutting down
 
 `run` returns the final state, and commands already queued when `Shutdown` arrives are processed first, so a closing broadcast submitted beforehand is guaranteed to go out:

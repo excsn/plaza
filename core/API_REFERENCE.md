@@ -11,7 +11,7 @@ An application supplies four things; `plaza` runs the loop around them.
 *   **[`StateLogic`](#trait-statelogic)**: the rules. The only place state is mutated.
 *   **[`SnapshotProvider`](#trait-snapshotprovider)**: what a client is sent, built per recipient.
 
-**Single-actor model.** A [`StateController`](#struct-statecontrollerop-id-statetype-sl-sess-sp) owns the state and mutates it only from its own task, processing one input at a time. Application logic therefore needs no locking. Nothing in this crate spawns a task except [`TickDriver`](#struct-tickdriver) and the caller's own `controller.run()`.
+**Single-actor model.** A [`StateController`](#struct-statecontrollerop-id-statetype-sl-sess-sp-g--noguard) owns the state and mutates it only from its own task, processing one input at a time. Application logic therefore needs no locking. Nothing in this crate spawns a task except [`TickDriver`](#struct-tickdriver) and the caller's own `controller.run()`.
 
 **Identity.** `ID` is the application's identifier type. Anything satisfying [`AgentId`](#trait-agentid) qualifies through a blanket impl, so it is rarely implemented by hand. [`Agent<ID>`](#enum-agentid-agentid) wraps it and distinguishes humans, bots, and the system.
 
@@ -154,17 +154,59 @@ Which snapshot is wanted. **Plaza never reads this**: it carries it from caller 
 *   **Methods**: `custom<T>(value) -> Self`, `downcast_ref<T>() -> Option<&T>`.
 *   The named variants are conveniences. When your notion of "which snapshot" is a content hash, a vector clock, or a typed enum, use `Custom`. Plaza tracks no versions and runs no acknowledgement protocol.
 
+### Trait `OpGuard` (module `op_guard`)
+
+```rust,ignore
+pub trait OpGuard<Op, ID: AgentId, StateType>: Send + Sync + 'static {
+  fn guard(&self, state: &StateType, source: &Agent<ID>, op: &Op) -> OpClearance<Op>;
+}
+```
+
+**The seam for authorization.** "May this agent do this at all" is a different question from "what does the act do", and an application answering both inside `StateLogic` smears its security checks through its handlers. The controller runs the guard per op, ahead of `process_input`, so it is the one auditable place for the first question; a refused op never reaches the rules. Installed with [`StateControllerBuilder::guard`](#struct-statecontrollerbuilderop-id-statetype-sl-sess-sp-g--noguard); the default is `NoGuard`.
+
+The guard judges the actor's standing, not the act's content: whether a seated, living player may vote in this phase is the guard's, whether the player they voted for exists stays in the rules. The state is read-only, so authorization cannot mutate. **Sync on purpose**: it runs per op on the controller's task, and a permission that lives in a database belongs loaded into state, not fetched mid-stream.
+
+**What is screened**: everything an agent submits, bots included, whether it arrived through the session or `SubmitAgentOps`. **What is not**: `SubmitSystemOps`, time steps, joins and leaves. A whole batch is screened against the state it arrived to, before any op in it applies. A batch whose every op was refused is not delivered at all.
+
+#### Enum `OpClearance<Op>`
+
+*   `Cleared`: the op proceeds to `StateLogic`.
+*   `Refused { reply: Option<Op> }`: the op is dropped; `reply`, if any, is sent to the source as a system op, so a client can say what happened instead of appearing to freeze. `None` refuses silently. Refusals count in [`ControllerStats::ops_refused`](#struct-controllerstats).
+
+#### Struct `NoGuard`
+
+The guard for an application with no authorization concept: clears everything, for every `Op`/`ID`/`StateType`. What `StateControllerBuilder::new` installs.
+
+#### Struct `GuardFn<F>`
+
+A guard that is just a function, the counterpart of [`SnapshotFn`](#struct-snapshotfnf):
+
+```rust,ignore
+fn screen(state: &Game, source: &Agent<PlayerId>, op: &GameOp) -> OpClearance<GameOp> {
+  match op {
+    GameOp::Play(_) if !state.seated(source) => OpClearance::Refused {
+      reply: Some(GameOp::Refused(Refusal::Spectating)),
+    },
+    _ => OpClearance::Cleared,
+  }
+}
+let guard = Arc::new(GuardFn(screen));
+```
+
+A named function coerces cleanly; a closure usually needs its argument types written out.
+
 ## 5. The Controller
 
-### Struct `StateControllerBuilder<Op, ID, StateType, SL, Sess, SP>`
+### Struct `StateControllerBuilder<Op, ID, StateType, SL, Sess, SP, G = NoGuard>`
 
 *   **`new(op_handler: Arc<SL>, session: Arc<Sess>, snapshot_provider: Arc<SP>, initial_state: StateType) -> Self`** All components are required, which is why `build` is infallible.
 *   **`without_snapshots(op_handler: Arc<SL>, session: Arc<Sess>, initial_state: StateType) -> Self`**: the same for an application where joining carries no catch-up. Supplies [`NoSnapshots`](#struct-nosnapshots), so `SP` is fixed to it. Everything else is unchanged, including `SendSnapshots`, which becomes a request that sends nothing.
+*   **`guard(op_guard: Arc<G2>) -> StateControllerBuilder<.., G2>`**: the [`OpGuard`](#trait-opguard-module-op_guard) screening agent ops ahead of `StateLogic`. Default `NoGuard`.
 *   **`command_buffer(size: usize) -> Self`**: command channel depth. Default [`DEFAULT_COMMAND_BUFFER`](#constants) (32).
 *   **`snapshot_context_on_join(context: Option<SnapshotContext>) -> Self`**: context for the snapshot a joining agent receives. Defaults to `Full`.
 *   **`build(self) -> (CommandSender<Op, ID, StateType>, StateController<..>)`**
 
-### Struct `StateController<Op, ID, StateType, SL, Sess, SP>`
+### Struct `StateController<Op, ID, StateType, SL, Sess, SP, G = NoGuard>`
 
 *   **`async run(self) -> Result<StateType, PlazaError<ID>>`** Runs until `Shutdown` or its channels close, then returns the final state for the caller to persist. Commands already queued when `Shutdown` arrives are processed first; only what is already buffered is drained, so a producer that keeps sending cannot keep the controller alive.
 
@@ -298,10 +340,11 @@ The interval and the step are separate on purpose. Waking more often than you st
 ### Struct `ControllerStats`
 
 Live counters for one running controller, obtained from
-[`StateControllerBuilder::stats`](#struct-statecontrollerbuilderop-id-statetype-sl-sess-sp) before `build`
+[`StateControllerBuilder::stats`](#struct-statecontrollerbuilderop-id-statetype-sl-sess-sp-g--noguard) before `build`
 (or `with_stats` to supply one you already hold), and from `StateController::stats` after.
 
 *   **`ticks()`**, **`commands()`**, **`ops()`**, **`joins()`**, **`leaves()`**, **`snapshots()`**.
+*   **`ops_refused()`**: ops the [`OpGuard`](#trait-opguard-module-op_guard) refused, which `StateLogic` never saw. A number that climbs is clients attempting what they may not do; the guard's own logging says which op and whose.
 *   **`mean_tick()`** / **`worst_tick()`**: how long a `ProcessTimeStep` took, against which your tick interval says whether the simulation keeps up with itself. Both are kept because one slow tick in a thousand is invisible in a mean and is exactly the hitch a player notices.
 *   **`busy()`**: total time handling commands, against wall time the non-idle fraction.
 *   **`queue_depth()`** / **`deepest_queue()`**: how many commands were waiting when the last was taken. A depth sitting near the buffer size is a producer outrunning the loop, which is the state before commands are dropped.

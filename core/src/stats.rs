@@ -66,6 +66,7 @@ pub struct ControllerStats {
   commands: AtomicU64,
   ticks: AtomicU64,
   ops: AtomicU64,
+  ops_refused: AtomicU64,
   tick_nanos: AtomicU64,
   worst_tick_nanos: AtomicU64,
   busy_nanos: AtomicU64,
@@ -94,6 +95,17 @@ impl ControllerStats {
   /// Operations delivered to `StateLogic`, across agent and system submissions.
   pub fn ops(&self) -> u64 {
     self.ops.load(Ordering::Relaxed)
+  }
+
+  /// Ops the [`OpGuard`] refused, which `StateLogic` never saw.
+  ///
+  /// A number that climbs is clients attempting what they may not do, which is
+  /// either a confused client or a probing one; the guard's own logging says
+  /// which op and whose.
+  ///
+  /// [`OpGuard`]: crate::op_guard::OpGuard
+  pub fn ops_refused(&self) -> u64 {
+    self.ops_refused.load(Ordering::Relaxed)
   }
 
   /// Mean time one time step took, or zero before the first.
@@ -168,6 +180,10 @@ impl ControllerStats {
 
   pub(crate) fn record_ops(&self, count: usize) {
     self.ops.fetch_add(count as u64, Ordering::Relaxed);
+  }
+
+  pub(crate) fn record_op_refused(&self) {
+    self.ops_refused.fetch_add(1, Ordering::Relaxed);
   }
 
   pub(crate) fn record_queue_depth(&self, depth: usize) {

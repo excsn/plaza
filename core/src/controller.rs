@@ -1,5 +1,6 @@
 use crate::agent::{Agent, AgentId};
 use crate::error::PlazaError;
+use crate::op_guard::{NoGuard, OpClearance, OpGuard};
 use crate::session::{MessageTarget, PresenceEvent, Session, SessionMessage};
 use crate::stats::ControllerStats;
 use crate::snapshot::{NoSnapshots, SnapshotContext, SnapshotProvider};
@@ -74,7 +75,7 @@ pub enum ControllerCommand<Op, ID: AgentId, StateType> {
 ///   .build();
 /// tokio::spawn(controller.run());
 /// ```
-pub struct StateControllerBuilder<Op, ID, StateType, SL, Sess, SP>
+pub struct StateControllerBuilder<Op, ID, StateType, SL, Sess, SP, G = NoGuard>
 where
   ID: AgentId,
   Op: Debug + Clone + Send + Sync + 'static,
@@ -82,10 +83,12 @@ where
   SL: StateLogic<Op, ID, StateType>,
   Sess: Session<Op, ID>,
   SP: SnapshotProvider<ID, StateType, Op>,
+  G: OpGuard<Op, ID, StateType>,
 {
   op_handler: Arc<SL>,
   session: Arc<Sess>,
   snapshot_provider: Arc<SP>,
+  op_guard: Arc<G>,
   initial_state: StateType,
   buffer_size: usize,
   join_context: Option<SnapshotContext>,
@@ -93,8 +96,7 @@ where
   _phantom: PhantomData<fn() -> (Op, ID)>,
 }
 
-impl<Op, ID, StateType, SL, Sess, SP>
-  StateControllerBuilder<Op, ID, StateType, SL, Sess, SP>
+impl<Op, ID, StateType, SL, Sess, SP> StateControllerBuilder<Op, ID, StateType, SL, Sess, SP, NoGuard>
 where
   ID: AgentId,
   Op: Debug + Clone + Send + Sync + 'static,
@@ -109,10 +111,52 @@ where
       op_handler,
       session,
       snapshot_provider,
+      op_guard: Arc::new(NoGuard),
       initial_state,
       buffer_size: DEFAULT_COMMAND_BUFFER,
       join_context: Some(SnapshotContext::Full),
       stats: ControllerStats::new(),
+      _phantom: PhantomData,
+    }
+  }
+}
+
+impl<Op, ID, StateType, SL, Sess, SP, G>
+  StateControllerBuilder<Op, ID, StateType, SL, Sess, SP, G>
+where
+  ID: AgentId,
+  Op: Debug + Clone + Send + Sync + 'static,
+  StateType: Debug + Send + Sync + 'static,
+  SL: StateLogic<Op, ID, StateType>,
+  Sess: Session<Op, ID>,
+  SP: SnapshotProvider<ID, StateType, Op>,
+  G: OpGuard<Op, ID, StateType>,
+{
+  /// Sets the [`OpGuard`] screening agent ops ahead of `StateLogic`.
+  ///
+  /// Per op, state read-only: a refused op never reaches the rules, its reply
+  /// (if any) goes back to the source as a system op, and the refusal counts
+  /// in [`ControllerStats::ops_refused`]. System submissions and time steps
+  /// are never screened. The default is [`NoGuard`].
+  ///
+  /// ```ignore
+  /// .guard(Arc::new(GuardFn(screen)))
+  /// ```
+  ///
+  /// [`ControllerStats::ops_refused`]: crate::stats::ControllerStats::ops_refused
+  pub fn guard<G2>(self, op_guard: Arc<G2>) -> StateControllerBuilder<Op, ID, StateType, SL, Sess, SP, G2>
+  where
+    G2: OpGuard<Op, ID, StateType>,
+  {
+    StateControllerBuilder {
+      op_handler: self.op_handler,
+      session: self.session,
+      snapshot_provider: self.snapshot_provider,
+      op_guard,
+      initial_state: self.initial_state,
+      buffer_size: self.buffer_size,
+      join_context: self.join_context,
+      stats: self.stats,
       _phantom: PhantomData,
     }
   }
@@ -160,13 +204,14 @@ where
     self,
   ) -> (
     CommandSender<Op, ID, StateType>,
-    StateController<Op, ID, StateType, SL, Sess, SP>,
+    StateController<Op, ID, StateType, SL, Sess, SP, G>,
   ) {
     StateController::new(
       self.initial_state,
       self.op_handler,
       self.session,
       self.snapshot_provider,
+      self.op_guard,
       self.buffer_size,
       self.join_context,
       self.stats,
@@ -300,7 +345,7 @@ static NEXT_CONTROLLER_ID: AtomicU64 = AtomicU64::new(1);
 ///
 /// Runs as a single-task actor: it owns the state outright and mutates it only
 /// from its own loop, so no locking is needed anywhere in this crate.
-pub struct StateController<Op, ID, StateType, SL, Sess, SP>
+pub struct StateController<Op, ID, StateType, SL, Sess, SP, G = NoGuard>
 where
   ID: AgentId,
   Op: Debug + Clone + Send + Sync + 'static,
@@ -308,11 +353,13 @@ where
   SL: StateLogic<Op, ID, StateType>,
   Sess: Session<Op, ID>,
   SP: SnapshotProvider<ID, StateType, Op>,
+  G: OpGuard<Op, ID, StateType>,
 {
   state_data: StateType,
   op_handler: Arc<SL>,
   session: Arc<Sess>,
   snapshot_provider: Arc<SP>,
+  op_guard: Arc<G>,
   command_rx: mpsc::BoundedAsyncReceiver<ControllerCommand<Op, ID, StateType>>,
   /// Context for the snapshot a joining agent receives.
   join_context: Option<SnapshotContext>,
@@ -324,8 +371,8 @@ where
   stats: Arc<ControllerStats>,
 }
 
-impl<Op, ID, StateType, SL, Sess, SP>
-  StateController<Op, ID, StateType, SL, Sess, SP>
+impl<Op, ID, StateType, SL, Sess, SP, G>
+  StateController<Op, ID, StateType, SL, Sess, SP, G>
 where
   ID: AgentId,
   Op: Debug + Clone + Send + Sync + 'static,
@@ -333,6 +380,7 @@ where
   SL: StateLogic<Op, ID, StateType>,
   Sess: Session<Op, ID>,
   SP: SnapshotProvider<ID, StateType, Op>,
+  G: OpGuard<Op, ID, StateType>,
 {
   /// The live counters this controller writes into. See [`ControllerStats`].
   pub fn stats(&self) -> Arc<ControllerStats> {
@@ -344,6 +392,7 @@ where
     op_handler: Arc<SL>,
     session: Arc<Sess>,
     snapshot_provider: Arc<SP>,
+    op_guard: Arc<G>,
     buffer_size: usize,
     join_context: Option<SnapshotContext>,
     stats: Arc<ControllerStats>,
@@ -358,6 +407,7 @@ where
       op_handler,
       session,
       snapshot_provider,
+      op_guard,
       command_rx,
       join_context,
       session_presence_rx: Some(session_presence_rx),
@@ -504,8 +554,47 @@ where
     }
   }
 
+  /// Runs the guard over one agent batch, in place. Refused ops are removed;
+  /// what comes back is their replies, addressed to the source.
+  fn screen_ops(&self, source: &Agent<ID>, ops: &mut Vec<Op>) -> Vec<Op> {
+    let mut replies = Vec::new();
+    ops.retain(|op| match self.op_guard.guard(&self.state_data, source, op) {
+      OpClearance::Cleared => true,
+      OpClearance::Refused { reply } => {
+        self.stats.record_op_refused();
+        debug!(source = %source, ?op, "Op refused by guard");
+        replies.extend(reply);
+        false
+      }
+    });
+    replies
+  }
+
+  async fn send_refusals(&self, source: &Agent<ID>, replies: Vec<Op>) {
+    let Some(id) = source.id_cloned() else { return };
+    let msg = SessionMessage::system(replies);
+    if let Err(e) = self.session.send_message(MessageTarget::Agent(id), msg).await {
+      error!(error = %e, source = %source, "Failed to send guard refusals");
+    }
+  }
+
   #[instrument(skip(self, input), fields(input = input.kind()))]
   async fn handle_logic_input(&mut self, input: LogicInput<Op, ID>) {
+    let input = match input {
+      LogicInput::AgentOps { source, mut ops } if !source.is_system() => {
+        let submitted = ops.len();
+        let replies = self.screen_ops(&source, &mut ops);
+        if !replies.is_empty() {
+          self.send_refusals(&source, replies).await;
+        }
+        if ops.is_empty() && submitted > 0 {
+          return;
+        }
+        LogicInput::AgentOps { source, ops }
+      }
+      other => other,
+    };
+
     // Formatted inside the macro, so a disabled level costs nothing. This runs
     // on every tick and every op batch; describing it eagerly allocated there.
     debug!(input = %input, "Processing logic input");

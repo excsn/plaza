@@ -1,13 +1,10 @@
 //! The rules. The only place `VillageState` changes.
 //!
-//! # The authorization the crate has nowhere else to put
-//!
-//! [`guard`] is "may this player do this", and it lives here because there is
-//! nowhere else: role, phase and liveness gate every act, and plaza has no
-//! `authorize(agent, &op)` seam ahead of `StateLogic`. This function is the
-//! consumer the backlog's authorization-hook entry has been waiting for, and
-//! it is deliberately written as one auditable place rather than smeared
-//! through the handlers, so what belongs in a hook is visible as a unit.
+//! "May this player act at all" is not asked here: that is
+//! [`VillageGuard`](crate::guard::VillageGuard), run by the controller ahead
+//! of `process_input`, so every op these handlers see already has standing.
+//! What the handlers still refuse is the act's content: a target that is
+//! dead, absent, or yourself.
 
 use async_trait::async_trait;
 use plaza::agent::Agent;
@@ -79,28 +76,6 @@ impl StateLogic<VillageOp, PlayerId, VillageState> for VillageLogic {
     }
     Ok(output)
   }
-}
-
-/// May `player` act at all, in this phase, in this role?
-///
-/// One place, checked before any handler touches state. See the module docs:
-/// this is the shape an authorization hook would lift out of the application.
-fn guard(state: &VillageState, player: PlayerId, phase: VillagePhase, role: Option<Role>) -> Option<Refusal> {
-  if state.seats.seat_of(&player).is_none() {
-    return Some(Refusal::Spectating);
-  }
-  if state.is_dead(player) {
-    return Some(Refusal::Dead);
-  }
-  if *state.phase.current() != phase {
-    return Some(Refusal::NotNow);
-  }
-  if let Some(required) = role
-    && state.roles.get(&player) != Some(&required)
-  {
-    return Some(Refusal::NotYourRole);
-  }
-  None
 }
 
 fn refuse(ctx: &mut Ctx, player: PlayerId, why: Refusal) -> bool {
@@ -260,9 +235,6 @@ fn begin_night(state: &mut VillageState, ctx: &mut Ctx) {
 
 /// The wolf's choice. Applied at dawn, not on receipt: the phase resolves once.
 fn hunt(state: &mut VillageState, player: PlayerId, target: PlayerId, ctx: &mut Ctx) -> bool {
-  if let Some(why) = guard(state, player, VillagePhase::Night, Some(Role::Wolf)) {
-    return refuse(ctx, player, why);
-  }
   if !state.is_alive(target) || target == player {
     return refuse(ctx, player, Refusal::NoSuchTarget);
   }
@@ -313,9 +285,6 @@ fn begin_day(state: &mut VillageState, ctx: &mut Ctx) {
 
 /// A ballot. Collected, not applied: dusk resolves them all at once.
 fn vote(state: &mut VillageState, player: PlayerId, target: PlayerId, ctx: &mut Ctx) -> bool {
-  if let Some(why) = guard(state, player, VillagePhase::Day, None) {
-    return refuse(ctx, player, why);
-  }
   if !state.is_alive(target) {
     return refuse(ctx, player, Refusal::NoSuchTarget);
   }
@@ -455,7 +424,9 @@ fn run_due_events(state: &mut VillageState, ctx: &mut Ctx) -> bool {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::guard::VillageGuard;
   use crate::types::{VillageView, DAY_TICKS, NIGHT_TICKS};
+  use plaza::op_guard::{OpClearance, OpGuard as _};
 
   async fn run(state: &mut VillageState, input: LogicInput<VillageOp, PlayerId>) {
     VillageLogic.process_input(state, input).await.unwrap();
@@ -468,9 +439,14 @@ mod tests {
     .await;
   }
 
+  /// Submits as the controller would: through the guard, then the logic.
   async fn act(state: &mut VillageState, who: PlayerId, op: VillageOp) {
+    let source = Agent::new_human(who);
+    if let OpClearance::Refused { .. } = VillageGuard.guard(state, &source, &op) {
+      return;
+    }
     run(state, LogicInput::AgentOps {
-      source: Agent::new_human(who),
+      source,
       ops: vec![op],
     })
     .await;

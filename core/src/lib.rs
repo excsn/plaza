@@ -40,6 +40,7 @@ pub mod common;
 pub mod controller;
 pub mod error;
 pub mod game_common;
+pub mod op_guard;
 pub mod session;
 pub mod snapshot;
 pub mod state_logic;
@@ -51,6 +52,7 @@ pub use controller::{
   query_state, query_with, CommandSender, ControllerCommand, StateController, StateControllerBuilder, StateReader,
 };
 pub use error::PlazaError;
+pub use op_guard::{GuardFn, NoGuard, OpClearance, OpGuard};
 pub use session::{InProcessSession, MessageTarget, Session, SessionMessage, TargetedOp};
 pub use snapshot::{NoSnapshots, SnapshotFn, SnapshotProvider};
 pub use state_logic::{LogicInput, StateLogic};

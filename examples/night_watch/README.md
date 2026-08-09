@@ -23,9 +23,9 @@ Be honest about what this is: social deduction without chat is a thin game, beca
 
 Every snapshot is per recipient. `your_role` is yours alone, the wolf's night choice never crosses the wire before dawn, and a death reveals the fallen player's role to everyone. The inversion worth the trip: **the dead see everything.** A killed player's next snapshot carries every role, face up, because the dead know and can no longer be asked. A uniform snapshot could not carry this game at all, and the wire discipline is `pellet_maze`'s lesson: the tally broadcasts counts, never ballots, because secrecy is a property of the whole outbound stream.
 
-## The authorization plaza has nowhere to put
+## The authorization, in the seam built for it
 
-`guard` in [logic.rs](src/logic.rs) is "may this player do this": seated, alive, right phase, right role, checked before any handler touches state. It lives inside `StateLogic` because plaza has no `authorize(agent, &op)` seam ahead of it, and it is deliberately one auditable function rather than checks smeared through the handlers, so what such a hook would lift out of an application is visible as a unit. This example is the consumer the backlog's authorization-hook entry was waiting for.
+`VillageGuard` in [guard.rs](src/guard.rs) is "may this player do this": seated, alive, right phase, right role, one auditable `OpGuard` the controller runs ahead of `StateLogic`, so every op the handlers see already has standing. A refusal answers the sender with its reason (`Refused(NotYourRole)` and kin) and never reaches the rules. The line it draws is standing versus content: whether the wolf may hunt tonight is the guard's, whether the named victim is dead, absent, or yourself stays in [logic.rs](src/logic.rs). This example wrote the same function inside `StateLogic` first, for want of anywhere else, and was the consumer the hook was extracted for.
 
 ## The lab
 

@@ -19,6 +19,7 @@ use plaza_session::ActixWsPlazaSession;
 use tracing::{error, info, Level};
 use tracing_subscriber::EnvFilter;
 
+use plaza_example_night_watch::guard::VillageGuard;
 use plaza_example_night_watch::logic::VillageLogic;
 use plaza_example_night_watch::snapshot::VillageSnapshotter;
 use plaza_example_night_watch::types::{PlayerId, VillageOp, VillageState, PROTOCOL};
@@ -66,6 +67,7 @@ async fn main() -> std::io::Result<()> {
     Arc::new(VillageSnapshotter),
     VillageState::new().with_deadlines(NIGHT_TICKS, DAY_TICKS),
   )
+  .guard(Arc::new(VillageGuard))
   .command_buffer(64)
   .build();
 
