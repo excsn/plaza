@@ -26,7 +26,7 @@
 
 [`manager`](#4-module-manager), [`codec`](#3-module-codec), and [`error`](#2-error-handling) compile unconditionally.
 
-**Dropping `serde_json`.** Turn off `json` and the crate no longer builds it: `plaza_session = { version = "0.6", default-features = false, features = ["tcp", "msgpack"] }`. Nothing else has to change, because `plaza` and `plaza_wire` are depended on with `default-features = false` here and neither `plaza` nor `plaza_lobby` names a codec at all, so no internal dependency forces the choice back on. Bring your own codec and you can drop `msgpack` too, leaving no built-in format compiled.
+**Dropping `serde_json`.** Turn off `json` and the crate no longer builds it: `plaza_session = { version = "0.7", default-features = false, features = ["tcp", "msgpack"] }`. Nothing else has to change, because `plaza` and `plaza_wire` are depended on with `default-features = false` here and neither `plaza` nor `plaza_lobby` names a codec at all, so no internal dependency forces the choice back on. Bring your own codec and you can drop `msgpack` too, leaving no built-in format compiled.
 
 Two consequences worth knowing before you do. Without `json` the session types have no default type parameter, so `ActixWsPlazaSession<Op, Id>` becomes `ActixWsPlazaSession<Op, Id, MyCodec>`, and the zero-argument constructors (`ActixWsPlazaSession::new`, `TcpPlazaSession::bind`) are gone with it; use `with_codec` and `bind_with_codec`. And **`actix_ws` re-introduces `serde_json` regardless**, because actix-web depends on it unconditionally for its own extractors. A build that genuinely excludes it is a `tcp` or custom-transport build.
 

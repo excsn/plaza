@@ -8,7 +8,7 @@ One client-side WebSocket interface across a desktop, a browser, and in-process.
 
 ```toml
 [dependencies]
-plaza_ws = { version = "0.1", features = ["native", "loopback"] }
+plaza_ws = { version = "0.6", features = ["native", "loopback"] }
 ```
 
 ## The shape, and why

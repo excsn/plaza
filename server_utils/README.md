@@ -10,7 +10,7 @@ Full surface in [API_REFERENCE.md](API_REFERENCE.md).
 
 ```toml
 [dependencies]
-plaza_server_utils = "0.1"
+plaza_server_utils = "0.6"
 ```
 
 Its only dependency is `plaza_client_utils`, for the shared `Interpolatable` and `ToF32` traits, plus `tracing`. No async runtime, so like the client crate it compiles to wasm: a server *simulation* can run in a browser, which the interactive [`netcode_playground`](../examples/netcode_playground/) example relies on.

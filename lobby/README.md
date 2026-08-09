@@ -10,8 +10,8 @@ Full surface in [API_REFERENCE.md](API_REFERENCE.md).
 
 ```toml
 [dependencies]
-plaza = "0.1"
-plaza_lobby = "0.1"
+plaza = "0.7"
+plaza_lobby = "0.7"
 ```
 
 ## The division of labour

@@ -10,8 +10,8 @@ Full surface in [API_REFERENCE.md](API_REFERENCE.md).
 
 ```toml
 [dependencies]
-plaza = "0.1"
-plaza_session = { version = "0.1", default-features = false, features = ["actix_ws", "json"] }
+plaza = "0.7"
+plaza_session = { version = "0.7", default-features = false, features = ["actix_ws", "json"] }
 ```
 
 | Feature | Default | Gives you |

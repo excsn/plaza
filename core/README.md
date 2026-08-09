@@ -10,7 +10,7 @@ For the concepts and why they are shaped this way, see the [workspace README](..
 
 ```toml
 [dependencies]
-plaza = "0.1"
+plaza = "0.7"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }

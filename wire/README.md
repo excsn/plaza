@@ -47,13 +47,13 @@ Transports that distinguish frame types use it. It matters for browsers: a WebSo
 
 ```toml
 [dependencies]
-plaza_wire = "0.1"
+plaza_wire = "0.7"
 ```
 
 Trait only, no JSON:
 
 ```toml
-plaza_wire = { version = "0.1", default-features = false }
+plaza_wire = { version = "0.7", default-features = false }
 ```
 
 ## Why this is its own crate
@@ -148,7 +148,7 @@ A wire format only agrees if both ends were built from the same definition of it
 
 ```toml
 [build-dependencies]
-plaza_wire = { version = "0.1", default-features = false, features = ["build"] }
+plaza_wire = { version = "0.7", default-features = false, features = ["build"] }
 ```
 
 ```rust,ignore
