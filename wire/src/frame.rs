@@ -40,6 +40,7 @@
 /// from [`crate::build`] will still change and ask them to reload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
+#[non_exhaustive]
 pub enum Kind {
   /// A batch of application operations. The body is `Vec<Op>`.
   Ops = 0,

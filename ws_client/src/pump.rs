@@ -233,7 +233,7 @@ impl<C: WireCodec> FramePump<C> {
       }
       // A server speaking a newer protocol may send kinds this build has never
       // heard of; the rule is skip, not fail.
-      None => None,
+      _ => None,
     }
   }
 

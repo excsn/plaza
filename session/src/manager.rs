@@ -1789,7 +1789,7 @@ async fn deserialize_bridge<Op, ID, C>(
       // than through serde: a peer speaking a newer protocol may send kinds
       // this build has never heard of, and refusing them would turn every
       // additive change into a break.
-      None => {
+      _ => {
         trace!(transport, kind = tag, agent = %from, "Skipping a frame of unknown kind.");
         continue;
       }
