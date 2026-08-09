@@ -66,33 +66,38 @@ const VOCAB_LEAVES: &[&str] = &[
   "RoundEndedNoticePayload",
 ];
 
-/// Plaza types that cross wires but do not live in `plaza_wire` yet, so the
-/// version does not cover their shape. Referencing one warns instead of
-/// failing, since the reference is legitimate and the gap is plaza's.
-const UNCOVERED_PLAZA: &[&str] = &[
-  "Vec2",
-  "Vec3",
-  "Quat",
-  "ActivityStatusPayload",
-  "CreateObjectPayload",
-  "CursorPositionPayload",
-  "DeleteObjectPayload",
-  "DeleteObjectPropertyPayload",
-  "InsertListItemPayload",
-  "LockAcquiredNoticePayload",
-  "LockDeniedNoticePayload",
-  "LockInfo",
-  "LockReleasedNoticePayload",
-  "MoveListItemPayload",
-  "PresenceChangedNoticePayload",
-  "ReleaseLockPayload",
-  "RemoveListItemPayload",
-  "RequestLockPayload",
-  "SelectionPayload",
-  "SetObjectPropertyPayload",
-  "UpdateListItemPayload",
-  "UpdatePresencePayload",
-];
+/// The one-line fix for a plaza type that lives in core rather than here:
+/// the bundle in [`super::vocab`] carrying its vendored definition.
+pub(crate) fn bundle_hint(name: &str) -> Option<&'static str> {
+  const MATH: &[&str] = &["Vec2", "Vec3", "Quat"];
+  const APP_COMMON: &[&str] = &[
+    "ActivityStatusPayload",
+    "CreateObjectPayload",
+    "CursorPositionPayload",
+    "DeleteObjectPayload",
+    "DeleteObjectPropertyPayload",
+    "InsertListItemPayload",
+    "LockAcquiredNoticePayload",
+    "LockDeniedNoticePayload",
+    "LockReleasedNoticePayload",
+    "MoveListItemPayload",
+    "PresenceChangedNoticePayload",
+    "ReleaseLockPayload",
+    "RemoveListItemPayload",
+    "RequestLockPayload",
+    "SelectionPayload",
+    "SetObjectPropertyPayload",
+    "UpdateListItemPayload",
+    "UpdatePresencePayload",
+  ];
+  if MATH.contains(&name) {
+    Some(".vocab(plaza_wire::build::vocab::MATH)")
+  } else if APP_COMMON.contains(&name) {
+    Some(".vocab(plaza_wire::build::vocab::APP_COMMON)")
+  } else {
+    None
+  }
+}
 
 /// Derives the wire version by resolving types from tagged roots.
 ///
@@ -104,6 +109,7 @@ pub struct Wire {
   dart: Option<PathBuf>,
   dart_types: Option<PathBuf>,
   leaves: Vec<String>,
+  vocab: Vec<(String, String)>,
 }
 
 impl Wire {
@@ -125,7 +131,23 @@ impl Wire {
       dart: None,
       dart_types: None,
       leaves: Vec::new(),
+      vocab: Vec::new(),
     }
+  }
+
+  /// Includes a vocabulary bundle: extra definition sources resolved, covered
+  /// by the version, and emitted by [`dart_types`](Self::dart_types) exactly
+  /// like your own types. [`super::vocab`] ships plaza's bundles; anything
+  /// else takes the same shape, `(label, source_text)` pairs, so a vendored
+  /// copy of a third-party definition can be included the same way (pin your
+  /// copy with a test, as `wire/tests/vocab_sync.rs` pins plaza's).
+  ///
+  /// Your own definition of a name shadows a bundle's.
+  pub fn vocab(mut self, bundle: &[(&str, &str)]) -> Self {
+    for (name, source) in bundle {
+      self.vocab.push((name.to_string(), source.to_string()));
+    }
+    self
   }
 
   /// Scans another directory besides `src/`, for a workspace that keeps wire
@@ -188,9 +210,24 @@ impl Wire {
 
   /// The scanned index and the resolved roots, for the Dart type emitter.
   pub(crate) fn scanned(&self) -> (BTreeMap<String, Definition>, Vec<String>) {
-    let index = scan(&self.scan_dirs);
+    let index = self.index();
     let roots = self.find_roots(&index);
     (index, roots)
+  }
+
+  /// The scanned directories plus any included vocabulary bundles, the user's
+  /// own definitions shadowing a bundle's.
+  fn index(&self) -> BTreeMap<String, Definition> {
+    let mut index = scan(&self.scan_dirs);
+    for (name, source) in &self.vocab {
+      let parsed = syn::parse_file(source).unwrap_or_else(|e| panic!("plaza-wire: cannot parse vocab {name}: {e}"));
+      let mut bundle = BTreeMap::new();
+      index_items(&parsed.items, source, Path::new(name), &mut bundle);
+      for (n, def) in bundle {
+        index.entry(n).or_insert(def);
+      }
+    }
+    index
   }
 
   /// The derived version alone, for tests and for placing it yourself.
@@ -198,7 +235,7 @@ impl Wire {
   /// Panics with the full list of unresolved references, because this runs in a
   /// build script and a panic is a build error naming the problem.
   pub fn version(&self) -> u32 {
-    let index = scan(&self.scan_dirs);
+    let index = self.index();
     let roots = self.find_roots(&index);
     let mut included: BTreeMap<&str, &Definition> = BTreeMap::new();
     let mut errors: Vec<String> = Vec::new();
@@ -223,15 +260,13 @@ impl Wire {
         if VOCAB_LEAVES.contains(&reference) {
           continue;
         }
-        if UNCOVERED_PLAZA.contains(&reference) {
-          println!(
-            "cargo:warning=plaza-wire: `{reference}` (via `{name}`) is plaza vocabulary not yet covered by the \
-             version; its shape changing will not move this number"
-          );
-          continue;
-        }
         if index.contains_key(reference) {
           queue.push(reference);
+        } else if let Some(hint) = bundle_hint(reference) {
+          println!(
+            "cargo:warning=plaza-wire: `{reference}` (via `{name}`) is plaza vocabulary not included in the \
+             version; add {hint} to cover it"
+          );
         } else {
           errors.push(format!(
             "cannot resolve `{reference}`, referenced from `{name}` ({}). Define it in a scanned directory, add \
@@ -581,6 +616,7 @@ mod tests {
       dart: None,
       dart_types: None,
       leaves: Vec::new(),
+      vocab: Vec::new(),
     }
   }
 
@@ -668,6 +704,21 @@ mod tests {
   }
 
   #[test]
+  fn an_included_bundle_covers_and_the_leaf_does_not() {
+    let dir = crate_dir("an_included_bundle_covers", &[(
+      "ops.rs",
+      "/// plaza-wire: root\npub enum Op { Move { to: Vec2 } }\n",
+    )]);
+    let mut with_bundle = wire_over(&dir);
+    with_bundle.vocab = super::super::vocab::MATH.iter().map(|(n, s)| (n.to_string(), s.to_string())).collect();
+    let covered = with_bundle.version();
+
+    let acknowledged = wire_over(&dir).leaf("Vec2").version();
+    assert_ne!(covered, acknowledged, "a covered definition is hashed; an acknowledged leaf is not");
+    std::fs::remove_dir_all(&dir).unwrap();
+  }
+
+  #[test]
   fn named_roots_work_without_tags() {
     let dir = crate_dir("named_roots_work_without_tags", &[("ops.rs", "pub enum Op { Ping }\n")]);
     let wire = Wire {
@@ -676,6 +727,7 @@ mod tests {
       dart: None,
       dart_types: None,
       leaves: Vec::new(),
+      vocab: Vec::new(),
     };
     assert!(wire.version() > 0);
     std::fs::remove_dir_all(&dir).unwrap();

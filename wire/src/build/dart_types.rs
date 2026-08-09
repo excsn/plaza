@@ -22,7 +22,7 @@
 
 use std::collections::BTreeMap;
 
-use super::resolve::{vocab_index, Wire};
+use super::resolve::{bundle_hint, vocab_index, Wire};
 
 pub(crate) fn generate(wire: &Wire) -> String {
   let (mut index, roots) = wire.scanned();
@@ -274,10 +274,15 @@ impl Generator {
             }
             Some(_) => Ty::User(self.instantiate(&name, &args)),
             None => {
-              self.errors.push(format!(
-                "`{base}` ({file}) references `{name}`, which the generator cannot place; define it in a scanned \
-                 directory or add .also_scan(dir)"
-              ));
+              match bundle_hint(&name) {
+                Some(hint) => self.errors.push(format!(
+                  "`{base}` ({file}) references `{name}`, plaza vocabulary that is not included; add {hint}"
+                )),
+                None => self.errors.push(format!(
+                  "`{base}` ({file}) references `{name}`, which the generator cannot place; define it in a scanned \
+                   directory, add .also_scan(dir), or include a vendored copy with .vocab(&[(label, source)])"
+                )),
+              }
               Ty::Int
             }
           },

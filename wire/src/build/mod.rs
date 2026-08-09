@@ -69,6 +69,30 @@ mod resolve;
 pub use hash::{type_definitions, version_of_sources};
 pub use resolve::Wire;
 
+/// Prepared vocabulary bundles for [`Wire::vocab`]: plaza types that cross
+/// wires but live in `plaza` core, as vendored source copies embedded here so
+/// a consumer can include them on demand, from the cargo registry included.
+/// Each copy is pinned byte-for-byte against core's original by
+/// `wire/tests/vocab_sync.rs`, so the two cannot drift silently.
+///
+/// Included types are covered by the derived version and emitted by
+/// [`Wire::dart_types`] like your own; a bundle you do not pass costs nothing
+/// and covers nothing, which is the point of on-demand.
+pub mod vocab {
+  /// `Vec2`, `Vec3`, `Quat`: `plaza::common::math`.
+  pub const MATH: &[(&str, &str)] = &[("<plaza_vocab>/math.rs", include_str!("vocab/math.rs"))];
+
+  /// The collaborative-app payloads: `plaza::app_common`'s locking, presence,
+  /// object/property and ordered-collection op payloads.
+  pub const APP_COMMON: &[(&str, &str)] = &[
+    ("<plaza_vocab>/app_common_locking.rs", include_str!("vocab/app_common_locking.rs")),
+    ("<plaza_vocab>/app_common_object_property_ops.rs", include_str!("vocab/app_common_object_property_ops.rs")),
+    ("<plaza_vocab>/app_common_ordered_collection_ops.rs", include_str!("vocab/app_common_ordered_collection_ops.rs")),
+    ("<plaza_vocab>/app_common_presence.rs", include_str!("vocab/app_common_presence.rs")),
+    ("<plaza_vocab>/app_common_presence_fragments.rs", include_str!("vocab/app_common_presence_fragments.rs")),
+  ];
+}
+
 /// The version contribution of plaza's own wire vocabulary: [`Agent`], the
 /// netcode payloads, and the flow-control notice payloads, hashed from this
 /// crate's own sources when this crate was built.
