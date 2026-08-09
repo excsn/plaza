@@ -265,6 +265,30 @@ Returning this rather than a bare index is the entire reason the type exists. `F
 *   **`occupants()`**, **`keys()`**, **`by_seat() -> HashMap<usize, Key>`**, **`occupied_count()`**, **`capacity()`**, **`is_full()`**, **`clear()`**.
 *   **`reseat_all(capacity) -> Vec<(Key, usize)>`**: resize, returning everyone's new seat. For a world rebuilt under a changed configuration. Anyone who does not fit is dropped from the table and is not in the returned list; every returned seat is fresh by definition, since the world behind it is new.
 
+### Struct `SeatSlots<Key>`
+
+The tri-state slot map: `SeatTable`'s sibling with one more state, `Held`, for a seat kept while its occupant is away. One of the two blocks `Roster` is composed of, and public for the same reason every prescription's blocks are: a seating policy `Roster` does not express is built from these directly.
+
+*   **`new(capacity)`**, **`first_open()`**, **`seat(key, seat)`** (the seat must be open), **`hold(&key)`** / **`resume(&key)`** / **`open(&key)`** (each returns the seat, `None` when the transition does not apply), **`is_held(&key)`**, **`seat_of(&key)`**, **`state(seat) -> SeatState`**, **`capacity()`**, **`occupied_count()`**.
+
+### Struct `RankedQueue<Key>`
+
+A queue with priority bands: better (lower) ranks first, arrival order within a band, membership removal. The other block `Roster` composes.
+
+*   **`new()`**, **`push(key, rank) -> position`**, **`remove(&key)`**, **`position(&key)`**, **`best()`** / **`pop_best()`** (next out, with its rank), **`iter()`**, **`len()`**, **`is_empty()`**.
+
+### Struct `Roster<Key>`
+
+Seating with the policies games actually vary; `SeatTable` stays the right choice for plain seat-on-arrival, free-on-leave. A `Roster` composes `SeatSlots` and `RankedQueue` into four orthogonal axes, each off by default: a **lock** for games that seat only between rounds (`lock()`/`unlock()`; a locked roster turns everyone away or queues them whatever the free count), a **waitlist** (`with_waitlist()`; turned-away keys queue for the next open seat), **held seats** (`holding_seats()`; a departure keeps the seat until you call `expire`), and **ranks** (`admit_ranked(key, rank)`, lower is better; the classic use is people at 0 and bots at 1, so a bot holds a seat only until a person wants one). A bot bench needs no axis at all: `SeatState::Open` says nothing about who drives the seat, so a game whose empties are bots reads every open seat as bot-driven and the roster does not know.
+
+Three rules run through it. **Promotion happens on the tick**: `admit` and `depart` settle the arriving or leaving key immediately, but a freed seat reaches the waitlist only in `resolve()`, called from your `TimeStep` arm, because seating decided in two places is the bug the pong example spent a comment warning about. **Ranks displace only across bands**: at `resolve`, a waiter with a better rank takes the worst-ranked human seat (later seats first); equals never displace each other, and a held seat is never displaced, because the hold is a promise. **No clocks**: a held seat stays held until `expire(&key)`; how long that takes is between you and your `ReconnectTracker`.
+
+*   **`new(capacity)`**, **`with_waitlist()`**, **`holding_seats()`**, **`lock()`**, **`unlock()`**, **`is_locked()`**.
+*   **`admit(key) -> Admission`** (rank 0; a roster whose admissions all use this never displaces anyone), **`admit_ranked(key, rank) -> Admission`**: seats, resumes, queues or turns away, in that order of preference. `Admission` is **`Seated { seat, fresh }`** (same freshness contract as `Seating`), **`Resumed { seat }`** (their held seat is theirs again, everything in it intact: resend state, reset nothing), **`Waitlisted { position }`**, or **`Turned(Turnaway)`** with `Turnaway::{Full, Locked}`; whether a turnaway means spectating or refusal is the application's answer.
+*   **`depart(&key) -> Departure`**: **`Freed { seat }`**, **`Held { seat }`** (start their clock), **`Unwaitlisted`**, or **`NotPresent`**. Idempotent, because a disconnect can be reported more than once; a repeat report of a held key reports the hold again rather than breaking it.
+*   **`expire(&key) -> Option<usize>`**: releases a held seat whose grace ran out. **`resolve() -> Vec<Shuffle<Key>>`**: seats the waitlist into open seats in queue order, then settles rank displacement; a no-op while locked. `Shuffle` is **`Promoted { key, seat }`** (the seat is fresh) or **`Displaced { key, seat }`** (requeued at the tail of their own rank band).
+*   **`seat_of(&key)`**, **`seat_state(seat) -> SeatState`** (`Human(&Key)` / `Held(&Key)` / `Open`), **`seats()`**, **`waiting()`**, **`capacity()`**, **`occupied_count()`** (held seats count: a held seat is not free), **`is_full()`**.
+
 ## 10. Rates (module `meter`)
 
 ### Struct `RateMeter`

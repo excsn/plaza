@@ -24,6 +24,7 @@ Its only dependency is `plaza_client_utils`, for the shared `Interpolatable` and
 | Some of those entities are simulation *inputs*, so dropping the distant ones changes the answer, but sending them all does not scale | `aggregate` (`AggregateTree`) |
 | Streaming that set as *entered* and *left* assumes every packet arrives, and one that does not is lost for good | `delta` (`DeltaBaseline`) |
 | A bounded number of seats, where a fresh occupant must not inherit the last one's accumulated state | `seats` (`SeatTable`, `Seating`) |
+| Seating policy: a lock for games that seat only between rounds, a ranked waitlist, displacement (a bot holds a seat only until a person wants one), seats held across an absence, bot-driven empties | `seats` (`Roster`, composed of `SeatSlots` and `RankedQueue`, both public) |
 | A claim about bandwidth should be a number on screen, not an assertion in a README | `meter` (`RateMeter`) |
 | A one-shot op with nothing behind it (a `Welcome`, a `Refused`) is lost for good on a lossy link, and nothing in the protocol will ever mention it again | `oneshot` (`Pending`) |
 | An accuracy figure taken against the *present* charges a client for a render delay it chose, so the number grows with the buffer depth rather than with anything going wrong | `render_error` (`render_error_at`) |
