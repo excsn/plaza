@@ -62,6 +62,7 @@
 
 use std::path::Path;
 
+mod dart_types;
 mod hash;
 mod resolve;
 
@@ -166,12 +167,16 @@ pub fn emit_dart<P: AsRef<Path>>(sources: &[P], dart_path: impl AsRef<Path>) {
 }
 
 pub(crate) fn write_dart(version: u32, dart_path: &Path) {
-  let generated = dart_version_file(version);
-  match std::fs::read(dart_path) {
-    Ok(existing) if existing == generated.as_bytes() => {}
+  write_if_changed(dart_path, &dart_version_file(version));
+}
+
+/// Writes only when the content differs, so an unchanged wire leaves the
+/// committed file's mtime alone.
+pub(crate) fn write_if_changed(path: &Path, content: &str) {
+  match std::fs::read(path) {
+    Ok(existing) if existing == content.as_bytes() => {}
     _ => {
-      std::fs::write(dart_path, &generated)
-        .unwrap_or_else(|e| panic!("wire version: cannot write {}: {e}", dart_path.display()));
+      std::fs::write(path, content).unwrap_or_else(|e| panic!("wire version: cannot write {}: {e}", path.display()));
     }
   }
 }

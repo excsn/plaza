@@ -1,6 +1,7 @@
 import 'package:flame/game.dart' show Vector2;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:parlour_client/parlour_game.dart';
+import 'package:parlour_client/wire_types.dart';
 import 'package:plaza_flame/plaza_flame.dart';
 
 /// Drives the client against `LoopbackSocket`, so it needs no server and no
@@ -273,7 +274,7 @@ void main() {
       game.update(0.016);
 
       expect(game.view!.myHand, [4]);
-      expect(game.view!.phase, 'Scoring');
+      expect(game.view!.phase, TablePhase.scoring);
       expect(game.myTurn, isFalse);
     });
   });

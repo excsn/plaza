@@ -17,7 +17,7 @@ use plaza_lobby::factory::RoomFactory;
 use plaza_lobby::op_payloads::RoomSettings;
 use plaza_lobby::room::InProcessRoomHandle;
 use plaza_lobby::{LobbyError, RoomId};
-use plaza_session::codec::MsgPackNamedCodec;
+use plaza_session::codec::MsgPackCodec;
 use plaza_session::ActixWsPlazaSession;
 use plaza_wire::frame::ProtocolVersion;
 use tracing::info;
@@ -34,7 +34,7 @@ use crate::wallets::WalletRegistry;
 /// belongs to a controller. The table is the wire a shipped client speaks and
 /// the lobby is the one a browser tab reads, so they are encoded differently on
 /// purpose, from one binary, over one port.
-pub type TableSession = ActixWsPlazaSession<TableOp, PlayerId, MsgPackNamedCodec>;
+pub type TableSession = ActixWsPlazaSession<TableOp, PlayerId, MsgPackCodec>;
 
 /// Turn timeouts are counted in ticks, and nothing here is latency-sensitive.
 const TABLE_TICK_HZ: u32 = 20;
@@ -126,7 +126,7 @@ impl RoomFactory for TableFactory {
       .clone()
       .unwrap_or_else(|| format!("table-{room_id}"));
     let seats = Arc::new(AtomicU32::new(0));
-    let session: Arc<TableSession> = ActixWsPlazaSession::with_protocol(MsgPackNamedCodec, ProtocolVersion(PROTOCOL));
+    let session: Arc<TableSession> = ActixWsPlazaSession::with_protocol(MsgPackCodec, ProtocolVersion(PROTOCOL));
 
     // Built from the room's settings, which is what `TableState::default` cannot
     // do and why that impl exists only to satisfy the trait bound.

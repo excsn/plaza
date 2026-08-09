@@ -89,6 +89,8 @@ Icon
 ##### Gradle
 **/.gradle
 **/build/
+!wire/src/build/
+!wire/src/build/**
 
 # Ignore Gradle GUI config
 gradle-app.setting

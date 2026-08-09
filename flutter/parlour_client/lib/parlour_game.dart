@@ -5,61 +5,36 @@ import 'package:flame/game.dart';
 import 'package:plaza_flame/plaza_flame.dart';
 
 import 'sequencer.dart';
+import 'wire_types.dart';
 
-/// A table as the lobby lists it.
-class TableCard {
-  const TableCard({required this.roomId, required this.name, required this.players, required this.seats});
-
-  factory TableCard.fromFields(Map<String, Object?> f) => TableCard(
-        roomId: f['room_id'] as String,
-        name: f['name'] as String,
-        players: f['current_players'] as int,
-        seats: f['max_players'] as int,
-      );
-
-  final String roomId;
-  final String name;
-  final int players;
-  final int seats;
-}
-
-/// What this client was told it may see.
+/// What this client was told it may see, as the scene mutates it.
 ///
-/// Mirrors the server's `PlayerView`, which is built per recipient: your own
-/// cards by rank, everyone else's by count. The absence of other hands is not a
-/// rendering decision here, it is what arrived.
+/// Built from the generated [PlayerView], which is decoded straight off the
+/// wire; this copy exists because the round is narrated as ops between
+/// snapshots and the scene needs somewhere mutable to apply them.
 class TableView {
-  TableView.fromFields(Map<String, Object?> f)
-      : table = f['table'] as String,
-        phase = f['phase'] as String,
-        round = f['round'] as int,
-        totalRounds = f['total_rounds'] as int?,
-        whoseTurn = f['whose_turn'] as int?,
-        yourSeat = f['your_seat'] as String?,
-        coins = f['coins'] as int,
-        myHand = (f['my_hand'] as List<Object?>).cast<int>().toList(),
-        opponents = (f['opponents'] as List<Object?>)
-            .map((e) => (e as List<Object?>).cast<int>())
-            .map((p) => (player: p[0], cards: p[1]))
-            .toList(),
-        played = (f['played'] as List<Object?>)
-            .map((e) => (e as List<Object?>).cast<int>())
-            .map((p) => (player: p[0], card: p[1]))
-            .toList(),
-        scores = (f['scores'] as List<Object?>)
-            .map((e) => (e as List<Object?>).cast<int>())
-            .map((p) => (player: p[0], tricks: p[1]))
-            .toList(),
-        seatsTaken = f['seats_taken'] as int,
-        seatsTotal = f['seats_total'] as int,
-        bots = f['bots'] as int;
+  TableView.fromView(PlayerView v)
+      : table = v.table,
+        phase = v.phase,
+        round = v.round,
+        totalRounds = v.totalRounds,
+        whoseTurn = v.whoseTurn,
+        yourSeat = v.yourSeat,
+        coins = v.coins,
+        myHand = [for (final c in v.myHand) c.value],
+        opponents = [for (final o in v.opponents) (player: o.$1, cards: o.$2)],
+        played = [for (final p in v.played) (player: p.$1, card: p.$2.value)],
+        scores = [for (final s in v.scores) (player: s.$1, tricks: s.$2)],
+        seatsTaken = v.seatsTaken,
+        seatsTotal = v.seatsTotal,
+        bots = v.bots;
 
   final String table;
-  String phase;
+  TablePhase phase;
   int round;
   final int? totalRounds;
   int? whoseTurn;
-  final String? yourSeat;
+  final Seat? yourSeat;
   int coins;
   final List<int> myHand;
   final List<({int player, int cards})> opponents;
@@ -69,7 +44,7 @@ class TableView {
   final int seatsTotal;
   final int bots;
 
-  bool get spectating => yourSeat == 'Spectator';
+  bool get spectating => yourSeat == Seat.spectator;
 }
 
 /// How long each kind of op is worth watching, in seconds.
@@ -134,42 +109,41 @@ class ParlourGame extends FlameGame with PlazaGame {
 
   /* ------------------------------------------------------------ the lobby */
 
-  void quickMatch() => sendPlazaOp(variant('QuickMatch'));
-  void leaveQueue() => sendPlazaOp(variant('LeaveQueue'));
-  void listTables() => sendPlazaOp(variant('ListTables'));
-  void spectate(String roomId) => sendPlazaOp(variant('Spectate', {'room_id': roomId}));
+  // The lobby speaks JSON, so these encode named maps.
+  void quickMatch() => sendPlazaOp(const LobbyOpQuickMatch().toWire(named: true));
+  void leaveQueue() => sendPlazaOp(const LobbyOpLeaveQueue().toWire(named: true));
+  void listTables() => sendPlazaOp(const LobbyOpListTables().toWire(named: true));
+  void spectate(String roomId) => sendPlazaOp(LobbyOpSpectate(roomId: roomId).toWire(named: true));
 
   @override
   void onPlazaOp(Object? op) {
-    // `variantName` and `variantFields`, never `op['Catalogue']`: a unit variant
-    // arrives as a bare string and indexing drops it silently. `QueueLeft` is
-    // exactly that case.
-    final f = variantFields(op);
-    switch (variantName(op)) {
-      case 'Welcome':
-        playerId = f['you'] as int;
-        coins = f['coins'] as int;
+    switch (LobbyOp.fromWire(op)) {
+      case LobbyOpWelcome(:final you, coins: final purse):
+        playerId = you;
+        coins = purse;
         status = 'in the lobby';
-      case 'Catalogue':
+      case LobbyOpCatalogue(tables: final listed):
         tables
           ..clear()
-          ..addAll((f['tables'] as List<Object?>).cast<Map<String, Object?>>().map(TableCard.fromFields));
-      case 'Queued':
-        queued = 'place ${(f['position'] as int) + 1} of ${f['needed']}';
+          ..addAll(listed);
+      case LobbyOpQueued(:final position, :final needed):
+        queued = 'place ${position + 1} of $needed';
         status = 'queued';
-      case 'QueueLeft':
+      case LobbyOpQueueLeft():
         queued = null;
         status = 'in the lobby';
-      case 'Placed':
+      case LobbyOpPlaced(:final name, :final endpoint, coins: final purse):
         queued = null;
-        coins = f['coins'] as int;
-        status = 'placed at ${f['name']}';
-        _note('placed at ${f['name']}');
-        unawaited(openTable(Uri.parse(f['endpoint'] as String)));
-      case 'Refused':
+        coins = purse;
+        status = 'placed at $name';
+        _note('placed at $name');
+        unawaited(openTable(Uri.parse(endpoint)));
+      case LobbyOpRefused(:final reason):
         queued = null;
-        status = 'refused: ${f['reason']}';
-        _note('refused: ${f['reason']}');
+        status = 'refused: $reason';
+        _note('refused: $reason');
+      default:
+        break;
     }
   }
 
@@ -187,9 +161,9 @@ class ParlourGame extends FlameGame with PlazaGame {
     final client = PlazaClient(
       url: endpoint,
       connect: connect,
-      // The table speaks named MessagePack where the lobby speaks JSON. One
-      // codec class reads both shapes, so what changes here is the encoding, not
-      // the reading of it.
+      // The table speaks compact MessagePack where the lobby speaks JSON: the
+      // generated types carry the field order, which is what makes compact safe
+      // to read and write here.
       codec: const MsgPackCodec(),
       protocol: protocol,
       backoff: Backoff(initial: const Duration(milliseconds: 400)),
@@ -229,12 +203,12 @@ class ParlourGame extends FlameGame with PlazaGame {
   bool playCard(int rank) {
     final client = _table;
     if (client == null) return false;
-    final ok = client.sendOps(<Object?>[variant('PlayCard', rank)]);
+    final ok = client.sendOps(<Object?>[TableOpPlayCard(Card(rank)).toWire()]);
     if (ok) plazaStats.countOut(1);
     return ok;
   }
 
-  bool get myTurn => view != null && view!.whoseTurn == playerId && view!.phase == 'Playing';
+  bool get myTurn => view != null && view!.whoseTurn == playerId && view!.phase == TablePhase.playing;
 
   /// Applies one op and says how long it is worth watching.
   ///
@@ -242,50 +216,51 @@ class ParlourGame extends FlameGame with PlazaGame {
   /// so the rest of the round is narrated as ops and this is the half of that
   /// bargain the client owes.
   double applyTableOp(Object? op) {
-    final f = variantFields(op);
     final v = view;
-    switch (variantName(op)) {
-      case 'Snapshot':
-        view = TableView.fromFields(variantBody(op)! as Map<String, Object?>);
+    switch (TableOp.fromWire(op)) {
+      case TableOpSnapshot(value: final snapshot):
+        view = TableView.fromView(snapshot);
         return 0;
 
-      case 'PhaseChanged':
-        v?.phase = f['new_phase'] as String;
+      case TableOpPhaseChanged(value: final notice):
+        v?.phase = notice.newPhase;
         return 0;
 
-      case 'TurnChanged':
-        v?.whoseTurn = f['new_turn_actor'] as int?;
+      case TableOpTurnChanged(value: final notice):
+        v?.whoseTurn = notice.newTurnActor;
         return 0;
 
-      case 'RoundStarted':
-        v?.round = f['round_number'] as int;
+      case TableOpRoundStarted(value: final notice):
+        v?.round = notice.roundNumber;
         return 0;
 
-      case 'CardPlayed':
-      case 'PlayedForYou':
-        _played(f['player'] as int, f['card'] as int);
-        _note('#${f['player']} played ${f['card']}');
+      case TableOpCardPlayed(:final player, :final card):
+      case TableOpPlayedForYou(:final player, :final card):
+        _played(player, card.value);
+        _note('#$player played ${card.value}');
         return pacing.cardPlayed;
 
-      case 'TrickWon':
-        _note('#${f['player']} took the trick with ${f['card']}');
+      case TableOpTrickWon(:final player, :final card):
+        _note('#$player took the trick with ${card.value}');
         return pacing.trickWon;
 
-      case 'Settled':
-        coins = f['coins'] as int;
-        _note('match over, #${f['winner']} takes the stake');
+      case TableOpSettled(:final winner, coins: final purse):
+        coins = purse;
+        _note('match over, #$winner takes the stake');
         return pacing.settled;
 
-      case 'Rejected':
-        _note('refused: ${f['reason']}');
+      case TableOpRejected(:final reason):
+        _note('refused: $reason');
         return 0;
 
-      case 'Closed':
-        _note('table closed: ${f['reason']}');
+      case TableOpClosed(:final reason):
+        _note('table closed: $reason');
         unawaited(closeTable());
         return 0;
+
+      default:
+        return 0;
     }
-    return 0;
   }
 
   void _played(int player, int card) {

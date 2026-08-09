@@ -8,5 +8,6 @@
 fn main() {
   plaza_wire::build::Wire::detect()
     .dart("../../flutter/parlour_client/lib/wire_protocol.dart")
+    .dart_types("../../flutter/parlour_client/lib/wire_types.dart")
     .emit();
 }

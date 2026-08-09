@@ -113,7 +113,7 @@ class _TableOverlayState extends State<TableOverlay> {
               OutlinedButton(onPressed: g.listTables, child: const Text('Refresh')),
             ]),
           if (v != null) ...[
-            Text('${v.table}  ${v.phase}  round ${v.round}/${v.totalRounds ?? '-'}'
+            Text('${v.table}  ${v.phase.wireName}  round ${v.round}/${v.totalRounds ?? '-'}'
                 '  ${v.seatsTaken}/${v.seatsTotal} seats, ${v.bots} bots'),
             const SizedBox(height: 10),
             const Text('played', style: TextStyle(color: Color(0xFF8B93A3), fontSize: 12)),

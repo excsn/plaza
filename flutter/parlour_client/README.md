@@ -31,6 +31,10 @@ A snapshot arrives on a deal and on a resolved trick and **nothing in between**;
 
 It knows nothing about ops. The caller's function does the work and returns how long to wait, so the pacing lives next to the animation rather than in a table of durations somewhere else.
 
+### 3. The types are generated, and compact MessagePack is the payoff
+
+[`lib/wire_types.dart`](lib/wire_types.dart) is written by the server's build script (`Wire::dart_types` in `examples/parlour_game/build.rs`), not by hand. Under the compact codec a struct is an array and field order is the whole contract; generated types read that order from the Rust definitions, which is what makes the table safe to run on `MsgPackCodec` and is why this client pays no field-name premium. Every generated type encodes `toWire(named: ...)`, named maps for the JSON lobby and compact arrays for the table, and `fromWire` accepts either shape. `test/wire_conformance_test.dart` re-encodes the server's golden fixtures byte for byte, which is the proof the order matches; regenerate the fixtures with `PLAZA_REGENERATE_FIXTURES=1 cargo test -p plaza_example_parlour_game --test wire_fixtures` after a wire change.
+
 ## What this cost, which is the part worth reading
 
 **The mixin owns one client, so the second one is hand-rolled.** [`PlazaGame`](../plaza_flame/lib/src/game.dart) creates its client in `onLoad` and holds it for the game's life, which is right for the connection an app always has. A second connection whose URL is not known until the first one names it does not fit, so `ParlourGame` carries its own `PlazaClient`, its own two `StreamSubscription`s, its own teardown, and its own `resume` on the lifecycle hook. About forty lines, all of it a second copy of what the mixin already does once.

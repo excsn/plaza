@@ -108,7 +108,7 @@
 
   <div>
     <div class="panel">
-      <h2>Table <span class="badge wire" id="table-wire">msgpack-named</span></h2>
+      <h2>Table <span class="badge wire" id="table-wire">msgpack</span></h2>
       <div class="row"><span class="k">table</span><span id="t-name">not seated</span></div>
       <div class="row"><span class="k">phase</span><span id="t-phase">-</span></div>
       <div class="row"><span class="k">round</span><span class="num" id="t-round">-</span></div>
@@ -379,9 +379,37 @@ function drawTables(tables) {
   }
 }
 
-/* ---------------------------------------------- table socket, named msgpack */
+/* -------------------------------------------- table socket, compact msgpack */
 
 const mpCodec = { encode: mpEncode, decode: mpDecode };
+
+/* Compact msgpack sends a struct as its fields in declaration order, and these
+   tables are that order, copied from types.rs. This is the price a hand-written
+   peer pays against the compact codec (the Dart client generates its types and
+   pays nothing); the protocol version moves whenever the order changes, so a
+   stale copy of this page is told to reload rather than left misreading. */
+const SHAPES = {
+  Snapshot: ['table', 'phase', 'round', 'total_rounds', 'whose_turn', 'your_seat', 'stake', 'coins', 'my_hand', 'opponents', 'played', 'scores', 'seats_taken', 'seats_total', 'spectators', 'bots'],
+  PhaseChanged: ['new_phase', 'previous_phase', 'duration_hint', 'reason'],
+  TurnChanged: ['new_turn_actor', 'previous_turn_actor', 'turn_number', 'time_limit_for_turn'],
+  RoundStarted: ['round_number', 'total_rounds'],
+  RoundEnded: ['round_number', 'reason', 'summary_data'],
+  CardPlayed: ['player', 'card'],
+  PlayedForYou: ['player', 'card'],
+  TrickWon: ['player', 'card'],
+  Settled: ['winner', 'coins'],
+  Rejected: ['reason'],
+  Closed: ['reason'],
+};
+
+function namedBody(op) {
+  const body = opBody(op);
+  if (!Array.isArray(body)) return body;
+  const fields = SHAPES[opName(op)] || [];
+  const named = {};
+  fields.forEach((field, at) => { named[field] = body[at]; });
+  return named;
+}
 
 function sendTable(op) {
   if (table && table.readyState === WebSocket.OPEN) {
@@ -425,7 +453,7 @@ function onPlayed(player, card) {
 }
 
 function handleTableOp(op) {
-  const body = opBody(op);
+  const body = namedBody(op);
   switch (opName(op)) {
     case 'Snapshot':
       view = body;

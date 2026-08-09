@@ -26,9 +26,9 @@ That is a two-line difference in `seat_formed` and a completely different lifecy
 
 ### 2. Two codecs, one server, one port
 
-The lobby session speaks `JsonCodec`. Every table session speaks `MsgPackNamedCodec`. Same binary, same port, different wires, because **a codec belongs to a session and a session belongs to a controller**, so nothing about plaza ties a deployment to one encoding.
+The lobby session speaks `JsonCodec`. Every table session speaks the compact `MsgPackCodec`. Same binary, same port, different wires, because **a codec belongs to a session and a session belongs to a controller**, so nothing about plaza ties a deployment to one encoding.
 
-The browser page is therefore two clients in one file: JSON text frames on the lobby socket, and a hand-written MessagePack reader on the table socket. That reader is not a nicety, it is the demonstration. `MsgPackNamedCodec` exists precisely for a peer that **cannot be built from the server's struct definitions** and so has no way to recover field order, and a hundred lines of JavaScript is exactly that peer. Under the default compact codec every read in it would be an array index instead of a field name.
+The two table clients then demonstrate the two ways to survive compact's contract, where a struct is an array and field order is everything. The Flutter client's types are **generated** from `types.rs` by `Wire::dart_types` in `build.rs`, so its order is machine-checked and costs nobody anything. The browser page is the hand-written peer: its `SHAPES` tables are the field order copied by hand, which is exactly the maintenance burden codegen removes, kept here deliberately so the price is visible. Both are guarded by the derived protocol version, which moves whenever the order changes. `MsgPackNamedCodec` still exists for a peer that cannot be built or generated from the server's definitions, and the measurement below is why reaching for it should be a last resort rather than a default.
 
 ### 3. What the field names actually cost
 
@@ -40,7 +40,7 @@ The figure usually quoted for named MessagePack is 67% of JSON against compact's
 | snapshots | 18 | 4941 | 1170 | 3618 |
 | **total** | **56** | **7864** | **2040** | **5945** |
 
-Named is **76% of JSON where compact is 26%**, a premium of **+190%** rather than +67%. At that point the choice is close to "a quarter of JSON or three quarters of it", and adopting named to keep a hand-written client simple is nearly giving up MessagePack.
+Named is **76% of JSON where compact is 26%**, a premium of **+190%** rather than +67%. At that point the choice is close to "a quarter of JSON or three quarters of it", and adopting named to keep a hand-written client simple is nearly giving up MessagePack. This deployment paid that premium until generated Dart types made compact safe; the tables now speak compact and the premium is gone.
 
 **The reason generalises, and it is the opposite of the other measurement in this repository.** A field name is paid *per field per message*, so the premium tracks how **wide** a message is, not how large. `PlayerView` has fifteen fields and is sent once per recipient on every deal and every resolved trick; a notice has two or three behind a variant name both encodings pay for. So the widest and most frequent message pays proportionally most. [`curtain_fire`](../curtain_fire/) measured a *per-message* cost, the variant tag, and found the opposite: there it is the **small** messages that are expensive. Both are true. A per-message cost punishes small messages; a per-field cost punishes wide ones.
 

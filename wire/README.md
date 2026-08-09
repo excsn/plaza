@@ -177,7 +177,7 @@ A client then announces `PROTOCOL` on connect and a server speaking a different 
 | Client | Channel | Client work |
 |---|---|---|
 | Browser page | [`Host`](../session/) stamps `window.PLAZA_PROTOCOL` into the HTML at serve time | none |
-| Dart / Flutter app | `.dart(path)` writes a committed `const int wireProtocol` the app imports | one import, one constructor argument |
+| Dart / Flutter app | `.dart(path)` writes a committed `const int wireProtocol` the app imports; `.dart_types(path)` generates its wire types too, making compact MessagePack safe to speak | one import, one constructor argument |
 | Native Rust client | shares the server's crate and its `PROTOCOL` const | none |
 
 The Dart file is committed because a Dart build cannot run a cargo build script; the server's build keeps it current, and `assert_dart_protocol(path, PROTOCOL)` is a one-line test that fails CI when a wire change was committed without a build. Either way a stale client also self-announces at runtime through the `Hello` handshake, so the test moves discovery earlier rather than being the only net.

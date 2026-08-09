@@ -47,8 +47,8 @@ echo "   both paths behaved"
 # A second server and a second suite, because the two clients prove different
 # things. lobby_world proves the handshake and one JSON socket; parlour_game
 # proves the handoff to a *second* socket on a different codec, which is the
-# only place named MessagePack written by `rmp_serde` is read by Dart over a
-# real wire.
+# only place compact MessagePack written by `rmp_serde` is read by Dart's
+# generated types over a real wire.
 echo "== parlour_client against examples/parlour_game"
 cd "$root/examples"
 CARGO_TARGET_DIR="$root/target" cargo build -q -p plaza_example_parlour_game
