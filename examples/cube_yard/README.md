@@ -31,21 +31,23 @@ That inverts the physics configuration too, and for a reason rather than a prefe
 **All four stages.** Reproduce with `cargo test -p cube_yard --test baseline -- --nocapture`.
 
 ```
-905 cubes, 905 asleep, one frame at 60 Hz
+905 cubes, 852 asleep, one frame at 60 Hz
 
 stage                     bytes   Mbit/sec vs stage 1  worst error
 1  full width             49800      23.90      1.0x        exact
-2  quantised + packed      8740       4.20      5.7x      0.0008u
-3  + priority budget        491       0.24    101.4x      0.0008u
-4  + delta encoding         532       0.26     93.6x      0.0008u
+2  quantised + packed      8959       4.30      5.6x      0.0033u
+3  + priority budget        490       0.24    101.6x      0.0033u
+4  + delta encoding         531       0.25     93.8x      0.0033u
 
    cubes refreshed per tick, inside the same budget:
-     stage 3      44
-     stage 4     432
+     stage 3      41
+     stage 4     263
 
-   mean quantisation error 0.00048 units, on cubes one unit across
-   worst single packet 495 bytes against a 507 byte budget
+   mean quantisation error 0.00190 units, on cubes one unit across
+   worst single packet 499 bytes against a 507 byte budget
 ```
+
+The error column moved when the floor did, and that is the trade an endless stage makes on the wire. Quantisation spends a fixed number of bits over a **bounded** range, so widening the world four times over costs four times the step at the same 16 bits: 0.0008 units became 0.0033. Still a three-hundredth of a cube and still invisible, but it is the reason the floor is finite at all rather than a plane going on for ever. Buy the precision back with two more bits an axis if a world ever needs it.
 
 **The target is met at stage 3**, and the thing worth saying plainly is that the last 16x was not compression at all. Quantising has a floor: 905 cubes times the smallest honest encoding is still 4.2 Mbit/sec, and no number of bits saved per cube reaches 256 kbit. What closed it was choosing.
 

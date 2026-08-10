@@ -18,11 +18,19 @@ use crate::protocol::{CubeState, Drive, CUBES, TICK_HZ};
 const CUBE: f32 = 0.5;
 /// Player cubes are bigger, so shoving reads as shoving.
 const PLAYER: f32 = 1.5;
-/// Half-width of the floor. Wide enough to hold the field with room to fly.
-pub const YARD: f32 = 40.0;
+/// Half-width of the floor.
+///
+/// Effectively infinite rather than actually: the field is 37 across, so this
+/// leaves a hundred units of ground in every direction. There is no edge to
+/// lose a cube over and no wall to pile them against, and the only reason it is
+/// finite at all is that the wire quantises positions over a bounded range (see
+/// `pack`), and an unbounded range would mean unbounded precision loss.
+pub const YARD: f32 = 150.0;
+/// Where the field of cubes actually sits, well inside the floor.
+pub const FIELD: f32 = 40.0;
 /// Gap between cubes in the field, so there is air to shove them through.
 const SPACING: f32 = 2.4;
-const WALL: f32 = 6.0;
+
 
 /// How fast a held direction moves a player cube.
 ///
@@ -102,23 +110,14 @@ impl Yard {
     let mut bodies = RigidBodySet::new();
     let mut colliders = ColliderSet::new();
 
-    // Floor and four walls, so the pile has somewhere to be and nothing
-    // escapes into the void where a client would draw it forever.
+    // One floor, no walls. A wall is something to pile cubes against and an
+    // edge is something to lose them over, and this game wants neither: shove a
+    // cube as hard as you like and it lands on ground and stays there.
     colliders.insert(
       ColliderBuilder::cuboid(YARD, 1.0, YARD)
         .translation(Vec3::new(0.0, -1.0, 0.0))
         .friction(0.8),
     );
-    for (half, at) in [
-      ((YARD, WALL, 1.0), (0.0, WALL, -YARD)),
-      ((YARD, WALL, 1.0), (0.0, WALL, YARD)),
-      ((1.0, WALL, YARD), (-YARD, WALL, 0.0)),
-      ((1.0, WALL, YARD), (YARD, WALL, 0.0)),
-    ] {
-      colliders.insert(
-        ColliderBuilder::cuboid(half.0, half.1, half.2).translation(Vec3::new(at.0, at.1, at.2)),
-      );
-    }
 
     // A flat field, evenly spaced and resting on the floor. Not a heap: the
     // whole game is ploughing furrows through a regular pattern, and a pile has
@@ -135,6 +134,7 @@ impl Yard {
         CUBE,
         (z as f32 - side as f32 / 2.0) * SPACING,
       );
+      debug_assert!(at.x.abs() < FIELD && at.z.abs() < FIELD, "the field must sit inside the floor");
       let body = bodies.insert(RigidBodyBuilder::dynamic().translation(at));
       let collider = colliders.insert_with_parent(
         ColliderBuilder::cuboid(CUBE, CUBE, CUBE).friction(0.6).restitution(0.05),
@@ -498,16 +498,50 @@ mod tests {
   }
 
   #[test]
-  fn the_pile_settles_inside_the_walls() {
+  fn the_field_settles_on_the_floor_and_stays_there() {
     let mut yard = Yard::new();
     run(&mut yard, 600);
 
     let mut cubes = Vec::new();
     yard.snapshot(&mut cubes);
+    // There are no walls to hold anything in, so what matters is that the floor
+    // reaches far enough that nothing has run out of it, and that gravity has
+    // put everything back down on it.
     for (i, cube) in cubes.iter().enumerate() {
       assert!(cube.pos[1] > -2.0, "cube {i} fell through the floor: {:?}", cube.pos);
-      assert!(cube.pos[0].abs() < YARD + 4.0, "cube {i} left the yard: {:?}", cube.pos);
-      assert!(cube.pos[2].abs() < YARD + 4.0, "cube {i} left the yard: {:?}", cube.pos);
+      assert!(cube.pos[1] < 6.0, "cube {i} never came back down: {:?}", cube.pos);
+      assert!(cube.pos[0].abs() < YARD, "cube {i} ran out of floor: {:?}", cube.pos);
+      assert!(cube.pos[2].abs() < YARD, "cube {i} ran out of floor: {:?}", cube.pos);
+    }
+  }
+
+  /// Gravity, and nothing to fall off: shove the field as hard as the game
+  /// allows and everything lands and stays on the ground.
+  #[test]
+  fn everything_shoved_comes_back_down_and_stays_on_the_floor() {
+    let mut yard = Yard::new();
+    run(&mut yard, 120);
+
+    // Fly back and forth through the field at full speed.
+    for pass in 0..6 {
+      let dx = if pass % 2 == 0 { -1 } else { 1 };
+      let mut flying = [Drive::default(); MAX_PLAYERS];
+      flying[0] = Drive { dx, dz: 0, jump: false, rolling: false };
+      for _ in 0..120 {
+        yard.step(&flying);
+      }
+    }
+    // Then leave it alone and let gravity finish.
+    run(&mut yard, 600);
+
+    let cubes = snapshot_of(&yard);
+    for i in 0..CUBES {
+      let p = cubes[i].pos;
+      assert!(p[1] > -2.0 && p[1] < 8.0, "cube {i} did not settle: {p:?}");
+      assert!(
+        p[0].abs() < YARD && p[2].abs() < YARD,
+        "cube {i} was shoved off the floor: {p:?}"
+      );
     }
   }
 

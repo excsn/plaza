@@ -19,12 +19,14 @@ use crate::protocol::CubeState;
 ///
 /// A value outside them does not wrap or error, it *clamps*, so a cube beyond
 /// the edge is pinned to it and stops moving on the client while carrying on
-/// perfectly well on the server. Widening the yard for the lattice without
-/// widening these left the outer ring of the field frozen: awake, correctly
-/// flagged, and stuck. The walls stand at `sim::YARD` = 40, so 46 leaves room
-/// for anything shoved against them.
-const X: (f32, f32) = (-46.0, 46.0);
-const Y: (f32, f32) = (-2.0, 40.0);
+/// perfectly well on the server. Widening the yard once without widening these
+/// left the outer ring of the field frozen: awake, correctly flagged, and
+/// stuck. So these track the floor, which is why the floor is finite at all.
+///
+/// At 16 bits over 310 units a step is under 5mm, which on cubes a unit across
+/// is still far below anything a camera will resolve.
+const X: (f32, f32) = (-155.0, 155.0);
+const Y: (f32, f32) = (-2.0, 60.0);
 const XZ_BITS: u32 = 16;
 const Y_BITS: u32 = 15;
 

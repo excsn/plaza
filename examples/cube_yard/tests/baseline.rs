@@ -230,13 +230,16 @@ fn the_send_rate_axis_priced_across_the_yard() {
   use plaza_client_utils::math::Vec3;
 
   const SEND_EVERY: u64 = 6; // ten a second at 60Hz
-  const WATCH: usize = 300;
+  // The cubes nearest the player's path, which are the ones it disturbs.
+  const WATCH: usize = 500;
 
+  // Settled first, then ploughed through: the motion being interpolated should
+  // be the motion the game actually produces, not the field bedding in.
   let mut yard = Yard::new();
-  let idle = [Default::default(); MAX_PLAYERS];
-  for _ in 0..30 {
-    yard.step(&idle);
+  for _ in 0..240 {
+    yard.step(&[cube_yard::protocol::Drive::default(); MAX_PLAYERS]);
   }
+  let idle = ploughing();
 
   let mut splines: Vec<HermiteView<Vec3, Vec3>> = (0..WATCH).map(|_| HermiteView::new(8)).collect();
   let mut samples: Vec<Vec<(u64, Vec3)>> = vec![Vec::new(); WATCH];
