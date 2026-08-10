@@ -25,6 +25,8 @@ pub mod flow_payloads;
 pub mod frame;
 pub mod framing;
 #[cfg(feature = "serde")]
+pub mod payload;
+#[cfg(feature = "serde")]
 pub mod payloads;
 
 #[cfg(feature = "build")]
@@ -33,6 +35,8 @@ pub mod build;
 #[cfg(feature = "serde")]
 pub use bit_codec::BitCodec;
 pub use envelope::{Agent, AgentId};
+#[cfg(feature = "serde")]
+pub use payload::Payload;
 pub use frame::Kind;
 
 #[cfg(feature = "serde")]

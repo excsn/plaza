@@ -302,9 +302,11 @@ Available without the `serde` feature: it is bytes and bits, not a codec.
 
 **`quantize(value, min, max, bits) -> u64`**, **`dequantize(q, min, max, bits) -> f32`** (round trip costs at most half a step), **`zigzag(i64) -> u64`**, **`unzigzag(u64) -> i64`**.
 
-### The `Vec<u8>` trap
+### The `Vec<u8>` trap, and `Payload`
 
-A packed payload carried as a `Vec<u8>` field reaches the outer codec through `serialize_seq`, so every byte is re-encoded as its own integer. In `wire/tests/packing.rs` that costs **15502 bytes to carry 10396**, giving back half of what packing just won. Declare the field as *bytes* (`serde_bytes`, or a newtype whose `Serialize` calls `serialize_bytes`) and the same payload travels in **10411**.
+A packed payload carried as a `Vec<u8>` field reaches the outer codec through `serialize_seq`, so every byte is re-encoded as its own integer. In `wire/tests/packing.rs` that costs **15502 bytes to carry 10396**, giving back half of what packing just won.
+
+**Struct `Payload`** (feature `serde`) is the fix: a `Vec<u8>` newtype whose `Serialize` calls `serialize_bytes`, so the same payload travels in **10411**, a fifteen-byte header over the raw layout. `From<Vec<u8>>`, `Deref<Target = [u8]>`, `as_slice`, `into_inner`; `Debug` prints the length rather than the bytes, because a packed frame in a log line is noise. Its `Deserialize` also accepts a sequence, so a text codec with no byte-string type still round-trips.
 
 ## 7c. Struct `BitCodec` (feature `serde`)
 
