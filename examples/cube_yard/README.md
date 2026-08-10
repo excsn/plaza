@@ -89,9 +89,11 @@ Every stage keeps a position-error readout beside the bandwidth. Compression wit
 
 ## Drawing 901 tumbling cubes
 
-macroquad's `draw_cube` takes a position and a size and **no rotation**, so it cannot draw a tumbling rigid body at all. Every cube therefore goes into one mesh whose vertices are rebuilt each frame. That turns out to be the fast path as well as the only correct one: 901 cubes cost about 158us to rebuild, under one percent of a 16.7ms frame, and the cost is linear in cubes rather than in draw calls. At 5000 cubes it is still only 4.5%.
+macroquad's `draw_cube` takes a position and a size and **no rotation**, so it cannot draw a tumbling rigid body at all. Every cube therefore goes into a mesh whose vertices are rebuilt each frame. That is the fast path as well as the only correct one: 901 cubes cost about 158us to rebuild, under one percent of a 16.7ms frame, and the cost is linear in cubes rather than in draw calls. At 5000 cubes it is still only 4.5%.
 
-The ceiling is `u16` mesh indices, which cap one mesh at 65535 vertices, so 2730 cubes. Past that it wants splitting into several.
+**In chunks of 128, and that number was paid for.** macroquad's batcher has `draw_call_vertex_capacity` of 10000 and `draw_call_index_capacity` of 5000, and `geometry()` *clamps* anything larger: it warns and then draws the front of the buffer. One mesh of 905 cubes is 21720 vertices and 32580 indices, so roughly a quarter of the yard was drawn and the rest simply was not there. Indices bind first, at 36 per cube, putting the true ceiling at 138 cubes per call rather than the 2730 the `u16` index type suggests.
+
+The rendering spike that was supposed to catch this did catch it, and the output was filtered away: the run printed the warning on every frame and the check grepped for its own success line. A spike that greps for what it hoped to see is not a spike.
 
 ## Structure
 
