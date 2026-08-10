@@ -28,6 +28,10 @@ const JUMP: f32 = 9.0;
 
 pub const MAX_PLAYERS: usize = 4;
 
+/// Below this speed a body counts as not drifting, so quantise-both-sides
+/// leaves it alone. Comfortably under rapier's own sleep threshold.
+const STILL: f32 = 0.05;
+
 pub struct Yard {
   bodies: RigidBodySet,
   colliders: ColliderSet,
@@ -197,6 +201,44 @@ impl Yard {
         linvel: [v.x, v.y, v.z],
         at_rest: body.is_sleeping(),
       });
+    }
+  }
+
+  /// Snaps every body onto the grid the wire carries.
+  ///
+  /// Fiedler's "quantise both sides": the server simulating at a precision it
+  /// never transmits means the client is always looking at a rounded copy of a
+  /// truth that has already moved on. Snapping first makes what the client
+  /// receives *be* the state, so the two cannot drift apart in the digits below
+  /// the wire's resolution.
+  ///
+  /// **Only bodies that are actually moving get snapped**, and that is not a
+  /// detail. Snapping everything every tick took the settled pile from 905
+  /// asleep to 0: a resting cube jitters by less than one quantisation step, so
+  /// it is re-snapped forever, and writing a body's position marks it modified,
+  /// which is enough to stop it ever reaching the sleep threshold. Keying on
+  /// `is_sleeping` does not help either, because that is the state it can no
+  /// longer get into.
+  ///
+  /// Keying on motion breaks the circle, and the rule it leaves is the one that
+  /// was always right: a body that is not moving is not drifting, so there is
+  /// no divergence for snapping to prevent. Costing the at-rest flag to fix
+  /// drift that does not exist would be a bad trade twice over.
+  pub fn snap_to_wire(&mut self) {
+    for handle in &self.handles {
+      let body = &mut self.bodies[*handle];
+      if body.is_sleeping() || body.linvel().length() < STILL {
+        continue;
+      }
+      let t = body.translation();
+      let snapped = Vec3::new(
+        crate::pack::snap_position(t.x, 0),
+        crate::pack::snap_position(t.y, 1),
+        crate::pack::snap_position(t.z, 2),
+      );
+      if snapped != t {
+        body.set_translation(snapped, false);
+      }
     }
   }
 

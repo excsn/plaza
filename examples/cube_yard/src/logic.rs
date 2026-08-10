@@ -13,7 +13,8 @@ use plaza::state_logic::{LogicInput, LogicOutput, StateLogic};
 use plaza_server_utils::{Admission, Departure};
 use tracing::info;
 
-use crate::protocol::{frame_to_ms, FrameUpdate, PlayerId, YardOp};
+use crate::pack;
+use crate::protocol::{frame_to_ms, Cubes, Encoding, FrameUpdate, PlayerId, YardOp};
 use crate::state::YardState;
 
 type Ctx = OpsQueue<YardOp, PlayerId>;
@@ -111,9 +112,16 @@ fn step_once(state: &mut YardState, ctx: &mut Ctx) {
   state.tick += 1;
   let driving = state.driving;
   state.yard.step(&driving);
+  if state.snap {
+    state.yard.snap_to_wire();
+  }
 
   let mut cubes = Vec::new();
   state.yard.snapshot(&mut cubes);
+  let cubes = match state.encoding {
+    Encoding::Full => Cubes::Full(cubes),
+    Encoding::Packed => Cubes::Packed(pack::pack(&cubes).into()),
+  };
 
   // One frame, every cube, to everybody. The whole point of stage one is that
   // this is the expensive way, and by how much.
@@ -150,7 +158,10 @@ mod tests {
     let YardOp::Frame(update) = &ops[0].ops[0] else {
       panic!("a tick broadcasts a frame");
     };
-    assert_eq!(update.cubes.len(), CUBES + MAX_PLAYERS);
+    let Cubes::Full(cubes) = &update.cubes else {
+      panic!("the default encoding is full width");
+    };
+    assert_eq!(cubes.len(), CUBES + MAX_PLAYERS);
     assert_eq!(update.frame, 1);
   }
 

@@ -10,7 +10,8 @@ use plaza_wire::{MsgPackCodec, WireCodec};
 use plaza_ws::pump::{mismatch_message, Arrival, FramePump};
 use plaza_ws::{Event, State};
 
-use crate::protocol::{CubeState, Drive, FrameUpdate, YardOp, PROTOCOL};
+use crate::pack;
+use crate::protocol::{CubeState, Cubes, Drive, FrameUpdate, YardOp, PROTOCOL};
 
 const WIRE: MsgPackCodec = MsgPackCodec;
 
@@ -81,6 +82,11 @@ pub struct NetClient {
   pub cubes: Vec<CubeState>,
   pub frame: u64,
   pub meter: Meter,
+  /// Whether the frames arriving are bit-packed, for the panel to name.
+  pub packed: bool,
+  /// Frames whose packed payload would not read back. Must stay zero: it means
+  /// the layout and its reader have drifted apart.
+  pub unreadable: u64,
 
   events: Vec<Event>,
   arrivals: Vec<Arrival>,
@@ -105,6 +111,8 @@ impl NetClient {
       cubes: Vec::new(),
       frame: 0,
       meter: Meter::default(),
+      packed: false,
+      unreadable: 0,
       events: Vec::new(),
       arrivals: Vec::new(),
       now_ms: 0,
@@ -172,7 +180,14 @@ impl NetClient {
   fn on_frame(&mut self, update: FrameUpdate) {
     self.pump.timeline_mut().note_stamp(update.server_time_ms, self.now_ms);
     self.frame = update.frame;
-    self.cubes = update.cubes;
+    self.packed = update.cubes.is_packed();
+    match update.cubes {
+      Cubes::Full(cubes) => self.cubes = cubes,
+      Cubes::Packed(payload) => match pack::unpack(payload.as_slice()) {
+        Some(cubes) => self.cubes = cubes,
+        None => self.unreadable += 1,
+      },
+    }
   }
 
   /// Sends the held direction, and only when it changes: a level repeats on the
@@ -227,7 +242,7 @@ mod tests {
       frame,
       server_time_ms: frame_to_ms(frame),
       yours: None,
-      cubes: yard(cubes),
+      cubes: Cubes::Full(yard(cubes)),
     }))
   }
 

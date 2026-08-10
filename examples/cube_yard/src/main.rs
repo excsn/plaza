@@ -7,6 +7,7 @@ mod render;
 mod ui;
 
 use macroquad::prelude::*;
+use cube_yard::protocol::{self, Encoding};
 use cube_yard::role;
 use cube_yard::role::Role;
 
@@ -27,7 +28,12 @@ fn give_up(message: String) {
 }
 
 fn main() {
-  let options = match role::parse(std::env::args()) {
+  let encoding = match Encoding::from_args(std::env::args()) {
+    Ok(encoding) => encoding,
+    Err(message) => return give_up(message),
+  };
+  let snap = std::env::args().any(|a| a == "--snap");
+  let options = match role::parse(protocol::without_yard_args(std::env::args())) {
     Ok(options) => options,
     Err(message) => return give_up(message),
   };
@@ -39,7 +45,7 @@ fn main() {
   if options.role == Role::Headless {
     let result = tokio::runtime::Runtime::new()
       .expect("tokio runtime")
-      .block_on(cube_yard::net::host::serve(&options.bind, options.static_dir.clone()));
+      .block_on(cube_yard::net::host::serve(&options.bind, options.static_dir.clone(), encoding, snap));
     if let Err(e) = result {
       eprintln!("server stopped: {e}");
       std::process::exit(1);
@@ -49,7 +55,7 @@ fn main() {
 
   #[cfg(all(feature = "client", feature = "websocket"))]
   {
-    windowed(options);
+    windowed(options, encoding, snap);
     return;
   }
 
@@ -69,8 +75,8 @@ fn window_conf() -> Conf {
 }
 
 #[cfg(all(feature = "client", feature = "websocket"))]
-fn windowed(options: role::Options) {
-  macroquad::Window::from_config(window_conf(), frame_loop(options));
+fn windowed(options: role::Options, encoding: Encoding, snap: bool) {
+  macroquad::Window::from_config(window_conf(), frame_loop(options, encoding, snap));
 }
 
 #[cfg(all(feature = "client", feature = "websocket"))]
@@ -97,7 +103,10 @@ fn read_drive() -> Drive {
 }
 
 #[cfg(all(feature = "client", feature = "websocket"))]
-async fn frame_loop(options: role::Options) {
+async fn frame_loop(options: role::Options, encoding: Encoding, snap: bool) {
+  #[cfg(not(feature = "server"))]
+  let (_, _) = (encoding, snap);
+
   #[cfg(feature = "server")]
   if options.role.runs_a_server() {
     let bind = options.bind.clone();
@@ -106,7 +115,7 @@ async fn frame_loop(options: role::Options) {
       .name("yard".to_owned())
       .spawn(move || {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-        if let Err(e) = runtime.block_on(cube_yard::net::host::serve(&bind, static_dir)) {
+        if let Err(e) = runtime.block_on(cube_yard::net::host::serve(&bind, static_dir, encoding, snap)) {
           eprintln!("yard stopped: {e}");
         }
       })

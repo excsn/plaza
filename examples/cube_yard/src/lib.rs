@@ -7,6 +7,7 @@
 //! Glenn Fiedler's networked physics articles, at his cube count, so the
 //! numbers can be read against his.
 
+pub mod pack;
 pub mod protocol;
 pub mod role;
 

@@ -24,12 +24,19 @@ pub fn draw_panel(client: &NetClient, url: &str) {
         ui.label(format!("{asleep} asleep, {} awake", client.cubes.len().saturating_sub(asleep)));
         ui.separator();
 
+        ui.label(if client.packed { "encoding: quantised + bit-packed" } else { "encoding: full width (stage 1)" });
+        if client.unreadable > 0 {
+          ui.colored_label(
+            egui_macroquad::egui::Color32::LIGHT_RED,
+            format!("{} unreadable frames", client.unreadable),
+          );
+        }
         ui.label("what the wire cost:");
         ui.label(format!("  {:.0} kbit/sec", client.meter.kbps(client.now_ms())));
         ui.label(format!("  {:.0} bytes per frame", client.meter.bytes_per_frame()));
         ui.label(
           egui_macroquad::egui::RichText::new(
-            "stage one: every cube, every tick, full width.\nthe number the packing stages have to beat.",
+            "still every cube, every tick.\npriority and delta are what close the last 16x.",
           )
           .small(),
         );

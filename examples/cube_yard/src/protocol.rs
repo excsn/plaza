@@ -5,6 +5,7 @@
 //! state stays on the server: unlike puck_rink, no client re-simulates here, so
 //! only this projection has to travel.
 
+use plaza_wire::Payload;
 use serde::{Deserialize, Serialize};
 
 /// The wire format's version, derived at build time from this file.
@@ -38,6 +39,26 @@ pub struct CubeState {
   pub at_rest: bool,
 }
 
+/// How a frame carries the yard.
+///
+/// Both encodings ride the same op so a server can be switched between them and
+/// the difference read off one panel, rather than compared across two runs a
+/// week apart.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Cubes {
+  /// Stage one: every field at full width, through serde.
+  Full(Vec<CubeState>),
+  /// Stage two: the hand-written bit layout in `pack`, carried as bytes rather
+  /// than as a `Vec<u8>`, which would re-encode every byte as an integer.
+  Packed(Payload),
+}
+
+impl Cubes {
+  pub fn is_packed(&self) -> bool {
+    matches!(self, Self::Packed(_))
+  }
+}
+
 /// One authoritative tick.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FrameUpdate {
@@ -45,7 +66,53 @@ pub struct FrameUpdate {
   pub server_time_ms: u64,
   /// The player cube this client drives, if it has one.
   pub yours: Option<u16>,
-  pub cubes: Vec<CubeState>,
+  pub cubes: Cubes,
+}
+
+/// Which wire encoding the yard is running.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Encoding {
+  /// Full width, through serde. The number every stage is measured against.
+  #[default]
+  Full,
+  /// Quantised and bit-packed by hand.
+  Packed,
+}
+
+impl Encoding {
+  pub fn named(name: &str) -> Result<Self, String> {
+    match name {
+      "full" => Ok(Self::Full),
+      "packed" => Ok(Self::Packed),
+      other => Err(format!("unknown encoding {other:?}; expected full or packed")),
+    }
+  }
+
+  /// The value of `--encoding` on a command line.
+  pub fn from_args<I: IntoIterator<Item = String>>(args: I) -> Result<Self, String> {
+    let mut args = args.into_iter().skip_while(|a| a != "--encoding");
+    match args.nth(1) {
+      Some(name) => Self::named(&name),
+      None => Ok(Self::default()),
+    }
+  }
+}
+
+/// The same command line with `--encoding <name>` and `--snap` removed, for the
+/// shared role parser, which rejects an argument it does not know.
+pub fn without_yard_args<I: IntoIterator<Item = String>>(args: I) -> Vec<String> {
+  let mut kept = Vec::new();
+  let mut args = args.into_iter();
+  while let Some(arg) = args.next() {
+    match arg.as_str() {
+      "--encoding" => {
+        args.next();
+      }
+      "--snap" => {}
+      _ => kept.push(arg),
+    }
+  }
+  kept
 }
 
 /// A held direction plus whether the player is shoving, in the camera's frame.

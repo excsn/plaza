@@ -14,7 +14,7 @@ use plaza_wire::frame::ProtocolVersion;
 use plaza_wire::MsgPackCodec;
 
 use crate::logic::YardLogic;
-use crate::protocol::{PlayerId, YardOp, PROTOCOL, TICK_HZ};
+use crate::protocol::{Encoding, PlayerId, YardOp, PROTOCOL, TICK_HZ};
 use crate::state::YardState;
 
 type YardSession = ActixWsPlazaSession<YardOp, PlayerId, MsgPackCodec>;
@@ -35,7 +35,7 @@ async fn ws_route(
 }
 
 /// Runs the rink until the process ends.
-pub async fn serve(bind: &str, static_dir: Option<String>) -> std::io::Result<()> {
+pub async fn serve(bind: &str, static_dir: Option<String>, encoding: Encoding, snap: bool) -> std::io::Result<()> {
   init_logging();
 
   let sim_clock = Arc::new(AtomicU64::new(0));
@@ -54,7 +54,7 @@ pub async fn serve(bind: &str, static_dir: Option<String>) -> std::io::Result<()
     Arc::new(logic),
     session.clone(),
     Arc::new(NoSnapshots),
-    YardState::new(),
+    YardState::with(encoding, snap),
   )
   .snapshot_context_on_join(None)
   .command_buffer(256)
@@ -67,7 +67,7 @@ pub async fn serve(bind: &str, static_dir: Option<String>) -> std::io::Result<()
   });
   tokio::spawn(TickDriver::from_hz(TICK_HZ as u32).run(commands));
 
-  tracing::info!(bind, "cube yard listening (WebSocket at /ws)");
+  tracing::info!(bind, ?encoding, snap, "cube yard listening (WebSocket at /ws)");
   let session = web::Data::new(session);
   Host::new(bind)
     .serve_dir(static_dir)
