@@ -184,6 +184,24 @@ The Dart file is committed because a Dart build cannot run a cargo build script;
 
 The other half of that failure is caching, and it lives in [`plaza_session::host::Host`](../session/): a browser serving the page from cache cannot quote a new version however well you derived it.
 
+## Bit packing, and where a derive stops
+
+MessagePack spends a byte on a `bool` and five on a large `u32`. Right for an envelope, wrong for the hot array in a state-sync packet where the same field appears once per entity per tick against a budget.
+
+Two things here, and the gap between them is the point. `BitCodec` is a `WireCodec` that packs any `Serialize` type with nothing written by hand: one bit per `bool`, nibble varints for integers, one bit for an `Option`, a varint for an enum tag, and no field names on the wire at all. The `bits` module is the layer under it, for a layout you write yourself: bounded-float quantisation, smallest-three quaternions, and varints.
+
+The gap is that **serde's data model has no place to put a bound**. A field is an `f32`, not "an f32 within ±256 that renders at 2 mm", so a derive must spend the full 32 bits. Quantising is the largest single saving in a state-sync packet and it is exactly the one a derive cannot reach. Measured on Fiedler's 901 cubes, one snapshot at 60 Hz:
+
+| strategy | bytes | Mbit/sec | vs msgpack |
+|---|---:|---:|---:|
+| MessagePack (derive) | 51877 | 24.90 | 1.0x |
+| `BitCodec` (derive) | 37674 | 18.08 | 1.4x |
+| `bits`, hand-packed | 10396 | 4.99 | 5.0x |
+
+A derive buys 1.4x for one line. The remaining 3.6x costs a hand-written layout **and** a matching reader per packed type, and is lossy by construction where the derive is lossless. The usual shape is to pack only the hot array and leave the envelope on MessagePack.
+
+One trap worth knowing before you measure your own: a packed payload carried as a `Vec<u8>` field reaches the outer codec through `serialize_seq`, so every byte is re-encoded as its own integer. That costs **15502 bytes to carry 10396**, handing back half the win. Declare the field as *bytes* and it travels in **10411**. Reproduce all of it with `cargo test -p plaza_wire --features msgpack --test packing -- --nocapture`.
+
 ## Features
 
 | Feature | Default | Effect |

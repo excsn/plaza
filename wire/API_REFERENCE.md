@@ -278,6 +278,52 @@ include!(concat!(env!("OUT_DIR"), "/wire_protocol.rs"));
 
 Pairs with [`plaza_session::host::Host`](../session/API_REFERENCE.md), which covers the other half (a page cannot quote a new version if the browser served it from cache).
 
+## 7b. Bit packing (module `bits`)
+
+MessagePack spends a byte on a `bool` and five on a large `u32`. That is right for an envelope and wrong for the hot array in a state-sync packet, where the same field appears once per entity per tick against a budget. This module is the sub-byte layer, and it is deliberately **not** self-describing: a reader must be told exactly what the writer was told, in the same order.
+
+Available without the `serde` feature: it is bytes and bits, not a codec.
+
+### Struct `BitWriter`
+
+*   **`new()` / `with_capacity(bytes)`**, **`bit_len() -> usize`**, **`finish() -> Vec<u8>`** (zero-pads to a byte).
+*   **`bits(&mut self, value: u64, bits: u32)`**: the low `bits` of `value`. Panics if `bits` is 0 or above 64, since a width is part of a layout rather than input.
+*   **`bool(&mut self, bool)`**: one bit.
+*   **`varint(&mut self, u64)`**: nibble varint, four data bits per group plus a continuation bit. `0..=15` costs five bits where MessagePack's smallest integer costs eight; a full `u64` costs 80 against MessagePack's 72, which is a good trade for values that are large only rarely.
+*   **`signed_varint(&mut self, i64)`**: zigzag then varint, so `-1` costs one group rather than sixteen.
+*   **`quantized(&mut self, value: f32, min: f32, max: f32, bits: u32)`**: maps a bounded float onto `bits` bits. Out-of-range clamps rather than wraps.
+*   **`smallest_three(&mut self, quat: [f32; 4], bits: u32)`**: an orientation as a 2-bit index plus its three smallest components, since the largest is recoverable from the unit constraint. At 9 bits that is 29 bits against 128.
+
+### Struct `BitReader<'a>`
+
+**`new(&[u8])`**, **`bits_left()`**, and `bits` / `bool` / `varint` / `signed_varint` / `quantized` / `smallest_three` mirroring the writer. Reads past the end return `BitError::Underrun` rather than panicking. The final byte is zero-padded, so up to seven padding bits read back as zeroes before the error.
+
+### Functions
+
+**`quantize(value, min, max, bits) -> u64`**, **`dequantize(q, min, max, bits) -> f32`** (round trip costs at most half a step), **`zigzag(i64) -> u64`**, **`unzigzag(u64) -> i64`**.
+
+### The `Vec<u8>` trap
+
+A packed payload carried as a `Vec<u8>` field reaches the outer codec through `serialize_seq`, so every byte is re-encoded as its own integer. In `wire/tests/packing.rs` that costs **15502 bytes to carry 10396**, giving back half of what packing just won. Declare the field as *bytes* (`serde_bytes`, or a newtype whose `Serialize` calls `serialize_bytes`) and the same payload travels in **10411**.
+
+## 7c. Struct `BitCodec` (feature `serde`)
+
+A [`WireCodec`](#trait-wirecodec) that packs any `Serialize` type into a bit stream with no layout written by hand: `bool` is one bit, every integer is a nibble varint, `Option` is one bit, an enum tag is a varint, and field names never reach the wire.
+
+What it cannot do is the reason `bits` exists beside it. **Serde's data model has no place to put a bound**: a field is an `f32`, not "an f32 within ±256 that renders at 2mm", so this codec must spend the full 32 bits on it. Quantising is the single largest saving in a state-sync packet and it is exactly the one a derive cannot reach.
+
+Measured on Fiedler's scene of 901 cubes, one snapshot at 60Hz (`cargo test -p plaza_wire --features msgpack --test packing -- --nocapture`):
+
+| strategy | bytes | Mbit/sec | vs msgpack |
+|---|---:|---:|---:|
+| MessagePack (derive) | 51877 | 24.90 | 1.0x |
+| `BitCodec` (derive) | 37674 | 18.08 | 1.4x |
+| `bits`, hand-packed | 10396 | 4.99 | 5.0x |
+| ...in a `Vec<u8>` envelope | 15502 | 7.44 | 3.3x |
+| ...in a bytes envelope | 10411 | 5.00 | 5.0x |
+
+Read that as the boundary rather than a ranking. A derive gets you 1.4x for one line of setup; the remaining 3.6x costs a hand-written layout **and** a hand-written reader for every packed type, and is lossy by construction where the derive is lossless. Not self-describing, so both ends must agree on the type exactly: pin the protocol version (see [`build`](#7-module-build-feature-build)) and do not put it on disk.
+
 ## 8. Feature Flags
 
 | Feature | Default | Effect |

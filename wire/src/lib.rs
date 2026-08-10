@@ -16,6 +16,9 @@
 //! version by hashing the source that defines it, so a client built against an
 //! older format can be told to reload instead of half working.
 
+#[cfg(feature = "serde")]
+pub mod bit_codec;
+pub mod bits;
 pub mod envelope;
 #[cfg(feature = "serde")]
 pub mod flow_payloads;
@@ -27,6 +30,8 @@ pub mod payloads;
 #[cfg(feature = "build")]
 pub mod build;
 
+#[cfg(feature = "serde")]
+pub use bit_codec::BitCodec;
 pub use envelope::{Agent, AgentId};
 pub use frame::Kind;
 
