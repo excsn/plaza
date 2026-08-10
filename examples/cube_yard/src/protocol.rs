@@ -161,9 +161,13 @@ pub struct Drive {
   pub dx: i8,
   pub dz: i8,
   pub jump: bool,
-  /// A toggle, not a press: held on until the player turns it off, so a lost
-  /// input cannot leave the magnet stuck in the wrong state.
-  pub magnet: bool,
+  /// Which mode the cube is in, as a toggle rather than a press, so a lost
+  /// input cannot strand it in the wrong one.
+  ///
+  /// `false` hovers: the cube floats and shoves the field aside without
+  /// touching it. `true` rolls: it drops, tumbles along the ground, and weakly
+  /// holds on to whatever it runs into.
+  pub rolling: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

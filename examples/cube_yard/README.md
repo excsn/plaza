@@ -12,7 +12,11 @@ A pile of 901 cubes, a solver nobody re-simulates, and one question: how few bit
 cargo test -p cube_yard --test baseline -- --nocapture   # what the current stage costs
 ```
 
-WASD or arrows drive your cube, space jumps, **enter toggles the magnet** and loose cubes gather to you until you turn it off. Drive into the pile.
+A wide flat field of cubes, evenly spaced on the floor, and one big cube you drive. WASD or arrows move; **enter switches mode**.
+
+**Hovering** (the default) floats above the field with a repulsion field, so you shove cubes aside without ever touching them and plough visible furrows through the lattice. **Enter** drops you into **rolling**: you land, tumble along the ground, and weakly hold on to whatever you run into, so a churning ball builds up as you plough through. Space jumps, in roll mode only. Enter again and the ball scatters.
+
+Grey means asleep, red means awake, which is the at-rest flag drawn directly: grey cubes are nearly free on the wire and red ones are what the bandwidth is being spent on.
 
 The controls are a platformer's, and deliberately so. Horizontal velocity is *set* rather than pushed, so letting go stops you on the next tick; only gravity owns the vertical axis. The cube also **rolls** at the rate it travels, a quarter turn per face width, because a cube that slides reads as a hockey puck; the roll axis is `up x velocity`, and getting the rate wrong looks like skidding one way and spinning on the spot the other. The camera sits at a fixed offset behind your cube and never orbits, which is what lets the input be plain world axes: a turning camera makes "left" mean a different direction every second.
 

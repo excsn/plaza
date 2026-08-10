@@ -15,11 +15,16 @@ use plaza_wire::bits::{BitReader, BitWriter};
 
 use crate::protocol::CubeState;
 
-/// The yard is 48 units across and the walls are 6 high, so these bounds have
-/// room for a cube that has been launched without wasting range on space
-/// nothing can reach.
-const X: (f32, f32) = (-32.0, 32.0);
-const Y: (f32, f32) = (-2.0, 34.0);
+/// The bounds have to cover **everywhere a cube can be**, with margin.
+///
+/// A value outside them does not wrap or error, it *clamps*, so a cube beyond
+/// the edge is pinned to it and stops moving on the client while carrying on
+/// perfectly well on the server. Widening the yard for the lattice without
+/// widening these left the outer ring of the field frozen: awake, correctly
+/// flagged, and stuck. The walls stand at `sim::YARD` = 40, so 46 leaves room
+/// for anything shoved against them.
+const X: (f32, f32) = (-46.0, 46.0);
+const Y: (f32, f32) = (-2.0, 40.0);
 const XZ_BITS: u32 = 16;
 const Y_BITS: u32 = 15;
 
@@ -329,6 +334,29 @@ mod tests {
     let flip = if back.iter().zip(cubes[0].rot).map(|(a, b)| a * b).sum::<f32>() < 0.0 { -1.0 } else { 1.0 };
     for i in 0..4 {
       assert!((back[i] * flip - cubes[0].rot[i]).abs() < 0.02, "{back:?} vs {:?}", cubes[0].rot);
+    }
+  }
+
+  #[test]
+  fn the_bounds_cover_everywhere_a_cube_can_be() {
+    // The failure this pins is silent: a position outside the bounds clamps,
+    // so a cube past the edge freezes on the client while moving on the server.
+    let reach = crate::sim::YARD + 2.0;
+    for corner in [-reach, reach] {
+      let cube = CubeState {
+        pos: [corner, 0.5, corner],
+        rot: [0.0, 0.0, 0.0, 1.0],
+        linvel: [0.0; 3],
+        at_rest: true,
+      };
+      let back = unpack(&pack(&[cube])).unwrap();
+      let step = position_error();
+      assert!(
+        (back[0].pos[0] - corner).abs() <= step,
+        "a cube at the wall clamps: {corner} came back as {}",
+        back[0].pos[0]
+      );
+      assert!((back[0].pos[2] - corner).abs() <= step);
     }
   }
 

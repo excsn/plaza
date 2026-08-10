@@ -504,14 +504,14 @@ mod tests {
     let mut client = NetClient::from_socket(Box::new(socket.clone()));
     client.poll(0);
 
-    let held = Drive { dx: 1, dz: 0, jump: false, magnet: false };
+    let held = Drive { dx: 1, dz: 0, jump: false, rolling: false };
     client.drive(held);
     let after_first = socket.sent().len();
     client.drive(held);
     client.drive(held);
     assert_eq!(socket.sent().len(), after_first, "a repeat is not a message");
 
-    client.drive(Drive { dx: -1, dz: 0, jump: false, magnet: false });
+    client.drive(Drive { dx: -1, dz: 0, jump: false, rolling: false });
     assert!(socket.sent().len() > after_first, "a change is");
   }
 

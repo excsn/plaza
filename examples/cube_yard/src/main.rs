@@ -104,7 +104,7 @@ fn read_drive() -> Drive {
     dz,
     jump: is_key_down(KeyCode::Space),
     // Filled in by the caller, which owns the toggle.
-    magnet: false,
+    rolling: false,
   }
 }
 
@@ -144,8 +144,8 @@ async fn frame_loop(options: role::Options, encoding: Encoding, snap: bool, send
   let mut yard = render::Yard::new();
   let mut clock_ms: u64 = 0;
   // A toggle the client owns and repeats: the wire carries a level, so a lost
-  // press cannot leave the two ends disagreeing about whether it is on.
-  let mut magnet = false;
+  // press cannot leave the two ends disagreeing about which mode it is in.
+  let mut rolling = false;
 
   loop {
     let dt = get_frame_time().min(0.25);
@@ -153,10 +153,10 @@ async fn frame_loop(options: role::Options, encoding: Encoding, snap: bool, send
 
     client.poll(clock_ms);
     if is_key_pressed(KeyCode::Enter) {
-      magnet = !magnet;
+      rolling = !rolling;
     }
     let mut drive = read_drive();
-    drive.magnet = magnet;
+    drive.rolling = rolling;
     client.drive(drive);
     client.ease(dt);
     client.advance_render_clock();
@@ -173,13 +173,13 @@ async fn frame_loop(options: role::Options, encoding: Encoding, snap: bool, send
         .map(|p| vec3(p[0], p[1], p[2]))
         .unwrap_or(vec3(0.0, 3.0, 0.0));
       set_camera(&Camera3D {
-        position: target + vec3(0.0, 16.0, 26.0),
+        position: target + vec3(0.0, 18.0, 30.0),
         up: Vec3::Y,
         target,
         ..Default::default()
       });
 
-      render::draw_yard(cube_yard::protocol::CUBES as f32 * 0.0 + 24.0);
+      render::draw_yard(cube_yard::sim_yard_half());
       yard.draw(&client.cubes, |i| client.drawn(i), client.mine, CUBES);
       set_default_camera();
     } else {

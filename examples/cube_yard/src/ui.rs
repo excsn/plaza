@@ -20,9 +20,11 @@ pub fn draw_panel(client: &NetClient, url: &str) {
         ui.separator();
 
         ui.label(format!("{CUBES} cubes, frame {}", client.frame));
-        ui.label("arrows or WASD to move, space to jump, enter to magnet");
+        ui.label("arrows or WASD to move, enter to hover or roll");
+        ui.label("hovering shoves the field aside; rolling picks it up, space jumps");
         let asleep = client.cubes.iter().filter(|c| c.at_rest).count();
-        ui.label(format!("{asleep} asleep, {} awake", client.cubes.len().saturating_sub(asleep)));
+        let awake = client.cubes.len().saturating_sub(asleep);
+        ui.label(format!("{asleep} asleep (grey), {awake} awake (red)"));
         ui.separator();
 
         ui.label(match (client.packed, client.patched) {

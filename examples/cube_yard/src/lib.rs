@@ -26,3 +26,9 @@ pub mod logic;
 pub mod net;
 
 pub use playground_common;
+
+/// Half-width of the floor, for a client that draws it without compiling the
+/// solver that owns it.
+pub fn sim_yard_half() -> f32 {
+  40.0
+}

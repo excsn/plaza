@@ -8,6 +8,8 @@
 //! determinism buys nothing and `parallel` is free to take. Same crate, and the
 //! netcode family is what decides the configuration.
 
+use std::collections::HashMap;
+
 use rapier3d::prelude::*;
 
 use crate::protocol::{CubeState, Drive, CUBES, TICK_HZ};
@@ -16,8 +18,10 @@ use crate::protocol::{CubeState, Drive, CUBES, TICK_HZ};
 const CUBE: f32 = 0.5;
 /// Player cubes are bigger, so shoving reads as shoving.
 const PLAYER: f32 = 1.5;
-/// Half-width of the floor.
-pub const YARD: f32 = 24.0;
+/// Half-width of the floor. Wide enough to hold the field with room to fly.
+pub const YARD: f32 = 40.0;
+/// Gap between cubes in the field, so there is air to shove them through.
+const SPACING: f32 = 2.4;
 const WALL: f32 = 6.0;
 
 /// How fast a held direction moves a player cube.
@@ -37,18 +41,25 @@ const JUMP_SPEED: f32 = 12.0;
 const ROLL_PER_UNIT: f32 = std::f32::consts::FRAC_PI_2 / (2.0 * PLAYER);
 /// How far below the player's centre a contact has to be to count as ground.
 
-/// How far the magnet reaches.
-const MAGNET_RANGE: f32 = 9.0;
-/// Spring strength toward the player, in velocity per second at full reach.
-const MAGNET_PULL: f32 = 34.0;
-/// Damping against the *relative* velocity, which is what stops a held cube
-/// oscillating through the player instead of settling against it.
-const MAGNET_DAMP: f32 = 0.28;
-/// Ceiling on one tick's pull, so a cube that spawns overlapping does not get
-/// launched.
-const MAGNET_MAX: f32 = 26.0;
-/// Held cubes sit inside this, and the test measures gathering by it.
-const MAGNET_HOLD: f32 = 3.2;
+/// How high the cube floats in hover mode, and how hard it holds that height.
+const HOVER_HEIGHT: f32 = 5.0;
+const HOVER_STIFF: f32 = 6.0;
+const HOVER_DAMP: f32 = 3.0;
+
+/// The repulsion field, which is what ploughs furrows through the field
+/// without ever touching it.
+const REPEL_RANGE: f32 = 8.0;
+const REPEL_PUSH: f32 = 30.0;
+
+/// The hold in roll mode. Deliberately weak: a cube sticks when the roll runs
+/// into it and can be knocked loose again, which is what makes the ball build
+/// up gradually instead of vacuuming the field.
+const CARRY_PULL: f32 = 12.0;
+const CARRY_DAMP: f32 = 0.35;
+/// A carried cube further than this has been shaken off.
+const CARRY_LOSE: f32 = 7.0;
+/// Ceiling on any one tick's impulse, in velocity terms.
+const FIELD_MAX: f32 = 24.0;
 
 pub const MAX_PLAYERS: usize = 4;
 
@@ -74,6 +85,10 @@ pub struct Yard {
   player_colliders: Vec<ColliderHandle>,
   /// Whether each seat held jump last tick, so holding it does not re-fire.
   held_jump: [bool; MAX_PLAYERS],
+  /// Which seat, if any, is carrying each field cube.
+  carried: Vec<Option<u8>>,
+  /// Collider back to field-cube index, for asking what a roll just hit.
+  cube_of: HashMap<ColliderHandle, usize>,
 }
 
 impl Default for Yard {
@@ -105,24 +120,28 @@ impl Yard {
       );
     }
 
-    // A loose stack rather than a lattice: a perfect grid settles instantly and
-    // has nothing to say about a solver.
+    // A flat field, evenly spaced and resting on the floor. Not a heap: the
+    // whole game is ploughing furrows through a regular pattern, and a pile has
+    // no pattern to disturb. It also means the scene settles and *stays*
+    // settled, which is what makes the at-rest saving real rather than
+    // theoretical.
     let mut handles = Vec::with_capacity(CUBES + MAX_PLAYERS);
-    let side = (CUBES as f32).cbrt().ceil() as usize;
+    let mut cube_of: HashMap<ColliderHandle, usize> = HashMap::with_capacity(CUBES);
+    let side = (CUBES as f32).sqrt().ceil() as usize;
     for i in 0..CUBES {
-      let (x, y, z) = (i % side, (i / side) % side, i / (side * side));
-      let jitter = |v: usize, salt: usize| (((i * 37 + v * 11 + salt * 7) % 17) as f32 / 17.0 - 0.5) * 0.3;
+      let (x, z) = (i % side, i / side);
       let at = Vec3::new(
-        (x as f32 - side as f32 / 2.0) * 1.25 + jitter(x, 1),
-        2.0 + y as f32 * 1.3 + jitter(y, 2),
-        (z as f32 - side as f32 / 2.0) * 1.25 + jitter(z, 3),
+        (x as f32 - side as f32 / 2.0) * SPACING,
+        CUBE,
+        (z as f32 - side as f32 / 2.0) * SPACING,
       );
       let body = bodies.insert(RigidBodyBuilder::dynamic().translation(at));
-      colliders.insert_with_parent(
+      let collider = colliders.insert_with_parent(
         ColliderBuilder::cuboid(CUBE, CUBE, CUBE).friction(0.6).restitution(0.05),
         body,
         &mut bodies,
       );
+      cube_of.insert(collider, i);
       handles.push(body);
     }
 
@@ -134,9 +153,9 @@ impl Yard {
       let angle = seat as f32 * std::f32::consts::TAU / MAX_PLAYERS as f32;
       let body = bodies.insert(
         RigidBodyBuilder::dynamic()
-          .translation(Vec3::new(angle.cos() * (YARD - 6.0), PLAYER, angle.sin() * (YARD - 6.0)))
-          .linear_damping(0.6)
-          .angular_damping(1.2),
+          .translation(Vec3::new(angle.cos() * 14.0, HOVER_HEIGHT, angle.sin() * 14.0))
+          .linear_damping(0.2)
+          .angular_damping(0.8),
       );
       let collider = colliders.insert_with_parent(
         ColliderBuilder::cuboid(PLAYER, PLAYER, PLAYER).friction(0.7).density(2.5),
@@ -166,6 +185,8 @@ impl Yard {
       players,
       player_colliders,
       held_jump: [false; MAX_PLAYERS],
+      carried: vec![None; CUBES],
+      cube_of,
     }
   }
 
@@ -219,26 +240,30 @@ impl Yard {
       } else {
         Vec3::ZERO
       };
-      let mut next = Vec3::new(horizontal.x, was.y, horizontal.z);
-      body.set_linvel(next, true);
+      if drive.rolling {
+        // On the ground, tumbling, and gravity owns the vertical axis.
+        let mut next = Vec3::new(horizontal.x, was.y, horizontal.z);
+        body.set_linvel(next, true);
+        body.set_angvel(Vec3::Y.cross(horizontal) * ROLL_PER_UNIT, true);
 
-      // Roll about the axis across the direction of travel, at the rate a cube
-      // tumbling face over face would. `up x velocity` is that axis: for motion
-      // along +x it points along -z, which turns the top of the cube forwards.
-      let roll = Vec3::Y.cross(horizontal) * ROLL_PER_UNIT;
-      body.set_angvel(roll, true);
-
-      // A press, not a hold: the wire carries a level so a lost input cannot
-      // strand the key down, and the rising edge is what a platformer jumps on.
-      let pressed = drive.jump && !self.held_jump[seat];
-      self.held_jump[seat] = drive.jump;
-      if pressed && self.grounded(seat) {
-        next.y = JUMP_SPEED;
-        self.bodies[handle].set_linvel(next, true);
+        let pressed = drive.jump && !self.held_jump[seat];
+        self.held_jump[seat] = drive.jump;
+        if pressed && self.grounded(seat) {
+          next.y = JUMP_SPEED;
+          self.bodies[handle].set_linvel(next, true);
+        }
+      } else {
+        // Hovering: a damped spring holds the height, so the cube floats rather
+        // than falling, and it does not tumble.
+        let at = body.translation();
+        let lift = (HOVER_HEIGHT - at.y) * HOVER_STIFF - was.y * HOVER_DAMP;
+        body.set_linvel(Vec3::new(horizontal.x, was.y + lift * self.params.dt, horizontal.z), true);
+        body.set_angvel(Vec3::ZERO, true);
+        self.held_jump[seat] = drive.jump;
       }
     }
 
-    self.pull_magnets(driving);
+    self.apply_fields(driving);
 
     self.pipeline.step(
       Vec3::new(0.0, -9.81, 0.0),
@@ -256,30 +281,21 @@ impl Yard {
     );
   }
 
-  /// Draws loose cubes toward any player holding the magnet on.
+  /// The two fields, one per mode.
   ///
-  /// A spring toward the player, damped against the *relative* velocity, and
-  /// applied as an impulse with **the equal and opposite one applied back to
-  /// the player**. All three of those are load-bearing.
+  /// Hovering **repels**: everything within reach is pushed away, which is what
+  /// carves furrows through the field without the cube ever touching it.
+  /// Rolling **attracts**, but only what it has actually run into, and weakly,
+  /// so the ball grows as you plough through rather than sucking the field in
+  /// from a distance.
   ///
-  /// The first version set each held cube's velocity to the player's own, which
-  /// is a positive feedback loop with the player standing on them: jump, the
-  /// cubes underneath inherit the upward velocity, they push the player higher
-  /// through contact, and next tick they copy the new higher velocity. The
-  /// player floats away. Setting a velocity on a body you are resting on is
-  /// always this bug.
-  ///
-  /// The reaction matters for the same reason: pulling a pile toward you with
-  /// nothing pulling back is free energy, and it shows up as flight. With it,
-  /// carrying cubes is heavy, which is what a magnet should feel like.
-  ///
-  /// Waking them is not optional either: a settled pile is asleep, and a
-  /// sleeping body ignores impulses.
-  fn pull_magnets(&mut self, driving: &[Drive; MAX_PLAYERS]) {
+  /// Both apply the reaction to the player. Pushing a field away with nothing
+  /// pushing back is free thrust, and pulling it in with nothing pulling back
+  /// is free lift; the first version of this flew for exactly that reason.
+  fn apply_fields(&mut self, driving: &[Drive; MAX_PLAYERS]) {
+    self.update_carried(driving);
+
     for (seat, drive) in driving.iter().enumerate() {
-      if !drive.magnet {
-        continue;
-      }
       let player = self.players[seat];
       let at = self.bodies[player].translation();
       let moving = self.bodies[player].linvel();
@@ -287,26 +303,78 @@ impl Yard {
 
       for index in 0..CUBES {
         let handle = self.handles[index];
+        let carried = self.carried[index] == Some(seat as u8);
         let body = &mut self.bodies[handle];
         let delta = at - body.translation();
         let distance = delta.length();
-        if distance > MAGNET_RANGE || distance < 1e-3 {
+        if distance < 1e-3 {
           continue;
         }
-        body.wake_up(true);
 
-        let toward = delta / distance;
-        let relative = body.linvel() - moving;
-        let mut pull = toward * MAGNET_PULL * (1.0 - distance / MAGNET_RANGE) - relative * MAGNET_DAMP;
-        if pull.length() > MAGNET_MAX {
-          pull = pull.normalize() * MAGNET_MAX;
-        }
-        let impulse = pull * body.mass();
+        let push = if drive.rolling {
+          if !carried {
+            continue;
+          }
+          let relative = body.linvel() - moving;
+          (delta / distance) * CARRY_PULL - relative * CARRY_DAMP
+        } else {
+          if distance > REPEL_RANGE {
+            continue;
+          }
+          // Away, hardest at the centre, fading to nothing at the edge so
+          // there is no rim a cube pops across.
+          -(delta / distance) * REPEL_PUSH * (1.0 - distance / REPEL_RANGE)
+        };
+
+        let push = if push.length() > FIELD_MAX { push.normalize() * FIELD_MAX } else { push };
+        body.wake_up(true);
+        let impulse = push * body.mass();
         body.apply_impulse(impulse, true);
         reaction -= impulse;
       }
 
       self.bodies[player].apply_impulse(reaction, true);
+    }
+  }
+
+  /// Picks up whatever the rolling cube has run into, and drops everything when
+  /// it lifts off again.
+  fn update_carried(&mut self, driving: &[Drive; MAX_PLAYERS]) {
+    for (seat, drive) in driving.iter().enumerate() {
+      if !drive.rolling {
+        for held in self.carried.iter_mut() {
+          if *held == Some(seat as u8) {
+            *held = None;
+          }
+        }
+        continue;
+      }
+
+      let collider = self.player_colliders[seat];
+      let touched: Vec<usize> = self
+        .narrow_phase
+        .contact_pairs_with(collider)
+        .filter(|pair| pair.has_any_active_contact())
+        .filter_map(|pair| {
+          let other = if pair.collider1 == collider { pair.collider2 } else { pair.collider1 };
+          self.cube_of.get(&other).copied()
+        })
+        .collect();
+      for index in touched {
+        if self.carried[index].is_none() {
+          self.carried[index] = Some(seat as u8);
+        }
+      }
+
+      // Anything shaken loose is loose again, so a ball can be knocked apart.
+      let at = self.bodies[self.players[seat]].translation();
+      for index in 0..CUBES {
+        if self.carried[index] == Some(seat as u8)
+          && (at - self.bodies[self.handles[index]].translation()).length() > CARRY_LOSE
+        {
+          self.carried[index] = None;
+        }
+      }
     }
   }
 
@@ -369,6 +437,11 @@ impl Yard {
     snapped
   }
 
+  /// How many field cubes a seat is carrying.
+  pub fn carrying(&self, seat: usize) -> usize {
+    self.carried.iter().filter(|c| **c == Some(seat as u8)).count()
+  }
+
   /// How many bodies the solver currently has asleep.
   ///
   /// The input [`RestDetector`](plaza_server_utils::RestDetector) wants, and a
@@ -393,6 +466,29 @@ mod tests {
     for _ in 0..ticks {
       yard.step(&idle);
     }
+  }
+
+  /// Settled on the ground in roll mode, which is where the ground behaviours
+  /// live now: hovering deliberately never touches the floor.
+  fn landed(ticks: usize) -> Yard {
+    let mut yard = Yard::new();
+    let mut still = [Drive::default(); MAX_PLAYERS];
+    still[0] = Drive { dx: 0, dz: 0, jump: false, rolling: true };
+    for _ in 0..ticks {
+      yard.step(&still);
+    }
+    yard
+  }
+
+  fn roll(dx: i8, dz: i8, jump: bool) -> [Drive; MAX_PLAYERS] {
+    let mut driving = [Drive::default(); MAX_PLAYERS];
+    driving[0] = Drive { dx, dz, jump, rolling: true };
+    driving
+  }
+
+  /// Idle but still in roll mode, so releasing a key does not also lift off.
+  fn idle_rolling() -> [Drive; MAX_PLAYERS] {
+    roll(0, 0, false)
   }
 
   #[test]
@@ -427,36 +523,34 @@ mod tests {
   #[test]
   fn releasing_the_key_stops_the_cube() {
     // The bug this replaced: a force plus damping coasts, which reads as ice.
-    let mut yard = Yard::new();
-    run(&mut yard, 120);
+    let mut yard = landed(120);
     let seat = yard.player_index(0) as usize;
 
-    // Inward, toward the middle of the yard. Seat 0 spawns near the east wall,
-    // so driving outward stops against it, which is correct and measures
-    // nothing.
-    let mut driving = [Drive::default(); MAX_PLAYERS];
-    driving[0] = Drive { dx: -1, dz: 0, jump: false, magnet: false };
+    let driving = roll(-1, 0, false);
     for _ in 0..20 {
       yard.step(&driving);
     }
     let moving = snapshot_of(&yard)[seat].linvel[0];
     assert!(moving < -5.0, "holding a direction should move it, got {moving}");
 
-    // Let go. One tick is all it should take.
-    yard.step(&[Drive::default(); MAX_PLAYERS]);
+    // Let go, staying on the ground. It sheds nearly all of it in one tick;
+    // what is left is the field pushing back, since a rolling cube is embedded
+    // in cubes that are leaning on it. Coasting would keep most of the 14.
+    yard.step(&idle_rolling());
     let stopped = snapshot_of(&yard)[seat].linvel;
-    assert!(stopped[0].abs() < 0.01, "releasing should stop it, got {stopped:?}");
+    assert!(
+      stopped[0].abs() < 3.0,
+      "releasing should stop it rather than coast, got {stopped:?}"
+    );
   }
 
   #[test]
   fn jumping_leaves_the_ground_and_comes_back() {
-    let mut yard = Yard::new();
-    run(&mut yard, 200);
+    let mut yard = landed(200);
     let seat = yard.player_index(0) as usize;
     let resting = snapshot_of(&yard)[seat].pos[1];
 
-    let mut driving = [Drive::default(); MAX_PLAYERS];
-    driving[0] = Drive { dx: 0, dz: 0, jump: true, magnet: false };
+    let driving = roll(0, 0, true);
     yard.step(&driving);
     assert!(snapshot_of(&yard)[seat].linvel[1] > 5.0, "space should launch it");
 
@@ -471,11 +565,11 @@ mod tests {
     assert!(peak > resting + 1.0, "it should get airborne, peak {peak}");
     assert!(peak < resting + 12.0, "and one jump's worth, not a climb: {peak}");
 
-    let landed = snapshot_of(&yard)[seat].pos[1];
-    assert!(landed < peak, "and come down: peak {peak}, landed {landed}");
+    let down = snapshot_of(&yard)[seat].pos[1];
+    assert!(down < peak, "and come down: peak {peak}, landed {down}");
 
     // Released and pressed again, from the ground, it jumps again.
-    yard.step(&[Drive::default(); MAX_PLAYERS]);
+    yard.step(&idle_rolling());
     yard.step(&driving);
     assert!(
       snapshot_of(&yard)[seat].linvel[1] > 5.0,
@@ -484,57 +578,14 @@ mod tests {
   }
 
   #[test]
-  fn the_magnet_gathers_cubes_and_lets_them_go() {
-    let mut yard = Yard::new();
-    run(&mut yard, 300);
-    let seat = yard.player_index(0) as usize;
-
-    let near = |yard: &Yard| {
-      let cubes = snapshot_of(yard);
-      let at = cubes[seat].pos;
-      (0..CUBES)
-        .filter(|&i| {
-          let p = cubes[i].pos;
-          ((p[0] - at[0]).powi(2) + (p[1] - at[1]).powi(2) + (p[2] - at[2]).powi(2)).sqrt() < MAGNET_HOLD
-        })
-        .count()
-    };
-
-    // Drive to the pile first: the magnet reaches 9 units and a seat spawns
-    // about 12 from the nearest cube, so standing still magnetises nothing.
-    let mut driving = [Drive::default(); MAX_PLAYERS];
-    driving[0] = Drive { dx: -1, dz: 0, jump: false, magnet: false };
-    for _ in 0..60 {
-      yard.step(&driving);
-    }
-
-    let before = near(&yard);
-    driving[0] = Drive { dx: 0, dz: 0, jump: false, magnet: true };
-    for _ in 0..90 {
-      yard.step(&driving);
-    }
-    let gathered = near(&yard);
-    assert!(gathered > before, "the magnet should gather: {before} -> {gathered}");
-
-    // Off again, and they are free: driving away leaves them behind.
-    driving[0] = Drive { dx: 0, dz: 1, jump: false, magnet: false };
-    for _ in 0..120 {
-      yard.step(&driving);
-    }
-    assert!(near(&yard) < gathered, "releasing should let them go");
-  }
-
-  #[test]
   fn the_cube_rolls_at_the_rate_it_travels() {
     // What reads as wrong is the *rate*: too slow is skidding, too fast is
     // spinning on the spot. A cube going face over face turns a quarter turn
     // per face width, so rotation and distance are locked together.
-    let mut yard = Yard::new();
-    run(&mut yard, 200);
+    let mut yard = landed(200);
     let seat = yard.player_index(0) as usize;
 
-    let mut driving = [Drive::default(); MAX_PLAYERS];
-    driving[0] = Drive { dx: -1, dz: 0, jump: false, magnet: false };
+    let driving = roll(-1, 0, false);
     // A few ticks into the motion, so the first tick's acceleration is past.
     for _ in 0..10 {
       yard.step(&driving);
@@ -560,23 +611,21 @@ mod tests {
 
   #[test]
   fn a_stopped_cube_stops_turning() {
-    let mut yard = Yard::new();
-    run(&mut yard, 200);
+    let mut yard = landed(200);
     let seat = yard.player_index(0) as usize;
 
-    let mut driving = [Drive::default(); MAX_PLAYERS];
-    driving[0] = Drive { dx: -1, dz: 0, jump: false, magnet: false };
+    let driving = roll(-1, 0, false);
     for _ in 0..30 {
       yard.step(&driving);
     }
     // Released, and given a moment to settle onto a face.
     for _ in 0..40 {
-      yard.step(&[Drive::default(); MAX_PLAYERS]);
+      yard.step(&idle_rolling());
     }
 
     let a = snapshot_of(&yard)[seat].rot;
     for _ in 0..20 {
-      yard.step(&[Drive::default(); MAX_PLAYERS]);
+      yard.step(&idle_rolling());
     }
     let b = snapshot_of(&yard)[seat].rot;
     let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>().abs();
@@ -584,48 +633,111 @@ mod tests {
   }
 
   #[test]
-  fn the_magnet_does_not_launch_the_player() {
-    // The bug: held cubes were given the player's velocity, so jumping with the
-    // magnet on made the pile under you into a lift and you never came down.
+  fn hovering_holds_its_height_and_shoves_the_field_aside() {
     let mut yard = Yard::new();
-    run(&mut yard, 300);
     let seat = yard.player_index(0) as usize;
-
-    let mut driving = [Drive::default(); MAX_PLAYERS];
-    driving[0] = Drive { dx: -1, dz: 0, jump: false, magnet: false };
-    for _ in 0..60 {
-      yard.step(&driving);
+    let hovering = [Drive::default(); MAX_PLAYERS];
+    for _ in 0..120 {
+      yard.step(&hovering);
     }
 
-    // Magnet on and jump held, which is exactly what floated away before.
-    driving[0] = Drive { dx: 0, dz: 0, jump: true, magnet: true };
-    let mut highest = 0.0f32;
-    for _ in 0..600 {
-      yard.step(&driving);
-      highest = highest.max(snapshot_of(&yard)[seat].pos[1]);
-    }
-
-    let ended = snapshot_of(&yard)[seat].pos[1];
+    let at = snapshot_of(&yard)[seat].pos[1];
     assert!(
-      highest < 20.0,
-      "the magnet should not fly: reached {highest} in a yard {YARD} across"
+      (at - HOVER_HEIGHT).abs() < 1.5,
+      "it should float near {HOVER_HEIGHT}, sitting at {at}"
     );
+
+    // Fly across the field and it should leave a hole, without ever landing.
+    let before = snapshot_of(&yard);
+    let mut flying = [Drive::default(); MAX_PLAYERS];
+    flying[0] = Drive { dx: -1, dz: 0, jump: false, rolling: false };
+    for _ in 0..120 {
+      yard.step(&flying);
+    }
+    let after = snapshot_of(&yard);
+
+    let shoved = (0..CUBES)
+      .filter(|&i| {
+        let (a, b) = (before[i].pos, after[i].pos);
+        ((a[0] - b[0]).powi(2) + (a[2] - b[2]).powi(2)).sqrt() > 0.4
+      })
+      .count();
+    assert!(shoved > 10, "the repulsion field should plough a furrow, moved {shoved}");
     assert!(
-      ended < highest + 0.5,
-      "and should not still be climbing: peak {highest}, ended {ended}"
+      snapshot_of(&yard)[seat].pos[1] > 2.0,
+      "and it should still be flying, not dragging along the floor"
     );
   }
 
   #[test]
+  fn rolling_gathers_what_it_runs_into_and_drops_it_on_lift_off() {
+    let mut yard = landed(120);
+    let seat = yard.player_index(0) as usize;
+
+    // Plough through the field.
+    let rolling = roll(-1, 0, false);
+    for _ in 0..240 {
+      yard.step(&rolling);
+    }
+
+    let carried = yard.carrying(0);
+    assert!(carried > 0, "rolling through the field should pick cubes up");
+
+    let cubes = snapshot_of(&yard);
+    let at = cubes[seat].pos;
+    let close = (0..CUBES)
+      .filter(|&i| {
+        let p = cubes[i].pos;
+        ((p[0] - at[0]).powi(2) + (p[1] - at[1]).powi(2) + (p[2] - at[2]).powi(2)).sqrt() < CARRY_LOSE
+      })
+      .count();
+    assert!(close >= carried, "and hold them near it, {carried} carried, {close} close");
+
+    // Lift off and everything is let go.
+    yard.step(&[Drive::default(); MAX_PLAYERS]);
+    assert_eq!(yard.carrying(0), 0, "hovering again should release the ball");
+  }
+
+  #[test]
+  fn neither_field_lets_the_player_fly_away() {
+    // Both fields apply their reaction to the player; without it, pushing a
+    // field away is free thrust and pulling it in is free lift.
+    for rolling in [false, true] {
+      let mut yard = Yard::new();
+      let seat = yard.player_index(0) as usize;
+      let mut driving = [Drive::default(); MAX_PLAYERS];
+      driving[0] = Drive { dx: -1, dz: 0, jump: true, rolling };
+
+      // Bounded, not capped at an arbitrary number: riding your own ball of
+      // cubes is legitimate height, and what must not happen is climbing
+      // without limit. So the second half must not tower over the first.
+      let mut early = 0.0f32;
+      let mut late = 0.0f32;
+      for tick in 0..900 {
+        yard.step(&driving);
+        let y = snapshot_of(&yard)[seat].pos[1];
+        if tick < 450 {
+          early = early.max(y);
+        } else {
+          late = late.max(y);
+        }
+      }
+      assert!(
+        late < early + 6.0,
+        "rolling={rolling} is still climbing: {early:.1} then {late:.1}"
+      );
+      assert!(late < 40.0, "rolling={rolling} reached {late:.1}, which is orbit");
+    }
+  }
+
+  #[test]
   fn driving_moves_the_player_cube() {
-    let mut yard = Yard::new();
-    run(&mut yard, 120);
+    let mut yard = landed(120);
     let mut before = Vec::new();
     yard.snapshot(&mut before);
     let seat = yard.player_index(0) as usize;
 
-    let mut driving = [Drive::default(); MAX_PLAYERS];
-    driving[0] = Drive { dx: 1, dz: 0, jump: false, magnet: false };
+    let driving = roll(-1, 0, false);
     for _ in 0..90 {
       yard.step(&driving);
     }
@@ -633,7 +745,7 @@ mod tests {
     let mut after = Vec::new();
     yard.snapshot(&mut after);
     assert!(
-      after[seat].pos[0] > before[seat].pos[0] + 1.0,
+      after[seat].pos[0] < before[seat].pos[0] - 1.0,
       "{:?} -> {:?}",
       before[seat].pos,
       after[seat].pos
