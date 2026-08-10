@@ -94,6 +94,10 @@ pub struct NetClient {
   /// snap that size is exactly what a viewer notices.
   pub offsets: Vec<[f32; 3]>,
   decay: AdaptiveDecay,
+  /// The quantised state this client is known to hold, which is what a delta
+  /// frame is measured against. Both ends keep it identically, which the TCP
+  /// transport is what makes safe.
+  baseline: Vec<Option<pack::Quantized>>,
   /// Frames whose packed payload would not read back. Must stay zero: it means
   /// the layout and its reader have drifted apart.
   pub unreadable: u64,
@@ -124,6 +128,7 @@ impl NetClient {
       packed: false,
       offsets: Vec::new(),
       decay: AdaptiveDecay::default(),
+      baseline: Vec::new(),
       patched: 0,
       unreadable: 0,
       events: Vec::new(),
@@ -203,26 +208,31 @@ impl NetClient {
       // A budgeted frame is a patch, not a world: whatever it does not mention
       // is still whatever this client last heard about it.
       Cubes::Subset(payload) => match pack::unpack_subset(payload.as_slice()) {
-        Some(patch) => {
-          self.patched = patch.len() as u32;
-          for (index, cube) in patch {
-            let index = index as usize;
-            if index >= self.cubes.len() {
-              self.cubes.resize(index + 1, cube);
-              self.offsets.resize(index + 1, [0.0; 3]);
-            }
-            // Whatever the correction moved stays on screen and bleeds off, so
-            // a cube that waited its turn slides into place rather than
-            // teleporting.
-            let was = self.cubes[index].pos;
-            for axis in 0..3 {
-              self.offsets[index][axis] += was[axis] - cube.pos[axis];
-            }
-            self.cubes[index] = cube;
-          }
-        }
+        Some(patch) => self.apply(patch),
         None => self.unreadable += 1,
       },
+      Cubes::Delta(payload) => match pack::unpack_delta(payload.as_slice(), &mut self.baseline) {
+        Some(patch) => self.apply(patch),
+        None => self.unreadable += 1,
+      },
+    }
+  }
+
+  /// Patches whatever arrived into the yard this client already holds, keeping
+  /// the visual offset of anything that moved so it eases rather than jumps.
+  fn apply(&mut self, patch: Vec<(u32, CubeState)>) {
+    self.patched = patch.len() as u32;
+    for (index, cube) in patch {
+      let index = index as usize;
+      if index >= self.cubes.len() {
+        self.cubes.resize(index + 1, cube);
+        self.offsets.resize(index + 1, [0.0; 3]);
+      }
+      let was = self.cubes[index].pos;
+      for axis in 0..3 {
+        self.offsets[index][axis] += was[axis] - cube.pos[axis];
+      }
+      self.cubes[index] = cube;
     }
   }
 

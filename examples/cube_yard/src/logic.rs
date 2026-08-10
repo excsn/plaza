@@ -90,17 +90,26 @@ fn seat_player(state: &mut YardState, agent: &Agent<PlayerId>, ctx: &mut Ctx) {
 
   // A budgeted client would take seconds to learn the yard one packet at a
   // time, so it is handed the whole thing once and budgeted from then on.
-  if state.encoding == Encoding::Budgeted {
+  if matches!(state.encoding, Encoding::Budgeted | Encoding::Delta) {
     let mut stream = Stream::new(state.yard.len());
+    if state.encoding == Encoding::Delta {
+      stream = stream.with_delta(state.yard.len());
+    }
     let mut cubes = Vec::new();
     state.yard.snapshot(&mut cubes);
     let seed = stream.seed(cubes.len());
+    let deltas = stream.deltas();
+    let payload = if deltas {
+      pack::pack_delta(&cubes, &seed, &mut stream.baseline)
+    } else {
+      pack::pack_subset(&cubes, &seed)
+    };
     state.streams.insert(player, stream);
     ctx.ops_q().push(TargetedOp::new_system_to(player, vec![YardOp::Frame(Box::new(FrameUpdate {
       frame: state.tick,
       server_time_ms: frame_to_ms(state.tick),
       yours: None,
-      cubes: Cubes::Subset(pack::pack_subset(&cubes, &seed).into()),
+      cubes: if deltas { Cubes::Delta(payload.into()) } else { Cubes::Subset(payload.into()) },
     }))]));
   }
 
@@ -141,7 +150,7 @@ fn step_once(state: &mut YardState, ctx: &mut Ctx) {
     Encoding::Full => Some(Cubes::Full(cubes.clone())),
     Encoding::Packed => Some(Cubes::Packed(pack::pack(&cubes).into())),
     // A budget is per link, so there is no one frame to broadcast.
-    Encoding::Budgeted => None,
+    Encoding::Budgeted | Encoding::Delta => None,
   };
 
   if let Some(cubes) = whole {
@@ -164,16 +173,21 @@ fn step_once(state: &mut YardState, ctx: &mut Ctx) {
     let Some(stream) = state.streams.get_mut(&player) else {
       continue;
     };
-    let picked = stream.pick(&cubes, viewer, BUDGET_BITS);
+    let picked = stream.pick(&cubes, viewer, BUDGET_BITS).to_vec();
     if picked.is_empty() {
       continue;
     }
-    let payload = pack::pack_subset(&cubes, picked);
+    let deltas = stream.deltas();
+    let payload = if deltas {
+      pack::pack_delta(&cubes, &picked, &mut stream.baseline)
+    } else {
+      pack::pack_subset(&cubes, &picked)
+    };
     ctx.ops_q().push(TargetedOp::new_system_to(player, vec![YardOp::Frame(Box::new(FrameUpdate {
       frame: state.tick,
       server_time_ms: frame_to_ms(state.tick),
       yours: None,
-      cubes: Cubes::Subset(payload.into()),
+      cubes: if deltas { Cubes::Delta(payload.into()) } else { Cubes::Subset(payload.into()) },
     }))]));
   }
 }

@@ -97,9 +97,11 @@ fn the_stages_priced_side_by_side() {
   let eye = Some(truth[CUBES].pos);
   let mut total = 0usize;
   let mut worst_packet = 0usize;
+  let mut budgeted_cubes = 0usize;
   const TICKS: usize = 120;
   for _ in 0..TICKS {
     let picked = stream.pick(&truth, eye, BUDGET_BITS);
+    budgeted_cubes += picked.len();
     let bytes = on_the_wire(Cubes::Subset(Payload::from(pack::pack_subset(&truth, picked))));
     worst_packet = worst_packet.max(bytes);
     total += bytes;
@@ -114,6 +116,36 @@ fn the_stages_priced_side_by_side() {
     worst
   );
 
+  // Stage four: the same budget, with each cube encoded against what the
+  // client already holds. The bandwidth does not fall, because the budget was
+  // already the ceiling. What rises is how much of the yard fits inside it.
+  let mut stream = Stream::new(truth.len()).with_delta(truth.len());
+  let mut delta_total = 0usize;
+  let mut delta_cubes = 0usize;
+  let mut baseline = Vec::new();
+  for _ in 0..TICKS {
+    let picked = stream.pick(&truth, eye, BUDGET_BITS).to_vec();
+    delta_cubes += picked.len();
+    let payload = pack::pack_delta(&truth, &picked, &mut stream.baseline);
+    // Read it back the way a client would, so the row is not a claim about an
+    // encoder nobody decoded.
+    assert!(pack::unpack_delta(&payload, &mut baseline).is_some());
+    delta_total += on_the_wire(Cubes::Delta(Payload::from(payload)));
+  }
+  let deltaed = delta_total / TICKS;
+  println!(
+    "{:<22} {:>8} {:>10.2} {:>8.1}x {:>11.4}u",
+    "4  + delta encoding",
+    deltaed,
+    mbps(deltaed),
+    full as f64 / deltaed as f64,
+    worst
+  );
+
+  println!("\n   cubes refreshed per tick, inside the same budget:");
+  println!("     stage 3   {:>5.0}", budgeted_cubes as f64 / TICKS as f64);
+  println!("     stage 4   {:>5.0}", delta_cubes as f64 / TICKS as f64);
+
   println!("\n   mean quantisation error {mean:.5} units, on cubes one unit across");
   println!("   worst single packet {worst_packet} bytes against a {} byte budget", BUDGET_BITS / 8);
   println!("   target 0.256 Mbit/sec: {:.2}x\n", mbps(budgeted) / 0.256);
@@ -122,6 +154,13 @@ fn the_stages_priced_side_by_side() {
   // A cube is one unit across, so anything approaching that is visible.
   assert!(worst < 0.01, "quantisation error {worst} is large enough to see");
   assert!(mbps(budgeted) <= 0.30, "the budget is a ceiling: {:.2} Mbit/sec", mbps(budgeted));
+  assert!(mbps(deltaed) <= 0.30, "and stays one under delta encoding: {:.2}", mbps(deltaed));
+  assert!(
+    delta_cubes > budgeted_cubes * 3,
+    "delta should buy far more cubes per tick: {} vs {}",
+    delta_cubes / TICKS,
+    budgeted_cubes / TICKS
+  );
 }
 
 /// Quantising the server's own state is not free: it perturbs every body every
@@ -151,6 +190,74 @@ fn snapping_both_sides_costs_something_and_it_is_small() {
   assert!(
     worst < pack::position_error(),
     "a snapped yard should survive the wire within one step, not {worst}"
+  );
+}
+
+/// A budget means a cube can wait several ticks between updates, which is the
+/// same problem a low send rate has, and the same fix works: a spline through
+/// both samples that leaves along the velocity recorded at each.
+///
+/// Measured on a real collapse rather than a synthetic curve, because a falling
+/// cube changes direction against the floor and that is where a spline is least
+/// flattered.
+#[test]
+fn hermite_beats_a_straight_line_between_sparse_samples() {
+  use plaza_client_utils::hermite::HermiteView;
+  use plaza_client_utils::math::Vec3;
+
+  let mut yard = Yard::new();
+  let idle = [Default::default(); MAX_PLAYERS];
+  // Let the pile start collapsing, so the cube watched below is genuinely
+  // moving rather than asleep.
+  for _ in 0..30 {
+    yard.step(&idle);
+  }
+
+  const WATCHED: usize = 400;
+  const SEND_EVERY: u64 = 6; // ten sends a second at 60Hz
+  let mut truth: Vec<Vec3> = Vec::new();
+  let mut spline: HermiteView<Vec3, Vec3> = HermiteView::new(64);
+  let mut samples: Vec<(u64, Vec3)> = Vec::new();
+
+  for tick in 0..120u64 {
+    yard.step(&idle);
+    let cubes = snapshot(&yard);
+    let c = cubes[WATCHED];
+    let at = Vec3::new(c.pos[0], c.pos[1], c.pos[2]);
+    truth.push(at);
+
+    if tick % SEND_EVERY == 0 {
+      let v = Vec3::new(c.linvel[0], c.linvel[1], c.linvel[2]);
+      let ms = tick * 1000 / TICK_HZ;
+      spline.push(ms, at, v);
+      samples.push((ms, at));
+    }
+  }
+
+  let mut worst_hermite = 0.0f32;
+  let mut worst_linear = 0.0f32;
+  for (tick, want) in truth.iter().enumerate() {
+    let ms = tick as u64 * 1000 / TICK_HZ;
+    if let Some(drawn) = spline.render(ms) {
+      worst_hermite = worst_hermite.max((drawn - *want).length());
+    }
+    // The same samples, blended in a straight line.
+    if let Some(i) = samples.iter().rposition(|(at, _)| *at <= ms) {
+      let (t0, a) = samples[i];
+      let (t1, b) = samples.get(i + 1).copied().unwrap_or((t0, a));
+      let t = if t1 == t0 { 0.0 } else { (ms - t0) as f32 / (t1 - t0) as f32 };
+      let lerped = Vec3::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t);
+      worst_linear = worst_linear.max((lerped - *want).length());
+    }
+  }
+
+  println!("\na falling cube, sampled {} times a second:", TICK_HZ / SEND_EVERY);
+  println!("  worst error  hermite {worst_hermite:.4}u, linear {worst_linear:.4}u");
+  println!("  improvement  {:.1}x\n", worst_linear / worst_hermite.max(1e-6));
+
+  assert!(
+    worst_hermite < worst_linear,
+    "hermite {worst_hermite} should beat linear {worst_linear}"
   );
 }
 

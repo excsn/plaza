@@ -6,6 +6,7 @@ A pile of 901 cubes, a solver nobody re-simulates, and one question: how few bit
 ./run-native.sh                                  # desktop window; hosts and plays
 ./run-native.sh --encoding packed --snap         # stage 2: quantised, bit-packed
 ./run-native.sh --encoding budgeted              # stage 3: a hard 256 kbit/sec
+./run-native.sh --encoding delta                 # stage 4: deltas against what you hold
 ./run-native.sh --role client --connect ws://host:8100/ws
 ./wasm-serve.sh                                  # build the browser client, host it on :8100
 cargo test -p cube_yard --test baseline -- --nocapture   # what the current stage costs
@@ -21,7 +22,7 @@ That inverts the physics configuration too, and for a reason rather than a prefe
 
 ## Where it is
 
-**Stage 3 of 4.** Reproduce with `cargo test -p cube_yard --test baseline -- --nocapture`.
+**All four stages.** Reproduce with `cargo test -p cube_yard --test baseline -- --nocapture`.
 
 ```
 905 cubes, 905 asleep, one frame at 60 Hz
@@ -30,13 +31,19 @@ stage                     bytes   Mbit/sec vs stage 1  worst error
 1  full width             49800      23.90      1.0x        exact
 2  quantised + packed      8740       4.20      5.7x      0.0008u
 3  + priority budget        512       0.25     97.3x      0.0008u
+4  + delta encoding         305       0.15    163.3x      0.0008u
+
+   cubes refreshed per tick, inside the same budget:
+     stage 3      46
+     stage 4     206
 
    mean quantisation error 0.00048 units, on cubes one unit across
    worst single packet 517 bytes against a 533 byte budget
-   target 0.256 Mbit/sec: 0.96x
 ```
 
-**The target is met.** Which is the thing worth saying plainly: the last 16x was not compression at all.
+**The target is met at stage 3**, and the thing worth saying plainly is that the last 16x was not compression at all. Quantising has a floor: 905 cubes times the smallest honest encoding is still 4.2 Mbit/sec, and no number of bits saved per cube reaches 256 kbit. What closed it was choosing.
+
+Which is also why stage 4's row is the wrong way to read it. The bandwidth was already at the ceiling, so delta encoding cannot lower it meaningfully; what it buys is **four and a half times more of the yard inside the same budget**, 206 cubes a tick against 46. Every cube is refreshed about every four ticks instead of every twenty.
 
 Stage 1 is the naive thing on purpose. Fiedler's uncompressed figure for the same scene is 17.38 Mbit/sec; ours is higher because MessagePack has envelope overhead and each cube also carries velocity and a rest flag.
 
@@ -50,9 +57,17 @@ Two things fell out of building it. A budget is **per link**, so the frame stopp
 
 A budget also makes corrections bigger: a distant cube can wait several ticks and then move a long way at once. That is what `plaza_client_utils::AdaptiveDecay` is for, and it is the third technique from the articles that plaza was missing.
 
-The stage left:
+Stage 4 encodes each cube against what the client is known to hold. A cube that has not moved costs **eight bits**: an index delta and three flags, against the eighty-two an absolute sleeping cube costs. In a settled yard that is nearly all of them, which is what turns a refresh from expensive into free.
 
-- **4. Interpolation and delta.** `HermiteView` at a low send rate, then value-level delta encoding, measured the honest way: more cubes inside the same budget rather than a smaller number in isolation.
+Two things about it are worth knowing. It needs no acknowledgements, unlike Fiedler's, because plaza's WebSocket transport is TCP: what was last *sent* is what the other end holds, in order. On a datagram transport this would have to delta against an acked baseline instead, which is what `plaza_server_utils::DeltaBaseline` is for. And a delta frame has its own wire variant rather than a flag, because the two layouts are not distinguishable from their bytes and guessing wrong would decode garbage into a baseline both ends have to agree on.
+
+Stage 4 finishes about 40% under budget. The per-cube cost planner allows 15 bits for an index delta, which is safe for any gap but generous when most deltas are 1, so the budget fills on the estimate rather than the encoding. That headroom is real and unclaimed.
+
+## Interpolating between sparse updates
+
+A budget means a cube can wait several ticks between updates, which is the problem a low send rate has, and it takes the same fix. `plaza_client_utils::HermiteView` splines through both samples and leaves along the velocity recorded at each.
+
+On a real falling cube sampled ten times a second, worst error is **0.0588 units against a straight line's 0.1219**, so 2.1x. That is far short of the 484x the same primitive gets on a smooth circle, and the difference is the point: a cube bouncing off a floor changes direction between samples, and no spline recovers what it was never told. Take the 2x and do not expect the 484x on anything with contacts in it.
 
 ## Quantise both sides, and what it costs
 

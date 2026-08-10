@@ -258,6 +258,81 @@ mod tests {
   }
 
   #[test]
+  fn a_delta_stream_reconstructs_the_yard() {
+    let mut cubes = yard(200);
+    let all: Vec<usize> = (0..200).collect();
+    let mut sent = vec![None; 200];
+    let mut held = Vec::new();
+
+    // First frame: nothing is known, so everything is absolute.
+    let first = pack_delta(&cubes, &all, &mut sent);
+    let patch = unpack_delta(&first, &mut held).unwrap();
+    assert_eq!(patch.len(), 200);
+
+    // Move a few, leave the rest, and send everything again.
+    for i in [3usize, 44, 150] {
+      cubes[i].pos[0] += 0.5;
+    }
+    let second = pack_delta(&cubes, &all, &mut sent);
+    let patch = unpack_delta(&second, &mut held).unwrap();
+
+    let step = position_error();
+    for (index, state) in patch {
+      let want = &cubes[index as usize];
+      for axis in 0..3 {
+        assert!((state.pos[axis] - want.pos[axis]).abs() <= step, "cube {index}");
+      }
+    }
+    // Three quarters of this yard is awake, and an awake cube still pays for
+    // its velocity every frame however still it is, so the collapse is bounded
+    // by that rather than by how much moved.
+    assert!(
+      second.len() < first.len() / 3,
+      "a frame of mostly-unchanged cubes should collapse: {} vs {}",
+      second.len(),
+      first.len()
+    );
+  }
+
+  #[test]
+  fn an_unchanged_cube_costs_almost_nothing() {
+    let cubes: Vec<CubeState> = yard(905).into_iter().map(|mut c| { c.at_rest = true; c }).collect();
+    let all: Vec<usize> = (0..905).collect();
+    let mut sent = vec![None; 905];
+
+    pack_delta(&cubes, &all, &mut sent);
+    let repeat = pack_delta(&cubes, &all, &mut sent);
+
+    // Five bits of index delta plus known, at-rest and unchanged: eight bits,
+    // against the eighty-two an absolute sleeping cube costs.
+    let bits_each = repeat.len() * 8 / 905;
+    assert_eq!(bits_each, 8, "an unchanged cube should cost its three flags and an index");
+  }
+
+  #[test]
+  fn a_tumbling_cube_survives_its_largest_component_changing() {
+    // The one case a naive delta gets wrong: when the dropped component
+    // changes, the other three are a different three and cannot be deltaed.
+    let mut cubes = vec![CubeState {
+      pos: [0.0; 3],
+      rot: [0.0, 0.0, 0.0, 1.0],
+      linvel: [0.0; 3],
+      at_rest: true,
+    }];
+    let mut sent = vec![None; 1];
+    let mut held = Vec::new();
+    unpack_delta(&pack_delta(&cubes, &[0], &mut sent), &mut held).unwrap();
+
+    cubes[0].rot = [0.92, 0.0, 0.0, 0.39];
+    let patch = unpack_delta(&pack_delta(&cubes, &[0], &mut sent), &mut held).unwrap();
+    let back = patch[0].1.rot;
+    let flip = if back.iter().zip(cubes[0].rot).map(|(a, b)| a * b).sum::<f32>() < 0.0 { -1.0 } else { 1.0 };
+    for i in 0..4 {
+      assert!((back[i] * flip - cubes[0].rot[i]).abs() < 0.02, "{back:?} vs {:?}", cubes[0].rot);
+    }
+  }
+
+  #[test]
   fn a_truncated_payload_is_none_rather_than_a_panic() {
     let bytes = pack(&yard(50));
     assert!(unpack(&bytes[..bytes.len() / 2]).is_none());
@@ -280,4 +355,228 @@ mod tests {
       assert_eq!(back[0].pos[0], snapped, "snapping should be a fixed point of the wire");
     }
   }
+}
+
+/// A cube as the wire sees it: the quantised integers themselves.
+///
+/// A delta has to be taken against what the *other side holds*, not against the
+/// f32 the solver holds, or the two ends would disagree by a rounding error
+/// that accumulates with every frame. Keeping the quantised form is what makes
+/// a delta exact.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Quantized {
+  pos: [u64; 3],
+  largest: u64,
+  rot: [u64; 3],
+  pub at_rest: bool,
+}
+
+pub fn quantize_cube(cube: &CubeState) -> Quantized {
+  use plaza_wire::bits::quantize;
+
+  let mut largest = 0usize;
+  for i in 1..4 {
+    if cube.rot[i].abs() > cube.rot[largest].abs() {
+      largest = i;
+    }
+  }
+  let sign = if cube.rot[largest] < 0.0 { -1.0 } else { 1.0 };
+  let mut rot = [0u64; 3];
+  let mut at = 0;
+  for i in 0..4 {
+    if i != largest {
+      rot[at] = quantize(cube.rot[i] * sign, -SMALLEST_THREE, SMALLEST_THREE, ROT_BITS);
+      at += 1;
+    }
+  }
+
+  Quantized {
+    pos: [
+      quantize(cube.pos[0], X.0, X.1, XZ_BITS),
+      quantize(cube.pos[1], Y.0, Y.1, Y_BITS),
+      quantize(cube.pos[2], X.0, X.1, XZ_BITS),
+    ],
+    largest: largest as u64,
+    rot,
+    at_rest: cube.at_rest,
+  }
+}
+
+fn dequantize_cube(q: &Quantized, linvel: [f32; 3]) -> CubeState {
+  use plaza_wire::bits::dequantize;
+
+  let mut rot = [0.0f32; 4];
+  let mut sum = 0.0f32;
+  let mut at = 0;
+  for i in 0..4 {
+    if i as u64 != q.largest {
+      let v = dequantize(q.rot[at], -SMALLEST_THREE, SMALLEST_THREE, ROT_BITS);
+      rot[i] = v;
+      sum += v * v;
+      at += 1;
+    }
+  }
+  rot[q.largest as usize] = (1.0 - sum).max(0.0).sqrt();
+
+  CubeState {
+    pos: [
+      dequantize(q.pos[0], X.0, X.1, XZ_BITS),
+      dequantize(q.pos[1], Y.0, Y.1, Y_BITS),
+      dequantize(q.pos[2], X.0, X.1, XZ_BITS),
+    ],
+    rot,
+    linvel,
+    at_rest: q.at_rest,
+  }
+}
+
+/// The largest component of a unit quaternion cannot exceed this, so the other
+/// three are quantised over it.
+const SMALLEST_THREE: f32 = std::f32::consts::FRAC_1_SQRT_2;
+
+/// What a cube costs when it has not moved since the other side last heard
+/// about it: an index, a known bit, a rest bit and an unchanged bit.
+///
+/// This is the whole point of delta encoding here. A settled yard is 905
+/// sleeping cubes that a budget still has to refresh, and at eight bits each
+/// the refresh is almost free.
+pub const UNCHANGED_BITS: usize = INDEX_BITS + 3;
+
+/// Writes a subset as deltas against `baseline`, updating it as it goes.
+///
+/// Unlike Fiedler's, this needs no acknowledgements: plaza's WebSocket
+/// transport is TCP, so what was last *sent* is what the other end holds once
+/// it has read it, in order. On a datagram transport this would have to delta
+/// against an acked baseline instead (see `plaza_server_utils::DeltaBaseline`).
+pub fn pack_delta(cubes: &[CubeState], indices: &[usize], baseline: &mut [Option<Quantized>]) -> Vec<u8> {
+  let mut w = BitWriter::with_capacity(indices.len() * 4);
+  w.varint(indices.len() as u64);
+  let mut previous = 0usize;
+
+  for &index in indices {
+    w.varint((index - previous) as u64);
+    previous = index;
+
+    let now = quantize_cube(&cubes[index]);
+    match baseline[index] {
+      None => {
+        w.bool(false);
+        write_absolute(&mut w, &now);
+      }
+      Some(was) => {
+        w.bool(true);
+        w.bool(now.at_rest);
+        let same = was.pos == now.pos && was.largest == now.largest && was.rot == now.rot;
+        w.bool(same);
+        if !same {
+          for axis in 0..3 {
+            w.signed_varint(now.pos[axis] as i64 - was.pos[axis] as i64);
+          }
+          // The largest component can change as a cube tumbles, and when it
+          // does the other three are a different three; only a run where it
+          // holds can be deltaed.
+          let same_axis = was.largest == now.largest;
+          w.bool(same_axis);
+          if same_axis {
+            for i in 0..3 {
+              w.signed_varint(now.rot[i] as i64 - was.rot[i] as i64);
+            }
+          } else {
+            w.bits(now.largest, plaza_wire::bits::SMALLEST_THREE_INDEX_BITS);
+            for i in 0..3 {
+              w.bits(now.rot[i], ROT_BITS);
+            }
+          }
+        }
+      }
+    }
+    if !now.at_rest {
+      for axis in cubes[index].linvel {
+        w.quantized(axis, VEL.0, VEL.1, VEL_BITS);
+      }
+    }
+    baseline[index] = Some(now);
+  }
+  w.finish()
+}
+
+fn write_absolute(w: &mut BitWriter, q: &Quantized) {
+  w.bool(q.at_rest);
+  w.bits(q.pos[0], XZ_BITS);
+  w.bits(q.pos[1], Y_BITS);
+  w.bits(q.pos[2], XZ_BITS);
+  w.bits(q.largest, plaza_wire::bits::SMALLEST_THREE_INDEX_BITS);
+  for i in 0..3 {
+    w.bits(q.rot[i], ROT_BITS);
+  }
+}
+
+/// Reads what [`pack_delta`] wrote, against the same baseline.
+pub fn unpack_delta(bytes: &[u8], baseline: &mut Vec<Option<Quantized>>) -> Option<Vec<(u32, CubeState)>> {
+  let mut r = BitReader::new(bytes);
+  let count = r.varint().ok()? as usize;
+  if count > 1 << 20 {
+    return None;
+  }
+
+  let mut out = Vec::with_capacity(count.min(4096));
+  let mut index = 0u64;
+  for _ in 0..count {
+    index += r.varint().ok()?;
+    let at = index as usize;
+    if at >= baseline.len() {
+      baseline.resize(at + 1, None);
+    }
+
+    let known = r.bool().ok()?;
+    let q = if known {
+      let was = baseline[at]?;
+      let at_rest = r.bool().ok()?;
+      let same = r.bool().ok()?;
+      let mut now = Quantized { at_rest, ..was };
+      if !same {
+        for axis in 0..3 {
+          now.pos[axis] = (was.pos[axis] as i64 + r.signed_varint().ok()?) as u64;
+        }
+        if r.bool().ok()? {
+          for i in 0..3 {
+            now.rot[i] = (was.rot[i] as i64 + r.signed_varint().ok()?) as u64;
+          }
+        } else {
+          now.largest = r.bits(plaza_wire::bits::SMALLEST_THREE_INDEX_BITS).ok()?;
+          for i in 0..3 {
+            now.rot[i] = r.bits(ROT_BITS).ok()?;
+          }
+        }
+      }
+      now
+    } else {
+      let at_rest = r.bool().ok()?;
+      let pos = [
+        r.bits(XZ_BITS).ok()?,
+        r.bits(Y_BITS).ok()?,
+        r.bits(XZ_BITS).ok()?,
+      ];
+      let largest = r.bits(plaza_wire::bits::SMALLEST_THREE_INDEX_BITS).ok()?;
+      let mut rot = [0u64; 3];
+      for i in 0..3 {
+        rot[i] = r.bits(ROT_BITS).ok()?;
+      }
+      Quantized { pos, largest, rot, at_rest }
+    };
+
+    let linvel = if q.at_rest {
+      [0.0; 3]
+    } else {
+      [
+        r.quantized(VEL.0, VEL.1, VEL_BITS).ok()?,
+        r.quantized(VEL.0, VEL.1, VEL_BITS).ok()?,
+        r.quantized(VEL.0, VEL.1, VEL_BITS).ok()?,
+      ]
+    };
+
+    baseline[at] = Some(q);
+    out.push((index as u32, dequantize_cube(&q, linvel)));
+  }
+  Some(out)
 }

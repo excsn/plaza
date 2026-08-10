@@ -54,15 +54,20 @@ pub enum Cubes {
   /// Stage three: only the cubes that fit this tick's budget, each naming
   /// itself. The client patches these into the yard it already holds.
   Subset(Payload),
+  /// Stage four: the same, with each cube encoded against what the client is
+  /// known to hold. A separate variant rather than a flag because the two
+  /// layouts are not distinguishable from their bytes, and guessing wrong
+  /// would decode garbage into a baseline both ends have to agree on.
+  Delta(Payload),
 }
 
 impl Cubes {
   pub fn is_packed(&self) -> bool {
-    matches!(self, Self::Packed(_) | Self::Subset(_))
+    matches!(self, Self::Packed(_) | Self::Subset(_) | Self::Delta(_))
   }
 
   pub fn is_subset(&self) -> bool {
-    matches!(self, Self::Subset(_))
+    matches!(self, Self::Subset(_) | Self::Delta(_))
   }
 }
 
@@ -86,6 +91,8 @@ pub enum Encoding {
   Packed,
   /// Packed, and only what fits a hard byte budget each tick.
   Budgeted,
+  /// Budgeted, and each cube encoded against what the client already holds.
+  Delta,
 }
 
 impl Encoding {
@@ -94,7 +101,8 @@ impl Encoding {
       "full" => Ok(Self::Full),
       "packed" => Ok(Self::Packed),
       "budgeted" => Ok(Self::Budgeted),
-      other => Err(format!("unknown encoding {other:?}; expected full, packed or budgeted")),
+      "delta" => Ok(Self::Delta),
+      other => Err(format!("unknown encoding {other:?}; expected full, packed, budgeted or delta")),
     }
   }
 

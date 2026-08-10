@@ -17,6 +17,7 @@
 
 use plaza_server_utils::{PriorityAccumulator, RestDetector};
 
+use crate::pack::Quantized;
 use crate::protocol::CubeState;
 
 /// 256 kbit/sec is Fiedler's target, and at 60Hz it is this many bits a tick.
@@ -48,6 +49,9 @@ pub struct Stream {
   priority: PriorityAccumulator,
   rest: RestDetector,
   chosen: Vec<usize>,
+  /// What this client is known to hold, for delta encoding to measure against.
+  /// Empty when the stream is not deltaing.
+  pub baseline: Vec<Option<Quantized>>,
 }
 
 impl Stream {
@@ -56,7 +60,18 @@ impl Stream {
       priority: PriorityAccumulator::new(cubes),
       rest: RestDetector::with_capacity(cubes, REST_TICKS),
       chosen: Vec::new(),
+      baseline: Vec::new(),
     }
+  }
+
+  /// Turns on delta encoding, which needs a baseline per cube.
+  pub fn with_delta(mut self, cubes: usize) -> Self {
+    self.baseline = vec![None; cubes];
+    self
+  }
+
+  pub fn deltas(&self) -> bool {
+    !self.baseline.is_empty()
   }
 
   /// Scores every cube for this tick and returns the ones that fit, ascending.
@@ -81,9 +96,23 @@ impl Stream {
     // Cost comes from the layout, so a yard full of sleeping cubes correctly
     // fits more of them into the same budget, and a change to the layout moves
     // the budget with it instead of silently overrunning.
+    // With a baseline, a cube that has not moved costs its flags and nothing
+    // else, so the same budget refreshes far more of a settled yard.
+    let baseline = &self.baseline;
     self.priority.fill(
       budget,
-      |index| crate::pack::INDEX_BITS + crate::pack::cube_bits(cubes[index].at_rest),
+      |index| {
+        let cube = &cubes[index];
+        if let Some(Some(was)) = baseline.get(index) {
+          if !cube.at_rest {
+            return crate::pack::INDEX_BITS + crate::pack::cube_bits(false);
+          }
+          if crate::pack::quantize_cube(cube) == *was {
+            return crate::pack::UNCHANGED_BITS;
+          }
+        }
+        crate::pack::INDEX_BITS + crate::pack::cube_bits(cube.at_rest)
+      },
       &mut self.chosen,
     );
     // `fill` returns them hottest first; the packed layout wants them ascending
