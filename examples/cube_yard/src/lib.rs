@@ -8,6 +8,8 @@
 //! numbers can be read against his.
 
 #[cfg(feature = "server")]
+pub mod acked;
+#[cfg(feature = "server")]
 pub mod budget;
 pub mod pack;
 pub mod protocol;

@@ -63,6 +63,22 @@ Stage 4 encodes each cube against what the client is known to hold. A cube that 
 
 Two things about it are worth knowing. It needs no acknowledgements, unlike Fiedler's, because plaza's WebSocket transport is TCP: what was last *sent* is what the other end holds, in order. On a datagram transport this would have to delta against an acked baseline instead, which is what `plaza_server_utils::DeltaBaseline` is for.
 
+**Stage 5 removes that dependency**, and prices it. `--encoding delta` measures from what was last *sent*; an acknowledged baseline measures from what the client has confirmed, so a lost frame costs bandwidth rather than correctness. Over 400 ticks on a deterministically lossy link:
+
+```
+loss             delta vs last sent      delta vs acknowledged
+           worst err     cubes/tick   worst err     cubes/tick
+0%             0.001            333       0.001             87
+2%             0.011            333       0.001             87
+10%            0.134            333       0.001             72
+```
+
+Two things in that table were not what was expected. **The bytes are identical**, because a budget is a ceiling and both schemes spend all of it; the premium for an older baseline cannot show up as bandwidth, so it shows up as **a quarter of the cubes per tick**. And 10% loss barely moves the acked column, because most of a settled yard encodes as an unchanged flag whichever baseline it is measured from.
+
+Getting it right needed one thing the naive version does not have: **the frame has to name the baseline it was measured from**. The first attempt had the server encoding against its confirmed baseline while the client decoded against everything it had received since, which are different reference points, and the lossless control caught it at 2.0 units of error. Both ends now run the same reconstruction (`Acked::view_at`) over the same per-cube history, which is Fiedler's "5-bit offset identifying which packet contains the delta base" in a different shape.
+
+The other half is a lesson plaza had already written down: the baseline is the newest **contiguous** acknowledgement, not the newest bit set, which is what `AckWindow::contiguous_base` is for.
+
 That dependency is measured rather than asserted. [`tests/agreement.rs`](tests/agreement.rs) drives the real server encode path into the real client decode path and checks every cube a frame names against where the server holds it, then drops a single frame and watches the yard corrupt by **0.609 units** on cubes one unit across, six hundred times the quantisation step, with no error raised anywhere. The second test is there as much to prove the first one has teeth: a check that has never failed is weak evidence that it could. And a delta frame has its own wire variant rather than a flag, because the two layouts are not distinguishable from their bytes and guessing wrong would decode garbage into a baseline both ends have to agree on.
 
 Stage 4 does not plan against a cost estimate at all, and that is the second thing it taught. A delta cube costs anywhere between eight bits and a full absolute, and any single estimate covering that range has to be generous enough to waste most of the budget: the first version allowed 15 bits for an index delta that is usually 5 and finished 40% under. Adding a cube never shrinks the payload, so the largest prefix of the priority order that fits is found by bisecting on the *written* size, about ten trial encodes a tick. That claimed the headroom: 432 cubes instead of 206.

@@ -149,6 +149,14 @@ Reading the shape of a counter rather than its value: a count climbing without b
 
 ## The bug catalogue
 
+### A delta needs both ends naming the same baseline, not just having one (cube_yard)
+
+Moving from delta-against-last-sent to delta-against-acknowledged looks like a server-side change: keep what the client confirmed, encode against that instead. It is not. The server ends up measuring from a baseline several frames old while the client decodes against everything it has received since, and those are different reference points, so every delta lands somewhere wrong. The lossless control caught it at 2.0 units where the correct answer is 0.001.
+
+The fix is that a frame has to **name** the state it was measured from, and both ends have to be able to reconstruct that state. Fiedler carries a 5-bit offset identifying the base packet; the same thing here is a per-cube history of `(sequence, value)` on both sides and one shared `view_at(seq)`. The symmetry is the point: two implementations of "what did we agree on" is a disagreement waiting to happen.
+
+Worth pairing with what the measurement then showed. Under a budget, bytes are pinned by the ceiling, so an older baseline cannot cost bandwidth; it costs **cubes per tick**, 333 down to 87. A premium quoted in bandwidth would have been invisible here.
+
 ### A harness that models the wrong thing measures it beautifully (client_utils)
 
 Chapter 20 recorded that a fixed-duration ease has a correction rate above which it never finishes. Checking it against the shipped `ErrorSmoother` produced a clean table showing exactly that, and the table was worthless: the harness called `begin_from` every frame while the logical state advanced *smoothly*, which is not a correction at all. It was measuring an ease being told to restart toward a moving target, not a discontinuity being hidden.

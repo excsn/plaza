@@ -449,6 +449,19 @@ pub const UNCHANGED_BITS: usize = INDEX_BITS + 3;
 /// it has read it, in order. On a datagram transport this would have to delta
 /// against an acked baseline instead (see `plaza_server_utils::DeltaBaseline`).
 pub fn pack_delta(cubes: &[CubeState], indices: &[usize], baseline: &mut [Option<Quantized>]) -> Vec<u8> {
+  let payload = pack_delta_against(cubes, indices, baseline);
+  for &index in indices {
+    baseline[index] = Some(quantize_cube(&cubes[index]));
+  }
+  payload
+}
+
+/// The same, without advancing the baseline.
+///
+/// What an acknowledged baseline needs: the value a client is *known* to hold
+/// only changes when it says so, so sending must not move it. The caller keeps
+/// what it sent as pending and promotes it on an ack.
+pub fn pack_delta_against(cubes: &[CubeState], indices: &[usize], baseline: &[Option<Quantized>]) -> Vec<u8> {
   let mut w = BitWriter::with_capacity(indices.len() * 4);
   w.varint(indices.len() as u64);
   let mut previous = 0usize;
@@ -495,7 +508,6 @@ pub fn pack_delta(cubes: &[CubeState], indices: &[usize], baseline: &mut [Option
         w.quantized(axis, VEL.0, VEL.1, VEL_BITS);
       }
     }
-    baseline[index] = Some(now);
   }
   w.finish()
 }
@@ -554,10 +566,29 @@ pub fn pack_delta_until_full(
   (payload, picked)
 }
 
-/// Encodes against a copy of the baseline, so a trial fit leaves no trace.
+/// A trial fit leaves no trace, which is now simply the read-only encode.
 fn pack_delta_dry(cubes: &[CubeState], indices: &[usize], baseline: &[Option<Quantized>]) -> Vec<u8> {
+  pack_delta_against(cubes, indices, baseline)
+}
+
+/// Reads against a baseline the caller supplies and does not advance, and hands
+/// back the quantised values so the caller can file them under the right
+/// sequence.
+///
+/// What an acknowledged baseline needs on the receiving side: a frame is
+/// encoded against a *named* earlier state, not against everything the client
+/// has seen since, so the reader has to be told which state to measure from.
+pub fn unpack_delta_against(
+  bytes: &[u8],
+  baseline: &[Option<Quantized>],
+) -> Option<Vec<(u32, CubeState, Quantized)>> {
   let mut scratch = baseline.to_vec();
-  pack_delta(cubes, indices, &mut scratch)
+  let mut out = Vec::new();
+  let patch = unpack_delta(bytes, &mut scratch)?;
+  for (index, cube) in patch {
+    out.push((index, cube, scratch[index as usize]?));
+  }
+  Some(out)
 }
 
 /// Reads what [`pack_delta`] wrote, against the same baseline.
