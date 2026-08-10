@@ -103,6 +103,8 @@ fn read_drive() -> Drive {
     dx,
     dz,
     jump: is_key_down(KeyCode::Space),
+    // Filled in by the caller, which owns the toggle.
+    magnet: false,
   }
 }
 
@@ -141,29 +143,37 @@ async fn frame_loop(options: role::Options, encoding: Encoding, snap: bool, send
 
   let mut yard = render::Yard::new();
   let mut clock_ms: u64 = 0;
-  let mut orbit = 0.0f32;
+  // A toggle the client owns and repeats: the wire carries a level, so a lost
+  // press cannot leave the two ends disagreeing about whether it is on.
+  let mut magnet = false;
 
   loop {
     let dt = get_frame_time().min(0.25);
     clock_ms += (dt * 1000.0) as u64;
 
     client.poll(clock_ms);
-    client.drive(read_drive());
+    if is_key_pressed(KeyCode::Enter) {
+      magnet = !magnet;
+    }
+    let mut drive = read_drive();
+    drive.magnet = magnet;
+    client.drive(drive);
     client.ease(dt);
     client.advance_render_clock();
 
     clear_background(Color::new(0.05, 0.05, 0.07, 1.0));
 
     if client.ready() {
-      // The camera follows the cube you drive, and orbits the pile otherwise.
+      // Fixed behind and above the cube you drive, never orbiting: a camera
+      // that turns makes "left" mean a different direction every second, and
+      // the input is in world axes.
       let target = client
         .mine
         .map(|i| client.drawn(i as usize))
         .map(|p| vec3(p[0], p[1], p[2]))
         .unwrap_or(vec3(0.0, 3.0, 0.0));
-      orbit += dt * 0.12;
       set_camera(&Camera3D {
-        position: target + vec3(orbit.cos() * 34.0, 22.0, orbit.sin() * 34.0),
+        position: target + vec3(0.0, 16.0, 26.0),
         up: Vec3::Y,
         target,
         ..Default::default()

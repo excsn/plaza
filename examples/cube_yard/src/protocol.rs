@@ -151,12 +151,19 @@ pub fn without_yard_args<I: IntoIterator<Item = String>>(args: I) -> Vec<String>
   kept
 }
 
-/// A held direction plus whether the player is shoving, in the camera's frame.
+/// What a player is holding this tick, in world axes.
+///
+/// The camera sits at a fixed offset behind the cube rather than orbiting, so
+/// "left" means the same direction from one second to the next and these can be
+/// world axes without a frame conversion.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Drive {
   pub dx: i8,
   pub dz: i8,
   pub jump: bool,
+  /// A toggle, not a press: held on until the player turns it off, so a lost
+  /// input cannot leave the magnet stuck in the wrong state.
+  pub magnet: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

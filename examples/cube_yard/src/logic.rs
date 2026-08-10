@@ -264,7 +264,7 @@ mod tests {
     .await;
     run(&mut state, LogicInput::AgentOps {
       source: Agent::new_human(7),
-      ops: vec![YardOp::Drive(Drive { dx: 1, dz: 0, jump: false })],
+      ops: vec![YardOp::Drive(Drive { dx: 1, dz: 0, jump: false, magnet: false })],
     })
     .await;
 
@@ -280,7 +280,7 @@ mod tests {
       agent: Agent::new_human(7),
     })
     .await;
-    state.driving[0] = Drive { dx: 1, dz: 1, jump: false };
+    state.driving[0] = Drive { dx: 1, dz: 1, jump: false, magnet: false };
     run(&mut state, LogicInput::AgentLeft { agent_id: 7 }).await;
 
     assert_eq!(state.driving[0], Drive::default());

@@ -20,11 +20,24 @@ const PLAYER: f32 = 1.5;
 pub const YARD: f32 = 24.0;
 const WALL: f32 = 6.0;
 
-/// How hard a held direction pushes a player cube, and the ceiling it pushes
-/// toward.
-const DRIVE_FORCE: f32 = 320.0;
-const DRIVE_MAX: f32 = 18.0;
-const JUMP: f32 = 9.0;
+/// How fast a held direction moves a player cube.
+///
+/// Set as a velocity rather than pushed as a force: a platformer stops when you
+/// let go, and a force plus damping coasts, which reads as ice.
+const DRIVE_SPEED: f32 = 14.0;
+/// Upward speed a jump starts with.
+const JUMP_SPEED: f32 = 12.0;
+/// Vertical speed below which a cube counts as standing on something, so a jump
+/// is allowed. Loose enough to work while riding the pile, tight enough not to
+/// allow a second jump mid-air.
+const GROUNDED: f32 = 1.5;
+
+/// How far the magnet reaches, and how hard it pulls.
+const MAGNET_RANGE: f32 = 9.0;
+const MAGNET_PULL: f32 = 26.0;
+/// Cubes closer than this are held rather than pulled, so they ride along
+/// instead of oscillating through the player.
+const MAGNET_HOLD: f32 = 3.2;
 
 pub const MAX_PLAYERS: usize = 4;
 
@@ -155,20 +168,24 @@ impl Yard {
     for (seat, drive) in driving.iter().enumerate() {
       let handle = self.players[seat];
       let body = &mut self.bodies[handle];
-      let speed = body.linvel();
-      // Push toward a ceiling rather than setting velocity, so a player cube
-      // that has driven into the pile has to work its way through it.
-      let mut force = Vec3::new(drive.dx.clamp(-1, 1) as f32, 0.0, drive.dz.clamp(-1, 1) as f32);
-      if force.length_squared() > 0.0 {
-        force = force.normalize() * DRIVE_FORCE;
-        if Vec3::new(speed.x, 0.0, speed.z).length() < DRIVE_MAX {
-          body.add_force(force, true);
-        }
+      let was = body.linvel();
+
+      // Horizontal velocity is *set*, so releasing a key stops the cube on the
+      // next tick; only gravity owns the vertical axis.
+      let wanted = Vec3::new(drive.dx.clamp(-1, 1) as f32, 0.0, drive.dz.clamp(-1, 1) as f32);
+      let horizontal = if wanted.length_squared() > 0.0 {
+        wanted.normalize() * DRIVE_SPEED
+      } else {
+        Vec3::ZERO
+      };
+      let mut next = Vec3::new(horizontal.x, was.y, horizontal.z);
+      if drive.jump && was.y.abs() < GROUNDED {
+        next.y = JUMP_SPEED;
       }
-      if drive.jump && speed.y.abs() < 0.5 {
-        body.apply_impulse(Vec3::new(0.0, JUMP * body.mass(), 0.0), true);
-      }
+      body.set_linvel(next, true);
     }
+
+    self.pull_magnets(driving);
 
     self.pipeline.step(
       Vec3::new(0.0, -9.81, 0.0),
@@ -184,6 +201,39 @@ impl Yard {
       &(),
       &(),
     );
+  }
+
+  /// Draws loose cubes toward any player holding the magnet on.
+  ///
+  /// Near ones are given the player's own velocity so they ride along instead
+  /// of oscillating through it; further ones are pulled in. Waking them is not
+  /// optional: a settled pile is asleep, and a sleeping body ignores forces.
+  fn pull_magnets(&mut self, driving: &[Drive; MAX_PLAYERS]) {
+    for (seat, drive) in driving.iter().enumerate() {
+      if !drive.magnet {
+        continue;
+      }
+      let player = self.players[seat];
+      let at = self.bodies[player].translation();
+      let carrying = self.bodies[player].linvel();
+
+      for index in 0..CUBES {
+        let handle = self.handles[index];
+        let body = &mut self.bodies[handle];
+        let delta = at - body.translation();
+        let distance = delta.length();
+        if distance > MAGNET_RANGE || distance < 1e-3 {
+          continue;
+        }
+        body.wake_up(true);
+        if distance < MAGNET_HOLD {
+          body.set_linvel(carrying, true);
+        } else {
+          let toward = delta / distance;
+          body.set_linvel(toward * MAGNET_PULL * (distance / MAGNET_RANGE), true);
+        }
+      }
+    }
   }
 
   /// The whole yard, as the wire currently carries it.
@@ -258,6 +308,12 @@ impl Yard {
 mod tests {
   use super::*;
 
+  fn snapshot_of(yard: &Yard) -> Vec<CubeState> {
+    let mut cubes = Vec::new();
+    yard.snapshot(&mut cubes);
+    cubes
+  }
+
   fn run(yard: &mut Yard, ticks: usize) {
     let idle = [Drive::default(); MAX_PLAYERS];
     for _ in 0..ticks {
@@ -295,6 +351,95 @@ mod tests {
   }
 
   #[test]
+  fn releasing_the_key_stops_the_cube() {
+    // The bug this replaced: a force plus damping coasts, which reads as ice.
+    let mut yard = Yard::new();
+    run(&mut yard, 120);
+    let seat = yard.player_index(0) as usize;
+
+    // Inward, toward the middle of the yard. Seat 0 spawns near the east wall,
+    // so driving outward stops against it, which is correct and measures
+    // nothing.
+    let mut driving = [Drive::default(); MAX_PLAYERS];
+    driving[0] = Drive { dx: -1, dz: 0, jump: false, magnet: false };
+    for _ in 0..20 {
+      yard.step(&driving);
+    }
+    let moving = snapshot_of(&yard)[seat].linvel[0];
+    assert!(moving < -5.0, "holding a direction should move it, got {moving}");
+
+    // Let go. One tick is all it should take.
+    yard.step(&[Drive::default(); MAX_PLAYERS]);
+    let stopped = snapshot_of(&yard)[seat].linvel;
+    assert!(stopped[0].abs() < 0.01, "releasing should stop it, got {stopped:?}");
+  }
+
+  #[test]
+  fn jumping_leaves_the_ground_and_comes_back() {
+    let mut yard = Yard::new();
+    run(&mut yard, 200);
+    let seat = yard.player_index(0) as usize;
+    let resting = snapshot_of(&yard)[seat].pos[1];
+
+    let mut driving = [Drive::default(); MAX_PLAYERS];
+    driving[0] = Drive { dx: 0, dz: 0, jump: true, magnet: false };
+    yard.step(&driving);
+    assert!(snapshot_of(&yard)[seat].linvel[1] > 5.0, "space should launch it");
+
+    // Held down, it must not climb for ever: a second jump needs landing first.
+    for _ in 0..12 {
+      yard.step(&driving);
+    }
+    let peak = snapshot_of(&yard)[seat].pos[1];
+    assert!(peak > resting + 1.0, "it should get airborne");
+
+    run(&mut yard, 240);
+    let landed = snapshot_of(&yard)[seat].pos[1];
+    assert!(landed < peak, "and come down: peak {peak}, landed {landed}");
+  }
+
+  #[test]
+  fn the_magnet_gathers_cubes_and_lets_them_go() {
+    let mut yard = Yard::new();
+    run(&mut yard, 300);
+    let seat = yard.player_index(0) as usize;
+
+    let near = |yard: &Yard| {
+      let cubes = snapshot_of(yard);
+      let at = cubes[seat].pos;
+      (0..CUBES)
+        .filter(|&i| {
+          let p = cubes[i].pos;
+          ((p[0] - at[0]).powi(2) + (p[1] - at[1]).powi(2) + (p[2] - at[2]).powi(2)).sqrt() < MAGNET_HOLD
+        })
+        .count()
+    };
+
+    // Drive to the pile first: the magnet reaches 9 units and a seat spawns
+    // about 12 from the nearest cube, so standing still magnetises nothing.
+    let mut driving = [Drive::default(); MAX_PLAYERS];
+    driving[0] = Drive { dx: -1, dz: 0, jump: false, magnet: false };
+    for _ in 0..60 {
+      yard.step(&driving);
+    }
+
+    let before = near(&yard);
+    driving[0] = Drive { dx: 0, dz: 0, jump: false, magnet: true };
+    for _ in 0..90 {
+      yard.step(&driving);
+    }
+    let gathered = near(&yard);
+    assert!(gathered > before, "the magnet should gather: {before} -> {gathered}");
+
+    // Off again, and they are free: driving away leaves them behind.
+    driving[0] = Drive { dx: 0, dz: 1, jump: false, magnet: false };
+    for _ in 0..120 {
+      yard.step(&driving);
+    }
+    assert!(near(&yard) < gathered, "releasing should let them go");
+  }
+
+  #[test]
   fn driving_moves_the_player_cube() {
     let mut yard = Yard::new();
     run(&mut yard, 120);
@@ -303,7 +448,7 @@ mod tests {
     let seat = yard.player_index(0) as usize;
 
     let mut driving = [Drive::default(); MAX_PLAYERS];
-    driving[0] = Drive { dx: 1, dz: 0, jump: false };
+    driving[0] = Drive { dx: 1, dz: 0, jump: false, magnet: false };
     for _ in 0..90 {
       yard.step(&driving);
     }
