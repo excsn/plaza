@@ -26,6 +26,8 @@ Every block, one line each, sorted by the itch it scratches. Links go to the cra
 | `AggregateTree` | distant entities the client computes with, not just draws | [server_utils](../../server_utils/API_REFERENCE.md) |
 | `DeltaBaseline` / `DeltaPlan` | streaming a changing set over a lossy link, diffed against what was acknowledged | [server_utils](../../server_utils/API_REFERENCE.md) |
 | `DeltaMirror`, `SetDigest`, `SlotKey`, `SlotAllocator` | the client half of that stream, and the proof both ends still agree | [client_utils](../../client_utils/API_REFERENCE.md) |
+| `PriorityAccumulator` | relevance says who; this says which of them fit *this* packet, without starving the rest | [server_utils](../../server_utils/API_REFERENCE.md) |
+| `RestDetector` | knowing which entities have stopped, so a packet can stop paying for them | [server_utils](../../server_utils/API_REFERENCE.md) |
 | `RateMeter` | live rates, means, and shares on a HUD instead of claims in a README | [server_utils](../../server_utils/API_REFERENCE.md) |
 
 ## Your own character (chapter 20)
@@ -36,6 +38,7 @@ Every block, one line each, sorted by the itch it scratches. Links go to the cra
 | `HeldInputPredictor` | the wired bundle for a server that integrates held inputs | [client_utils](../../client_utils/API_REFERENCE.md) |
 | `PredictedEntity` + `ClientInputBuffer` | the primitives under both, for wiring your own | [client_utils](../../client_utils/API_REFERENCE.md) |
 | `ErrorSmoother` / `CorrectionMonitor` | easing what you draw after a correction / knowing whether that correction was normal | [client_utils](../../client_utils/API_REFERENCE.md) |
+| `AdaptiveDecay` | clearing a large correction *sooner* than a small one, rather than in the same fixed time | [client_utils](../../client_utils/API_REFERENCE.md) |
 | `InputCoalescer` | send-on-change plus keepalive, paired with held-input servers only | [client_utils](../../client_utils/API_REFERENCE.md) |
 | reconciliation module (server half) | tracking which inputs each client has been credited for | [core](../../core/API_REFERENCE.md) |
 
@@ -45,6 +48,7 @@ Every block, one line each, sorted by the itch it scratches. Links go to the cra
 |---|---|---|
 | `RemoteView` | an entity you do not control: push snapshots, ask for a render state | [client_utils](../../client_utils/API_REFERENCE.md) |
 | `SnapshotBuffer` + `InterpolationClock` | rendering remotes a declared beat in the past | [client_utils](../../client_utils/API_REFERENCE.md) |
+| `HermiteView` | a send rate low enough that a straight line between samples visibly corners | [client_utils](../../client_utils/API_REFERENCE.md) |
 | `ExtrapolationBase` / `TrajectoryPredictor` | coasting through a gap, capped / the sub-10Hz special case | [client_utils](../../client_utils/API_REFERENCE.md) |
 | `ArrivalMonitor` | measuring what render delay your stream actually needs | [client_utils](../../client_utils/API_REFERENCE.md) |
 | `HistoricalStateBuffer` | judging a shot at the time the shooter saw, not now | [server_utils](../../server_utils/API_REFERENCE.md) |
@@ -71,6 +75,9 @@ Every block, one line each, sorted by the itch it scratches. Links go to the cra
 | `build::emit` / `ProtocolVersion` | a wire version nobody has to remember to bump | [wire](../../wire/API_REFERENCE.md) |
 | `answer_ping` | answering probes from a hand-written read loop | [wire](../../wire/API_REFERENCE.md) |
 | `AckWindow` | telling the other side what arrived, in twelve bytes | [client_utils](../../client_utils/API_REFERENCE.md) |
+| `bits` (`BitWriter`/`BitReader`, `quantize`, `smallest_three`, varints) | the hot array, where a byte-aligned codec cannot express a bound and a bound is the whole saving | [wire](../../wire/API_REFERENCE.md) |
+| `BitCodec` | the same idea with no layout written by hand: worth 1.4x, and the ceiling of what a derive can reach | [wire](../../wire/API_REFERENCE.md) |
+| `Payload` | carrying packed bytes in a field, without a codec re-encoding every byte as an integer | [wire](../../wire/API_REFERENCE.md) |
 | payload types (`SequencedClientInput` and friends) | the shared netcode vocabulary, generic over your types | [wire](../../wire/API_REFERENCE.md) |
 
 ## Sockets and sessions (chapters 31, 32, 33)
