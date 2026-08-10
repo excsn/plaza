@@ -11,6 +11,7 @@ Every chapter answers one question, reads in one sitting, and names a runnable e
 - [00. What plaza is made of](00-what-plaza-is-made-of.md), why it is blocks with prescriptions on top, what it refuses to do, and how to read this guide if you are building an app rather than a game.
 - [01. One loop, one truth](01-one-loop-one-truth.md), where your game's state lives and the one place it is allowed to change.
 - [02. Choosing your netcode](02-choosing-your-netcode.md), which model fits your game before any mechanics matter.
+- [03. A solver in the loop](03-a-solver-in-the-loop.md), what a physics engine costs each netcode family, and why the answer decides its configuration.
 
 **The world and its players**, or what everyone agrees is happening:
 
