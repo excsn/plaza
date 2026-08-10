@@ -15,6 +15,9 @@ pub struct YardState {
   pub encoding: Encoding,
   /// Whether the server snaps its own state onto the wire's grid each tick.
   pub snap: bool,
+  /// Frames per second on the wire. Below the tick rate, a client has gaps to
+  /// fill and interpolation stops being a formality.
+  pub send_hz: u64,
   pub roster: Roster<PlayerId>,
   /// The level each seat currently holds; a tick with nothing new repeats it.
   pub driving: [Drive; MAX_PLAYERS],
@@ -42,11 +45,16 @@ impl YardState {
   }
 
   pub fn with(encoding: Encoding, snap: bool) -> Self {
+    Self::at_rate(encoding, snap, crate::protocol::TICK_HZ)
+  }
+
+  pub fn at_rate(encoding: Encoding, snap: bool, send_hz: u64) -> Self {
     Self {
       yard: Yard::new(),
       tick: 0,
       encoding,
       snap,
+      send_hz: send_hz.clamp(1, crate::protocol::TICK_HZ),
       roster: Roster::new(MAX_PLAYERS),
       driving: [Drive::default(); MAX_PLAYERS],
       agents: HashMap::new(),

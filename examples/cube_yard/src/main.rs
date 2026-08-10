@@ -33,6 +33,10 @@ fn main() {
     Err(message) => return give_up(message),
   };
   let snap = std::env::args().any(|a| a == "--snap");
+  let send_hz = match protocol::send_hz_from_args(std::env::args()) {
+    Ok(hz) => hz,
+    Err(message) => return give_up(message),
+  };
   let options = match role::parse(protocol::without_yard_args(std::env::args())) {
     Ok(options) => options,
     Err(message) => return give_up(message),
@@ -45,7 +49,7 @@ fn main() {
   if options.role == Role::Headless {
     let result = tokio::runtime::Runtime::new()
       .expect("tokio runtime")
-      .block_on(cube_yard::net::host::serve(&options.bind, options.static_dir.clone(), encoding, snap));
+      .block_on(cube_yard::net::host::serve(&options.bind, options.static_dir.clone(), encoding, snap, send_hz));
     if let Err(e) = result {
       eprintln!("server stopped: {e}");
       std::process::exit(1);
@@ -55,7 +59,7 @@ fn main() {
 
   #[cfg(all(feature = "client", feature = "websocket"))]
   {
-    windowed(options, encoding, snap);
+    windowed(options, encoding, snap, send_hz);
     return;
   }
 
@@ -75,8 +79,8 @@ fn window_conf() -> Conf {
 }
 
 #[cfg(all(feature = "client", feature = "websocket"))]
-fn windowed(options: role::Options, encoding: Encoding, snap: bool) {
-  macroquad::Window::from_config(window_conf(), frame_loop(options, encoding, snap));
+fn windowed(options: role::Options, encoding: Encoding, snap: bool, send_hz: u64) {
+  macroquad::Window::from_config(window_conf(), frame_loop(options, encoding, snap, send_hz));
 }
 
 #[cfg(all(feature = "client", feature = "websocket"))]
@@ -103,9 +107,9 @@ fn read_drive() -> Drive {
 }
 
 #[cfg(all(feature = "client", feature = "websocket"))]
-async fn frame_loop(options: role::Options, encoding: Encoding, snap: bool) {
+async fn frame_loop(options: role::Options, encoding: Encoding, snap: bool, send_hz: u64) {
   #[cfg(not(feature = "server"))]
-  let (_, _) = (encoding, snap);
+  let (_, _, _) = (encoding, snap, send_hz);
 
   #[cfg(feature = "server")]
   if options.role.runs_a_server() {
@@ -115,7 +119,7 @@ async fn frame_loop(options: role::Options, encoding: Encoding, snap: bool) {
       .name("yard".to_owned())
       .spawn(move || {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-        if let Err(e) = runtime.block_on(cube_yard::net::host::serve(&bind, static_dir, encoding, snap)) {
+        if let Err(e) = runtime.block_on(cube_yard::net::host::serve(&bind, static_dir, encoding, snap, send_hz)) {
           eprintln!("yard stopped: {e}");
         }
       })
@@ -146,6 +150,7 @@ async fn frame_loop(options: role::Options, encoding: Encoding, snap: bool) {
     client.poll(clock_ms);
     client.drive(read_drive());
     client.ease(dt);
+    client.advance_render_clock();
 
     clear_background(Color::new(0.05, 0.05, 0.07, 1.0));
 

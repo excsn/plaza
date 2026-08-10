@@ -16,8 +16,20 @@
 //! Everything else is the same, including that the target should trail the
 //! stream by a couple of send intervals so two real samples bracket it.
 //!
-//! Worth it below roughly 20 snapshots a second, and not worth the second
-//! velocity on the wire much above that.
+//! **Only for motion that is smooth between samples**, and this is the sharp
+//! edge rather than a caveat. A straight line cannot leave the segment its two
+//! samples bracket; a spline can, and does, whenever the recorded velocity is a
+//! poor prediction of the path. Measured over 300 solver-driven cubes at 10Hz,
+//! with impacts in the scene, the spline left that segment on **half of all
+//! frames by up to 2.48 units** and finished 13x *worse* than the chord it
+//! replaced. On a smoothly curving path it is 484x better. The difference is
+//! entirely whether velocity at a sample predicts the path to the next one.
+//!
+//! So: reach for it for a steered character, an orbit, a projectile in free
+//! flight. Do not reach for it for anything that collides between samples,
+//! where plain interpolation is bounded and therefore safer. Worth it below
+//! roughly 20 snapshots a second, and not worth the second velocity on the wire
+//! much above that.
 //!
 //! ```
 //! use plaza_client_utils::hermite::HermiteView;

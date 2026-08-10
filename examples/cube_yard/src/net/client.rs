@@ -6,6 +6,8 @@
 
 use std::collections::VecDeque;
 
+use plaza_client_utils::interpolation::SnapshotBuffer;
+use plaza_client_utils::math::Vec3;
 use plaza_client_utils::AdaptiveDecay;
 use plaza_wire::{MsgPackCodec, WireCodec};
 use plaza_ws::pump::{mismatch_message, Arrival, FramePump};
@@ -19,6 +21,10 @@ const WIRE: MsgPackCodec = MsgPackCodec;
 /// Bandwidth is averaged over this window, so the panel reads as a rate rather
 /// than as whatever the last packet happened to be.
 const WINDOW_MS: u64 = 1000;
+
+/// Samples kept per cube for interpolation. Two is the minimum a spline needs;
+/// a few more absorb a packet arriving out of order.
+const SAMPLES: usize = 6;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Status {
@@ -88,6 +94,23 @@ pub struct NetClient {
   /// How many cubes the last frame carried, which under a budget is the
   /// number the panel should show rather than the yard's size.
   pub patched: u32,
+  /// Position samples per cube, blended in a **straight line** when the send
+  /// rate is low enough to leave gaps.
+  ///
+  /// Deliberately not `HermiteView`, and the measurement is in
+  /// `tests/baseline.rs`: across 300 of these cubes at 10Hz the spline came out
+  /// 13x worse than the chord, because it left the segment its own samples
+  /// bracket on half of all frames. Velocity at a sample is a promise about the
+  /// path to the next one, and a pile of colliding cubes breaks that promise
+  /// after the packet has left. A chord cannot leave the segment, which is
+  /// exactly the property this scene needs.
+  views: Vec<SnapshotBuffer<u64, Vec3>>,
+  /// Where the render clock is pointed: the newest stamp seen, less a delay of
+  /// two send intervals so two real samples bracket it.
+  render_at: u64,
+  /// Measured gap between frames, which is what sets that delay.
+  send_interval_ms: u64,
+  last_stamp: Option<u64>,
   /// Where each cube was drawn before its last correction, minus where it is
   /// now, bled off over the following frames. Under a budget a cube can go
   /// several ticks without an update and then move a long way at once, and a
@@ -105,6 +128,8 @@ pub struct NetClient {
   events: Vec<Event>,
   arrivals: Vec<Arrival>,
   now_ms: u64,
+  stamp: u64,
+  interpolating: bool,
   sent: Option<Drive>,
 }
 
@@ -126,6 +151,10 @@ impl NetClient {
       frame: 0,
       meter: Meter::default(),
       packed: false,
+      views: Vec::new(),
+      render_at: 0,
+      send_interval_ms: 1000 / crate::protocol::TICK_HZ,
+      last_stamp: None,
       offsets: Vec::new(),
       decay: AdaptiveDecay::default(),
       baseline: Vec::new(),
@@ -134,6 +163,8 @@ impl NetClient {
       events: Vec::new(),
       arrivals: Vec::new(),
       now_ms: 0,
+      stamp: 0,
+      interpolating: false,
       sent: None,
     }
   }
@@ -197,6 +228,16 @@ impl NetClient {
 
   fn on_frame(&mut self, update: FrameUpdate) {
     self.pump.timeline_mut().note_stamp(update.server_time_ms, self.now_ms);
+    // The send rate is measured rather than configured, so a client does not
+    // have to be told what the server chose.
+    if let Some(previous) = self.last_stamp {
+      let gap = update.server_time_ms.saturating_sub(previous);
+      if gap > 0 {
+        self.send_interval_ms = gap;
+      }
+    }
+    self.last_stamp = Some(update.server_time_ms);
+    self.stamp = update.server_time_ms;
     self.frame = update.frame;
     self.packed = update.cubes.is_packed();
     match update.cubes {
@@ -222,6 +263,7 @@ impl NetClient {
   /// the visual offset of anything that moved so it eases rather than jumps.
   fn apply(&mut self, patch: Vec<(u32, CubeState)>) {
     self.patched = patch.len() as u32;
+    let stamp = self.stamp;
     for (index, cube) in patch {
       let index = index as usize;
       if index >= self.cubes.len() {
@@ -233,7 +275,16 @@ impl NetClient {
         self.offsets[index][axis] += was[axis] - cube.pos[axis];
       }
       self.cubes[index] = cube;
+      self.sample(index, &cube, stamp);
     }
+  }
+
+  /// Files a cube's new position for interpolation.
+  fn sample(&mut self, index: usize, cube: &CubeState, stamp: u64) {
+    if index >= self.views.len() {
+      self.views.resize_with(index + 1, || SnapshotBuffer::new(SAMPLES));
+    }
+    self.views[index].add_snapshot(stamp, Vec3::new(cube.pos[0], cube.pos[1], cube.pos[2]));
   }
 
   /// Bleeds off the visual offsets. Call once per rendered frame, with real
@@ -254,12 +305,46 @@ impl NetClient {
 
   /// Where to draw a cube: its last known state plus whatever of its last
   /// correction has not bled off yet.
+  /// Where to draw a cube.
+  ///
+  /// Blended between two real samples when the send rate leaves gaps, which is
+  /// what a low rate needs; otherwise the last known state plus whatever of its
+  /// correction has not bled off. The two are alternatives rather than a blend:
+  /// interpolating already puts the cube where it should be, so easing on top
+  /// would fight it.
   pub fn drawn(&self, index: usize) -> [f32; 3] {
+    if self.interpolating {
+      if let Some(view) = self.views.get(index) {
+        if let Some(at) = view.get_interpolated_state(self.render_at) {
+          return [at.x, at.y, at.z];
+        }
+      }
+    }
     let pos = self.cubes[index].pos;
     match self.offsets.get(index) {
       Some(offset) => [pos[0] + offset[0], pos[1] + offset[1], pos[2] + offset[2]],
       None => pos,
     }
+  }
+
+  /// Whether the send rate is low enough that interpolating is worth it.
+  ///
+  /// At the tick rate a chord is 16ms and a straight line is invisible; the
+  /// spline only earns its keep once the gaps are long enough to corner.
+  pub fn interpolating(&self) -> bool {
+    self.interpolating
+  }
+
+  /// Advances the render clock. Call once per rendered frame.
+  ///
+  /// The target trails the newest stamp by two send intervals so two real
+  /// samples bracket it, which is the same trade every remote entity makes:
+  /// a fixed, small staleness in exchange for motion assembled from real
+  /// states rather than guessed ones.
+  pub fn advance_render_clock(&mut self) {
+    let delay = self.send_interval_ms * 2;
+    self.render_at = self.stamp.saturating_sub(delay);
+    self.interpolating = self.send_interval_ms > 1000 / crate::protocol::TICK_HZ;
   }
 
   /// Sends the held direction, and only when it changes: a level repeats on the

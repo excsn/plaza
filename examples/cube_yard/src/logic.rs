@@ -135,12 +135,22 @@ fn depart(state: &mut YardState, player: PlayerId) {
   }
 }
 
+/// Whether this tick is one the wire carries.
+fn on_air(state: &YardState) -> bool {
+  let every = (crate::protocol::TICK_HZ / state.send_hz).max(1);
+  state.tick % every == 0
+}
+
 fn step_once(state: &mut YardState, ctx: &mut Ctx) {
   state.tick += 1;
   let driving = state.driving;
   state.yard.step(&driving);
   if state.snap {
     state.yard.snap_to_wire();
+  }
+
+  if !on_air(state) {
+    return;
   }
 
   let mut cubes = Vec::new();

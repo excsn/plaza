@@ -341,6 +341,99 @@ fn snapping_makes_deltas_cheaper_on_a_settling_yard() {
   );
 }
 
+/// The whole yard at a low send rate, drawn three ways.
+///
+/// The single-cube test above says a spline beats a straight line; this says
+/// what it is worth across a scene, and what the cheapest option costs, which
+/// is the number that decides whether the second velocity is worth putting on
+/// the wire at all.
+#[test]
+fn the_send_rate_axis_priced_across_the_yard() {
+  use plaza_client_utils::hermite::HermiteView;
+  use plaza_client_utils::math::Vec3;
+
+  const SEND_EVERY: u64 = 6; // ten a second at 60Hz
+  const WATCH: usize = 300;
+
+  let mut yard = Yard::new();
+  let idle = [Default::default(); MAX_PLAYERS];
+  for _ in 0..30 {
+    yard.step(&idle);
+  }
+
+  let mut splines: Vec<HermiteView<Vec3, Vec3>> = (0..WATCH).map(|_| HermiteView::new(8)).collect();
+  let mut samples: Vec<Vec<(u64, Vec3)>> = vec![Vec::new(); WATCH];
+  let mut truth: Vec<Vec<Vec3>> = vec![Vec::new(); WATCH];
+
+  for tick in 0..180u64 {
+    yard.step(&idle);
+    let cubes = snapshot(&yard);
+    let ms = tick * 1000 / TICK_HZ;
+    for i in 0..WATCH {
+      let c = cubes[i];
+      let at = Vec3::new(c.pos[0], c.pos[1], c.pos[2]);
+      truth[i].push(at);
+      if tick % SEND_EVERY == 0 {
+        splines[i].push(ms, at, Vec3::new(c.linvel[0], c.linvel[1], c.linvel[2]));
+        samples[i].push((ms, at));
+      }
+    }
+  }
+
+  let (mut hermite, mut linear, mut hold) = (0.0f32, 0.0f32, 0.0f32);
+  // Is the spline overshooting its own samples? A straight line cannot leave
+  // the segment between two samples; a spline can, and that is the difference
+  // a scene with impacts in it exposes.
+  let (mut overshoots, mut worst_overshoot, mut segments) = (0usize, 0.0f32, 0usize);
+  for i in 0..WATCH {
+    for (tick, want) in truth[i].iter().enumerate() {
+      let ms = tick as u64 * 1000 / TICK_HZ;
+      if let Some(drawn) = splines[i].render(ms) {
+        hermite = hermite.max((drawn - *want).length());
+      }
+      if let Some(at) = samples[i].iter().rposition(|(t, _)| *t <= ms) {
+        let (t0, a) = samples[i][at];
+        let (t1, b) = samples[i].get(at + 1).copied().unwrap_or((t0, a));
+        if let Some(drawn) = splines[i].render(ms) {
+          segments += 1;
+          // Outside the sphere the two samples bracket: only a spline can do it.
+          let mid = Vec3::new((a.x + b.x) * 0.5, (a.y + b.y) * 0.5, (a.z + b.z) * 0.5);
+          let radius = (b - a).length() * 0.5;
+          let beyond = (drawn - mid).length() - radius;
+          if beyond > 1e-3 {
+            overshoots += 1;
+            worst_overshoot = worst_overshoot.max(beyond);
+          }
+        }
+        // Held: the newest sample, drawn until the next one replaces it.
+        hold = hold.max((a - *want).length());
+        let t = if t1 == t0 { 0.0 } else { (ms - t0) as f32 / (t1 - t0) as f32 };
+        let lerped = Vec3::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t);
+        linear = linear.max((lerped - *want).length());
+      }
+    }
+  }
+
+  println!("\n{WATCH} cubes at {} sends a second, worst position error:", TICK_HZ / SEND_EVERY);
+  println!("  hold the newest sample   {hold:.4}u");
+  println!("  interpolate straight     {linear:.4}u   ({:.1}x better than hold)", hold / linear);
+  println!("  spline through velocity  {hermite:.4}u   ({:.1}x WORSE than straight)", hermite / linear);
+  println!(
+    "\n  the spline left the segment its samples bracket on {:.0}% of frames, by up to {worst_overshoot:.2}u",
+    overshoots as f32 / segments.max(1) as f32 * 100.0
+  );
+  println!("  a straight line cannot do that, which is the whole difference.\n");
+
+  assert!(linear < hold, "interpolating should beat holding");
+  // The finding, asserted so it cannot quietly reverse: on a scene with
+  // impacts, a spline is worse than the chord it replaces.
+  assert!(
+    hermite > linear,
+    "a spline is expected to lose here; if it now wins, the docs need revisiting"
+  );
+  assert!(overshoots > 0, "and to lose by overshooting");
+}
+
 #[test]
 fn a_settled_yard_is_mostly_asleep() {
   let yard = settled(false);

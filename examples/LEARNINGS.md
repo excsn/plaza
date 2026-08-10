@@ -149,6 +149,16 @@ Reading the shape of a counter rather than its value: a count climbing without b
 
 ## The bug catalogue
 
+### One entity is not a sample, and a spline is not bounded (cube_yard)
+
+A Hermite spline through two snapshots, leaving along the velocity recorded at each, beat straight-line interpolation by 484x on a smooth curve and by 2.1x on a falling cube pulled out of the solver. Both numbers went into the docs. Across 300 cubes from the same scene it is **13x worse** than the straight line it replaced.
+
+The mechanism is the part worth keeping: a chord cannot leave the segment between its two samples, and a spline can. Measured here it left that segment on **half of all frames, by up to 2.48 units** on cubes one unit across. Velocity at a sample is a promise about the path to the next one, and a collision breaks that promise after the packet has already gone. On a smooth path the promise holds and the spline is near-exact; in a pile of colliding bodies it is a licence to overshoot.
+
+Two habits. Picking an index is not sampling: the 2.1x figure came from one cube that happened to be falling cleanly, and a second index would have contradicted it before the claim reached three documents. And prefer the bounded technique when you cannot guarantee the assumption the unbounded one rests on, which is the same instinct as the rendering hierarchy preferring real data to inference at every rung.
+
+The example that motivated building the spline is the one that should not use it, and says so.
+
 ### A delta needs both ends naming the same baseline, not just having one (cube_yard)
 
 Moving from delta-against-last-sent to delta-against-acknowledged looks like a server-side change: keep what the client confirmed, encode against that instead. It is not. The server ends up measuring from a baseline several frames old while the client decodes against everything it has received since, and those are different reference points, so every delta lands somewhere wrong. The lossless control caught it at 2.0 units where the correct answer is 0.001.

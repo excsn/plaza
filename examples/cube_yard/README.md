@@ -89,7 +89,22 @@ It also needed a change in `PriorityAccumulator`. `fill` clears the score of eve
 
 A budget means a cube can wait several ticks between updates, which is the problem a low send rate has, and it takes the same fix. `plaza_client_utils::HermiteView` splines through both samples and leaves along the velocity recorded at each.
 
-On a real falling cube sampled ten times a second, worst error is **0.0588 units against a straight line's 0.1219**, so 2.1x. That is far short of the 484x the same primitive gets on a smooth circle, and the difference is the point: a cube bouncing off a floor changes direction between samples, and no spline recovers what it was never told. Take the 2x and do not expect the 484x on anything with contacts in it.
+One cube, chosen by index and falling smoothly, gives the flattering answer: 0.0588 units against a straight line's 0.1219, so 2.1x. Across 300 cubes it reverses completely.
+
+```
+300 cubes at 10 sends a second, worst position error:
+  hold the newest sample   0.7034u
+  interpolate straight     0.2300u   (3.1x better than hold)
+  spline through velocity  3.0350u   (13.2x WORSE than straight)
+
+  the spline left the segment its samples bracket on 50% of frames, by up to 2.48u
+```
+
+Interpolating beats holding by 3.1x, which is the expected win and the reason to send at a low rate at all. The spline then **loses to the straight line by 13x**, and the overshoot number says why: a chord cannot leave the segment between its two samples and a spline can. Velocity at a sample is a promise about the path to the next one, and in a pile of colliding cubes that promise is broken after the packet has left.
+
+The single-cube figure was not wrong, it was one cube, and picking an index is not sampling. That is the whole lesson.
+
+So **cube_yard's client does not use `HermiteView`**, and that is the finding rather than a disappointment. It blends between two real samples with `SnapshotBuffer`, because a chord is bounded by the states it sits between and this scene needs exactly that. The spline's home is a steered character or a projectile in free flight, where velocity at a sample really does predict the path; the example that motivated building it is the example that should not use it. Take the 2x and do not expect the 484x on anything with contacts in it.
 
 ## Quantise both sides, and what it costs
 

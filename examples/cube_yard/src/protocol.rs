@@ -113,6 +113,24 @@ impl Encoding {
   }
 }
 
+/// The value of `--send-hz`, defaulting to the tick rate.
+pub fn send_hz_from_args<I: IntoIterator<Item = String>>(args: I) -> Result<u64, String> {
+  let mut args = args.into_iter().skip_while(|a| a != "--send-hz");
+  match args.nth(1) {
+    Some(text) => text
+      .parse::<u64>()
+      .map_err(|_| format!("--send-hz wants a number, got {text:?}"))
+      .and_then(|hz| {
+        if (1..=TICK_HZ).contains(&hz) {
+          Ok(hz)
+        } else {
+          Err(format!("--send-hz must be between 1 and {TICK_HZ}"))
+        }
+      }),
+    None => Ok(TICK_HZ),
+  }
+}
+
 /// The same command line with `--encoding <name>` and `--snap` removed, for the
 /// shared role parser, which rejects an argument it does not know.
 pub fn without_yard_args<I: IntoIterator<Item = String>>(args: I) -> Vec<String> {
@@ -124,6 +142,9 @@ pub fn without_yard_args<I: IntoIterator<Item = String>>(args: I) -> Vec<String>
         args.next();
       }
       "--snap" => {}
+      "--send-hz" => {
+        args.next();
+      }
       _ => kept.push(arg),
     }
   }
