@@ -147,6 +147,23 @@ An entity you do not control: a `SnapshotBuffer` plus the interpolate / extrapol
 
 **`RenderOpts`**: `interpolate: bool`, `extrapolate: bool`. `Default` is both on; a real client fixes them, the booleans exist so a UI can toggle them.
 
+### Struct `HermiteView<State, Velocity>`
+
+`RemoteView` for low send rates. A straight line between two snapshots is right when they are close together and wrong when they are not: at 60 snapshots a second the error over a 16ms chord is invisible, at 10 the chord flattens 100ms of a curved path and the entity visibly corners, sliding to each sample and changing direction. A cubic Hermite spline passes through both samples *and* leaves along the velocity recorded at each, so the seams stop being corners.
+
+Requires `State: HermiteInterpolatable<Velocity>`, implemented here for `f32`, `Vec2` and `Vec3`. An orientation wants `Quat::slerp` instead; a quaternion's components do not interpolate independently.
+
+*   **`new(capacity)`**: panics below 2, since a spline needs two samples to sit between.
+*   **`push(&mut self, time_ms, state, velocity)`**: out-of-order arrivals are inserted in time order rather than dropped, since a straggler still improves the segment it lands in.
+*   **`render(&self, target_ms) -> Option<State>`**: `None` until the first sample; before the oldest or past the newest it **holds** that end rather than guessing. Coasting past the end is a separate decision with a different failure mode, which is what [`RenderOpts`](#struct-remoteviewstate-velocity) is for.
+*   **`latest()`**, **`oldest_time()`**, **`latest_time()`**, **`len()`**, **`is_empty()`**, **`clear()`**.
+
+Why it is a separate type rather than a flag on `RemoteView`: a spline needs the velocity at **both** ends, and `RemoteView` keeps one, for dead reckoning past the newest sample.
+
+Measured on a 10-unit circle sampled at 10Hz and drawn at 60 (`cargo test -p plaza_client_utils hermite -- --nocapture`): worst error over a second is **0.0003 against linear's 0.1231**. That ratio is flattering because a cubic is near-exact on a smooth curve given true derivatives; expect less on a path that changes direction sharply. Worth it below roughly 20 snapshots a second, and not worth the second velocity on the wire much above that.
+
+**Trait `HermiteInterpolatable<Velocity>`**: `hermite(&self, other, velocity_a, velocity_b, t, seconds) -> Self`, where `t` runs `0..=1` across the segment and `seconds` is its wall duration, which is what puts a per-second velocity into the same units as the positions. **`hermite_scalar(p0, v0, p1, v1, t, seconds) -> f32`** is the one-axis form.
+
 ## 3b. Rollback netcode (deterministic lockstep)
 
 A different model from the rest of this crate. There is no server: peers run the **same deterministic simulation**, exchange only inputs, and stay identical frame for frame. Latency is handled by **predicting** a missing remote input (repeat its last one), simulating ahead, and **rolling back** to re-simulate when the real input arrives and disagrees. Determinism is what makes the re-simulation land on the state the other peer already has. Lives in module `rollback`.

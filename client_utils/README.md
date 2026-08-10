@@ -159,6 +159,14 @@ if let Some(state) = remote.get_interpolated_state(render_time) {
 
 Pick a delay slightly larger than your typical gap between snapshots, one to two server ticks. Too small and the buffer runs dry; too large and remote entities visibly lag.
 
+## Interpolating at a low send rate
+
+A straight line between two snapshots is right when they are close together and wrong when they are not. At 60 snapshots a second the error across a 16 ms chord is invisible. At 10, the chord flattens 100 ms of a curved path into a line and the entity visibly corners: it slides to each sample, changes direction, slides to the next.
+
+`HermiteView` is the answer Fiedler reaches for in [snapshot interpolation](https://gafferongames.com/post/snapshot_interpolation/): a cubic spline through both samples that also leaves along the velocity recorded at each, so the seams stop being corners. On a 10-unit circle sampled at 10 Hz and drawn at 60, worst error over a second is **0.0003 against linear's 0.1231**; expect less on a path that turns sharply, since a cubic is near-exact on a smooth one given true derivatives.
+
+It is a separate type rather than a flag on `RemoteView` for a concrete reason: a spline needs the velocity at **both** ends, and `RemoteView` keeps one, for dead reckoning past the newest sample. Worth the second velocity on the wire below roughly 20 snapshots a second, and not much above it.
+
 ## Acknowledgement and second-order dead reckoning
 
 Two later additions, both with a measured regime narrower than they first appear. Both are documented at length in [API_REFERENCE.md](API_REFERENCE.md); the summary of what measurement said:
