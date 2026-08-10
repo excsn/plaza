@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use plaza::agent::Agent;
 use plaza_server_utils::{Roster, SeatState};
 
+use crate::budget::Stream;
 use crate::protocol::{Drive, Encoding, PlayerId};
 use crate::sim::{Yard, MAX_PLAYERS};
 
@@ -18,6 +19,9 @@ pub struct YardState {
   /// The level each seat currently holds; a tick with nothing new repeats it.
   pub driving: [Drive; MAX_PLAYERS],
   pub agents: HashMap<PlayerId, Agent<PlayerId>>,
+  /// One share of the wire per client: a budget is per link, so the choosing
+  /// is too, and two clients standing in different places get different cubes.
+  pub streams: HashMap<PlayerId, Stream>,
 }
 
 impl std::fmt::Debug for YardState {
@@ -46,6 +50,7 @@ impl YardState {
       roster: Roster::new(MAX_PLAYERS),
       driving: [Drive::default(); MAX_PLAYERS],
       agents: HashMap::new(),
+      streams: HashMap::new(),
     }
   }
 

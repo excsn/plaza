@@ -24,7 +24,11 @@ pub fn draw_panel(client: &NetClient, url: &str) {
         ui.label(format!("{asleep} asleep, {} awake", client.cubes.len().saturating_sub(asleep)));
         ui.separator();
 
-        ui.label(if client.packed { "encoding: quantised + bit-packed" } else { "encoding: full width (stage 1)" });
+        ui.label(match (client.packed, client.patched) {
+          (false, _) => "encoding: full width (stage 1)".to_owned(),
+          (true, 0) => "encoding: quantised + packed (stage 2)".to_owned(),
+          (true, n) => format!("encoding: budgeted, {n} cubes this tick"),
+        });
         if client.unreadable > 0 {
           ui.colored_label(
             egui_macroquad::egui::Color32::LIGHT_RED,
@@ -36,7 +40,7 @@ pub fn draw_panel(client: &NetClient, url: &str) {
         ui.label(format!("  {:.0} bytes per frame", client.meter.bytes_per_frame()));
         ui.label(
           egui_macroquad::egui::RichText::new(
-            "still every cube, every tick.\npriority and delta are what close the last 16x.",
+            "a cube that did not fit keeps its priority,\nso waiting is what earns the next slot.",
           )
           .small(),
         );

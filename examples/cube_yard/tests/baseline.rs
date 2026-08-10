@@ -10,6 +10,7 @@
 
 #![cfg(feature = "server")]
 
+use cube_yard::budget::{Stream, BUDGET_BITS};
 use cube_yard::pack;
 use cube_yard::protocol::{frame_to_ms, CubeState, Cubes, FrameUpdate, YardOp, CUBES, TICK_HZ};
 use cube_yard::sim::{Yard, MAX_PLAYERS};
@@ -89,12 +90,38 @@ fn the_stages_priced_side_by_side() {
     full as f64 / packed as f64,
     worst
   );
-  println!("\n   mean error {mean:.5} units, on cubes one unit across");
-  println!("   target 0.256 Mbit/sec: {:.0}x to go\n", mbps(packed) / 0.256);
+  // Stage three: only what fits a hard budget, scored from where a client is
+  // standing. Measured over a run rather than one frame, because the whole
+  // point is that a cube skipped now goes out shortly after.
+  let mut stream = Stream::new(truth.len());
+  let eye = Some(truth[CUBES].pos);
+  let mut total = 0usize;
+  let mut worst_packet = 0usize;
+  const TICKS: usize = 120;
+  for _ in 0..TICKS {
+    let picked = stream.pick(&truth, eye, BUDGET_BITS);
+    let bytes = on_the_wire(Cubes::Subset(Payload::from(pack::pack_subset(&truth, picked))));
+    worst_packet = worst_packet.max(bytes);
+    total += bytes;
+  }
+  let budgeted = total / TICKS;
+  println!(
+    "{:<22} {:>8} {:>10.2} {:>8.1}x {:>11.4}u",
+    "3  + priority budget",
+    budgeted,
+    mbps(budgeted),
+    full as f64 / budgeted as f64,
+    worst
+  );
+
+  println!("\n   mean quantisation error {mean:.5} units, on cubes one unit across");
+  println!("   worst single packet {worst_packet} bytes against a {} byte budget", BUDGET_BITS / 8);
+  println!("   target 0.256 Mbit/sec: {:.2}x\n", mbps(budgeted) / 0.256);
 
   assert!(packed < full / 4, "packing should be worth several times, not a few percent");
   // A cube is one unit across, so anything approaching that is visible.
   assert!(worst < 0.01, "quantisation error {worst} is large enough to see");
+  assert!(mbps(budgeted) <= 0.30, "the budget is a ceiling: {:.2} Mbit/sec", mbps(budgeted));
 }
 
 /// Quantising the server's own state is not free: it perturbs every body every

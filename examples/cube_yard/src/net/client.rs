@@ -6,6 +6,7 @@
 
 use std::collections::VecDeque;
 
+use plaza_client_utils::AdaptiveDecay;
 use plaza_wire::{MsgPackCodec, WireCodec};
 use plaza_ws::pump::{mismatch_message, Arrival, FramePump};
 use plaza_ws::{Event, State};
@@ -84,6 +85,15 @@ pub struct NetClient {
   pub meter: Meter,
   /// Whether the frames arriving are bit-packed, for the panel to name.
   pub packed: bool,
+  /// How many cubes the last frame carried, which under a budget is the
+  /// number the panel should show rather than the yard's size.
+  pub patched: u32,
+  /// Where each cube was drawn before its last correction, minus where it is
+  /// now, bled off over the following frames. Under a budget a cube can go
+  /// several ticks without an update and then move a long way at once, and a
+  /// snap that size is exactly what a viewer notices.
+  pub offsets: Vec<[f32; 3]>,
+  decay: AdaptiveDecay,
   /// Frames whose packed payload would not read back. Must stay zero: it means
   /// the layout and its reader have drifted apart.
   pub unreadable: u64,
@@ -112,6 +122,9 @@ impl NetClient {
       frame: 0,
       meter: Meter::default(),
       packed: false,
+      offsets: Vec::new(),
+      decay: AdaptiveDecay::default(),
+      patched: 0,
       unreadable: 0,
       events: Vec::new(),
       arrivals: Vec::new(),
@@ -187,6 +200,55 @@ impl NetClient {
         Some(cubes) => self.cubes = cubes,
         None => self.unreadable += 1,
       },
+      // A budgeted frame is a patch, not a world: whatever it does not mention
+      // is still whatever this client last heard about it.
+      Cubes::Subset(payload) => match pack::unpack_subset(payload.as_slice()) {
+        Some(patch) => {
+          self.patched = patch.len() as u32;
+          for (index, cube) in patch {
+            let index = index as usize;
+            if index >= self.cubes.len() {
+              self.cubes.resize(index + 1, cube);
+              self.offsets.resize(index + 1, [0.0; 3]);
+            }
+            // Whatever the correction moved stays on screen and bleeds off, so
+            // a cube that waited its turn slides into place rather than
+            // teleporting.
+            let was = self.cubes[index].pos;
+            for axis in 0..3 {
+              self.offsets[index][axis] += was[axis] - cube.pos[axis];
+            }
+            self.cubes[index] = cube;
+          }
+        }
+        None => self.unreadable += 1,
+      },
+    }
+  }
+
+  /// Bleeds off the visual offsets. Call once per rendered frame, with real
+  /// seconds: the decay is a rate, not a per-frame constant.
+  pub fn ease(&mut self, dt_secs: f32) {
+    for offset in &mut self.offsets {
+      let magnitude = (offset[0] * offset[0] + offset[1] * offset[1] + offset[2] * offset[2]).sqrt();
+      if magnitude < 1e-4 {
+        *offset = [0.0; 3];
+        continue;
+      }
+      let keep = self.decay.retain(magnitude, dt_secs);
+      for axis in offset.iter_mut() {
+        *axis *= keep;
+      }
+    }
+  }
+
+  /// Where to draw a cube: its last known state plus whatever of its last
+  /// correction has not bled off yet.
+  pub fn drawn(&self, index: usize) -> [f32; 3] {
+    let pos = self.cubes[index].pos;
+    match self.offsets.get(index) {
+      Some(offset) => [pos[0] + offset[0], pos[1] + offset[1], pos[2] + offset[2]],
+      None => pos,
     }
   }
 
@@ -211,6 +273,8 @@ impl NetClient {
 mod tests {
   use plaza_wire::frame;
   use plaza_ws::scripted::ScriptedSocket;
+
+  use crate::pack;
 
   use super::*;
   use crate::protocol::frame_to_ms;
@@ -269,6 +333,74 @@ mod tests {
     assert_eq!(client.meter.total_bytes, bytes as u64);
     assert_eq!(client.meter.frames, 1);
     assert!(client.meter.bytes_per_frame() > 100.0, "100 cubes is not free");
+  }
+
+  #[test]
+  fn a_budgeted_patch_updates_only_what_it_names() {
+    let socket = ScriptedSocket::new();
+    let mut cubes = yard(10);
+    feed(&socket, vec![YardOp::Frame(Box::new(FrameUpdate {
+      frame: 1,
+      server_time_ms: 0,
+      yours: None,
+      cubes: Cubes::Subset(pack::pack_subset(&cubes, &(0..10).collect::<Vec<_>>()).into()),
+    }))]);
+
+    let mut client = NetClient::from_socket(Box::new(socket.clone()));
+    client.poll(0);
+    assert_eq!(client.cubes.len(), 10);
+
+    // A second frame naming two cubes leaves the other eight where they were.
+    let before = client.cubes[5].pos;
+    cubes[2].pos[1] = 9.0;
+    cubes[7].pos[1] = 9.0;
+    feed(&socket, vec![YardOp::Frame(Box::new(FrameUpdate {
+      frame: 2,
+      server_time_ms: 16,
+      yours: None,
+      cubes: Cubes::Subset(pack::pack_subset(&cubes, &[2, 7]).into()),
+    }))]);
+    client.poll(16);
+
+    assert_eq!(client.patched, 2);
+    assert!((client.cubes[2].pos[1] - 9.0).abs() < 0.01);
+    assert_eq!(client.cubes[5].pos, before, "an unnamed cube is left alone");
+    assert_eq!(client.unreadable, 0);
+  }
+
+  #[test]
+  fn a_correction_is_eased_rather_than_snapped() {
+    let socket = ScriptedSocket::new();
+    let mut cubes = yard(4);
+    feed(&socket, vec![YardOp::Frame(Box::new(FrameUpdate {
+      frame: 1,
+      server_time_ms: 0,
+      yours: None,
+      cubes: Cubes::Subset(pack::pack_subset(&cubes, &(0..4).collect::<Vec<_>>()).into()),
+    }))]);
+    let mut client = NetClient::from_socket(Box::new(socket.clone()));
+    client.poll(0);
+
+    cubes[1].pos[1] += 5.0;
+    feed(&socket, vec![YardOp::Frame(Box::new(FrameUpdate {
+      frame: 2,
+      server_time_ms: 16,
+      yours: None,
+      cubes: Cubes::Subset(pack::pack_subset(&cubes, &[1]).into()),
+    }))]);
+    client.poll(16);
+
+    // Drawn short of the new truth, then closing on it.
+    let first = client.drawn(1)[1];
+    assert!(first < client.cubes[1].pos[1] - 1.0, "the jump should not land at once");
+    client.ease(0.1);
+    let later = client.drawn(1)[1];
+    assert!(later > first && later <= client.cubes[1].pos[1]);
+
+    for _ in 0..40 {
+      client.ease(0.05);
+    }
+    assert!((client.drawn(1)[1] - client.cubes[1].pos[1]).abs() < 0.01, "and it gets there");
   }
 
   #[test]

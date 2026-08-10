@@ -5,6 +5,7 @@ A pile of 901 cubes, a solver nobody re-simulates, and one question: how few bit
 ```sh
 ./run-native.sh                                  # desktop window; hosts and plays
 ./run-native.sh --encoding packed --snap         # stage 2: quantised, bit-packed
+./run-native.sh --encoding budgeted              # stage 3: a hard 256 kbit/sec
 ./run-native.sh --role client --connect ws://host:8100/ws
 ./wasm-serve.sh                                  # build the browser client, host it on :8100
 cargo test -p cube_yard --test baseline -- --nocapture   # what the current stage costs
@@ -20,7 +21,7 @@ That inverts the physics configuration too, and for a reason rather than a prefe
 
 ## Where it is
 
-**Stage 2 of 4.** Reproduce with `cargo test -p cube_yard --test baseline -- --nocapture`.
+**Stage 3 of 4.** Reproduce with `cargo test -p cube_yard --test baseline -- --nocapture`.
 
 ```
 905 cubes, 905 asleep, one frame at 60 Hz
@@ -28,10 +29,14 @@ That inverts the physics configuration too, and for a reason rather than a prefe
 stage                     bytes   Mbit/sec vs stage 1  worst error
 1  full width             49800      23.90      1.0x        exact
 2  quantised + packed      8740       4.20      5.7x      0.0008u
+3  + priority budget        512       0.25     97.3x      0.0008u
 
-   mean error 0.00048 units, on cubes one unit across
-   target 0.256 Mbit/sec: 16x to go
+   mean quantisation error 0.00048 units, on cubes one unit across
+   worst single packet 517 bytes against a 533 byte budget
+   target 0.256 Mbit/sec: 0.96x
 ```
+
+**The target is met.** Which is the thing worth saying plainly: the last 16x was not compression at all.
 
 Stage 1 is the naive thing on purpose. Fiedler's uncompressed figure for the same scene is 17.38 Mbit/sec; ours is higher because MessagePack has envelope overhead and each cube also carries velocity and a rest flag.
 
@@ -39,9 +44,14 @@ Stage 2 is `plaza_wire::bits` doing what a derive cannot: positions on a bounded
 
 The error column is the point of doing it this way. A worst case of 0.0008 units on cubes a full unit across is four ten-thousandths of a cube, which is not a visible thing, and now it is a number rather than a hope.
 
-The stages left, and what each is allowed to spend:
+Stage 3 is `PriorityAccumulator` and `RestDetector` in [`src/budget.rs`](src/budget.rs). Every cube gains priority each tick (an awake one far more than a sleeping one, a near one more than a far one), the highest fill 4266 bits, and **what did not fit keeps what it accumulated**, so waiting is itself what earns the next slot. Nothing starves, and there is a test that says so: run a still yard for 80 ticks and every one of the 905 has had a turn.
 
-- **3. Priority and a budget.** `PriorityAccumulator` and `RestDetector`, with the solver's own sleeping bodies as the at-rest input, filling a hard 256 kbit/sec. Magnitude-adaptive correction smoothing lands here, because only now do entities update at different rates.
+Two things fell out of building it. A budget is **per link**, so the frame stopped being a broadcast: each client is scored from where it is standing and gets its own packet, and a joiner is handed the whole yard once rather than learning it over several seconds. And the per-cube cost is derived from the layout (`pack::cube_bits`) rather than written down beside it, because the first hand-guessed figure overran the budget by 20% and a constant like that drifts silently the moment the layout changes.
+
+A budget also makes corrections bigger: a distant cube can wait several ticks and then move a long way at once. That is what `plaza_client_utils::AdaptiveDecay` is for, and it is the third technique from the articles that plaza was missing.
+
+The stage left:
+
 - **4. Interpolation and delta.** `HermiteView` at a low send rate, then value-level delta encoding, measured the honest way: more cubes inside the same budget rather than a smaller number in isolation.
 
 ## Quantise both sides, and what it costs

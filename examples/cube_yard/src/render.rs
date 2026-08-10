@@ -69,7 +69,7 @@ impl Yard {
 
   /// Rebuilds and draws the whole yard. `mine` is drawn in its own colour so a
   /// player can find the cube they are driving.
-  pub fn draw(&mut self, cubes: &[CubeState], mine: Option<u16>, players_from: usize) {
+  pub fn draw(&mut self, cubes: &[CubeState], at: impl Fn(usize) -> [f32; 3], mine: Option<u16>, players_from: usize) {
     // u16 indices cap a mesh at 65535 vertices, so 2730 cubes is the ceiling
     // before this needs splitting into several meshes.
     let drawn = cubes.len().min(65_535 / 24);
@@ -92,7 +92,8 @@ impl Yard {
       };
 
       let rotation = Quat::from_xyzw(cube.rot[0], cube.rot[1], cube.rot[2], cube.rot[3]);
-      let centre = vec3(cube.pos[0], cube.pos[1], cube.pos[2]);
+      let drawn = at(index);
+      let centre = vec3(drawn[0], drawn[1], drawn[2]);
 
       for (corners, shade) in &self.faces {
         let color = Color::new(tint.r * shade, tint.g * shade, tint.b * shade, 1.0);

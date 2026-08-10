@@ -13,6 +13,7 @@ use plaza::state_logic::{LogicInput, LogicOutput, StateLogic};
 use plaza_server_utils::{Admission, Departure};
 use tracing::info;
 
+use crate::budget::{Stream, BUDGET_BITS};
 use crate::pack;
 use crate::protocol::{frame_to_ms, Cubes, Encoding, FrameUpdate, PlayerId, YardOp};
 use crate::state::YardState;
@@ -87,6 +88,22 @@ fn seat_player(state: &mut YardState, agent: &Agent<PlayerId>, ctx: &mut Ctx) {
   }
   state.agents.insert(player, agent.clone());
 
+  // A budgeted client would take seconds to learn the yard one packet at a
+  // time, so it is handed the whole thing once and budgeted from then on.
+  if state.encoding == Encoding::Budgeted {
+    let mut stream = Stream::new(state.yard.len());
+    let mut cubes = Vec::new();
+    state.yard.snapshot(&mut cubes);
+    let seed = stream.seed(cubes.len());
+    state.streams.insert(player, stream);
+    ctx.ops_q().push(TargetedOp::new_system_to(player, vec![YardOp::Frame(Box::new(FrameUpdate {
+      frame: state.tick,
+      server_time_ms: frame_to_ms(state.tick),
+      yours: None,
+      cubes: Cubes::Subset(pack::pack_subset(&cubes, &seed).into()),
+    }))]));
+  }
+
   let Admission::Seated { seat, .. } = state.roster.admit(player) else {
     info!(player, "the yard is full of drivers; watching");
     return;
@@ -101,6 +118,7 @@ fn seat_player(state: &mut YardState, agent: &Agent<PlayerId>, ctx: &mut Ctx) {
 
 fn depart(state: &mut YardState, player: PlayerId) {
   state.agents.remove(&player);
+  state.streams.remove(&player);
   if let Departure::Freed { seat } = state.roster.depart(&player) {
     // A driverless cube stops driving; it keeps its momentum and its place.
     state.driving[seat] = Default::default();
@@ -118,19 +136,46 @@ fn step_once(state: &mut YardState, ctx: &mut Ctx) {
 
   let mut cubes = Vec::new();
   state.yard.snapshot(&mut cubes);
-  let cubes = match state.encoding {
-    Encoding::Full => Cubes::Full(cubes),
-    Encoding::Packed => Cubes::Packed(pack::pack(&cubes).into()),
+
+  let whole = match state.encoding {
+    Encoding::Full => Some(Cubes::Full(cubes.clone())),
+    Encoding::Packed => Some(Cubes::Packed(pack::pack(&cubes).into())),
+    // A budget is per link, so there is no one frame to broadcast.
+    Encoding::Budgeted => None,
   };
 
-  // One frame, every cube, to everybody. The whole point of stage one is that
-  // this is the expensive way, and by how much.
-  ctx.ops_q().push(TargetedOp::new_system_all(vec![YardOp::Frame(Box::new(FrameUpdate {
-    frame: state.tick,
-    server_time_ms: frame_to_ms(state.tick),
-    yours: None,
-    cubes,
-  }))]));
+  if let Some(cubes) = whole {
+    ctx.ops_q().push(TargetedOp::new_system_all(vec![YardOp::Frame(Box::new(FrameUpdate {
+      frame: state.tick,
+      server_time_ms: frame_to_ms(state.tick),
+      yours: None,
+      cubes,
+    }))]));
+    return;
+  }
+
+  // Each client is scored from where it is standing, so the yard around it
+  // updates faster than the yard behind it.
+  let players: Vec<PlayerId> = state.agents.keys().copied().collect();
+  for player in players {
+    let viewer = state
+      .seat_of(player)
+      .map(|seat| cubes[state.yard.player_index(seat) as usize].pos);
+    let Some(stream) = state.streams.get_mut(&player) else {
+      continue;
+    };
+    let picked = stream.pick(&cubes, viewer, BUDGET_BITS);
+    if picked.is_empty() {
+      continue;
+    }
+    let payload = pack::pack_subset(&cubes, picked);
+    ctx.ops_q().push(TargetedOp::new_system_to(player, vec![YardOp::Frame(Box::new(FrameUpdate {
+      frame: state.tick,
+      server_time_ms: frame_to_ms(state.tick),
+      yours: None,
+      cubes: Cubes::Subset(payload.into()),
+    }))]));
+  }
 }
 
 #[cfg(test)]

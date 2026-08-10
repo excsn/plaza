@@ -51,11 +51,18 @@ pub enum Cubes {
   /// Stage two: the hand-written bit layout in `pack`, carried as bytes rather
   /// than as a `Vec<u8>`, which would re-encode every byte as an integer.
   Packed(Payload),
+  /// Stage three: only the cubes that fit this tick's budget, each naming
+  /// itself. The client patches these into the yard it already holds.
+  Subset(Payload),
 }
 
 impl Cubes {
   pub fn is_packed(&self) -> bool {
-    matches!(self, Self::Packed(_))
+    matches!(self, Self::Packed(_) | Self::Subset(_))
+  }
+
+  pub fn is_subset(&self) -> bool {
+    matches!(self, Self::Subset(_))
   }
 }
 
@@ -77,6 +84,8 @@ pub enum Encoding {
   Full,
   /// Quantised and bit-packed by hand.
   Packed,
+  /// Packed, and only what fits a hard byte budget each tick.
+  Budgeted,
 }
 
 impl Encoding {
@@ -84,7 +93,8 @@ impl Encoding {
     match name {
       "full" => Ok(Self::Full),
       "packed" => Ok(Self::Packed),
-      other => Err(format!("unknown encoding {other:?}; expected full or packed")),
+      "budgeted" => Ok(Self::Budgeted),
+      other => Err(format!("unknown encoding {other:?}; expected full, packed or budgeted")),
     }
   }
 

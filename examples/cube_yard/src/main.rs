@@ -145,14 +145,16 @@ async fn frame_loop(options: role::Options, encoding: Encoding, snap: bool) {
 
     client.poll(clock_ms);
     client.drive(read_drive());
+    client.ease(dt);
 
     clear_background(Color::new(0.05, 0.05, 0.07, 1.0));
 
     if client.ready() {
       // The camera follows the cube you drive, and orbits the pile otherwise.
       let target = client
-        .mine_state()
-        .map(|c| vec3(c.pos[0], c.pos[1], c.pos[2]))
+        .mine
+        .map(|i| client.drawn(i as usize))
+        .map(|p| vec3(p[0], p[1], p[2]))
         .unwrap_or(vec3(0.0, 3.0, 0.0));
       orbit += dt * 0.12;
       set_camera(&Camera3D {
@@ -163,7 +165,7 @@ async fn frame_loop(options: role::Options, encoding: Encoding, snap: bool) {
       });
 
       render::draw_yard(cube_yard::protocol::CUBES as f32 * 0.0 + 24.0);
-      yard.draw(&client.cubes, client.mine, CUBES);
+      yard.draw(&client.cubes, |i| client.drawn(i), client.mine, CUBES);
       set_default_camera();
     } else {
       let text = match &client.status {

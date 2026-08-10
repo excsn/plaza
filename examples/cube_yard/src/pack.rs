@@ -48,19 +48,97 @@ pub fn pack(cubes: &[CubeState]) -> Vec<u8> {
   w.varint(cubes.len() as u64);
 
   for cube in cubes {
-    w.bool(cube.at_rest);
-    w.quantized(cube.pos[0], X.0, X.1, XZ_BITS);
-    w.quantized(cube.pos[1], Y.0, Y.1, Y_BITS);
-    w.quantized(cube.pos[2], X.0, X.1, XZ_BITS);
-    w.smallest_three(cube.rot, ROT_BITS);
-    if !cube.at_rest {
-      for axis in cube.linvel {
-        w.quantized(axis, VEL.0, VEL.1, VEL_BITS);
-      }
-    }
+    write_cube(&mut w, cube);
   }
   w.finish()
 }
+
+/// Writes a *subset*, each entry carrying which cube it is.
+///
+/// Stage two could leave the index implicit because it sent every cube in
+/// order. A budget means sending some of them, so each one has to say who it
+/// is, and the cheapest way to say that is a delta from the previous index:
+/// a run of neighbours costs five bits each rather than a whole index.
+/// `indices` must be ascending.
+pub fn pack_subset(cubes: &[CubeState], indices: &[usize]) -> Vec<u8> {
+  let mut w = BitWriter::with_capacity(indices.len() * 12);
+  w.varint(indices.len() as u64);
+  let mut previous = 0usize;
+  for &index in indices {
+    w.varint((index - previous) as u64);
+    previous = index;
+    write_cube(&mut w, &cubes[index]);
+  }
+  w.finish()
+}
+
+/// Reads back what [`pack_subset`] wrote, as `(index, state)` pairs to patch
+/// into whatever the client already holds.
+pub fn unpack_subset(bytes: &[u8]) -> Option<Vec<(u32, CubeState)>> {
+  let mut r = BitReader::new(bytes);
+  let count = r.varint().ok()? as usize;
+  if count > 1 << 20 {
+    return None;
+  }
+  let mut out = Vec::with_capacity(count.min(4096));
+  let mut index = 0u64;
+  for _ in 0..count {
+    index += r.varint().ok()?;
+    out.push((index as u32, read_cube(&mut r)?));
+  }
+  Some(out)
+}
+
+fn write_cube(w: &mut BitWriter, cube: &CubeState) {
+  w.bool(cube.at_rest);
+  w.quantized(cube.pos[0], X.0, X.1, XZ_BITS);
+  w.quantized(cube.pos[1], Y.0, Y.1, Y_BITS);
+  w.quantized(cube.pos[2], X.0, X.1, XZ_BITS);
+  w.smallest_three(cube.rot, ROT_BITS);
+  if !cube.at_rest {
+    for axis in cube.linvel {
+      w.quantized(axis, VEL.0, VEL.1, VEL_BITS);
+    }
+  }
+}
+
+fn read_cube(r: &mut BitReader) -> Option<CubeState> {
+  let at_rest = r.bool().ok()?;
+  let pos = [
+    r.quantized(X.0, X.1, XZ_BITS).ok()?,
+    r.quantized(Y.0, Y.1, Y_BITS).ok()?,
+    r.quantized(X.0, X.1, XZ_BITS).ok()?,
+  ];
+  let rot = r.smallest_three(ROT_BITS).ok()?;
+  let linvel = if at_rest {
+    [0.0; 3]
+  } else {
+    [
+      r.quantized(VEL.0, VEL.1, VEL_BITS).ok()?,
+      r.quantized(VEL.0, VEL.1, VEL_BITS).ok()?,
+      r.quantized(VEL.0, VEL.1, VEL_BITS).ok()?,
+    ]
+  };
+  Some(CubeState { pos, rot, linvel, at_rest })
+}
+
+/// Bits one cube costs in a frame, excluding its index.
+///
+/// Derived from the layout above rather than written down beside it, so a
+/// budget planning with this cannot fall out of step with what `write_cube`
+/// actually emits.
+pub const fn cube_bits(at_rest: bool) -> usize {
+  let fixed = 1 + XZ_BITS + Y_BITS + XZ_BITS + plaza_wire::bits::SMALLEST_THREE_INDEX_BITS + 3 * ROT_BITS;
+  (fixed + if at_rest { 0 } else { 3 * VEL_BITS }) as usize
+}
+
+/// What to allow for one index delta.
+///
+/// A nibble varint costs five bits per four bits of value, so this covers a
+/// gap of up to 4095, which a subset of a yard this size never exceeds. Being
+/// generous here only means finishing a little under budget, and being mean
+/// means going over it.
+pub const INDEX_BITS: usize = 15;
 
 /// Reads back what [`pack`] wrote. `None` on a truncated or corrupt payload,
 /// which on this wire means a version skew the handshake should already have
@@ -76,28 +154,7 @@ pub fn unpack(bytes: &[u8]) -> Option<Vec<CubeState>> {
 
   let mut out = Vec::with_capacity(count.min(4096));
   for _ in 0..count {
-    let at_rest = r.bool().ok()?;
-    let pos = [
-      r.quantized(X.0, X.1, XZ_BITS).ok()?,
-      r.quantized(Y.0, Y.1, Y_BITS).ok()?,
-      r.quantized(X.0, X.1, XZ_BITS).ok()?,
-    ];
-    let rot = r.smallest_three(ROT_BITS).ok()?;
-    let linvel = if at_rest {
-      [0.0; 3]
-    } else {
-      [
-        r.quantized(VEL.0, VEL.1, VEL_BITS).ok()?,
-        r.quantized(VEL.0, VEL.1, VEL_BITS).ok()?,
-        r.quantized(VEL.0, VEL.1, VEL_BITS).ok()?,
-      ]
-    };
-    out.push(CubeState {
-      pos,
-      rot,
-      linvel,
-      at_rest,
-    });
+    out.push(read_cube(&mut r)?);
   }
   Some(out)
 }
@@ -167,6 +224,37 @@ mod tests {
     let packed = pack(&cubes).len();
     // 55 bytes a cube at full width is the stage-one number this has to beat.
     assert!(packed < cubes.len() * 20, "{} bytes for {} cubes", packed, cubes.len());
+  }
+
+  #[test]
+  fn a_subset_names_which_cubes_it_carries() {
+    let cubes = yard(905);
+    let picked: Vec<usize> = (0..905).step_by(19).collect();
+    let back = unpack_subset(&pack_subset(&cubes, &picked)).unwrap();
+
+    assert_eq!(back.len(), picked.len());
+    for ((index, state), &want) in back.iter().zip(&picked) {
+      assert_eq!(*index as usize, want);
+      let step = position_error();
+      for axis in 0..3 {
+        assert!((state.pos[axis] - cubes[want].pos[axis]).abs() <= step);
+      }
+    }
+  }
+
+  #[test]
+  fn neighbouring_indices_cost_less_than_scattered_ones() {
+    // Every cube identical, so the only thing that differs between the two
+    // sets is the index delta. Left alone, `yard` gives the scattered set
+    // twice as many sleeping cubes, and a sleeping cube saves 33 bits where an
+    // index delta costs 5, which drowns the thing being measured.
+    let cubes: Vec<CubeState> = yard(905).into_iter().map(|mut c| { c.at_rest = false; c }).collect();
+    let run: Vec<usize> = (0..48).collect();
+    let scattered: Vec<usize> = (0..48).map(|i| i * 18).collect();
+    assert!(
+      pack_subset(&cubes, &run).len() < pack_subset(&cubes, &scattered).len(),
+      "a delta-coded index should reward locality"
+    );
   }
 
   #[test]
