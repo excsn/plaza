@@ -27,16 +27,19 @@ const WALL: f32 = 6.0;
 const DRIVE_SPEED: f32 = 14.0;
 /// Upward speed a jump starts with.
 const JUMP_SPEED: f32 = 12.0;
-/// Vertical speed below which a cube counts as standing on something, so a jump
-/// is allowed. Loose enough to work while riding the pile, tight enough not to
-/// allow a second jump mid-air.
-const GROUNDED: f32 = 1.5;
+/// How far below the player's centre a contact has to be to count as ground.
 
-/// How far the magnet reaches, and how hard it pulls.
+/// How far the magnet reaches.
 const MAGNET_RANGE: f32 = 9.0;
-const MAGNET_PULL: f32 = 26.0;
-/// Cubes closer than this are held rather than pulled, so they ride along
-/// instead of oscillating through the player.
+/// Spring strength toward the player, in velocity per second at full reach.
+const MAGNET_PULL: f32 = 34.0;
+/// Damping against the *relative* velocity, which is what stops a held cube
+/// oscillating through the player instead of settling against it.
+const MAGNET_DAMP: f32 = 0.28;
+/// Ceiling on one tick's pull, so a cube that spawns overlapping does not get
+/// launched.
+const MAGNET_MAX: f32 = 26.0;
+/// Held cubes sit inside this, and the test measures gathering by it.
 const MAGNET_HOLD: f32 = 3.2;
 
 pub const MAX_PLAYERS: usize = 4;
@@ -59,6 +62,10 @@ pub struct Yard {
   /// Pile first, then the player cubes, so a wire index is a stable identity.
   handles: Vec<RigidBodyHandle>,
   players: Vec<RigidBodyHandle>,
+  /// The player colliders, for asking the narrow phase what each is standing on.
+  player_colliders: Vec<ColliderHandle>,
+  /// Whether each seat held jump last tick, so holding it does not re-fire.
+  held_jump: [bool; MAX_PLAYERS],
 }
 
 impl Default for Yard {
@@ -114,6 +121,7 @@ impl Yard {
     // Player cubes exist from the start whether or not anybody is driving one,
     // so a seat is a change of who steers rather than a spawn.
     let mut players = Vec::with_capacity(MAX_PLAYERS);
+    let mut player_colliders = Vec::with_capacity(MAX_PLAYERS);
     for seat in 0..MAX_PLAYERS {
       let angle = seat as f32 * std::f32::consts::TAU / MAX_PLAYERS as f32;
       let body = bodies.insert(
@@ -122,12 +130,13 @@ impl Yard {
           .linear_damping(0.6)
           .angular_damping(1.2),
       );
-      colliders.insert_with_parent(
+      let collider = colliders.insert_with_parent(
         ColliderBuilder::cuboid(PLAYER, PLAYER, PLAYER).friction(0.7).density(2.5),
         body,
         &mut bodies,
       );
       players.push(body);
+      player_colliders.push(collider);
       handles.push(body);
     }
 
@@ -147,7 +156,31 @@ impl Yard {
       pipeline: PhysicsPipeline::new(),
       handles,
       players,
+      player_colliders,
+      held_jump: [false; MAX_PLAYERS],
     }
+  }
+
+  /// Whether a seat's cube is resting on something.
+  ///
+  /// Asked of the narrow phase rather than inferred from vertical speed. The
+  /// speed test said "grounded" at the apex of every jump, where the velocity
+  /// passes through zero, so holding the key launched again at the top of each
+  /// arc and the player climbed for ever. A contact below is the actual
+  /// question, and it is the one the solver can already answer.
+  fn grounded(&self, seat: usize) -> bool {
+    let collider = self.player_colliders[seat];
+    let at = self.bodies[self.players[seat]].translation();
+    self.narrow_phase.contact_pairs_with(collider).any(|pair| {
+      if !pair.has_any_active_contact() {
+        return false;
+      }
+      let other = if pair.collider1 == collider { pair.collider2 } else { pair.collider1 };
+      match self.colliders.get(other) {
+        Some(c) => c.translation().y < at.y - PLAYER * 0.5,
+        None => false,
+      }
+    })
   }
 
   /// Total bodies on the wire: the pile then the player cubes.
@@ -167,8 +200,8 @@ impl Yard {
   pub fn step(&mut self, driving: &[Drive; MAX_PLAYERS]) {
     for (seat, drive) in driving.iter().enumerate() {
       let handle = self.players[seat];
+      let was = self.bodies[handle].linvel();
       let body = &mut self.bodies[handle];
-      let was = body.linvel();
 
       // Horizontal velocity is *set*, so releasing a key stops the cube on the
       // next tick; only gravity owns the vertical axis.
@@ -179,10 +212,16 @@ impl Yard {
         Vec3::ZERO
       };
       let mut next = Vec3::new(horizontal.x, was.y, horizontal.z);
-      if drive.jump && was.y.abs() < GROUNDED {
-        next.y = JUMP_SPEED;
-      }
       body.set_linvel(next, true);
+
+      // A press, not a hold: the wire carries a level so a lost input cannot
+      // strand the key down, and the rising edge is what a platformer jumps on.
+      let pressed = drive.jump && !self.held_jump[seat];
+      self.held_jump[seat] = drive.jump;
+      if pressed && self.grounded(seat) {
+        next.y = JUMP_SPEED;
+        self.bodies[handle].set_linvel(next, true);
+      }
     }
 
     self.pull_magnets(driving);
@@ -205,9 +244,23 @@ impl Yard {
 
   /// Draws loose cubes toward any player holding the magnet on.
   ///
-  /// Near ones are given the player's own velocity so they ride along instead
-  /// of oscillating through it; further ones are pulled in. Waking them is not
-  /// optional: a settled pile is asleep, and a sleeping body ignores forces.
+  /// A spring toward the player, damped against the *relative* velocity, and
+  /// applied as an impulse with **the equal and opposite one applied back to
+  /// the player**. All three of those are load-bearing.
+  ///
+  /// The first version set each held cube's velocity to the player's own, which
+  /// is a positive feedback loop with the player standing on them: jump, the
+  /// cubes underneath inherit the upward velocity, they push the player higher
+  /// through contact, and next tick they copy the new higher velocity. The
+  /// player floats away. Setting a velocity on a body you are resting on is
+  /// always this bug.
+  ///
+  /// The reaction matters for the same reason: pulling a pile toward you with
+  /// nothing pulling back is free energy, and it shows up as flight. With it,
+  /// carrying cubes is heavy, which is what a magnet should feel like.
+  ///
+  /// Waking them is not optional either: a settled pile is asleep, and a
+  /// sleeping body ignores impulses.
   fn pull_magnets(&mut self, driving: &[Drive; MAX_PLAYERS]) {
     for (seat, drive) in driving.iter().enumerate() {
       if !drive.magnet {
@@ -215,7 +268,8 @@ impl Yard {
       }
       let player = self.players[seat];
       let at = self.bodies[player].translation();
-      let carrying = self.bodies[player].linvel();
+      let moving = self.bodies[player].linvel();
+      let mut reaction = Vec3::ZERO;
 
       for index in 0..CUBES {
         let handle = self.handles[index];
@@ -226,13 +280,19 @@ impl Yard {
           continue;
         }
         body.wake_up(true);
-        if distance < MAGNET_HOLD {
-          body.set_linvel(carrying, true);
-        } else {
-          let toward = delta / distance;
-          body.set_linvel(toward * MAGNET_PULL * (distance / MAGNET_RANGE), true);
+
+        let toward = delta / distance;
+        let relative = body.linvel() - moving;
+        let mut pull = toward * MAGNET_PULL * (1.0 - distance / MAGNET_RANGE) - relative * MAGNET_DAMP;
+        if pull.length() > MAGNET_MAX {
+          pull = pull.normalize() * MAGNET_MAX;
         }
+        let impulse = pull * body.mass();
+        body.apply_impulse(impulse, true);
+        reaction -= impulse;
       }
+
+      self.bodies[player].apply_impulse(reaction, true);
     }
   }
 
@@ -386,16 +446,27 @@ mod tests {
     yard.step(&driving);
     assert!(snapshot_of(&yard)[seat].linvel[1] > 5.0, "space should launch it");
 
-    // Held down, it must not climb for ever: a second jump needs landing first.
-    for _ in 0..12 {
+    // Held down for a long time. A rising edge plus a real ground check means
+    // this is one jump, not a climb: the apex has near-zero vertical velocity,
+    // which is exactly what the old test mistook for standing on something.
+    let mut peak = resting;
+    for _ in 0..400 {
       yard.step(&driving);
+      peak = peak.max(snapshot_of(&yard)[seat].pos[1]);
     }
-    let peak = snapshot_of(&yard)[seat].pos[1];
-    assert!(peak > resting + 1.0, "it should get airborne");
+    assert!(peak > resting + 1.0, "it should get airborne, peak {peak}");
+    assert!(peak < resting + 12.0, "and one jump's worth, not a climb: {peak}");
 
-    run(&mut yard, 240);
     let landed = snapshot_of(&yard)[seat].pos[1];
     assert!(landed < peak, "and come down: peak {peak}, landed {landed}");
+
+    // Released and pressed again, from the ground, it jumps again.
+    yard.step(&[Drive::default(); MAX_PLAYERS]);
+    yard.step(&driving);
+    assert!(
+      snapshot_of(&yard)[seat].linvel[1] > 5.0,
+      "a fresh press on the ground should still jump"
+    );
   }
 
   #[test]
@@ -437,6 +508,39 @@ mod tests {
       yard.step(&driving);
     }
     assert!(near(&yard) < gathered, "releasing should let them go");
+  }
+
+  #[test]
+  fn the_magnet_does_not_launch_the_player() {
+    // The bug: held cubes were given the player's velocity, so jumping with the
+    // magnet on made the pile under you into a lift and you never came down.
+    let mut yard = Yard::new();
+    run(&mut yard, 300);
+    let seat = yard.player_index(0) as usize;
+
+    let mut driving = [Drive::default(); MAX_PLAYERS];
+    driving[0] = Drive { dx: -1, dz: 0, jump: false, magnet: false };
+    for _ in 0..60 {
+      yard.step(&driving);
+    }
+
+    // Magnet on and jump held, which is exactly what floated away before.
+    driving[0] = Drive { dx: 0, dz: 0, jump: true, magnet: true };
+    let mut highest = 0.0f32;
+    for _ in 0..600 {
+      yard.step(&driving);
+      highest = highest.max(snapshot_of(&yard)[seat].pos[1]);
+    }
+
+    let ended = snapshot_of(&yard)[seat].pos[1];
+    assert!(
+      highest < 20.0,
+      "the magnet should not fly: reached {highest} in a yard {YARD} across"
+    );
+    assert!(
+      ended < highest + 0.5,
+      "and should not still be climbing: peak {highest}, ended {ended}"
+    );
   }
 
   #[test]

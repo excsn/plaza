@@ -149,6 +149,18 @@ Reading the shape of a counter rather than its value: a count climbing without b
 
 ## The bug catalogue
 
+### Setting a velocity on a body you are standing on is a lift (cube_yard)
+
+A magnet that gathers loose cubes was written the obvious way: cubes within reach get the player's velocity, so they ride along. Jump with it on and the player rises for ever, reaching 58 units in a yard 24 across.
+
+Two independent faults, and the second only became visible because of the first.
+
+The magnet was a positive feedback loop. Cubes underneath inherit the player's upward velocity, push the player higher through contact, and next tick copy the new higher velocity. Setting a velocity on a body that is supporting you is always this. It was also free energy: pulling a pile toward you with no reaction on you creates momentum from nothing. Both go away with a damped spring applied as an impulse, **with the equal and opposite impulse applied back to the player**, which also makes carrying cubes feel heavy, as it should.
+
+That fix alone did not stop the flying, which is what exposed the real one: `grounded` was `vertical speed is small`, and vertical speed is small **at the apex of every jump**. Holding the key therefore launched again at the top of each arc. The magnet had merely kept the player jostled near zero often enough to make it obvious. The fix is to ask the narrow phase what the player is actually touching, and to jump on the rising edge rather than while held.
+
+The general shape: a cheap proxy for a physical question ("am I on the ground") is fine until something else starts satisfying the proxy for the wrong reason, and the thing that exposes it will look like an unrelated feature.
+
 ### One entity is not a sample, and a spline is not bounded (cube_yard)
 
 A Hermite spline through two snapshots, leaving along the velocity recorded at each, beat straight-line interpolation by 484x on a smooth curve and by 2.1x on a falling cube pulled out of the solver. Both numbers went into the docs. Across 300 cubes from the same scene it is **13x worse** than the straight line it replaced.
