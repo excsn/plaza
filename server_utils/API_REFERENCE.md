@@ -116,6 +116,34 @@ An order-independent checksum of a set of `u64` keys, for giving a delta-relevan
 
 Attach the comparison to the **report**, not to the state change. Running it only when an acknowledgement advances the frontier skips the one case it is for: a client re-acknowledging the same sequence still tells you what it holds, and a mirror that loses something *without* losing a packet reports it exactly then.
 
+## 5b. Priority (module `priority`)
+
+[Relevance](#5-relevance-module-relevance) answers *who can see what*, which is a yes or no. It does not answer what follows: a hundred entities are relevant, the budget holds twenty, so which twenty go this tick? Sending the first twenty by id starves the tail forever, and so does sending the nearest twenty. That is what turns a bandwidth budget into a bandwidth *outcome*.
+
+### Struct `PriorityAccumulator`
+
+Per-entity priority that survives the ticks an entity is not sent on, after Fiedler's [state synchronization](https://gafferongames.com/post/state_synchronization/). Indexed densely, so a [`SlotKey`](#struct-slotkey) is already the index.
+
+*   **`new(entities)`**, **`resize(entities)`**, **`len()`**, **`is_empty()`**, **`clear()`**.
+*   **`bump(&mut self, index, priority: f32)`**: adds this tick's priority. An index past the end grows the space rather than panicking, since an allocator handing out a fresh slot is ordinary.
+*   **`fill(&mut self, budget: usize, cost: impl Fn(usize) -> usize, out: &mut Vec<usize>)`**: fills `budget` with the highest scorers, clearing `out` first and returning indices highest-priority first. **Chosen entities reset to zero; skipped ones keep what they had**, which is what stops anything starving. The walk continues past an entity that does not fit rather than stopping, so one large entity near the front cannot leave the rest of the packet empty; its priority keeps climbing until it wins outright. Ties break by index, so a server and a replay of it choose alike.
+*   **`score(index) -> f32`**, **`forget(index)`**: drop an entity to zero without sending it, for a despawn or for something that has gone irrelevant and should not return holding a hoard.
+
+Entities at zero or below are never chosen, so a negative score is how you say "not this one" without removing it. The per-tick priority is yours: distance, ownership, whether it is [at rest](#5c-at-rest-module-rest), how long since it changed.
+
+## 5c. At rest (module `rest`)
+
+In a settled scene most things are not moving, and saying so costs one bit against the thirty-three a velocity costs. The cheapest compression in Fiedler's [snapshot compression](https://gafferongames.com/post/snapshot_compression/), because it needs nothing new on the wire, only knowing which entities qualify.
+
+### Struct `RestDetector`
+
+Knowing is the part worth a type. One quiet tick means nothing: a body at the top of its arc has zero velocity and is about to fall, and a body on the floor jitters by an epsilon forever. So rest is a **run** of quiet ticks, while waking is immediate, because being slow to notice motion is visible and being slow to notice stillness only costs bandwidth.
+
+*   **`new(threshold)` / `with_capacity(entities, threshold)`**: `threshold` is the run of quiet ticks that counts as rest.
+*   **`observe(&mut self, index, moving: bool)`**: one tick of evidence. What counts as moving stays yours: a solver already knows (rapier's island manager sleeps bodies, so `!body.is_sleeping()` is the whole input), and without one a speed against an epsilon does it.
+*   **`at_rest(index) -> bool`**, **`ticks_still(index) -> u32`** (for scaling priority smoothly instead of switching on a threshold), **`wake(index)`** for a teleport or respawn that no velocity test would catch.
+*   **`resize`**, **`len`**, **`is_empty`**.
+
 ## 6. Aggregation (module `aggregate`)
 
 The third option between sending every entity and sending none, for entities a client must *compute* with rather than merely draw. Relevance culling drops a distant contribution entirely; aggregation keeps it and drops only its resolution, replacing a distant group with one stand-in at its weighted centroid. This is the Barnes-Hut construction.

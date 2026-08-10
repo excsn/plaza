@@ -60,6 +60,15 @@ A multiplayer world is bigger than one screen and its players stand apart, so se
 
 What stays the app's: the cell size and origin, the relevance rule (a radius, a frustum, a team), and how the streams are encoded on the wire. This only makes them cheap to compute. The [`relevance_demo`](examples/relevance_demo.rs) example (`cargo run --example relevance_demo -p plaza_server_utils`) shows a field of entities and moving players, and reports the bandwidth the filter saves.
 
+## Filling the packet (priority, and what is asleep)
+
+Relevance answers *who can see what*, which is a yes or no. It does not answer what comes next: a hundred entities are relevant, the budget holds twenty, so which twenty this tick? First-twenty-by-id starves the tail, and so does nearest-twenty. That is the difference between a bandwidth **budget** and a bandwidth **outcome**, where the packet is whatever size the world happened to be.
+
+- **`PriorityAccumulator`**: every entity gains priority each tick, the highest fill the budget, and **whatever did not fit keeps what it accumulated**, so waiting is itself what earns a slot. Nothing starves, the budget is respected exactly, and how often a thing updates becomes a rate you choose per entity rather than a consequence of the sort order. The walk continues past an entity too large to fit, so one big one near the front cannot leave the rest of the packet empty; its score keeps climbing until it wins outright. Ties break by index, so a server and a replay of it agree.
+- **`RestDetector`**: in a settled scene most things are not moving, and saying so costs one bit against the thirty-three a velocity costs. Knowing *which* is the part worth a type: a single quiet tick means nothing, since a body at the top of its arc has zero velocity and is about to fall, so rest is a **run** of quiet ticks while waking is immediate. Being slow to notice motion is visible; being slow to notice stillness only costs bandwidth. What counts as moving stays yours, and a solver already knows it: rapier sleeps bodies, so `!body.is_sleeping()` is the whole input.
+
+Both are indexed densely, so a `SlotKey` is already the index, and both compose: score an at-rest entity lower and it naturally updates less often without a special case anywhere.
+
 ## Aggregation (when relevance is the wrong question)
 
 Relevance gives a binary answer: in the set or out of it. That is right for entities a client merely *draws*, and wrong for entities it has to *compute* with, because dropping an input silently changes the result. Measured in [`blackhole_playground`](../examples/blackhole_playground/) with 64 gravitational attractors: culling the distant ones by view distance cut the field's share of the traffic from 280 to 33 KiB/s and multiplied the client's simulation error by 2.4x, because a hole you were not told about still bends every pellet you hold.
