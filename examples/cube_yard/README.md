@@ -30,20 +30,22 @@ That inverts the physics configuration too, and for a reason rather than a prefe
 stage                     bytes   Mbit/sec vs stage 1  worst error
 1  full width             49800      23.90      1.0x        exact
 2  quantised + packed      8740       4.20      5.7x      0.0008u
-3  + priority budget        512       0.25     97.3x      0.0008u
-4  + delta encoding         305       0.15    163.3x      0.0008u
+3  + priority budget        491       0.24    101.4x      0.0008u
+4  + delta encoding         532       0.26     93.6x      0.0008u
 
    cubes refreshed per tick, inside the same budget:
-     stage 3      46
-     stage 4     206
+     stage 3      44
+     stage 4     432
 
    mean quantisation error 0.00048 units, on cubes one unit across
-   worst single packet 517 bytes against a 533 byte budget
+   worst single packet 495 bytes against a 507 byte budget
 ```
 
 **The target is met at stage 3**, and the thing worth saying plainly is that the last 16x was not compression at all. Quantising has a floor: 905 cubes times the smallest honest encoding is still 4.2 Mbit/sec, and no number of bits saved per cube reaches 256 kbit. What closed it was choosing.
 
-Which is also why stage 4's row is the wrong way to read it. The bandwidth was already at the ceiling, so delta encoding cannot lower it meaningfully; what it buys is **four and a half times more of the yard inside the same budget**, 206 cubes a tick against 46. Every cube is refreshed about every four ticks instead of every twenty.
+Which is also why stage 4's row is the wrong way to read it. The bandwidth was already at the ceiling, so delta encoding cannot lower it; what it buys is **ten times more of the yard inside the same budget**, 432 cubes a tick against 44. Every cube is refreshed about every other tick instead of every twenty.
+
+Both rows are measured at the wire, envelope included, which is what the target is a number about. Budgeting only the payload overshoots by the op tag, the tick, the stamp and the byte-string header, and at 60Hz that is 12 kbit/sec of quiet overspend.
 
 Stage 1 is the naive thing on purpose. Fiedler's uncompressed figure for the same scene is 17.38 Mbit/sec; ours is higher because MessagePack has envelope overhead and each cube also carries velocity and a rest flag.
 
@@ -63,7 +65,9 @@ Two things about it are worth knowing. It needs no acknowledgements, unlike Fied
 
 That dependency is measured rather than asserted. [`tests/agreement.rs`](tests/agreement.rs) drives the real server encode path into the real client decode path and checks every cube a frame names against where the server holds it, then drops a single frame and watches the yard corrupt by **0.609 units** on cubes one unit across, six hundred times the quantisation step, with no error raised anywhere. The second test is there as much to prove the first one has teeth: a check that has never failed is weak evidence that it could. And a delta frame has its own wire variant rather than a flag, because the two layouts are not distinguishable from their bytes and guessing wrong would decode garbage into a baseline both ends have to agree on.
 
-Stage 4 finishes about 40% under budget. The per-cube cost planner allows 15 bits for an index delta, which is safe for any gap but generous when most deltas are 1, so the budget fills on the estimate rather than the encoding. That headroom is real and unclaimed.
+Stage 4 does not plan against a cost estimate at all, and that is the second thing it taught. A delta cube costs anywhere between eight bits and a full absolute, and any single estimate covering that range has to be generous enough to waste most of the budget: the first version allowed 15 bits for an index delta that is usually 5 and finished 40% under. Adding a cube never shrinks the payload, so the largest prefix of the priority order that fits is found by bisecting on the *written* size, about ten trial encodes a tick. That claimed the headroom: 432 cubes instead of 206.
+
+It also needed a change in `PriorityAccumulator`. `fill` clears the score of everything it picks, which is only sound while the cost you hand it cannot under-count; a caller that packs until full does not know what it sent until afterwards, and clearing an entity that never travelled is exactly the starvation the type exists to prevent. So `order` ranks without clearing and `sent` clears what actually went, which is the pair a measured fit needs.
 
 ## Interpolating between sparse updates
 

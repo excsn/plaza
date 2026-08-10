@@ -173,16 +173,23 @@ fn step_once(state: &mut YardState, ctx: &mut Ctx) {
     let Some(stream) = state.streams.get_mut(&player) else {
       continue;
     };
-    let picked = stream.pick(&cubes, viewer, BUDGET_BITS).to_vec();
+    let deltas = stream.deltas();
+    let (payload, picked) = if deltas {
+      // Packed until the packet is actually full rather than planned against an
+      // estimate: a delta cube costs anywhere from eight bits to a full
+      // absolute, and no single estimate covers that without wasting the
+      // difference.
+      let order = stream.rank(&cubes, viewer).to_vec();
+      let (payload, sent) = pack::pack_delta_until_full(&cubes, &order, &mut stream.baseline, BUDGET_BITS);
+      stream.sent(&sent);
+      (payload, sent)
+    } else {
+      let picked = stream.pick(&cubes, viewer, BUDGET_BITS).to_vec();
+      (pack::pack_subset(&cubes, &picked), picked)
+    };
     if picked.is_empty() {
       continue;
     }
-    let deltas = stream.deltas();
-    let payload = if deltas {
-      pack::pack_delta(&cubes, &picked, &mut stream.baseline)
-    } else {
-      pack::pack_subset(&cubes, &picked)
-    };
     ctx.ops_q().push(TargetedOp::new_system_to(player, vec![YardOp::Frame(Box::new(FrameUpdate {
       frame: state.tick,
       server_time_ms: frame_to_ms(state.tick),

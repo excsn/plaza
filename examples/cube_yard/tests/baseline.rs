@@ -124,9 +124,10 @@ fn the_stages_priced_side_by_side() {
   let mut delta_cubes = 0usize;
   let mut baseline = Vec::new();
   for _ in 0..TICKS {
-    let picked = stream.pick(&truth, eye, BUDGET_BITS).to_vec();
+    let order = stream.rank(&truth, eye).to_vec();
+    let (payload, picked) = pack::pack_delta_until_full(&truth, &order, &mut stream.baseline, BUDGET_BITS);
+    stream.sent(&picked);
     delta_cubes += picked.len();
-    let payload = pack::pack_delta(&truth, &picked, &mut stream.baseline);
     // Read it back the way a client would, so the row is not a claim about an
     // encoder nobody decoded.
     assert!(pack::unpack_delta(&payload, &mut baseline).is_some());

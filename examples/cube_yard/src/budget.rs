@@ -20,11 +20,20 @@ use plaza_server_utils::{PriorityAccumulator, RestDetector};
 use crate::pack::Quantized;
 use crate::protocol::CubeState;
 
-/// 256 kbit/sec is Fiedler's target, and at 60Hz it is this many bits a tick.
+/// What the frame around the payload costs: the op tag, the tick, the server
+/// stamp and the byte-string header.
+///
+/// The target is a number about the *wire*, so the thing the wire actually
+/// carries has to fit in it. Budgeting the payload alone quietly overshoots by
+/// this much, which at 60Hz is 12 kbit/sec.
+pub const ENVELOPE_BITS: usize = 26 * 8;
+
+/// 256 kbit/sec is Fiedler's target, and at 60Hz it is this many bits a tick,
+/// less what the envelope takes.
 ///
 /// Counted in bits rather than bytes because the layout is: rounding each
 /// cube up to a byte would throw away most of what packing just bought.
-pub const BUDGET_BITS: usize = 256_000 / 60;
+pub const BUDGET_BITS: usize = 256_000 / 60 - ENVELOPE_BITS;
 /// The same budget as the byte figure a packet is actually measured against.
 pub const BUDGET_BYTES: usize = BUDGET_BITS / 8;
 
@@ -80,18 +89,7 @@ impl Stream {
   /// in updates faster than the yard behind it.
   /// `budget` is in **bits**, matching [`BUDGET_BITS`].
   pub fn pick(&mut self, cubes: &[CubeState], viewer: Option<[f32; 3]>, budget: usize) -> &[usize] {
-    for (index, cube) in cubes.iter().enumerate() {
-      self.rest.observe(index, !cube.at_rest);
-
-      let mut score = if cube.at_rest || self.rest.at_rest(index) { RESTING } else { MOVING };
-      if let Some(eye) = viewer {
-        let d2 = (cube.pos[0] - eye[0]).powi(2) + (cube.pos[1] - eye[1]).powi(2) + (cube.pos[2] - eye[2]).powi(2);
-        // Falls off with distance rather than cutting at a radius, so nothing
-        // has an edge it pops across.
-        score += NEARBY / (1.0 + d2 / (NEAR_RANGE * NEAR_RANGE));
-      }
-      self.priority.bump(index, score);
-    }
+    self.score_all(cubes, viewer);
 
     // Cost comes from the layout, so a yard full of sleeping cubes correctly
     // fits more of them into the same budget, and a change to the layout moves
@@ -119,6 +117,36 @@ impl Stream {
     // so an index delta is never negative.
     self.chosen.sort_unstable();
     &self.chosen
+  }
+
+  /// The same scoring, but ranked rather than fitted: the caller packs until
+  /// the packet is full and tells us what actually travelled.
+  ///
+  /// Preferred over [`pick`](Self::pick) once deltas are on, because a cube's
+  /// real cost is anywhere between eight bits and a full absolute, and no
+  /// estimate covers that range without wasting most of the budget.
+  pub fn rank(&mut self, cubes: &[CubeState], viewer: Option<[f32; 3]>) -> &[usize] {
+    self.score_all(cubes, viewer);
+    self.priority.order(&mut self.chosen);
+    &self.chosen
+  }
+
+  /// Clears the score of what actually went out.
+  pub fn sent(&mut self, indices: &[usize]) {
+    self.priority.sent(indices);
+  }
+
+  fn score_all(&mut self, cubes: &[CubeState], viewer: Option<[f32; 3]>) {
+    for (index, cube) in cubes.iter().enumerate() {
+      self.rest.observe(index, !cube.at_rest);
+
+      let mut score = if cube.at_rest || self.rest.at_rest(index) { RESTING } else { MOVING };
+      if let Some(eye) = viewer {
+        let d2 = (cube.pos[0] - eye[0]).powi(2) + (cube.pos[1] - eye[1]).powi(2) + (cube.pos[2] - eye[2]).powi(2);
+        score += NEARBY / (1.0 + d2 / (NEAR_RANGE * NEAR_RANGE));
+      }
+      self.priority.bump(index, score);
+    }
   }
 
   /// Everything, for a joining client that holds nothing yet.

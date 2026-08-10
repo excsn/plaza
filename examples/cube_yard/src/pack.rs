@@ -511,6 +511,55 @@ fn write_absolute(w: &mut BitWriter, q: &Quantized) {
   }
 }
 
+/// Writes cubes in priority order until the next one would not fit, and reports
+/// which ones actually travelled.
+///
+/// The alternative is planning against a per-cube cost estimate, and an
+/// estimate has to be conservative or it overruns: allowing fifteen bits for an
+/// index delta that is usually five leaves most of the budget unspent. Measuring
+/// the writer as it goes spends the budget exactly, and needs no cost function
+/// at all.
+///
+/// `order` is hottest first; the packed layout needs ascending indices, so this
+/// takes the ones that fit and sorts them before writing.
+pub fn pack_delta_until_full(
+  cubes: &[CubeState],
+  order: &[usize],
+  baseline: &mut [Option<Quantized>],
+  budget_bits: usize,
+) -> (Vec<u8>, Vec<usize>) {
+  // Cost depends on the index gaps, which depend on the selection, so the fit
+  // is found by writing rather than by predicting. Adding a cube never makes
+  // the payload smaller, so the largest prefix of `order` that fits is found by
+  // bisection: about ten trial encodes a tick rather than one per cube.
+  let ascending_prefix = |n: usize| {
+    let mut picked: Vec<usize> = order[..n].to_vec();
+    picked.sort_unstable();
+    picked
+  };
+
+  let (mut lo, mut hi) = (0usize, order.len());
+  while lo < hi {
+    let mid = (lo + hi + 1) / 2;
+    if pack_delta_dry(cubes, &ascending_prefix(mid), baseline).len() * 8 <= budget_bits {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+
+  // Written for real this time, so the baseline advances only for what travels.
+  let picked = ascending_prefix(lo);
+  let payload = pack_delta(cubes, &picked, baseline);
+  (payload, picked)
+}
+
+/// Encodes against a copy of the baseline, so a trial fit leaves no trace.
+fn pack_delta_dry(cubes: &[CubeState], indices: &[usize], baseline: &[Option<Quantized>]) -> Vec<u8> {
+  let mut scratch = baseline.to_vec();
+  pack_delta(cubes, indices, &mut scratch)
+}
+
 /// Reads what [`pack_delta`] wrote, against the same baseline.
 pub fn unpack_delta(bytes: &[u8], baseline: &mut Vec<Option<Quantized>>) -> Option<Vec<(u32, CubeState)>> {
   let mut r = BitReader::new(bytes);

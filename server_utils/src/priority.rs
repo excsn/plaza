@@ -95,6 +95,32 @@ impl PriorityAccumulator {
     self.scores.fill(0.0);
   }
 
+  /// The entities worth sending, hottest first, **without clearing anything**.
+  ///
+  /// [`fill`](Self::fill) assumes everything it picks gets sent, which is only
+  /// safe while the cost you hand it can never under-count. A caller that packs
+  /// until the packet is full instead of planning against an estimate does not
+  /// know what it sent until afterwards, and clearing an entity that did not
+  /// travel is the starvation this type exists to prevent. Pair this with
+  /// [`sent`](Self::sent).
+  ///
+  /// `out` is cleared first. Entities at zero or below are omitted, so a
+  /// negative score is still how you say "not this one".
+  pub fn order(&mut self, out: &mut Vec<usize>) {
+    out.clear();
+    out.extend((0..self.scores.len()).filter(|&i| self.scores[i] > 0.0));
+    out.sort_by(|&a, &b| self.scores[b].total_cmp(&self.scores[a]).then(a.cmp(&b)));
+  }
+
+  /// Clears the score of entities that actually went out.
+  pub fn sent(&mut self, indices: &[usize]) {
+    for &index in indices {
+      if let Some(score) = self.scores.get_mut(index) {
+        *score = 0.0;
+      }
+    }
+  }
+
   /// Fills `budget` with the highest-priority entities, cheapest measure of
   /// cost being whatever `cost` reports for an index.
   ///
@@ -230,6 +256,48 @@ mod tests {
     b.fill(20, flat, &mut y);
     assert_eq!(x, y);
     assert_eq!(x, [0, 1]);
+  }
+
+  #[test]
+  fn order_ranks_without_clearing_and_sent_is_what_clears() {
+    let mut p = PriorityAccumulator::new(4);
+    for i in 0..4 {
+      p.bump(i, (4 - i) as f32);
+    }
+
+    let mut order = Vec::new();
+    p.order(&mut order);
+    assert_eq!(order, [0, 1, 2, 3], "hottest first");
+    assert_eq!(p.score(0), 4.0, "ranking is not sending");
+
+    // Only what actually travelled is cleared; the rest keep what they had, so
+    // a packet that filled up early does not starve its tail.
+    p.sent(&order[..2]);
+    assert_eq!(p.score(0), 0.0);
+    assert_eq!(p.score(1), 0.0);
+    assert_eq!(p.score(2), 2.0);
+    assert_eq!(p.score(3), 1.0);
+  }
+
+  #[test]
+  fn nothing_starves_when_the_caller_packs_until_full() {
+    // The pattern `fill` cannot express: the caller discovers the real cost as
+    // it writes, and only clears what fitted.
+    let mut p = PriorityAccumulator::new(6);
+    let mut seen = vec![0u32; 6];
+    let mut order = Vec::new();
+    for _ in 0..60 {
+      for i in 0..6 {
+        p.bump(i, 1.0);
+      }
+      p.order(&mut order);
+      let fitted: Vec<usize> = order.iter().copied().take(2).collect();
+      p.sent(&fitted);
+      for i in fitted {
+        seen[i] += 1;
+      }
+    }
+    assert!(seen.iter().all(|&n| n >= 15), "{seen:?}");
   }
 
   #[test]
