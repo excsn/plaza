@@ -27,6 +27,14 @@ const WALL: f32 = 6.0;
 const DRIVE_SPEED: f32 = 14.0;
 /// Upward speed a jump starts with.
 const JUMP_SPEED: f32 = 12.0;
+
+/// Radians of tumble per unit travelled, so the cube rolls rather than slides.
+///
+/// A cube going face over face turns a quarter turn for every face width it
+/// covers, and a face is `2 * PLAYER` across, so a unit of travel is
+/// `(PI / 2) / (2 * PLAYER)` of rotation. Getting this wrong in either
+/// direction reads immediately as skidding or as spinning on the spot.
+const ROLL_PER_UNIT: f32 = std::f32::consts::FRAC_PI_2 / (2.0 * PLAYER);
 /// How far below the player's centre a contact has to be to count as ground.
 
 /// How far the magnet reaches.
@@ -213,6 +221,12 @@ impl Yard {
       };
       let mut next = Vec3::new(horizontal.x, was.y, horizontal.z);
       body.set_linvel(next, true);
+
+      // Roll about the axis across the direction of travel, at the rate a cube
+      // tumbling face over face would. `up x velocity` is that axis: for motion
+      // along +x it points along -z, which turns the top of the cube forwards.
+      let roll = Vec3::Y.cross(horizontal) * ROLL_PER_UNIT;
+      body.set_angvel(roll, true);
 
       // A press, not a hold: the wire carries a level so a lost input cannot
       // strand the key down, and the rising edge is what a platformer jumps on.
@@ -508,6 +522,65 @@ mod tests {
       yard.step(&driving);
     }
     assert!(near(&yard) < gathered, "releasing should let them go");
+  }
+
+  #[test]
+  fn the_cube_rolls_at_the_rate_it_travels() {
+    // What reads as wrong is the *rate*: too slow is skidding, too fast is
+    // spinning on the spot. A cube going face over face turns a quarter turn
+    // per face width, so rotation and distance are locked together.
+    let mut yard = Yard::new();
+    run(&mut yard, 200);
+    let seat = yard.player_index(0) as usize;
+
+    let mut driving = [Drive::default(); MAX_PLAYERS];
+    driving[0] = Drive { dx: -1, dz: 0, jump: false, magnet: false };
+    // A few ticks into the motion, so the first tick's acceleration is past.
+    for _ in 0..10 {
+      yard.step(&driving);
+    }
+
+    let start = snapshot_of(&yard)[seat];
+    for _ in 0..6 {
+      yard.step(&driving);
+    }
+    let end = snapshot_of(&yard)[seat];
+
+    let travelled = ((end.pos[0] - start.pos[0]).powi(2) + (end.pos[2] - start.pos[2]).powi(2)).sqrt();
+    let dot: f32 = start.rot.iter().zip(end.rot).map(|(a, b)| a * b).sum();
+    let turned = 2.0 * dot.abs().clamp(0.0, 1.0).acos();
+
+    let expected = travelled * ROLL_PER_UNIT;
+    assert!(travelled > 0.5, "it should have moved, got {travelled}");
+    assert!(
+      (turned - expected).abs() < expected * 0.35,
+      "rolled {turned:.3} rad over {travelled:.2} units, expected about {expected:.3}"
+    );
+  }
+
+  #[test]
+  fn a_stopped_cube_stops_turning() {
+    let mut yard = Yard::new();
+    run(&mut yard, 200);
+    let seat = yard.player_index(0) as usize;
+
+    let mut driving = [Drive::default(); MAX_PLAYERS];
+    driving[0] = Drive { dx: -1, dz: 0, jump: false, magnet: false };
+    for _ in 0..30 {
+      yard.step(&driving);
+    }
+    // Released, and given a moment to settle onto a face.
+    for _ in 0..40 {
+      yard.step(&[Drive::default(); MAX_PLAYERS]);
+    }
+
+    let a = snapshot_of(&yard)[seat].rot;
+    for _ in 0..20 {
+      yard.step(&[Drive::default(); MAX_PLAYERS]);
+    }
+    let b = snapshot_of(&yard)[seat].rot;
+    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>().abs();
+    assert!(dot > 0.98, "a stopped cube should stop turning, orientation dot {dot}");
   }
 
   #[test]

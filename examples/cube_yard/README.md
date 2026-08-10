@@ -14,7 +14,7 @@ cargo test -p cube_yard --test baseline -- --nocapture   # what the current stag
 
 WASD or arrows drive your cube, space jumps, **enter toggles the magnet** and loose cubes gather to you until you turn it off. Drive into the pile.
 
-The controls are a platformer's, and deliberately so. Horizontal velocity is *set* rather than pushed, so letting go stops you on the next tick; only gravity owns the vertical axis. The camera sits at a fixed offset behind your cube and never orbits, which is what lets the input be plain world axes: a turning camera makes "left" mean a different direction every second.
+The controls are a platformer's, and deliberately so. Horizontal velocity is *set* rather than pushed, so letting go stops you on the next tick; only gravity owns the vertical axis. The cube also **rolls** at the rate it travels, a quarter turn per face width, because a cube that slides reads as a hockey puck; the roll axis is `up x velocity`, and getting the rate wrong looks like skidding one way and spinning on the spot the other. The camera sits at a fixed offset behind your cube and never orbits, which is what lets the input be plain world axes: a turning camera makes "left" mean a different direction every second.
 
 ## The other family
 
