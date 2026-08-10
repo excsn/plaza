@@ -106,7 +106,10 @@ Both transports share everything that is not socket I/O, which is why the adapte
 | Framing: the kind byte in front of every message, the skip-unknown rule that lets a frame kind be added later, and `ProtocolVersion` for the `Hello` handshake | [wire/src/frame.rs](wire/src/frame.rs) |
 | What the codecs and the framing actually cost, with an allocation-counting allocator | [wire/benches/wire.rs](wire/benches/wire.rs) |
 | Shared netcode payload vocabulary (`SequencedClientInput`, `AuthoritativeStateUpdate`, `RemoteEntitySnapshot`, `TimestampedClientAction`) | [wire/src/payloads.rs](wire/src/payloads.rs) |
-| Build-time protocol version: hash the sources that define your messages, emit a `u32` (feature `build`, used from a `build.rs`) | [wire/src/build.rs](wire/src/build.rs) |
+| Build-time protocol version: hash the sources that define your messages, emit a `u32` (feature `build`, used from a `build.rs`) | [wire/src/build/mod.rs](wire/src/build/mod.rs) |
+| Sub-byte packing: a bit writer and reader, nibble varints, bounded-float quantisation, smallest-three quaternions. What a derive cannot reach, measured: 51877 bytes to 10396 on 901 cubes | [wire/src/bits.rs](wire/src/bits.rs) |
+| A `WireCodec` that bit-packs any `Serialize` type with no layout written by hand. 1.4x on the same payload, and the ceiling of what a derive can do, because serde carries no bounds | [wire/src/bit_codec.rs](wire/src/bit_codec.rs) |
+| `Payload`: bytes that stay bytes. A packed array in a `Vec<u8>` field is re-encoded integer by integer and costs 15502 to carry 10396 | [wire/src/payload.rs](wire/src/payload.rs) |
 
 Split out from `plaza_session` so a client can share the server's encoding without inheriting its async runtime: pure serde, no tokio, no actix. Server code sees these through the `plaza_session` re-export and rarely names this crate directly.
 
@@ -134,7 +137,8 @@ Split out from `plaza_session` so a client can share the server's encoding witho
 | What a reconciliation did, and an adaptive test for what counts as abnormal | [correction.rs](client_utils/src/correction.rs) |
 | Snapshot buffering and interpolation for remote entities, plus the render clock | [interpolation.rs](client_utils/src/interpolation.rs) |
 | Extrapolation when snapshots run out | [extrapolation.rs](client_utils/src/extrapolation.rs) |
-| Easing a reconciliation correction over a few frames | [smoothing.rs](client_utils/src/smoothing.rs) |
+| Easing a reconciliation correction over a few frames, and `AdaptiveDecay` for clearing a large error sooner than a small one rather than in the same time | [smoothing.rs](client_utils/src/smoothing.rs) |
+| Interpolation that uses the velocity at both ends, for a send rate low enough that a straight line corners visibly | [hermite.rs](client_utils/src/hermite.rs) |
 | Fixed-size simulation steps out of a variable frame, and "is it time yet" beside it | [timestep.rs](client_utils/src/timestep.rs) |
 | The client's mirror of a streamed entity set: apply, check generations, fold the digest, compare | [mirror.rs](client_utils/src/mirror.rs) |
 | `(index, generation)` handles and the allocator that recycles them | [slot.rs](client_utils/src/slot.rs) |
@@ -145,7 +149,7 @@ Split out from `plaza_session` so a client can share the server's encoding witho
 | Client-side `Vec2`/`Vec3`/`Quat` with operators and slerp | [math.rs](client_utils/src/math.rs) |
 | Delay, jitter and loss applied where the link is | [conditioner.rs](session/src/conditioner.rs) |
 | Frames the session answers for itself (probes, their schedule) | [control.rs](session/src/control.rs) |
-| Saying a one-shot op until the peer proves it heard | [oneshot.rs](examples/playground_common/src/oneshot.rs) |
+| Saying a one-shot op until the peer proves it heard | [oneshot.rs](server_utils/src/oneshot.rs) |
 | Round-trip latency estimation from probe samples | [rtt.rs](client_utils/src/rtt.rs) |
 | A probe's epoch bookkeeping across reconnect and resume | [timeline.rs](client_utils/src/timeline.rs) |
 | Sliding-window acknowledgement: a sequence number plus a 64-bit arrival mask, so a sender resends only the gaps (and `contiguous_base`, for a protocol that re-derives instead) | [ack.rs](client_utils/src/ack.rs) |
@@ -181,8 +185,10 @@ The server-side counterpart, also runtime-free and wasm-safe. Shares `client_uti
 | Per-subscriber delta bookkeeping: which packets landed, what to send and what to retract, the rebuild when a mirror has drifted, and the flow control that stops streaming to a reader that stopped reading | [server_utils/src/delta.rs](server_utils/src/delta.rs) |
 | Tick-addressed input buffering: the accepting window, reject-not-correct, level and event semantics | [server_utils/src/input_schedule.rs](server_utils/src/input_schedule.rs) |
 | Hierarchical aggregation: a Barnes-Hut tree that coarsens a distant crowd instead of culling it, for entities a client simulates rather than draws | [server_utils/src/aggregate.rs](server_utils/src/aggregate.rs) |
-| A bounded number of seats, and a type that will not let you forget whether one is fresh | [server_utils/src/seats.rs](server_utils/src/seats.rs) |
+| A bounded number of seats, and a type that will not let you forget whether one is fresh | [server_utils/src/seats/mod.rs](server_utils/src/seats/mod.rs) |
 | Running totals into rates, with the divide-by-zero guard every copy had to remember | [server_utils/src/meter.rs](server_utils/src/meter.rs) |
+| Which entities fit the packet when they cannot all fit: priority that survives the ticks an entity is not sent on, so nothing starves and a budget is a ceiling rather than an outcome | [server_utils/src/priority.rs](server_utils/src/priority.rs) |
+| Which entities have stopped, so a packet can stop paying for them. Rest is a run of quiet ticks; waking is immediate | [server_utils/src/rest.rs](server_utils/src/rest.rs) |
 
 `SetDigest`, `SlotKey`/`SlotAllocator` and `DeltaMirror` are re-exported from `client_utils`, not defined here: both sides have to agree about them, and a browser client must not inherit a server to get them.
 

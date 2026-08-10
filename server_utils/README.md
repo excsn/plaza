@@ -69,6 +69,8 @@ Relevance answers *who can see what*, which is a yes or no. It does not answer w
 
 Both are indexed densely, so a `SlotKey` is already the index, and both compose: score an at-rest entity lower and it naturally updates less often without a special case anywhere.
 
+[cube_yard](../examples/cube_yard/) prices them. 901 cubes at 4.20 Mbit/sec, which is the floor bit packing alone reaches, went to **0.25** under a 256 kbit budget, and adding delta encoding then bought 206 cubes refreshed per tick instead of 46 inside that same budget. Two things it found are worth knowing before you copy the shape: the per-entity cost you hand `fill` should be derived from your encoding rather than estimated (the guessed figure overran by 20%), and a budget is per link, so the frame stops being a broadcast.
+
 ## Aggregation (when relevance is the wrong question)
 
 Relevance gives a binary answer: in the set or out of it. That is right for entities a client merely *draws*, and wrong for entities it has to *compute* with, because dropping an input silently changes the result. Measured in [`blackhole_playground`](../examples/blackhole_playground/) with 64 gravitational attractors: culling the distant ones by view distance cut the field's share of the traffic from 280 to 33 KiB/s and multiplied the client's simulation error by 2.4x, because a hole you were not told about still bends every pellet you hold.

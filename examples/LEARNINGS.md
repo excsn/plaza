@@ -149,6 +149,30 @@ Reading the shape of a counter rather than its value: a count climbing without b
 
 ## The bug catalogue
 
+### Quantising both sides destroyed the thing it was meant to help (cube_yard)
+
+Fiedler names quantising the simulation on both sides as the critical trick of state synchronization: the server simulating at a precision it never transmits means the client is always looking at a rounded copy of a truth that has already moved on. Snapping the yard onto the wire's grid each tick took the settled pile from **905 cubes asleep to 0**.
+
+The mechanism is a circle. A resting cube jitters by less than one quantisation step, so it is re-snapped every tick forever; writing a body's position marks it modified; a body that is modified every tick never reaches the solver's sleep threshold. The obvious guard, skipping bodies that are `is_sleeping()`, does not help, because sleeping is precisely the state they can no longer get into.
+
+Keying on **motion** breaks the circle, and the rule left over is the one that was always right: a body that is not moving is not drifting, so there is no divergence for snapping to prevent. With that, the pile settles to 905 asleep exactly as it does untouched, and the two runs end 0.011 units apart.
+
+The general shape: a technique that perturbs state to keep two machines agreeing can collide with an optimisation that rewards state for holding still, and the optimisation was worth more here (a sleeping cube skips its velocity entirely). Check what a correction costs the things that were not wrong.
+
+### Half the packing win was handed back at the envelope (cube_yard, wire)
+
+A hand-packed payload went from 51877 bytes to 10396, and then travelled in **15502**. A `Vec<u8>` field reaches the outer codec through `serialize_seq`, so every byte is re-encoded as its own integer and MessagePack spends two on anything above 127. Declared as *bytes*, the same payload travels in 10411: a fifteen-byte header over the raw layout.
+
+Worth knowing because the packing work is visible and the envelope is not: the bits are counted carefully in one function and then silently inflated by a field declaration two files away. `plaza_wire::Payload` exists so this is a type rather than a thing to remember.
+
+### A budget planned with a guessed number is not a budget (cube_yard)
+
+The priority accumulator fills a byte budget using a cost function the caller supplies. The first one was written by reading the layout and estimating: 12 bytes for a moving cube, 8 for a sleeping one. The packets came out at **638 bytes against a 533 byte budget**, 20% over the ceiling the whole stage exists to hold.
+
+The fix was not a better estimate. The cost is now derived from the layout itself (`pack::cube_bits`, a `const fn` over the same widths `write_cube` uses), so changing a field's precision moves the budget with it. A constant written down beside the thing it describes is a constant that drifts the first time the thing changes, and a budget that drifts is indistinguishable from not having one.
+
+The same shape appeared twice more in the same example: a bandwidth meter that only pruned its window when a packet arrived, so a link that went quiet kept quoting its old rate, and a test asserting delta-coded indices reward locality that was really measuring how many sleeping cubes each index set happened to select. Numbers about a system should be computed from the system.
+
 ### The pulse ring that fired several times per pulse (horde)
 
 **Symptom.** The nova's expanding ring visibly restarted two or three times per pulse, a fraction of a second apart. Reported by a player as "the animation seems to activate multiple times, but dunno if it is just part of the animation". It was not the animation.

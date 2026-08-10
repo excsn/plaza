@@ -2,6 +2,14 @@
 
 The question this chapter answers: what is actually inside a plaza frame, and how do I ship an update without stranding every client built last week?
 
+## When a codec is not enough
+
+A codec is byte-aligned, and for an envelope that is the right trade. For the hot array in a state-sync packet, where the same field appears once per entity per tick against a budget, it is not: a `bool` costs eight bits to say one thing, and a position costs 96 to express something the game renders at a millimetre.
+
+[`bits`](../../wire/API_REFERENCE.md) is the sub-byte layer for that array: bounded-float quantisation, smallest-three quaternions (29 bits against 128), nibble varints, and the delta-coded indices that make a subset cheap to address. `BitCodec` is the same idea with nothing written by hand, and the gap between them is the honest boundary: **serde's data model has no place to put a bound**, so a derive can shrink a bool and varint an integer but can never know a position is within ±256 at 2mm. Measured on 901 cubes, the derive is worth 1.4x and the hand-written layout 5.0x, and the remaining 3.6x costs a layout *and* a matching reader per type, and is lossy where the derive is lossless.
+
+So the usual shape is to pack one array by hand and leave the envelope on MessagePack. One trap on the way: carry that payload as a `Vec<u8>` and every byte is re-encoded as an integer, costing 15502 bytes to carry 10396. `Payload` is the field type that does not.
+
 ## One byte, then your bytes
 
 Every frame is `[kind: u8][codec-encoded body]`. That is the whole format. The kind byte lives *outside* the codec on purpose: inside a serde enum, the codec decides what the tag costs and a reader must parse to dispatch; a byte ahead costs exactly one byte in every format and is read without parsing. The wire crate measured the alternatives (39 bytes and 113ns against 42 bytes and 180ns, with in-document dispatch needing a second parse at 239ns), and the byte won.
