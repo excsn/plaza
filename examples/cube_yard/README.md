@@ -91,4 +91,4 @@ The ceiling is `u16` mesh indices, which cap one mesh at 65535 vertices, so 2730
 
 The usual listen-server shape: one crate builds the authoritative server, the desktop client and the browser client (`--no-default-features --features web`, wrapped by `wasm-build.sh`). MessagePack with a build-derived protocol version, derived from `protocol.rs` alone, because the simulation's state is rapier's and only the projection crosses.
 
-`rapier3d` is behind the `server` feature, so the browser client never compiles a solver it would not run.
+`rapier3d` is behind the `server` feature, so the browser client never compiles a solver it would not run, and the sizes say so: **2.70MB** after `wasm-opt -Oz`, against puck_rink's 6.22MB where the client re-simulates and the solver has to ship with it.
