@@ -149,6 +149,16 @@ Reading the shape of a counter rather than its value: a count climbing without b
 
 ## The bug catalogue
 
+### A harness that models the wrong thing measures it beautifully (client_utils)
+
+Chapter 20 recorded that a fixed-duration ease has a correction rate above which it never finishes. Checking it against the shipped `ErrorSmoother` produced a clean table showing exactly that, and the table was worthless: the harness called `begin_from` every frame while the logical state advanced *smoothly*, which is not a correction at all. It was measuring an ease being told to restart toward a moving target, not a discontinuity being hidden.
+
+The mistake surfaced only because a second model, written to compare against, returned `inf`. `offset += drawn - logical` where `drawn = logical + offset` doubles the offset every step. An obviously broken number in the second column is what exposed the quietly broken numbers in the first.
+
+Rebuilt so a correction is an actual jump in the logical state, the lesson held and gained a crossover: below a correction rate equal to the ease duration, duration-based is fine and slightly better on the mean; above it, worst error goes 2.67 to 15.00 while a rate-based ease goes 2.73 to 11.33. So the guidance was right, the API claim beside it was wrong (`new` takes a duration, not a fraction), and neither would have been settled by the first harness.
+
+Two habits fall out. A measurement that confirms what you expected deserves the same scrutiny as one that does not, because there is no error message for "modelled the wrong scenario". And a second, independent implementation of the same idea is worth writing even when you only want one of them, because disagreement between them is the only cheap signal that either is wrong.
+
 ### Quantising both sides destroyed the thing it was meant to help (cube_yard)
 
 Fiedler names quantising the simulation on both sides as the critical trick of state synchronization: the server simulating at a precision it never transmits means the client is always looking at a rounded copy of a truth that has already moved on. Snapping the yard onto the wire's grid each tick took the settled pile from **905 cubes asleep to 0**.

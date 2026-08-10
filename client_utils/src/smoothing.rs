@@ -123,6 +123,11 @@ pub struct ErrorSmoother<State> {
   elapsed: f32,
   duration: f32,
   easing: Easing,
+  /// Set by [`at_rate`](Self::at_rate): the fraction of the remaining gap kept
+  /// per 60Hz frame, instead of a duration to finish within.
+  retain: Option<f32>,
+  /// How much of the gap is left, for the rate mode.
+  remaining: f32,
 }
 
 impl<State: Clone> ErrorSmoother<State> {
@@ -135,6 +140,34 @@ impl<State: Clone> ErrorSmoother<State> {
       elapsed: 0.0,
       duration: duration_secs.max(0.0),
       easing: linear,
+      retain: None,
+      remaining: 0.0,
+    }
+  }
+
+  /// Sheds a fixed fraction of the remaining gap per 60Hz frame instead of
+  /// finishing within a duration.
+  ///
+  /// Pick this when corrections can arrive faster than an ease would finish.
+  /// A duration-based ease restarts before it completes, and past a correction
+  /// rate equal to its duration it degrades sharply: measured against a
+  /// two-unit correction, worst visual error goes 2.67 at one correction every
+  /// 0.5s to 15.00 at one every frame, where the same case at `retain = 0.85`
+  /// gives 11.33. Below that crossover the duration is the better choice and
+  /// this is not worth the swap.
+  ///
+  /// `retain` is the fraction *kept*, so smaller closes faster; 0.85 to 0.95 is
+  /// the useful range. Framerate-independent, like [`AdaptiveDecay`], which is
+  /// what to reach for instead when you can measure the size of the error and
+  /// want big ones cleared sooner.
+  pub fn at_rate(retain_per_frame: f32) -> Self {
+    Self {
+      from: None,
+      elapsed: 0.0,
+      duration: 0.0,
+      easing: linear,
+      retain: Some(retain_per_frame.clamp(0.0, 0.999)),
+      remaining: 0.0,
     }
   }
 
@@ -153,17 +186,26 @@ impl<State: Clone> ErrorSmoother<State> {
   /// was last drawn at. Call this right after a reconciliation whose jump you
   /// want to hide. Calling it again mid-ease restarts from the new point.
   pub fn begin_from(&mut self, rendered_before_correction: State) {
-    if self.duration <= 0.0 {
+    if self.retain.is_none() && self.duration <= 0.0 {
       self.from = None;
       return;
     }
     self.from = Some(rendered_before_correction);
     self.elapsed = 0.0;
+    self.remaining = 1.0;
   }
 
   /// Advances the ease by one frame. No effect when not easing.
   pub fn advance(&mut self, dt_secs: f32) {
     if self.from.is_none() {
+      return;
+    }
+    if let Some(retain) = self.retain {
+      self.remaining *= retain.powf(dt_secs * 60.0);
+      // A rate is asymptotic, so it needs a floor to ever be done.
+      if self.remaining < 1e-3 {
+        self.from = None;
+      }
       return;
     }
     self.elapsed += dt_secs;
@@ -180,6 +222,7 @@ impl<State: Clone> ErrorSmoother<State> {
   /// `t` of the way from `a` to `b`.
   pub fn sample(&self, logical: &State, lerp: impl Fn(&State, &State, f32) -> State) -> State {
     match &self.from {
+      Some(from) if self.retain.is_some() => lerp(from, logical, 1.0 - self.remaining),
       Some(from) if self.duration > 0.0 => {
         let progress = (self.elapsed / self.duration).clamp(0.0, 1.0);
         let t = (self.easing)(progress);
@@ -199,6 +242,7 @@ impl<State: Clone> ErrorSmoother<State> {
   pub fn reset(&mut self) {
     self.from = None;
     self.elapsed = 0.0;
+    self.remaining = 0.0;
   }
 
   /// Whether a correction is still being eased.
@@ -265,6 +309,50 @@ mod tests {
     s.advance(0.05);
     s.begin_from(P(100.0)); // a fresh correction from a new visual spot
     assert_eq!(s.sample(&P(200.0), lerp), P(100.0), "eases from the newest point");
+  }
+
+  #[test]
+  fn a_rate_ease_starts_where_it_was_and_reaches_the_logical_state() {
+    let mut s: ErrorSmoother<P> = ErrorSmoother::at_rate(0.85);
+    s.begin_from(P(0.0));
+    assert_eq!(s.sample(&P(10.0), lerp).0, 0.0, "the first frame still draws the old place");
+
+    for _ in 0..200 {
+      s.advance(1.0 / 60.0);
+    }
+    assert!(!s.is_easing(), "a rate needs a floor or it never finishes");
+    assert_eq!(s.sample(&P(10.0), lerp).0, 10.0);
+  }
+
+  #[test]
+  fn a_rate_ease_survives_corrections_faster_than_it_finishes() {
+    // The case a duration cannot serve: a correction every frame. The duration
+    // ease restarts before it has gone anywhere; the rate closes a fixed
+    // fraction of whatever gap is left, however often it is disturbed.
+    let mut s: ErrorSmoother<P> = ErrorSmoother::at_rate(0.85);
+    let mut drawn = 0.0f32;
+    let logical = P(10.0);
+    for _ in 0..200 {
+      s.begin_from(P(drawn));
+      s.advance(1.0 / 60.0);
+      drawn = s.sample(&logical, lerp).0;
+    }
+    assert!(drawn > 9.0, "it should still converge under constant disturbance, got {drawn}");
+  }
+
+  #[test]
+  fn a_faster_rate_closes_sooner() {
+    let frames = |retain: f32| {
+      let mut s: ErrorSmoother<P> = ErrorSmoother::at_rate(retain);
+      s.begin_from(P(0.0));
+      let mut n = 0;
+      while s.is_easing() && n < 10_000 {
+        s.advance(1.0 / 60.0);
+        n += 1;
+      }
+      n
+    };
+    assert!(frames(0.80) < frames(0.95));
   }
 
   #[test]

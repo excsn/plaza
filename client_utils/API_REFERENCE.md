@@ -164,6 +164,8 @@ Measured on a 10-unit circle sampled at 10Hz and drawn at 60 (`cargo test -p pla
 
 **Trait `HermiteInterpolatable<Velocity>`**: `hermite(&self, other, velocity_a, velocity_b, t, seconds) -> Self`, where `t` runs `0..=1` across the segment and `seconds` is its wall duration, which is what puts a per-second velocity into the same units as the positions. **`hermite_scalar(p0, v0, p1, v1, t, seconds) -> f32`** is the one-axis form.
 
+**`ErrorSmoother::at_rate(retain_per_frame)`** sheds a fixed fraction of the remaining gap per 60Hz frame instead of finishing within a duration. Reach for it when corrections can arrive faster than an ease would finish: past a correction rate equal to the duration, a duration-based ease restarts before completing and degrades sharply (worst error 2.67 at one correction every 0.5s, 15.00 at one every frame, against 11.33 for `at_rate(0.85)`). Below that crossover the duration is the better choice.
+
 ### Struct `AdaptiveDecay`
 
 Per-frame correction decay whose rate depends on how big the error is. `ErrorSmoother` eases over a fixed *duration*, so a large error and a small one take the same time and the large one merely moves faster; that is the wrong way round. A small offset is invisible and can afford to linger, while a large one is already visible and every extra frame it survives is a frame the entity is somewhere it is not. Fiedler's numbers, which are the `Default`: keep 0.95 of the error per frame at or below 0.25 units, 0.85 at or above 1.0, blended between.
