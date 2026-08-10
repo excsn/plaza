@@ -224,22 +224,25 @@ impl Yard {
   /// was always right: a body that is not moving is not drifting, so there is
   /// no divergence for snapping to prevent. Costing the at-rest flag to fix
   /// drift that does not exist would be a bad trade twice over.
-  pub fn snap_to_wire(&mut self) {
+  pub fn snap_to_wire(&mut self) -> usize {
+    let mut snapped = 0usize;
     for handle in &self.handles {
       let body = &mut self.bodies[*handle];
       if body.is_sleeping() || body.linvel().length() < STILL {
         continue;
       }
       let t = body.translation();
-      let snapped = Vec3::new(
+      let snapped_to = Vec3::new(
         crate::pack::snap_position(t.x, 0),
         crate::pack::snap_position(t.y, 1),
         crate::pack::snap_position(t.z, 2),
       );
-      if snapped != t {
-        body.set_translation(snapped, false);
+      if snapped_to != t {
+        body.set_translation(snapped_to, false);
+        snapped += 1;
       }
     }
+    snapped
   }
 
   /// How many bodies the solver currently has asleep.

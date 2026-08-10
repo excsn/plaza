@@ -79,6 +79,10 @@ Keying on **motion** breaks the circle, and the rule it leaves is the one that w
 
 Worth stating plainly because the articles do not: the technique has a cost, it lands on the at-rest optimisation, and at-rest is worth more.
 
+**And in this example it buys nothing measurable.** The obvious hypothesis once deltas are on is that snapping pins a body jittering below one quantisation step, so its delta reads "unchanged" instead of flipping back and forth. Measured over 120 ticks of a settling yard, both runs seeing identical motion: 41894 bytes against 41806, a difference of **0.2%**, which is noise.
+
+That is not a refutation of Fiedler, it is a statement about what cube_yard is. His justification for quantising both sides is that the *client* extrapolates, running the simulation forward between updates, so a client holding digits the server never sent diverges as it integrates. Nothing here extrapolates: the client draws what arrived and eases the correction. `--snap` is implemented and honest about costing nothing, and the condition under which it would earn its place is a client that simulates.
+
 Every stage keeps a position-error readout beside the bandwidth. Compression without an error number is half a measurement.
 
 ## Drawing 901 tumbling cubes

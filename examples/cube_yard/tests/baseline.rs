@@ -261,6 +261,85 @@ fn hermite_beats_a_straight_line_between_sparse_samples() {
   );
 }
 
+/// Does quantise-both-sides pay for itself once deltas are on?
+///
+/// The hypothesis the earlier stages could not test: a body jittering below one
+/// quantisation step flips its quantised value back and forth, and every flip
+/// costs a full delta. Snapping pins it, so the delta reads "unchanged" instead.
+#[test]
+fn snapping_makes_deltas_cheaper_on_a_settling_yard() {
+  fn stream_bytes(snap: bool) -> (usize, usize, usize) {
+    let mut yard = Yard::new();
+    let idle = [Default::default(); MAX_PLAYERS];
+    // The settling window, and getting this wrong the first time is the
+    // lesson: warmed up to 240 ticks the yard is asleep, every cube encodes as
+    // "unchanged" at eight bits whatever its position, and the byte count is
+    // position-independent, so the measurement cannot see the thing it is for.
+    for _ in 0..60 {
+      yard.step(&idle);
+      if snap {
+        yard.snap_to_wire();
+      }
+    }
+
+    let mut stream = Stream::new(CUBES + MAX_PLAYERS).with_delta(CUBES + MAX_PLAYERS);
+    let mut total = 0usize;
+    let mut unchanged = 0usize;
+    let mut awake_seen = 0usize;
+    for _ in 0..120 {
+      yard.step(&idle);
+      if snap {
+        yard.snap_to_wire();
+      }
+      let cubes = snapshot(&yard);
+      let before: Vec<Option<_>> = stream.baseline.clone();
+      let picked = stream.pick(&cubes, None, BUDGET_BITS).to_vec();
+      unchanged += picked
+        .iter()
+        .filter(|&&i| before[i].map(|w| pack::quantize_cube(&cubes[i]) == w).unwrap_or(false))
+        .count();
+      awake_seen += cubes.iter().filter(|c| !c.at_rest).count();
+      total += pack::pack_delta(&cubes, &picked, &mut stream.baseline).len();
+    }
+    (total, unchanged, awake_seen)
+  }
+
+  // Is snapping firing at all? An identical byte count would otherwise be
+  // indistinguishable from a flag that does nothing.
+  {
+    let mut probe = Yard::new();
+    let idle = [Default::default(); MAX_PLAYERS];
+    let mut moved = 0usize;
+    let mut ticks_with_any = 0usize;
+    for _ in 0..360 {
+      probe.step(&idle);
+      let n = probe.snap_to_wire();
+      moved += n;
+      if n > 0 {
+        ticks_with_any += 1;
+      }
+    }
+    println!("\nsnap_to_wire over 360 ticks: {moved} body-snaps across {ticks_with_any} ticks");
+  }
+
+  let (loose, loose_unchanged, loose_awake) = stream_bytes(false);
+  let (snapped, snapped_unchanged, snapped_awake) = stream_bytes(true);
+
+  println!("\ndelta stream over 120 ticks of a settling yard:");
+  println!("  no snapping   {loose:>7} bytes, {loose_unchanged} cubes read unchanged, {loose_awake} awake cube-ticks");
+  println!("  --snap        {snapped:>7} bytes, {snapped_unchanged} cubes read unchanged, {snapped_awake} awake cube-ticks");
+  println!("  difference    {:>7.1}%\n", (loose as f64 - snapped as f64) / loose as f64 * 100.0);
+
+  // The answer, and it is a negative one: snapping does not pay here. Both runs
+  // see the same amount of motion, so the comparison is sound, and the gap is
+  // noise. Recorded rather than left as an open question.
+  assert_eq!(loose_awake, snapped_awake, "the two runs must see the same motion to be comparable");
+  assert!(
+    (loose as f64 - snapped as f64).abs() / (loose as f64) < 0.02,
+    "snapping changed delta cost by more than noise: {loose} vs {snapped}"
+  );
+}
+
 #[test]
 fn a_settled_yard_is_mostly_asleep() {
   let yard = settled(false);
