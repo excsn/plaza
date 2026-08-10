@@ -164,6 +164,15 @@ Measured on a 10-unit circle sampled at 10Hz and drawn at 60 (`cargo test -p pla
 
 **Trait `HermiteInterpolatable<Velocity>`**: `hermite(&self, other, velocity_a, velocity_b, t, seconds) -> Self`, where `t` runs `0..=1` across the segment and `seconds` is its wall duration, which is what puts a per-second velocity into the same units as the positions. **`hermite_scalar(p0, v0, p1, v1, t, seconds) -> f32`** is the one-axis form.
 
+### Struct `AdaptiveDecay`
+
+Per-frame correction decay whose rate depends on how big the error is. `ErrorSmoother` eases over a fixed *duration*, so a large error and a small one take the same time and the large one merely moves faster; that is the wrong way round. A small offset is invisible and can afford to linger, while a large one is already visible and every extra frame it survives is a frame the entity is somewhere it is not. Fiedler's numbers, which are the `Default`: keep 0.95 of the error per frame at or below 0.25 units, 0.85 at or above 1.0, blended between.
+
+This is the rate, not the state: keep your own offset, multiply it by `retain` each frame, add it to what you draw.
+
+*   **`new(small, large, small_at, large_at)`**, **`Default`** for the numbers above.
+*   **`retain(&self, magnitude, dt_secs) -> f32`**: the fraction of an error that size to keep after `dt_secs`. Framerate-independent, so a 30fps client and a 144fps one shed the same error over the same wall time.
+
 ## 3b. Rollback netcode (deterministic lockstep)
 
 A different model from the rest of this crate. There is no server: peers run the **same deterministic simulation**, exchange only inputs, and stay identical frame for frame. Latency is handled by **predicting** a missing remote input (repeat its last one), simulating ahead, and **rolling back** to re-simulate when the real input arrives and disagrees. Determinism is what makes the re-simulation land on the state the other peer already has. Lives in module `rollback`.

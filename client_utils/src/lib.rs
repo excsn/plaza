@@ -191,6 +191,7 @@ pub use predicted_player::{PlayerConfig, PredictedPlayer};
 pub use prediction::PredictedEntity;
 pub use remote_view::{RemoteView, RenderOpts};
 pub use rollback::{repeat_last_input, Frame, InputTimeline, RollbackConfig, RollbackSession, StateHistory};
+pub use smoothing::AdaptiveDecay;
 pub use rtt::RttEstimator;
 pub use slot::{ReusePolicy, SlotAllocator, SlotKey};
 pub use timeline::{Probe, Timeline};

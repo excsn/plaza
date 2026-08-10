@@ -312,3 +312,138 @@ mod tests {
     assert!((s.sample(&P(10.0), lerp).0 - 3.0).abs() < 1e-5, "default is a straight line");
   }
 }
+
+/// Per-frame decay whose rate depends on how big the error is.
+///
+/// [`ErrorSmoother`] eases a correction over a fixed *duration*, so a large
+/// error and a small one both take the same time and the large one simply moves
+/// faster. That is the wrong way round. A small offset is invisible and can
+/// afford to linger; a large one is already visible, and every extra frame it
+/// survives is a frame the entity is somewhere it is not. Glenn Fiedler's
+/// [state synchronization](https://gafferongames.com/post/state_synchronization/)
+/// puts numbers on it: retain 0.95 of the error per frame under 25cm, and 0.85
+/// over a metre, so a big correction is *over sooner* rather than merely
+/// quicker.
+///
+/// This is the rate, not the state. Keep your own offset, multiply it by
+/// [`retain`](Self::retain) each frame, and add it to whatever you draw.
+///
+/// ```
+/// use plaza_client_utils::smoothing::AdaptiveDecay;
+///
+/// let decay = AdaptiveDecay::default();
+/// let dt = 1.0 / 60.0;
+///
+/// // A metre-scale error sheds more per frame than a centimetre-scale one.
+/// assert!(decay.retain(2.0, dt) < decay.retain(0.05, dt));
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub struct AdaptiveDecay {
+  small: f32,
+  large: f32,
+  small_at: f32,
+  large_at: f32,
+}
+
+impl Default for AdaptiveDecay {
+  /// Fiedler's numbers, in whatever unit your positions are in: 0.95 per frame
+  /// at or below 0.25, 0.85 at or above 1.0.
+  fn default() -> Self {
+    Self {
+      small: 0.95,
+      large: 0.85,
+      small_at: 0.25,
+      large_at: 1.0,
+    }
+  }
+}
+
+impl AdaptiveDecay {
+  /// `small`/`large` are the fraction of the error kept per 60Hz frame at
+  /// magnitudes `small_at` and `large_at`. Between them it blends; outside, it
+  /// clamps.
+  pub fn new(small: f32, large: f32, small_at: f32, large_at: f32) -> Self {
+    Self {
+      small,
+      large,
+      small_at,
+      large_at,
+    }
+  }
+
+  /// The fraction of an error of this magnitude to keep after `dt_secs`.
+  ///
+  /// Framerate-independent: the per-frame rates are quoted at 60Hz and raised
+  /// to the number of 60Hz frames `dt_secs` covers, so a 30fps client and a
+  /// 144fps one shed the same error over the same wall time.
+  pub fn retain(&self, magnitude: f32, dt_secs: f32) -> f32 {
+    let span = (self.large_at - self.small_at).max(f32::EPSILON);
+    let t = ((magnitude - self.small_at) / span).clamp(0.0, 1.0);
+    let per_frame = self.small + (self.large - self.small) * t;
+    per_frame.powf(dt_secs * 60.0)
+  }
+}
+
+#[cfg(test)]
+mod adaptive_tests {
+  use super::*;
+
+  #[test]
+  fn a_large_error_clears_sooner_than_a_small_one() {
+    let decay = AdaptiveDecay::default();
+    let dt = 1.0 / 60.0;
+
+    let frames_to_clear = |start: f32| {
+      let mut error = start;
+      let mut frames = 0;
+      // Down to a twentieth of where it started, so the two are compared over
+      // the same proportion rather than the same absolute distance.
+      while error > start / 20.0 && frames < 10_000 {
+        error *= decay.retain(error, dt);
+        frames += 1;
+      }
+      frames
+    };
+
+    assert!(
+      frames_to_clear(2.0) < frames_to_clear(0.05),
+      "{} frames for a large error, {} for a small one",
+      frames_to_clear(2.0),
+      frames_to_clear(0.05)
+    );
+  }
+
+  #[test]
+  fn the_same_wall_time_sheds_the_same_error_at_any_framerate() {
+    let decay = AdaptiveDecay::default();
+    let magnitude = 0.5;
+
+    let after = |fps: f32| {
+      let dt = 1.0 / fps;
+      let mut kept = 1.0f32;
+      for _ in 0..(fps as usize) {
+        kept *= decay.retain(magnitude, dt);
+      }
+      kept
+    };
+
+    assert!((after(30.0) - after(60.0)).abs() < 1e-4, "{} vs {}", after(30.0), after(60.0));
+    assert!((after(144.0) - after(60.0)).abs() < 1e-4);
+  }
+
+  #[test]
+  fn magnitudes_outside_the_band_clamp() {
+    let decay = AdaptiveDecay::default();
+    let dt = 1.0 / 60.0;
+    assert!((decay.retain(0.0, dt) - 0.95).abs() < 1e-5);
+    assert!((decay.retain(1000.0, dt) - 0.85).abs() < 1e-5);
+  }
+
+  #[test]
+  fn an_error_that_is_kept_entirely_never_moves() {
+    // A caller that wants the old fixed-rate behaviour asks for it.
+    let flat = AdaptiveDecay::new(0.9, 0.9, 0.0, 1.0);
+    let dt = 1.0 / 60.0;
+    assert!((flat.retain(0.01, dt) - flat.retain(5.0, dt)).abs() < 1e-6);
+  }
+}

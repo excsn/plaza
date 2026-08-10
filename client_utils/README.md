@@ -167,6 +167,14 @@ A straight line between two snapshots is right when they are close together and 
 
 It is a separate type rather than a flag on `RemoteView` for a concrete reason: a spline needs the velocity at **both** ends, and `RemoteView` keeps one, for dead reckoning past the newest sample. Worth the second velocity on the wire below roughly 20 snapshots a second, and not much above it.
 
+## Correcting big errors faster than small ones
+
+`ErrorSmoother` eases a correction over a fixed duration, which means a large error and a small one take exactly as long; the large one just travels faster. That is backwards. A small offset is invisible and can afford to linger, and a large one is already visible, so every extra frame it survives is a frame the entity is drawn somewhere it is not.
+
+`AdaptiveDecay` is the rate Fiedler uses in [state synchronization](https://gafferongames.com/post/state_synchronization/): keep 0.95 of the error per frame under 0.25 units, 0.85 over 1.0, blended between, so a big correction is *over sooner* rather than merely quicker. It is the rate and not the state, so it composes with whatever offset you already keep, and it is framerate-independent.
+
+It earns its place the moment entities stop updating at the same rate. Under a bandwidth budget a distant object can wait several ticks and then move a long way at once, and that is the snap a viewer notices.
+
 ## Acknowledgement and second-order dead reckoning
 
 Two later additions, both with a measured regime narrower than they first appear. Both are documented at length in [API_REFERENCE.md](API_REFERENCE.md); the summary of what measurement said:
