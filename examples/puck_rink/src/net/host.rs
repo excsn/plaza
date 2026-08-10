@@ -6,15 +6,15 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use actix_web::{web, HttpRequest, HttpResponse};
-use plaza::{Agent, NoSnapshots, StateControllerBuilder, TickDriver};
+use plaza::{Agent, SnapshotFn, StateControllerBuilder, TickDriver};
 use plaza_session::actix_ws::ActixWsPlazaSession;
 use plaza_session::host::{init_logging, Host};
 use plaza_session::SessionOptions;
 use plaza_wire::frame::ProtocolVersion;
 use plaza_wire::MsgPackCodec;
 
-use crate::logic::RinkLogic;
-use crate::protocol::{PlayerId, RinkOp, PROTOCOL, TICK_HZ};
+use crate::logic::{baseline, RinkLogic};
+use crate::protocol::{Physics, PlayerId, RinkOp, PROTOCOL, TICK_HZ};
 use crate::state::RinkState;
 
 type RinkSession = ActixWsPlazaSession<RinkOp, PlayerId, MsgPackCodec>;
@@ -35,7 +35,7 @@ async fn ws_route(
 }
 
 /// Runs the rink until the process ends.
-pub async fn serve(bind: &str, static_dir: Option<String>) -> std::io::Result<()> {
+pub async fn serve(bind: &str, static_dir: Option<String>, physics: Physics) -> std::io::Result<()> {
   init_logging();
 
   let sim_clock = Arc::new(AtomicU64::new(0));
@@ -48,13 +48,14 @@ pub async fn serve(bind: &str, static_dir: Option<String>) -> std::io::Result<()
   );
 
   let logic = RinkLogic::new().with_clock(sim_clock);
-  // No snapshot provider: the world goes out inside every Frame, so a joiner
-  // is whole one tick after arriving.
+  // The fixed-point backend's world goes out inside every Frame, so its
+  // provider returns nothing and a joiner is whole one tick after arriving. A
+  // solver-backed one cannot do that and hands over a snapshot instead.
   let (commands, controller) = StateControllerBuilder::new(
     Arc::new(logic),
     session.clone(),
-    Arc::new(NoSnapshots),
-    RinkState::new(),
+    Arc::new(SnapshotFn(baseline)),
+    RinkState::on(physics),
   )
   .snapshot_context_on_join(None)
   .command_buffer(256)
@@ -67,7 +68,7 @@ pub async fn serve(bind: &str, static_dir: Option<String>) -> std::io::Result<()
   });
   tokio::spawn(TickDriver::from_hz(TICK_HZ as u32).run(commands));
 
-  tracing::info!(bind, "puck rink listening (WebSocket at /ws)");
+  tracing::info!(bind, ?physics, "puck rink listening (WebSocket at /ws)");
   let session = web::Data::new(session);
   Host::new(bind)
     .serve_dir(static_dir)

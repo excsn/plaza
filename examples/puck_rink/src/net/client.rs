@@ -15,13 +15,14 @@
 
 use std::collections::VecDeque;
 
-use plaza_client_utils::rollback::{RollbackConfig, RollbackSession};
+use plaza_client_utils::rollback::RollbackConfig;
 use plaza_wire::{MsgPackCodec, WireCodec};
 use plaza_ws::pump::{mismatch_message, Arrival, FramePump};
 use plaza_ws::{Event, State};
 
-use crate::protocol::{ms_to_frame, FrameUpdate, RinkOp, PROTOCOL};
-use crate::sim::{self, PaddleInput, World, SEATS};
+use crate::physics::Rink;
+use crate::protocol::{ms_to_frame, FrameUpdate, Physics, RinkOp, PROTOCOL};
+use crate::sim::{PaddleInput, World, SEATS};
 
 const WIRE: MsgPackCodec = MsgPackCodec;
 
@@ -110,6 +111,10 @@ impl Meter {
   }
 }
 
+fn unrunnable(physics: Physics) -> String {
+  format!("the server runs {physics:?}, which this build cannot re-simulate")
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Moment {
   Seated(usize),
@@ -122,7 +127,7 @@ pub struct NetClient {
   pub seat: Option<usize>,
   pub mode: Mode,
 
-  session: Option<RollbackSession<World, PaddleInput>>,
+  session: Option<Rink>,
   base: u64,
   pub latest: Option<FrameUpdate>,
   frames: VecDeque<FrameUpdate>,
@@ -139,6 +144,8 @@ pub struct NetClient {
   pub snap_px: Meter,
   pub corrections: u64,
   pub resim_frames: u64,
+  /// What the join cost on this backend: zero when a frame was baseline enough.
+  pub baseline_bytes: usize,
   pub ease: VisualEase,
   pub moments: Vec<Moment>,
 
@@ -176,6 +183,7 @@ impl NetClient {
       snap_px: Meter::default(),
       corrections: 0,
       resim_frames: 0,
+      baseline_bytes: 0,
       ease: VisualEase::default(),
       moments: Vec::new(),
       events: Vec::new(),
@@ -237,9 +245,32 @@ impl NetClient {
           self.seat = Some(seat as usize);
           self.moments.push(Moment::Seated(seat as usize));
         }
+        RinkOp::Baseline { frame, physics, state } => self.on_baseline(frame, physics, &state),
         RinkOp::Frame(update) => self.on_frame(*update),
         RinkOp::Input { .. } => {}
       }
+    }
+  }
+
+  /// A backend whose frames are not complete baselines hands the running
+  /// simulation over as bytes instead, once, before the first frame.
+  fn on_baseline(&mut self, frame: u64, physics: Physics, state: &[u8]) {
+    if self.session.is_some() {
+      return;
+    }
+    match Rink::from_baseline(physics, state, self.config()) {
+      Some(session) => {
+        self.session = Some(session);
+        self.base = frame;
+        self.baseline_bytes = state.len();
+      }
+      None => self.status = Status::Gone(unrunnable(physics)),
+    }
+  }
+
+  fn config(&self) -> RollbackConfig {
+    RollbackConfig {
+      max_rollback_frames: ROLLBACK_WINDOW,
     }
   }
 
@@ -247,15 +278,21 @@ impl NetClient {
     self.pump.timeline_mut().note_stamp(update.server_time_ms, self.now_ms);
 
     let Some(session) = self.session.as_mut() else {
-      // The first authoritative world is the session's frame zero.
-      self.session = Some(RollbackSession::new(
-        update.world.clone(),
-        vec![PaddleInput::default(); SEATS],
-        RollbackConfig {
-          max_rollback_frames: ROLLBACK_WINDOW,
-        },
-        sim::step,
-      ));
+      // The first authoritative world is the session's frame zero, and the
+      // backend that produced it is the one this session has to run. A backend
+      // a frame cannot seed is still waiting on its baseline, so drop this one:
+      // the baseline is sent on join, ahead of any frame.
+      if !crate::physics::view_is_complete(update.physics) {
+        if !crate::physics::supported(update.physics) {
+          self.status = Status::Gone(unrunnable(update.physics));
+        }
+        return;
+      }
+      let Some(session) = Rink::new(update.physics, &update.world, self.config()) else {
+        self.status = Status::Gone(unrunnable(update.physics));
+        return;
+      };
+      self.session = Some(session);
       self.base = update.frame;
       self.prev_scores = update.world.scores;
       self.frames.push_back(update.clone());
@@ -325,13 +362,13 @@ impl NetClient {
 
       let before_count = session.rollback_count();
       let cf = session.current_frame();
-      let before = session.state().clone();
+      let before = session.view();
       session.advance_frame();
       let rolled = session.rollback_count() - before_count;
       if rolled > 0 {
         self.corrections += rolled;
         self.resim_frames += session.last_rollback_frames() as u64;
-        if let Some(rewritten) = session.state_at(cf) {
+        if let Some(rewritten) = session.view_at(cf) {
           let dx = rewritten.puck.x.to_f32() - before.puck.x.to_f32();
           let dy = rewritten.puck.y.to_f32() - before.puck.y.to_f32();
           self.snap_px.add((dx * dx + dy * dy).sqrt());
@@ -347,15 +384,12 @@ impl NetClient {
         if sf >= session.current_frame() {
           break;
         }
-        match session.state_at(sf) {
-          Some(world) => {
-            if sim::digest(&world) == digest {
-              self.digest_ok += 1;
-            } else {
-              self.digest_bad += 1;
-            }
+        if let Some(ours) = session.digest_at(sf) {
+          if ours == digest {
+            self.digest_ok += 1;
+          } else {
+            self.digest_bad += 1;
           }
-          None => {}
         }
         self.pending_checks.pop_front();
       }
@@ -384,7 +418,7 @@ impl NetClient {
   /// The world to draw: the session's present. The caller adds [`Self::ease`]
   /// on top, and swaps the puck for the delayed blend when the mode says so.
   pub fn present(&self) -> Option<World> {
-    Some(self.session.as_ref()?.state().clone())
+    Some(self.session.as_ref()?.view())
   }
 
   /// The two server frames around `now - delay`, and how far between them the
@@ -433,7 +467,8 @@ mod tests {
   use plaza_ws::scripted::ScriptedSocket;
 
   use super::*;
-  use crate::protocol::{frame_to_ms, Occupant};
+  use crate::protocol::{frame_to_ms, Occupant, Physics};
+  use crate::sim;
 
   fn feed(socket: &ScriptedSocket, ops: Vec<RinkOp>) {
     let mut bytes = Vec::new();
@@ -450,6 +485,7 @@ mod tests {
       applied,
       digest: sim::digest(world),
       occupants: [Occupant::Bot; SEATS],
+      physics: Physics::Fx,
     }))
   }
 

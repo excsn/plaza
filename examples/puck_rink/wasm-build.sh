@@ -21,8 +21,13 @@ fi
 # 2. Build the browser client. `--no-default-features --features web` is required:
 #    the default set pulls in the native socket (tungstenite) and the actix server,
 #    and neither compiles to wasm. `web` is the browser client alone.
-echo "==> building browser client (release wasm)"
-( cd "$root" && cargo build -p puck_rink --bin puck_rink --target wasm32-unknown-unknown --release --no-default-features --features web )
+#
+#    PUCK_RINK_FEATURES adds to that set; the client re-simulates, so a server on
+#    the rapier backend needs a browser client carrying the same one:
+#      PUCK_RINK_FEATURES=rapier ./wasm-build.sh
+features="web${PUCK_RINK_FEATURES:+,$PUCK_RINK_FEATURES}"
+echo "==> building browser client (release wasm, features: $features)"
+( cd "$root" && cargo build -p puck_rink --bin puck_rink --target wasm32-unknown-unknown --release --no-default-features --features "$features" )
 
 # 3. Place the artifact next to index.html. It is gitignored: a build product.
 cp "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/puck_rink.wasm" "$here/static/puck_rink.wasm"

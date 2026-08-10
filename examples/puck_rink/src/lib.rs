@@ -5,6 +5,7 @@
 //! client runs the same fixed-point simulation inside a `RollbackSession`, and
 //! the digest on every frame proves the machines still agree.
 
+pub mod physics;
 pub mod protocol;
 pub mod role;
 pub mod sim;

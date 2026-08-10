@@ -5,7 +5,8 @@ use std::collections::HashMap;
 use plaza::agent::Agent;
 use plaza_server_utils::{InputSchedule, InputWindow, Roster, SeatState};
 
-use crate::protocol::{Occupant, PlayerId};
+use crate::physics::Body;
+use crate::protocol::{Occupant, Physics, PlayerId};
 use crate::sim::{PaddleInput, World, SEATS};
 
 /// How far behind an input may name its tick and still buffer, and how far
@@ -17,7 +18,7 @@ pub const WINDOW: InputWindow = InputWindow {
 
 #[derive(Debug)]
 pub struct RinkState {
-  pub world: World,
+  pub body: Body,
   pub tick: u64,
   /// Every seat always has an actor: an open seat is bot-driven, so the rink
   /// is never short a paddle.
@@ -37,14 +38,26 @@ impl Default for RinkState {
 
 impl RinkState {
   pub fn new() -> Self {
+    Self::on(Physics::Fx)
+  }
+
+  /// # Panics
+  /// Panics if this build cannot run `physics`, which is a startup argument
+  /// rather than anything a client can ask for.
+  pub fn on(physics: Physics) -> Self {
     Self {
-      world: World::new(),
+      body: Body::new(physics).expect("this build was not compiled with that physics backend"),
       tick: 0,
       roster: Roster::new(SEATS),
       schedules: std::array::from_fn(|_| InputSchedule::new()),
       held: [PaddleInput::default(); SEATS],
       agents: HashMap::new(),
     }
+  }
+
+  /// The wire's and the bots' view of the ice.
+  pub fn world(&self) -> World {
+    self.body.view()
   }
 
   pub fn seat_of(&self, player: PlayerId) -> Option<usize> {

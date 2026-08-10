@@ -5,9 +5,13 @@
 # `--role client --connect <url>` to join someone else, or `--role headless` for
 # the deployable server.
 #
-# Usage: ./run-native.sh [-- <args>]
+# PUCK_RINK_FEATURES adds cargo features; the second physics backend is one:
+#   PUCK_RINK_FEATURES=rapier ./run-native.sh --physics rapier
+#
+# Usage: ./run-native.sh [<args>]
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 export CARGO_TARGET_DIR="$(cd "$(dirname "$0")/../.." && pwd)/target"
-exec cargo run -p puck_rink --bin puck_rink --release --manifest-path "$root/Cargo.toml" -- "$@"
+exec cargo run -p puck_rink --bin puck_rink --release --manifest-path "$root/Cargo.toml" \
+  ${PUCK_RINK_FEATURES:+--features "$PUCK_RINK_FEATURES"} -- "$@"

@@ -31,6 +31,22 @@ pub enum Occupant {
   Human(PlayerId),
 }
 
+/// Which simulation produced a frame.
+///
+/// `PROTOCOL` covers what a message looks like; this covers what it means. Two
+/// peers on different backends agree about every field of every message and
+/// disagree about every world, which is the failure the digest would otherwise
+/// report sixty times a second without ever naming the cause.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Physics {
+  /// The owned fixed-point step in [`crate::sim`].
+  Fx,
+  /// Rapier, identified by the exact build that produced the frame: agreeing
+  /// on "rapier" is not agreement, because determinism holds same-version-only
+  /// and a dependency bump moves no type definition `PROTOCOL` can see.
+  Rapier { pin: u32 },
+}
+
 /// One authoritative tick: the world after it ran, and **the inputs it ran
 /// with**. Echoing the applied inputs is what turns the server into an input
 /// orderer a rollback session can confirm against; the digest is what proves
@@ -43,6 +59,7 @@ pub struct FrameUpdate {
   pub applied: [PaddleInput; SEATS],
   pub digest: u64,
   pub occupants: [Occupant; SEATS],
+  pub physics: Physics,
 }
 
 /// What clients send, and what the rink broadcasts back.
@@ -54,6 +71,13 @@ pub enum RinkOp {
 
   /// Sent once, to one client, on taking a seat from the bot.
   Seated { seat: u8 },
+
+  /// The running simulation as bytes, sent once to a joining client by a
+  /// backend whose frames are not complete baselines. A solver carries contact
+  /// manifolds, islands and sleep state between ticks, and none of that is in
+  /// a `World`; a client seeded from a frame instead would diverge on its
+  /// first contact. The fixed-point backend never sends this.
+  Baseline { frame: u64, physics: Physics, state: Vec<u8> },
 
   Frame(Box<FrameUpdate>),
 }

@@ -1,6 +1,14 @@
 //! The panel: which treatment the puck gets, and what each one costs.
 
 use puck_rink::net::client::{Mode, NetClient, Status};
+use puck_rink::protocol::Physics;
+
+fn name(physics: Physics) -> String {
+  match physics {
+    Physics::Fx => "fixed point".to_owned(),
+    Physics::Rapier { pin } => format!("rapier ({pin:08x})"),
+  }
+}
 
 pub fn draw_panel(client: &mut NetClient, url: &str) {
   egui_macroquad::ui(|ctx| {
@@ -15,6 +23,13 @@ pub fn draw_panel(client: &mut NetClient, url: &str) {
         };
         if let Some(rtt) = client.rtt_ms() {
           ui.label(format!("rtt {rtt:.0} ms, present {} frames ahead", client.prediction_horizon()));
+        }
+        if let Some(latest) = &client.latest {
+          let cost = match client.baseline_bytes {
+            0 => "seeded from a frame".to_owned(),
+            bytes => format!("{bytes} byte handover on join"),
+          };
+          ui.label(format!("physics: {}, {cost}", name(latest.physics)));
         }
         ui.separator();
 
@@ -45,7 +60,7 @@ pub fn draw_panel(client: &mut NetClient, url: &str) {
         ui.label(format!("digests: {} agreed, {} diverged", client.digest_ok, client.digest_bad));
         ui.label(
           egui_macroquad::egui::RichText::new(
-            "a diverged digest would mean the fixed-point step disagreed\nacross machines; it must stay zero",
+            "a diverged digest would mean the step disagreed across\nmachines; it must stay zero on either backend",
           )
           .small(),
         );

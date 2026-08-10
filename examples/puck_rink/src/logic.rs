@@ -43,6 +43,26 @@ pub fn bot_held(tick: u64, seat: usize, world: &sim::World, held: &mut PaddleInp
   }
 }
 
+/// What a joining client is handed before its first frame, for a backend whose
+/// frames are not complete baselines. `None` is the fixed-point answer and the
+/// reason the rink shipped without a snapshot provider at all: its world goes
+/// out inside every frame.
+///
+/// Wrap it in [`plaza::SnapshotFn`] to make it a provider.
+pub fn baseline(state: &RinkState, _target: Option<&Agent<PlayerId>>) -> Option<RinkOp> {
+  match state.body.baseline()? {
+    Ok(bytes) => Some(RinkOp::Baseline {
+      frame: state.tick,
+      physics: state.body.physics(),
+      state: bytes,
+    }),
+    Err(e) => {
+      tracing::error!(error = %e, "could not serialise the simulation for a joining client");
+      None
+    }
+  }
+}
+
 #[derive(Default)]
 pub struct RinkLogic {
   clock: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
@@ -151,6 +171,7 @@ fn submit(state: &mut RinkState, player: PlayerId, frame: u64, input: PaddleInpu
 fn step_once(state: &mut RinkState, ctx: &mut Ctx) {
   state.tick += 1;
 
+  let before = state.world();
   let mut applied = [PaddleInput::default(); SEATS];
   for seat in 0..SEATS {
     applied[seat] = match state.roster.seat_state(seat) {
@@ -160,21 +181,22 @@ fn step_once(state: &mut RinkState, ctx: &mut Ctx) {
         }
         state.held[seat]
       }
-      _ => bot_held(state.tick, seat, &state.world, &mut state.held[seat]),
+      _ => bot_held(state.tick, seat, &before, &mut state.held[seat]),
     };
   }
 
-  state.world = sim::step(&state.world, &applied);
+  state.body.step(&applied);
 
   ctx
     .ops_q()
     .push(TargetedOp::new_system_all(vec![RinkOp::Frame(Box::new(FrameUpdate {
       frame: state.tick,
       server_time_ms: frame_to_ms(state.tick),
-      world: state.world.clone(),
+      world: state.world(),
       applied,
-      digest: sim::digest(&state.world),
+      digest: state.body.digest(),
       occupants: state.occupants(),
+      physics: state.body.physics(),
     }))]));
 }
 
@@ -227,31 +249,31 @@ mod tests {
   #[tokio::test]
   async fn the_rink_never_waits_for_people() {
     let mut state = RinkState::new();
-    let before = state.world.paddles;
+    let before = state.world().paddles;
     for _ in 0..120 {
       tick(&mut state).await;
     }
-    assert_ne!(state.world.paddles, before, "four bots are already skating");
+    assert_ne!(state.world().paddles, before, "four bots are already skating");
   }
 
   #[tokio::test]
   async fn an_input_executes_on_the_frame_it_named() {
     let mut state = RinkState::new();
     join(&mut state, 7).await;
-    let x0 = state.world.paddles[0].x;
+    let x0 = state.world().paddles[0].x;
 
     send(&mut state, 7, 3, 1, 0).await;
     tick(&mut state).await;
     tick(&mut state).await;
-    assert_eq!(state.world.paddles[0].x, x0, "not yet: the input names frame 3");
+    assert_eq!(state.world().paddles[0].x, x0, "not yet: the input names frame 3");
 
     tick(&mut state).await;
-    assert!(state.world.paddles[0].x > x0, "and on frame 3 it runs");
+    assert!(state.world().paddles[0].x > x0, "and on frame 3 it runs");
 
     // A level repeats until replaced.
     tick(&mut state).await;
     let moved_twice = plaza_client_utils::fixed::Fx::from_int(2 * 3);
-    assert_eq!(state.world.paddles[0].x - x0, moved_twice);
+    assert_eq!(state.world().paddles[0].x - x0, moved_twice);
   }
 
   #[tokio::test]
@@ -261,10 +283,10 @@ mod tests {
     for _ in 0..20 {
       tick(&mut state).await;
     }
-    let x0 = state.world.paddles[0].x;
+    let x0 = state.world().paddles[0].x;
     send(&mut state, 7, 2, 1, 0).await;
     tick(&mut state).await;
-    assert_eq!(state.world.paddles[0].x, x0, "frame 2 is history and stays history");
+    assert_eq!(state.world().paddles[0].x, x0, "frame 2 is history and stays history");
     assert!(state.schedules[0].rejected() > 0);
   }
 
@@ -278,7 +300,7 @@ mod tests {
     assert!(state.occupants().iter().all(|s| matches!(s, Occupant::Human(_))));
 
     // A spectator's input goes nowhere.
-    let before = state.world.paddles;
+    let before = state.world().paddles;
     send(&mut state, 5, 1, 1, 1).await;
     tick(&mut state).await;
     let _ = before;
@@ -291,7 +313,7 @@ mod tests {
       tick(&mut state).await;
     }
     let mid = crate::sim::RINK_W / 2;
-    assert!(state.world.paddles[0].x.to_int() <= mid - PADDLE_R);
-    assert!(state.world.paddles[3].x.to_int() >= mid + PADDLE_R);
+    assert!(state.world().paddles[0].x.to_int() <= mid - PADDLE_R);
+    assert!(state.world().paddles[3].x.to_int() >= mid + PADDLE_R);
   }
 }

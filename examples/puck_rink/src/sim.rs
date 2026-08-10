@@ -17,9 +17,9 @@ pub const PUCK_R: i32 = 6;
 /// Half-height of each goal mouth, around the rink's midline.
 pub const GOAL_HALF: i32 = 30;
 
-const PADDLE_SPEED: i32 = 3;
-const SHOT_SPEED: i32 = 4;
-const PUCK_MAX_SPEED: i32 = 6;
+pub const PADDLE_SPEED: i32 = 3;
+pub const SHOT_SPEED: i32 = 4;
+pub const PUCK_MAX_SPEED: i32 = 6;
 
 pub fn team(seat: usize) -> usize {
   seat / 2
