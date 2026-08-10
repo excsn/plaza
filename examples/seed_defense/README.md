@@ -10,7 +10,7 @@ That is the oldest trick in networked games and it comes with a bill: the moment
 
 ```sh
 ./run-native.sh                              # host and play, serves the browser page too
-./run-native.sh -- --role client --connect ws://host:8080/ws
+./run-native.sh --role client --connect ws://host:8080/ws
 ./wasm-serve.sh 8080                         # headless, browser client on http://localhost:8080
 ./wasm-build.sh                              # rebuild the browser client only
 cargo test -p seed_defense                   # every claim below, as a test

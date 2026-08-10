@@ -10,7 +10,7 @@ It carries a second, unrelated measurement because the shape suits it and nothin
 
 ```sh
 ./run-native.sh                              # host and play, serves the browser page too
-./run-native.sh -- --role client --connect ws://host:8080/ws
+./run-native.sh --role client --connect ws://host:8080/ws
 ./wasm-serve.sh 8080                         # headless, browser client on http://localhost:8080
 cargo test -p curtain_fire                   # every claim below, as a test
 ```

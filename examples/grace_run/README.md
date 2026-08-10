@@ -4,7 +4,7 @@ Four seats delving through locked rooms, built for the half of session-keeping n
 
 ```sh
 ./run-native.sh                          # desktop window; hosts and plays (--role host)
-./run-native.sh -- --role client --connect ws://host:8098/ws
+./run-native.sh --role client --connect ws://host:8098/ws
 ./wasm-serve.sh                          # build the browser client, host it on :8098
 cargo run -p grace_run --bin scripted    # the whole arc, asserted
 ```

@@ -6,7 +6,7 @@
 # to join someone else. For the pure single-process teaching build with no
 # networking compiled in, use `--no-default-features --features native,client`.
 #
-# Usage: ./run-native.sh [-- <args>]
+# Usage: ./run-native.sh [<args>]
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"

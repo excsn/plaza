@@ -12,8 +12,8 @@ It is deliberately the **hard** case. The [`horde_playground`](../horde_playgrou
 
 ```sh
 ./run-native.sh                                                  # --role host: play, and serve joiners
-./run-native.sh -- --role observer                               # watch and drive the settings, no hole of your own
-./run-native.sh -- --role client --connect ws://<host>:8080/ws   # join someone else's arena
+./run-native.sh --role observer                               # watch and drive the settings, no hole of your own
+./run-native.sh --role client --connect ws://<host>:8080/ws   # join someone else's arena
 ./wasm-build.sh                                                  # build the browser client only
 ./wasm-serve.sh                                                  # build it and host it; open the printed URL
 ```

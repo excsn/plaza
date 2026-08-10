@@ -10,7 +10,7 @@ Everything else in this repository has spent its effort on **when** an input hap
 
 ```sh
 ./run-native.sh                              # host and play, serves the browser page too
-./run-native.sh -- --role client --connect ws://host:8080/ws
+./run-native.sh --role client --connect ws://host:8080/ws
 ./wasm-serve.sh 8080                         # headless, browser client on http://localhost:8080
 ./wasm-build.sh                              # rebuild the browser client only
 cargo test -p pellet_maze                    # every claim below, as a test

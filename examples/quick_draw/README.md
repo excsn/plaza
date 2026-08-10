@@ -4,7 +4,7 @@ Two duelists, one signal, and whoever fired first wins: the smallest game whose 
 
 ```sh
 ./run-native.sh                          # desktop window; hosts and plays (--role host)
-./run-native.sh -- --role client --connect ws://host:8096/ws
+./run-native.sh --role client --connect ws://host:8096/ws
 ./wasm-serve.sh                          # build the browser client, host it on :8096
 cargo run -p quick_draw --bin scripted   # the in-process arc, mill numbers included
 ```

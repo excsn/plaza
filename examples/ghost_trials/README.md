@@ -10,7 +10,7 @@ Drive two laps through the rings, as fast as you can. Every run you finish becom
 
 ```sh
 ./run-native.sh                              # host and drive, serves the browser page too
-./run-native.sh -- --role client --connect ws://host:8080/ws
+./run-native.sh --role client --connect ws://host:8080/ws
 ./wasm-serve.sh 8080                         # headless, browser client on http://localhost:8080
 ./wasm-build.sh                              # rebuild the browser client only
 cargo test -p ghost_trials                   # every claim below, as a test

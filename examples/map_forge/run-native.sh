@@ -5,7 +5,7 @@
 # `--role client --connect <url>` to join someone else, or `--role headless` for
 # the deployable server.
 #
-# Usage: ./run-native.sh [-- <args>]
+# Usage: ./run-native.sh [<args>]
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"

@@ -4,7 +4,7 @@ Four editors forge one bomb_grid board together. This is the example for the hal
 
 ```sh
 ./run-native.sh                          # desktop window; hosts and plays (--role host)
-./run-native.sh -- --role client --connect ws://host:8099/ws
+./run-native.sh --role client --connect ws://host:8099/ws
 ./wasm-serve.sh                          # build the browser client, host it on :8099
 cargo run -p map_forge --bin scripted    # the whole arc, asserted
 ```

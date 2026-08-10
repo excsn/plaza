@@ -4,7 +4,7 @@ A Fire Emblem-shaped battle, playable from two commanders to thirty-two: two arm
 
 ```sh
 ./run-native.sh                          # desktop window; hosts and plays (--role host)
-./run-native.sh -- --role client --connect ws://host:8095/ws
+./run-native.sh --role client --connect ws://host:8095/ws
 ./wasm-serve.sh                          # build the browser client, host it on :8095
 cargo run -p plaza_example_field_orders --bin scripted   # the in-process scripted arc
 ```
