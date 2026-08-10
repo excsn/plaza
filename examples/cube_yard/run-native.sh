@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# The zero-ceremony path: open the duel floor as a native desktop window. With
+# The zero-ceremony path: open the cube yard as a native desktop window. With
 # no arguments this is `--role host`, which plays *and* stands up the server, so
 # it also serves the browser page and prints an address others can join at. Pass
 # `--role client --connect <url>` to join someone else, or `--role headless` for
 # the deployable server.
 #
-# CUBE_YARD_FEATURES adds cargo features; the second physics backend is one:
-#   CUBE_YARD_FEATURES=rapier ./run-native.sh --physics rapier
+# --encoding full|packed|budgeted|delta picks how much the wire is asked to
+# carry; --snap turns on quantise-both-sides. See the README for what each costs.
+#
+# CUBE_YARD_FEATURES passes extra cargo features through, if you add any.
 #
 # Usage: ./run-native.sh [<args>]
 set -euo pipefail

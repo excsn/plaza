@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The zero-ceremony path: open the duel floor as a native desktop window. With
+# The zero-ceremony path: open the rink as a native desktop window. With
 # no arguments this is `--role host`, which plays *and* stands up the server, so
 # it also serves the browser page and prints an address others can join at. Pass
 # `--role client --connect <url>` to join someone else, or `--role headless` for

@@ -22,9 +22,11 @@ fi
 #    the default set pulls in the native socket (tungstenite) and the actix server,
 #    and neither compiles to wasm. `web` is the browser client alone.
 #
-#    CUBE_YARD_FEATURES adds to that set; the client re-simulates, so a server on
-#    the rapier backend needs a browser client carrying the same one:
-#      CUBE_YARD_FEATURES=rapier ./wasm-build.sh
+#    The solver is behind the `server` feature, so the browser client never
+#    compiles a rapier it would not run: unlike puck_rink, nothing here
+#    re-simulates, and the client only draws what arrives.
+#
+#    CUBE_YARD_FEATURES adds to that set, if you add any features worth passing.
 features="web${CUBE_YARD_FEATURES:+,$CUBE_YARD_FEATURES}"
 echo "==> building browser client (release wasm, features: $features)"
 ( cd "$root" && cargo build -p cube_yard --bin cube_yard --target wasm32-unknown-unknown --release --no-default-features --features "$features" )

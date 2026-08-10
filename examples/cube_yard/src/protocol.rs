@@ -66,9 +66,6 @@ impl Cubes {
     matches!(self, Self::Packed(_) | Self::Subset(_) | Self::Delta(_))
   }
 
-  pub fn is_subset(&self) -> bool {
-    matches!(self, Self::Subset(_) | Self::Delta(_))
-  }
 }
 
 /// One authoritative tick.
