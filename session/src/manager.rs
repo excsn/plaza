@@ -976,7 +976,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
   }
 
   /// What this manager refuses per connection. A transport adapter reads the
-  /// byte cap its own framing enforces, and [`Limits::probe_slots`] for the
+  /// byte cap its own framing enforces, and [`SessionOptions::probe_slots`] for the
   /// probe table.
   pub fn limits(&self) -> &Limits {
     &self.limits

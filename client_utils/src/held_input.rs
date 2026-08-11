@@ -9,7 +9,7 @@
 //!
 //! | model | what the server does | use |
 //! |---|---|---|
-//! | discrete | each input advances the simulation exactly one step | [`PredictedPlayer`](crate::PredictedPlayer) |
+//! | discrete | each input advances the simulation exactly one step | [`crate::PredictedPlayer`] |
 //! | continuous | an input sets a *held* value the server integrates every tick | this |
 //!
 //! Input replay is wrong for the continuous model, and wrong in a way that gets
@@ -25,7 +25,7 @@
 //!
 //! # How the correction works, and why there is no separate render state
 //!
-//! [`PredictedPlayer`] keeps an exact logical state and eases only what is
+//! [`crate::PredictedPlayer`] keeps an exact logical state and eases only what is
 //! drawn, because replaying inputs over an authoritative state reproduces an
 //! exact answer worth keeping. Here there is nothing to replay and so no exact
 //! answer: the client is dead reckoning, and the honest thing is to bend the
