@@ -74,11 +74,16 @@ fn window_conf() -> Conf {
 fn read_fly() -> Fly {
   let mut yaw = 0i8;
   let mut pitch = 0i8;
+  // Left is +yaw, which reads backwards and is not. `facing()` points along +Z
+  // at yaw zero and the chase camera looks that way, so a rising yaw swings the
+  // nose toward +X, and +X is screen-left from behind. Mapping the keys the
+  // "obvious" way sent the ship the other way, which is the sort of thing no
+  // test here can see and one press tells you immediately.
   if is_key_down(KeyCode::A) || is_key_down(KeyCode::Left) {
-    yaw -= 1;
+    yaw += 1;
   }
   if is_key_down(KeyCode::D) || is_key_down(KeyCode::Right) {
-    yaw += 1;
+    yaw -= 1;
   }
   if is_key_down(KeyCode::W) || is_key_down(KeyCode::Up) {
     pitch += 1;
