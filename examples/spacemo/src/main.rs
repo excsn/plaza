@@ -6,6 +6,7 @@ mod render;
 mod ui;
 
 use macroquad::prelude::*;
+#[cfg(feature = "server")]
 use spacemo::controls::Controls;
 use spacemo::role;
 use spacemo::role::Role;
