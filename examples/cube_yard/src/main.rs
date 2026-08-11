@@ -161,13 +161,21 @@ async fn frame_loop(options: role::Options, encoding: Encoding, snap: bool, send
 
   let mut yard = render::Yard::new();
   let mut clock_ms: u64 = 0;
+  // Kept in a float and spent whole, because truncating the frame time each
+  // frame runs the clock *slow*: 16.67ms counted as 16 loses 4% a second at
+  // 60fps and 13.6% at 144. Everything measured against this clock reads high
+  // by exactly that much, and a bandwidth figure is the whole point here.
+  let mut clock_owed: f32 = 0.0;
   // A toggle the client owns and repeats: the wire carries a level, so a lost
   // press cannot leave the two ends disagreeing about which mode it is in.
   let mut rolling = false;
 
   loop {
     let dt = get_frame_time().min(0.25);
-    clock_ms += (dt * 1000.0) as u64;
+    clock_owed += dt * 1000.0;
+    let whole = clock_owed.floor();
+    clock_ms += whole as u64;
+    clock_owed -= whole;
 
     client.poll(clock_ms);
     if is_key_pressed(KeyCode::Enter) {

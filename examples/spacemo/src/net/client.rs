@@ -614,6 +614,46 @@ mod tests {
     assert!(ships.contains_key(&0));
   }
 
+  /// A clock that loses its remainder makes every rate measured against it
+  /// read high, which in an example built to quote bandwidth is the number
+  /// itself being wrong rather than a detail.
+  #[test]
+  fn a_frame_clock_that_truncates_reports_a_rate_that_is_too_high() {
+    fn rate(fps: usize, keep_remainder: bool) -> f32 {
+      let dt = 1.0 / fps as f32;
+      let mut meter = Meter::default();
+      let (mut clock, mut owed) = (0u64, 0.0f32);
+      // Two seconds of wall clock, a fixed 100 bytes every frame, so the true
+      // rate is exactly 100 * fps bytes a second.
+      for _ in 0..fps * 2 {
+        if keep_remainder {
+          owed += dt * 1000.0;
+          let whole = owed.floor();
+          clock += whole as u64;
+          owed -= whole;
+        } else {
+          clock += (dt * 1000.0) as u64;
+        }
+        meter.record(clock, 100);
+      }
+      meter.kib_per_sec(clock)
+    }
+
+    let truth = 100.0 * 144.0 / 1024.0;
+    let truncated = rate(144, false);
+    let kept = rate(144, true);
+    println!("\n  144fps, true {truth:.1} KiB/s: truncated reads {truncated:.1}, kept reads {kept:.1}\n");
+
+    assert!(
+      (kept - truth).abs() < truth * 0.05,
+      "keeping the remainder should be about right: {kept:.1} against {truth:.1}"
+    );
+    assert!(
+      truncated > kept,
+      "and truncating should over-report: {truncated:.1} against {kept:.1}"
+    );
+  }
+
   #[test]
   fn a_quiet_link_reads_as_zero_rather_than_its_last_rate() {
     let mut meter = Meter::default();
