@@ -26,6 +26,16 @@ The controls are a platformer's, and deliberately so. **The world is simulated a
 
 That inverts the physics configuration too, and for a reason rather than a preference. puck_rink's rapier backend must run `enhanced-determinism` and is therefore forbidden `parallel` and `simd8`. Here nothing re-simulates, so determinism buys nothing and `parallel` is free to take. Same crate, same version, opposite flags, and the netcode family is what decides.
 
+## Turning the dial while it runs
+
+The four stages are also **host dials**, so the panel can move between them without a restart. The host process contains the server, so this is a shared `Arc<Mutex<Controls>>` handed to both the panel and the logic rather than a wire message, which is how [horde_playground](../horde_playground/) does it too. A joining client never has one: not a permission check, just that the handle only exists in the process that is also the server. `--encoding`, `--snap` and the send rate still set the starting position.
+
+It is worth more than the convenience. The headline result is a 94x drop between stage one and stage four, and as startup flags the only way to see it was to run twice and compare two remembered numbers. On a dial it is 2917 KiB/s becoming 31 while the yard keeps moving, which is the same fact arriving as an observation.
+
+Switching encodings mid-stream is the part that needed care, and it is a baseline problem. Entering delta always starts from **nothing confirmed**, because a delta measured against a value the client was never sent under this encoding decodes somewhere else and raises nothing, which is exactly what `tests/agreement.rs` prices at 0.273 units. And a client seated under full width has no stream at all, so the switch builds one rather than leaving it silent; it already holds every cube, so it needs no seed.
+
+Both are tested by driving the real logic through the change and decoding every frame the way a client does, scored over **the cubes each frame names** rather than the whole yard, since a budgeted cube waiting its turn is stale by design and comparing it to truth measures the scheme working. The first version of that test clamped its own error before asserting the clamp, so it could not fail; the second was checked by deleting the stream-building branch and confirming it went red.
+
 ## Where it is
 
 **All four stages.** Reproduce with `cargo test -p cube_yard --test baseline -- --nocapture`.

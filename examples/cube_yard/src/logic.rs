@@ -14,6 +14,7 @@ use plaza_server_utils::{Admission, Departure};
 use tracing::info;
 
 use crate::budget::{Stream, BUDGET_BITS};
+use crate::controls::Controls;
 use crate::pack;
 use crate::protocol::{frame_to_ms, Cubes, Encoding, FrameUpdate, PlayerId, YardOp};
 use crate::state::YardState;
@@ -23,6 +24,7 @@ type Ctx = OpsQueue<YardOp, PlayerId>;
 #[derive(Default)]
 pub struct YardLogic {
   clock: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
+  controls: Option<std::sync::Arc<parking_lot::Mutex<crate::controls::Controls>>>,
 }
 
 impl std::fmt::Debug for YardLogic {
@@ -40,6 +42,50 @@ impl YardLogic {
     self.clock = Some(clock);
     self
   }
+
+  /// Dials the host can turn while the yard runs. Shared memory rather than a
+  /// wire message, because the host process is also the server.
+  pub fn with_controls(mut self, controls: std::sync::Arc<parking_lot::Mutex<crate::controls::Controls>>) -> Self {
+    self.controls = Some(controls);
+    self
+  }
+}
+
+/// Applies whatever the host has dialled, before the tick that will be sent
+/// under it.
+///
+/// A live stream cannot simply be told the new encoding. Entering delta has to
+/// start from nothing confirmed, and a client that joined under full width has
+/// no stream at all, so one is built for it here rather than only on join.
+pub fn retune(state: &mut YardState, wanted: Controls) {
+  state.snap = wanted.snap;
+  state.send_hz = wanted.send_hz.clamp(1, crate::protocol::TICK_HZ);
+  if state.encoding == wanted.encoding {
+    return;
+  }
+  state.encoding = wanted.encoding;
+
+  let cubes = state.yard.len();
+  let budgeted = matches!(wanted.encoding, Encoding::Budgeted | Encoding::Delta);
+  let deltas = wanted.encoding == Encoding::Delta;
+  if !budgeted {
+    return;
+  }
+  let players: Vec<PlayerId> = state.agents.keys().copied().collect();
+  for player in players {
+    match state.streams.get_mut(&player) {
+      Some(stream) => stream.retune(deltas, cubes),
+      None => {
+        // Joined under an unbudgeted encoding, so it already holds every cube
+        // and needs no seed: a fresh accumulator refreshes them on priority.
+        let mut stream = Stream::new(cubes);
+        if deltas {
+          stream = stream.with_delta(cubes);
+        }
+        state.streams.insert(player, stream);
+      }
+    }
+  }
 }
 
 #[async_trait]
@@ -50,6 +96,11 @@ impl StateLogic<YardOp, PlayerId, YardState> for YardLogic {
     input: LogicInput<YardOp, PlayerId>,
   ) -> Result<LogicOutput<YardOp, PlayerId>, StateLogicError> {
     let mut ctx = Ctx::new();
+
+    if let Some(controls) = &self.controls {
+      let wanted = *controls.lock();
+      retune(state, wanted);
+    }
 
     match input {
       LogicInput::AgentJoined { agent } => seat_player(state, &agent, &mut ctx),
@@ -239,6 +290,172 @@ mod tests {
     };
     assert_eq!(cubes.len(), CUBES + MAX_PLAYERS);
     assert_eq!(update.frame, 1);
+  }
+
+  /// Drives the real logic through a dial change and decodes every frame the
+  /// way a client does, which is the only way to catch a baseline the two ends
+  /// stop sharing: a delta measured from a value the client never received
+  /// decodes somewhere else and raises nothing.
+  ///
+  /// Scored over **the cubes each frame actually names**, never the whole yard.
+  /// Under a budget most cubes are waiting their turn, and comparing those
+  /// against truth measures staleness, which is the scheme working. A decode
+  /// fault looks like a cube arriving and landing somewhere the server has
+  /// never put it.
+  async fn dial_and_decode(from: Encoding, to: Encoding) -> f32 {
+    let mut state = YardState::at_rate(from, false, crate::protocol::TICK_HZ);
+    let logic = YardLogic::new();
+    let mut client: Vec<crate::protocol::CubeState> = Vec::new();
+    let mut baseline: Vec<Option<crate::pack::Quantized>> = Vec::new();
+
+    fn drain(
+      ops: Vec<TargetedOp<YardOp, PlayerId>>,
+      client: &mut Vec<crate::protocol::CubeState>,
+      baseline: &mut Vec<Option<crate::pack::Quantized>>,
+    ) -> Vec<usize> {
+      let mut named = Vec::new();
+      for targeted in ops {
+        for op in targeted.ops {
+          let YardOp::Frame(update) = op else { continue };
+          let mut apply = |index: usize, cube: crate::protocol::CubeState, client: &mut Vec<_>| {
+            if index >= client.len() {
+              client.resize(index + 1, cube);
+            }
+            client[index] = cube;
+            named.push(index);
+          };
+          match update.cubes {
+            Cubes::Full(cubes) => {
+              for (index, cube) in cubes.into_iter().enumerate() {
+                apply(index, cube, client);
+              }
+            }
+            Cubes::Packed(bytes) => {
+              for (index, cube) in pack::unpack(bytes.as_ref()).unwrap().into_iter().enumerate() {
+                apply(index, cube, client);
+              }
+            }
+            Cubes::Subset(bytes) => {
+              for (index, cube) in pack::unpack_subset(bytes.as_ref()).unwrap() {
+                apply(index as usize, cube, client);
+              }
+            }
+            Cubes::Delta(bytes) => {
+              for (index, cube) in pack::unpack_delta(bytes.as_ref(), baseline).unwrap() {
+                apply(index as usize, cube, client);
+              }
+            }
+          }
+        }
+      }
+      named
+    }
+
+    let joined = logic
+      .process_input(&mut state, LogicInput::AgentJoined {
+        agent: Agent::new_human(7),
+      })
+      .await
+      .unwrap();
+    drain(joined.ops, &mut client, &mut baseline);
+
+    let moved = logic
+      .process_input(&mut state, LogicInput::AgentOps {
+        source: Agent::new_human(7),
+        ops: vec![YardOp::Drive(Drive { dx: -1, dz: 0, jump: false, rolling: true })],
+      })
+      .await
+      .unwrap();
+    drain(moved.ops, &mut client, &mut baseline);
+
+    for _ in 0..120 {
+      let ops = logic.process_input(&mut state, step()).await.unwrap();
+      drain(ops.ops, &mut client, &mut baseline);
+    }
+
+    // The dial moves, and nothing else changes.
+    retune(&mut state, Controls::new(to, false, crate::protocol::TICK_HZ));
+
+    let (mut worst, mut checked) = (0.0f32, 0usize);
+    for _ in 0..240 {
+      let ops = logic.process_input(&mut state, step()).await.unwrap();
+      let named = drain(ops.ops, &mut client, &mut baseline);
+
+      let mut truth = Vec::new();
+      state.yard.snapshot(&mut truth);
+      for index in named {
+        let (want, held) = (&truth[index], &client[index]);
+        worst = worst.max(
+          ((want.pos[0] - held.pos[0]).powi(2) + (want.pos[1] - held.pos[1]).powi(2) + (want.pos[2] - held.pos[2]).powi(2))
+            .sqrt(),
+        );
+        checked += 1;
+      }
+    }
+    assert!(checked > 1000, "the run has to actually carry cubes: {checked}");
+    worst
+  }
+
+  fn step() -> LogicInput<YardOp, PlayerId> {
+    LogicInput::TimeStep {
+      delta_time: std::time::Duration::from_millis(16),
+    }
+  }
+
+  /// A cube a frame names should land within the wire's own rounding. Anything
+  /// larger is the two ends measuring from different baselines.
+  const DECODE_TOLERANCE: f32 = 0.02;
+
+  #[tokio::test]
+  async fn the_dial_can_move_to_delta_without_desyncing_the_baseline() {
+    // Entering delta with a baseline carried over from before the switch means
+    // measuring against values the client was never sent under this encoding.
+    for from in [Encoding::Full, Encoding::Packed, Encoding::Budgeted] {
+      let worst = dial_and_decode(from, Encoding::Delta).await;
+      assert!(worst < DECODE_TOLERANCE, "{from:?} -> Delta decoded {worst} out");
+    }
+  }
+
+  #[tokio::test]
+  async fn the_dial_can_move_off_delta_and_back() {
+    for to in [Encoding::Full, Encoding::Packed, Encoding::Budgeted] {
+      let worst = dial_and_decode(Encoding::Delta, to).await;
+      assert!(worst < DECODE_TOLERANCE, "Delta -> {to:?} decoded {worst} out");
+    }
+  }
+
+  #[tokio::test]
+  async fn a_client_seated_before_the_dial_moved_gets_a_stream() {
+    let mut state = YardState::at_rate(Encoding::Full, false, crate::protocol::TICK_HZ);
+    let logic = YardLogic::new();
+    logic
+      .process_input(&mut state, LogicInput::AgentJoined {
+        agent: Agent::new_human(7),
+      })
+      .await
+      .unwrap();
+    assert!(state.streams.is_empty(), "full width needs no stream");
+
+    retune(&mut state, Controls::new(Encoding::Delta, false, crate::protocol::TICK_HZ));
+    let stream = state.streams.get(&7).expect("the dial builds one for a seated client");
+    assert!(stream.deltas());
+  }
+
+  #[tokio::test]
+  async fn entering_delta_confirms_nothing(){
+    let mut stream = Stream::new(8).with_delta(8);
+    stream.baseline[3] = Some(crate::pack::quantize_cube(&crate::protocol::CubeState {
+      pos: [1.0, 2.0, 3.0],
+      rot: [0.0, 0.0, 0.0, 1.0],
+      linvel: [0.0; 3],
+      at_rest: true,
+    }));
+    stream.retune(true, 8);
+    assert!(stream.baseline.iter().all(|b| b.is_none()), "nothing survives the switch");
+    assert!(stream.deltas());
+
+    stream.retune(false, 8);
+    assert!(!stream.deltas(), "and leaving delta drops the baseline entirely");
   }
 
   #[tokio::test]

@@ -13,8 +13,9 @@ use plaza_session::SessionOptions;
 use plaza_wire::frame::ProtocolVersion;
 use plaza_wire::MsgPackCodec;
 
+use crate::controls::Controls;
 use crate::logic::YardLogic;
-use crate::protocol::{Encoding, PlayerId, YardOp, PROTOCOL, TICK_HZ};
+use crate::protocol::{PlayerId, YardOp, PROTOCOL, TICK_HZ};
 use crate::state::YardState;
 
 type YardSession = ActixWsPlazaSession<YardOp, PlayerId, MsgPackCodec>;
@@ -38,10 +39,9 @@ async fn ws_route(
 pub async fn serve(
   bind: &str,
   static_dir: Option<String>,
-  encoding: Encoding,
-  snap: bool,
-  send_hz: u64,
+  controls: std::sync::Arc<parking_lot::Mutex<crate::controls::Controls>>,
 ) -> std::io::Result<()> {
+  let Controls { encoding, snap, send_hz } = *controls.lock();
   init_logging();
 
   let sim_clock = Arc::new(AtomicU64::new(0));
@@ -53,7 +53,7 @@ pub async fn serve(
     }),
   );
 
-  let logic = YardLogic::new().with_clock(sim_clock);
+  let logic = YardLogic::new().with_clock(sim_clock).with_controls(controls);
   // No snapshot provider: the whole yard goes out inside every Frame, which is
   // exactly the extravagance stage one exists to measure.
   let (commands, controller) = StateControllerBuilder::new(

@@ -6,7 +6,9 @@
 # the deployable server.
 #
 # --encoding full|packed|budgeted|delta picks how much the wire is asked to
-# carry; --snap turns on quantise-both-sides. See the README for what each costs.
+# carry; --snap turns on quantise-both-sides. Both are the *starting* position:
+# a host can move between all four stages from the panel while the yard runs,
+# which is the only way to watch 2917 KiB/s become 31. See the README.
 #
 # CUBE_YARD_FEATURES passes extra cargo features through, if you add any.
 #

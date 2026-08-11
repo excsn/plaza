@@ -1,9 +1,15 @@
 //! The panel: what the wire cost, and what stage one is spending it on.
 
+use cube_yard::controls::{Controls, ENCODINGS};
 use cube_yard::net::client::{NetClient, Status};
-use cube_yard::protocol::CUBES;
+use cube_yard::protocol::{Encoding, CUBES, TICK_HZ};
 
-pub fn draw_panel(client: &NetClient, url: &str) {
+/// The dials, drawn only where the `Arc` exists, which is the process that is
+/// also the server. A joining client is handed `None` and sees a panel without
+/// them, because the handle is shared memory rather than a permission.
+pub type Dials = Option<std::sync::Arc<parking_lot::Mutex<Controls>>>;
+
+pub fn draw_panel(client: &NetClient, url: &str, dials: &Dials) {
   egui_macroquad::ui(|ctx| {
     egui_macroquad::egui::Window::new("cube yard")
       .anchor(egui_macroquad::egui::Align2::RIGHT_TOP, [-12.0, 12.0])
@@ -56,6 +62,30 @@ pub fn draw_panel(client: &NetClient, url: &str) {
           )
           .small(),
         );
+
+        if let Some(dials) = dials {
+          ui.separator();
+          let mut held = *dials.lock();
+          let was = held;
+          ui.label("host dials:");
+          for (encoding, name) in ENCODINGS {
+            ui.radio_value(&mut held.encoding, encoding, name);
+          }
+          ui.checkbox(&mut held.snap, "quantise both sides");
+          ui.add(egui_macroquad::egui::Slider::new(&mut held.send_hz, 1..=TICK_HZ).text("sends/sec"));
+          if held != was {
+            *dials.lock() = held;
+          }
+          ui.label(
+            egui_macroquad::egui::RichText::new(match held.encoding {
+              Encoding::Full => "every cube, every tick, at full width.",
+              Encoding::Packed => "the same cubes on a bounded grid.",
+              Encoding::Budgeted => "only what fits the budget, hottest first.",
+              Encoding::Delta => "the same budget, spent on ten times as many cubes.",
+            })
+            .small(),
+          );
+        }
       });
   });
 }

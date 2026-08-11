@@ -79,6 +79,20 @@ impl Stream {
     self
   }
 
+  /// Re-points a live stream at a different encoding.
+  ///
+  /// Entering delta always starts from **nothing confirmed**, so every cube is
+  /// written absolute until the other end has been told each one once. Carrying
+  /// a baseline across the switch would measure deltas from values the client
+  /// was never sent under this encoding, which decodes somewhere else in
+  /// silence: exactly the failure `tests/agreement.rs` exists to price.
+  pub fn retune(&mut self, deltas: bool, cubes: usize) {
+    self.baseline.clear();
+    if deltas {
+      self.baseline.resize(cubes, None);
+    }
+  }
+
   pub fn deltas(&self) -> bool {
     !self.baseline.is_empty()
   }

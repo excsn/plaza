@@ -7,6 +7,7 @@ mod render;
 mod ui;
 
 use macroquad::prelude::*;
+use cube_yard::controls::Controls;
 use cube_yard::protocol::{self, Encoding};
 use cube_yard::role;
 use cube_yard::role::Role;
@@ -49,7 +50,11 @@ fn main() {
   if options.role == Role::Headless {
     let result = tokio::runtime::Runtime::new()
       .expect("tokio runtime")
-      .block_on(cube_yard::net::host::serve(&options.bind, options.static_dir.clone(), encoding, snap, send_hz));
+      .block_on(cube_yard::net::host::serve(
+        &options.bind,
+        options.static_dir.clone(),
+        Controls::new(encoding, snap, send_hz).shared(),
+      ));
     if let Err(e) = result {
       eprintln!("server stopped: {e}");
       std::process::exit(1);
@@ -113,15 +118,23 @@ async fn frame_loop(options: role::Options, encoding: Encoding, snap: bool, send
   #[cfg(not(feature = "server"))]
   let (_, _, _) = (encoding, snap, send_hz);
 
+  // One handle for the panel and one for the logic, in the process that is both
+  // the host and the server. A joining client never has one.
   #[cfg(feature = "server")]
-  if options.role.runs_a_server() {
+  let controls = options
+    .role
+    .runs_a_server()
+    .then(|| Controls::new(encoding, snap, send_hz).shared());
+
+  #[cfg(feature = "server")]
+  if let Some(controls) = controls.clone() {
     let bind = options.bind.clone();
     let static_dir = options.static_dir.clone();
     std::thread::Builder::new()
       .name("yard".to_owned())
       .spawn(move || {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-        if let Err(e) = runtime.block_on(cube_yard::net::host::serve(&bind, static_dir, encoding, snap, send_hz)) {
+        if let Err(e) = runtime.block_on(cube_yard::net::host::serve(&bind, static_dir, controls)) {
           eprintln!("yard stopped: {e}");
         }
       })
@@ -140,6 +153,11 @@ async fn frame_loop(options: role::Options, encoding: Encoding, snap: bool, send
     Ok(client) => client,
     Err(e) => return give_up(format!("could not connect to {url}: {e}")),
   };
+
+  #[cfg(feature = "server")]
+  let dials: ui::Dials = controls;
+  #[cfg(not(feature = "server"))]
+  let dials: ui::Dials = None;
 
   let mut yard = render::Yard::new();
   let mut clock_ms: u64 = 0;
@@ -191,7 +209,7 @@ async fn frame_loop(options: role::Options, encoding: Encoding, snap: bool, send
       draw_text(text, (screen_width() - w) * 0.5, screen_height() * 0.5, 28.0, GRAY);
     }
 
-    ui::draw_panel(&client, &url);
+    ui::draw_panel(&client, &url, &dials);
     egui_macroquad::draw();
 
     next_frame().await;

@@ -11,6 +11,7 @@
 pub mod acked;
 #[cfg(feature = "server")]
 pub mod budget;
+pub mod controls;
 pub mod pack;
 pub mod protocol;
 pub mod role;
