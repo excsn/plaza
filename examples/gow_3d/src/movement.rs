@@ -25,6 +25,12 @@ pub const RUN_SPEED: f32 = 7.0;
 /// as a constant.
 pub const TOLERANCE: f32 = 1.35;
 
+/// The finest interval the server's clock actually resolves, in milliseconds.
+///
+/// One tick. A validator cannot tell two claims within a tick apart in time,
+/// so it must not pretend they took zero.
+pub const CLOCK_GRAIN_MS: u64 = 1000 / 30;
+
 /// What the server did with a claimed position.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Verdict {
@@ -57,7 +63,14 @@ impl Tracked {
   /// The elapsed time is the server's, not the client's, or the cheat is to
   /// claim a long gap and a long distance together.
   pub fn claim(&mut self, to: (f32, f32, f32), now_ms: u64) -> Verdict {
-    let elapsed = now_ms.saturating_sub(self.at_ms) as f32 / 1000.0;
+    // Credited against at least one tick, because the server's clock only
+    // moves on one. Two claims arriving between ticks measure zero elapsed
+    // against each other, and without this the second is refused however
+    // honest it was: jitter alone would produce refusals, and refusals are the
+    // only signal this design has that somebody is cheating. The cost is
+    // stated rather than hidden, and it is the same trade `TOLERANCE` already
+    // makes: the cheat budget is one tick's distance wider.
+    let elapsed = now_ms.saturating_sub(self.at_ms).max(CLOCK_GRAIN_MS) as f32 / 1000.0;
     let allowed = RUN_SPEED * TOLERANCE * elapsed;
     let moved = distance(self.at, to);
     // A first claim after a long silence is allowed a long distance, which is
@@ -122,6 +135,26 @@ mod tests {
     // would be punishing a client for a gap the network caused.
     let mut t = Tracked::new((0.0, 0.0, 0.0), 0);
     assert_eq!(t.claim((60.0, 0.0, 0.0), 10_000), Verdict::Accepted);
+  }
+
+  #[test]
+  fn two_claims_between_ticks_are_not_refused_for_arriving_together() {
+    // Without a credited grain this is the shape of a false positive that
+    // costs the design its only signal: an honest client whose packets bunch
+    // up gets refused for it, and the refusal count stops meaning anything.
+    let mut t = Tracked::new((0.0, 0.0, 0.0), 0);
+    let step = RUN_SPEED * (CLOCK_GRAIN_MS as f32 / 1000.0);
+    assert_eq!(t.claim((step, 0.0, 0.0), 0), Verdict::Accepted);
+    assert_eq!(t.claim((step * 2.0, 0.0, 0.0), 0), Verdict::Accepted, "same millisecond");
+    assert_eq!(t.refusals, 0);
+  }
+
+  #[test]
+  fn the_credited_grain_is_one_tick_and_not_a_free_pass() {
+    // The other half, or the fix would be a hole: crediting a grain does not
+    // credit a teleport.
+    let mut t = Tracked::new((0.0, 0.0, 0.0), 0);
+    assert_eq!(t.claim((400.0, 0.0, 0.0), 0), Verdict::Refused);
   }
 
   #[test]

@@ -43,6 +43,15 @@ pub struct GowState {
   scratch: Vec<Seat>,
 }
 
+impl std::fmt::Debug for GowState {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("GowState")
+      .field("tick", &self.tick)
+      .field("characters", &self.zone.characters.len())
+      .finish_non_exhaustive()
+  }
+}
+
 impl Default for GowState {
   fn default() -> Self {
     Self::new()

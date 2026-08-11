@@ -20,6 +20,7 @@ pub mod casting;
 pub mod movement;
 pub mod relevance;
 pub mod logic;
+pub mod net;
 pub mod protocol;
 pub mod state;
 pub mod zone;
