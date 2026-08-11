@@ -211,6 +211,24 @@ Keying on **motion** breaks the circle, and the rule left over is the one that w
 
 The general shape: a technique that perturbs state to keep two machines agreeing can collide with an optimisation that rewards state for holding still, and the optimisation was worth more here (a sleeping cube skips its velocity entirely). Check what a correction costs the things that were not wrong.
 
+### Discreteness does not make things cheap, it makes apparatus unnecessary (poketo)
+
+A tile world was expected to be a large bandwidth win over a continuous one. Measured, a trainer is **36 bits against 51** for the quantised position every other example in this tree actually sends: 1.4x, which is modest. The 2.9x figure people quote comes from comparing against two raw `f32`s and an angle, and nothing here sends those.
+
+What a tile actually buys is that it is an **index rather than a measurement**. No bounds to outgrow, no quantiser, no precision to argue about, and two machines can compare positions with `==`. cube_yard shipped a bug that cannot exist in a tile world, by widening its floor past the range its quantiser covered and freezing everything that wandered out.
+
+The same correction landed twice more in the same example. Ten times the view radius is **24.5x** the people rather than the 100x its area implies, but nowhere near free. And arriving in a populated zone costs **1.00x** an ordinary frame, so there is no join protocol to write at all: a tile world's steady state is already a complete description of what is in view, where cube_yard needed a whole-world dump because a budgeted client would take seconds to learn the yard packet by packet.
+
+Three predictions about size, three measurements saying the interesting thing is elsewhere. The general shape: when a representation change looks like it should save bytes, measure it against **what you actually send today** rather than against the naive version, and then look at what it lets you delete instead.
+
+### A state has to be repeated to stay true and a transcript does not (poketo)
+
+One game holding a real-time overworld and a turn-based battle, and the difference between them is not a budget. The overworld goes out **every tick**, because a trainer nobody describes stops moving on screen. A battle goes out **only when something happens**, because nothing in it decays: a client with the latest one is completely up to date however long ago it arrived.
+
+That sentence decides more than the send rate. It is why a battle needs no prediction, no interpolation and no relevance, and why all of its difficulty is in delivery instead: an event that is never repeated is one whose loss is permanent. Two things handle that, and neither is a mechanism. A choice **names the turn it is for**, so a resend after a dropped connection names a turn that has resolved and is ignored, which is ordering, deduplication and late arrival in one field. And a **token issued on seating** links a reconnecting client to what it was doing, because a new connection is a new id and nothing in plaza's session layer carries identity across a drop.
+
+It also decides the switch between the two: a seat is in one collection or the other, never a flag on a player. A boolean leaves a body standing in the world while its owner is elsewhere, and every rule has to remember to check it.
+
 ### Both halves running is a different test from either half being right (spacemo)
 
 Every test in spacemo drove one side, and the bug that got past all of them lived on the seam: the server was correct, the client was correct about everything it was told, and what neither owned was **what to do about silence**. Missiles are streamed while they exist and simply stop being sent when they end, so a client that never treated absence as an ending kept every one it had ever seen.
