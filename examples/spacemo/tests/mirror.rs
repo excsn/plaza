@@ -252,6 +252,87 @@ async fn a_client_lands_where_the_server_is_under_every_dial() {
   }
 }
 
+/// Every kill a client is part of has to reach it, however far away the other
+/// half was.
+///
+/// The only **event** on this wire, and the only thing whose delivery matters:
+/// a state is described again next frame and an event is not. The filter that
+/// decides who hears one is hand-written and reads visible-or-about-you, which
+/// is a rule with two halves and no test until now. Losing the second half
+/// would look like being killed by nothing, which is a worse bug than the
+/// bandwidth it saves.
+#[tokio::test]
+async fn every_kill_a_client_is_part_of_reaches_it() {
+  let logic = SpaceLogic::new();
+  let mut state = SpaceState::new();
+  state.bots = 40;
+  state.space.set_bots(40);
+  for id in 0..3u32 {
+    seat(&logic, &mut state, id).await;
+  }
+  for id in 0..3u32 {
+    hold(&logic, &mut state, id, Fly {
+      thrust: 1,
+      yaw: 0.4,
+      pitch: 0.1,
+      firing: true,
+      launching: true,
+    })
+    .await;
+  }
+
+  let mut mine_on_the_wire = 0usize;
+  let mut mine_in_the_world = 0usize;
+  for _ in 0..2500u64 {
+    let out = logic
+      .process_input(&mut state, LogicInput::TimeStep {
+        delta_time: std::time::Duration::from_millis(16),
+      })
+      .await
+      .unwrap();
+
+    // What happened this tick that seat zero is part of.
+    let owed: Vec<_> = state
+      .space
+      .kills
+      .iter()
+      .filter(|k| k.killer == 0 || k.victim == 0)
+      .copied()
+      .collect();
+    mine_in_the_world += owed.len();
+
+    for targeted in &out.ops {
+      for op in &targeted.ops {
+        let SpaceOp::Frame(update) = op else { continue };
+        if update.yours != Some(0) {
+          continue;
+        }
+        for kill in &update.kills {
+          if kill.killer == 0 || kill.victim == 0 {
+            mine_on_the_wire += 1;
+          }
+        }
+        // And what it was told must actually have happened.
+        for kill in &update.kills {
+          assert!(
+            state.space.kills.iter().any(|k| k.killer == kill.killer && k.victim == kill.victim),
+            "a kill was announced that the world does not have: {kill:?}"
+          );
+        }
+      }
+    }
+  }
+
+  println!("
+  seat zero was part of {mine_in_the_world} kills and was told about {mine_on_the_wire}
+");
+  assert!(mine_in_the_world > 0, "the fight has to involve this seat at all");
+  assert_eq!(
+    mine_on_the_wire, mine_in_the_world,
+    "a client has to hear about every kill it is part of, wherever the other half was standing"
+  );
+}
+
 #[tokio::test]
 async fn a_client_stops_hearing_about_a_ship_that_leaves_and_lets_go_of_it() {
   // The same shape one entity along, and the half that already worked: ships
