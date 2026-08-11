@@ -107,7 +107,9 @@ async fn frame_loop(options: role::Options) {
     Err(e) => return give_up(format!("could not connect to {url}: {e}")),
   };
 
-  let mut clock_ms: u64 = 0;
+  // Assigned from the absolute clock on the first frame, so there is no
+  // starting value to read.
+  let mut clock_ms;
   let mut tool = ui::Tool::Paint(TILE_SOFT);
   let mut presence_due: u64 = 0;
   let mut walk_due: u64 = 0;

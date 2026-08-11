@@ -160,7 +160,9 @@ async fn frame_loop(options: role::Options, encoding: Encoding, snap: bool, send
   let dials: ui::Dials = None;
 
   let mut yard = render::Yard::new();
-  let mut clock_ms: u64 = 0;
+  // Assigned from the absolute clock on the first frame, so there is no
+  // starting value to read.
+  let mut clock_ms;
   // A toggle the client owns and repeats: the wire carries a level, so a lost
   // press cannot leave the two ends disagreeing about which mode it is in.
   let mut rolling = false;

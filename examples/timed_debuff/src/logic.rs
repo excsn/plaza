@@ -123,10 +123,11 @@ impl StateLogic<GameOp, PlayerId, GameState> for DebuffLogic {
                 warn!(target_id = %target_id, "ApplyDebuff op for non-existent player.");
               }
             }
-            _ => {}
-            // Server-originated: the snapshot provider builds these,
-            // clients never send one.
+            // Server-originated: the snapshot provider builds these, clients
+            // never send one. Above the catch-all, or the arm the comment
+            // describes is unreachable and the comment describes nothing.
             GameOp::Snapshot(_) => {}
+            _ => {}
 }
         }
       }

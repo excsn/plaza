@@ -4,7 +4,6 @@ use crate::types::{
 };
 use async_trait::async_trait;
 use plaza::{
-  agent::Agent,
   common::fsm::{FsmContext as _, OpsQueue},
   session::TargetedOp,
   state_logic::{LogicInput, LogicOutput, StateLogic, StateLogicError},
@@ -189,6 +188,9 @@ impl StateLogic<MoleOp, PlayerId, MoleGameState> for MoleLogic {
 #[cfg(test)]
 mod tests {
   use super::*;
+  // Here rather than at the top of the file: only the tests build an agent, and
+  // a top-level import is unused in every other target.
+  use plaza::agent::Agent;
   use std::time::Duration;
   use uuid::Uuid;
 

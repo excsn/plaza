@@ -65,7 +65,7 @@ shots carried per frame, per client:
 
 Both halves stay live on a dial, so the bolt count collapses while the missiles keep streaming.
 
-Three decisions around the missile are worth naming. **Lock is resolved on the server**, nearest target inside a 35 degree cone: it is the one thing here a client could name that it has no business naming, and the check costs a dot product. **The counter-play is distance rather than evasion**, 70 units a second against a ship's 90, so running works and turning while chased is what gets you hit. And **a missile whose target leaves keeps flying** rather than vanishing, which is kinder and one less event to deliver.
+Three decisions around the missile are worth naming. **Lock is resolved on the server**, nearest target inside a 35 degree cone: it is the one thing here a client could name that it has no business naming, and the check costs a dot product. **The counter-play is distance rather than evasion**, 70 units a second against a ship's 90, so running works and turning while chased is what gets you hit. And **a missile whose target leaves goes out** on a short fuse, rather than flying on: a shot chasing nothing is debris that still looks like a threat, and a homing shot is the one thing here whose path has to be sent every frame, so carrying on costs bandwidth to say nothing.
 
 ## Events and state, on one wire
 

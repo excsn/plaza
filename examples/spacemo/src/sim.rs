@@ -162,6 +162,13 @@ const MISSILE_EVERY: u16 = 90;
 /// Radians a second it can turn. Deliberately beatable: a missile nobody can
 /// out-fly is a cutscene rather than a weapon.
 const MISSILE_TURN: f32 = 1.5;
+/// Ticks a missile has left once it has nothing to chase.
+///
+/// It goes out rather than flying on. A missile that has lost its target is
+/// debris that still looks like a threat, and it costs the wire every frame to
+/// say so, since a homing shot is the one thing whose path cannot be derived.
+/// Short rather than instant so it fizzles instead of popping.
+const MISSILE_FUSE: u16 = 20;
 /// How far ahead a target can be and still be acquired.
 const LOCK_RANGE: f32 = 320.0;
 /// How far off the nose. About 35 degrees, so it is aimed rather than sprayed.
@@ -480,9 +487,10 @@ impl Space {
         continue;
       };
       let Some(ship) = self.ships.get(target as usize).filter(|s| s.alive) else {
-        // The target left. It keeps its heading rather than vanishing, which is
-        // both kinder and one less event to deliver.
+        // The target left, so it goes out on a short fuse rather than flying on
+        // as debris nobody is aiming.
         self.bolts[index].chasing = None;
+        self.bolts[index].life = self.bolts[index].life.min(MISSILE_FUSE);
         continue;
       };
       let bolt = self.bolts[index];
@@ -1129,7 +1137,12 @@ mod tests {
   }
 
   #[test]
-  fn a_missile_whose_target_leaves_keeps_going_rather_than_vanishing() {
+  fn a_missile_whose_target_leaves_goes_out() {
+    // This asserted the opposite until now: that it kept flying, on the
+    // reasoning that a shot which quietly stops existing is one less event to
+    // deliver. It is also debris that still looks like a threat, and a homing
+    // shot is the one thing on this wire whose path has to be sent every frame,
+    // so flying on costs bandwidth to say nothing.
     let mut space = Space::new();
     space.spawn(0);
     space.spawn(1);
@@ -1146,7 +1159,44 @@ mod tests {
       space.bolts.iter().all(|b| b.chasing.is_none()),
       "it should let go rather than chase a seat nobody is in"
     );
-    assert!(!space.bolts.is_empty(), "and stay in flight, which is one less event to deliver");
+    let left = space.bolts.iter().map(|b| b.life).max().unwrap_or(0);
+    assert!(left <= MISSILE_FUSE, "and be on a short fuse, not {left} ticks of it");
+
+    for _ in 0..MISSILE_FUSE + 2 {
+      space.step(&[Fly::default(); MAX_PLAYERS]);
+    }
+    assert!(space.bolts.is_empty(), "and then be gone");
+  }
+
+  #[test]
+  fn a_missile_that_never_finds_anything_still_expires() {
+    // The other half of the ask: it goes out after a while regardless.
+    let mut space = Space::new();
+    space.spawn(0);
+    space.spawn(1);
+    space.ships[0].at = Vec3::ZERO;
+    space.ships[1].at = Vec3::new(0.0, 0.0, 200.0);
+    for _ in 0..2 {
+      space.step(&launching());
+    }
+    assert!(space.bolts.iter().any(|b| b.chasing.is_some()));
+
+    // The target stays alive and simply outruns it for ever.
+    let mut running = [Fly::default(); MAX_PLAYERS];
+    running[1] = Fly {
+      thrust: 1,
+      yaw: 0.0,
+      pitch: 0.0,
+      firing: false,
+      launching: false,
+    };
+    for _ in 0..MISSILE_LIFE + 30 {
+      space.step(&running);
+    }
+    assert!(
+      space.bolts.iter().all(|b| b.chasing.is_none()),
+      "nothing should still be chasing after its life ran out"
+    );
   }
 
   #[test]

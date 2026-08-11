@@ -121,7 +121,9 @@ async fn frame_loop(options: role::Options) {
   let mut agreement = Agreement::default();
   let mut choice = ui::Choice::default();
   let mut over_panel = false;
-  let mut clock_ms: u64 = 0;
+  // Assigned from the absolute clock on the first frame, so there is no
+  // starting value to read.
+  let mut clock_ms;
   let mut perf = Perf::default();
 
   loop {

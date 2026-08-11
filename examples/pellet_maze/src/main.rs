@@ -153,7 +153,9 @@ async fn frame_loop(options: role::Options) {
 
   #[cfg(all(feature = "client", feature = "websocket"))]
   let mut marker = JunctionMarker::default();
-  let mut clock_ms: u64 = 0;
+  // Assigned from the absolute clock on the first frame, so there is no
+  // starting value to read.
+  let mut clock_ms;
   let mut perf = Perf::default();
 
   loop {
