@@ -36,6 +36,9 @@ pub struct SpaceState {
   visible: Vec<u32>,
   /// What the last tick sent, per seat, for the panel.
   pub last_seen: [usize; MAX_PLAYERS],
+  pub last_bytes: [usize; MAX_PLAYERS],
+  /// Whether frames go out bit-packed or at full serde width.
+  pub packed: bool,
 }
 
 impl std::fmt::Debug for SpaceState {
@@ -67,6 +70,8 @@ impl SpaceState {
       points: Vec::new(),
       visible: Vec::new(),
       last_seen: [0; MAX_PLAYERS],
+      last_bytes: [0; MAX_PLAYERS],
+      packed: true,
     }
   }
 
