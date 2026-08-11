@@ -167,6 +167,7 @@ async fn frame_loop(options: role::Options) {
       // hand says it is and the rest are where the server last said they were.
       let ships: Vec<_> = client.ships.keys().filter_map(|seat| client.drawn(*seat)).collect();
       scene.draw_ships(ships.iter(), client.mine);
+      scene.draw_bolts(client.bolts.values());
       set_default_camera();
     } else {
       draw_text("waiting for a seat", 24.0, 48.0, 28.0, GRAY);

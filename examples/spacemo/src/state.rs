@@ -34,9 +34,16 @@ pub struct SpaceState {
   /// Scratch, so a tick that queries once per client allocates nothing.
   points: Vec<Vec3>,
   visible: Vec<u32>,
+  /// A second index, over bolts. Separate from the ship index because the two
+  /// churn at completely different rates: rebuilding one costs a handful of
+  /// inserts and the other costs however many are in flight.
+  bolt_field: Field,
+  bolt_points: Vec<Vec3>,
+  bolt_visible: Vec<u32>,
   /// What the last tick sent, per seat, for the panel.
   pub last_seen: [usize; MAX_PLAYERS],
   pub last_bytes: [usize; MAX_PLAYERS],
+  pub last_bolt_bytes: [usize; MAX_PLAYERS],
   /// Whether frames go out bit-packed or at full serde width.
   pub packed: bool,
 }
@@ -69,8 +76,12 @@ impl SpaceState {
       strategy,
       points: Vec::new(),
       visible: Vec::new(),
+      bolt_field: Field::new(CELL, strategy),
+      bolt_points: Vec::new(),
+      bolt_visible: Vec::new(),
       last_seen: [0; MAX_PLAYERS],
       last_bytes: [0; MAX_PLAYERS],
+      last_bolt_bytes: [0; MAX_PLAYERS],
       packed: true,
     }
   }
@@ -86,6 +97,24 @@ impl SpaceState {
     }
     self.space.positions(&mut self.points);
     self.field.rebuild(&self.points);
+
+    if self.bolt_field.strategy() != self.strategy {
+      self.bolt_field = Field::new(CELL, self.strategy);
+    }
+    self.bolt_points.clear();
+    self.bolt_points.extend(self.space.bolts.iter().map(|b| b.at));
+    self.bolt_field.rebuild(&self.bolt_points);
+  }
+
+  /// The bolts a seat can see.
+  ///
+  /// Relevance applies to these exactly as it does to ships, and it matters
+  /// more: a firefight on the far side of the volume is the traffic a viewer
+  /// has no use for, and there is a great deal of it.
+  pub fn bolts_visible_to(&mut self, seat: usize) -> &[u32] {
+    let at = self.space.ships[seat].at;
+    self.bolt_field.query(at, VIEW, &mut self.bolt_visible, &[]);
+    &self.bolt_visible
   }
 
   /// The seats a given seat can see, including itself.

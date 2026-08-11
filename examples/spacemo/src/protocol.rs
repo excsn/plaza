@@ -44,6 +44,22 @@ pub struct Fly {
   pub firing: bool,
 }
 
+/// A bolt in flight, as the wire carries it.
+///
+/// No orientation: a bolt points where it is going, so the client derives the
+/// look of it from the velocity it already has. That is a third of a ship's
+/// cost for a thing there are far more of, which is the trade transient
+/// entities want.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BoltState {
+  /// Slot index and generation together, because an index alone is reused and
+  /// is therefore not an identity: a client that keyed on it would blend a new
+  /// bolt into the path of the one that just expired.
+  pub id: u32,
+  pub pos: [f32; 3],
+  pub vel: [f32; 3],
+}
+
 /// One authoritative tick, as one client sees it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FrameUpdate {
@@ -53,6 +69,8 @@ pub struct FrameUpdate {
   pub yours: Option<u16>,
   /// Only the ships this client can see. Its own is always among them.
   pub ships: Vec<ShipState>,
+  /// Only the bolts this client can see, which churn far faster than ships do.
+  pub bolts: Vec<BoltState>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -14,7 +14,7 @@ use plaza_wire::{MsgPackCodec, WireCodec};
 use plaza_ws::pump::{mismatch_message, Arrival, FramePump};
 use plaza_ws::{Event, State};
 
-use crate::protocol::{Fly, ShipState, SpaceOp, PROTOCOL};
+use crate::protocol::{BoltState, Fly, ShipState, SpaceOp, PROTOCOL};
 use crate::sim::{advance, quaternion, Ship};
 
 const WIRE: MsgPackCodec = MsgPackCodec;
@@ -131,6 +131,10 @@ pub struct NetClient {
   /// How many ships the last frame carried, which is the number the panel
   /// should show rather than the volume's population.
   pub carried: usize,
+  /// Bolts this client currently knows about, keyed by the id that makes a
+  /// reused slot distinguishable from the bolt that vacated it.
+  pub bolts: HashMap<u32, BoltState>,
+  pub bolts_carried: usize,
   /// Ships dropped for going quiet, cumulative, so the panel can show that
   /// churn is a cost rather than an error.
   pub forgotten: u64,
@@ -171,6 +175,8 @@ impl NetClient {
       stamp: 0,
       meter: Meter::default(),
       carried: 0,
+      bolts: HashMap::new(),
+      bolts_carried: 0,
       forgotten: 0,
       predicted: None,
       offset: [0.0; 3],
@@ -241,6 +247,14 @@ impl NetClient {
             self.mine = update.yours;
           }
           self.carried = update.ships.len();
+          self.bolts_carried = update.bolts.len();
+          // A bolt is replaced wholesale every frame rather than aged: it lives
+          // about a second, so there is no staleness worth carrying, and the
+          // set that arrived *is* the set that exists.
+          self.bolts.clear();
+          for bolt in &update.bolts {
+            self.bolts.insert(bolt.id, *bolt);
+          }
           for ship in update.ships {
             self.ships.insert(
               ship.seat,

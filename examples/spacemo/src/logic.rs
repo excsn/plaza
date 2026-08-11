@@ -16,7 +16,7 @@ use plaza_server_utils::{Admission, Departure};
 use tracing::info;
 
 use crate::pack;
-use crate::protocol::{frame_to_ms, FrameUpdate, PlayerId, ShipState, SpaceOp};
+use crate::protocol::{frame_to_ms, BoltState, FrameUpdate, PlayerId, ShipState, SpaceOp};
 use crate::sim::quaternion;
 use crate::state::SpaceState;
 
@@ -138,16 +138,32 @@ fn step_once(state: &mut SpaceState, ctx: &mut Ctx) {
     };
     let seen = state.visible_to(seat).to_vec();
     let ships: Vec<ShipState> = seen.iter().map(|id| ship_state(state, *id as usize)).collect();
-    let ships = if state.packed {
-      // The packed path still builds the same list; what changes is what
+    let near = state.bolts_visible_to(seat).to_vec();
+    let bolts: Vec<BoltState> = near
+      .iter()
+      .filter_map(|id| state.space.bolts.get(*id as usize))
+      .map(|bolt| BoltState {
+        id: (bolt.key.index << 8) | bolt.key.generation as u32 & 0xff,
+        pos: [bolt.at.x, bolt.at.y, bolt.at.z],
+        vel: [bolt.vel.x, bolt.vel.y, bolt.vel.z],
+      })
+      .collect();
+    let (ships, bolts) = if state.packed {
+      // The packed path still builds the same lists; what changes is what
       // crosses. Keeping both live is what lets the panel price one against
       // the other without a second run.
-      let bytes = pack::pack(&ships);
-      state.last_bytes[seat] = bytes.len();
-      pack::unpack(&bytes).unwrap_or(ships)
+      let ship_bytes = pack::pack(&ships);
+      let bolt_bytes = pack::pack_bolts(&bolts);
+      state.last_bytes[seat] = ship_bytes.len();
+      state.last_bolt_bytes[seat] = bolt_bytes.len();
+      (
+        pack::unpack(&ship_bytes).unwrap_or(ships),
+        pack::unpack_bolts(&bolt_bytes).unwrap_or(bolts),
+      )
     } else {
       state.last_bytes[seat] = ships.len() * pack::ship_bits_full() / 8;
-      ships
+      state.last_bolt_bytes[seat] = bolts.len() * 7 * 32 / 8;
+      (ships, bolts)
     };
 
     ctx.ops_q().push(TargetedOp::new_system_to(
@@ -157,6 +173,7 @@ fn step_once(state: &mut SpaceState, ctx: &mut Ctx) {
         server_time_ms: frame_to_ms(state.tick),
         yours: Some(seat as u16),
         ships,
+        bolts,
       }))],
     ));
   }
@@ -244,6 +261,74 @@ mod tests {
         );
       }
     }
+  }
+
+  /// What transient entities cost against the standing world.
+  ///
+  /// Every other example in the tree measures steady state: N bodies updating
+  /// every tick. This is the other half, and the reason the answer is not
+  /// obvious is that bolts are individually cheap and collectively numerous.
+  #[tokio::test]
+  async fn what_churn_costs_against_a_standing_world() {
+    let mut state = SpaceState::new();
+    for id in 0..8u32 {
+      run(&mut state, LogicInput::AgentJoined {
+        agent: Agent::new_human(id),
+      })
+      .await;
+    }
+    // Everyone in one fight, so the bolts are actually in each other's view.
+    for seat in 0..8 {
+      state.space.ships[seat].at = Vec3::new(seat as f32 * 12.0, 0.0, 0.0);
+    }
+    for id in 0..8u32 {
+      run(&mut state, LogicInput::AgentOps {
+        source: Agent::new_human(id),
+        ops: vec![SpaceOp::Fly(Fly {
+          thrust: 0,
+          yaw: 0,
+          pitch: 0,
+          firing: true,
+        })],
+      })
+      .await;
+    }
+
+    let (mut ship_bytes, mut bolt_bytes, mut ships, mut bolts, mut counted) = (0usize, 0usize, 0usize, 0usize, 0usize);
+    for _ in 0..600 {
+      let ops = tick(&mut state).await;
+      for update in frames(&ops) {
+        ships += update.ships.len();
+        bolts += update.bolts.len();
+        counted += 1;
+      }
+      for seat in 0..8 {
+        ship_bytes += state.last_bytes[seat];
+        bolt_bytes += state.last_bolt_bytes[seat];
+      }
+    }
+
+    let per = counted.max(1) as f32;
+    println!("\n  eight ships in one fight, ten seconds, per frame per client:\n");
+    println!("    ships  {:>6.1} at {:>7.1} bytes", ships as f32 / per, ship_bytes as f32 / per);
+    println!("    bolts  {:>6.1} at {:>7.1} bytes", bolts as f32 / per, bolt_bytes as f32 / per);
+    println!(
+      "\n  {} spawned and {} expired over the run, so the transient half of\n  the world turned over {:.0} times while the standing half sat still.\n",
+      state.space.spawned,
+      state.space.expired,
+      state.space.expired as f32 / 8.0
+    );
+
+    assert!(bolts > 0, "the fight has to actually produce bolts");
+    assert!(state.space.expired > 0, "and they have to expire");
+    // The claim worth pinning: a bolt is cheaper than a ship, or transient
+    // entities would be unaffordable at the rate they are created.
+    let bolt_each = bolt_bytes as f32 / bolts.max(1) as f32;
+    let ship_each = ship_bytes as f32 / ships.max(1) as f32;
+    assert!(
+      bolt_each < ship_each,
+      "a bolt should cost less than a ship: {bolt_each:.1} against {ship_each:.1}"
+    );
   }
 
   #[tokio::test]

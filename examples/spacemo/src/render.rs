@@ -121,6 +121,19 @@ impl Scene {
     self.flush();
   }
 
+  /// Bolts, drawn as a streak along their own velocity.
+  ///
+  /// No orientation crosses the wire for these, and none needs to: a bolt
+  /// points where it is going, so the look is derived from what is already
+  /// there rather than paid for again.
+  pub fn draw_bolts<'a>(&mut self, bolts: impl Iterator<Item = &'a spacemo::protocol::BoltState>) {
+    for bolt in bolts {
+      let at = vec3(bolt.pos[0], bolt.pos[1], bolt.pos[2]);
+      let along = vec3(bolt.vel[0], bolt.vel[1], bolt.vel[2]).normalize_or_zero() * 1.6;
+      draw_line_3d(at - along, at + along, Color::new(1.0, 0.72, 0.3, 1.0));
+    }
+  }
+
   /// The static rocks, which are the only thing giving the volume a sense of
   /// scale. Without them a ship in open space appears not to move at all.
   pub fn draw_rocks(&mut self, rocks: &[[f32; 3]]) {
