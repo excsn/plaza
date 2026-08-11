@@ -348,6 +348,7 @@ impl Space {
   /// relevance field, which is already rebuilt anyway.
   fn resolve_hits(&mut self) {
     let mut struck = Vec::new();
+    let slots = &mut self.slots;
     self.bolts.retain(|bolt| {
       for (seat, ship) in self.ships.iter().enumerate() {
         if !ship.alive || seat as u8 == bolt.from {
@@ -357,6 +358,10 @@ impl Space {
         if d.length_squared() <= HIT_RADIUS * HIT_RADIUS {
           let damage = if bolt.chasing.is_some() { MISSILE_DAMAGE } else { 1 };
           struck.push((seat, bolt.from, damage));
+          // Freed here as well as on expiry. A shot that hits was leaking its
+          // slot, so the index space climbed for as long as anyone was fighting
+          // and eventually ran past the bits the wire gives an id.
+          slots.free(bolt.key);
           return false;
         }
       }
@@ -850,6 +855,41 @@ mod tests {
       })
       .fold(f32::MIN, f32::max);
     assert!(ahead > 0.0, "a bolt should be in front, not behind: {ahead}");
+  }
+
+  #[test]
+  fn a_shot_that_hits_frees_its_slot_as_well_as_one_that_expires() {
+    // It did not. Expiry freed the slot and a hit did not, so the index space
+    // climbed for as long as anyone was fighting, and an id is only twenty bits
+    // on the wire.
+    let mut space = Space::new();
+    space.spawn(0);
+    space.spawn(1);
+    space.ships[0].at = Vec3::ZERO;
+
+    let mut all = [Fly::default(); MAX_PLAYERS];
+    all[0] = Fly {
+      thrust: 0,
+      yaw: 0.0,
+      pitch: 0.0,
+      firing: true,
+      launching: false,
+    };
+
+    let mut widest = 0u32;
+    for _ in 0..1200 {
+      // Parked in front, so nearly every shot lands rather than expiring.
+      space.ships[1].at = Vec3::new(0.0, 0.0, 30.0);
+      space.ships[1].vel = Vec3::ZERO;
+      space.ships[0].at = Vec3::ZERO;
+      space.step(&all);
+      widest = widest.max(space.bolts.iter().map(|b| b.key.index).max().unwrap_or(0));
+    }
+    assert!(space.hits.is_empty() || widest > 0);
+    assert!(
+      widest < 32,
+      "a fight of twenty seconds walked the slot index to {widest}, so hits are leaking"
+    );
   }
 
   #[test]

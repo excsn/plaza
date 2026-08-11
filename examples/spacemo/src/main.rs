@@ -206,7 +206,7 @@ async fn frame_loop(options: role::Options) {
       // hand says it is and the rest are where the server last said they were.
       let ships: Vec<_> = client.ships.keys().filter_map(|seat| client.drawn(*seat)).collect();
       scene.draw_ships(ships.iter(), client.mine, &client.struck);
-      scene.draw_bolts(client.bolts.values());
+      scene.draw_bolts(client.bolts.values().map(|shot| &shot.state));
       if let Some(target) = client.locked.and_then(|seat| client.drawn(seat)) {
         scene.draw_lock(target.pos);
       }

@@ -115,7 +115,10 @@ pub fn draw_panel(client: &NetClient, url: &str, dials: &Dials) {
           client.up.kib_per_sec(now),
           client.up.bytes_per_frame()
         ));
-        ui.label(format!("worst correction {:.3}u", client.worst_correction));
+        ui.label(format!(
+          "worst correction {:.3}u, {} wraps",
+          client.worst_correction, client.teleports
+        ));
 
         if let Some(dials) = dials {
           ui.separator();

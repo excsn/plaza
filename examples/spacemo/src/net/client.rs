@@ -29,6 +29,12 @@ const WINDOW_MS: u64 = 1000;
 /// frame makes the edge of the world strobe; a short grace makes it a fade.
 const FORGET_AFTER: u64 = 30;
 
+/// Frames of silence before a homing shot is assumed gone.
+///
+/// Short, because a missile is streamed every frame while it exists, so silence
+/// means it is over rather than out of budget.
+const BOLT_SILENCE: u64 = 6;
+
 /// What fraction of a correction survives one sixtieth of a second.
 ///
 /// Not a snap. The local ship is predicted from the same rule the server runs,
@@ -108,6 +114,34 @@ impl Meter {
   }
 }
 
+/// Drops shots the server has stopped sending, and reports how many went.
+///
+/// **A homing shot has no other way to die on the client.** It is not carried
+/// forward, because its path cannot be derived, so its life never runs down
+/// here; and nothing announces that one hit something or expired, it simply
+/// stops being in the frame. Without this, every missile that ever came into
+/// view stayed in the map for ever, drawn at the last place it was seen.
+///
+/// Free-standing so it can be tested without a socket.
+pub fn forget_quiet_bolts(bolts: &mut HashMap<u32, Shot>, frame: u64) -> usize {
+  let before = bolts.len();
+  bolts.retain(|_, bolt| !bolt.homing || frame.saturating_sub(bolt.seen) < BOLT_SILENCE);
+  before - bolts.len()
+}
+
+/// Whether a correction is the world moving a ship rather than the prediction
+/// being wrong about it.
+///
+/// The volume wraps at its edge, so crossing it moves a ship by `VOLUME * 2`,
+/// and the prediction and the server do not wrap on the same tick. Easing that
+/// difference draws the ship, and the camera with it, somewhere it never was
+/// for several seconds, which reads as the rest of the world freezing at a
+/// distance. Free-standing so it can be tested without a socket.
+pub fn is_a_wrap(offset: [f32; 3]) -> bool {
+  let size = (offset[0].powi(2) + offset[1].powi(2) + offset[2].powi(2)).sqrt();
+  size > crate::sim::VOLUME
+}
+
 /// What a seat is called. Bots and players share a numbering, so the name says
 /// which is which without a second field on the wire to carry it.
 pub fn name(seat: u16) -> String {
@@ -140,6 +174,20 @@ pub struct Known {
   pub seen: u64,
 }
 
+/// A shot the client is drawing, with the frame it was last mentioned in.
+#[derive(Clone, Copy, Debug)]
+pub struct Shot {
+  pub state: BoltState,
+  pub seen: u64,
+}
+
+impl std::ops::Deref for Shot {
+  type Target = BoltState;
+  fn deref(&self) -> &BoltState {
+    &self.state
+  }
+}
+
 pub struct NetClient {
   pump: FramePump<MsgPackCodec>,
   pub status: Status,
@@ -158,10 +206,13 @@ pub struct NetClient {
   pub carried: usize,
   /// Bolts this client currently knows about, keyed by the id that makes a
   /// reused slot distinguishable from the bolt that vacated it.
-  pub bolts: HashMap<u32, BoltState>,
+  pub bolts: HashMap<u32, Shot>,
   pub bolts_carried: usize,
   /// What a missile would chase if launched now, straight from the server.
   pub locked: Option<u16>,
+  /// Shots dropped for going silent, which for a missile is the only way it
+  /// ever leaves the screen.
+  pub stale_bolts: u64,
   /// Ticks until a launch is possible, zero when ready.
   pub reload: u16,
   /// Seats struck recently, with the frame it happened on, so the renderer can
@@ -192,8 +243,12 @@ pub struct NetClient {
   offset: [f32; 3],
   /// Worst correction seen, for the panel: this is what the prediction is
   /// getting wrong, and it should stay small if the shared rule is really
-  /// shared.
+  /// shared. Wraps are excluded, or this reports the width of the world.
   pub worst_correction: f32,
+  /// How many times the world moved a ship rather than the prediction being
+  /// wrong about it. Counted rather than hidden, since a wrap is a real event
+  /// and a reader should be able to tell the two apart.
+  pub teleports: u64,
   /// **The rule includes its timestep**, which is what this is here to hold.
   ///
   /// `advance` moves a ship by one server tick, so calling it once per rendered
@@ -247,6 +302,7 @@ impl NetClient {
       bolts: HashMap::new(),
       bolts_carried: 0,
       locked: None,
+      stale_bolts: 0,
       reload: 0,
       struck: HashMap::new(),
       hits_seen: 0,
@@ -257,6 +313,7 @@ impl NetClient {
       predicted: None,
       offset: [0.0; 3],
       worst_correction: 0.0,
+      teleports: 0,
       debt: 0.0,
       last_ms: None,
       held: Fly::default(),
@@ -336,8 +393,15 @@ impl NetClient {
           // off, a frame carries only what is *new*, and everything else is
           // being carried forward here instead.
           for bolt in &update.bolts {
-            self.bolts.insert(bolt.id, *bolt);
+            self.bolts.insert(
+              bolt.id,
+              Shot {
+                state: *bolt,
+                seen: update.frame,
+              },
+            );
           }
+          self.forget_quiet_bolts(update.frame);
           for ship in update.ships {
             self.ships.insert(
               ship.seat,
@@ -431,15 +495,29 @@ impl NetClient {
   fn carry_bolts(&mut self) {
     let step = 1.0 / crate::protocol::TICK_HZ as f32;
     self.bolts.retain(|_, bolt| {
+      // A homing shot is not carried forward, because its path cannot be
+      // derived. It is dropped when the server stops mentioning it, below.
       if bolt.homing {
         return true;
       }
       for axis in 0..3 {
-        bolt.pos[axis] += bolt.vel[axis] * step;
+        bolt.state.pos[axis] += bolt.state.vel[axis] * step;
       }
-      bolt.life = bolt.life.saturating_sub(1);
-      bolt.life > 0
+      bolt.state.life = bolt.state.life.saturating_sub(1);
+      bolt.state.life > 0
     });
+  }
+
+  /// Drops shots the server has stopped sending.
+  ///
+  /// **A homing shot has no other way to die on this client.** It is not
+  /// carried forward, so its life never runs down here, and nothing announces
+  /// that one hit something or expired: it simply stops being in the frame.
+  /// Without this every missile that ever came into view stayed in the map for
+  /// ever, drawn at the last place it was seen, which is what a volume full of
+  /// frozen missiles was.
+  fn forget_quiet_bolts(&mut self, frame: u64) {
+    self.stale_bolts += forget_quiet_bolts(&mut self.bolts, frame) as u64;
   }
 
   /// Runs the local ship forward one tick under the held input, and bleeds off
@@ -498,9 +576,23 @@ impl NetClient {
 
     if let Some(was) = was {
       let now = self.predicted.unwrap().at;
-      self.offset = [was[0] - now.x, was[1] - now.y, was[2] - now.z];
-      let size = (self.offset[0].powi(2) + self.offset[1].powi(2) + self.offset[2].powi(2)).sqrt();
-      self.worst_correction = self.worst_correction.max(size);
+      let offset = [was[0] - now.x, was[1] - now.y, was[2] - now.z];
+      // **A teleport is not an error, and must not be eased.** The volume wraps
+      // at its edge, so crossing it moves a ship by `VOLUME * 2`; the prediction
+      // and the server do not wrap on the same tick, and the difference for that
+      // one frame is the whole width of the world. Bleeding 800 units off at
+      // ten percent a tick draws the ship, and therefore the camera, somewhere
+      // it never was for several seconds, which reads as the rest of the world
+      // freezing at a distance. Measured on a panel as a worst correction of
+      // 799.770 against a volume of 400.
+      if is_a_wrap(offset) {
+        self.offset = [0.0; 3];
+        self.teleports += 1;
+      } else {
+        let size = (offset[0].powi(2) + offset[1].powi(2) + offset[2].powi(2)).sqrt();
+        self.offset = offset;
+        self.worst_correction = self.worst_correction.max(size);
+      }
     }
   }
 
@@ -618,6 +710,51 @@ mod tests {
       },
       seen,
     }
+  }
+
+  fn shot(id: u32, homing: bool, seen: u64) -> Shot {
+    Shot {
+      state: BoltState {
+        id,
+        homing,
+        pos: [0.0; 3],
+        vel: [1.0, 0.0, 0.0],
+        life: 300,
+      },
+      seen,
+    }
+  }
+
+  #[test]
+  fn a_missile_the_server_stops_sending_leaves_the_screen() {
+    // It has no other way to die here. A homing shot is not carried forward,
+    // because its path cannot be derived, so its life never runs down on the
+    // client; and nothing announces that one hit or expired, it simply stops
+    // being in the frame. Without this every missile that ever came into view
+    // stayed for ever, drawn where it was last seen.
+    let mut bolts = HashMap::new();
+    bolts.insert(1, shot(1, true, 0));
+    bolts.insert(2, shot(2, false, 0));
+
+    assert_eq!(forget_quiet_bolts(&mut bolts, BOLT_SILENCE - 1), 0, "not on the first silent frame");
+    assert_eq!(forget_quiet_bolts(&mut bolts, BOLT_SILENCE + 1), 1, "then the missile goes");
+    assert!(!bolts.contains_key(&1));
+    assert!(bolts.contains_key(&2), "and a straight shot is left to its own life");
+  }
+
+  #[test]
+  fn a_wrap_is_told_apart_from_an_ordinary_correction() {
+    // Both arrive through the same path and must not be treated alike. A wrap
+    // moves a ship by the width of the world; easing that draws it, and the
+    // camera with it, somewhere it never was for seconds. Seen on a panel as a
+    // worst correction of 799.770 in a volume 400 across.
+    assert!(!is_a_wrap([2.0, 0.0, 0.0]), "an ordinary correction is carried and eased");
+    assert!(!is_a_wrap([0.0, 30.0, 0.0]), "even a large one, if it is not the world");
+    assert!(is_a_wrap([crate::sim::VOLUME * 2.0, 0.0, 0.0]), "a wrap is not");
+    assert!(
+      is_a_wrap([crate::sim::VOLUME * 1.4, crate::sim::VOLUME * 1.4, 0.0]),
+      "on any axis, or a diagonal wrap is eased"
+    );
   }
 
   #[test]
