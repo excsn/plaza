@@ -11,9 +11,9 @@ use std::collections::HashMap;
 use plaza_client_utils::math::Vec3;
 use plaza_server_utils::Roster;
 
-use crate::protocol::{Fly as WireFly, PlayerId};
+use crate::protocol::{Fly, PlayerId};
 use crate::relevance::{Field, Strategy};
-use crate::sim::{Fly, Space, MAX_PLAYERS};
+use crate::sim::{Space, MAX_PLAYERS};
 
 /// How far a ship can see. The single number the whole example turns on.
 pub const VIEW: f32 = 80.0;
@@ -107,13 +107,8 @@ impl SpaceState {
     &self.visible
   }
 
-  pub fn apply(&mut self, seat: usize, fly: WireFly) {
-    self.flying[seat] = Fly {
-      thrust: fly.thrust,
-      yaw: fly.yaw,
-      pitch: fly.pitch,
-      firing: fly.firing,
-    };
+  pub fn apply(&mut self, seat: usize, fly: Fly) {
+    self.flying[seat] = fly;
   }
 }
 

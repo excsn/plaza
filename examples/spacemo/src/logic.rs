@@ -17,6 +17,7 @@ use tracing::info;
 
 use crate::pack;
 use crate::protocol::{frame_to_ms, FrameUpdate, PlayerId, ShipState, SpaceOp};
+use crate::sim::quaternion;
 use crate::state::SpaceState;
 
 type Ctx = OpsQueue<SpaceOp, PlayerId>;
@@ -171,22 +172,6 @@ fn ship_state(state: &SpaceState, seat: usize) -> ShipState {
   }
 }
 
-/// Yaw and pitch to a unit quaternion, which is what the wire carries.
-///
-/// The simulation reasons in angles because a flight model does; the wire wants
-/// a quaternion because smallest-three is 29 bits against 64 for two f32s, and
-/// because a client blending orientations wants something it can slerp.
-pub fn quaternion(yaw: f32, pitch: f32) -> [f32; 4] {
-  let (sy, cy) = (yaw * 0.5).sin_cos();
-  // Negated, because a positive rotation about X takes +Z toward -Y while the
-  // flight model treats positive pitch as nose up. The two conventions differ
-  // by exactly this sign, and nothing but the nose test would have caught it:
-  // positions were correct throughout, and every ship simply rendered pitched
-  // the wrong way.
-  let (sp, cp) = (-pitch * 0.5).sin_cos();
-  // Yaw about Y, then pitch about X.
-  [cy * sp, sy * cp, -sy * sp, cy * cp]
-}
 
 #[cfg(test)]
 mod tests {

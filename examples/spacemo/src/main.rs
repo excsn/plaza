@@ -156,13 +156,17 @@ async fn frame_loop(options: role::Options) {
 
     client.poll(clock_ms);
     client.fly(read_fly());
+    client.predict(dt);
 
     clear_background(Color::new(0.02, 0.02, 0.05, 1.0));
 
-    if let Some(mine) = client.mine_state() {
+    if let Some(mine) = client.mine.and_then(|seat| client.drawn(seat)) {
       set_camera(&render::chase(mine.pos, mine.rot));
       scene.draw_rocks(&rocks);
-      scene.draw_ships(client.ships.values().map(|k| &k.state), client.mine);
+      // Drawn rather than received, so the local ship is where the player's
+      // hand says it is and the rest are where the server last said they were.
+      let ships: Vec<_> = client.ships.keys().filter_map(|seat| client.drawn(*seat)).collect();
+      scene.draw_ships(ships.iter(), client.mine);
       set_default_camera();
     } else {
       draw_text("waiting for a seat", 24.0, 48.0, 28.0, GRAY);

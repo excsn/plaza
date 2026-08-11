@@ -38,6 +38,7 @@ pub fn draw_panel(client: &NetClient, url: &str, dials: &Dials) {
           client.meter.kib_per_sec(now)
         ));
         ui.label(format!("  {:.0} bytes per frame", client.meter.bytes_per_frame()));
+        ui.label(format!("worst correction {:.3}u", client.worst_correction));
 
         if let Some(dials) = dials {
           ui.separator();

@@ -15,6 +15,7 @@ use plaza_ws::pump::{mismatch_message, Arrival, FramePump};
 use plaza_ws::{Event, State};
 
 use crate::protocol::{Fly, ShipState, SpaceOp, PROTOCOL};
+use crate::sim::{advance, quaternion, Ship};
 
 const WIRE: MsgPackCodec = MsgPackCodec;
 
@@ -27,6 +28,13 @@ const WINDOW_MS: u64 = 1000;
 /// flickers in and out of it as both ends drift. Dropping on the first silent
 /// frame makes the edge of the world strobe; a short grace makes it a fade.
 const FORGET_AFTER: u64 = 30;
+
+/// How fast a correction is bled into the drawn position, per second.
+///
+/// Not a snap. The local ship is predicted from the same rule the server runs,
+/// so corrections are small and constant rather than rare and large, and
+/// teleporting on each one is far more visible than carrying a little error.
+const EASE_PER_SEC: f32 = 6.0;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Status {
@@ -126,6 +134,20 @@ pub struct NetClient {
   /// Ships dropped for going quiet, cumulative, so the panel can show that
   /// churn is a cost rather than an error.
   pub forgotten: u64,
+  /// The local ship, run forward under local input rather than waited for.
+  ///
+  /// Presentation only: nothing here is authoritative and nothing else reads
+  /// it. The server's answer always wins, this only decides what is on screen
+  /// between the input and the answer arriving.
+  predicted: Option<Ship>,
+  /// Where the prediction was drawn before its last correction, minus where it
+  /// is now, bled off over the following frames.
+  offset: [f32; 3],
+  /// Worst correction seen, for the panel: this is what the prediction is
+  /// getting wrong, and it should stay small if the shared rule is really
+  /// shared.
+  pub worst_correction: f32,
+  held: Fly,
   now_ms: u64,
   sent: Option<Fly>,
   events: Vec<Event>,
@@ -150,6 +172,10 @@ impl NetClient {
       meter: Meter::default(),
       carried: 0,
       forgotten: 0,
+      predicted: None,
+      offset: [0.0; 3],
+      worst_correction: 0.0,
+      held: Fly::default(),
       now_ms: 0,
       sent: None,
       events: Vec::new(),
@@ -224,6 +250,9 @@ impl NetClient {
               },
             );
           }
+          if let Some(truth) = self.mine.and_then(|mine| self.ships.get(&mine)).map(|k| k.state) {
+            self.correct(&truth);
+          }
           self.forget_the_quiet();
         }
         SpaceOp::Fly(_) => {}
@@ -242,12 +271,87 @@ impl NetClient {
   }
 
   /// Sends the held level, and only when it changes.
+  ///
+  /// The level is also kept, because prediction needs to know what is being
+  /// held on every frame rather than only on the frames it changed.
   pub fn fly(&mut self, fly: Fly) {
+    self.held = fly;
     if self.sent == Some(fly) {
       return;
     }
     self.sent = Some(fly);
     self.pump.send_op(&SpaceOp::Fly(fly));
+  }
+
+  /// Runs the local ship forward one tick under the held input, and bleeds off
+  /// whatever the last correction was worth.
+  pub fn predict(&mut self, dt_secs: f32) {
+    if let Some(ship) = &mut self.predicted {
+      advance(ship, self.held);
+    }
+    let keep = (1.0 - EASE_PER_SEC * dt_secs).clamp(0.0, 1.0);
+    for axis in self.offset.iter_mut() {
+      *axis *= keep;
+      if axis.abs() < 1e-4 {
+        *axis = 0.0;
+      }
+    }
+  }
+
+  /// Folds a server answer into the prediction.
+  ///
+  /// The server wins outright; what survives is the *visual* difference, bled
+  /// off over the next few frames so a correction reads as a drift rather than
+  /// a jump.
+  fn correct(&mut self, truth: &ShipState) {
+    let was = self.drawn_local();
+    let mut ship = self.predicted.unwrap_or_default();
+    ship.at = plaza_client_utils::math::Vec3::new(truth.pos[0], truth.pos[1], truth.pos[2]);
+    ship.vel = plaza_client_utils::math::Vec3::new(truth.vel[0], truth.vel[1], truth.vel[2]);
+    ship.alive = true;
+    // Orientation stays predicted: it is driven entirely by local input, so the
+    // client is not guessing at it, and snapping it fights the player's hand.
+    if self.predicted.is_none() {
+      self.predicted = Some(ship);
+    } else {
+      let held = self.predicted.unwrap();
+      ship.yaw = held.yaw;
+      ship.pitch = held.pitch;
+      self.predicted = Some(ship);
+    }
+
+    if let Some(was) = was {
+      let now = self.predicted.unwrap().at;
+      self.offset = [was[0] - now.x, was[1] - now.y, was[2] - now.z];
+      let size = (self.offset[0].powi(2) + self.offset[1].powi(2) + self.offset[2].powi(2)).sqrt();
+      self.worst_correction = self.worst_correction.max(size);
+    }
+  }
+
+  fn drawn_local(&self) -> Option<[f32; 3]> {
+    let ship = self.predicted?;
+    Some([
+      ship.at.x + self.offset[0],
+      ship.at.y + self.offset[1],
+      ship.at.z + self.offset[2],
+    ])
+  }
+
+  /// Where to draw a ship: predicted for the local one, as received for the
+  /// rest.
+  pub fn drawn(&self, seat: u16) -> Option<ShipState> {
+    let known = self.ships.get(&seat)?;
+    if Some(seat) != self.mine {
+      return Some(known.state);
+    }
+    let ship = self.predicted?;
+    let at = self.drawn_local()?;
+    Some(ShipState {
+      seat,
+      pos: at,
+      rot: quaternion(ship.yaw, ship.pitch),
+      vel: [ship.vel.x, ship.vel.y, ship.vel.z],
+    })
   }
 
   pub fn mine_state(&self) -> Option<&ShipState> {

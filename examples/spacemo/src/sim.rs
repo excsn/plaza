@@ -35,20 +35,14 @@ const TURN: f32 = 1.8;
 const DRAG: f32 = 0.35;
 const MAX_SPEED: f32 = 90.0;
 
-/// What a client holds down.
+/// What a client holds down, which is the wire's own type rather than a copy.
 ///
-/// Levels rather than events, so a lost input repeats harmlessly and the server
-/// never has to reconstruct a press it did not see.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Fly {
-  /// Forward thrust, -1 to 1.
-  pub thrust: i8,
-  /// Yaw, -1 to 1.
-  pub yaw: i8,
-  /// Pitch, -1 to 1.
-  pub pitch: i8,
-  pub firing: bool,
-}
+/// Two identical structs and a conversion between them is a bug waiting for
+/// someone to add a field to one of them, and this is exactly the boundary a
+/// prediction crosses: the client runs [`advance`] on the level it is holding
+/// and the server runs it on the level that arrived, so they had better be the
+/// same shape by construction.
+pub use crate::protocol::Fly;
 
 /// A ship, as the server holds it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -125,34 +119,9 @@ impl Space {
   pub fn step(&mut self, flying: &[Fly; MAX_PLAYERS]) {
     self.tick += 1;
     for (seat, fly) in flying.iter().enumerate() {
-      let ship = &mut self.ships[seat];
-      if !ship.alive {
-        continue;
+      if self.ships[seat].alive {
+        advance(&mut self.ships[seat], *fly);
       }
-
-      ship.yaw += fly.yaw.clamp(-1, 1) as f32 * TURN * TICK;
-      ship.pitch = (ship.pitch + fly.pitch.clamp(-1, 1) as f32 * TURN * TICK)
-        // Straight up and straight down are where a yaw/pitch model tears, so
-        // it never quite arrives at either.
-        .clamp(-1.4, 1.4);
-
-      let push = ship.facing() * (fly.thrust.clamp(-1, 1) as f32 * THRUST * TICK);
-      ship.vel = Vec3::new(
-        (ship.vel.x + push.x) * (1.0 - DRAG * TICK),
-        (ship.vel.y + push.y) * (1.0 - DRAG * TICK),
-        (ship.vel.z + push.z) * (1.0 - DRAG * TICK),
-      );
-      let speed = ship.vel.length();
-      if speed > MAX_SPEED {
-        ship.vel = ship.vel.normalize() * MAX_SPEED;
-      }
-
-      ship.at = Vec3::new(
-        ship.at.x + ship.vel.x * TICK,
-        ship.at.y + ship.vel.y * TICK,
-        ship.at.z + ship.vel.z * TICK,
-      );
-      confine(ship);
     }
   }
 
@@ -165,6 +134,56 @@ impl Space {
   pub fn alive(&self) -> usize {
     self.ships.iter().filter(|s| s.alive).count()
   }
+}
+
+/// One ship, one tick.
+///
+/// **The rule, shared as code rather than described twice.** A client predicting
+/// its own ship runs exactly this, so there is no second implementation to
+/// disagree with the server's: a prediction that diverges because two copies of
+/// a rule drifted apart is the failure the reconciliation machinery only
+/// recovers from, and the cheapest place to prevent it is here.
+pub fn advance(ship: &mut Ship, fly: Fly) {
+  ship.yaw += fly.yaw.clamp(-1, 1) as f32 * TURN * TICK;
+  ship.pitch = (ship.pitch + fly.pitch.clamp(-1, 1) as f32 * TURN * TICK)
+    // Straight up and straight down are where a yaw/pitch model tears, so it
+    // never quite arrives at either.
+    .clamp(-1.4, 1.4);
+
+  let push = ship.facing() * (fly.thrust.clamp(-1, 1) as f32 * THRUST * TICK);
+  ship.vel = Vec3::new(
+    (ship.vel.x + push.x) * (1.0 - DRAG * TICK),
+    (ship.vel.y + push.y) * (1.0 - DRAG * TICK),
+    (ship.vel.z + push.z) * (1.0 - DRAG * TICK),
+  );
+  let speed = ship.vel.length();
+  if speed > MAX_SPEED {
+    ship.vel = ship.vel.normalize() * MAX_SPEED;
+  }
+
+  ship.at = Vec3::new(
+    ship.at.x + ship.vel.x * TICK,
+    ship.at.y + ship.vel.y * TICK,
+    ship.at.z + ship.vel.z * TICK,
+  );
+  confine(ship);
+}
+
+/// Yaw and pitch to a unit quaternion, which is what the wire carries.
+///
+/// The simulation reasons in angles because a flight model does; the wire wants
+/// a quaternion because smallest-three is 29 bits against 64 for two f32s, and
+/// because a client blending orientations wants something it can slerp.
+pub fn quaternion(yaw: f32, pitch: f32) -> [f32; 4] {
+  let (sy, cy) = (yaw * 0.5).sin_cos();
+  // Negated, because a positive rotation about X takes +Z toward -Y while the
+  // flight model treats positive pitch as nose up. The two conventions differ
+  // by exactly this sign, and nothing but the nose test would have caught it:
+  // positions were correct throughout, and every ship simply rendered pitched
+  // the wrong way.
+  let (sp, cp) = (-pitch * 0.5).sin_cos();
+  // Yaw about Y, then pitch about X.
+  [cy * sp, sy * cp, -sy * sp, cy * cp]
 }
 
 /// Wraps at the boundary rather than bouncing.
@@ -284,6 +303,37 @@ mod tests {
       assert!(
         at.x.abs() <= VOLUME && at.y.abs() <= VOLUME && at.z.abs() <= VOLUME,
         "left the volume at {at:?}"
+      );
+    }
+  }
+
+  #[test]
+  fn a_prediction_and_the_server_walk_the_same_line() {
+    // The claim behind sharing `advance` as code. A client predicting its own
+    // ship must produce the server's trajectory exactly, not approximately:
+    // reconciliation exists to absorb *network* disagreement, and a second
+    // copy of the rule turns every frame into a correction instead.
+    //
+    // This fails the moment someone reimplements the flight model anywhere.
+    let mut space = Space::new();
+    space.spawn(0);
+    let mut predicted = space.ships[0];
+
+    let holding = Fly {
+      thrust: 1,
+      yaw: 1,
+      pitch: -1,
+      firing: false,
+    };
+    let mut all = [Fly::default(); MAX_PLAYERS];
+    all[0] = holding;
+
+    for tick in 0..600 {
+      space.step(&all);
+      advance(&mut predicted, holding);
+      assert_eq!(
+        space.ships[0], predicted,
+        "server and prediction parted at tick {tick}"
       );
     }
   }
