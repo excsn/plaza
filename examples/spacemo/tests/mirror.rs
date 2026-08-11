@@ -173,6 +173,85 @@ async fn a_client_holds_no_more_than_the_server_has_after_a_long_fight() {
   );
 }
 
+/// Where the client thinks things are, against where they are, under every
+/// combination of the dials that changes how a position crosses.
+///
+/// A bound that stops covering the world clamps rather than errors, and a
+/// relative frame decoded against the wrong anchor lands somewhere plausible.
+/// Neither raises anything, and both look exactly like this test not existing.
+#[tokio::test]
+async fn a_client_lands_where_the_server_is_under_every_dial() {
+  for packed in [false, true] {
+    for relative in [false, true] {
+      let logic = SpaceLogic::new();
+      let mut state = SpaceState::new();
+      state.packed = packed;
+      state.relative = relative;
+      state.bots = 40;
+      state.space.set_bots(40);
+      for id in 0..2u32 {
+        seat(&logic, &mut state, id).await;
+      }
+      for id in 0..2u32 {
+        hold(&logic, &mut state, id, Fly {
+          thrust: 1,
+          yaw: 0.7,
+          pitch: -0.3,
+          firing: true,
+          launching: true,
+        })
+        .await;
+      }
+
+      let mut worst = 0.0f32;
+      let mut checked = 0usize;
+      for _ in 0..600u64 {
+        let out = logic
+          .process_input(&mut state, LogicInput::TimeStep {
+            delta_time: std::time::Duration::from_millis(16),
+          })
+          .await
+          .unwrap();
+        for targeted in &out.ops {
+          for op in &targeted.ops {
+            let SpaceOp::Frame(update) = op else { continue };
+            // Scored against the ships this frame actually names, at the tick
+            // it names them, so this measures decoding rather than staleness.
+            for ship in &update.ships {
+              let truth = &state.space.ships[ship.seat as usize];
+              let dx = ship.pos[0] - truth.at.x;
+              let dy = ship.pos[1] - truth.at.y;
+              let dz = ship.pos[2] - truth.at.z;
+              worst = worst.max((dx * dx + dy * dy + dz * dz).sqrt());
+              assert_eq!(
+                ship.health, truth.health,
+                "health is a state and must arrive exactly, packed {packed} relative {relative}"
+              );
+              checked += 1;
+            }
+          }
+        }
+      }
+
+      // Full width is exact; the packed paths carry their own rounding, and a
+      // relative offset composes the anchor's with its own.
+      let tolerance = if !packed {
+        0.001
+      } else if relative {
+        spacemo::pack::relative_error() * 2.0
+      } else {
+        spacemo::pack::position_error() * 2.0
+      };
+      println!("  packed {packed:<5} relative {relative:<5} worst {worst:.4}u over {checked} ships");
+      assert!(checked > 1000, "the run has to carry ships: {checked}");
+      assert!(
+        worst < tolerance,
+        "packed {packed} relative {relative}: {worst} is past {tolerance}"
+      );
+    }
+  }
+}
+
 #[tokio::test]
 async fn a_client_stops_hearing_about_a_ship_that_leaves_and_lets_go_of_it() {
   // The same shape one entity along, and the half that already worked: ships
