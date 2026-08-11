@@ -19,3 +19,5 @@ pub mod protocol;
 pub mod world;
 #[cfg(feature = "server")]
 pub mod state;
+#[cfg(feature = "server")]
+pub mod logic;
