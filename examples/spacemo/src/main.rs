@@ -127,6 +127,7 @@ fn read_fly(aim: &mut Aim, last: &mut Vec2) -> Fly {
     yaw: aim.yaw,
     pitch: aim.pitch,
     firing: is_key_down(KeyCode::Space) || is_mouse_button_down(MouseButton::Left),
+    launching: is_key_down(KeyCode::LeftShift) || is_mouse_button_down(MouseButton::Right),
   }
 }
 

@@ -140,8 +140,15 @@ impl Scene {
   pub fn draw_bolts<'a>(&mut self, bolts: impl Iterator<Item = &'a spacemo::protocol::BoltState>) {
     for bolt in bolts {
       let at = vec3(bolt.pos[0], bolt.pos[1], bolt.pos[2]);
-      let along = vec3(bolt.vel[0], bolt.vel[1], bolt.vel[2]).normalize_or_zero() * 1.6;
-      draw_line_3d(at - along, at + along, Color::new(1.0, 0.72, 0.3, 1.0));
+      let along = vec3(bolt.vel[0], bolt.vel[1], bolt.vel[2]).normalize_or_zero();
+      // A missile is longer and cooler-coloured, because the thing a player
+      // needs to read at a glance is whether the shot is following them.
+      let (reach, tint) = if bolt.homing {
+        (4.0, Color::new(0.55, 0.85, 1.0, 1.0))
+      } else {
+        (1.6, Color::new(1.0, 0.72, 0.3, 1.0))
+      };
+      draw_line_3d(at - along * reach, at + along * reach, tint);
     }
   }
 

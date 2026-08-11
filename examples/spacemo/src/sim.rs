@@ -110,6 +110,15 @@ pub struct Bolt {
   /// Ticks left before it expires on its own.
   pub life: u16,
   pub from: u8,
+  /// Who it is chasing, if anyone.
+  ///
+  /// **This is the field that changes what the wire has to carry.** A bolt flies
+  /// straight, so its whole future is implied by where it started and how fast:
+  /// a client could be told once and draw the rest itself. A missile's path
+  /// depends on where its target moves next, which nobody knows in advance, so
+  /// there is no version of it that can be sent once. Two projectiles, opposite
+  /// wire profiles, one field apart.
+  pub chasing: Option<u16>,
 }
 
 /// How long a bolt lives, in ticks.
@@ -118,6 +127,18 @@ const BOLT_LIFE: u16 = 90;
 const BOLT_EVERY: u16 = 8;
 /// Speed added to the ship's own, so a bolt outruns whoever fired it.
 const BOLT_SPEED: f32 = 120.0;
+
+/// A missile is slower, lives longer, and turns.
+const MISSILE_SPEED: f32 = 70.0;
+const MISSILE_LIFE: u16 = 300;
+const MISSILE_EVERY: u16 = 90;
+/// Radians a second it can turn. Deliberately beatable: a missile nobody can
+/// out-fly is a cutscene rather than a weapon.
+const MISSILE_TURN: f32 = 1.5;
+/// How far ahead a target can be and still be acquired.
+const LOCK_RANGE: f32 = 320.0;
+/// How far off the nose. About 35 degrees, so it is aimed rather than sprayed.
+const LOCK_CONE: f32 = 0.82;
 
 pub struct Space {
   /// Player seats first, bots after, so a seat index is a stable identity and
@@ -130,6 +151,7 @@ pub struct Space {
   /// keeps a client from mistaking a new bolt for one it was already drawing.
   slots: SlotAllocator,
   cooldown: Vec<u16>,
+  missile_cooldown: Vec<u16>,
   /// Cumulative, for the panel: churn is the cost this example exists to show.
   pub spawned: u64,
   pub expired: u64,
@@ -159,6 +181,7 @@ impl Space {
       bolts: Vec::new(),
       slots: SlotAllocator::new(),
       cooldown: vec![0; MAX_SHIPS],
+      missile_cooldown: vec![0; MAX_SHIPS],
       spawned: 0,
       expired: 0,
       hits: Vec::new(),
@@ -235,6 +258,8 @@ impl Space {
       yaw,
       pitch,
       firing: (seed >> 32).is_multiple_of(5),
+      // Rarely, so a volume of bots is not a permanent missile storm.
+      launching: (seed >> 48).is_multiple_of(23),
     }
   }
 
@@ -258,6 +283,10 @@ impl Space {
         self.cooldown[index] = self.cooldown[index].saturating_sub(1);
         if fly.firing && self.ships[index].alive && self.cooldown[index] == 0 {
           self.fire(index);
+        }
+        self.missile_cooldown[index] = self.missile_cooldown[index].saturating_sub(1);
+        if fly.launching && self.ships[index].alive && self.missile_cooldown[index] == 0 {
+          self.launch(index);
         }
       }
     }
@@ -328,11 +357,95 @@ impl Space {
       ),
       life: BOLT_LIFE,
       from: seat as u8,
+      chasing: None,
+    });
+    self.spawned += 1;
+  }
+
+  /// Fires a missile at whatever is nearest inside the cone ahead.
+  ///
+  /// Locking on the server rather than trusting a client-chosen target: it is
+  /// the one place here where a client could name something it has no business
+  /// naming, and the check costs a dot product.
+  fn launch(&mut self, seat: usize) {
+    let ship = self.ships[seat];
+    let nose = ship.facing();
+    let mut best: Option<(usize, f32)> = None;
+    for (index, other) in self.ships.iter().enumerate() {
+      if index == seat || !other.alive {
+        continue;
+      }
+      let to = Vec3::new(other.at.x - ship.at.x, other.at.y - ship.at.y, other.at.z - ship.at.z);
+      let range = to.length();
+      if !(1.0..=LOCK_RANGE).contains(&range) {
+        continue;
+      }
+      let ahead = (to.x * nose.x + to.y * nose.y + to.z * nose.z) / range;
+      if ahead < LOCK_CONE {
+        continue;
+      }
+      if best.is_none_or(|(_, held)| range < held) {
+        best = Some((index, range));
+      }
+    }
+    let Some((target, _)) = best else {
+      return;
+    };
+
+    self.missile_cooldown[seat] = MISSILE_EVERY;
+    self.bolts.push(Bolt {
+      key: self.slots.alloc(),
+      at: Vec3::new(
+        ship.at.x + nose.x * SHIP_NOSE,
+        ship.at.y + nose.y * SHIP_NOSE,
+        ship.at.z + nose.z * SHIP_NOSE,
+      ),
+      vel: Vec3::new(
+        ship.vel.x + nose.x * MISSILE_SPEED,
+        ship.vel.y + nose.y * MISSILE_SPEED,
+        ship.vel.z + nose.z * MISSILE_SPEED,
+      ),
+      life: MISSILE_LIFE,
+      from: seat as u8,
+      chasing: Some(target as u16),
     });
     self.spawned += 1;
   }
 
   fn fly_bolts(&mut self) {
+    // Steering first, so a missile's velocity is already turned before it is
+    // integrated. Done here rather than in `advance` because a projectile is
+    // not a ship and shares none of the flight model.
+    for index in 0..self.bolts.len() {
+      let Some(target) = self.bolts[index].chasing else {
+        continue;
+      };
+      let Some(ship) = self.ships.get(target as usize).filter(|s| s.alive) else {
+        // The target left. It keeps its heading rather than vanishing, which is
+        // both kinder and one less event to deliver.
+        self.bolts[index].chasing = None;
+        continue;
+      };
+      let bolt = self.bolts[index];
+      let to = Vec3::new(ship.at.x - bolt.at.x, ship.at.y - bolt.at.y, ship.at.z - bolt.at.z);
+      if to.length() < 0.001 {
+        continue;
+      }
+      let wanted = to.normalize();
+      let speed = bolt.vel.length().max(1.0);
+      let heading = bolt.vel.normalize();
+      // Turned toward the target by a bounded amount, so speed is preserved and
+      // the thing can be out-flown.
+      let step = MISSILE_TURN * TICK;
+      let turned = Vec3::new(
+        heading.x + (wanted.x - heading.x) * step,
+        heading.y + (wanted.y - heading.y) * step,
+        heading.z + (wanted.z - heading.z) * step,
+      )
+      .normalize();
+      self.bolts[index].vel = Vec3::new(turned.x * speed, turned.y * speed, turned.z * speed);
+    }
+
     for bolt in self.bolts.iter_mut() {
       bolt.at = Vec3::new(
         bolt.at.x + bolt.vel.x * TICK,
@@ -470,6 +583,7 @@ mod tests {
       yaw,
       pitch,
       firing: false,
+      launching: false,
     };
     all
   }
@@ -563,6 +677,7 @@ mod tests {
       yaw: 0.6,
       pitch: -0.4,
       firing: false,
+      launching: false,
     };
     let mut all = [Fly::default(); MAX_PLAYERS];
     all[0] = holding;
@@ -590,6 +705,7 @@ mod tests {
       yaw: 0.0,
       pitch: 0.0,
       firing: true,
+      launching: false,
     };
 
     for _ in 0..600 {
@@ -622,6 +738,7 @@ mod tests {
       yaw: 0.0,
       pitch: 0.0,
       firing: true,
+      launching: false,
     };
     for _ in 0..60 {
       space.step(&all);
@@ -652,6 +769,7 @@ mod tests {
       yaw: 0.0,
       pitch: 0.0,
       firing: true,
+      launching: false,
     };
     for _ in 0..3000 {
       space.step(&all);
@@ -687,6 +805,7 @@ mod tests {
         yaw: *yaw,
         pitch: 0.0,
         firing: false,
+        launching: false,
       };
       space.step(&all);
     }
@@ -728,6 +847,7 @@ mod tests {
       yaw: 0.0,
       pitch: 0.0,
       firing: true,
+      launching: false,
     };
 
     let mut hit = false;
@@ -759,6 +879,7 @@ mod tests {
       yaw: 0.0,
       pitch: 0.0,
       firing: true,
+      launching: false,
     };
     for _ in 0..120 {
       space.step(&all);
@@ -795,6 +916,7 @@ mod tests {
       yaw: 0.0,
       pitch: 0.0,
       firing: false,
+      launching: false,
     };
     for _ in 0..600 {
       space.step(&all);
@@ -808,6 +930,164 @@ mod tests {
 
     assert!(player > mean * 1.15, "a player should out-run the average bot: {player:.1} against {mean:.1}");
     assert!(mean > 1.0, "and they should still be moving, not drifting: {mean:.1}");
+  }
+
+  fn launching() -> [Fly; MAX_PLAYERS] {
+    let mut all = [Fly::default(); MAX_PLAYERS];
+    all[0] = Fly {
+      thrust: 0,
+      yaw: 0.0,
+      pitch: 0.0,
+      firing: false,
+      launching: true,
+    };
+    all
+  }
+
+  #[test]
+  fn a_missile_turns_after_a_target_that_a_bolt_would_miss() {
+    let mut space = Space::new();
+    space.spawn(0);
+    space.spawn(1);
+    space.ships[0].at = Vec3::ZERO;
+    space.ships[0].yaw = 0.0;
+    space.ships[0].pitch = 0.0;
+    // Ahead and off to one side: inside the lock cone, outside a straight shot.
+    space.ships[1].at = Vec3::new(60.0, 0.0, 200.0);
+
+    let mut hit = false;
+    for _ in 0..300 {
+      space.step(&launching());
+      // Held still, so this is the missile turning rather than the target
+      // flying into it.
+      space.ships[1].vel = Vec3::ZERO;
+      space.ships[1].at = Vec3::new(60.0, 0.0, 200.0);
+      if space.hits.contains(&1) {
+        hit = true;
+        break;
+      }
+    }
+    assert!(hit, "a missile should come round onto a target off the nose");
+  }
+
+  #[test]
+  fn a_missile_can_be_out_run_but_not_out_turned() {
+    // A missile nobody can escape is a cutscene, so there has to be a counter,
+    // and here it is *distance* rather than evasion: it turns tightly, at 1.5
+    // radians a second, but only travels at 70 against a ship's 90. Turning
+    // while being chased is what gets you hit; running is what works.
+    let chased = |evade: Fly| {
+      let mut space = Space::new();
+      space.spawn(0);
+      space.spawn(1);
+      space.ships[0].at = Vec3::ZERO;
+      space.ships[0].yaw = 0.0;
+      space.ships[1].at = Vec3::new(0.0, 0.0, 180.0);
+      space.ships[1].yaw = 0.0;
+
+      let mut all = launching();
+      all[1] = evade;
+      for _ in 0..MISSILE_LIFE as usize + 30 {
+        space.step(&all);
+        all[0].launching = false;
+        if space.hits.contains(&1) {
+          return true;
+        }
+      }
+      false
+    };
+
+    let running = Fly {
+      thrust: 1,
+      yaw: 0.0,
+      pitch: 0.0,
+      firing: false,
+      launching: false,
+    };
+    let sitting = Fly {
+      thrust: 0,
+      yaw: 0.0,
+      pitch: 0.0,
+      firing: false,
+      launching: false,
+    };
+
+    assert!(!chased(running), "a ship at full throttle out-runs a slower missile");
+    assert!(chased(sitting), "and one that does not, does not");
+  }
+
+  #[test]
+  fn a_missile_is_the_only_shot_whose_path_a_client_could_not_derive() {
+    // The wire claim. A bolt's whole future follows from where it started and
+    // how fast, so a client could be told once. A missile's does not, because
+    // it depends on where the target goes next, and nobody knows that at spawn.
+    let mut space = Space::new();
+    space.spawn(0);
+    space.spawn(1);
+    space.ships[0].at = Vec3::ZERO;
+    space.ships[1].at = Vec3::new(40.0, 0.0, 200.0);
+
+    let mut all = launching();
+    all[0].firing = true;
+    for _ in 0..3 {
+      space.step(&all);
+    }
+    let spawned: Vec<(SlotKey, Vec3, Vec3, bool)> = space
+      .bolts
+      .iter()
+      .map(|b| (b.key, b.at, b.vel, b.chasing.is_some()))
+      .collect();
+    assert!(spawned.iter().any(|s| s.3), "the run has to produce a missile");
+    assert!(spawned.iter().any(|s| !s.3), "and a bolt to compare it against");
+
+    // Fly on, with the target moving, then compare each shot against where a
+    // straight-line extrapolation from its spawn would have put it.
+    all[0].firing = false;
+    all[0].launching = false;
+    all[1] = Fly {
+      thrust: 1,
+      yaw: 1.2,
+      pitch: 0.3,
+      firing: false,
+      launching: false,
+    };
+    for _ in 0..40 {
+      space.step(&all);
+    }
+
+    for (key, at, vel, homing) in spawned {
+      let Some(now) = space.bolts.iter().find(|b| b.key == key) else {
+        continue;
+      };
+      let straight = Vec3::new(at.x + vel.x * TICK * 40.0, at.y + vel.y * TICK * 40.0, at.z + vel.z * TICK * 40.0);
+      let drift = Vec3::new(now.at.x - straight.x, now.at.y - straight.y, now.at.z - straight.z).length();
+      if homing {
+        assert!(drift > 1.0, "a missile should have left the line it started on: {drift}");
+      } else {
+        assert!(drift < 0.01, "a bolt should still be on it: {drift}");
+      }
+    }
+  }
+
+  #[test]
+  fn a_missile_whose_target_leaves_keeps_going_rather_than_vanishing() {
+    let mut space = Space::new();
+    space.spawn(0);
+    space.spawn(1);
+    space.ships[0].at = Vec3::ZERO;
+    space.ships[1].at = Vec3::new(0.0, 0.0, 200.0);
+    for _ in 0..2 {
+      space.step(&launching());
+    }
+    assert!(space.bolts.iter().any(|b| b.chasing.is_some()));
+
+    space.remove(1);
+    space.step(&[Fly::default(); MAX_PLAYERS]);
+    assert!(
+      space.bolts.iter().all(|b| b.chasing.is_none()),
+      "it should let go rather than chase a seat nobody is in"
+    );
+    assert!(!space.bolts.is_empty(), "and stay in flight, which is one less event to deliver");
   }
 
   #[test]

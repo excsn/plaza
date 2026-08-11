@@ -150,6 +150,7 @@ fn step_once(state: &mut SpaceState, ctx: &mut Ctx) {
       .filter_map(|id| state.space.bolts.get(*id as usize))
       .map(|bolt| BoltState {
         id: (bolt.key.index << 8) | bolt.key.generation as u32 & 0xff,
+        homing: bolt.chasing.is_some(),
         pos: [bolt.at.x, bolt.at.y, bolt.at.z],
         vel: [bolt.vel.x, bolt.vel.y, bolt.vel.z],
       })
@@ -179,7 +180,7 @@ fn step_once(state: &mut SpaceState, ctx: &mut Ctx) {
       (decoded.unwrap_or(ships), pack::unpack_bolts(&bolt_bytes).unwrap_or(bolts))
     } else {
       state.last_bytes[seat] = ships.len() * pack::ship_bits_full() / 8;
-      state.last_bolt_bytes[seat] = bolts.len() * 7 * 32 / 8;
+      state.last_bolt_bytes[seat] = bolts.len() * 8 * 32 / 8;
       (ships, bolts)
     };
 
@@ -314,6 +315,7 @@ mod tests {
           yaw: 0.0,
           pitch: 0.0,
           firing: true,
+          launching: false,
         })],
       })
       .await;
@@ -456,6 +458,7 @@ mod tests {
         yaw: 0.0,
         pitch: 0.0,
         firing: false,
+        launching: false,
       })],
     })
     .await;

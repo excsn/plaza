@@ -54,6 +54,8 @@ pub struct Fly {
   pub yaw: f32,
   pub pitch: f32,
   pub firing: bool,
+  /// A second trigger, for the weapon that cannot be predicted.
+  pub launching: bool,
 }
 
 /// A bolt in flight, as the wire carries it.
@@ -64,6 +66,9 @@ pub struct Fly {
 /// entities want.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BoltState {
+  /// Whether it is chasing something, which is the difference between a shot a
+  /// client could draw for itself and one it has to be told about.
+  pub homing: bool,
   /// Slot index and generation together, because an index alone is reused and
   /// is therefore not an identity: a client that keyed on it would blend a new
   /// bolt into the path of the one that just expired.

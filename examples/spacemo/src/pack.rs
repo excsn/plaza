@@ -171,7 +171,7 @@ pub fn relative_error() -> f32 {
 
 /// What one bolt costs, which is what makes churn affordable at all.
 pub const fn bolt_bits() -> usize {
-  (ID_BITS + POS_BITS * 3 + VEL_BITS * 3) as usize
+  (ID_BITS + 1 + POS_BITS * 3 + VEL_BITS * 3) as usize
 }
 
 const ID_BITS: u32 = 20;
@@ -181,6 +181,7 @@ pub fn pack_bolts(bolts: &[crate::protocol::BoltState]) -> Vec<u8> {
   w.varint(bolts.len() as u64);
   for bolt in bolts {
     w.bits(bolt.id as u64 & ((1 << ID_BITS) - 1), ID_BITS);
+    w.bool(bolt.homing);
     for axis in 0..3 {
       w.quantized(bolt.pos[axis], POS.0, POS.1, POS_BITS);
     }
@@ -197,6 +198,7 @@ pub fn unpack_bolts(bytes: &[u8]) -> Option<Vec<crate::protocol::BoltState>> {
   let mut out = Vec::with_capacity(count);
   for _ in 0..count {
     let id = r.bits(ID_BITS).ok()? as u32;
+    let homing = r.bool().ok()?;
     let mut pos = [0.0f32; 3];
     for axis in pos.iter_mut() {
       *axis = r.quantized(POS.0, POS.1, POS_BITS).ok()?;
@@ -205,7 +207,7 @@ pub fn unpack_bolts(bytes: &[u8]) -> Option<Vec<crate::protocol::BoltState>> {
     for axis in vel.iter_mut() {
       *axis = r.quantized(VEL.0, VEL.1, VEL_BITS).ok()?;
     }
-    out.push(crate::protocol::BoltState { id, pos, vel });
+    out.push(crate::protocol::BoltState { id, homing, pos, vel });
   }
   Some(out)
 }

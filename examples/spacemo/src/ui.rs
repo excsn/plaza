@@ -24,7 +24,8 @@ pub fn draw_panel(client: &NetClient, url: &str, dials: &Dials) {
         }
         ui.separator();
 
-        ui.label("arrows or WASD to fly, space to thrust");
+        ui.label("mouse aims, W/S throttle, space fires");
+        ui.label("right click or shift launches a missile");
         ui.label(format!("frame {}", client.frame));
         ui.label(format!("{} ships in view", client.carried));
         ui.label(format!("{} bolts in view", client.bolts_carried));
