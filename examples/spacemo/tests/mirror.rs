@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use plaza::agent::Agent;
 use plaza::state_logic::{LogicInput, StateLogic};
 use spacemo::logic::SpaceLogic;
-use spacemo::net::client::{forget_quiet_bolts, Shot};
+use spacemo::net::client::{forget_quiet_bolts, forget_the_quiet, Known, Shot};
 use spacemo::protocol::{Fly, PlayerId, SpaceOp};
 use spacemo::state::SpaceState;
 
@@ -31,17 +31,28 @@ use spacemo::state::SpaceState;
 #[derive(Default)]
 struct Mirror {
   bolts: HashMap<u32, Shot>,
-  ships: HashMap<u16, u64>,
+  ships: HashMap<u16, Known>,
   frame: u64,
   dropped: u64,
+  dropped_ships: u64,
 }
 
 impl Mirror {
   fn receive(&mut self, update: &spacemo::protocol::FrameUpdate) {
     self.frame = update.frame;
     for ship in &update.ships {
-      self.ships.insert(ship.seat, update.frame);
+      self.ships.insert(
+        ship.seat,
+        Known {
+          state: *ship,
+          seen: update.frame,
+        },
+      );
     }
+    // The client's own rule, run here rather than asserted about the server:
+    // what the server stops sending is only half of it, and the half that was
+    // broken for missiles was this one.
+    self.dropped_ships += forget_the_quiet(&mut self.ships, update.frame, update.yours) as u64;
     for bolt in &update.bolts {
       let streamed = self.bolts.contains_key(&bolt.id);
       self.bolts.insert(
@@ -151,6 +162,15 @@ async fn a_client_holds_no_more_than_the_server_has_after_a_long_fight() {
     worst_held <= worst_real,
     "the client held {worst_held} shots against {worst_real} in the world, so it is keeping ones that ended"
   );
+
+  // Ships too, which is the same claim about the other collection: a client
+  // cannot end a long fight holding more of them than exist.
+  assert!(
+    mirror.ships.len() <= state.space.ships.len(),
+    "the client held {} ships against {} in the world",
+    mirror.ships.len(),
+    state.space.ships.len()
+  );
 }
 
 #[tokio::test]
@@ -194,9 +214,19 @@ async fn a_client_stops_hearing_about_a_ship_that_leaves_and_lets_go_of_it() {
   for _ in 0..10 {
     tick(&mut state, &mut mirror).await;
   }
-  let last_heard = mirror.ships[&1];
   assert!(
-    mirror.frame - last_heard >= 5,
-    "the server should have gone quiet about it by now"
+    mirror.ships.contains_key(&1),
+    "still held while the silence is short, or the edge of the world strobes"
   );
+
+  // Long enough for the client's own rule to fire. Asserted on the client
+  // letting go rather than on the server going quiet, because a server that
+  // stops sending and a client that never drops is exactly the shape the
+  // missiles had.
+  for _ in 0..40 {
+    tick(&mut state, &mut mirror).await;
+  }
+  assert!(!mirror.ships.contains_key(&1), "the client should have let go of it");
+  assert_eq!(mirror.dropped_ships, 1);
+  assert!(mirror.ships.contains_key(&0), "and never of its own");
 }
