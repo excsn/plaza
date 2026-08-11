@@ -140,7 +140,7 @@ In a settled scene most things are not moving, and saying so costs one bit again
 Knowing is the part worth a type. One quiet tick means nothing: a body at the top of its arc has zero velocity and is about to fall, and a body on the floor jitters by an epsilon forever. So rest is a **run** of quiet ticks, while waking is immediate, because being slow to notice motion is visible and being slow to notice stillness only costs bandwidth.
 
 *   **`new(threshold)` / `with_capacity(entities, threshold)`**: `threshold` is the run of quiet ticks that counts as rest.
-*   **`observe(&mut self, index, moving: bool)`**: one tick of evidence. What counts as moving stays yours: a solver already knows (rapier's island manager sleeps bodies, so `!body.is_sleeping()` is the whole input), and without one a speed against an epsilon does it.
+*   **`observe(&mut self, index, moving: bool)`**: one tick of evidence. What counts as moving stays yours. A solver already knows, but check the granularity before you take it: rapier sleeps an **island**, meaning every body in a chain of contacts, so one body still jostling in a heap reports the whole heap as moving. Prefer a per-body test, a speed against an epsilon, and let this type supply the run-of-quiet-ticks part.
 *   **`at_rest(index) -> bool`**, **`ticks_still(index) -> u32`** (for scaling priority smoothly instead of switching on a threshold), **`wake(index)`** for a teleport or respawn that no velocity test would catch.
 *   **`resize`**, **`len`**, **`is_empty`**.
 

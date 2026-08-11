@@ -15,7 +15,7 @@
 use cube_yard::acked::Acked;
 use cube_yard::budget::{Stream, BUDGET_BITS};
 use cube_yard::pack::{self, Quantized};
-use cube_yard::protocol::{CubeState, CUBES};
+use cube_yard::protocol::{CubeState, Drive, CUBES};
 use cube_yard::sim::{Yard, MAX_PLAYERS};
 use plaza_client_utils::AckWindow;
 
@@ -56,6 +56,20 @@ fn settle(ticks: usize) -> Yard {
   yard
 }
 
+/// A player ploughing through the field, because a **settled** yard prices
+/// nothing: with every cube asleep a lost frame costs no accuracy at all, and
+/// both schemes reported 0.003 whatever the loss rate.
+fn ploughing() -> [Drive; MAX_PLAYERS] {
+  let mut driving = [Drive::default(); MAX_PLAYERS];
+  driving[0] = Drive {
+    dx: -1,
+    dz: 0,
+    jump: false,
+    rolling: true,
+  };
+  driving
+}
+
 fn snapshot(yard: &Yard) -> Vec<CubeState> {
   let mut cubes = Vec::new();
   yard.snapshot(&mut cubes);
@@ -80,7 +94,7 @@ fn error_of(truth: &[CubeState], held: &[CubeState], named: &[usize]) -> f32 {
 /// Delta against what was last sent: what stage four does.
 fn last_sent(drop_rate: f32, ticks: usize) -> Run {
   let mut yard = settle(60);
-  let idle = [Default::default(); MAX_PLAYERS];
+  let idle = ploughing();
   let total = CUBES + MAX_PLAYERS;
 
   let mut stream = Stream::new(total).with_delta(total);
@@ -134,7 +148,7 @@ fn last_sent(drop_rate: f32, ticks: usize) -> Run {
 /// Delta against what the client has acknowledged.
 fn acknowledged(drop_rate: f32, ticks: usize) -> Run {
   let mut yard = settle(60);
-  let idle = [Default::default(); MAX_PLAYERS];
+  let idle = ploughing();
   let total = CUBES + MAX_PLAYERS;
 
   let mut stream = Stream::new(total).with_delta(total);

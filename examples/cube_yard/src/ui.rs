@@ -24,7 +24,7 @@ pub fn draw_panel(client: &NetClient, url: &str) {
         ui.label("hovering shoves the field aside; rolling picks it up, space jumps");
         let asleep = client.cubes.iter().filter(|c| c.at_rest).count();
         let awake = client.cubes.len().saturating_sub(asleep);
-        ui.label(format!("{asleep} asleep (grey), {awake} awake (red)"));
+        ui.label(format!("{asleep} asleep (grey), {awake} awake (blue)"));
         ui.separator();
 
         ui.label(match (client.packed, client.patched) {

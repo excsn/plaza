@@ -208,15 +208,15 @@ fn snapping_both_sides_costs_something_and_it_is_small() {
   );
 }
 
-/// Where the smooth-motion case lives, and why it is not here.
-///
-/// A spline is for a path that curves between samples. The nearest thing this
-/// scene has is the hovering player, and it flies a straight line at constant
-/// speed, where a spline and a chord are the same expression: measured, both
-/// give 0.647, which is a fact about straight lines rather than about either
-/// technique. `plaza_client_utils::hermite` measures the curved case properly
-/// on a circle and gets 484x. What cube_yard has to say about splines is the
-/// contact case below, where they lose.
+// Where the smooth-motion case lives, and why it is not here.
+//
+// A spline is for a path that curves between samples. The nearest thing this
+// scene has is the hovering player, and it flies a straight line at constant
+// speed, where a spline and a chord are the same expression: measured, both
+// give 0.647, which is a fact about straight lines rather than about either
+// technique. `plaza_client_utils::hermite` measures the curved case properly
+// on a circle and gets 484x. What cube_yard has to say about splines is the
+// contact case below, where they lose.
 
 /// The whole yard at a low send rate, drawn three ways.
 ///
@@ -273,7 +273,12 @@ fn the_send_rate_axis_priced_across_the_yard() {
       }
       if let Some(at) = samples[i].iter().rposition(|(t, _)| *t <= ms) {
         let (t0, a) = samples[i][at];
-        let (t1, b) = samples[i].get(at + 1).copied().unwrap_or((t0, a));
+        // Only where two samples actually bracket the frame. Past the newest
+        // one there is nothing to interpolate *toward*, so "interpolate"
+        // silently becomes "hold" and the comparison measures nothing.
+        let Some((t1, b)) = samples[i].get(at + 1).copied() else {
+          continue;
+        };
         if let Some(drawn) = splines[i].render(ms) {
           segments += 1;
           // Outside the sphere the two samples bracket: only a spline can do it.

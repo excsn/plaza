@@ -167,13 +167,17 @@ The magnet was a positive feedback loop. Cubes underneath inherit the player's u
 
 That fix alone did not stop the flying, which is what exposed the real one: `grounded` was `vertical speed is small`, and vertical speed is small **at the apex of every jump**. Holding the key therefore launched again at the top of each arc. The magnet had merely kept the player jostled near zero often enough to make it obvious. The fix is to ask the narrow phase what the player is actually touching, and to jump on the rising edge rather than while held.
 
-The general shape: a cheap proxy for a physical question ("am I on the ground") is fine until something else starts satisfying the proxy for the wrong reason, and the thing that exposes it will look like an unrelated feature.
+The narrow-phase version then failed the same way, for a second reason. It asks whether anything is touching below the player's centre, and a cube stuck to the **underside** is exactly that, so a gathered clump became its own launchpad and jump could be held down for ever. The proxy had been made physical and was still a proxy.
+
+The general shape: a cheap proxy for a physical question ("am I on the ground") is fine until something else starts satisfying the proxy for the wrong reason, and the thing that exposes it will look like an unrelated feature. Twice here, and the second time the replacement was the thing that broke.
 
 ### One entity is not a sample, and a spline is not bounded (cube_yard)
 
-A Hermite spline through two snapshots, leaving along the velocity recorded at each, beat straight-line interpolation by 484x on a smooth curve and by 2.1x on a falling cube pulled out of the solver. Both numbers went into the docs. Across 300 cubes from the same scene it is **13x worse** than the straight line it replaced.
+A Hermite spline through two snapshots, leaving along the velocity recorded at each, beat straight-line interpolation by 484x on a smooth curve and by 2.1x on a falling cube pulled out of the solver. Both numbers went into the docs. Across 500 cubes from the same scene it is **39x worse** than the straight line it replaced.
 
-The mechanism is the part worth keeping: a chord cannot leave the segment between its two samples, and a spline can. Measured here it left that segment on **half of all frames, by up to 2.48 units** on cubes one unit across. Velocity at a sample is a promise about the path to the next one, and a collision breaks that promise after the packet has already gone. On a smooth path the promise holds and the spline is near-exact; in a pile of colliding bodies it is a licence to overshoot.
+The mechanism is the part worth keeping: a chord cannot leave the segment between its two samples, and a spline can. Measured here it left that segment on **5% of frames, by up to 2.53 units** on cubes one unit across. Velocity at a sample is a promise about the path to the next one, and a collision breaks that promise after the packet has already gone. On a smooth path the promise holds and the spline is near-exact; in a pile of colliding bodies it is a licence to overshoot.
+
+The overshoot rate carries its own correction. It read **50%** until the comparison was restricted to frames that two samples actually bracket: past the newest sample there is nothing to interpolate toward, so "interpolate" degenerates into "hold" and those frames were scored for both techniques. Excluding them moved the straight line's win from 3.1x to 8.2x and the spline's loss from 13x to 39x, in opposite directions, which is what a comparison contaminated by a degenerate case does to both arms at once.
 
 Two habits. Picking an index is not sampling: the 2.1x figure came from one cube that happened to be falling cleanly, and a second index would have contradicted it before the claim reached three documents. And prefer the bounded technique when you cannot guarantee the assumption the unbounded one rests on, which is the same instinct as the rendering hierarchy preferring real data to inference at every rung.
 
@@ -199,13 +203,51 @@ Two habits fall out. A measurement that confirms what you expected deserves the 
 
 ### Quantising both sides destroyed the thing it was meant to help (cube_yard)
 
-Fiedler names quantising the simulation on both sides as the critical trick of state synchronization: the server simulating at a precision it never transmits means the client is always looking at a rounded copy of a truth that has already moved on. Snapping the yard onto the wire's grid each tick took the settled pile from **905 cubes asleep to 0**.
+Fiedler names quantising the simulation on both sides as the critical trick of state synchronization: the server simulating at a precision it never transmits means the client is always looking at a rounded copy of a truth that has already moved on. Snapping the yard onto the wire's grid each tick took the settled pile from **901 cubes asleep to 0**.
 
 The mechanism is a circle. A resting cube jitters by less than one quantisation step, so it is re-snapped every tick forever; writing a body's position marks it modified; a body that is modified every tick never reaches the solver's sleep threshold. The obvious guard, skipping bodies that are `is_sleeping()`, does not help, because sleeping is precisely the state they can no longer get into.
 
-Keying on **motion** breaks the circle, and the rule left over is the one that was always right: a body that is not moving is not drifting, so there is no divergence for snapping to prevent. With that, the pile settles to 905 asleep exactly as it does untouched, and the two runs end 0.011 units apart.
+Keying on **motion** breaks the circle, and the rule left over is the one that was always right: a body that is not moving is not drifting, so there is no divergence for snapping to prevent. With that, the pile settles to 901 asleep exactly as it does untouched, and the two runs end 0.009 units apart on average.
 
 The general shape: a technique that perturbs state to keep two machines agreeing can collide with an optimisation that rewards state for holding still, and the optimisation was worth more here (a sleeping cube skips its velocity entirely). Check what a correction costs the things that were not wrong.
+
+### Simulate the world, drive the player (cube_yard)
+
+"Make the roll physical" was taken literally: the player cube was driven by a torque, with friction turning spin into travel, so mass and momentum were real. It was the wrong call and it cost a long sequence of fixes, each of which found a genuine bug that was not the problem.
+
+A torque can only become travel through grip, so friction becomes the arbiter of everything. Raise it enough to stop the cube spinning on the spot and it measured **1059N of static friction against a 950N motor**, so the cube simply stopped. Lower it and the cube span without going anywhere. A gathered ball added drag until the player was down to 0.4 units per second, which reads as stuck. Every coefficient tuned moved the problem somewhere else, because the system had no good operating point to tune toward.
+
+The fantasy was never realistic anyway. A player who presses a key expects to move and expects to stop; that is intent, not dynamics. Driving the horizontal velocity directly and reading the **roll off the resulting velocity** made the cube behave, made the spin always match the travel, and removed the dependency on grip entirely, which is why friction could then drop to almost nothing. Gravity, jumping, collisions and the entire field stayed physical.
+
+The general shape: a solver is for the parts of the world nobody is steering. Handing it the thing a player controls means negotiating with it for outcomes the player is entitled to have directly, and the weight you wanted can be a coefficient on the drive instead.
+
+### A filter set on the wrong field is silently inert (cube_yard)
+
+Carried cubes were supposed to stop pushing the player: solid ones make it climb its own ball, and the fix was to filter the pair out of the solver. The player collider got `collision_groups(PLAYER_GROUP)`, the carried cube got a solver filter excluding that group, and the tests that followed went green.
+
+Nothing was being filtered. `collision_groups` and `solver_groups` are **separate fields**, and `solver_groups` defaults to `Group::ALL`. Both sides of a pair have to agree, so the player's default membership of everything matched the cube's filter no matter what that filter said. Every carried cube stayed fully solid for the whole sequence of fixes that followed, and each of those fixes was credited with an improvement it had not caused.
+
+What exposed it was not a test. It was printing the player's contacts while chasing an unrelated bug: resting at 2.495 on four cubes it was supposed to be passing through, with no floor contact at all. The levitation, the infinite jump and the wedging were one cause.
+
+The general shape: a filter that is not applied looks exactly like a filter that passes everything, and a green suite cannot tell them apart. When a mechanism is meant to *stop* something, assert the thing stopped, not the symptom you hoped would improve.
+
+### Rapier sleeps per island; the wire wants per body (cube_yard)
+
+`at_rest` on the wire came straight from `body.is_sleeping()`, which the guide called the whole input a rest detector needs. It is not, and a screenshot showed why: patches of a hundred-odd cubes drawn as awake, lying flat on the ground with nothing near them.
+
+A solver sleeps an **island**, which is every body in a chain of contacts. One cube still jostling in a scattered heap holds every cube touching it awake, and each of those pays a velocity on the wire to hold still. The property the wire cares about is per body and purely local: has *this* body moved recently.
+
+A run of quiet ticks per body, which is what `RestDetector` already models, decoupled the two: 205 cubes reporting awake became 56, against 57 that had actually moved.
+
+The general shape: reusing a solver's flag is free until its granularity is not yours. Islands are the right unit for skipping integration work and the wrong unit for deciding what to transmit.
+
+### Waking what you cannot move is pure bandwidth (cube_yard)
+
+The repulsion field fades to nothing at its rim, but woke every cube inside the radius before deciding how hard to push. Below about eight units the push cannot overcome the cube's own friction, so the outer band was woken, could not move, and trailed each player as a halo of awake cubes paying for velocities that were all zero.
+
+Gating the *wake* achieved nothing, and the reason is worth keeping: a cube woken while the player was close keeps receiving the weak push as the player recedes, so it never gets the run of quiet ticks it needs to sleep again. The condition has to be **motion**, not sleep state. A cube already moving still receives the weak push, so the field itself has no cliff in it; a still one below the threshold receives nothing.
+
+The general shape: an at-rest optimisation is only worth what your own code lets it earn, and a force too small to move anything is not free, it is the cost of the optimisation you just disabled.
 
 ### Half the packing win was handed back at the envelope (cube_yard, wire)
 
