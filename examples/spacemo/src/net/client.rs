@@ -297,6 +297,12 @@ impl NetClient {
     ))
   }
 
+  /// A client on a socket the caller owns, which is what lets a test drive the
+  /// real decode path rather than a copy of it.
+  pub fn from_socket(socket: Box<dyn plaza_ws::Socket>) -> Self {
+    Self::from_pump(FramePump::new(socket, WIRE, PROTOCOL))
+  }
+
   pub fn from_pump(pump: FramePump<MsgPackCodec>) -> Self {
     Self {
       pump,

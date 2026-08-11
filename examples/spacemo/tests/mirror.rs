@@ -17,64 +17,40 @@
 
 #![cfg(feature = "server")]
 
-use std::collections::HashMap;
-
 use plaza::agent::Agent;
 use plaza::state_logic::{LogicInput, StateLogic};
+use plaza_ws::scripted::ScriptedSocket;
+use plaza_wire::{frame, MsgPackCodec, WireCodec};
 use spacemo::logic::SpaceLogic;
-use spacemo::net::client::{forget_quiet_bolts, forget_the_quiet, Known, Shot};
+use spacemo::net::client::NetClient;
 use spacemo::protocol::{Fly, PlayerId, SpaceOp};
 use spacemo::state::SpaceState;
 
-/// The client's half, reduced to the part this is about: what it holds, and
-/// what makes it let go.
-#[derive(Default)]
-struct Mirror {
-  bolts: HashMap<u32, Shot>,
-  ships: HashMap<u16, Known>,
-  frame: u64,
-  dropped: u64,
-  dropped_ships: u64,
+/// Hands the server's own ops to a real client, through the real decode path.
+///
+/// The point of doing it this way rather than keeping a second copy of what the
+/// client does: a test that reimplements the code under test passes while the
+/// code drifts away from it, which is the same trap as any other pair of
+/// derivations of one fact.
+fn deliver(socket: &ScriptedSocket, ops: &[SpaceOp]) {
+  let mut bytes = Vec::new();
+  frame::begin(frame::Kind::Ops, &mut bytes);
+  MsgPackCodec.encode_into(&ops.to_vec(), &mut bytes).unwrap();
+  socket.feed_message(bytes);
 }
 
-impl Mirror {
-  fn receive(&mut self, update: &spacemo::protocol::FrameUpdate) {
-    self.frame = update.frame;
-    for ship in &update.ships {
-      self.ships.insert(
-        ship.seat,
-        Known {
-          state: *ship,
-          seen: update.frame,
-        },
-      );
-    }
-    // The client's own rule, run here rather than asserted about the server:
-    // what the server stops sending is only half of it, and the half that was
-    // broken for missiles was this one.
-    self.dropped_ships += forget_the_quiet(&mut self.ships, update.frame, update.yours) as u64;
-    for bolt in &update.bolts {
-      let streamed = self.bolts.contains_key(&bolt.id);
-      self.bolts.insert(
-        bolt.id,
-        Shot {
-          state: *bolt,
-          seen: update.frame,
-          streamed,
-        },
-      );
-    }
-    self.dropped += forget_quiet_bolts(&mut self.bolts, update.frame) as u64;
-    // The other half of what the real client does each tick: a shot sent once
-    // is carried forward and ends when its life runs out.
-    self.bolts.retain(|_, bolt| {
-      if bolt.streamed {
-        return true;
-      }
-      bolt.state.life = bolt.state.life.saturating_sub(1);
-      bolt.state.life > 0
-    });
-  }
+/// Everything one seat is sent this tick.
+fn ops_for(out: &plaza::state_logic::LogicOutput<SpaceOp, PlayerId>, seat: u16) -> Vec<SpaceOp> {
+  out
+    .ops
+    .iter()
+    .flat_map(|t| t.ops.iter())
+    .filter(|op| match op {
+      SpaceOp::Frame(update) => update.yours == Some(seat),
+      _ => true,
+    })
+    .cloned()
+    .collect()
 }
 
 async fn seat(logic: &SpaceLogic, state: &mut SpaceState, id: PlayerId) {
@@ -123,8 +99,10 @@ async fn a_client_holds_no_more_than_the_server_has_after_a_long_fight() {
     .await;
   }
 
-  let mut mirror = Mirror::default();
+  let socket = ScriptedSocket::new();
+  let mut client = NetClient::from_socket(Box::new(socket.clone()));
   let (mut worst_held, mut worst_real) = (0usize, 0usize);
+  let mut now_ms = 0u64;
   for _ in 0..TICKS {
     let out = logic
       .process_input(&mut state, LogicInput::TimeStep {
@@ -132,27 +110,23 @@ async fn a_client_holds_no_more_than_the_server_has_after_a_long_fight() {
       })
       .await
       .unwrap();
-    for targeted in &out.ops {
-      for op in &targeted.ops {
-        if let SpaceOp::Frame(update) = op {
-          // One client's view: the first seat's frames only.
-          if update.yours == Some(0) {
-            mirror.receive(update);
-          }
-        }
-      }
-    }
-    worst_held = worst_held.max(mirror.bolts.len());
+    deliver(&socket, &ops_for(&out, 0));
+    now_ms += 16;
+    // The real thing: decode, apply, and run whatever the client does each
+    // frame to decide what it is still holding.
+    client.poll(now_ms);
+    client.predict(1.0 / 60.0);
+    worst_held = worst_held.max(client.bolts.len());
     worst_real = worst_real.max(state.space.bolts.len());
   }
 
   println!("\n  {TICKS} ticks, four pilots and sixty bots, all firing:\n");
   println!("    shots the server had, at most      {worst_real}");
   println!("    shots this client held, at most    {worst_held}");
-  println!("    shots it let go of                 {}\n", mirror.dropped);
+  println!("    shots it let go of                 {}\n", client.stale_bolts);
 
   assert!(worst_real > 0, "the fight has to actually produce shots");
-  assert!(mirror.dropped > 0, "and the client has to let go of some");
+  assert!(client.stale_bolts > 0, "and the client has to let go of some");
 
   // The claim: a client cannot end up holding more than exist. It legitimately
   // holds fewer, since it is only told about what it can see. Holding *more* is
@@ -166,9 +140,9 @@ async fn a_client_holds_no_more_than_the_server_has_after_a_long_fight() {
   // Ships too, which is the same claim about the other collection: a client
   // cannot end a long fight holding more of them than exist.
   assert!(
-    mirror.ships.len() <= state.space.ships.len(),
+    client.ships.len() <= state.space.ships.len(),
     "the client held {} ships against {} in the world",
-    mirror.ships.len(),
+    client.ships.len(),
     state.space.ships.len()
   );
 }
@@ -345,37 +319,34 @@ async fn a_client_stops_hearing_about_a_ship_that_leaves_and_lets_go_of_it() {
   state.space.ships[0].at = plaza_client_utils::math::Vec3::ZERO;
   state.space.ships[1].at = plaza_client_utils::math::Vec3::new(0.0, 0.0, 40.0);
 
-  let mut mirror = Mirror::default();
-  let tick = async |state: &mut SpaceState, mirror: &mut Mirror| {
+  let socket = ScriptedSocket::new();
+  let mut client = NetClient::from_socket(Box::new(socket.clone()));
+  let mut now_ms = 0u64;
+  let tick = async |state: &mut SpaceState, client: &mut NetClient, now_ms: &mut u64| {
     let out = logic
       .process_input(state, LogicInput::TimeStep {
         delta_time: std::time::Duration::from_millis(16),
       })
       .await
       .unwrap();
-    for targeted in &out.ops {
-      for op in &targeted.ops {
-        if let SpaceOp::Frame(update) = op
-          && update.yours == Some(0)
-        {
-          mirror.receive(update);
-        }
-      }
-    }
+    deliver(&socket, &ops_for(&out, 0));
+    *now_ms += 16;
+    client.poll(*now_ms);
+    client.predict(1.0 / 60.0);
   };
 
   for _ in 0..10 {
-    tick(&mut state, &mut mirror).await;
+    tick(&mut state, &mut client, &mut now_ms).await;
   }
-  assert!(mirror.ships.contains_key(&1), "it should have been told about the other ship");
+  assert!(client.ships.contains_key(&1), "it should have been told about the other ship");
 
   // Out of range, and never mentioned again.
   state.space.ships[1].at = plaza_client_utils::math::Vec3::new(0.0, 0.0, spacemo::sim::VOLUME * 0.9);
   for _ in 0..10 {
-    tick(&mut state, &mut mirror).await;
+    tick(&mut state, &mut client, &mut now_ms).await;
   }
   assert!(
-    mirror.ships.contains_key(&1),
+    client.ships.contains_key(&1),
     "still held while the silence is short, or the edge of the world strobes"
   );
 
@@ -384,9 +355,9 @@ async fn a_client_stops_hearing_about_a_ship_that_leaves_and_lets_go_of_it() {
   // stops sending and a client that never drops is exactly the shape the
   // missiles had.
   for _ in 0..40 {
-    tick(&mut state, &mut mirror).await;
+    tick(&mut state, &mut client, &mut now_ms).await;
   }
-  assert!(!mirror.ships.contains_key(&1), "the client should have let go of it");
-  assert_eq!(mirror.dropped_ships, 1);
-  assert!(mirror.ships.contains_key(&0), "and never of its own");
+  assert!(!client.ships.contains_key(&1), "the client should have let go of it");
+  assert_eq!(client.forgotten, 1);
+  assert!(client.ships.contains_key(&0), "and never of its own");
 }

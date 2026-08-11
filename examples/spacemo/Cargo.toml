@@ -33,6 +33,7 @@ macroquad = "=0.4.15"
 egui-macroquad = "=0.17.3"
 
 [dev-dependencies]
+plaza_ws = { workspace = true, features = ["scripted"] }
 tokio = { workspace = true }
 
 [build-dependencies]
