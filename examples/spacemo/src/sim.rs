@@ -41,11 +41,17 @@ const THRUST: f32 = 42.0;
 /// This is a flight model, not a physics claim.
 const DRAG: f32 = 0.35;
 const MAX_SPEED: f32 = 90.0;
+/// Half-length of a ship along its nose.
+///
+/// The renderer draws from this rather than keeping its own copy, because a
+/// hull and the sphere a bolt tests against are two expressions of one fact,
+/// and two constants for one fact drift the moment either is tuned.
+pub const SHIP_HALF: f32 = 4.0;
 /// How far ahead of the ship a bolt starts, so nobody shoots themselves.
-const SHIP_NOSE: f32 = 3.0;
-/// How close a bolt has to pass. Generous, because a bolt moves 2 units a tick
-/// and a tighter radius would mostly be a test of luck.
-const HIT_RADIUS: f32 = 4.0;
+const SHIP_NOSE: f32 = SHIP_HALF + 1.0;
+/// How close a bolt has to pass. Generous against the hull, because a bolt
+/// moves two units a tick and a tighter radius is mostly a test of luck.
+const HIT_RADIUS: f32 = SHIP_HALF * 1.8;
 
 /// What a client holds down, which is the wire's own type rather than a copy.
 ///
@@ -208,7 +214,10 @@ impl Space {
   /// and anything cleverer would be a second simulation to keep honest.
   fn bot_input(&self, index: usize) -> Fly {
     let n = index as u64;
-    let phase = (self.tick / 90).wrapping_add(n.wrapping_mul(7));
+    // A long stretch, so a bot holds a heading long enough to be lined up on.
+    // Turning often makes them harder to catch and reads as twitching rather
+    // than as flying.
+    let phase = (self.tick / 220).wrapping_add(n.wrapping_mul(7));
     // A hash of the index and the current stretch of time, so each wanders on
     // its own schedule without any per-bot state to store or send.
     let mut seed = phase.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ n;
@@ -218,7 +227,11 @@ impl Space {
     let yaw = ((seed & 0xffff) as f32 / 65535.0 - 0.5) * std::f32::consts::TAU;
     let pitch = (((seed >> 16) & 0xffff) as f32 / 65535.0 - 0.5) * 1.4;
     Fly {
-      thrust: 1,
+      // Not full throttle. A bot holding the same throttle as the player it is
+      // running from can never be caught, because they share a flight model and
+      // a top speed: the chase is then a fixed gap held for ever. Coasting part
+      // of the time is what makes one closeable.
+      thrust: if (seed >> 40).is_multiple_of(3) { 0 } else { 1 },
       yaw,
       pitch,
       firing: (seed >> 32).is_multiple_of(5),
@@ -765,6 +778,36 @@ mod tests {
       !space.hits.contains(&3),
       "an event that survives its tick is a state wearing the wrong clothes"
     );
+  }
+
+  #[test]
+  fn a_bot_is_slower_than_a_player_at_full_throttle_and_therefore_catchable() {
+    // Bots and players share a flight model and a top speed, so a bot holding
+    // full throttle cannot be caught at all: the chase becomes a fixed gap held
+    // for ever. Coasting part of the time is the whole of the fix.
+    let mut space = Space::new();
+    space.set_bots(24);
+    space.spawn(0);
+
+    let mut all = [Fly::default(); MAX_PLAYERS];
+    all[0] = Fly {
+      thrust: 1,
+      yaw: 0.0,
+      pitch: 0.0,
+      firing: false,
+    };
+    for _ in 0..600 {
+      space.step(&all);
+    }
+
+    let player = space.ships[0].vel.length();
+    let bots: Vec<f32> = space.ships[MAX_PLAYERS..].iter().map(|s| s.vel.length()).collect();
+    let fastest = bots.iter().cloned().fold(0.0f32, f32::max);
+    let mean = bots.iter().sum::<f32>() / bots.len() as f32;
+    println!("\n  player at full throttle {player:.1}, bots mean {mean:.1}, fastest {fastest:.1}\n");
+
+    assert!(player > mean * 1.15, "a player should out-run the average bot: {player:.1} against {mean:.1}");
+    assert!(mean > 1.0, "and they should still be moving, not drifting: {mean:.1}");
   }
 
   #[test]

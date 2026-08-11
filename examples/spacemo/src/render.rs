@@ -15,8 +15,9 @@ use macroquad::prelude::*;
 
 use spacemo::protocol::ShipState;
 
-/// Half-length of a ship along its nose.
-const SHIP: f32 = 2.0;
+/// Half-length of a ship along its nose, taken from the simulation rather than
+/// kept here, so the hull and the sphere a bolt tests against cannot drift.
+const SHIP: f32 = spacemo::sim::SHIP_HALF;
 /// Half-width of a rock.
 const ROCK: f32 = 3.0;
 
