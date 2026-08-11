@@ -13,5 +13,6 @@
 //! Nothing here borrows from any existing creature game: the creatures are
 //! invented and so are their names.
 
+pub mod battle;
 pub mod grid;
 pub mod world;
