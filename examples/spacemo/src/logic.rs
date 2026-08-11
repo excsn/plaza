@@ -82,7 +82,6 @@ impl StateLogic<SpaceOp, PlayerId, SpaceState> for SpaceLogic {
         }
       }
       LogicInput::TimeStep { .. } => step_once(state, &mut ctx),
-      _ => {}
     }
 
     if let Some(clock) = &self.clock {
