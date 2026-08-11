@@ -175,7 +175,9 @@ async fn frame_loop(options: role::Options) {
   let dials: ui::Dials = None;
 
   let mut scene = render::Scene::new();
-  let rocks: Vec<[f32; 3]> = spacemo::sim::scatter(spacemo::sim::ROCKS, spacemo::sim::VOLUME)
+  // The same expression the server builds its own from, rather than the same
+  // arguments passed a second time.
+  let rocks: Vec<[f32; 3]> = spacemo::sim::rocks()
     .into_iter()
     .map(|at| [at.x, at.y, at.z])
     .collect();

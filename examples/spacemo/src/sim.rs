@@ -216,7 +216,7 @@ impl Space {
   pub fn new() -> Self {
     Self {
       ships: vec![Ship::default(); MAX_PLAYERS],
-      rocks: scatter(ROCKS, VOLUME),
+      rocks: rocks(),
       tick: 0,
       bolts: Vec::new(),
       slots: SlotAllocator::new(),
@@ -655,6 +655,16 @@ fn confine(ship: &mut Ship) {
       *value += VOLUME * 2.0;
     }
   }
+}
+
+/// The rocks, which never cross the wire.
+///
+/// Both ends generate them, so this is the one expression rather than two
+/// callers passing the same arguments and agreeing by luck. They are scenery
+/// with no collision, so a drift would be cosmetic, but it would also be
+/// invisible until someone noticed the landmarks disagreeing.
+pub fn rocks() -> Vec<Vec3> {
+  scatter(ROCKS, VOLUME)
 }
 
 /// A deterministic scatter. Seeded by hand rather than taken from a crate: it
