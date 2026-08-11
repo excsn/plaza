@@ -13,3 +13,4 @@
 //! perfectly good result to publish.
 
 pub mod relevance;
+pub mod sim;
