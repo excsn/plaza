@@ -56,11 +56,21 @@ enum PositionalOp {
   Ack(u32),
 }
 
+/// A normalised diagonal, which is what an input vector usually is and why the
+/// literal was 0.7071. Named, because clippy reads a hand-typed approximation
+/// of a known constant as a mistake, and here it was not one.
+const DIAGONAL: f32 = std::f32::consts::FRAC_1_SQRT_2;
+
 fn named() -> Vec<NamedOp> {
-  vec![NamedOp::Input { seq: 1234, tick: 5678, dx: -0.7071, dy: 0.7071 }]
+  vec![NamedOp::Input {
+    seq: 1234,
+    tick: 5678,
+    dx: -DIAGONAL,
+    dy: DIAGONAL,
+  }]
 }
 fn positional() -> Vec<PositionalOp> {
-  vec![PositionalOp::Input(1234, 5678, -0.7071, 0.7071)]
+  vec![PositionalOp::Input(1234, 5678, -DIAGONAL, DIAGONAL)]
 }
 
 fn encode_frame<T: Serialize, C: WireCodec>(codec: &C, ops: &T, buf: &mut Vec<u8>) {

@@ -388,10 +388,15 @@ mod tests {
 
   #[test]
   fn an_orientation_survives_the_smallest_three() {
+    // A quarter turn about X is the interesting case, since two components sit
+    // exactly on the smallest-three bound. Named rather than typed out, because
+    // a hand-written approximation of a known constant is what clippy reads as
+    // a mistake, and it is not one here.
+    const HALF_TURN: f32 = std::f32::consts::FRAC_1_SQRT_2;
     let quats = [
       [0.0, 0.0, 0.0, 1.0f32],
       [0.5, 0.5, 0.5, 0.5],
-      [-0.7071068, 0.0, 0.0, 0.7071068],
+      [-HALF_TURN, 0.0, 0.0, HALF_TURN],
       [0.183, -0.365, 0.548, 0.730],
     ];
     for quat in quats {

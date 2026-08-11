@@ -2,6 +2,11 @@
 //! This module defines the server's state, logic, and a simulated session layer
 //! using Tokio MPSC channels to mimic network communication with clients.
 
+/// Ticks between broadcasts. One means every tick, which is what this demo
+/// wants; the constant exists so lowering the rate is a change of value rather
+/// than a change of shape.
+const SEND_EVERY: u64 = 1;
+
 use crate::common_types::{CspSnapshotPayload, 
   BoxState,
   GameOp,
@@ -151,8 +156,9 @@ impl StateLogic<GameOp, PlayerId, ServerGameState> for ServerLogic {
         // We use our fixed server tick interval
         state.current_server_tick += 1;
 
-        if state.current_server_tick % 1 == 0 {
-          // Send every tick for this demo (can be less frequent)
+        // The knob the original `% 1` was standing in for. It was always true,
+        // so the gate it looked like was not one.
+        if state.current_server_tick.is_multiple_of(SEND_EVERY) {
           let mut remote_snapshots = Vec::new();
           for (id, box_state) in state.boxes.iter() {
             remote_snapshots.push(RemoteEntitySnapshot {
