@@ -12,6 +12,11 @@
 //! and that the answer "a flat grid plus a height filter is enough" is a
 //! perfectly good result to publish.
 
+/// The view radius, readable without compiling the server that owns it.
+pub const fn state_view() -> f32 {
+  80.0
+}
+
 pub mod controls;
 pub mod pack;
 pub mod protocol;

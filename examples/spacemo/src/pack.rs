@@ -81,6 +81,86 @@ pub fn unpack(bytes: &[u8]) -> Option<Vec<ShipState>> {
   Some(out)
 }
 
+/// Bounds on an **offset from the observer**, rather than on a position.
+///
+/// This is the stage-five idea and it falls out of relevance rather than being
+/// bolted on: a frame only ever carries what is inside the view radius, so the
+/// offset it has to encode is bounded by that radius no matter how large the
+/// world is. Absolute quantisation spends a fixed number of bits over the whole
+/// volume, so widening the world costs precision everywhere; cube_yard measured
+/// exactly that when its floor went from 0.0008 units of error to 0.0033 by
+/// growing four times. Relative encoding does not have the knob.
+///
+/// The margin covers a ship that moved between the query and the encode.
+const REL: (f32, f32) = (-(crate::state_view() + 24.0), crate::state_view() + 24.0);
+const REL_BITS: u32 = 13;
+
+/// What a ship costs when its position is an offset rather than a place.
+pub const fn ship_bits_relative() -> usize {
+  (SEAT_BITS + REL_BITS * 3 + plaza_wire::bits::SMALLEST_THREE_INDEX_BITS + ROT_BITS * 3 + VEL_BITS * 3) as usize
+}
+
+/// Writes ships as offsets from `observer`, which is carried absolutely once.
+///
+/// One absolute anchor plus N offsets, rather than N absolutes. The anchor is
+/// the observer's own ship, which the client is guaranteed to be sent.
+pub fn pack_relative(ships: &[ShipState], observer: [f32; 3]) -> Vec<u8> {
+  let mut w = BitWriter::with_capacity(ships.len() * ship_bits_relative() / 8 + 16);
+  // **The anchor is not quantised.** Quantising it over the world puts the
+  // world's size back into the error, which is the whole thing this scheme
+  // exists to remove: measured, that made relative encoding very slightly
+  // *worse* than absolute at every world size, because the anchor's rounding
+  // dominated a bounded offset that was already accurate. Ninety-six bits once
+  // per frame amortises to nothing across the ships in it.
+  for axis in observer {
+    w.bits(axis.to_bits() as u64, 32);
+  }
+  w.varint(ships.len() as u64);
+  for ship in ships {
+    w.bits(ship.seat as u64, SEAT_BITS);
+    for (axis, anchor) in observer.iter().enumerate() {
+      w.quantized(ship.pos[axis] - anchor, REL.0, REL.1, REL_BITS);
+    }
+    w.smallest_three(ship.rot, ROT_BITS);
+    for axis in 0..3 {
+      w.quantized(ship.vel[axis], VEL.0, VEL.1, VEL_BITS);
+    }
+  }
+  w.finish()
+}
+
+pub fn unpack_relative(bytes: &[u8]) -> Option<Vec<ShipState>> {
+  let mut r = BitReader::new(bytes);
+  let mut observer = [0.0f32; 3];
+  for axis in observer.iter_mut() {
+    *axis = f32::from_bits(r.bits(32).ok()? as u32);
+  }
+  let count = r.varint().ok()? as usize;
+  let mut out = Vec::with_capacity(count);
+  for _ in 0..count {
+    let seat = r.bits(SEAT_BITS).ok()? as u16;
+    let mut pos = [0.0f32; 3];
+    for (axis, place) in pos.iter_mut().enumerate() {
+      *place = observer[axis] + r.quantized(REL.0, REL.1, REL_BITS).ok()?;
+    }
+    let rot = r.smallest_three(ROT_BITS).ok()?;
+    let mut vel = [0.0f32; 3];
+    for axis in vel.iter_mut() {
+      *axis = r.quantized(VEL.0, VEL.1, VEL_BITS).ok()?;
+    }
+    out.push(ShipState { seat, pos, rot, vel });
+  }
+  Some(out)
+}
+
+/// Worst error a relative offset can carry.
+///
+/// The offset's rounding alone, because the anchor is exact. This number does
+/// not move when the world grows, which is the entire claim.
+pub fn relative_error() -> f32 {
+  (REL.1 - REL.0) / ((1u32 << REL_BITS) - 1) as f32
+}
+
 /// What one bolt costs, which is what makes churn affordable at all.
 pub const fn bolt_bits() -> usize {
   (ID_BITS + POS_BITS * 3 + VEL_BITS * 3) as usize
@@ -200,6 +280,99 @@ mod tests {
         }
       }
     }
+  }
+
+  /// The stage-five measurement: what each scheme costs as the world grows.
+  ///
+  /// Absolute quantisation spends a fixed number of bits over the whole volume,
+  /// so its error is a property of *how big the world is*. A relative offset is
+  /// bounded by the view radius, which does not change, so its error is a
+  /// property of how far you can see. Only one of those is a number the game
+  /// designer gets to choose.
+  #[test]
+  fn absolute_error_grows_with_the_world_and_relative_error_does_not() {
+    println!("\n  worst position error, ships within an 80-unit view:\n");
+    println!("{:>12} {:>14} {:>14}", "world half", "absolute", "relative");
+
+    let mut readings = Vec::new();
+    for half in [400.0f32, 4_000.0, 40_000.0, 400_000.0] {
+      // What absolute encoding would cost over a world of this size, at the
+      // same 16 bits an axis.
+      let absolute = (half + 10.0) * 2.0 / ((1u32 << POS_BITS) - 1) as f32;
+      // Relative spends its bits on the view radius, which does not grow, and
+      // the anchor is exact.
+      let relative = relative_error();
+      println!("{half:>12.0} {absolute:>13.4}u {relative:>13.4}u");
+      readings.push((half, absolute, relative));
+    }
+
+    println!(
+      "\n  a ship costs {} bits absolute and {} bits relative.",
+      ship_bits(),
+      ship_bits_relative()
+    );
+    println!("  the saving is small; the unboundedness is the point.\n");
+
+    let (_, small_abs, small_rel) = readings[0];
+    let (_, big_abs, big_rel) = readings[readings.len() - 1];
+    assert!(big_abs / small_abs > 100.0, "absolute error should track the world size");
+    // Asserted flat, not merely *slower*. The first version of this compared
+    // growth ratios and passed while relative was worse than absolute at every
+    // size, because a ratio hides which curve is higher.
+    assert_eq!(small_rel, big_rel, "relative error must not know how big the world is");
+    assert!(
+      big_rel < big_abs / 100.0,
+      "and should be far below it in a large world: {big_rel} against {big_abs}"
+    );
+    assert!(ship_bits_relative() < ship_bits(), "and cost no more");
+  }
+
+  #[test]
+  fn a_relative_frame_works_where_an_absolute_one_cannot_reach() {
+    // Two hundred thousand units from the origin, which is far outside
+    // anything `POS` can represent. The anchor is exact and the offsets are
+    // bounded by the view, so distance from the origin is simply not a term.
+    let observer = [200_000.0f32, -150_000.0, 90_000.0];
+    let sent: Vec<ShipState> = (0..12)
+      .map(|i| {
+        let a = i as f32 * 0.5;
+        ShipState {
+          seat: i as u16,
+          pos: [
+            observer[0] + a.sin() * 40.0,
+            observer[1] + a.cos() * 30.0,
+            observer[2] + (a * 0.7).sin() * 50.0,
+          ],
+          rot: [0.0, 0.0, 0.0, 1.0],
+          vel: [1.0, -2.0, 3.0],
+        }
+      })
+      .collect();
+
+    let back = unpack_relative(&pack_relative(&sent, observer)).expect("it should decode");
+    assert_eq!(back.len(), sent.len());
+    let tolerance = relative_error();
+    for (a, b) in sent.iter().zip(&back) {
+      assert_eq!(a.seat, b.seat);
+      for axis in 0..3 {
+        assert!(
+          (a.pos[axis] - b.pos[axis]).abs() <= tolerance,
+          "axis {axis} moved {} past {tolerance} at {} from the origin",
+          (a.pos[axis] - b.pos[axis]).abs(),
+          observer[0]
+        );
+      }
+    }
+
+    // And the same scene through the absolute path is nowhere near, which is
+    // the comparison rather than an insult to it.
+    let clamped = unpack(&pack(&sent)).expect("it still decodes");
+    let worst = sent
+      .iter()
+      .zip(&clamped)
+      .map(|(a, b)| (a.pos[0] - b.pos[0]).abs())
+      .fold(0.0f32, f32::max);
+    assert!(worst > 1000.0, "absolute should clamp badly out here, not {worst}");
   }
 
   #[test]

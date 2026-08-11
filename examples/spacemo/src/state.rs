@@ -16,7 +16,7 @@ use crate::relevance::{Field, Strategy};
 use crate::sim::{Space, MAX_PLAYERS};
 
 /// How far a ship can see. The single number the whole example turns on.
-pub const VIEW: f32 = 80.0;
+pub const VIEW: f32 = crate::state_view();
 /// Grid cell width. Comfortably under `VIEW`, so a query touches a handful of
 /// cells rather than one enormous one.
 pub const CELL: f32 = 60.0;
