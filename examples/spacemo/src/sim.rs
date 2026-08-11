@@ -9,6 +9,7 @@
 //! contact machinery that cost cube_yard a long afternoon exists here at all.
 
 use plaza_client_utils::math::Vec3;
+use plaza_client_utils::slot::{SlotAllocator, SlotKey};
 
 /// How many rocks are scattered as fixed landmarks.
 ///
@@ -34,6 +35,8 @@ const TURN: f32 = 1.8;
 /// This is a flight model, not a physics claim.
 const DRAG: f32 = 0.35;
 const MAX_SPEED: f32 = 90.0;
+/// How far ahead of the ship a bolt starts, so nobody shoots themselves.
+const SHIP_NOSE: f32 = 3.0;
 
 /// What a client holds down, which is the wire's own type rather than a copy.
 ///
@@ -78,10 +81,41 @@ impl Ship {
   }
 }
 
+/// A shot in flight.
+///
+/// The transient half of the world, and the reason this example has an axis
+/// cube_yard does not. A cube is always there and only its freshness varies; a
+/// bolt exists for a second and then does not, so the cost lands on **entry and
+/// exit** rather than on steady-state updates.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Bolt {
+  pub key: SlotKey,
+  pub at: Vec3,
+  pub vel: Vec3,
+  /// Ticks left before it expires on its own.
+  pub life: u16,
+  pub from: u8,
+}
+
+/// How long a bolt lives, in ticks.
+const BOLT_LIFE: u16 = 90;
+/// Ticks between shots while the trigger is held.
+const BOLT_EVERY: u16 = 8;
+/// Speed added to the ship's own, so a bolt outruns whoever fired it.
+const BOLT_SPEED: f32 = 120.0;
+
 pub struct Space {
   pub ships: [Ship; MAX_PLAYERS],
   pub rocks: Vec<Vec3>,
   pub tick: u64,
+  pub bolts: Vec<Bolt>,
+  /// Ids that are stable while a bolt lives and reusable after, which is what
+  /// keeps a client from mistaking a new bolt for one it was already drawing.
+  slots: SlotAllocator,
+  cooldown: [u16; MAX_PLAYERS],
+  /// Cumulative, for the panel: churn is the cost this example exists to show.
+  pub spawned: u64,
+  pub expired: u64,
 }
 
 impl Default for Space {
@@ -96,6 +130,11 @@ impl Space {
       ships: [Ship::default(); MAX_PLAYERS],
       rocks: scatter(ROCKS, VOLUME),
       tick: 0,
+      bolts: Vec::new(),
+      slots: SlotAllocator::new(),
+      cooldown: [0; MAX_PLAYERS],
+      spawned: 0,
+      expired: 0,
     }
   }
 
@@ -122,7 +161,58 @@ impl Space {
       if self.ships[seat].alive {
         advance(&mut self.ships[seat], *fly);
       }
+      self.cooldown[seat] = self.cooldown[seat].saturating_sub(1);
+      if fly.firing && self.ships[seat].alive && self.cooldown[seat] == 0 {
+        self.fire(seat);
+      }
     }
+    self.fly_bolts();
+  }
+
+  fn fire(&mut self, seat: usize) {
+    let ship = self.ships[seat];
+    let nose = ship.facing();
+    self.cooldown[seat] = BOLT_EVERY;
+    self.bolts.push(Bolt {
+      key: self.slots.alloc(),
+      at: Vec3::new(
+        ship.at.x + nose.x * SHIP_NOSE,
+        ship.at.y + nose.y * SHIP_NOSE,
+        ship.at.z + nose.z * SHIP_NOSE,
+      ),
+      // Inherits the ship's velocity, or flying fast means firing backwards.
+      vel: Vec3::new(
+        ship.vel.x + nose.x * BOLT_SPEED,
+        ship.vel.y + nose.y * BOLT_SPEED,
+        ship.vel.z + nose.z * BOLT_SPEED,
+      ),
+      life: BOLT_LIFE,
+      from: seat as u8,
+    });
+    self.spawned += 1;
+  }
+
+  fn fly_bolts(&mut self) {
+    for bolt in self.bolts.iter_mut() {
+      bolt.at = Vec3::new(
+        bolt.at.x + bolt.vel.x * TICK,
+        bolt.at.y + bolt.vel.y * TICK,
+        bolt.at.z + bolt.vel.z * TICK,
+      );
+      bolt.life = bolt.life.saturating_sub(1);
+    }
+    let slots = &mut self.slots;
+    let expired = &mut self.expired;
+    self.bolts.retain(|bolt| {
+      if bolt.life > 0 {
+        return true;
+      }
+      // Freeing the slot is what lets the id be reused, and what a client's
+      // "have I seen this before" test depends on being told about.
+      slots.free(bolt.key);
+      *expired += 1;
+      false
+    });
   }
 
   /// Every live ship's position, indexed by seat, for a relevance query.
@@ -336,6 +426,94 @@ mod tests {
         "server and prediction parted at tick {tick}"
       );
     }
+  }
+
+  #[test]
+  fn holding_the_trigger_spawns_and_expires_at_a_steady_rate() {
+    // The churn axis. Steady state is what every other example measures; here
+    // the interesting cost is entry and exit, and this is the number that says
+    // how much of it there is.
+    let mut space = Space::new();
+    space.spawn(0);
+    let mut all = [Fly::default(); MAX_PLAYERS];
+    all[0] = Fly {
+      thrust: 0,
+      yaw: 0,
+      pitch: 0,
+      firing: true,
+    };
+
+    for _ in 0..600 {
+      space.step(&all);
+    }
+    println!(
+      "\n  10s of held fire: {} spawned, {} expired, {} in flight\n",
+      space.spawned,
+      space.expired,
+      space.bolts.len()
+    );
+    assert!(space.spawned > 60, "a held trigger should keep firing: {}", space.spawned);
+    assert!(space.expired > 0, "and bolts should die on their own");
+    // In flight is bounded by life over cadence, so the population settles
+    // rather than growing without limit.
+    assert!(
+      space.bolts.len() <= (BOLT_LIFE / BOLT_EVERY) as usize + 2,
+      "{} in flight is more than the cadence allows",
+      space.bolts.len()
+    );
+  }
+
+  #[test]
+  fn a_bolt_outruns_the_ship_that_fired_it() {
+    let mut space = Space::new();
+    space.spawn(0);
+    let mut all = [Fly::default(); MAX_PLAYERS];
+    all[0] = Fly {
+      thrust: 1,
+      yaw: 0,
+      pitch: 0,
+      firing: true,
+    };
+    for _ in 0..60 {
+      space.step(&all);
+    }
+    let ship = space.ships[0];
+    let ahead = space
+      .bolts
+      .iter()
+      .filter(|b| b.from == 0)
+      .map(|b| {
+        let d = Vec3::new(b.at.x - ship.at.x, b.at.y - ship.at.y, b.at.z - ship.at.z);
+        let nose = ship.facing();
+        d.x * nose.x + d.y * nose.y + d.z * nose.z
+      })
+      .fold(f32::MIN, f32::max);
+    assert!(ahead > 0.0, "a bolt should be in front, not behind: {ahead}");
+  }
+
+  #[test]
+  fn a_freed_slot_is_reused_rather_than_growing_for_ever() {
+    // Ids are a dense index space, so a fight that lasts an hour must not
+    // walk it upward without limit.
+    let mut space = Space::new();
+    space.spawn(0);
+    let mut all = [Fly::default(); MAX_PLAYERS];
+    all[0] = Fly {
+      thrust: 0,
+      yaw: 0,
+      pitch: 0,
+      firing: true,
+    };
+    for _ in 0..3000 {
+      space.step(&all);
+    }
+    assert!(space.spawned > 300, "the run has to churn: {}", space.spawned);
+    let widest = space.bolts.iter().map(|b| b.key.index).max().unwrap_or(0);
+    assert!(
+      (widest as usize) < (BOLT_LIFE / BOLT_EVERY) as usize + 4,
+      "index space walked to {widest} after {} shots",
+      space.spawned
+    );
   }
 
   #[test]
