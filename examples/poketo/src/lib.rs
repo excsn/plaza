@@ -14,3 +14,4 @@
 //! invented and so are their names.
 
 pub mod grid;
+pub mod world;
