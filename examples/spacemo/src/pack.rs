@@ -21,13 +21,35 @@ use crate::sim::VOLUME;
 const POS: (f32, f32) = (-(VOLUME + 10.0), VOLUME + 10.0);
 const POS_BITS: u32 = 16;
 
+/// Asserted rather than described, for the same reason cube_yard's are: a body
+/// outside these pins to the edge on the client while flying perfectly well on
+/// the server, and nothing raises anything.
+const _: () = assert!(POS.1 > crate::sim::VOLUME, "the wire bounds must cover the volume");
+const _: () = assert!(
+  REL.1 > crate::max_view(),
+  "an offset must reach as far as the widest view the dial allows"
+);
+
 /// At 16 bits over 820 units a step is 12.5mm, on ships a few units across.
 const ROT_BITS: u32 = 9;
 
-/// Comfortably past `MAX_SPEED`, because a bound that a legal value can reach
-/// is a bound that clamps in play.
-const VEL: (f32, f32) = (-128.0, 128.0);
-const VEL_BITS: u32 = 12;
+/// Comfortably past the fastest thing in the volume, which is **not** a ship.
+///
+/// A bolt inherits the velocity of whatever fired it, so a shot from a ship at
+/// full throttle travels at `BOLT_SPEED + MAX_SPEED`, which is 210 against the
+/// 128 this used to allow. Clamping it is worse here than an ordinary pin to
+/// the edge, because a straight shot's path is *extrapolated from its
+/// velocity*: the client would draw the whole flight at 128 while the server
+/// flew it at 210, and hits would land where nothing was ever drawn.
+///
+/// Thirteen bits rather than twelve keeps the step where it was after widening.
+const VEL: (f32, f32) = (-256.0, 256.0);
+const VEL_BITS: u32 = 13;
+
+const _: () = assert!(
+  VEL.1 > crate::sim::MAX_SPEED && VEL.1 > crate::sim::BOLT_TOP_SPEED,
+  "the velocity bound must cover the fastest thing in the volume"
+);
 
 /// Wide enough for [`crate::sim::MAX_SHIPS`], which the bot population needs.
 ///

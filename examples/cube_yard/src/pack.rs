@@ -39,6 +39,24 @@ const ROT_BITS: u32 = 9;
 const VEL: (f32, f32) = (-32.0, 32.0);
 const VEL_BITS: u32 = 11;
 
+/// The bounds above are not descriptions, they are **claims about the
+/// simulation**, and a claim that stops being true clamps rather than errors: a
+/// body outside them pins to the edge on the client while moving perfectly well
+/// on the server. This yard shipped exactly that once, by widening the field
+/// past the bounds, and the outer ring went still while staying awake.
+///
+/// So the relationships are asserted rather than described. Each of these is a
+/// comment that the compiler reads.
+const _: () = assert!(X.1 > crate::sim::YARD, "the wire bounds must cover the floor");
+const _: () = assert!(
+  VEL.1 > crate::sim::CUBE_MAX_SPEED,
+  "the wire's velocity bound must cover a cube at full tilt"
+);
+const _: () = assert!(
+  VEL.1 > crate::sim::ROLL_SPEED && VEL.1 > crate::sim::JUMP_SPEED && VEL.1 > crate::sim::DRIVE_SPEED,
+  "and a player at full tilt, in every mode"
+);
+
 /// The worst error any single axis can come back with, for the panel and the
 /// tests to check the drawn yard against.
 pub fn position_error() -> f32 {
@@ -146,6 +164,11 @@ pub const fn cube_bits(at_rest: bool) -> usize {
 /// generous here only means finishing a little under budget, and being mean
 /// means going over it.
 pub const INDEX_BITS: usize = 15;
+
+const _: () = assert!(
+  crate::protocol::CUBES + crate::sim::MAX_PLAYERS < (1 << INDEX_BITS),
+  "an index must fit the yard it names"
+);
 
 /// Reads back what [`pack`] wrote. `None` on a truncated or corrupt payload,
 /// which on this wire means a version skew the handshake should already have

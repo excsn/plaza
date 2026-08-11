@@ -36,9 +36,9 @@ const SPACING: f32 = 2.4;
 ///
 /// Set as a velocity rather than pushed as a force: a platformer stops when you
 /// let go, and a force plus damping coasts, which reads as ice.
-const DRIVE_SPEED: f32 = 14.0;
+pub(crate) const DRIVE_SPEED: f32 = 14.0;
 /// Upward speed a jump starts with.
-const JUMP_SPEED: f32 = 12.0;
+pub(crate) const JUMP_SPEED: f32 = 12.0;
 /// The fastest a contact may lift a rolling cube. Enough to ride up over a cube
 /// in the way, and far short of being punted: driving into the field at speed,
 /// a corner contact launched the player at 8.3 and it arced to a height of 12.
@@ -59,7 +59,7 @@ const CLIMB_MAX: f32 = 2.0;
 /// the intent, which is the one thing a player is entitled to.
 ///
 /// The **field** is where the physics lives, and it is the only place it should.
-const ROLL_SPEED: f32 = 15.0;
+pub(crate) const ROLL_SPEED: f32 = 15.0;
 /// Reached and shed in about a fifth of a second, which is a key press.
 const ROLL_EASE: f32 = 0.28;
 /// A full ball is heavier to shift, but never immovable: at fifteen cubes this
@@ -174,7 +174,7 @@ const FIELD_MAX: f32 = 62.0;
 /// the field is comfortably inside the floor. Without it the repulsion could
 /// throw one clean off, and a cube falling for ever is a cube the client draws
 /// for ever.
-const CUBE_MAX_SPEED: f32 = 24.0;
+pub(crate) const CUBE_MAX_SPEED: f32 = 24.0;
 
 pub const MAX_PLAYERS: usize = 4;
 

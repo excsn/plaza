@@ -40,7 +40,7 @@ const THRUST: f32 = 42.0;
 /// Nothing stops in space, but a ship with no drag is a ship nobody can aim.
 /// This is a flight model, not a physics claim.
 const DRAG: f32 = 0.35;
-const MAX_SPEED: f32 = 90.0;
+pub(crate) const MAX_SPEED: f32 = 90.0;
 /// Hits a ship survives. Three, so a fight is an exchange rather than a
 /// coin toss, and so a hit is worth announcing without being decisive.
 pub const MAX_HEALTH: u8 = 3;
@@ -149,6 +149,11 @@ const BOLT_LIFE: u16 = 90;
 const BOLT_EVERY: u16 = 8;
 /// Speed added to the ship's own, so a bolt outruns whoever fired it.
 const BOLT_SPEED: f32 = 120.0;
+
+/// The fastest a shot can be travelling, which is its own speed plus whatever
+/// the ship that fired it had. The wire's velocity bound has to cover this and
+/// not merely `BOLT_SPEED`, since a bolt inherits.
+pub(crate) const BOLT_TOP_SPEED: f32 = BOLT_SPEED + MAX_SPEED;
 
 /// A missile is slower, lives longer, and turns.
 const MISSILE_SPEED: f32 = 70.0;
@@ -1239,6 +1244,57 @@ mod tests {
     }
     assert!(streaks.len() >= 3, "the run has to land three kills: {streaks:?}");
     assert_eq!(&streaks[..3], &[1, 2, 3], "and they should climb: {streaks:?}");
+  }
+
+  #[test]
+  fn a_shot_from_a_ship_at_full_throttle_fits_the_wire() {
+    // A bolt inherits, so the fastest thing in the volume is not a ship. The
+    // wire clamped at 128 against a real 210, and because a straight shot's
+    // path is extrapolated from its velocity, the client drew the whole flight
+    // slow while the server flew it fast.
+    let mut space = Space::new();
+    space.spawn(0);
+    let mut all = [Fly::default(); MAX_PLAYERS];
+    all[0] = Fly {
+      thrust: 1,
+      yaw: 0.0,
+      pitch: 0.0,
+      firing: true,
+      launching: false,
+    };
+    for _ in 0..300 {
+      space.step(&all);
+    }
+    let fastest = space.bolts.iter().map(|b| b.vel.length()).fold(0.0f32, f32::max);
+    assert!(fastest > MAX_SPEED, "the run has to produce an inherited shot: {fastest:.1}");
+    assert!(
+      fastest <= BOLT_TOP_SPEED + 1.0,
+      "and BOLT_TOP_SPEED has to be what the wire is sized against: {fastest:.1}"
+    );
+
+    // And it survives the round trip rather than pinning to the bound.
+    let sent: Vec<crate::protocol::BoltState> = space
+      .bolts
+      .iter()
+      .map(|b| crate::protocol::BoltState {
+        id: b.key.index,
+        homing: b.chasing.is_some(),
+        pos: [b.at.x, b.at.y, b.at.z],
+        vel: [b.vel.x, b.vel.y, b.vel.z],
+        life: b.life,
+      })
+      .collect();
+    let back = crate::pack::unpack_bolts(&crate::pack::pack_bolts(&sent)).expect("decodes");
+    for (a, b) in sent.iter().zip(&back) {
+      for axis in 0..3 {
+        assert!(
+          (a.vel[axis] - b.vel[axis]).abs() < 0.2,
+          "velocity {axis} clamped: {} became {}",
+          a.vel[axis],
+          b.vel[axis]
+        );
+      }
+    }
   }
 
   #[test]
