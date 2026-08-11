@@ -17,4 +17,5 @@
 //! chosen to care about wherever they are.
 
 pub mod casting;
+pub mod movement;
 pub mod relevance;
