@@ -47,7 +47,11 @@ const VEL_BITS: u32 = 11;
 ///
 /// So the relationships are asserted rather than described. Each of these is a
 /// comment that the compiler reads.
+/// Gated, because `sim` is server-only and `pack` is not: the browser client
+/// compiles this file without a simulation to check against.
+#[cfg(feature = "server")]
 const _: () = assert!(X.1 > crate::sim::YARD, "the wire bounds must cover the floor");
+#[cfg(feature = "server")]
 const _: () = assert!(
   VEL.1 > crate::sim::CUBE_MAX_SPEED,
   "the wire's velocity bound must cover a cube at full tilt"
@@ -58,6 +62,7 @@ const _: () = assert!(
 /// constants and rejects an `&&` whose right side cannot fail, which is fair:
 /// a const assertion that cannot fail is the exact thing these guards exist to
 /// prevent elsewhere.
+#[cfg(feature = "server")]
 const PLAYER_TOP_SPEED: f32 = {
   let fastest = if crate::sim::ROLL_SPEED > crate::sim::DRIVE_SPEED {
     crate::sim::ROLL_SPEED
@@ -70,6 +75,7 @@ const PLAYER_TOP_SPEED: f32 = {
     crate::sim::JUMP_SPEED
   }
 };
+#[cfg(feature = "server")]
 const _: () = assert!(VEL.1 > PLAYER_TOP_SPEED, "and a player at full tilt, in any mode");
 
 /// The worst error any single axis can come back with, for the panel and the
@@ -180,6 +186,7 @@ pub const fn cube_bits(at_rest: bool) -> usize {
 /// means going over it.
 pub const INDEX_BITS: usize = 15;
 
+#[cfg(feature = "server")]
 const _: () = assert!(
   crate::protocol::CUBES + crate::sim::MAX_PLAYERS < (1 << INDEX_BITS),
   "an index must fit the yard it names"
