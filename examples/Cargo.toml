@@ -30,6 +30,7 @@ members = [
   "quick_draw",
   "rollback_playground",
   "shared_counter",
+  "spacemo",
   "table_manners",
   "tag_arena",
   "timed_debuff",
