@@ -52,10 +52,25 @@ const _: () = assert!(
   VEL.1 > crate::sim::CUBE_MAX_SPEED,
   "the wire's velocity bound must cover a cube at full tilt"
 );
-const _: () = assert!(
-  VEL.1 > crate::sim::ROLL_SPEED && VEL.1 > crate::sim::JUMP_SPEED && VEL.1 > crate::sim::DRIVE_SPEED,
-  "and a player at full tilt, in every mode"
-);
+/// The fastest a player cube can be going, in any mode.
+///
+/// One constant rather than three comparisons, because clippy folds the
+/// constants and rejects an `&&` whose right side cannot fail, which is fair:
+/// a const assertion that cannot fail is the exact thing these guards exist to
+/// prevent elsewhere.
+const PLAYER_TOP_SPEED: f32 = {
+  let fastest = if crate::sim::ROLL_SPEED > crate::sim::DRIVE_SPEED {
+    crate::sim::ROLL_SPEED
+  } else {
+    crate::sim::DRIVE_SPEED
+  };
+  if fastest > crate::sim::JUMP_SPEED {
+    fastest
+  } else {
+    crate::sim::JUMP_SPEED
+  }
+};
+const _: () = assert!(VEL.1 > PLAYER_TOP_SPEED, "and a player at full tilt, in any mode");
 
 /// The worst error any single axis can come back with, for the panel and the
 /// tests to check the drawn yard against.

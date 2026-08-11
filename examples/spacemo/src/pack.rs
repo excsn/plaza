@@ -46,9 +46,11 @@ const ROT_BITS: u32 = 9;
 const VEL: (f32, f32) = (-256.0, 256.0);
 const VEL_BITS: u32 = 13;
 
+// Only the shot, because it inherits the ship: `BOLT_TOP_SPEED` already
+// contains `MAX_SPEED`, and asserting both is a comparison that cannot fail.
 const _: () = assert!(
-  VEL.1 > crate::sim::MAX_SPEED && VEL.1 > crate::sim::BOLT_TOP_SPEED,
-  "the velocity bound must cover the fastest thing in the volume"
+  VEL.1 > crate::sim::BOLT_TOP_SPEED,
+  "the velocity bound must cover the fastest thing in the volume, which is a shot rather than a ship"
 );
 
 /// Wide enough for [`crate::sim::MAX_SHIPS`], which the bot population needs.
