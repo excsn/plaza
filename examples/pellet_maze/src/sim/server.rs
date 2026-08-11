@@ -729,7 +729,14 @@ impl Server {
         .players
         .iter()
         .enumerate()
-        .filter(|(_, p)| p.role == Role::Pursuer && !p.eaten(now) && p.occupied().distance(at) <= CATCH_DISTANCE)
+        // `CATCH_DISTANCE` is a tuning knob currently at zero, which makes this
+        // comparison degenerate rather than wrong: a catch is one shared cell.
+        .filter(|(_, p)| {
+          #[allow(clippy::absurd_extreme_comparisons)]
+          {
+            p.role == Role::Pursuer && !p.eaten(now) && p.occupied().distance(at) <= CATCH_DISTANCE
+          }
+        })
         .map(|(i, _)| i)
         .collect();
       if eaten.is_empty() {
@@ -755,7 +762,12 @@ impl Server {
     let catcher = self
       .players
       .iter()
-      .find(|p| p.role == Role::Pursuer && p.alive && !p.eaten(now) && p.occupied().distance(at) <= CATCH_DISTANCE)?;
+      .find(|p| {
+        #[allow(clippy::absurd_extreme_comparisons)]
+        {
+          p.role == Role::Pursuer && p.alive && !p.eaten(now) && p.occupied().distance(at) <= CATCH_DISTANCE
+        }
+      })?;
     let catcher_id = catcher.id;
 
     self.catches += 1;

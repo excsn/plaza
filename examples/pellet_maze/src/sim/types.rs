@@ -88,6 +88,13 @@ pub const ROUND_START_MS: u64 = 3000;
 /// a countdown is a table nobody read.
 pub const MATCH_END_MS: u64 = 5000;
 /// How close a pursuer must be to catch the runner: the same cell.
+/// Manhattan cells between a pursuer and a runner for a catch.
+///
+/// Zero, so a catch is the two occupying one cell. It stays a constant rather
+/// than becoming `==` in the two places that read it, because widening the
+/// catch is a tuning change and should not need the comparison rewritten. At
+/// zero the `<=` degenerates, which clippy reports as an absurd comparison and
+/// which the readers allow with this named here.
 pub const CATCH_DISTANCE: u16 = 0;
 
 /// The seed the tests and the offline harness build their maze from.
