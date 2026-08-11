@@ -12,7 +12,7 @@
 use plaza_client_utils::FixedTimestep;
 use std::collections::BTreeMap;
 
-use crate::sim::types::{step_pellet, Attractor, BlackHole, Controls, Packet, Pellet, PelletId, PlayerId, SyncMode, Vec2, SIM_DT};
+use crate::sim::types::{step_pellet, Attractor, BlackHole, Controls, Packet, Pellet, PelletId, PlayerId, SyncMode, Vec2, SIM_DT, SIM_STEP_MS};
 
 pub struct Client {
   pub id: PlayerId,
@@ -49,7 +49,7 @@ impl Client {
       field: Vec::new(),
       pellets: BTreeMap::new(),
       now_ms: 0,
-      sim: FixedTimestep::from_step_ms((SIM_DT * 1000.0) as u64),
+      sim: FixedTimestep::from_step_ms(SIM_STEP_MS),
       corrections_applied: 0,
     }
   }

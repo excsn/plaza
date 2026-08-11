@@ -1230,7 +1230,12 @@ mod tests {
     // many frames, so a small bound still catches it and an exact one only
     // tracked whatever the render delay happened to be.
     let synced = synced_on_frame.expect("the joiner never agreed with the server at all");
-    assert!(synced <= 3, "the joiner took {synced} frames to hold the whole world, which is a trickle rather than a dump");
+    // Five rather than three since the simulation step became a true 16ms: the
+    // client applies at its render instant, so a 4% change in cadence moves the
+    // packet it first agrees on. The bug this guards against was a trickle over
+    // hundreds of frames, and `digest_mismatches` below is what says the dump
+    // was whole rather than converging.
+    assert!(synced <= 5, "the joiner took {synced} frames to hold the whole world, which is a trickle rather than a dump");
     assert_eq!(client.digest_mismatches(), 0, "the mirror disagreed after a warm-arena join {} times", client.digest_mismatches());
   }
 

@@ -18,7 +18,7 @@ use plaza_server_utils::relevance::{GridQuantizer, SetDigest, SpatialGrid, TierB
 
 use crate::sim::types::{PlayerFrame, 
   coin_pull, difficulty, step_player, enemy_speed_scale, repulsor_pulse, quantize_far, step_coin, step_enemy, Coin, CoinId, Controls, Crowd, Enemy, EnemyKind, EntityIndex, Handle, LeaveReason, Packet, PlayerId, Projectile, Sample, Shot, ShotId, Spawn, Upgrade, Vec2, Wallet, COIN_PICKUP_RADIUS, COIN_DROP_IN, COIN_TTL_MS, ARENA_H, ARENA_W, CELL_SIZE, CONTACT_HIT_DAMAGE, FIRE_INTERVAL_MS, HIT_INVULN_MS, HIT_RADIUS, NOVA_INTERVAL_MS,
-  NOVA_DAMAGE, NOVA_RADIUS, PLAYER_CONTACT_RADIUS, PLAYER_INVULN_MS, PLAYER_MAX_HEALTH, PROJECTILE_SPEED, PROJECTILE_TTL, SIM_DT, VIEW_RADIUS, WAVE_INTERVAL_MS,
+  NOVA_DAMAGE, NOVA_RADIUS, PLAYER_CONTACT_RADIUS, PLAYER_INVULN_MS, PLAYER_MAX_HEALTH, PROJECTILE_SPEED, PROJECTILE_TTL, SIM_DT, SIM_STEP_MS, VIEW_RADIUS, WAVE_INTERVAL_MS,
 };
 
 const RETARGET_INTERVAL_MS: u64 = 1000;
@@ -242,7 +242,7 @@ impl Server {
       input_schedules: (0..player_count).map(|_| InputSchedule::new()).collect(),
       held: vec![None; player_count],
       naive_inputs: 0,
-      sim: FixedTimestep::from_step_ms((SIM_DT * 1000.0) as u64),
+      sim: FixedTimestep::from_step_ms(SIM_STEP_MS),
       sync: Periodic::new(1),
       player_sync: Periodic::new(1),
       pending_players: None,

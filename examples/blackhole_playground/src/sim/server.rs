@@ -11,7 +11,7 @@ use plaza_server_utils::relevance::{TierBoundary, VisibilitySet};
 
 use crate::sim::types::{
   exact_field, step_pellet, Attractor, BlackHole, Controls, Packet, Pellet, PelletCorrection, PelletId, PelletSpawn, PlayerId, SyncMode, Vec2, ARENA_H, ARENA_W, CONTACT_DRAIN_BASE, CONTACT_DRAIN_PRESS,
-  DASH_COOLDOWN_MS, DASH_DURATION_MS, DASH_SPEED_MULT, ELIMINATION_MASS, HOLE_PULL_SCALE, HOLE_SPEED, MAX_HOLE_PULL, PELLET_MASS, RESPAWN_DELAY_MS, SIM_DT, START_MASS, VIEW_RADIUS,
+  DASH_COOLDOWN_MS, DASH_DURATION_MS, DASH_SPEED_MULT, ELIMINATION_MASS, HOLE_PULL_SCALE, HOLE_SPEED, MAX_HOLE_PULL, PELLET_MASS, RESPAWN_DELAY_MS, SIM_DT, SIM_STEP_MS, START_MASS, VIEW_RADIUS,
 };
 
 /// Who is driving a hole this tick.
@@ -92,7 +92,7 @@ impl Server {
       holes,
       pellets,
       clock_ms: 0,
-      sim: FixedTimestep::from_step_ms((SIM_DT * 1000.0) as u64),
+      sim: FixedTimestep::from_step_ms(SIM_STEP_MS),
       sync: Periodic::new(1),
       correction_cursor: 0,
       dash_until_ms: vec![0; player_count],

@@ -21,7 +21,16 @@ pub const ENEMY_SPEED: f32 = 62.0;
 
 /// Local simulation rate, on both the server and every client.
 pub const SIM_HZ: u32 = 60;
-pub const SIM_DT: f32 = 1.0 / SIM_HZ as f32;
+/// The step the simulation is actually driven at.
+///
+/// `FixedTimestep` counts in whole milliseconds, so a 60Hz rate is a 16ms step
+/// and the loop really runs 62.5 times a second. Deriving the delta from the
+/// *step* rather than from the rate is what keeps the two in agreement: the
+/// previous `1.0 / SIM_HZ` integrated a sixtieth of a second per 16ms tick, so
+/// simulated time ran 4.2% fast against the wall clock everything else is
+/// scheduled on.
+pub const SIM_STEP_MS: u64 = (1000 / SIM_HZ) as u64;
+pub const SIM_DT: f32 = SIM_STEP_MS as f32 / 1000.0;
 
 /// The deepest render delay the panel can ask for. One constant, because two
 /// things must agree on it: the slider's range, and how much player history a
