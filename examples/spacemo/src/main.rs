@@ -190,7 +190,6 @@ async fn frame_loop(options: role::Options) {
     client.poll(clock_ms);
     client.fly(read_fly(&mut aim, &mut last_mouse));
     client.predict(dt);
-    client.carry_bolts(dt);
 
     clear_background(Color::new(0.02, 0.02, 0.05, 1.0));
 

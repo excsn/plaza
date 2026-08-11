@@ -36,6 +36,9 @@ const FORGET_AFTER: u64 = 30;
 /// teleporting on each one is far more visible than carrying a little error.
 const EASE_PER_SEC: f32 = 6.0;
 
+/// The most server ticks one rendered frame may run.
+const MAX_CATCHUP: usize = 8;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Status {
   Connecting,
@@ -179,6 +182,15 @@ pub struct NetClient {
   /// getting wrong, and it should stay small if the shared rule is really
   /// shared.
   pub worst_correction: f32,
+  /// Real time owed to the simulation, in seconds.
+  ///
+  /// **The rule includes its timestep.** `advance` moves a ship by one server
+  /// tick, so calling it once per rendered frame silently makes prediction a
+  /// function of the display: measured over one second of wall clock, a ship
+  /// travelled 5.1 units at 30fps, 19.0 at 60 and 67.7 at 120, against the
+  /// server's 19.0. Sharing the rule as code is not enough on its own if the
+  /// two sides disagree about how often to run it.
+  debt: f32,
   held: Fly,
   now_ms: u64,
   sent: Option<Fly>,
@@ -215,6 +227,7 @@ impl NetClient {
       predicted: None,
       offset: [0.0; 3],
       worst_correction: 0.0,
+      debt: 0.0,
       held: Fly::default(),
       now_ms: 0,
       sent: None,
@@ -382,17 +395,16 @@ impl NetClient {
   /// the reconciliation sense: there is nothing to be wrong about and nothing
   /// to correct against. A homing shot is skipped, because its path is exactly
   /// the thing that could not be derived.
-  pub fn carry_bolts(&mut self, dt_secs: f32) {
-    let ticks = dt_secs * crate::protocol::TICK_HZ as f32;
+  fn carry_bolts(&mut self) {
+    let step = 1.0 / crate::protocol::TICK_HZ as f32;
     self.bolts.retain(|_, bolt| {
       if bolt.homing {
         return true;
       }
       for axis in 0..3 {
-        bolt.pos[axis] += bolt.vel[axis] * dt_secs;
+        bolt.pos[axis] += bolt.vel[axis] * step;
       }
-      let spent = ticks.ceil() as u16;
-      bolt.life = bolt.life.saturating_sub(spent);
+      bolt.life = bolt.life.saturating_sub(1);
       bolt.life > 0
     });
   }
@@ -400,9 +412,23 @@ impl NetClient {
   /// Runs the local ship forward one tick under the held input, and bleeds off
   /// whatever the last correction was worth.
   pub fn predict(&mut self, dt_secs: f32) {
-    if let Some(ship) = &mut self.predicted {
-      advance(ship, self.held);
+    // Whole server ticks, however many of them this frame was worth. Capped, so
+    // a stalled tab returns to a world it can still catch up with rather than
+    // spending a second of wall clock simulating the minute it missed.
+    let step = 1.0 / crate::protocol::TICK_HZ as f32;
+    self.debt = (self.debt + dt_secs).min(step * MAX_CATCHUP as f32);
+    let mut ran = 0;
+    while self.debt >= step && ran < MAX_CATCHUP {
+      if let Some(ship) = &mut self.predicted {
+        advance(ship, self.held);
+      }
+      self.carry_bolts();
+      self.debt -= step;
+      ran += 1;
     }
+
+    // Easing stays on real time: it is a rate rather than a rule the server
+    // also runs, so it has nothing to stay in step with.
     let keep = (1.0 - EASE_PER_SEC * dt_secs).clamp(0.0, 1.0);
     for axis in self.offset.iter_mut() {
       *axis *= keep;
@@ -479,6 +505,73 @@ impl NetClient {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::sim::Ship;
+
+  /// One second of wall clock at a given frame rate, through the same
+  /// accumulator the client uses.
+  fn travelled(fps: usize) -> f32 {
+    let step = 1.0 / crate::protocol::TICK_HZ as f32;
+    let dt = 1.0 / fps as f32;
+    let mut ship = Ship {
+      alive: true,
+      ..Default::default()
+    };
+    let held = Fly {
+      thrust: 1,
+      yaw: 0.0,
+      pitch: 0.0,
+      firing: false,
+      launching: false,
+    };
+    let mut debt = 0.0f32;
+    for _ in 0..fps {
+      debt = (debt + dt).min(step * MAX_CATCHUP as f32);
+      let mut ran = 0;
+      while debt >= step && ran < MAX_CATCHUP {
+        crate::sim::advance(&mut ship, held);
+        debt -= step;
+        ran += 1;
+      }
+    }
+    ship.at.length()
+  }
+
+  #[test]
+  fn prediction_does_not_depend_on_the_display() {
+    // `advance` moves a ship one *server tick*, so running it once per rendered
+    // frame made prediction a function of the monitor: 5.1 units at 30fps, 19.0
+    // at 60 and 67.7 at 120, over the same second of wall clock, against a
+    // server that always produces 19.0.
+    //
+    // Sharing the rule as code is not enough by itself. The two sides have to
+    // agree on how often to run it.
+    let at30 = travelled(30);
+    let at60 = travelled(60);
+    let at120 = travelled(120);
+    println!("\n  one second: 30fps {at30:.2}, 60fps {at60:.2}, 120fps {at120:.2}\n");
+
+    for (fps, got) in [(30, at30), (120, at120)] {
+      assert!(
+        (got - at60).abs() < 0.5,
+        "{fps}fps travelled {got:.2} against 60fps {at60:.2}"
+      );
+    }
+  }
+
+  #[test]
+  fn a_stall_does_not_simulate_the_minute_it_missed() {
+    // A backgrounded tab returns with a large delta. Catching up in one frame
+    // would freeze the client for longer than the stall did.
+    let step = 1.0 / crate::protocol::TICK_HZ as f32;
+    let mut debt = 0.0f32;
+    debt = (debt + 60.0).min(step * MAX_CATCHUP as f32);
+    let mut ran = 0;
+    while debt >= step && ran < MAX_CATCHUP {
+      debt -= step;
+      ran += 1;
+    }
+    assert!(ran <= MAX_CATCHUP, "ran {ran} steps for one frame");
+  }
 
   fn known(seat: u16, seen: u64) -> Known {
     Known {
