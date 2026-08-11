@@ -125,7 +125,7 @@ impl Meter {
 /// Free-standing so it can be tested without a socket.
 pub fn forget_quiet_bolts(bolts: &mut HashMap<u32, Shot>, frame: u64) -> usize {
   let before = bolts.len();
-  bolts.retain(|_, bolt| !bolt.homing || frame.saturating_sub(bolt.seen) < BOLT_SILENCE);
+  bolts.retain(|_, bolt| !bolt.streamed || frame.saturating_sub(bolt.seen) < BOLT_SILENCE);
   before - bolts.len()
 }
 
@@ -179,6 +179,15 @@ pub struct Known {
 pub struct Shot {
   pub state: BoltState,
   pub seen: u64,
+  /// Whether this shot has been mentioned in more than one frame.
+  ///
+  /// Which is how the client tells the two schemes apart without being told.
+  /// A streamed shot is described every frame it exists, so silence ends it; a
+  /// shot sent once is never mentioned again by design, so only its life can.
+  /// Applying the silence rule to both would delete every spawn-only bolt on
+  /// its second frame, and applying the life rule to both leaves a straight
+  /// shot flying for seconds after it hit something.
+  pub streamed: bool,
 }
 
 impl std::ops::Deref for Shot {
@@ -393,11 +402,13 @@ impl NetClient {
           // off, a frame carries only what is *new*, and everything else is
           // being carried forward here instead.
           for bolt in &update.bolts {
+            let streamed = self.bolts.contains_key(&bolt.id);
             self.bolts.insert(
               bolt.id,
               Shot {
                 state: *bolt,
                 seen: update.frame,
+                streamed,
               },
             );
           }
@@ -714,6 +725,7 @@ mod tests {
 
   fn shot(id: u32, homing: bool, seen: u64) -> Shot {
     Shot {
+      streamed: homing,
       state: BoltState {
         id,
         homing,
