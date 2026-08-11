@@ -210,6 +210,7 @@ fn step_once(state: &mut SpaceState, ctx: &mut Ctx) {
         frame: state.tick,
         server_time_ms: frame_to_ms(state.tick),
         yours: Some(seat as u16),
+        locked: state.space.lock_for(seat),
         ships,
         bolts,
         // Only the ones this client can see, so a hit on the far side of the

@@ -152,6 +152,22 @@ impl Scene {
     }
   }
 
+  /// A box around whatever a missile would chase, so the launch button is not
+  /// silent when nothing is in the cone.
+  pub fn draw_lock(&mut self, at: [f32; 3]) {
+    let at = vec3(at[0], at[1], at[2]);
+    let r = SHIP * 2.0;
+    let tint = Color::new(1.0, 0.45, 0.35, 1.0);
+    for (a, b) in [
+      (vec3(-r, -r, 0.0), vec3(-r, r, 0.0)),
+      (vec3(r, -r, 0.0), vec3(r, r, 0.0)),
+      (vec3(-r, r, 0.0), vec3(r, r, 0.0)),
+      (vec3(-r, -r, 0.0), vec3(r, -r, 0.0)),
+    ] {
+      draw_line_3d(at + a, at + b, tint);
+    }
+  }
+
   /// The static rocks, which are the only thing giving the volume a sense of
   /// scale. Without them a ship in open space appears not to move at all.
   pub fn draw_rocks(&mut self, rocks: &[[f32; 3]]) {

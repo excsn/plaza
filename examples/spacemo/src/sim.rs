@@ -433,8 +433,16 @@ impl Space {
   /// Locking on the server rather than trusting a client-chosen target: it is
   /// the one place here where a client could name something it has no business
   /// naming, and the check costs a dot product.
-  fn launch(&mut self, seat: usize) {
+  /// What a seat would lock onto if it launched now.
+  ///
+  /// Public because a client cannot work it out: lock is resolved here, so
+  /// pressing the button with nothing in the cone does nothing at all, and
+  /// without being told, that is indistinguishable from a broken weapon.
+  pub fn lock_for(&self, seat: usize) -> Option<u16> {
     let ship = self.ships[seat];
+    if !ship.alive {
+      return None;
+    }
     let nose = ship.facing();
     let mut best: Option<(usize, f32)> = None;
     for (index, other) in self.ships.iter().enumerate() {
@@ -454,7 +462,13 @@ impl Space {
         best = Some((index, range));
       }
     }
-    let Some((target, _)) = best else {
+    best.map(|(index, _)| index as u16)
+  }
+
+  fn launch(&mut self, seat: usize) {
+    let ship = self.ships[seat];
+    let nose = ship.facing();
+    let Some(target) = self.lock_for(seat).map(|t| t as usize) else {
       return;
     };
 
@@ -1134,6 +1148,32 @@ mod tests {
         assert!(drift < 0.01, "a bolt should still be on it: {drift}");
       }
     }
+  }
+
+  #[test]
+  fn a_lock_is_exactly_what_a_launch_would_chase() {
+    // The two have to be the same answer, or the box on screen points at
+    // something the missile will not follow.
+    let mut space = Space::new();
+    space.spawn(0);
+    space.spawn(1);
+    space.ships[0].at = Vec3::ZERO;
+    space.ships[0].yaw = 0.0;
+    space.ships[0].pitch = 0.0;
+
+    // Behind: no lock, and a launch that does nothing.
+    space.ships[1].at = Vec3::new(0.0, 0.0, -200.0);
+    assert_eq!(space.lock_for(0), None, "nothing behind should lock");
+    let before = space.bolts.len();
+    space.step(&launching());
+    assert_eq!(space.bolts.len(), before, "and nothing should launch");
+
+    // Ahead: a lock, and a missile that chases exactly it.
+    space.ships[1].at = Vec3::new(0.0, 0.0, 200.0);
+    assert_eq!(space.lock_for(0), Some(1), "and something ahead should");
+    space.step(&launching());
+    let chasing: Vec<Option<u16>> = space.bolts.iter().filter(|b| b.chasing.is_some()).map(|b| b.chasing).collect();
+    assert_eq!(chasing, vec![Some(1)], "the missile should chase what was locked");
   }
 
   #[test]

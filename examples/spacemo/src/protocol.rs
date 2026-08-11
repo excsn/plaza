@@ -91,6 +91,9 @@ pub struct FrameUpdate {
   pub server_time_ms: u64,
   /// The seat this client flies, once it has one.
   pub yours: Option<u16>,
+  /// What a missile would chase if launched this frame, since lock is resolved
+  /// on the server and a launch with nothing in the cone is otherwise silent.
+  pub locked: Option<u16>,
   /// Only the ships this client can see. Its own is always among them.
   pub ships: Vec<ShipState>,
   /// Only the bolts this client can see, which churn far faster than ships do.

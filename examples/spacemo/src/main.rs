@@ -207,6 +207,9 @@ async fn frame_loop(options: role::Options) {
       let ships: Vec<_> = client.ships.keys().filter_map(|seat| client.drawn(*seat)).collect();
       scene.draw_ships(ships.iter(), client.mine, &client.struck);
       scene.draw_bolts(client.bolts.values());
+      if let Some(target) = client.locked.and_then(|seat| client.drawn(seat)) {
+        scene.draw_lock(target.pos);
+      }
       set_default_camera();
     } else {
       draw_text("waiting for a seat", 24.0, 48.0, 28.0, GRAY);

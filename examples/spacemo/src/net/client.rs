@@ -160,6 +160,8 @@ pub struct NetClient {
   /// reused slot distinguishable from the bolt that vacated it.
   pub bolts: HashMap<u32, BoltState>,
   pub bolts_carried: usize,
+  /// What a missile would chase if launched now, straight from the server.
+  pub locked: Option<u16>,
   /// Seats struck recently, with the frame it happened on, so the renderer can
   /// flash them. Events do not persist, so this is the client's own memory of
   /// one rather than something the wire keeps repeating.
@@ -242,6 +244,7 @@ impl NetClient {
       carried: 0,
       bolts: HashMap::new(),
       bolts_carried: 0,
+      locked: None,
       struck: HashMap::new(),
       hits_seen: 0,
       announcements: Vec::new(),
@@ -320,6 +323,7 @@ impl NetClient {
           }
           self.carried = update.ships.len();
           self.bolts_carried = update.bolts.len();
+          self.locked = update.locked;
           // A bolt is replaced wholesale every frame rather than aged: it lives
           // about a second, so there is no staleness worth carrying, and the
           // set that arrived *is* the set that exists.
