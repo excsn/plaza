@@ -97,8 +97,11 @@ pub fn unpack(bytes: &[u8]) -> Option<Vec<ShipState>> {
 /// growing four times. Relative encoding does not have the knob.
 ///
 /// The margin covers a ship that moved between the query and the encode.
-const REL: (f32, f32) = (-(crate::state_view() + 24.0), crate::state_view() + 24.0);
-const REL_BITS: u32 = 13;
+const REL: (f32, f32) = (-(crate::max_view() + 24.0), crate::max_view() + 24.0);
+/// Two more than a tight radius would need, because the bound covers the widest
+/// the dial goes rather than the current setting. At 15 bits over 1248 units a
+/// step is 38mm, on ships eight units long.
+const REL_BITS: u32 = 15;
 
 /// What a ship costs when its position is an offset rather than a place.
 pub const fn ship_bits_relative() -> usize {

@@ -12,9 +12,27 @@
 //! and that the answer "a flat grid plus a height filter is enough" is a
 //! perfectly good result to publish.
 
-/// The view radius, readable without compiling the server that owns it.
-pub const fn state_view() -> f32 {
-  80.0
+/// The largest view radius the dial allows.
+///
+/// A **bound on the encoding**, not a gameplay number. Positions cross as
+/// offsets from the observer, so the range those offsets have to cover is the
+/// view radius, and a radius that outgrew it would clamp: exactly the bug
+/// cube_yard shipped when it widened its floor without widening its bounds, and
+/// the outer ring of its field froze while flying perfectly well on the server.
+/// So this is sized once, for the widest the dial goes, and never for whatever
+/// it currently says.
+pub const fn max_view() -> f32 {
+  600.0
+}
+
+/// Where the dial starts.
+///
+/// At 90 units a second an 80-unit radius is crossed in under a second, so
+/// ships appeared and vanished faster than they could be aimed at. Relevance
+/// was working; the number was chosen for the measurement rather than for the
+/// game.
+pub const fn default_view() -> f32 {
+  260.0
 }
 
 pub mod controls;

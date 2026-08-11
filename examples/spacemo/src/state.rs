@@ -15,11 +15,14 @@ use crate::protocol::{Fly, PlayerId};
 use crate::relevance::{Field, Strategy};
 use crate::sim::{Space, MAX_PLAYERS};
 
-/// How far a ship can see. The single number the whole example turns on.
-pub const VIEW: f32 = crate::state_view();
-/// Grid cell width. Comfortably under `VIEW`, so a query touches a handful of
-/// cells rather than one enormous one.
-pub const CELL: f32 = 60.0;
+/// How far a ship can see, at the widest the dial goes. Cells are sized against
+/// this so a query never has to touch an absurd number of them.
+pub const MAX_VIEW: f32 = crate::max_view();
+/// Grid cell width, sized against the *current* radius rather than the widest,
+/// or a small view would sweep cells that are mostly empty.
+pub fn cell_for(view: f32) -> f32 {
+  (view / 3.0).max(20.0)
+}
 
 pub struct SpaceState {
   pub space: Space,
@@ -48,6 +51,8 @@ pub struct SpaceState {
   pub packed: bool,
   pub relative: bool,
   pub bots: usize,
+  /// How far a ship can see. The single number the whole example turns on.
+  pub view: f32,
 }
 
 impl std::fmt::Debug for SpaceState {
@@ -74,11 +79,11 @@ impl SpaceState {
       roster: Roster::new(MAX_PLAYERS),
       flying: [Fly::default(); MAX_PLAYERS],
       agents: HashMap::new(),
-      field: Field::new(CELL, strategy),
+      field: Field::new(cell_for(crate::default_view()), strategy),
       strategy,
       points: Vec::new(),
       visible: Vec::new(),
-      bolt_field: Field::new(CELL, strategy),
+      bolt_field: Field::new(cell_for(crate::default_view()), strategy),
       bolt_points: Vec::new(),
       bolt_visible: Vec::new(),
       last_seen: [0; MAX_PLAYERS],
@@ -87,6 +92,7 @@ impl SpaceState {
       packed: true,
       relative: true,
       bots: 0,
+      view: crate::default_view(),
     }
   }
 
@@ -96,14 +102,15 @@ impl SpaceState {
 
   /// Rebuilds the spatial index for this tick, under the current strategy.
   pub fn reindex(&mut self) {
-    if self.field.strategy() != self.strategy {
-      self.field = Field::new(CELL, self.strategy);
+    let cell = cell_for(self.view);
+    if self.field.strategy() != self.strategy || (self.field.cell() - cell).abs() > 0.01 {
+      self.field = Field::new(cell, self.strategy);
     }
     self.space.positions(&mut self.points);
     self.field.rebuild(&self.points);
 
-    if self.bolt_field.strategy() != self.strategy {
-      self.bolt_field = Field::new(CELL, self.strategy);
+    if self.bolt_field.strategy() != self.strategy || (self.bolt_field.cell() - cell).abs() > 0.01 {
+      self.bolt_field = Field::new(cell, self.strategy);
     }
     self.bolt_points.clear();
     self.bolt_points.extend(self.space.bolts.iter().map(|b| b.at));
@@ -117,7 +124,7 @@ impl SpaceState {
   /// has no use for, and there is a great deal of it.
   pub fn bolts_visible_to(&mut self, seat: usize) -> &[u32] {
     let at = self.space.ships[seat].at;
-    self.bolt_field.query(at, VIEW, &mut self.bolt_visible, &[]);
+    self.bolt_field.query(at, self.view, &mut self.bolt_visible, &[]);
     &self.bolt_visible
   }
 
@@ -131,7 +138,7 @@ impl SpaceState {
     // No truth set: this is the serving path, not the measuring one, and
     // scoring every query against a brute-force sweep would make relevance
     // cost more than it saves.
-    self.field.query(at, VIEW, &mut self.visible, &[]);
+    self.field.query(at, self.view, &mut self.visible, &[]);
     self.visible.retain(|id| self.space.ships[*id as usize].alive);
     if !self.visible.contains(&(seat as u32)) {
       self.visible.push(seat as u32);
@@ -165,12 +172,12 @@ mod tests {
     state.space.spawn(0);
     state.space.spawn(1);
     state.space.ships[0].at = Vec3::new(0.0, 0.0, 0.0);
-    state.space.ships[1].at = Vec3::new(VIEW * 3.0, 0.0, 0.0);
+    state.space.ships[1].at = Vec3::new(crate::default_view() * 3.0, 0.0, 0.0);
     state.reindex();
     let seen = state.visible_to(0).to_vec();
     assert_eq!(seen, vec![0], "only itself: {seen:?}");
 
-    state.space.ships[1].at = Vec3::new(VIEW * 0.5, 0.0, 0.0);
+    state.space.ships[1].at = Vec3::new(crate::default_view() * 0.5, 0.0, 0.0);
     state.reindex();
     let mut seen = state.visible_to(0).to_vec();
     seen.sort();
@@ -190,7 +197,10 @@ mod tests {
       state.space.spawn(0);
       state.space.spawn(1);
       state.space.ships[0].at = Vec3::new(0.0, 0.0, 0.0);
-      state.space.ships[1].at = Vec3::new(0.0, VIEW * 4.0, 0.0);
+      // Clear of the view and still inside the volume. A multiple of the radius
+      // wrapped at the boundary once the radius grew, putting the ship back
+      // *inside* the view from the other side and quietly inverting the test.
+      state.space.ships[1].at = Vec3::new(0.0, crate::sim::VOLUME * 0.95, 0.0);
       state.reindex();
       let seen = state.visible_to(0).len();
       assert_eq!(seen, expect, "{} saw {seen}", strategy.name());

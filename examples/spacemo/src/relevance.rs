@@ -91,6 +91,10 @@ impl Field {
     self.strategy
   }
 
+  pub fn cell(&self) -> f32 {
+    self.cell
+  }
+
   pub fn clear(&mut self) {
     self.cells.clear();
     self.points.clear();

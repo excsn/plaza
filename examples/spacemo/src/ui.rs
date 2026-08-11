@@ -58,6 +58,7 @@ pub fn draw_panel(client: &NetClient, url: &str, dials: &Dials) {
           ui.checkbox(&mut held.packed, "bit-packed");
           ui.checkbox(&mut held.relative, "positions relative to the observer");
           ui.add(egui_macroquad::egui::Slider::new(&mut held.bots, 0..=400).text("bots"));
+          ui.add(egui_macroquad::egui::Slider::new(&mut held.view, 40.0..=600.0).text("view radius"));
           if held != was {
             *dials.lock() = held;
           }

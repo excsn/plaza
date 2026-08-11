@@ -66,6 +66,7 @@ impl StateLogic<SpaceOp, PlayerId, SpaceState> for SpaceLogic {
       state.strategy = wanted.strategy;
       state.packed = wanted.packed;
       state.relative = wanted.relative;
+      state.view = wanted.view.clamp(40.0, crate::max_view());
       if state.bots != wanted.bots {
         state.bots = wanted.bots;
         state.space.set_bots(wanted.bots);
@@ -220,7 +221,6 @@ mod tests {
   use super::*;
   use crate::protocol::Fly;
   use crate::relevance::Strategy;
-  use crate::state::VIEW;
   use plaza_client_utils::math::Vec3;
 
   async fn run(
@@ -431,7 +431,7 @@ mod tests {
       .await;
     }
     state.space.ships[0].at = Vec3::new(0.0, 0.0, 0.0);
-    state.space.ships[1].at = Vec3::new(VIEW * 5.0, 0.0, 0.0);
+    state.space.ships[1].at = Vec3::new(crate::default_view() * 5.0, 0.0, 0.0);
 
     let ops = tick(&mut state).await;
     let sent = frames(&ops);
@@ -497,7 +497,10 @@ mod tests {
         .await;
       }
       state.space.ships[0].at = Vec3::ZERO;
-      state.space.ships[1].at = Vec3::new(0.0, VIEW * 4.0, 0.0);
+      // Clear of the view and still inside the volume. A multiple of the radius
+      // wrapped at the boundary once the radius grew, putting the ship back
+      // *inside* the view from the other side and quietly inverting the test.
+      state.space.ships[1].at = Vec3::new(0.0, crate::sim::VOLUME * 0.95, 0.0);
 
       let ops = tick(&mut state).await;
       let mine = frames(&ops).into_iter().find(|f| f.yours == Some(0)).unwrap();

@@ -12,7 +12,7 @@
 
 use crate::relevance::Strategy;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Controls {
   pub strategy: Strategy,
   /// Whether frames go out bit-packed or at full serde width.
@@ -23,6 +23,10 @@ pub struct Controls {
   /// flight every strategy returns the same answer, so nothing on the panel
   /// moves when the strategy does.
   pub bots: usize,
+  /// How far a ship can see, and the one number that trades feel against
+  /// bandwidth directly. Everything else here changes what a byte buys; this
+  /// changes how many there are.
+  pub view: f32,
 }
 
 impl Default for Controls {
@@ -32,6 +36,7 @@ impl Default for Controls {
       packed: true,
       relative: true,
       bots: 150,
+      view: crate::default_view(),
     }
   }
 }
