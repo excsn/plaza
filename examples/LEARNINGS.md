@@ -211,6 +211,24 @@ Keying on **motion** breaks the circle, and the rule left over is the one that w
 
 The general shape: a technique that perturbs state to keep two machines agreeing can collide with an optimisation that rewards state for holding still, and the optimisation was worth more here (a sleeping cube skips its velocity entirely). Check what a correction costs the things that were not wrong.
 
+### Send the spawn, not the path (spacemo)
+
+Two projectiles, one field apart. A bolt flies straight, so its whole future follows from where it started and how fast; a missile turns after its target, so its path depends on where that target goes next and nobody knows that at launch.
+
+Streaming both costs **20.4 shots a frame against 1.2**, a **17.3x** difference that is entirely paths already implied by their own spawn. Telling a client once and letting it carry the shot forward is not prediction in the reconciliation sense, which is what makes it safe: there is nothing to be wrong about and nothing to correct against. The homing half cannot be treated that way at all, and having both live on a dial is what makes the distinction a measurement instead of an argument.
+
+Two details it forced. A shot needs its remaining life on the wire, or a client told once never learns when to stop drawing it. And the per-client record of what has already been announced has to be pruned against the live set, or a **reused slot** is mistaken for the shot that vacated it.
+
+The general shape: before compressing what you send, ask which of it the receiver could have worked out. The answer is usually "the parts that never change direction", and those are often the numerous ones.
+
+### A comparison can pass with one arm missing (spacemo)
+
+The measurement above first read **83x**, which was wrong in a way the test could not see: the scene lined every ship up across the nose, so nothing was ever inside anyone's lock cone, **no missile ever launched**, and the streamed side was being compared against an empty homing side rather than against a cheaper one.
+
+Strung out along the axis ships actually look down, it is 17.3x. The test now asserts homing shots were genuinely in flight, so the failure cannot recur silently.
+
+Same family as the ratio assertion in the relative-encoding entry below: a comparison that is *arithmetically* fine while one of the two things being compared is absent or degenerate. Neither produced an error, both produced a number, and the number was the wrong shape. When a test contrasts two cases, assert that both cases actually occurred.
+
 ### A dropped axis over-returns rather than missing, which is why it survives (spacemo)
 
 `SpatialGrid` is two-dimensional, and every 3D thing built here before spacemo could ignore that, because a yard has a floor and an arena has a plane. The expected failure in a volume was ships going unseen. It is the opposite: a grid on `(x, z)` returns everything in the **disc**, which is a superset of the sphere, so nothing is ever missed.

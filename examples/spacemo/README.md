@@ -11,7 +11,9 @@ It sits at the far end of the axis the [examples index](../README.md) is organis
 ./run-native.sh --role client --connect ws://<host>:8200/ws
 ```
 
-Everything that changes what crosses the wire is a **host dial on the panel**, not a flag. What they change is *who you are told about*, and that only reads as a difference while the volume keeps moving.
+Mouse aims, W and S are the throttle, space fires, right click or shift launches a missile. Click to capture the pointer, escape to release it: in the browser that is a hard requirement rather than a nicety, since pointer lock needs a user gesture.
+
+Everything that changes what crosses the wire is a **host dial on the panel**, not a flag: the relevance strategy, bit packing, relative positions, whether a straight shot's path is sent, the view radius, and the bot population. What they change is *who you are told about* and *what it costs to say so*, and neither reads as a difference except while the volume keeps moving. The bots are part of that: with one ship in flight every strategy returns the same answer, so the dial moved and nothing else did.
 
 ## The finding: a dropped axis is paid for in bandwidth
 
@@ -44,6 +46,39 @@ The control matters as much as the result:
 
 **At slab thickness a flat grid costs exactly nothing.** It is right for what it was built for, and degrades smoothly as the world gains thickness. The finding is about geometry, not about one scene.
 
+## Two weapons, opposite wire profiles
+
+The clearest thing this example has to say about bandwidth is not about compression at all.
+
+A **bolt** flies straight, so its whole future follows from where it started and how fast. A client told once can carry it forward itself, and doing so is not prediction in the reconciliation sense: there is nothing to be wrong about and nothing to correct against. A **missile** turns after its target, so its path depends on where that target goes next, which nobody knows at launch. There is no version of it that can be sent once.
+
+One field apart, and the difference is the whole bill:
+
+```
+shots carried per frame, per client:
+
+  every path sent          20.4
+  spawns and homing only    1.2
+```
+
+**17.3x**, and it is entirely shots whose paths were already implied. `tests` prove the distinction rather than assert it: fly both forward forty ticks with the target manoeuvring, then compare each against a straight-line extrapolation from its own spawn. The bolt is still on that line to within 0.01 units; the missile has left it.
+
+Both halves stay live on a dial, so the bolt count collapses while the missiles keep streaming.
+
+Three decisions around the missile are worth naming. **Lock is resolved on the server**, nearest target inside a 35 degree cone: it is the one thing here a client could name that it has no business naming, and the check costs a dot product. **The counter-play is distance rather than evasion**, 70 units a second against a ship's 90, so running works and turning while chased is what gets you hit. And **a missile whose target leaves keeps flying** rather than vanishing, which is kinder and one less event to deliver.
+
+## Events and state, on one wire
+
+Health is **state**: a client that missed the frame a hit landed on still learns the result from the next one, because every frame describes health completely. It costs two bits a ship.
+
+A hit and a kill are **events**. They appear once and no later frame mentions them again, which makes them the only things here whose delivery actually matters. On this transport that is free; it is precisely the part that would stop being free on a datagram one, and now the example has a concrete instance of the distinction rather than a paragraph about it. Anything still on screen a second after a kill is the client *remembering*, not the wire repeating.
+
+Three places the game and the netcode pulled in different directions:
+
+- **A kill reaches the people it names, even outside the view radius.** Relevance says do not send what cannot be seen; being told that something out there got you, with no name, is worse than the bandwidth it saves.
+- **Streaks are counted on the server.** A client inferring one from arrival order would disagree with the next client about the same fight.
+- **The announcement text is built on the client.** One event reads three ways to the three people it concerns, and sending three strings to say one thing is paying for grammar on the wire.
+
 ## Churn is the other half of the bill
 
 Every other example in the tree measures steady state: N bodies updating every tick. Bolts are the opposite. They live about a second and then do not, so the cost lands on **entry and exit**.
@@ -51,11 +86,13 @@ Every other example in the tree measures steady state: N bodies updating every t
 ```
 eight ships in one fight, ten seconds, per frame per client:
 
-  ships     7.8 at   116.2 bytes
-  bolts    31.4 at   409.5 bytes
+  ships     8.0 at   133.0 bytes
+  bolts    83.0 at  1091.2 bytes
 ```
 
-**The transient half of the world is 78% of the packet**, while turning over 64 times in the run. A bolt is individually *cheaper* than a ship (13.0 bytes against 14.9) and collectively 3.5x more expensive, because there are four times as many. Budgeting for the entities you can name and not for the ones that come and go is how a packet budget gets missed.
+**The transient half of the world is eight times the standing half**, while turning over dozens of times in the run. A shot is individually *cheaper* than a ship and collectively far dearer, because there are an order of magnitude more of them. Budgeting for the entities you can name and not for the ones that come and go is how a packet budget gets missed, and none of `priority`, `rest` or `delta` addresses it, since all three optimise the freshness of a standing world.
+
+That figure is measured with every path streamed. The section above is what happens when the derivable ones stop being sent.
 
 Two decisions carry that:
 
