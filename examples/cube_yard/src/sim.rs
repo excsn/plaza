@@ -40,6 +40,11 @@ const DRIVE_SPEED: f32 = 14.0;
 /// Upward speed a jump starts with.
 const JUMP_SPEED: f32 = 12.0;
 
+/// The most a rolling cube may gain height per tick from anything other than a
+/// jump: enough to climb the field it is ploughing through, far short of what
+/// its own spin tries to give it.
+const ROLL_RISE: f32 = 2.5;
+
 /// Radians of tumble per unit travelled, so the cube rolls rather than slides.
 ///
 /// A cube going face over face turns a quarter turn for every face width it
@@ -241,8 +246,22 @@ impl Yard {
         Vec3::ZERO
       };
       if drive.rolling {
-        // On the ground, tumbling, and gravity owns the vertical axis.
-        let mut next = Vec3::new(horizontal.x, was.y, horizontal.z);
+        // Tumbling, with gravity owning the way down and almost nothing owning
+        // the way up.
+        //
+        // The roll is *authored*: both velocities are set rather than forced
+        // through torque, because a platformer stops when you let go. The cost
+        // is that setting a velocity bypasses mass entirely, so this cube is 68
+        // times heavier than a field cube and behaves as though it weighs
+        // nothing: it cannot be slowed by what it ploughs into.
+        //
+        // It also cannot be trusted with its own vertical. A cube spun this way
+        // digs a corner into the floor, the solver resolves the penetration by
+        // throwing it upward once per quarter turn, and that measured as an
+        // eleven unit launch. Capping the rise leaves terrain able to lift it
+        // over a cube without letting its own spin fling it.
+        let rise = if drive.jump { was.y } else { was.y.min(ROLL_RISE) };
+        let mut next = Vec3::new(horizontal.x, rise, horizontal.z);
         body.set_linvel(next, true);
         body.set_angvel(Vec3::Y.cross(horizontal) * ROLL_PER_UNIT, true);
 
@@ -641,6 +660,46 @@ mod tests {
       (turned - expected).abs() < expected * 0.35,
       "rolled {turned:.3} rad over {travelled:.2} units, expected about {expected:.3}"
     );
+  }
+
+  /// Rolling should ride the field, not hop on it.
+  ///
+  /// The cube's roll is authored rather than torqued, and a cube spun that way
+  /// digs a corner into the floor: the solver resolves the penetration by
+  /// throwing it upward once per quarter turn, which measured as an eleven unit
+  /// launch and read as constant bouncing. Capping the rise fixed it, and the
+  /// property worth pinning is *reversals* rather than range, because climbing
+  /// over a cube and down the far side is legitimate and hopping is not.
+  #[test]
+  fn rolling_rides_the_field_rather_than_bouncing_on_it() {
+    let mut yard = landed(200);
+    let seat = yard.player_index(0) as usize;
+    let driving = roll(-1, 0, false);
+    // Away from the field first, so this measures rolling on flat ground
+    // rather than climbing over cubes.
+    let mut heights = Vec::new();
+    for _ in 0..300 {
+      yard.step(&driving);
+      heights.push(snapshot_of(&yard)[seat].pos[1]);
+    }
+    let lo = heights.iter().cloned().fold(f32::MAX, f32::min);
+    let hi = heights.iter().cloned().fold(0.0f32, f32::max);
+    // Bouncing is *reversals*, not range: riding up over a cube and down the
+    // other side is one climb, and hopping is many.
+    let mut reversals = 0;
+    for w in heights.windows(3) {
+      let (a, b, c) = (w[0], w[1], w[2]);
+      if (b - a).signum() != (c - b).signum() && (c - b).abs() > 0.02 {
+        reversals += 1;
+      }
+    }
+    assert!(
+      reversals < 20,
+      "{reversals} up-down reversals in 300 ticks is bouncing, not rolling \
+       (height {lo:.2}..{hi:.2})"
+    );
+    assert!(hi < 12.0, "and it should stay near the ground, reached {hi:.2}");
+    let _ = (lo, hi);
   }
 
   #[test]
