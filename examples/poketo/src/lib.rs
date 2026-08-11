@@ -16,6 +16,7 @@
 pub mod battle;
 pub mod grid;
 pub mod protocol;
+pub mod trade;
 pub mod world;
 #[cfg(feature = "server")]
 pub mod state;
