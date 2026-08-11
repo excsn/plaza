@@ -16,4 +16,5 @@
 //! relevance**: spatial answers who is near, and a party answers who you have
 //! chosen to care about wherever they are.
 
+pub mod casting;
 pub mod relevance;
