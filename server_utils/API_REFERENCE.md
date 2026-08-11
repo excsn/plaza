@@ -122,7 +122,7 @@ Attach the comparison to the **report**, not to the state change. Running it onl
 
 ### Struct `PriorityAccumulator`
 
-Per-entity priority that survives the ticks an entity is not sent on, after Fiedler's [state synchronization](https://gafferongames.com/post/state_synchronization/). Indexed densely, so a [`SlotKey`](#struct-slotkey) is already the index.
+Per-entity priority that survives the ticks an entity is not sent on. Indexed densely, so a [`SlotKey`](#struct-slotkey) is already the index.
 
 *   **`new(entities)`**, **`resize(entities)`**, **`len()`**, **`is_empty()`**, **`clear()`**.
 *   **`bump(&mut self, index, priority: f32)`**: adds this tick's priority. An index past the end grows the space rather than panicking, since an allocator handing out a fresh slot is ordinary.
@@ -133,7 +133,7 @@ Entities at zero or below are never chosen, so a negative score is how you say "
 
 ## 5c. At rest (module `rest`)
 
-In a settled scene most things are not moving, and saying so costs one bit against the thirty-three a velocity costs. The cheapest compression in Fiedler's [snapshot compression](https://gafferongames.com/post/snapshot_compression/), because it needs nothing new on the wire, only knowing which entities qualify.
+In a settled scene most things are not moving, and saying so costs one bit against the thirty-three a velocity costs.
 
 ### Struct `RestDetector`
 
