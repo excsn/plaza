@@ -211,6 +211,44 @@ Keying on **motion** breaks the circle, and the rule left over is the one that w
 
 The general shape: a technique that perturbs state to keep two machines agreeing can collide with an optimisation that rewards state for holding still, and the optimisation was worth more here (a sleeping cube skips its velocity entirely). Check what a correction costs the things that were not wrong.
 
+### A dropped axis over-returns rather than missing, which is why it survives (spacemo)
+
+`SpatialGrid` is two-dimensional, and every 3D thing built here before spacemo could ignore that, because a yard has a floor and an arena has a plane. The expected failure in a volume was ships going unseen. It is the opposite: a grid on `(x, z)` returns everything in the **disc**, which is a superset of the sphere, so nothing is ever missed.
+
+That is exactly why it survives review. Interest management that is wrong in this direction looks completely correct from inside the game, and quietly funds the bandwidth it was built to save: measured, **51.7 KiB/s against 7.3, a 7.1x over-send**, per client, at 60Hz.
+
+The fix is a height filter on what the query returned, and it is exact at *identical* query cost: same cells touched, same candidates examined, a cheaper test per candidate. Which leaves a real 3D grid nothing to win on but query cost, where it trades 3x fewer distance tests for 2.5x more cell lookups. So the example's recommendation is the one-line filter, and `encode_3d` in `relevance.rs` stays unused.
+
+The control is half the finding: at slab thickness the flat grid costs **1.00x**, degrading smoothly as the world gains thickness. It is right for what it was built for. The general shape: when a structure is wrong in the cheap direction, no symptom will report it, so the measurement has to be built deliberately and paired with the scene where it is right.
+
+### Churn is the other half of the bill (spacemo)
+
+Every measurement in the tree before this one is steady state: N bodies updating every tick, and every optimisation aimed at freshness. Transient entities invert it. A bolt lives about a second, so the cost lands on entry and exit rather than on updates.
+
+Eight ships in one fight: **7.8 ships at 116 bytes a frame against 31.4 bolts at 410**, so the transient half is 78% of the packet while the standing half sits still. A bolt is individually *cheaper* than a ship, 13.0 bytes against 14.9, and collectively 3.5x more expensive because there are four times as many.
+
+Two things follow. Give transients no field they can derive: a bolt carries no orientation, because it points where it is going and the client already has the velocity. And an id has to survive slot reuse, or a client keying on a dense index blends a new entity into the flight path of the one that just vacated the slot, which is what `SlotKey`'s generation is for and the first time anything here has needed it.
+
+The general shape: budget for the entities you can name and you will miss the ones that come and go, because they are numerous exactly when the game is interesting.
+
+### A ratio hides which curve is higher (spacemo)
+
+Positions encoded relative to the observer should make error independent of world size, since relevance already bounds every offset by the view radius. The first version quantised the **anchor** over the world, which put the world's size straight back into the error, and relative came out very slightly *worse* than absolute at every size.
+
+The test passed. It compared growth **ratios**, and relative started higher and grew more slowly, so the check went green while the scheme was strictly worse than the one it replaced. A ratio is a statement about slope and says nothing about which curve is underneath.
+
+Sending the anchor at full width fixes it, and 96 bits once a frame amortises to nothing across the entities in it: error is then **0.0254u whether the world is 400 units across or 400000**, against absolute's 12.2 at the far end. The assertion now demands the two figures be *identical* rather than one growing more slowly.
+
+The general shape: normalising away the quantity you care about is how a comparison passes while measuring the wrong thing. Assert on the value when the value is the claim.
+
+### Two representations of one thing agree by luck until something checks (spacemo)
+
+The simulation reasons in yaw and pitch because a flight model does. The wire carries a quaternion because smallest-three is 29 bits against 64. Nothing forces them to agree, and they did not: a positive rotation about X takes +Z toward -Y while the flight model calls positive pitch nose up.
+
+**Every position was correct throughout.** Ships would have flown exactly where the server put them and simply rendered pitched the wrong way, and once a renderer existed the flight model is what would have looked broken. No positional test, no packing test and no relevance test can see it.
+
+What catches it is rotating the forward vector by the wire quaternion and comparing against the simulation's own `facing()`, with the rotation implemented the long way so it shares no code with what it checks. The general shape: wherever one fact has two representations, the test that matters is the one that converts between them, and it must not be written using the converter.
+
 ### Simulate the world, drive the player (cube_yard)
 
 "Make the roll physical" was taken literally: the player cube was driven by a torque, with friction turning spin into travel, so mass and momentum were real. It was the wrong call and it cost a long sequence of fixes, each of which found a genuine bug that was not the problem.
