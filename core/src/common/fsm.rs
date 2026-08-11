@@ -155,11 +155,10 @@ impl<Op: 'static, AppID: AgentId, StateIdEnum: Clone + Debug + PartialEq + Eq + 
     if !self.states.contains_key(&state_id) {
       panic!("Initial state ID {:?} not added.", state_id);
     }
-    if let Some(current_id_clone) = self.current_state_id.clone() {
-      if let Some(current_s_impl) = self.states.get_mut(&current_id_clone) {
+    if let Some(current_id_clone) = self.current_state_id.clone()
+      && let Some(current_s_impl) = self.states.get_mut(&current_id_clone) {
         current_s_impl.on_exit(context, &state_id);
       }
-    }
     self.current_state_id = Some(state_id.clone());
     let initial_s_impl = self
       .states
@@ -194,11 +193,10 @@ impl<Op: 'static, AppID: AgentId, StateIdEnum: Clone + Debug + PartialEq + Eq + 
       panic!("Attempted to transition to un-added state ID {:?}", next_state_id);
     }
     let previous_id_opt = self.current_state_id.clone();
-    if let Some(ref current_id_val) = previous_id_opt {
-      if let Some(current_s_impl) = self.states.get_mut(current_id_val) {
+    if let Some(ref current_id_val) = previous_id_opt
+      && let Some(current_s_impl) = self.states.get_mut(current_id_val) {
         current_s_impl.on_exit(context, &next_state_id);
       }
-    }
     self.current_state_id = Some(next_state_id.clone());
     let next_s_impl = self
       .states

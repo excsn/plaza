@@ -876,7 +876,7 @@ mod tests {
 
       // Deterministic pseudo-random loss, about one packet in four.
       rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-      let delivered = (rng >> 33) % 4 != 0;
+      let delivered = !(rng >> 33).is_multiple_of(4);
       if delivered {
         mirror.apply(&plan);
         window.observe(seq);

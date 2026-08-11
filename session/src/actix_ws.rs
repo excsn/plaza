@@ -326,12 +326,11 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
     tokio::select! {
       // Server -> client.
       Ok(frame) = to_client_rx.recv() => {
-        if let Some(frame) = queue_down!(frame, tokio::time::Instant::now()) {
-          if !write_frame(&mut ws_session, frame, send_as_text).await {
+        if let Some(frame) = queue_down!(frame, tokio::time::Instant::now())
+          && !write_frame(&mut ws_session, frame, send_as_text).await {
             debug!(transport = TRANSPORT, conn_id, "Client went away during send.");
             break None;
           }
-        }
       }
 
       // The application ending or bounding the session. Flush order: what the
@@ -409,11 +408,10 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
         let now = tokio::time::Instant::now();
         let frame = control::make_probe(&codec, &mut probe, now);
         next_probe = probe.interval().map(|gap| now + gap);
-        if let Some(frame) = queue_down!(frame, now) {
-          if !write_frame(&mut ws_session, frame, send_as_text).await {
+        if let Some(frame) = queue_down!(frame, now)
+          && !write_frame(&mut ws_session, frame, send_as_text).await {
             break None;
           }
-        }
       }
 
       _ = tokio::time::sleep_until(next_release.unwrap_or_else(far_future)), if next_release.is_some() => {
@@ -429,14 +427,12 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
           break None;
         }
         while let Some(frame) = up.pop_ready(now) {
-          if let Some(reply) = route_inbound(frame.into(), &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent).await {
-            if let Some(reply) = queue_down!(reply, now) {
-              if !write_frame(&mut ws_session, reply, send_as_text).await {
+          if let Some(reply) = route_inbound(frame, &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent).await
+            && let Some(reply) = queue_down!(reply, now)
+              && !write_frame(&mut ws_session, reply, send_as_text).await {
                 dead = true;
                 break;
               }
-            }
-          }
         }
         if dead {
           break None;
@@ -475,13 +471,11 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
           let now = tokio::time::Instant::now();
           let profile: LinkProfile = if link.impaired() { link.read() } else { LinkProfile::default() };
           if profile.up.is_passthrough() && up.is_empty() {
-            if let Some(reply) = route_inbound(bytes.into(), &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent).await {
-              if let Some(reply) = queue_down!(reply, now) {
-                if !write_frame(&mut ws_session, reply, send_as_text).await {
+            if let Some(reply) = route_inbound(bytes.into(), &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent).await
+              && let Some(reply) = queue_down!(reply, now)
+                && !write_frame(&mut ws_session, reply, send_as_text).await {
                   break None;
                 }
-              }
-            }
           } else if !up.push(bytes.into(), &profile.up, now) {
             manager.record_link_drop(conn_id);
           }

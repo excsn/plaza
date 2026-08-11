@@ -497,7 +497,7 @@ async fn a_room_with_no_budget_takes_anybody() {
   // schedule to miss, so it states no limit and a latency check must not invent
   // one for it.
   let lobby = manager();
-  let (owner, owner_agent) = player();
+  let (owner, _owner_agent) = player();
   let created = lobby
     .handle_create_room_request(&owner, settings_with_budget(4, None))
     .await
@@ -527,7 +527,7 @@ async fn a_slow_connection_is_routed_rather_than_turned_away() {
   // is left when nothing fits.
   let lobby = manager();
   for budget in [Some(50u32), Some(300), None] {
-    let (owner, owner_agent) = player();
+    let (owner, _owner_agent) = player();
     lobby
       .handle_create_room_request(&owner, settings_with_budget(4, budget))
       .await

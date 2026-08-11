@@ -108,11 +108,7 @@ fn main() {
     // `latest_server_ts_in_buffer - interpolation_delay` or
     // `client_current_time - estimated_rtt/2 - interpolation_delay`
     // For this example, we'll use a simplified target relative to client time.
-    let target_interpolation_time_on_server_timeline = if client_current_time_ms > INTERPOLATION_DELAY_MS {
-      client_current_time_ms - INTERPOLATION_DELAY_MS
-    } else {
-      0 // Don't go negative; clamp to earliest possible server time
-    };
+    let target_interpolation_time_on_server_timeline = client_current_time_ms.saturating_sub(INTERPOLATION_DELAY_MS);
 
     if let Some(interpolated_state) =
       snapshot_buffer.get_interpolated_state(target_interpolation_time_on_server_timeline)

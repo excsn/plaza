@@ -39,9 +39,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let session = InProcessSession::<AppOp, UserId>::new();
   let (controller_tx, controller) = StateControllerBuilder::new(
-    Arc::new(TypingLogic::default()),
+    Arc::new(TypingLogic),
     session.clone(),
-    Arc::new(TypingSnapshotter::default()),
+    Arc::new(TypingSnapshotter),
     AppState::default(),
   )
   .command_buffer(64)

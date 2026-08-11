@@ -133,8 +133,8 @@ impl ClientApp {
 
               if self.my_player_id.is_some() && self.predicted_box.is_some() {
                   // Simulate some input every few ticks
-                  if self.client_tick_counter % 5 == 0 {
-                      let dx = if self.client_tick_counter % 10 == 0 { -5.0 } else { 5.0 };
+                  if self.client_tick_counter.is_multiple_of(5) {
+                      let dx = if self.client_tick_counter.is_multiple_of(10) { -5.0 } else { 5.0 };
                       let local_input = MoveInput { dx, dy: 0.0 };
                       self.next_input_seq += 1;
 

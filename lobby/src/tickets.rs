@@ -205,7 +205,7 @@ impl<ID: AgentId> MapTicketRegistry<ID> {
 
   fn redeem_at(&self, token: &str, room: &RoomId, now: Instant) -> Option<Ticket<ID>> {
     let mut inner = self.inner.lock();
-    if !inner.held.get(token).is_some_and(|held| held.ticket.room == *room) {
+    if inner.held.get(token).is_none_or(|held| held.ticket.room != *room) {
       return None;
     }
     let held = inner.held.remove(token)?;

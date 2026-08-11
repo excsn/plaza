@@ -60,9 +60,9 @@ async fn main() -> std::io::Result<()> {
 
   let session: Arc<PongSession> = ActixWsPlazaSession::with_protocol(JsonCodec, ProtocolVersion(PROTOCOL));
   let (controller_tx, controller) = StateControllerBuilder::new(
-    Arc::new(PongLogic::default()),
+    Arc::new(PongLogic),
     session.clone(),
-    Arc::new(PongSnapshotter::default()),
+    Arc::new(PongSnapshotter),
     PongGameState::default(),
   )
   .command_buffer(128)

@@ -30,7 +30,7 @@ use plaza_server_utils::{RateMeter, SeatTable, Seating};
 
 use crate::sim::protocol::{Op, ServerPolicy};
 use crate::sim::server::{Seat, Server};
-use crate::sim::types::{BlackHole, Controls, Packet, Pellet, PlayerId, Vec2, CLUSTER_BYTES, HOLE_BYTES};
+use crate::sim::types::{BlackHole, Controls, Pellet, PlayerId, Vec2, CLUSTER_BYTES, HOLE_BYTES};
 
 /// How a connection is identified. Assigned by the server on accept, never
 /// supplied by the client.
@@ -343,7 +343,7 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         let Some(seat) = state.seat_of(&key) else {
           return Ok(LogicOutput::none());
         };
-        let mut replies = Vec::new();
+        let replies = Vec::new();
         for op in ops {
           match op {
             Op::Input { seq, dx, dy, dash } => {

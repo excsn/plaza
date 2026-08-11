@@ -100,7 +100,7 @@ mod tests {
   }
 
   fn evens_only(state: &u64, _source: &Agent<u64>, _op: &Op) -> OpClearance<Op> {
-    if state % 2 == 0 {
+    if state.is_multiple_of(2) {
       OpClearance::Cleared
     } else {
       OpClearance::Refused { reply: Some(Op::Denied) }

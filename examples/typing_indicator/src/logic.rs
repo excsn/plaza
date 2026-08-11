@@ -27,16 +27,13 @@ impl StateLogic<AppOp, UserId, AppState> for TypingLogic {
         for op in ops {
           match op {
             AppOp::UserJoined { user_id, name } => {
-              if !state.users_presence.contains_key(&user_id) {
+              if let std::collections::hash_map::Entry::Vacant(e) = state.users_presence.entry(user_id) {
                 info!(user_id = %user_id, %name, "User joined");
-                state.users_presence.insert(
-                  user_id,
-                  UserPresence {
+                e.insert(UserPresence {
                     user_id,
                     status: TypingState::Idle,
                     last_typing_timeout_event_id: None,
-                  },
-                );
+                  });
                 ops_to_broadcast.push(TargetedOp {
                   from_agent: Agent::system(),
                   target: MessageTarget::AllExcept(user_id),
@@ -48,21 +45,19 @@ impl StateLogic<AppOp, UserId, AppState> for TypingLogic {
               }
             }
             AppOp::UserLeft { user_id } => {
-              if source_user_id == Some(user_id) || source.is_system() {
-                if let Some(removed_presence) = state.users_presence.remove(&user_id) {
+              if (source_user_id == Some(user_id) || source.is_system())
+                && let Some(removed_presence) = state.users_presence.remove(&user_id) {
                   info!(user_id = %user_id, "User left");
-                  if let Some(event_id) = removed_presence.last_typing_timeout_event_id {
-                    if state.scheduler.cancel(event_id) {
+                  if let Some(event_id) = removed_presence.last_typing_timeout_event_id
+                    && state.scheduler.cancel(event_id) {
                       debug!(user_id = %user_id, ?event_id, "Cancelled pending typing timeout for leaving user.");
                     }
-                  }
                   ops_to_broadcast.push(TargetedOp {
                     from_agent: Agent::system(),
                     target: MessageTarget::All,
                     ops: vec![AppOp::UserLeft { user_id }],
                   });
                 }
-              }
             }
             AppOp::UserIsTyping { user_id } => {
               if source_user_id != Some(user_id) {

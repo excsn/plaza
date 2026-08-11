@@ -307,6 +307,6 @@ pub fn draw_scoreboard(board: &Board, view: &BattleView, me: Option<PlayerId>) {
   if let Some(me) = me
     && let Some((_, wins)) = view.wins.iter().find(|(p, _)| *p == me)
   {
-    draw_text(&format!("your wins: {wins}"), x, y, 20.0, GRAY);
+    draw_text(format!("your wins: {wins}"), x, y, 20.0, GRAY);
   }
 }

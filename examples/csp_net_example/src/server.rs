@@ -191,8 +191,8 @@ impl StateLogic<GameOp, PlayerId, ServerGameState> for ServerLogic {
         }
       }
       LogicInput::AgentJoined { agent } => {
-        if let Some(player_id) = agent.id_cloned() {
-          if !state.boxes.contains_key(&player_id) {
+        if let Some(player_id) = agent.id_cloned()
+          && let std::collections::hash_map::Entry::Vacant(e) = state.boxes.entry(player_id) {
             let initial_pos = Vec2 {
               x: rand::thread_rng().gen_range(-50.0..50.0),
               y: rand::thread_rng().gen_range(-50.0..50.0),
@@ -201,7 +201,7 @@ impl StateLogic<GameOp, PlayerId, ServerGameState> for ServerLogic {
               position: initial_pos,
               velocity: Vec2::default(),
             };
-            state.boxes.insert(player_id, initial_box_state);
+            e.insert(initial_box_state);
             state.input_tracker.record_processed_input(player_id, 0); // Initialize ack seq
 
             info!(player_id = %player_id, pos = ?initial_pos, "Player box added to game state via AgentJoinedPlaza.");
@@ -218,7 +218,6 @@ impl StateLogic<GameOp, PlayerId, ServerGameState> for ServerLogic {
             ));
             // The new player gets the full state via snapshot from SnapshotProvider shortly.
           }
-        }
       }
       LogicInput::AgentLeft { agent_id } => {
         if state.boxes.remove(&agent_id).is_some() {
@@ -322,14 +321,14 @@ impl Session<GameOp, PlayerId> for DummyServerSession {
     let targeted_players: Vec<PlayerId> = match &target {
       MessageTarget::Agent(id) => vec![*id],
       MessageTarget::Agents(ids) => ids.clone(),
-      MessageTarget::All => clients_guard.values().map(|(pid, _)| pid.clone()).collect(),
+      MessageTarget::All => clients_guard.values().map(|(pid, _)| *pid).collect(),
       MessageTarget::AllExcept(ex_id) => clients_guard
         .values()
         .filter_map(|(pid, _)| if pid != ex_id { Some(*pid) } else { None })
         .collect(),
       MessageTarget::AllExceptThese(ex_ids) => clients_guard
         .values()
-        .filter_map(|(pid, _)| if !ex_ids.contains(pid) { Some(pid.clone()) } else { None })
+        .filter_map(|(pid, _)| if !ex_ids.contains(pid) { Some(*pid) } else { None })
         .collect(),
     };
 
@@ -449,7 +448,7 @@ pub async fn start_server() -> Result<ServerHandle, PlazaError<PlayerId>> {
   let (controller_tx, controller) = StateControllerBuilder::new(
     Arc::new(ServerLogic::default()),
     session.clone(),
-    Arc::new(DummySnapshotProvider::default()),
+    Arc::new(DummySnapshotProvider),
     ServerGameState::default(),
   )
   .command_buffer(128)

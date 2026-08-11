@@ -189,7 +189,7 @@ fn depart(state: &mut YardState, player: PlayerId) {
 /// Whether this tick is one the wire carries.
 fn on_air(state: &YardState) -> bool {
   let every = (crate::protocol::TICK_HZ / state.send_hz).max(1);
-  state.tick % every == 0
+  state.tick.is_multiple_of(every)
 }
 
 fn step_once(state: &mut YardState, ctx: &mut Ctx) {

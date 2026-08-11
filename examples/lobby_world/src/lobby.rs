@@ -321,7 +321,7 @@ impl StateLogic<LobbyOp, PlayerId, LobbyState> for LobbyLogic {
         if let Some(room_id) = state.reserved_in.remove(&agent_id) {
           self
             .tell_arena(&room_id, "lobby departure", crate::types::RoomOp::Withdraw {
-              player: agent_id.clone(),
+              player: agent_id,
             })
             .await;
         }

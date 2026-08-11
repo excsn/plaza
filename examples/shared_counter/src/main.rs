@@ -55,9 +55,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let session = CounterSession::new();
   let (controller_tx, controller) = StateControllerBuilder::new(
-    Arc::new(CounterLogic::default()),
+    Arc::new(CounterLogic),
     session.clone(),
-    Arc::new(CounterSnapshotter::default()),
+    Arc::new(CounterSnapshotter),
     CounterStateData::default(),
   )
   .command_buffer(64)

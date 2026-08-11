@@ -96,8 +96,8 @@ pub fn step(world: &World, inputs: &[PaddleInput]) -> World {
   for seat in 0..SEATS {
     let input = inputs.get(seat).copied().unwrap_or_default();
     let paddle = &mut next.paddles[seat];
-    paddle.x = paddle.x + speed.mul(Fx::from_int(input.dx.clamp(-1, 1) as i32));
-    paddle.y = paddle.y + speed.mul(Fx::from_int(input.dy.clamp(-1, 1) as i32));
+    paddle.x += speed.mul(Fx::from_int(input.dx.clamp(-1, 1) as i32));
+    paddle.y += speed.mul(Fx::from_int(input.dy.clamp(-1, 1) as i32));
     confine(paddle, seat);
   }
 
@@ -119,15 +119,15 @@ pub fn step(world: &World, inputs: &[PaddleInput]) -> World {
       let push = (sep - d).mul(Fx::ratio(1, 2));
       next.paddles[i].x = next.paddles[i].x - nx.mul(push);
       next.paddles[i].y = next.paddles[i].y - ny.mul(push);
-      next.paddles[j].x = next.paddles[j].x + nx.mul(push);
-      next.paddles[j].y = next.paddles[j].y + ny.mul(push);
+      next.paddles[j].x += nx.mul(push);
+      next.paddles[j].y += ny.mul(push);
       confine(&mut next.paddles[i], i);
       confine(&mut next.paddles[j], j);
     }
   }
 
-  next.puck.x = next.puck.x + next.puck_vel.x;
-  next.puck.y = next.puck.y + next.puck_vel.y;
+  next.puck.x += next.puck_vel.x;
+  next.puck.y += next.puck_vel.y;
 
   let pr = Fx::from_int(PUCK_R);
   let h = Fx::from_int(RINK_H);
@@ -197,13 +197,13 @@ pub fn step(world: &World, inputs: &[PaddleInput]) -> World {
     let out = next.puck_vel.x.mul(nx) + next.puck_vel.y.mul(ny);
     let shot = Fx::from_int(SHOT_SPEED);
     if out < shot {
-      next.puck_vel.x = next.puck_vel.x + nx.mul(shot - out);
-      next.puck_vel.y = next.puck_vel.y + ny.mul(shot - out);
+      next.puck_vel.x += nx.mul(shot - out);
+      next.puck_vel.y += ny.mul(shot - out);
     }
     let input = inputs.get(seat).copied().unwrap_or_default();
     let carry = Fx::ratio(PADDLE_SPEED, 2);
-    next.puck_vel.x = next.puck_vel.x + carry.mul(Fx::from_int(input.dx.clamp(-1, 1) as i32));
-    next.puck_vel.y = next.puck_vel.y + carry.mul(Fx::from_int(input.dy.clamp(-1, 1) as i32));
+    next.puck_vel.x += carry.mul(Fx::from_int(input.dx.clamp(-1, 1) as i32));
+    next.puck_vel.y += carry.mul(Fx::from_int(input.dy.clamp(-1, 1) as i32));
   }
 
   // Contact placement can land past the boards, and a puck cornered under a
@@ -331,7 +331,7 @@ pub fn bot_chase(world: &World, seat: usize) -> PaddleInput {
     }
   } else {
     let guard_x = if mine == 0 { 60 } else { RINK_W - 60 };
-    let guard_y = if seat % 2 == 0 { 60 } else { 120 };
+    let guard_y = if seat.is_multiple_of(2) { 60 } else { 120 };
     V2::ints(guard_x, guard_y)
   };
 

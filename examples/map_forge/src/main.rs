@@ -113,7 +113,7 @@ async fn frame_loop(options: role::Options) {
   let mut walk_due: u64 = 0;
 
   loop {
-    let dt = get_frame_time().min(0.25);
+    let _dt = get_frame_time().min(0.25);
     // Read absolutely rather than accumulated. Adding a truncated frame time
     // each frame runs the clock slow: 16.67ms counted as 16 loses 4% a second
     // at 60fps and 13.6% at 144, and every rate measured against it reads high

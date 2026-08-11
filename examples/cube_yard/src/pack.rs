@@ -620,7 +620,7 @@ pub fn pack_delta_until_full(
 
   let (mut lo, mut hi) = (0usize, order.len());
   while lo < hi {
-    let mid = (lo + hi + 1) / 2;
+    let mid = (lo + hi).div_ceil(2);
     if pack_delta_dry(cubes, &ascending_prefix(mid), baseline).len() * 8 <= budget_bits {
       lo = mid;
     } else {

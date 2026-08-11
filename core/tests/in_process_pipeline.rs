@@ -191,7 +191,7 @@ async fn joining_agent_receives_a_snapshot() {
   let alice = Agent::new_human(1u64);
   let (_conn_id, inbox) = session.connect(alice).await.expect("connect");
 
-  let msg = recv_matching(&inbox, |m| is_snapshot(m)).await;
+  let msg = recv_matching(&inbox, is_snapshot).await;
   let snap = snapshot_of(&msg).expect("a snapshot op");
   assert_eq!(snap.members, vec![1u64], "snapshot reflects the join");
 
@@ -307,7 +307,7 @@ async fn each_agent_receives_a_snapshot_built_for_it() {
 
   // Drain each client's join snapshot before asking for a fresh round.
   for inbox in [&alice_inbox, &bob_inbox] {
-    recv_matching(inbox, |m| is_snapshot(m)).await;
+    recv_matching(inbox, is_snapshot).await;
   }
 
   tx.send(ControllerCommand::SendSnapshots {
@@ -317,8 +317,8 @@ async fn each_agent_receives_a_snapshot_built_for_it() {
   .await
   .expect("controller alive");
 
-  let for_alice = recv_matching(&alice_inbox, |m| is_snapshot(m)).await;
-  let for_bob = recv_matching(&bob_inbox, |m| is_snapshot(m)).await;
+  let for_alice = recv_matching(&alice_inbox, is_snapshot).await;
+  let for_bob = recv_matching(&bob_inbox, is_snapshot).await;
 
   fn members(msg: SessionMessage<CounterOp, UserId>) -> Vec<UserId> {
     match snapshot_of(&msg) {
@@ -387,14 +387,14 @@ async fn logic_can_push_a_resnapshot_to_every_player() {
 
   // Drain the join snapshots.
   for inbox in [&alice_inbox, &bob_inbox] {
-    recv_matching(inbox, |m| is_snapshot(m)).await;
+    recv_matching(inbox, is_snapshot).await;
   }
 
   // One client's op triggers a resnapshot for everyone, from inside the logic.
   session.client_send(alice, vec![CounterOp::Increment(3)]).await;
 
   for inbox in [&alice_inbox, &bob_inbox] {
-    let msg = recv_matching(inbox, |m| is_snapshot(m)).await;
+    let msg = recv_matching(inbox, is_snapshot).await;
     assert_eq!(snapshot_of(&msg).expect("a snapshot op").value, 3);
   }
 }
@@ -481,13 +481,13 @@ async fn a_uniform_request_builds_once_and_reaches_everyone() {
 
   // Drain the join snapshots, which are per-recipient and carry a target.
   for inbox in [&alice_inbox, &bob_inbox] {
-    recv_matching(inbox, |m| is_snapshot(m)).await;
+    recv_matching(inbox, is_snapshot).await;
   }
 
   session.client_send(alice, vec![CounterOp::Increment(3)]).await;
 
-  let for_alice = recv_matching(&alice_inbox, |m| is_snapshot(m)).await;
-  let for_bob = recv_matching(&bob_inbox, |m| is_snapshot(m)).await;
+  let for_alice = recv_matching(&alice_inbox, is_snapshot).await;
+  let for_bob = recv_matching(&bob_inbox, is_snapshot).await;
   assert_eq!(snapshot_of(&for_alice), snapshot_of(&for_bob), "one payload for both");
   assert_eq!(snapshot_of(&for_alice).expect("a snapshot op").value, 3);
 
@@ -542,7 +542,7 @@ async fn the_join_snapshot_context_is_configurable() {
     .await
     .expect("connect");
 
-  let msg = recv_matching(&inbox, |m| is_snapshot(m)).await;
+  let msg = recv_matching(&inbox, is_snapshot).await;
   let snap = snapshot_of(&msg).expect("a snapshot op");
   assert_eq!(snap.value, 99, "join used the configured perspective");
 }
@@ -655,7 +655,7 @@ async fn an_application_defined_context_survives_the_round_trip() {
 
   let alice = Agent::new_human(1u64);
   let (_conn, inbox) = session.connect(alice.clone()).await.expect("connect");
-  recv_matching(&inbox, |m| is_snapshot(m)).await;
+  recv_matching(&inbox, is_snapshot).await;
 
   tx.send(ControllerCommand::SendSnapshots {
     recipients: vec![alice],
@@ -664,7 +664,7 @@ async fn an_application_defined_context_survives_the_round_trip() {
   .await
   .expect("controller alive");
 
-  let msg = recv_matching(&inbox, |m| is_snapshot(m)).await;
+  let msg = recv_matching(&inbox, is_snapshot).await;
   let snap = snapshot_of(&msg).expect("a snapshot op");
   assert_eq!(snap.value, 42, "the provider received its own context type");
 }

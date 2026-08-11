@@ -283,12 +283,11 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
       // Server -> client. Already encoded; length delimiting is this
       // transport's whole framing job, so there is nothing else to decide.
       Ok(frame) = to_client_rx.recv() => {
-        if let Some(frame) = queue_down!(frame, Instant::now()) {
-          if let Err(e) = framed.send(frame.into_bytes()).await {
+        if let Some(frame) = queue_down!(frame, Instant::now())
+          && let Err(e) = framed.send(frame.into_bytes()).await {
             warn!(transport = TRANSPORT, conn_id, error = %e, "Write failed; closing connection.");
             break;
           }
-        }
       }
 
       // The application ending or bounding the session. Flush order: what the
@@ -338,11 +337,10 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
         let now = Instant::now();
         let frame = control::make_probe(&codec, &mut probe, now);
         next_probe = probe.interval().map(|gap| now + gap);
-        if let Some(frame) = queue_down!(frame, now) {
-          if framed.send(frame.into_bytes()).await.is_err() {
+        if let Some(frame) = queue_down!(frame, now)
+          && framed.send(frame.into_bytes()).await.is_err() {
             break;
           }
-        }
       }
 
       _ = tokio::time::sleep_until(next_release.unwrap_or_else(far_future)), if next_release.is_some() => {
@@ -358,14 +356,12 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
           break;
         }
         while let Some(frame) = up.pop_ready(now) {
-          if let Some(reply) = route_inbound(frame, &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent).await {
-            if let Some(reply) = queue_down!(reply, now) {
-              if framed.send(reply.into_bytes()).await.is_err() {
+          if let Some(reply) = route_inbound(frame, &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent).await
+            && let Some(reply) = queue_down!(reply, now)
+              && framed.send(reply.into_bytes()).await.is_err() {
                 dead = true;
                 break;
               }
-            }
-          }
         }
         if dead {
           break;
@@ -379,13 +375,11 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
             let now = Instant::now();
             let profile = if link.impaired() { link.read().up } else { DirectionProfile::default() };
             if profile.is_passthrough() && up.is_empty() {
-              if let Some(reply) = route_inbound(bytes.freeze().into(), &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent).await {
-                if let Some(reply) = queue_down!(reply, now) {
-                  if framed.send(reply.into_bytes()).await.is_err() {
+              if let Some(reply) = route_inbound(bytes.freeze().into(), &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent).await
+                && let Some(reply) = queue_down!(reply, now)
+                  && framed.send(reply.into_bytes()).await.is_err() {
                     break;
                   }
-                }
-              }
             } else if !up.push(bytes.freeze().into(), &profile, now) {
               manager.record_link_drop(conn_id);
             }

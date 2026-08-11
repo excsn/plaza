@@ -147,11 +147,10 @@ impl StateLogic<ArenaOp, crate::types::PlayerId, ArenaState> for TagLogic {
               info!(tagger = %it_id, %caught, tick = state.tick, "tag");
             }
           }
-          if let Some(it_id) = state.it {
-            if let Some(it) = state.runners.get_mut(&it_id) {
+          if let Some(it_id) = state.it
+            && let Some(it) = state.runners.get_mut(&it_id) {
               it.ticks_as_it += 1;
             }
-          }
         }
 
         if state.runners.is_empty() {

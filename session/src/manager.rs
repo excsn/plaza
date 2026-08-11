@@ -757,14 +757,13 @@ impl<ID: AgentId> Registry<ID> {
 
   fn remove(&mut self, conn_id: ConnectionId) -> Option<ClientHandle<ID>> {
     let handle = self.by_conn.remove(&conn_id)?;
-    if let Some(id) = handle.agent.id() {
-      if let Some(conns) = self.by_agent.get_mut(id) {
+    if let Some(id) = handle.agent.id()
+      && let Some(conns) = self.by_agent.get_mut(id) {
         conns.retain(|held| *held != conn_id);
         if conns.is_empty() {
           self.by_agent.remove(id);
         }
       }
-    }
     Some(handle)
   }
 

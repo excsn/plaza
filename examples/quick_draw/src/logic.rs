@@ -598,7 +598,7 @@ mod tests {
     assert_eq!(state.duelists, vec![1, 2]);
 
     let hold = to_signal(&mut state).await;
-    assert!(hold >= HOLD_MIN_MS && hold <= HOLD_MAX_MS + TICK_MS, "hold was {hold}ms");
+    assert!((HOLD_MIN_MS..=HOLD_MAX_MS + TICK_MS).contains(&hold), "hold was {hold}ms");
     assert!(state.signal_at_us.is_some());
   }
 

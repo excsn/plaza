@@ -90,9 +90,9 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
           let ball = &mut current_state.ball;
           let mut collided_with_paddle_this_step = false;
 
-          if let Some(p1_id) = p1 {
-            if let Some(paddle1) = current_state.paddles.get(&p1_id) {
-              if ball.vx < 0.0 &&
+          if let Some(p1_id) = p1
+            && let Some(paddle1) = current_state.paddles.get(&p1_id)
+              && ball.vx < 0.0 &&
                                ball.x - ball.radius < paddle1.x + paddle1.width && // Ball's left edge past paddle's right
                                ball.x + ball.radius > paddle1.x && // Ball's right edge past paddle's left
                                ball.y + ball.radius > paddle1.y - paddle1.height / 2.0 &&
@@ -109,13 +109,11 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
                   ball.vx, ball.vy
                 );
               }
-            }
-          }
 
-          if !collided_with_paddle_this_step {
-            if let Some(p2_id) = p2 {
-              if let Some(paddle2) = current_state.paddles.get(&p2_id) {
-                if ball.vx > 0.0 &&
+          if !collided_with_paddle_this_step
+            && let Some(p2_id) = p2
+              && let Some(paddle2) = current_state.paddles.get(&p2_id)
+                && ball.vx > 0.0 &&
                                    ball.x + ball.radius > paddle2.x && // Ball's right edge past paddle's left
                                    ball.x - ball.radius < paddle2.x + paddle2.width && // Ball's left edge past paddle's right
                                    ball.y + ball.radius > paddle2.y - paddle2.height / 2.0 &&
@@ -131,9 +129,6 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
                     ball.vx, ball.vy
                   );
                 }
-              }
-            }
-          }
 
           let mut scored_this_frame: Option<PlayerId> = None;
           if ball.x + ball.radius < 0.0 {

@@ -45,12 +45,11 @@ impl<R: Eq + Hash + Clone + Debug, ID: AgentId> LockManager<R, ID> {
   /// Releases a lock. Returns true if the lock was held by `releaser_id` and is now released.
   /// Returns false if not locked or locked by someone else.
   pub fn release_lock(&mut self, resource_id: &R, releaser_id: &ID) -> bool {
-    if let Some(lock_info) = self.locks.get(resource_id) {
-      if lock_info.owner_id == *releaser_id {
+    if let Some(lock_info) = self.locks.get(resource_id)
+      && lock_info.owner_id == *releaser_id {
         self.locks.remove(resource_id);
         return true;
       }
-    }
     false
   }
 

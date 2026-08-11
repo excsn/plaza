@@ -36,7 +36,7 @@ pub fn draw_scene(view: &RunView, me: Option<PlayerId>) {
   };
   draw_text(&header, 24.0, 44.0, 30.0, WHITE);
   draw_text(
-    &format!("delves completed here: {}", view.runs_completed),
+    format!("delves completed here: {}", view.runs_completed),
     24.0,
     68.0,
     17.0,
@@ -94,9 +94,9 @@ pub fn draw_scene(view: &RunView, me: Option<PlayerId>) {
     let x = 24.0 + i as f32 * (card_w + 12.0);
     draw_rectangle(x, card_y, card_w, 92.0, Color::new(0.12, 0.13, 0.16, 1.0));
     draw_rectangle_lines(x, card_y, card_w, 92.0, 2.0, Color::new(0.3, 0.3, 0.36, 1.0));
-    draw_text(&name_of(me, seat.player), x + 10.0, card_y + 24.0, 20.0, WHITE);
+    draw_text(name_of(me, seat.player), x + 10.0, card_y + 24.0, 20.0, WHITE);
     draw_text(
-      &format!("{} coins, {} key{}", seat.coins, seat.keys, if seat.keys == 1 { "" } else { "s" }),
+      format!("{} coins, {} key{}", seat.coins, seat.keys, if seat.keys == 1 { "" } else { "s" }),
       x + 10.0,
       card_y + 46.0,
       17.0,
@@ -108,7 +108,7 @@ pub fn draw_scene(view: &RunView, me: Option<PlayerId>) {
       }
       Presence::Grace { ms_left } => {
         draw_text(
-          &format!("held: {:.0}s left", ms_left as f32 / 1000.0),
+          format!("held: {:.0}s left", ms_left as f32 / 1000.0),
           x + 10.0,
           card_y + 70.0,
           17.0,

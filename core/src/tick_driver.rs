@@ -197,7 +197,7 @@ impl TickDriver {
         owed = ceiling;
       }
 
-      while owed >= step && !max_steps.is_some_and(|max| steps >= max) {
+      while owed >= step && max_steps.is_none_or(|max| steps < max) {
         owed -= step;
         if tx.send(ControllerCommand::ProcessTimeStep { delta_time: step }).await.is_err() {
           debug!(steps, "Controller channel closed; TickDriver stopping.");

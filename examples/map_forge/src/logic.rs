@@ -347,7 +347,7 @@ fn step_playtest(state: &mut ForgeState, ctx: &mut Ctx) -> bool {
   let carved = soft_before.saturating_sub(test.server.grid.soft_walls());
   state.meters.walls_carved += carved as u64;
 
-  if state.tick % 2 == 0 {
+  if state.tick.is_multiple_of(2) {
     let grid = &test.server.grid;
     let mut tiles = Vec::with_capacity(BOARD_W as usize * BOARD_H as usize);
     for y in 0..BOARD_H {

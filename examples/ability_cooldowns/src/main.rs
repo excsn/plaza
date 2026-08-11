@@ -58,9 +58,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let session = InProcessSession::<GameOp, PlayerId>::new();
   let (controller_tx, controller) = StateControllerBuilder::new(
-    Arc::new(CooldownLogic::default()),
+    Arc::new(CooldownLogic),
     session.clone(),
-    Arc::new(CooldownSnapshotter::default()),
+    Arc::new(CooldownSnapshotter),
     GameState::default(),
   )
   .command_buffer(64)

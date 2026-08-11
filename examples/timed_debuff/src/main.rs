@@ -39,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let (controller_tx, controller) = StateControllerBuilder::new(
     Arc::new(DebuffLogic::new()),
     session.clone(),
-    Arc::new(DebuffSnapshotter::default()),
+    Arc::new(DebuffSnapshotter),
     GameState::default(),
   )
   .command_buffer(64)

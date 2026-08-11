@@ -221,7 +221,7 @@ where
         }
         let t = target_minus_a_f32 / time_b_minus_a_f32;
         let t_clamped = t.max(0.0).min(1.0);
-        if (t - t_clamped).abs() > 1e-5 && (t < -1e-5 || t > 1.0 + 1e-5) {
+        if (t - t_clamped).abs() > 1e-5 && !(-1e-5..=1.0 + 1e-5).contains(&t) {
           tracing::warn!(target_time = ?target_render_time_on_server_timeline, ts_a = ?before_snapshot.server_timestamp, ts_b = ?after_snapshot.server_timestamp, t_calc = t, t_clamped, "Interpolation factor t was outside [0,1] and clamped significantly.");
         }
         Some(before_snapshot.state.interpolate(

@@ -354,11 +354,10 @@ impl Yard {
       // A cube stuck to the underside is not ground. It is below the player and
       // touching it, which is the whole test, so a gathered clump became its own
       // launchpad and jump could be held down forever.
-      if let Some(index) = self.cube_of.get(&other) {
-        if self.carried[*index].is_some() {
+      if let Some(index) = self.cube_of.get(&other)
+        && self.carried[*index].is_some() {
           return false;
         }
-      }
       match self.colliders.get(other) {
         Some(c) => c.translation().y < at.y - PLAYER * 0.5,
         None => false,

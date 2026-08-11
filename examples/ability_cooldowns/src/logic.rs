@@ -38,7 +38,7 @@ impl StateLogic<GameOp, PlayerId, GameState> for CooldownLogic {
         for op in ops {
           match op {
             GameOp::JoinGame { player_id, name } => {
-              if !state.players.contains_key(&player_id) {
+              if let std::collections::hash_map::Entry::Vacant(e) = state.players.entry(player_id) {
                 info!(player_id = %player_id, %name, "Player joined game");
                 let new_player = PlayerState {
                   id: player_id,
@@ -46,7 +46,7 @@ impl StateLogic<GameOp, PlayerId, GameState> for CooldownLogic {
                   ability_cooldowns: HashMap::new(),
                   health: 100,
                 };
-                state.players.insert(player_id, new_player);
+                e.insert(new_player);
               } else {
                 warn!(player_id = %player_id, "Player attempted to join again.");
               }
@@ -64,10 +64,10 @@ impl StateLogic<GameOp, PlayerId, GameState> for CooldownLogic {
                 continue;
               }
 
-              let can_use_ability = state.players.get(&player_id).map_or(false, |p| {
+              let can_use_ability = state.players.get(&player_id).is_some_and(|p| {
                 p.ability_cooldowns
                   .get(&ability)
-                  .map_or(true, |&end_tick| state.current_tick >= end_tick)
+                  .is_none_or(|&end_tick| state.current_tick >= end_tick)
               });
 
               if !can_use_ability {
@@ -169,7 +169,7 @@ impl StateLogic<GameOp, PlayerId, GameState> for CooldownLogic {
                 if player
                   .ability_cooldowns
                   .get(&ability)
-                  .map_or(false, |&end_tick| end_tick <= state.current_tick)
+                  .is_some_and(|&end_tick| end_tick <= state.current_tick)
                 {
                   // We could remove it from the map, but it's also fine to let the
                   // `UseAbility` logic just check `current_tick >= end_tick`.

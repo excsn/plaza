@@ -60,7 +60,7 @@ impl<ID: AgentId, InputData: Clone + Debug, ServerTime: Copy + Debug + PartialOr
   /// - `input`: The `SequencedClientInput` received from the client.
   /// - `server_received_time`: The current server time when this input is being added to the buffer.
   pub fn add_input(&mut self, client_id: ID, input: SequencedClientInput<InputData>, server_received_time: ServerTime) {
-    let client_queue = self.inputs_by_client.entry(client_id).or_insert_with(VecDeque::new);
+    let client_queue = self.inputs_by_client.entry(client_id).or_default();
     client_queue.push_back(BufferedInput {
       client_input: input,
       server_received_time,

@@ -71,34 +71,6 @@ impl DashFx {
   }
 }
 
-#[cfg(test)]
-mod tests {
-  use super::*;
-
-  #[test]
-  fn the_burst_lights_on_a_dash_and_eases_out_after() {
-    let dt = 1.0 / 60.0;
-    let mut fx = DashFx::new();
-
-    assert_eq!(fx.advance(0, true, dt), 1.0, "a dash lights the burst fully");
-
-    // After it ends it decays rather than snapping off, and reaches zero within
-    // the flash window.
-    let after_one = fx.advance(0, false, dt);
-    assert!(after_one > 0.0 && after_one < 1.0, "it eases out, not off: {after_one}");
-    for _ in 0..60 {
-      fx.advance(0, false, dt);
-    }
-    assert_eq!(fx.advance(0, false, dt), 0.0, "and settles to nothing");
-  }
-
-  #[test]
-  fn a_hole_that_never_dashes_never_flashes() {
-    let mut fx = DashFx::new();
-    assert_eq!(fx.advance(7, false, 1.0 / 60.0), 0.0);
-  }
-}
-
 pub struct Camera {
   center: SimVec2,
   scale: f32,
@@ -489,5 +461,33 @@ pub fn draw_observer_scores(view: &blackhole_playground::net::arena::HostView, c
   for (row, (i, score, mass)) in ranked.iter().enumerate() {
     let line = format!("{}. P{i}  {score}  (mass {mass:.0})", row + 1);
     draw_text(&line, 14.0, cam.sh - 84.0 + row as f32 * 20.0, 19.0, C_RIVAL);
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn the_burst_lights_on_a_dash_and_eases_out_after() {
+    let dt = 1.0 / 60.0;
+    let mut fx = DashFx::new();
+
+    assert_eq!(fx.advance(0, true, dt), 1.0, "a dash lights the burst fully");
+
+    // After it ends it decays rather than snapping off, and reaches zero within
+    // the flash window.
+    let after_one = fx.advance(0, false, dt);
+    assert!(after_one > 0.0 && after_one < 1.0, "it eases out, not off: {after_one}");
+    for _ in 0..60 {
+      fx.advance(0, false, dt);
+    }
+    assert_eq!(fx.advance(0, false, dt), 0.0, "and settles to nothing");
+  }
+
+  #[test]
+  fn a_hole_that_never_dashes_never_flashes() {
+    let mut fx = DashFx::new();
+    assert_eq!(fx.advance(7, false, 1.0 / 60.0), 0.0);
   }
 }

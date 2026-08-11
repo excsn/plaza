@@ -85,8 +85,8 @@ where
     op: Op,
     state_before_op_predicted: PredictedStateSnapshot,
   ) {
-    if self.inputs.len() == self.max_size {
-      if let Some(discarded) = self.inputs.pop_front() {
+    if self.inputs.len() == self.max_size
+      && let Some(discarded) = self.inputs.pop_front() {
         self.overflowed += 1;
         tracing::warn!(
           seq = discarded.sequence_number,
@@ -94,7 +94,6 @@ where
           self.max_size
         );
       }
-    }
     self.inputs.push_back(BufferedInput {
       sequence_number,
       op,
@@ -134,7 +133,7 @@ where
   pub fn get_unacknowledged_inputs(
     &self,
     last_acknowledged_sequence_number: SequenceNumber,
-  ) -> impl Iterator<Item = &BufferedInput<Op, PredictedStateSnapshot>> + DoubleEndedIterator + ExactSizeIterator {
+  ) -> impl DoubleEndedIterator<Item = &BufferedInput<Op, PredictedStateSnapshot>> + ExactSizeIterator {
     let start_index = self
       .inputs
       .iter()

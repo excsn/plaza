@@ -17,7 +17,6 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use bytes::Bytes;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use plaza::agent::Agent;
 use plaza::session::{session_channel, ConnectionId, MessageTarget, SessionReceiver, SessionSender};

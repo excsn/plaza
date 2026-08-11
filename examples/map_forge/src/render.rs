@@ -109,7 +109,7 @@ fn draw_cursors(board: &Board, client: &NetClient) {
       Vec2::new(px + 4.0, py + 10.0),
       THEIRS,
     );
-    draw_text(&format!("P{player}"), px + 12.0, py + 12.0, 14.0, THEIRS);
+    draw_text(format!("P{player}"), px + 12.0, py + 12.0, 14.0, THEIRS);
   }
 }
 
@@ -140,7 +140,7 @@ pub fn draw_playtest(board: &Board, frame: &TestFrame, me_seat: Option<usize>) {
     let py = board.origin.1 + fy * board.cell + board.cell / 2.0;
     let mine = me_seat == Some(i);
     draw_circle(px, py, board.cell * 0.32, if mine { MINE } else { Color::new(0.35, 0.55, 0.9, 1.0) });
-    draw_text(&format!("{}", i + 1), px - 4.0, py + 5.0, 16.0, WHITE);
+    draw_text(format!("{}", i + 1), px - 4.0, py + 5.0, 16.0, WHITE);
   }
   draw_text(
     "playtest: WASD to walk, SPACE to bomb; the blasts are bomb_grid's",

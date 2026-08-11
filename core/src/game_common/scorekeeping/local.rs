@@ -44,13 +44,13 @@ where
   }
 
   fn increment_score(&mut self, player_id: &ID, delta: ScoreType) -> ScoreType {
-    let entry = self.scores.entry(player_id.clone()).or_insert_with(Default::default);
+    let entry = self.scores.entry(player_id.clone()).or_default();
     *entry += delta;
     *entry
   }
 
   fn decrement_score(&mut self, player_id: &ID, delta: ScoreType) -> ScoreType {
-    let entry = self.scores.entry(player_id.clone()).or_insert_with(Default::default);
+    let entry = self.scores.entry(player_id.clone()).or_default();
     *entry -= delta;
     *entry
   }

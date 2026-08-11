@@ -78,9 +78,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let session = MoleSession::new();
   let (controller_tx, controller) = StateControllerBuilder::new(
-    Arc::new(MoleLogic::default()),
+    Arc::new(MoleLogic),
     session.clone(),
-    Arc::new(MoleSnapshotProvider::default()),
+    Arc::new(MoleSnapshotProvider),
     MoleGameState::default(),
   )
   .command_buffer(128)

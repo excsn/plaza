@@ -353,13 +353,12 @@ impl<Key: Eq + Hash + Clone> Roster<Key> {
     if let Some(position) = self.queue.position(&key) {
       return Admission::Waitlisted { position };
     }
-    if !self.locked {
-      if let Some(seat) = self.slots.first_open() {
+    if !self.locked
+      && let Some(seat) = self.slots.first_open() {
         self.slots.seat(key.clone(), seat);
         self.ranks.insert(key, rank);
         return Admission::Seated { seat, fresh: true };
       }
-    }
     if self.waitlist_on {
       let position = self.queue.push(key, rank);
       return Admission::Waitlisted { position };
@@ -514,7 +513,7 @@ mod tests {
     // because bots drive the empties. A joiner must be told the seat is fresh, or
     // it inherits a history it never lived through.
     let mut seats: SeatTable<u64> = SeatTable::new(2);
-    let mut baseline = vec![0u32; 2];
+    let mut baseline = [0u32; 2];
 
     let seat = seats.seat(1).index().unwrap();
     for _ in 0..150 {

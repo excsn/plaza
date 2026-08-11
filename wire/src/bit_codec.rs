@@ -115,7 +115,7 @@ impl Serializer {
   }
 }
 
-impl<'a> ser::Serializer for &'a mut Serializer {
+impl ser::Serializer for &mut Serializer {
   type Ok = ();
   type Error = Error;
   type SerializeSeq = Self;
@@ -297,7 +297,7 @@ seq_impl!(SerializeTuple, serialize_element);
 seq_impl!(SerializeTupleStruct, serialize_field);
 seq_impl!(SerializeTupleVariant, serialize_field);
 
-impl<'a> ser::SerializeMap for &'a mut Serializer {
+impl ser::SerializeMap for &mut Serializer {
   type Ok = ();
   type Error = Error;
 
@@ -364,7 +364,7 @@ macro_rules! forward_int {
   };
 }
 
-impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
+impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
   type Error = Error;
 
   fn deserialize_any<V: Visitor<'de>>(self, _visitor: V) -> Result<V::Value> {
@@ -533,7 +533,7 @@ impl<'a, 'de> MapAccess<'de> for Counted<'a, 'de> {
   }
 }
 
-impl<'a, 'de> de::EnumAccess<'de> for &'a mut Deserializer<'de> {
+impl<'de> de::EnumAccess<'de> for &mut Deserializer<'de> {
   type Error = Error;
   type Variant = Self;
 
@@ -545,7 +545,7 @@ impl<'a, 'de> de::EnumAccess<'de> for &'a mut Deserializer<'de> {
   }
 }
 
-impl<'a, 'de> de::VariantAccess<'de> for &'a mut Deserializer<'de> {
+impl<'de> de::VariantAccess<'de> for &mut Deserializer<'de> {
   type Error = Error;
 
   fn unit_variant(self) -> Result<()> {

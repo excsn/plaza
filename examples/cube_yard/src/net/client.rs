@@ -368,13 +368,11 @@ impl NetClient {
   /// interpolating already puts the cube where it should be, so easing on top
   /// would fight it.
   pub fn drawn(&self, index: usize) -> [f32; 3] {
-    if self.interpolating {
-      if let Some(view) = self.views.get(index) {
-        if let Some(at) = view.get_interpolated_state(self.render_at) {
+    if self.interpolating
+      && let Some(view) = self.views.get(index)
+        && let Some(at) = view.get_interpolated_state(self.render_at) {
           return [at.x, at.y, at.z];
         }
-      }
-    }
     let pos = self.cubes[index].pos;
     match self.offsets.get(index) {
       Some(offset) => [pos[0] + offset[0], pos[1] + offset[1], pos[2] + offset[2]],

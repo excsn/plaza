@@ -271,7 +271,7 @@ fn tick(state: &mut RunState, ctx: &mut Ctx) -> bool {
   // meter is that time, priced.
   if !state.door_locked && !state.complete && state.any_seat_held() {
     state.meters.waited_ms += TICK_MS;
-    if state.tick % 50 == 0 {
+    if state.tick.is_multiple_of(50) {
       changed = true;
     }
   }
@@ -359,7 +359,7 @@ fn drive_bots(state: &mut RunState, ctx: &mut Ctx) -> bool {
     state.bot_wait = 0;
   }
 
-  if state.complete || state.tick % BOT_THINK_TICKS != 0 {
+  if state.complete || !state.tick.is_multiple_of(BOT_THINK_TICKS) {
     return changed;
   }
   let turn = ((state.tick / BOT_THINK_TICKS) as usize) % state.seats.len().max(1);

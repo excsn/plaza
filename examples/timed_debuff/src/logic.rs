@@ -40,17 +40,14 @@ impl StateLogic<GameOp, PlayerId, GameState> for DebuffLogic {
         for op in ops {
           match op {
             GameOp::JoinGame { player_id, name } => {
-              if !state.players.contains_key(&player_id) {
+              state.players.entry(player_id).or_insert_with(|| {
                 info!(player_id = %player_id, %name, "Player joined game");
-                state.players.insert(
-                  player_id,
-                  PlayerState {
+                PlayerState {
                     id: player_id,
                     name,
                     ..Default::default()
-                  },
-                );
-              }
+                  }
+              });
             }
             GameOp::ApplyDebuff {
               caster_id,
@@ -94,8 +91,8 @@ impl StateLogic<GameOp, PlayerId, GameState> for DebuffLogic {
 
                 let action: ScheduledAction<GameState, GameOp, PlayerId> = Box::new(
                   move |s: &mut GameState, ops_q: &mut Vec<TargetedOp<GameOp, PlayerId>>| {
-                    if let Some(player_state) = s.players.get_mut(&target_id) {
-                      if player_state.active_debuffs.remove(&debuff) {
+                    if let Some(player_state) = s.players.get_mut(&target_id)
+                      && player_state.active_debuffs.remove(&debuff) {
                         info!(target_id = %target_id, ?debuff, tick = s.current_tick, "Debuff expired and removed by callback");
                         match debuff {
                           DebuffType::Slow => player_state.attributes.speed_modifier = 1.0,
@@ -117,7 +114,6 @@ impl StateLogic<GameOp, PlayerId, GameState> for DebuffLogic {
                           }],
                         });
                       }
-                    }
                   },
                 );
 
@@ -142,8 +138,8 @@ impl StateLogic<GameOp, PlayerId, GameState> for DebuffLogic {
 
         for player_id_key in state.players.keys().cloned().collect::<Vec<_>>() {
           // Avoid borrowing issues
-          if let Some(player) = state.players.get_mut(&player_id_key) {
-            if player.active_debuffs.contains(&DebuffType::DamageOverTime) {
+          if let Some(player) = state.players.get_mut(&player_id_key)
+            && player.active_debuffs.contains(&DebuffType::DamageOverTime) {
               player.health = player.health.saturating_sub(1);
               debug!(player_id = %player.id, new_health = player.health, "DOT tick applied");
               if player.health == 0 {
@@ -159,7 +155,6 @@ impl StateLogic<GameOp, PlayerId, GameState> for DebuffLogic {
                 }],
               });
             }
-          }
         }
       }
       LogicInput::AgentJoined { agent } => {

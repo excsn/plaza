@@ -146,7 +146,7 @@ impl StateLogic<MoleOp, PlayerId, MoleGameState> for MoleLogic {
         }
         // Send a periodic "full-ish" game state update (or parts of it)
         // This is simpler than delta updates for this example.
-        if state.current_tick % 100 == 0 {
+        if state.current_tick.is_multiple_of(100) {
           // Every 100 ticks (e.g. 2 seconds)
           let scores_snapshot: HashMap<PlayerId, u32> =
             state.player_info.iter().map(|(id, info)| (*id, info.score)).collect();
@@ -159,20 +159,17 @@ impl StateLogic<MoleOp, PlayerId, MoleGameState> for MoleLogic {
       }
       LogicInput::AgentJoined { agent } => {
         if let Some(player_id) = agent.id_cloned() {
-          if !state.player_info.contains_key(&player_id) {
+          state.player_info.entry(player_id).or_insert_with(|| {
             info!(player_id = %player_id, "Player joined game state.");
             // Seated under a placeholder: joining establishes identity, and
             // the name follows in the player's own `SetName`, which is also
             // what announces them to everyone else.
-            state.player_info.insert(
-              player_id,
-              PlayerSessionInfo {
+            PlayerSessionInfo {
                 name: format!("player-{}", &player_id.to_string()[..8]),
                 score: 0,
-              },
-            );
+              }
             // New player will get full state via snapshot.
-          }
+          });
         }
       }
       LogicInput::AgentLeft { agent_id } => {

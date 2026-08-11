@@ -32,7 +32,9 @@ impl<ItemID: Clone + Debug + Eq + Hash> Default for SelectionPayload<ItemID> {
 
 /// Represents common user activity states.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Default)]
 pub enum ActivityStatusPayload {
+  #[default]
   Idle,
   /// User is actively viewing a specific resource.
   Viewing {
@@ -51,8 +53,3 @@ pub enum ActivityStatusPayload {
   },
 }
 
-impl Default for ActivityStatusPayload {
-  fn default() -> Self {
-    ActivityStatusPayload::Idle
-  }
-}

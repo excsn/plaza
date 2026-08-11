@@ -169,11 +169,10 @@ impl<Op, AppID: AgentId, Summary: Clone + Debug> RoundManager<Op, AppID> for Seq
     if self.in_progress {
       return Err(format!("round {} is still in progress", self.current_round));
     }
-    if let Some(max) = self.max_rounds {
-      if self.current_round >= max {
+    if let Some(max) = self.max_rounds
+      && self.current_round >= max {
         return Err(format!("all {max} rounds have been played"));
       }
-    }
 
     self.current_round += 1;
     self.in_progress = true;
