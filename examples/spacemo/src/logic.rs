@@ -298,8 +298,8 @@ mod tests {
         source: Agent::new_human(id),
         ops: vec![SpaceOp::Fly(Fly {
           thrust: 0,
-          yaw: 0,
-          pitch: 0,
+          yaw: 0.0,
+          pitch: 0.0,
           firing: true,
         })],
       })
@@ -391,8 +391,8 @@ mod tests {
       source: Agent::new_human(7),
       ops: vec![SpaceOp::Fly(Fly {
         thrust: 1,
-        yaw: 0,
-        pitch: 0,
+        yaw: 0.0,
+        pitch: 0.0,
         firing: false,
       })],
     })

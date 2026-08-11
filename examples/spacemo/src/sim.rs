@@ -29,8 +29,6 @@ pub const VOLUME: f32 = 400.0;
 const TICK: f32 = 1.0 / 60.0;
 /// Thrust in units per second squared.
 const THRUST: f32 = 42.0;
-/// Radians per second at full deflection.
-const TURN: f32 = 1.8;
 /// Nothing stops in space, but a ship with no drag is a ship nobody can aim.
 /// This is a flight model, not a physics claim.
 const DRAG: f32 = 0.35;
@@ -234,11 +232,15 @@ impl Space {
 /// a rule drifted apart is the failure the reconciliation machinery only
 /// recovers from, and the cheapest place to prevent it is here.
 pub fn advance(ship: &mut Ship, fly: Fly) {
-  ship.yaw += fly.yaw.clamp(-1, 1) as f32 * TURN * TICK;
-  ship.pitch = (ship.pitch + fly.pitch.clamp(-1, 1) as f32 * TURN * TICK)
-    // Straight up and straight down are where a yaw/pitch model tears, so it
-    // never quite arrives at either.
-    .clamp(-1.4, 1.4);
+  // Aim is adopted outright rather than slewed toward. A mouse expects the nose
+  // to be where it is pointed this frame, and a turn rate in between reads as
+  // lag rather than as weight. The consequence is worth naming: **the client is
+  // effectively authoritative over its own facing**, because there is no way
+  // for a server to tell a plausible aim from an implausible one.
+  ship.yaw = fly.yaw;
+  // Straight up and straight down are where a yaw/pitch model tears, so it
+  // never quite arrives at either.
+  ship.pitch = fly.pitch.clamp(-1.4, 1.4);
 
   let push = ship.facing() * (fly.thrust.clamp(-1, 1) as f32 * THRUST * TICK);
   ship.vel = Vec3::new(
@@ -319,7 +321,7 @@ pub fn scatter(count: usize, spread: f32) -> Vec<Vec3> {
 mod tests {
   use super::*;
 
-  fn flying(thrust: i8, yaw: i8, pitch: i8) -> [Fly; MAX_PLAYERS] {
+  fn flying(thrust: i8, yaw: f32, pitch: f32) -> [Fly; MAX_PLAYERS] {
     let mut all = [Fly::default(); MAX_PLAYERS];
     all[0] = Fly {
       thrust,
@@ -338,7 +340,7 @@ mod tests {
     let nose = space.ships[0].facing();
 
     for _ in 0..60 {
-      space.step(&flying(1, 0, 0));
+      space.step(&flying(1, 0.0, 0.0));
     }
     let moved = Vec3::new(
       space.ships[0].at.x - from.x,
@@ -359,11 +361,11 @@ mod tests {
     let mut space = Space::new();
     space.spawn(0);
     for _ in 0..60 {
-      space.step(&flying(1, 0, 0));
+      space.step(&flying(1, 0.0, 0.0));
     }
     let moving = space.ships[0].vel.length();
     for _ in 0..30 {
-      space.step(&flying(0, 0, 0));
+      space.step(&flying(0, 0.0, 0.0));
     }
     let coasting = space.ships[0].vel.length();
     assert!(coasting > moving * 0.5, "it should coast: {moving} then {coasting}");
@@ -373,10 +375,12 @@ mod tests {
   #[test]
   fn pitch_never_reaches_straight_up() {
     // A yaw/pitch model tears at the poles, so the model refuses to arrive.
+    // Aim is absolute now, so this is asking for straight up outright rather
+    // than turning toward it, which is the harder version of the same test.
     let mut space = Space::new();
     space.spawn(0);
     for _ in 0..600 {
-      space.step(&flying(0, 0, 1));
+      space.step(&flying(0, 0.0, std::f32::consts::FRAC_PI_2));
     }
     assert!(space.ships[0].pitch < 1.5, "pitch ran to {}", space.ships[0].pitch);
     let nose = space.ships[0].facing();
@@ -391,7 +395,7 @@ mod tests {
     let mut space = Space::new();
     space.spawn(0);
     for _ in 0..4000 {
-      space.step(&flying(1, 0, 0));
+      space.step(&flying(1, 0.0, 0.0));
       let at = space.ships[0].at;
       assert!(
         at.x.abs() <= VOLUME && at.y.abs() <= VOLUME && at.z.abs() <= VOLUME,
@@ -414,8 +418,8 @@ mod tests {
 
     let holding = Fly {
       thrust: 1,
-      yaw: 1,
-      pitch: -1,
+      yaw: 0.6,
+      pitch: -0.4,
       firing: false,
     };
     let mut all = [Fly::default(); MAX_PLAYERS];
@@ -441,8 +445,8 @@ mod tests {
     let mut all = [Fly::default(); MAX_PLAYERS];
     all[0] = Fly {
       thrust: 0,
-      yaw: 0,
-      pitch: 0,
+      yaw: 0.0,
+      pitch: 0.0,
       firing: true,
     };
 
@@ -473,8 +477,8 @@ mod tests {
     let mut all = [Fly::default(); MAX_PLAYERS];
     all[0] = Fly {
       thrust: 1,
-      yaw: 0,
-      pitch: 0,
+      yaw: 0.0,
+      pitch: 0.0,
       firing: true,
     };
     for _ in 0..60 {
@@ -503,8 +507,8 @@ mod tests {
     let mut all = [Fly::default(); MAX_PLAYERS];
     all[0] = Fly {
       thrust: 0,
-      yaw: 0,
-      pitch: 0,
+      yaw: 0.0,
+      pitch: 0.0,
       firing: true,
     };
     for _ in 0..3000 {
@@ -516,6 +520,52 @@ mod tests {
       (widest as usize) < (BOLT_LIFE / BOLT_EVERY) as usize + 4,
       "index space walked to {widest} after {} shots",
       space.spawned
+    );
+  }
+
+  #[test]
+  fn a_lost_aim_is_forgotten_and_a_lost_delta_never_is() {
+    // Why aim crosses as a place rather than a change. A mouse hands you
+    // deltas; if one is dropped, nothing later contradicts it and the
+    // orientation is wrong for the rest of the session.
+    let wanted = [0.2f32, 0.5, 0.9, 1.4, 1.6];
+    let dropped = 2;
+
+    // Absolute: the lost packet simply never happened, and the next one is
+    // right.
+    let mut space = Space::new();
+    space.spawn(0);
+    let mut all = [Fly::default(); MAX_PLAYERS];
+    for (n, yaw) in wanted.iter().enumerate() {
+      if n == dropped {
+        continue;
+      }
+      all[0] = Fly {
+        thrust: 0,
+        yaw: *yaw,
+        pitch: 0.0,
+        firing: false,
+      };
+      space.step(&all);
+    }
+    let landed = space.ships[0].yaw;
+    assert_eq!(landed, *wanted.last().unwrap(), "an absolute aim recovers on the next packet");
+
+    // Deltas: the same loss, applied as changes, and the error is permanent.
+    let mut drifted = 0.0f32;
+    let mut previous = 0.0f32;
+    for (n, yaw) in wanted.iter().enumerate() {
+      let delta = yaw - previous;
+      previous = *yaw;
+      if n == dropped {
+        continue;
+      }
+      drifted += delta;
+    }
+    let lost = wanted[dropped] - wanted[dropped - 1];
+    assert!(
+      (drifted - landed).abs() > 0.1,
+      "the delta scheme should be permanently out by the packet it lost, {lost}"
     );
   }
 

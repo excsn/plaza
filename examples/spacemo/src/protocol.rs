@@ -35,12 +35,24 @@ pub struct ShipState {
   pub vel: [f32; 3],
 }
 
-/// What a client holds down, as a level rather than an event.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// What a client is asking for, as a **state rather than a change**.
+///
+/// Aim is absolute, and that is the load-bearing decision. A mouse hands you
+/// deltas, and a lost delta is wrong for ever: nothing later contradicts it, so
+/// the orientation never recovers. An absolute aim is corrected by the very
+/// next packet that arrives. Same principle as the throttle being a level, in
+/// the place where it is much less obvious.
+///
+/// The cost is that this changes every frame the mouse moves, where a keyed
+/// turn rate changed only on press and release, so the upstream side stops
+/// being free. That is a measurement this example did not previously have.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Fly {
+  /// Throttle, -1 to 1.
   pub thrust: i8,
-  pub yaw: i8,
-  pub pitch: i8,
+  /// Where the nose should point, in radians, absolute.
+  pub yaw: f32,
+  pub pitch: f32,
   pub firing: bool,
 }
 

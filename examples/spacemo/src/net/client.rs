@@ -128,6 +128,10 @@ pub struct NetClient {
   pub frame: u64,
   pub stamp: u64,
   pub meter: Meter,
+  /// What this client *sends*, which was free while input was a keyed level
+  /// that changed twice a turn and is not free now that a mouse sets it every
+  /// frame. Every other measurement in this example is downstream.
+  pub up: Meter,
   /// How many ships the last frame carried, which is the number the panel
   /// should show rather than the volume's population.
   pub carried: usize,
@@ -174,6 +178,7 @@ impl NetClient {
       frame: 0,
       stamp: 0,
       meter: Meter::default(),
+      up: Meter::default(),
       carried: 0,
       bolts: HashMap::new(),
       bolts_carried: 0,
@@ -294,7 +299,14 @@ impl NetClient {
       return;
     }
     self.sent = Some(fly);
-    self.pump.send_op(&SpaceOp::Fly(fly));
+    let op = SpaceOp::Fly(fly);
+    // Encoded once to measure and once to send. Wasteful, and worth it: a
+    // number the example quotes has to be the bytes that actually cross, not a
+    // count of fields multiplied by a guess.
+    if let Ok(bytes) = WIRE.encode(&vec![op.clone()]) {
+      self.up.record(self.now_ms, bytes.len());
+    }
+    self.pump.send_op(&op);
   }
 
   /// Runs the local ship forward one tick under the held input, and bleeds off

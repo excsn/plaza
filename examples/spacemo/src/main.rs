@@ -70,39 +70,63 @@ fn window_conf() -> Conf {
   }
 }
 
+/// Where the player is aiming, carried between frames because a mouse gives
+/// deltas and the wire wants a place.
 #[cfg(all(feature = "client", feature = "websocket"))]
-fn read_fly() -> Fly {
-  let mut yaw = 0i8;
-  let mut pitch = 0i8;
-  // Left is +yaw, which reads backwards and is not. `facing()` points along +Z
-  // at yaw zero and the chase camera looks that way, so a rising yaw swings the
-  // nose toward +X, and +X is screen-left from behind. Mapping the keys the
-  // "obvious" way sent the ship the other way, which is the sort of thing no
-  // test here can see and one press tells you immediately.
-  if is_key_down(KeyCode::A) || is_key_down(KeyCode::Left) {
-    yaw += 1;
+#[derive(Default)]
+struct Aim {
+  yaw: f32,
+  pitch: f32,
+  captured: bool,
+}
+
+/// Radians per pixel of mouse travel.
+#[cfg(all(feature = "client", feature = "websocket"))]
+const SENSITIVITY: f32 = 0.0032;
+
+#[cfg(all(feature = "client", feature = "websocket"))]
+fn read_fly(aim: &mut Aim, last: &mut Vec2) -> Fly {
+  // Pointer capture on first click. In the browser this is a hard requirement
+  // rather than a nicety: pointer lock needs a user gesture, so a page that
+  // grabs on load simply does not grab.
+  if !aim.captured && is_mouse_button_pressed(MouseButton::Left) {
+    set_cursor_grab(true);
+    show_mouse(false);
+    aim.captured = true;
+    *last = Vec2::from(mouse_position());
   }
-  if is_key_down(KeyCode::D) || is_key_down(KeyCode::Right) {
-    yaw -= 1;
+  if aim.captured && is_key_pressed(KeyCode::Escape) {
+    set_cursor_grab(false);
+    show_mouse(true);
+    aim.captured = false;
   }
-  if is_key_down(KeyCode::W) || is_key_down(KeyCode::Up) {
-    pitch += 1;
+
+  if aim.captured {
+    let now = Vec2::from(mouse_position());
+    let moved = now - *last;
+    *last = now;
+    // Left on screen is +yaw: `facing()` points along +Z at yaw zero and the
+    // chase camera looks that way, so a rising yaw swings the nose toward +X,
+    // which is screen-left from behind.
+    aim.yaw -= moved.x * SENSITIVITY;
+    aim.pitch -= moved.y * SENSITIVITY;
+    aim.pitch = aim.pitch.clamp(-1.4, 1.4);
   }
-  if is_key_down(KeyCode::S) || is_key_down(KeyCode::Down) {
-    pitch -= 1;
-  }
-  let thrust = if is_key_down(KeyCode::Space) {
+
+  // Up and down are the throttle now that the mouse owns the nose.
+  let thrust = if is_key_down(KeyCode::Up) || is_key_down(KeyCode::W) {
     1
-  } else if is_key_down(KeyCode::LeftShift) {
+  } else if is_key_down(KeyCode::Down) || is_key_down(KeyCode::S) {
     -1
   } else {
     0
   };
+
   Fly {
     thrust,
-    yaw,
-    pitch,
-    firing: is_key_down(KeyCode::LeftControl),
+    yaw: aim.yaw,
+    pitch: aim.pitch,
+    firing: is_key_down(KeyCode::Space) || is_mouse_button_down(MouseButton::Left),
   }
 }
 
@@ -154,13 +178,15 @@ async fn frame_loop(options: role::Options) {
     .map(|at| [at.x, at.y, at.z])
     .collect();
   let mut clock_ms: u64 = 0;
+  let mut aim = Aim::default();
+  let mut last_mouse = Vec2::ZERO;
 
   loop {
     let dt = get_frame_time().min(0.25);
     clock_ms += (dt * 1000.0) as u64;
 
     client.poll(clock_ms);
-    client.fly(read_fly());
+    client.fly(read_fly(&mut aim, &mut last_mouse));
     client.predict(dt);
 
     clear_background(Color::new(0.02, 0.02, 0.05, 1.0));
@@ -176,6 +202,9 @@ async fn frame_loop(options: role::Options) {
       set_default_camera();
     } else {
       draw_text("waiting for a seat", 24.0, 48.0, 28.0, GRAY);
+    }
+    if !aim.captured {
+      draw_text("click to fly, escape to release the mouse", 24.0, 80.0, 24.0, LIGHTGRAY);
     }
 
     ui::draw_panel(&client, &url, &dials);
