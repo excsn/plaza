@@ -71,6 +71,69 @@ fn what_a_view_radius_costs_in_a_town() {
   assert!(ratio < radius_ratio * radius_ratio, "a town runs out of people before a radius runs out of tiles");
 }
 
+/// What arriving costs against what standing still costs.
+///
+/// The moment an MMO is expensive is **arrival**: a client that has just walked
+/// through a door holds nothing and has to be told everything it can see, while
+/// one that has been standing there is told only that the world ticked. In a
+/// world of measurements that gap is where join protocols, baselines and
+/// catch-up schemes come from.
+///
+/// Here there is no gap to speak of, and that is the finding. A tile world's
+/// steady state is already a full description: every trainer in view, complete,
+/// every tick. There is nothing a joiner needs that a resident is not already
+/// being sent, so arriving costs exactly one ordinary frame.
+#[test]
+fn arriving_in_a_populated_zone_costs_one_ordinary_frame() {
+  const PEOPLE: usize = 200;
+  let mut world = World::new();
+  let centre = Tile::new(500, 500);
+  for (seat, at) in town(PEOPLE, centre, 30).into_iter().enumerate() {
+    world.seat(seat, at);
+  }
+  // Everyone else is on the far zone, so seat zero can walk into a full one.
+  for seat in 1..PEOPLE {
+    world.travel(seat, 1);
+  }
+
+  let (mut held, mut seen) = (Vec::new(), Vec::new());
+  for _ in 0..60 {
+    world.wandering(&mut held);
+    world.step(&held);
+  }
+
+  world.visible_to(0, 24, &mut seen);
+  let alone = seen.len();
+  assert_eq!(alone, 1, "an empty zone is just itself");
+
+  // Through the door.
+  world.travel(0, 1);
+  world.visible_to(0, 24, &mut seen);
+  let arriving = seen.len();
+
+  // And a tick later, as a resident.
+  world.wandering(&mut held);
+  world.step(&held);
+  world.visible_to(0, 24, &mut seen);
+  let resident = seen.len();
+
+  println!("\n  walking into a zone of {PEOPLE}:\n");
+  println!("    alone            {alone} trainers");
+  println!("    on arrival       {arriving}");
+  println!("    a tick later     {resident}");
+  println!(
+    "\n  arriving costs {:.2}x an ordinary frame, because a tile world's\n  steady state is already a complete description of what is in view.\n",
+    arriving as f32 / resident.max(1) as f32
+  );
+
+  assert!(arriving > 10, "the zone has to actually be populated: {arriving}");
+  let ratio = arriving as f32 / resident as f32;
+  assert!(
+    (0.8..=1.25).contains(&ratio),
+    "arriving should cost about what standing there costs: {arriving} against {resident}"
+  );
+}
+
 #[test]
 fn a_step_is_the_same_length_however_the_wire_carries_it() {
   // The property that makes a step drawable from its start: it is a rule both

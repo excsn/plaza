@@ -21,10 +21,21 @@ pub const MAX_TRAINERS: usize = 1024;
 /// a tile grid sends corners nobody can see and omits tiles they can.
 pub const VIEW_TILES: u32 = 24;
 
+/// How many zones the town is divided into.
+///
+/// Separate maps rather than regions of one: relevance inside a zone is a tile
+/// query, and between zones there is nothing to query, which is the entire
+/// reason to have them. A zone boundary is where a client's world *ends*, not
+/// where its query gets more expensive.
+pub const ZONES: u8 = 4;
+
 /// One trainer as the server holds it: the wire form plus what it is doing.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Walker {
   pub trainer: Trainer,
+  /// Which map it is standing on. Two trainers on different zones are not
+  /// near each other at any distance.
+  pub zone: u8,
   /// Ticks left in the step being taken, zero when standing.
   pub stepping: u8,
   pub alive: bool,
@@ -62,6 +73,7 @@ impl World {
         facing: Facing::South,
         phase: 0,
       },
+      zone: 0,
       stepping: 0,
       alive: true,
     };
@@ -123,14 +135,31 @@ impl World {
   /// The seats a given seat can see, itself included.
   pub fn visible_to(&self, seat: usize, radius: u32, out: &mut Vec<u16>) {
     out.clear();
-    let Some(from) = self.walkers.get(seat).filter(|w| w.alive).map(|w| w.trainer.at) else {
+    let Some(watcher) = self.walkers.get(seat).filter(|w| w.alive) else {
       return;
     };
+    let (from, zone) = (watcher.trainer.at, watcher.zone);
     for walker in self.walkers.iter().filter(|w| w.alive) {
-      if walker.trainer.at.within(from, radius) {
+      // Zone first, and it is not a distance check: somebody on another map is
+      // not far away, they are absent.
+      if walker.zone == zone && walker.trainer.at.within(from, radius) {
         out.push(walker.trainer.seat);
       }
     }
+  }
+
+  /// Moves a seat to another zone, keeping where it was standing.
+  pub fn travel(&mut self, seat: usize, zone: u8) {
+    if let Some(walker) = self.walkers.get_mut(seat) {
+      walker.zone = zone % ZONES;
+      // A step in progress belongs to the map it began on.
+      walker.stepping = 0;
+      walker.trainer.phase = 0;
+    }
+  }
+
+  pub fn zone_of(&self, seat: usize) -> u8 {
+    self.walkers.get(seat).map(|w| w.zone).unwrap_or(0)
   }
 
   /// A wander, for populating a map without a player behind every trainer.
@@ -236,6 +265,34 @@ mod tests {
       world.step(&holding(1, 0, Facing::North));
     }
     assert_eq!(world.walkers[0].trainer.at, Tile::new(11, 10), "it finished the step it began");
+  }
+
+  #[test]
+  fn somebody_on_another_map_is_absent_rather_than_far_away() {
+    // Which is the whole reason zones exist: a boundary is where a client's
+    // world ends, not where its query gets more expensive.
+    let mut world = World::new();
+    world.seat(0, Tile::new(10, 10));
+    world.seat(1, Tile::new(10, 11));
+
+    let mut seen = Vec::new();
+    world.visible_to(0, 24, &mut seen);
+    assert!(seen.contains(&1), "standing next to each other");
+
+    world.travel(1, 2);
+    world.visible_to(0, 24, &mut seen);
+    assert!(!seen.contains(&1), "and on the same tile of another map, absent");
+  }
+
+  #[test]
+  fn travelling_abandons_a_step_rather_than_finishing_it_elsewhere() {
+    let mut world = World::new();
+    world.seat(0, Tile::new(10, 10));
+    world.step(&holding(1, 0, Facing::East));
+    assert!(world.walkers[0].stepping > 0);
+    world.travel(0, 1);
+    assert_eq!(world.walkers[0].stepping, 0, "a step belongs to the map it began on");
+    assert_eq!(world.walkers[0].trainer.phase, 0);
   }
 
   #[test]
