@@ -114,7 +114,12 @@ async fn frame_loop(options: role::Options) {
 
   loop {
     let dt = get_frame_time().min(0.25);
-    clock_ms += (dt * 1000.0) as u64;
+    // Read absolutely rather than accumulated. Adding a truncated frame time
+    // each frame runs the clock slow: 16.67ms counted as 16 loses 4% a second
+    // at 60fps and 13.6% at 144, and every rate measured against it reads high
+    // by the same amount. Truncating an absolute clock once is off by at most a
+    // millisecond, for ever.
+    clock_ms = (get_time() * 1000.0) as u64;
 
     client.poll(clock_ms);
 

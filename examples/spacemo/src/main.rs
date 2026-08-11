@@ -180,20 +180,18 @@ async fn frame_loop(options: role::Options) {
     .map(|at| [at.x, at.y, at.z])
     .collect();
   let mut clock_ms: u64 = 0;
-  // Kept in a float and spent whole, because truncating the frame time each
-  // frame runs the clock *slow*: 16.67ms counted as 16 loses 4% a second at
-  // 60fps and 13.6% at 144. Everything measured against this clock reads high
-  // by exactly that much, and a bandwidth figure is the whole point here.
-  let mut clock_owed: f32 = 0.0;
   let mut aim = Aim::default();
   let mut last_mouse = Vec2::ZERO;
 
   loop {
     let dt = get_frame_time().min(0.25);
-    clock_owed += dt * 1000.0;
-    let whole = clock_owed.floor();
-    clock_ms += whole as u64;
-    clock_owed -= whole;
+    // Read absolutely rather than accumulated. Adding a truncated frame time
+    // each frame runs the clock slow: 16.67ms counted as 16 loses 4% a second
+    // at 60fps and 13.6% at 144, and every rate measured against it reads high
+    // by the same amount. Truncating an absolute clock once is off by at most a
+    // millisecond, for ever, which is why horde_playground has always done it
+    // this way.
+    clock_ms = (get_time() * 1000.0) as u64;
 
     client.poll(clock_ms);
     client.fly(read_fly(&mut aim, &mut last_mouse));
