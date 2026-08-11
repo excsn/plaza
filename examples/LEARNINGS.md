@@ -211,6 +211,18 @@ Keying on **motion** breaks the circle, and the rule left over is the one that w
 
 The general shape: a technique that perturbs state to keep two machines agreeing can collide with an optimisation that rewards state for holding still, and the optimisation was worth more here (a sleeping cube skips its velocity entirely). Check what a correction costs the things that were not wrong.
 
+### An optimisation that makes one thing self-terminating leaves the other with no ending (spacemo)
+
+Sending a straight shot once and letting the client carry it forward is worth 17.3x, and it has a second effect nobody planned: the shot now ends **by itself**, because the client counts its life down. A homing shot cannot be treated that way, so it is streamed every frame, so nothing on the client counts anything down for it. And nothing announces the end of one either. It hits, or expires, or loses its target, and simply stops being in the frame.
+
+The result was a volume filling with frozen missiles, each drawn at the last place it was seen, for ever. Found by the person playing it, while I was chasing an unrelated number on the panel: **the report was "the missiles are frozen" and the diagnosis was exactly that.**
+
+The rule the client needed is the one it already had for ships, applied to a thing that looked like it did not need it: **absence is the message**, so treat silence as an ending. Six quiet frames for something streamed every frame.
+
+Two general shapes. An optimisation applied to half a set changes the *lifecycle* of that half, and the untouched half inherits an assumption that no longer holds anywhere else. And a despawn that works is indistinguishable from one that never fires unless something counts it, which is why the panel reports how many went quiet.
+
+There was a matching leak on the server, guessed at correctly from the same symptom: a shot that **expired** freed its allocator slot and a shot that **hit** did not, so the index space climbed for as long as anyone was fighting, toward an id field of twenty bits. Two exits from one collection, one of them tidying up.
+
 ### Send the spawn, not the path (spacemo)
 
 Two projectiles, one field apart. A bolt flies straight, so its whole future follows from where it started and how fast; a missile turns after its target, so its path depends on where that target goes next and nobody knows that at launch.
