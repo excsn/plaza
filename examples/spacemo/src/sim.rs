@@ -41,6 +41,15 @@ const THRUST: f32 = 42.0;
 /// This is a flight model, not a physics claim.
 const DRAG: f32 = 0.35;
 const MAX_SPEED: f32 = 90.0;
+/// Hits a ship survives. Three, so a fight is an exchange rather than a
+/// coin toss, and so a hit is worth announcing without being decisive.
+pub const MAX_HEALTH: u8 = 3;
+/// What a missile takes off, against a bolt's one.
+const MISSILE_DAMAGE: u8 = 2;
+
+/// Kills within this many ticks of each other count as a streak.
+const MULTI_WINDOW: u64 = 300;
+
 /// Half-length of a ship along its nose.
 ///
 /// The renderer draws from this rather than keeping its own copy, because a
@@ -67,6 +76,9 @@ pub use crate::protocol::Fly;
 pub struct Ship {
   pub at: Vec3,
   pub vel: Vec3,
+  /// Hits left. State rather than an event, so a client that missed the frame
+  /// a hit landed on still learns the result from the next one.
+  pub health: u8,
   /// Yaw and pitch rather than a quaternion in the simulation, because a
   /// flight model that cannot roll has no use for the third degree and two
   /// angles are far easier to reason about. The wire carries the quaternion.
@@ -80,6 +92,7 @@ impl Default for Ship {
     Self {
       at: Vec3::ZERO,
       vel: Vec3::ZERO,
+      health: MAX_HEALTH,
       yaw: 0.0,
       pitch: 0.0,
       alive: false,
@@ -94,6 +107,15 @@ impl Ship {
     let (sp, cp) = self.pitch.sin_cos();
     Vec3::new(sy * cp, sp, cy * cp)
   }
+}
+
+/// One ship destroying another.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Kill {
+  pub killer: u16,
+  pub victim: u16,
+  /// How many the killer has taken in quick succession, counted from one.
+  pub streak: u8,
 }
 
 /// A shot in flight.
@@ -155,6 +177,12 @@ pub struct Space {
   /// Cumulative, for the panel: churn is the cost this example exists to show.
   pub spawned: u64,
   pub expired: u64,
+  /// Kills this tick, cleared at the start of every step like [`hits`].
+  pub kills: Vec<Kill>,
+  /// When each seat last killed, and how many in a row, for the streak a
+  /// client would otherwise have to infer from the order things arrived in.
+  last_kill: Vec<u64>,
+  streak: Vec<u8>,
   /// Seats hit this tick, cleared at the start of every step.
   ///
   /// **An event, and the first thing here that is not a state.** Everything
@@ -185,6 +213,9 @@ impl Space {
       spawned: 0,
       expired: 0,
       hits: Vec::new(),
+      kills: Vec::new(),
+      last_kill: vec![0; MAX_SHIPS],
+      streak: vec![0; MAX_SHIPS],
     }
   }
 
@@ -195,6 +226,7 @@ impl Space {
     self.ships[seat] = Ship {
       at: spread[seat % spread.len()],
       vel: Vec3::ZERO,
+      health: MAX_HEALTH,
       yaw: 0.0,
       pitch: 0.0,
       alive: true,
@@ -218,6 +250,7 @@ impl Space {
       self.ships.push(Ship {
         at: spread[n % spread.len()],
         vel: Vec3::ZERO,
+        health: MAX_HEALTH,
         yaw: headings[n % headings.len()].x * std::f32::consts::PI,
         pitch: headings[n % headings.len()].y * 0.8,
         alive: true,
@@ -266,6 +299,7 @@ impl Space {
   pub fn step(&mut self, flying: &[Fly; MAX_PLAYERS]) {
     self.tick += 1;
     self.hits.clear();
+    self.kills.clear();
     #[allow(clippy::needless_range_loop)]
     for index in 0..self.ships.len() {
       // Indexed rather than zipped: the player seats read from `flying` and
@@ -309,20 +343,39 @@ impl Space {
         }
         let d = Vec3::new(bolt.at.x - ship.at.x, bolt.at.y - ship.at.y, bolt.at.z - ship.at.z);
         if d.length_squared() <= HIT_RADIUS * HIT_RADIUS {
-          struck.push(seat);
+          let damage = if bolt.chasing.is_some() { MISSILE_DAMAGE } else { 1 };
+          struck.push((seat, bolt.from, damage));
           return false;
         }
       }
       true
     });
 
-    for seat in struck {
+    for (seat, from, damage) in struck {
       self.hits.push(seat as u16);
+      let health = &mut self.ships[seat].health;
+      *health = health.saturating_sub(damage);
+      if *health > 0 {
+        continue;
+      }
+
+      // A streak is counted on the server, because a client would have to infer
+      // it from the order things happened to arrive in, and two clients would
+      // disagree about the same fight.
+      let killer = from as usize;
+      if killer < self.streak.len() {
+        let quick = self.tick.saturating_sub(self.last_kill[killer]) <= MULTI_WINDOW;
+        self.streak[killer] = if quick { self.streak[killer].saturating_add(1) } else { 1 };
+        self.last_kill[killer] = self.tick;
+      }
+      self.kills.push(Kill {
+        killer: from as u16,
+        victim: seat as u16,
+        streak: self.streak.get(killer).copied().unwrap_or(1),
+      });
       // Respawned rather than destroyed, because an empty seat is a client with
       // nothing to fly and a missing bot is a volume that slowly empties.
-      let was_bot = seat >= MAX_PLAYERS;
       self.spawn_at(seat);
-      let _ = was_bot;
     }
   }
 
@@ -332,6 +385,7 @@ impl Space {
     self.ships[seat] = Ship {
       at: spread[n],
       vel: Vec3::ZERO,
+      health: MAX_HEALTH,
       yaw: self.ships[seat].yaw,
       pitch: 0.0,
       alive: true,
@@ -1088,6 +1142,103 @@ mod tests {
       "it should let go rather than chase a seat nobody is in"
     );
     assert!(!space.bolts.is_empty(), "and stay in flight, which is one less event to deliver");
+  }
+
+  #[test]
+  fn a_ship_takes_three_hits_and_the_third_is_the_kill() {
+    let mut space = Space::new();
+    space.spawn(0);
+    space.spawn(1);
+    space.ships[0].at = Vec3::ZERO;
+    space.ships[1].at = Vec3::new(0.0, 0.0, 40.0);
+
+    let mut all = [Fly::default(); MAX_PLAYERS];
+    all[0] = Fly {
+      thrust: 0,
+      yaw: 0.0,
+      pitch: 0.0,
+      firing: true,
+      launching: false,
+    };
+
+    let (mut hits, mut kills) = (0usize, 0usize);
+    for _ in 0..400 {
+      space.step(&all);
+      hits += space.hits.len();
+      kills += space.kills.len();
+      if kills > 0 {
+        break;
+      }
+      // Pinned, so this counts hits rather than measuring aim.
+      space.ships[1].at = Vec3::new(0.0, 0.0, 40.0);
+      space.ships[1].vel = Vec3::ZERO;
+    }
+    assert_eq!(kills, 1, "one kill");
+    assert_eq!(hits, MAX_HEALTH as usize, "after exactly {MAX_HEALTH} hits");
+    assert_eq!(space.ships[1].health, MAX_HEALTH, "and it comes back whole");
+  }
+
+  #[test]
+  fn a_missile_takes_more_off_than_a_bolt() {
+    let mut space = Space::new();
+    space.spawn(0);
+    space.spawn(1);
+    space.ships[0].at = Vec3::ZERO;
+    space.ships[1].at = Vec3::new(0.0, 0.0, 200.0);
+
+    let mut all = launching();
+    for _ in 0..300 {
+      space.step(&all);
+      all[0].launching = false;
+      space.ships[1].vel = Vec3::ZERO;
+      if !space.hits.is_empty() {
+        break;
+      }
+      space.ships[1].at = Vec3::new(0.0, 0.0, 200.0);
+    }
+    assert_eq!(
+      space.ships[1].health,
+      MAX_HEALTH - MISSILE_DAMAGE,
+      "a missile should be worth more than one bolt"
+    );
+  }
+
+  #[test]
+  fn a_streak_is_counted_on_the_server_and_resets_when_it_goes_quiet() {
+    // Counted here rather than by each client, or two clients watching the same
+    // fight would disagree about it from arrival order alone.
+    let mut space = Space::new();
+    space.spawn(0);
+    space.set_bots(4);
+
+    let mut all = [Fly::default(); MAX_PLAYERS];
+    all[0] = Fly {
+      thrust: 0,
+      yaw: 0.0,
+      pitch: 0.0,
+      firing: true,
+      launching: false,
+    };
+
+    let mut streaks = Vec::new();
+    for _ in 0..2000 {
+      // Parked on top of a bot so the shots keep landing.
+      let victim = MAX_PLAYERS + (streaks.len() % 4);
+      space.ships[victim].at = Vec3::new(0.0, 0.0, 40.0);
+      space.ships[victim].vel = Vec3::ZERO;
+      space.ships[0].at = Vec3::ZERO;
+      space.step(&all);
+      for kill in &space.kills {
+        if kill.killer == 0 {
+          streaks.push(kill.streak);
+        }
+      }
+      if streaks.len() >= 3 {
+        break;
+      }
+    }
+    assert!(streaks.len() >= 3, "the run has to land three kills: {streaks:?}");
+    assert_eq!(&streaks[..3], &[1, 2, 3], "and they should climb: {streaks:?}");
   }
 
   #[test]

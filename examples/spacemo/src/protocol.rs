@@ -30,6 +30,10 @@ pub fn frame_to_ms(frame: u64) -> u64 {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ShipState {
   pub seat: u16,
+  /// Hits left. A **state**, so a client that missed the frame a hit landed on
+  /// still learns the result from the next one, which is exactly what the hit
+  /// event beside it cannot offer.
+  pub health: u8,
   pub pos: [f32; 3],
   pub rot: [f32; 4],
   pub vel: [f32; 3],
@@ -94,6 +98,22 @@ pub struct FrameUpdate {
   /// lost frame costs freshness and nothing else; a hit appears once and never
   /// again, which makes it the one thing whose delivery matters.
   pub hits: Vec<u16>,
+  /// Kills this tick, of the ones this client can see or is part of.
+  ///
+  /// The second event on this wire, and the one that has to reach the people it
+  /// names: you are told you were killed even if the killer was never in your
+  /// view, because "something out there got you" is worse than a name.
+  pub kills: Vec<Kill>,
+}
+
+/// One ship destroying another.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Kill {
+  pub killer: u16,
+  pub victim: u16,
+  /// Counted on the server: a client inferring a streak from arrival order
+  /// would disagree with the next client about the same fight.
+  pub streak: u8,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

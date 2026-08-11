@@ -201,6 +201,25 @@ fn step_once(state: &mut SpaceState, ctx: &mut Ctx) {
           .copied()
           .filter(|struck| seen.contains(&(*struck as u32)))
           .collect(),
+        // Visible, *or* about this client. Being told you died by someone you
+        // never saw is the whole experience of being sniped, and withholding
+        // the name would be relevance applied past the point it helps.
+        kills: state
+          .space
+          .kills
+          .iter()
+          .copied()
+          .filter(|kill| {
+            kill.killer == seat as u16
+              || kill.victim == seat as u16
+              || seen.contains(&(kill.victim as u32))
+          })
+          .map(|k| crate::protocol::Kill {
+            killer: k.killer,
+            victim: k.victim,
+            streak: k.streak,
+          })
+          .collect(),
       }))],
     ));
   }
@@ -210,6 +229,7 @@ fn ship_state(state: &SpaceState, seat: usize) -> ShipState {
   let ship = &state.space.ships[seat];
   ShipState {
     seat: seat as u16,
+    health: ship.health,
     pos: [ship.at.x, ship.at.y, ship.at.z],
     rot: quaternion(ship.yaw, ship.pitch),
     vel: [ship.vel.x, ship.vel.y, ship.vel.z],

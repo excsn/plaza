@@ -35,6 +35,8 @@ const VEL_BITS: u32 = 12;
 /// cost rather than absorbing quietly: a populated volume is what makes the
 /// relevance dial visible, and it is paid for on every ship in every frame.
 const SEAT_BITS: u32 = 10;
+/// Enough for [`crate::sim::MAX_HEALTH`] and a zero.
+const HEALTH_BITS: u32 = 2;
 
 /// What one ship costs on the wire, derived from the layout rather than written
 /// down beside it.
@@ -42,7 +44,7 @@ const SEAT_BITS: u32 = 10;
 /// cube_yard's budget overran by 20% on a hand-guessed figure, and a constant
 /// like that drifts silently the moment the layout changes.
 pub const fn ship_bits() -> usize {
-  (SEAT_BITS + POS_BITS * 3 + plaza_wire::bits::SMALLEST_THREE_INDEX_BITS + ROT_BITS * 3 + VEL_BITS * 3) as usize
+  (SEAT_BITS + HEALTH_BITS + POS_BITS * 3 + plaza_wire::bits::SMALLEST_THREE_INDEX_BITS + ROT_BITS * 3 + VEL_BITS * 3) as usize
 }
 
 /// What one ship costs at full serde width, for the comparison.
@@ -55,6 +57,7 @@ pub fn pack(ships: &[ShipState]) -> Vec<u8> {
   w.varint(ships.len() as u64);
   for ship in ships {
     w.bits(ship.seat as u64, SEAT_BITS);
+    w.bits(ship.health.min(3) as u64, HEALTH_BITS);
     for axis in 0..3 {
       w.quantized(ship.pos[axis], POS.0, POS.1, POS_BITS);
     }
@@ -72,6 +75,7 @@ pub fn unpack(bytes: &[u8]) -> Option<Vec<ShipState>> {
   let mut out = Vec::with_capacity(count);
   for _ in 0..count {
     let seat = r.bits(SEAT_BITS).ok()? as u16;
+    let health = r.bits(HEALTH_BITS).ok()? as u8;
     let mut pos = [0.0f32; 3];
     for axis in pos.iter_mut() {
       *axis = r.quantized(POS.0, POS.1, POS_BITS).ok()?;
@@ -81,7 +85,7 @@ pub fn unpack(bytes: &[u8]) -> Option<Vec<ShipState>> {
     for axis in vel.iter_mut() {
       *axis = r.quantized(VEL.0, VEL.1, VEL_BITS).ok()?;
     }
-    out.push(ShipState { seat, pos, rot, vel });
+    out.push(ShipState { seat, health, pos, rot, vel });
   }
   Some(out)
 }
@@ -105,7 +109,7 @@ const REL_BITS: u32 = 15;
 
 /// What a ship costs when its position is an offset rather than a place.
 pub const fn ship_bits_relative() -> usize {
-  (SEAT_BITS + REL_BITS * 3 + plaza_wire::bits::SMALLEST_THREE_INDEX_BITS + ROT_BITS * 3 + VEL_BITS * 3) as usize
+  (SEAT_BITS + HEALTH_BITS + REL_BITS * 3 + plaza_wire::bits::SMALLEST_THREE_INDEX_BITS + ROT_BITS * 3 + VEL_BITS * 3) as usize
 }
 
 /// Writes ships as offsets from `observer`, which is carried absolutely once.
@@ -126,6 +130,7 @@ pub fn pack_relative(ships: &[ShipState], observer: [f32; 3]) -> Vec<u8> {
   w.varint(ships.len() as u64);
   for ship in ships {
     w.bits(ship.seat as u64, SEAT_BITS);
+    w.bits(ship.health.min(3) as u64, HEALTH_BITS);
     for (axis, anchor) in observer.iter().enumerate() {
       w.quantized(ship.pos[axis] - anchor, REL.0, REL.1, REL_BITS);
     }
@@ -147,6 +152,7 @@ pub fn unpack_relative(bytes: &[u8]) -> Option<Vec<ShipState>> {
   let mut out = Vec::with_capacity(count);
   for _ in 0..count {
     let seat = r.bits(SEAT_BITS).ok()? as u16;
+    let health = r.bits(HEALTH_BITS).ok()? as u8;
     let mut pos = [0.0f32; 3];
     for (axis, place) in pos.iter_mut().enumerate() {
       *place = observer[axis] + r.quantized(REL.0, REL.1, REL_BITS).ok()?;
@@ -156,7 +162,7 @@ pub fn unpack_relative(bytes: &[u8]) -> Option<Vec<ShipState>> {
     for axis in vel.iter_mut() {
       *axis = r.quantized(VEL.0, VEL.1, VEL_BITS).ok()?;
     }
-    out.push(ShipState { seat, pos, rot, vel });
+    out.push(ShipState { seat, health, pos, rot, vel });
   }
   Some(out)
 }
@@ -231,6 +237,7 @@ mod tests {
         let (s, c) = (a.sin(), a.cos());
         ShipState {
           seat: i as u16 % 64,
+          health: 3,
           pos: [at.x, at.y, at.z],
           // A real unit quaternion, so smallest-three has something legal to
           // reconstruct.
@@ -348,6 +355,7 @@ mod tests {
         let a = i as f32 * 0.5;
         ShipState {
           seat: i as u16,
+          health: 3,
           pos: [
             observer[0] + a.sin() * 40.0,
             observer[1] + a.cos() * 30.0,

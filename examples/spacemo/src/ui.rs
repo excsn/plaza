@@ -8,6 +8,50 @@ use spacemo::relevance::Strategy;
 /// also the server. A joiner is handed `None`.
 pub type Dials = Option<std::sync::Arc<parking_lot::Mutex<Controls>>>;
 
+/// Health and the announcement feed, drawn in screen space over the volume.
+///
+/// Separate from the panel because a panel is for numbers you go and read and a
+/// HUD is for things you are told while looking elsewhere.
+pub fn draw_hud(client: &NetClient) {
+  use macroquad::prelude::*;
+
+  if let Some(mine) = client.mine.and_then(|seat| client.drawn(seat)) {
+    let full = spacemo::sim::MAX_HEALTH as f32;
+    for pip in 0..spacemo::sim::MAX_HEALTH {
+      let filled = pip < mine.health;
+      let x = 28.0 + pip as f32 * 34.0;
+      draw_rectangle(
+        x,
+        screen_height() - 52.0,
+        26.0,
+        18.0,
+        if filled {
+          Color::new(0.45, 0.85, 0.55, 1.0)
+        } else {
+          Color::new(0.22, 0.22, 0.26, 1.0)
+        },
+      );
+    }
+    let _ = full;
+  }
+
+  // Newest at the bottom, fading with age, because a feed that reorders itself
+  // is a feed nobody can read mid-fight.
+  let now = client.frame;
+  let recent: Vec<&(u64, String)> = client.announcements.iter().rev().take(5).collect();
+  for (row, (at, line)) in recent.iter().enumerate() {
+    let age = now.saturating_sub(*at) as f32 / 240.0;
+    let fade = (1.0 - age).clamp(0.15, 1.0);
+    draw_text(
+      line,
+      28.0,
+      screen_height() - 96.0 - row as f32 * 26.0,
+      26.0,
+      Color::new(1.0, 0.92, 0.7, fade),
+    );
+  }
+}
+
 pub fn draw_panel(client: &NetClient, url: &str, dials: &Dials) {
   egui_macroquad::ui(|ctx| {
     egui_macroquad::egui::Window::new("spacemo")
@@ -31,6 +75,7 @@ pub fn draw_panel(client: &NetClient, url: &str, dials: &Dials) {
         ui.label(format!("{} bolts in view", client.bolts_carried));
         ui.label(format!("{} left the radius", client.forgotten));
         ui.label(format!("{} hits seen", client.hits_seen));
+        ui.label(format!("{} kills, {} deaths", client.kills, client.deaths));
         ui.separator();
 
         let now = client.now_ms();

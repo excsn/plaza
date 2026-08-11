@@ -14,7 +14,7 @@ use plaza_wire::{MsgPackCodec, WireCodec};
 use plaza_ws::pump::{mismatch_message, Arrival, FramePump};
 use plaza_ws::{Event, State};
 
-use crate::protocol::{BoltState, Fly, ShipState, SpaceOp, PROTOCOL};
+use crate::protocol::{BoltState, Fly, Kill, ShipState, SpaceOp, PROTOCOL};
 use crate::sim::{advance, quaternion, Ship};
 
 const WIRE: MsgPackCodec = MsgPackCodec;
@@ -97,6 +97,16 @@ impl Meter {
   }
 }
 
+/// What a seat is called. Bots and players share a numbering, so the name says
+/// which is which without a second field on the wire to carry it.
+pub fn name(seat: u16) -> String {
+  if (seat as usize) < crate::sim::MAX_PLAYERS {
+    format!("pilot {seat}")
+  } else {
+    format!("drone {}", seat as usize - crate::sim::MAX_PLAYERS)
+  }
+}
+
 /// Drops ships that have stopped being mentioned, and reports how many went.
 ///
 /// The half of relevance a client has to implement itself. A server that stops
@@ -144,6 +154,15 @@ pub struct NetClient {
   /// one rather than something the wire keeps repeating.
   pub struck: HashMap<u16, u64>,
   pub hits_seen: u64,
+  /// Recent announcements, newest last, with the frame each arrived on.
+  ///
+  /// The client's own memory of events, because an event is not repeated: the
+  /// wire says a kill happened once and never mentions it again, so anything
+  /// still on screen a second later is being remembered here rather than
+  /// re-received.
+  pub announcements: Vec<(u64, String)>,
+  pub kills: u64,
+  pub deaths: u64,
   /// Ships dropped for going quiet, cumulative, so the panel can show that
   /// churn is a cost rather than an error.
   pub forgotten: u64,
@@ -189,6 +208,9 @@ impl NetClient {
       bolts_carried: 0,
       struck: HashMap::new(),
       hits_seen: 0,
+      announcements: Vec::new(),
+      kills: 0,
+      deaths: 0,
       forgotten: 0,
       predicted: None,
       offset: [0.0; 3],
@@ -285,6 +307,10 @@ impl NetClient {
           }
           let frame = update.frame;
           self.struck.retain(|_, at| frame.saturating_sub(*at) < 24);
+          for kill in &update.kills {
+            self.announce(*kill, frame);
+          }
+          self.announcements.retain(|(at, _)| frame.saturating_sub(*at) < 240);
           self.forget_the_quiet();
         }
         SpaceOp::Fly(_) => {}
@@ -300,6 +326,30 @@ impl NetClient {
   /// runs on a frame count rather than waiting for something to arrive.
   fn forget_the_quiet(&mut self) {
     self.forgotten += forget_the_quiet(&mut self.ships, self.frame, self.mine) as u64;
+  }
+
+  /// Turns a kill into the line a player reads.
+  ///
+  /// Written here rather than on the server, because the same event reads
+  /// differently to each of the three people it concerns and sending three
+  /// strings to say one thing would be paying for grammar on the wire.
+  fn announce(&mut self, kill: Kill, frame: u64) {
+    let mine = self.mine;
+    let line = if Some(kill.killer) == mine {
+      self.kills += 1;
+      match kill.streak {
+        0 | 1 => format!("you got {}", name(kill.victim)),
+        2 => format!("double kill: {}", name(kill.victim)),
+        3 => format!("triple kill: {}", name(kill.victim)),
+        n => format!("{n} in a row: {}", name(kill.victim)),
+      }
+    } else if Some(kill.victim) == mine {
+      self.deaths += 1;
+      format!("{} got you", name(kill.killer))
+    } else {
+      format!("{} got {}", name(kill.killer), name(kill.victim))
+    };
+    self.announcements.push((frame, line));
   }
 
   /// Sends the held level, and only when it changes.
@@ -387,6 +437,9 @@ impl NetClient {
     let at = self.drawn_local()?;
     Some(ShipState {
       seat,
+      // Straight from the server: health is state nobody predicts, and a
+      // predicted health bar is a lie that reads as a bug.
+      health: known.state.health,
       pos: at,
       rot: quaternion(ship.yaw, ship.pitch),
       vel: [ship.vel.x, ship.vel.y, ship.vel.z],
@@ -406,6 +459,7 @@ mod tests {
     Known {
       state: ShipState {
         seat,
+        health: 3,
         pos: [0.0; 3],
         rot: [0.0, 0.0, 0.0, 1.0],
         vel: [0.0; 3],

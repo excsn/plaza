@@ -208,6 +208,7 @@ async fn frame_loop(options: role::Options) {
       draw_text("click to fly, escape to release the mouse", 24.0, 80.0, 24.0, LIGHTGRAY);
     }
 
+    ui::draw_hud(&client);
     ui::draw_panel(&client, &url, &dials);
     egui_macroquad::draw();
     next_frame().await;
