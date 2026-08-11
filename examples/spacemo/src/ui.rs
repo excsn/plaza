@@ -50,6 +50,7 @@ pub fn draw_panel(client: &NetClient, url: &str, dials: &Dials) {
             ui.radio_value(&mut held.strategy, strategy, strategy.name());
           }
           ui.checkbox(&mut held.packed, "bit-packed");
+          ui.checkbox(&mut held.relative, "positions relative to the observer");
           if held != was {
             *dials.lock() = held;
           }

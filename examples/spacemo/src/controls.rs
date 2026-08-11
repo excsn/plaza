@@ -17,6 +17,8 @@ pub struct Controls {
   pub strategy: Strategy,
   /// Whether frames go out bit-packed or at full serde width.
   pub packed: bool,
+  /// Whether positions are offsets from the observer rather than places.
+  pub relative: bool,
 }
 
 impl Default for Controls {
@@ -24,6 +26,7 @@ impl Default for Controls {
     Self {
       strategy: Strategy::FlatBand,
       packed: true,
+      relative: true,
     }
   }
 }

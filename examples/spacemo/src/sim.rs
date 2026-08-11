@@ -278,10 +278,13 @@ pub fn quaternion(yaw: f32, pitch: f32) -> [f32; 4] {
 
 /// Wraps at the boundary rather than bouncing.
 ///
-/// A wall in space is a lie either way, and wrapping keeps every ship inside
-/// the bounds the wire can carry without pretending there is something to hit.
-/// It is also the honest placeholder for stage five: the day positions are
-/// encoded relative to the observer, this stops being needed.
+/// A wall in space is a lie either way, and wrapping keeps players in the same
+/// volume without pretending there is something to hit.
+///
+/// This began as a wire constraint and is now a **gameplay** one. With
+/// positions encoded relative to the observer the wire no longer cares where
+/// anything is, so the only remaining reason to bound the volume is that ships
+/// which fly apart for ever never meet again.
 fn confine(ship: &mut Ship) {
   for axis in [0, 1, 2] {
     let value = match axis {

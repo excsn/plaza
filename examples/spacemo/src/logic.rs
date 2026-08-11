@@ -65,6 +65,7 @@ impl StateLogic<SpaceOp, PlayerId, SpaceState> for SpaceLogic {
       // else: the query is the only thing that differs between them.
       state.strategy = wanted.strategy;
       state.packed = wanted.packed;
+      state.relative = wanted.relative;
     }
 
     match input {
@@ -152,14 +153,25 @@ fn step_once(state: &mut SpaceState, ctx: &mut Ctx) {
       // The packed path still builds the same lists; what changes is what
       // crosses. Keeping both live is what lets the panel price one against
       // the other without a second run.
-      let ship_bytes = pack::pack(&ships);
+      let anchor = ships
+        .iter()
+        .find(|s| s.seat == seat as u16)
+        .map(|s| s.pos)
+        .unwrap_or([0.0; 3]);
+      let ship_bytes = if state.relative {
+        pack::pack_relative(&ships, anchor)
+      } else {
+        pack::pack(&ships)
+      };
       let bolt_bytes = pack::pack_bolts(&bolts);
       state.last_bytes[seat] = ship_bytes.len();
       state.last_bolt_bytes[seat] = bolt_bytes.len();
-      (
-        pack::unpack(&ship_bytes).unwrap_or(ships),
-        pack::unpack_bolts(&bolt_bytes).unwrap_or(bolts),
-      )
+      let decoded = if state.relative {
+        pack::unpack_relative(&ship_bytes)
+      } else {
+        pack::unpack(&ship_bytes)
+      };
+      (decoded.unwrap_or(ships), pack::unpack_bolts(&bolt_bytes).unwrap_or(bolts))
     } else {
       state.last_bytes[seat] = ships.len() * pack::ship_bits_full() / 8;
       state.last_bolt_bytes[seat] = bolts.len() * 7 * 32 / 8;
@@ -428,6 +440,41 @@ mod tests {
       let ops = tick(&mut state).await;
       let mine = frames(&ops).into_iter().find(|f| f.yours == Some(0)).unwrap();
       assert_eq!(mine.ships.len(), expect, "{} sent {:?}", strategy.name(), mine.ships);
+    }
+  }
+
+  #[tokio::test]
+  async fn the_relative_path_carries_the_same_world_as_the_absolute_one() {
+    // Both dials, one scene, through the real tick. Two encodings that disagree
+    // about where a ship is would be a defect no test of either alone finds.
+    let mut places = Vec::new();
+    for relative in [false, true] {
+      let mut state = SpaceState::new();
+      state.packed = true;
+      state.relative = relative;
+      for id in [7, 8] {
+        run(&mut state, LogicInput::AgentJoined {
+          agent: Agent::new_human(id),
+        })
+        .await;
+      }
+      state.space.ships[0].at = Vec3::new(120.0, -40.0, 60.0);
+      state.space.ships[1].at = Vec3::new(140.0, -30.0, 75.0);
+
+      let ops = tick(&mut state).await;
+      let mine = frames(&ops).into_iter().find(|f| f.yours == Some(0)).unwrap();
+      let other = mine.ships.iter().find(|s| s.seat == 1).unwrap();
+      places.push(other.pos);
+    }
+
+    let (a, b) = (places[0], places[1]);
+    for axis in 0..3 {
+      assert!(
+        (a[axis] - b[axis]).abs() < pack::position_error() + pack::relative_error(),
+        "axis {axis}: absolute says {}, relative says {}",
+        a[axis],
+        b[axis]
+      );
     }
   }
 
