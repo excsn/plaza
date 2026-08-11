@@ -38,9 +38,18 @@ pub fn draw_panel(client: &NetClient, url: &str) {
             format!("{} unreadable frames", client.unreadable),
           );
         }
+        let now = client.now_ms();
         ui.label("what the wire cost:");
-        ui.label(format!("  {:.0} kbit/sec", client.meter.kbps(client.now_ms())));
+        ui.label(format!(
+          "  {:.1} KiB/s session, {:.1} KiB/s recent",
+          client.meter.session_kib_per_sec(now),
+          client.meter.kib_per_sec(now)
+        ));
         ui.label(format!("  {:.0} bytes per frame", client.meter.bytes_per_frame()));
+        // Fiedler's target keeps its own unit, because it is a quotation from
+        // the article this example is measured against.
+        let kbit = client.meter.kbps(now);
+        ui.label(format!("  {kbit:.0} kbit/sec against a 256 kbit target"));
         ui.label(
           egui_macroquad::egui::RichText::new(
             "a cube that did not fit keeps its priority,\nso waiting is what earns the next slot.",

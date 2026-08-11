@@ -18,6 +18,37 @@ use crate::protocol::{CubeState, Cubes, Drive, FrameUpdate, YardOp, PROTOCOL};
 
 const WIRE: MsgPackCodec = MsgPackCodec;
 
+/// Nominal milliseconds between server frames.
+const TICK_MS: u64 = 1000 / crate::protocol::TICK_HZ;
+
+/// One frame's gap, smoothed into the running estimate.
+///
+/// The raw gap cannot be used directly. A 60Hz stamp advances 16, 17, 17, 16,
+/// because 1000/60 is not an integer, so any threshold sitting at 16 is crossed
+/// and uncrossed several times a second.
+fn smooth_interval(held: u64, gap: u64) -> u64 {
+  (held * 3 + gap + 2) / 4
+}
+
+/// Whether to draw from the interpolation buffer or from the newest state.
+///
+/// Two thresholds, because this chooses between **two different sources**: the
+/// buffer answers with a position a render delay in the past and the fallback
+/// answers with the newest one, so a decision that flips frame to frame swings
+/// every cube back and forth by whatever it travels in that delay. With a raw
+/// gap and a single threshold at the tick interval it flipped on a repeating
+/// three-frame cycle, which at 15 units a second is half a unit of shake, and
+/// worst under `--encoding delta` where sparse samples put the two answers
+/// furthest apart.
+fn should_interpolate(interval_ms: u64, currently: bool) -> bool {
+  if currently {
+    // Held until the rate is clearly back at tick speed.
+    interval_ms * 4 > TICK_MS * 5
+  } else {
+    interval_ms * 2 > TICK_MS * 3
+  }
+}
+
 /// Bandwidth is averaged over this window, so the panel reads as a rate rather
 /// than as whatever the last packet happened to be.
 const WINDOW_MS: u64 = 1000;
@@ -40,6 +71,9 @@ pub struct Meter {
   recent: VecDeque<(u64, usize)>,
   pub total_bytes: u64,
   pub frames: u64,
+  /// When the first packet landed, so a session rate is over the run rather
+  /// than over a frame count that assumes a send rate.
+  since_ms: Option<u64>,
 }
 
 impl Meter {
@@ -47,6 +81,7 @@ impl Meter {
     self.recent.push_back((now_ms, bytes));
     self.total_bytes += bytes as u64;
     self.frames += 1;
+    self.since_ms.get_or_insert(now_ms);
     while let Some((at, _)) = self.recent.front() {
       if now_ms.saturating_sub(*at) > WINDOW_MS {
         self.recent.pop_front();
@@ -69,6 +104,26 @@ impl Meter {
       .map(|(_, b)| b)
       .sum();
     bytes as f32 * 8.0 / WINDOW_MS as f32
+  }
+
+  /// Kibibytes a second over the same window, which is the unit
+  /// horde_playground reports and the one to read across examples.
+  pub fn kib_per_sec(&self, now_ms: u64) -> f32 {
+    self.kbps(now_ms) * 1000.0 / 8.0 / 1024.0
+  }
+
+  /// Kibibytes a second over the whole run.
+  ///
+  /// The pair answers two questions: **recent** responds to what just changed
+  /// and settles when the world does, **session** is what a configuration
+  /// actually cost. Session sits below recent while it is still climbing
+  /// toward it, which is a property of an average rather than of the traffic.
+  pub fn session_kib_per_sec(&self, now_ms: u64) -> f32 {
+    let Some(since) = self.since_ms else {
+      return 0.0;
+    };
+    let elapsed = now_ms.saturating_sub(since).max(1) as f32 / 1000.0;
+    self.total_bytes as f32 / elapsed / 1024.0
   }
 
   /// Mean bytes in one frame, which is the number the packing stages move.
@@ -153,7 +208,7 @@ impl NetClient {
       packed: false,
       views: Vec::new(),
       render_at: 0,
-      send_interval_ms: 1000 / crate::protocol::TICK_HZ,
+      send_interval_ms: TICK_MS,
       last_stamp: None,
       offsets: Vec::new(),
       decay: AdaptiveDecay::default(),
@@ -233,7 +288,7 @@ impl NetClient {
     if let Some(previous) = self.last_stamp {
       let gap = update.server_time_ms.saturating_sub(previous);
       if gap > 0 {
-        self.send_interval_ms = gap;
+        self.send_interval_ms = smooth_interval(self.send_interval_ms, gap);
       }
     }
     self.last_stamp = Some(update.server_time_ms);
@@ -344,7 +399,7 @@ impl NetClient {
   pub fn advance_render_clock(&mut self) {
     let delay = self.send_interval_ms * 2;
     self.render_at = self.stamp.saturating_sub(delay);
-    self.interpolating = self.send_interval_ms > 1000 / crate::protocol::TICK_HZ;
+    self.interpolating = should_interpolate(self.send_interval_ms, self.interpolating);
   }
 
   /// Sends the held direction, and only when it changes: a level repeats on the
@@ -525,5 +580,70 @@ mod tests {
     // Long after the window has passed, the rate is not still quoting old bytes.
     client.poll(10_000);
     assert_eq!(client.meter.kbps(10_000), 0.0);
+  }
+}
+
+#[cfg(test)]
+mod render_clock_tests {
+  use super::*;
+
+  /// The stamps a 60Hz server actually produces.
+  fn tick_gaps(frames: u64) -> Vec<u64> {
+    (1..=frames)
+      .map(crate::protocol::frame_to_ms)
+      .scan(0u64, |previous, at| {
+        let gap = at - *previous;
+        *previous = at;
+        Some(gap)
+      })
+      .collect()
+  }
+
+  #[test]
+  fn a_sixty_hertz_server_never_toggles_interpolation() {
+    // 1000/60 is not an integer, so the gaps are 16, 17, 17. A threshold at the
+    // tick interval reading the raw gap flipped on that cycle, and each flip
+    // moved every cube by a render delay's worth of travel.
+    let gaps = tick_gaps(600);
+    assert!(gaps.contains(&16) && gaps.contains(&17), "{gaps:?}");
+
+    let mut held = TICK_MS;
+    let mut on = false;
+    let mut flips = 0;
+    for gap in gaps {
+      held = smooth_interval(held, gap);
+      let next = should_interpolate(held, on);
+      if next != on {
+        flips += 1;
+      }
+      on = next;
+    }
+    assert_eq!(flips, 0, "interpolation toggled {flips} times at the tick rate");
+    assert!(!on, "and should be off, since a chord at 16ms is invisible");
+  }
+
+  #[test]
+  fn a_slow_send_rate_turns_it_on_and_keeps_it_on() {
+    let mut held = TICK_MS;
+    let mut on = false;
+    for _ in 0..40 {
+      held = smooth_interval(held, 100);
+      on = should_interpolate(held, on);
+    }
+    assert!(on, "at 10 sends a second a chord flattens 100ms of path");
+
+    // And jitter around that rate must not drop it again.
+    for gap in [96, 104, 98, 102, 91, 109] {
+      held = smooth_interval(held, gap);
+      assert!(should_interpolate(held, on), "dropped out at a {gap}ms gap");
+    }
+  }
+
+  #[test]
+  fn the_two_thresholds_do_not_overlap() {
+    // Hysteresis only helps while turning on is harder than staying on.
+    let on_at = (1..400).find(|ms| should_interpolate(*ms, false)).unwrap();
+    let off_at = (1..400).find(|ms| should_interpolate(*ms, true)).unwrap();
+    assert!(off_at < on_at, "on at {on_at}ms, stays on from {off_at}ms");
   }
 }

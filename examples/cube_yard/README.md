@@ -118,6 +118,14 @@ The overshoot figure carries a second one. It read 50% of frames until the compa
 
 So **cube_yard's client does not use `HermiteView`**, and that is the finding rather than a disappointment. It blends between two real samples with `SnapshotBuffer`, because a chord is bounded by the states it sits between and this scene needs exactly that. The spline's home is a steered character or a projectile in free flight, where velocity at a sample really does predict the path; the example that motivated building it is the example that should not use it. Take the 2x and do not expect the 484x on anything with contacts in it.
 
+### The render clock has to choose one source and stay with it
+
+`drawn()` answers from the interpolation buffer when the send rate is low enough to be worth it, and from the newest decoded state otherwise. Those are **different answers**: one is a render delay in the past, the other is now. Deciding between them per frame, from the raw gap between stamps against a threshold at the tick interval, meant deciding wrong half the time, because 1000/60 is not an integer and a 60Hz server stamps 16, 17, 17, 16. Every crossing swung every cube by whatever it travels in the delay, about half a unit at rolling speed, on a repeating three-frame cycle.
+
+It was worst under `--encoding delta`, which is what surfaced it: sparse, irregular samples put the buffer's answer and the newest state furthest apart, so the same flip has the largest amplitude.
+
+The gap is smoothed into the estimate, and the decision has two thresholds so it cannot flip on a millisecond. Both parts are needed: smoothing alone still sits a rounding error from the line. `a_sixty_hertz_server_never_toggles_interpolation` runs 600 frames of real stamps and asserts zero crossings.
+
 ## Quantise both sides, and what it costs
 
 Fiedler names quantising the simulation on both sides as the critical trick in [state synchronization](https://gafferongames.com/post/state_synchronization/): the server simulating at a precision it never transmits means the client is always looking at a rounded copy of a truth that has already moved on. `--snap` turns it on.
