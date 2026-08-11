@@ -211,6 +211,16 @@ Keying on **motion** breaks the circle, and the rule left over is the one that w
 
 The general shape: a technique that perturbs state to keep two machines agreeing can collide with an optimisation that rewards state for holding still, and the optimisation was worth more here (a sleeping cube skips its velocity entirely). Check what a correction costs the things that were not wrong.
 
+### Both halves running is a different test from either half being right (spacemo)
+
+Every test in spacemo drove one side, and the bug that got past all of them lived on the seam: the server was correct, the client was correct about everything it was told, and what neither owned was **what to do about silence**. Missiles are streamed while they exist and simply stop being sent when they end, so a client that never treated absence as an ending kept every one it had ever seen.
+
+The test that catches it runs the logic and a client together for three thousand ticks and compares what the client is **left holding** against what exists. It found the bug it was written for and a second one in the same minute: straight shots that hit something kept flying on the client for the rest of their nominal life, because silence ended a missile and not a bolt. The client held 1513 shots against 235 in the world.
+
+Two things about writing it are worth keeping. The first version kept **a second copy of what the client does**, which is the same pair-of-derivations trap the rest of this file is about, committed inside the test meant to catch it: it would have stayed green while `NetClient` drifted away from it. A scripted socket carrying the server's own ops into the real decode path costs nothing and removes the copy. And the ship half of it originally asserted that the *server* went quiet, which is the half that was never broken; asserting the client lets go is the whole point.
+
+The general shape: when two pieces are each correct and the bug is in what neither of them owns, no test of either can see it, and the question to ask a seam is not "did each side do its job" but "what is one side left holding".
+
 ### An optimisation that makes one thing self-terminating leaves the other with no ending (spacemo)
 
 Sending a straight shot once and letting the client carry it forward is worth 17.3x, and it has a second effect nobody planned: the shot now ends **by itself**, because the client counts its life down. A homing shot cannot be treated that way, so it is streamed every frame, so nothing on the client counts anything down for it. And nothing announces the end of one either. It hits, or expires, or loses its target, and simply stops being in the frame.
