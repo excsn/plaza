@@ -66,6 +66,10 @@ impl StateLogic<SpaceOp, PlayerId, SpaceState> for SpaceLogic {
       state.strategy = wanted.strategy;
       state.packed = wanted.packed;
       state.relative = wanted.relative;
+      if state.bots != wanted.bots {
+        state.bots = wanted.bots;
+        state.space.set_bots(wanted.bots);
+      }
     }
 
     match input {
@@ -186,6 +190,15 @@ fn step_once(state: &mut SpaceState, ctx: &mut Ctx) {
         yours: Some(seat as u16),
         ships,
         bolts,
+        // Only the ones this client can see, so a hit on the far side of the
+        // volume is not an event it has to be told about.
+        hits: state
+          .space
+          .hits
+          .iter()
+          .copied()
+          .filter(|struck| seen.contains(&(*struck as u32)))
+          .collect(),
       }))],
     ));
   }
@@ -340,6 +353,55 @@ mod tests {
     assert!(
       bolt_each < ship_each,
       "a bolt should cost less than a ship: {bolt_each:.1} against {ship_each:.1}"
+    );
+  }
+
+  /// What a populated volume does to the panel, which is why bots exist.
+  ///
+  /// With one ship in flight every strategy returns the same answer, so the
+  /// dial moves and nothing else does. This is the measurement made watchable.
+  #[tokio::test]
+  async fn the_strategy_dial_only_says_anything_in_a_populated_volume() {
+    let mut seen = Vec::new();
+    for strategy in [Strategy::Flat, Strategy::FlatBand] {
+      for bots in [0usize, 300] {
+        let mut state = SpaceState::with(strategy);
+        state.bots = bots;
+        state.space.set_bots(bots);
+        run(&mut state, LogicInput::AgentJoined {
+          agent: Agent::new_human(7),
+        })
+        .await;
+        state.space.ships[0].at = Vec3::ZERO;
+
+        let mut worst = 0usize;
+        for _ in 0..30 {
+          let ops = tick(&mut state).await;
+          for update in frames(&ops) {
+            worst = worst.max(update.ships.len());
+          }
+        }
+        seen.push((strategy, bots, worst));
+      }
+    }
+
+    println!("\n  ships in view, by strategy and population:\n");
+    for (strategy, bots, ships) in &seen {
+      println!("    {:<16} {bots:>4} bots  {ships:>4} in view", strategy.name());
+    }
+
+    let empty_flat = seen.iter().find(|(s, b, _)| *s == Strategy::Flat && *b == 0).unwrap().2;
+    let empty_band = seen.iter().find(|(s, b, _)| *s == Strategy::FlatBand && *b == 0).unwrap().2;
+    let full_flat = seen.iter().find(|(s, b, _)| *s == Strategy::Flat && *b == 300).unwrap().2;
+    let full_band = seen.iter().find(|(s, b, _)| *s == Strategy::FlatBand && *b == 300).unwrap().2;
+
+    assert_eq!(empty_flat, empty_band, "an empty volume cannot tell the strategies apart");
+    assert!(
+      full_flat > full_band,
+      "a populated one must: {full_flat} against {full_band}"
+    );
+    println!(
+      "\n  empty, both say {empty_flat}. populated, {full_flat} against {full_band}.\n  the dial is only a demonstration when there is something to see.\n"
     );
   }
 

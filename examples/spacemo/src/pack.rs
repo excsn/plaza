@@ -29,7 +29,12 @@ const ROT_BITS: u32 = 9;
 const VEL: (f32, f32) = (-128.0, 128.0);
 const VEL_BITS: u32 = 12;
 
-const SEAT_BITS: u32 = 6;
+/// Wide enough for [`crate::sim::MAX_SHIPS`], which the bot population needs.
+///
+/// Four bits more than the player seats alone would want, and worth naming as a
+/// cost rather than absorbing quietly: a populated volume is what makes the
+/// relevance dial visible, and it is paid for on every ship in every frame.
+const SEAT_BITS: u32 = 10;
 
 /// What one ship costs on the wire, derived from the layout rather than written
 /// down beside it.

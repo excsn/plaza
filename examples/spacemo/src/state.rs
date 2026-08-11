@@ -47,6 +47,7 @@ pub struct SpaceState {
   /// Whether frames go out bit-packed or at full serde width.
   pub packed: bool,
   pub relative: bool,
+  pub bots: usize,
 }
 
 impl std::fmt::Debug for SpaceState {
@@ -85,6 +86,7 @@ impl SpaceState {
       last_bolt_bytes: [0; MAX_PLAYERS],
       packed: true,
       relative: true,
+      bots: 0,
     }
   }
 

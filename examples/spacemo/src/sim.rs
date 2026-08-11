@@ -19,6 +19,14 @@ pub const ROCKS: usize = 240;
 
 pub const MAX_PLAYERS: usize = 32;
 
+/// The most ships a volume can hold, players and bots together.
+///
+/// Bots exist for the measurement rather than the game: with one ship in
+/// flight the relevance dial has nothing to show, because every strategy
+/// returns you and nothing else. A populated volume is what turns the 7.1x
+/// into something that moves on the panel.
+pub const MAX_SHIPS: usize = 1024;
+
 /// Half-width of the volume ships are scattered and kept inside.
 ///
 /// Space is unbounded and the wire is not, which is the tension stage five is
@@ -35,6 +43,9 @@ const DRAG: f32 = 0.35;
 const MAX_SPEED: f32 = 90.0;
 /// How far ahead of the ship a bolt starts, so nobody shoots themselves.
 const SHIP_NOSE: f32 = 3.0;
+/// How close a bolt has to pass. Generous, because a bolt moves 2 units a tick
+/// and a tighter radius would mostly be a test of luck.
+const HIT_RADIUS: f32 = 4.0;
 
 /// What a client holds down, which is the wire's own type rather than a copy.
 ///
@@ -103,17 +114,28 @@ const BOLT_EVERY: u16 = 8;
 const BOLT_SPEED: f32 = 120.0;
 
 pub struct Space {
-  pub ships: [Ship; MAX_PLAYERS],
+  /// Player seats first, bots after, so a seat index is a stable identity and
+  /// the bot population can be resized without moving anybody.
+  pub ships: Vec<Ship>,
   pub rocks: Vec<Vec3>,
   pub tick: u64,
   pub bolts: Vec<Bolt>,
   /// Ids that are stable while a bolt lives and reusable after, which is what
   /// keeps a client from mistaking a new bolt for one it was already drawing.
   slots: SlotAllocator,
-  cooldown: [u16; MAX_PLAYERS],
+  cooldown: Vec<u16>,
   /// Cumulative, for the panel: churn is the cost this example exists to show.
   pub spawned: u64,
   pub expired: u64,
+  /// Seats hit this tick, cleared at the start of every step.
+  ///
+  /// **An event, and the first thing here that is not a state.** Everything
+  /// else in this example survives a lost frame because the next one describes
+  /// the world completely; a hit does not appear in any later frame, so it is
+  /// the one thing whose delivery actually matters. On this transport that is
+  /// free, and it is worth knowing which part of the protocol would stop being
+  /// free on a datagram one.
+  pub hits: Vec<u16>,
 }
 
 impl Default for Space {
@@ -125,14 +147,15 @@ impl Default for Space {
 impl Space {
   pub fn new() -> Self {
     Self {
-      ships: [Ship::default(); MAX_PLAYERS],
+      ships: vec![Ship::default(); MAX_PLAYERS],
       rocks: scatter(ROCKS, VOLUME),
       tick: 0,
       bolts: Vec::new(),
       slots: SlotAllocator::new(),
-      cooldown: [0; MAX_PLAYERS],
+      cooldown: vec![0; MAX_SHIPS],
       spawned: 0,
       expired: 0,
+      hits: Vec::new(),
     }
   }
 
@@ -153,18 +176,124 @@ impl Space {
     self.ships[seat] = Ship::default();
   }
 
+  /// Grows or shrinks the bot population, which lives above the player seats.
+  pub fn set_bots(&mut self, bots: usize) {
+    let wanted = MAX_PLAYERS + bots.min(MAX_SHIPS - MAX_PLAYERS);
+    if self.ships.len() == wanted {
+      return;
+    }
+    let spread = scatter(MAX_SHIPS, VOLUME * 0.85);
+    let headings = scatter(MAX_SHIPS, 1.0);
+    while self.ships.len() < wanted {
+      let n = self.ships.len();
+      self.ships.push(Ship {
+        at: spread[n % spread.len()],
+        vel: Vec3::ZERO,
+        yaw: headings[n % headings.len()].x * std::f32::consts::PI,
+        pitch: headings[n % headings.len()].y * 0.8,
+        alive: true,
+      });
+    }
+    self.ships.truncate(wanted);
+  }
+
+  pub fn bots(&self) -> usize {
+    self.ships.len().saturating_sub(MAX_PLAYERS)
+  }
+
+  /// What the bots are holding this tick.
+  ///
+  /// Deliberately dull: a slow wander with the throttle on, and a shot now and
+  /// then. They are relevance load and something to shoot at, not opponents,
+  /// and anything cleverer would be a second simulation to keep honest.
+  fn bot_input(&self, index: usize) -> Fly {
+    let n = index as u64;
+    let phase = (self.tick / 90).wrapping_add(n.wrapping_mul(7));
+    // A hash of the index and the current stretch of time, so each wanders on
+    // its own schedule without any per-bot state to store or send.
+    let mut seed = phase.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ n;
+    seed ^= seed >> 33;
+    seed = seed.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    seed ^= seed >> 29;
+    let yaw = ((seed & 0xffff) as f32 / 65535.0 - 0.5) * std::f32::consts::TAU;
+    let pitch = (((seed >> 16) & 0xffff) as f32 / 65535.0 - 0.5) * 1.4;
+    Fly {
+      thrust: 1,
+      yaw,
+      pitch,
+      firing: (seed >> 32).is_multiple_of(5),
+    }
+  }
+
   pub fn step(&mut self, flying: &[Fly; MAX_PLAYERS]) {
     self.tick += 1;
-    for (seat, fly) in flying.iter().enumerate() {
-      if self.ships[seat].alive {
-        advance(&mut self.ships[seat], *fly);
+    self.hits.clear();
+    #[allow(clippy::needless_range_loop)]
+    for index in 0..self.ships.len() {
+      // Indexed rather than zipped: the player seats read from `flying` and
+      // everything above them is generated, so the two halves are not one
+      // sequence.
+      let fly = if index < MAX_PLAYERS {
+        flying[index]
+      } else {
+        self.bot_input(index)
+      };
+      if self.ships[index].alive {
+        advance(&mut self.ships[index], fly);
       }
-      self.cooldown[seat] = self.cooldown[seat].saturating_sub(1);
-      if fly.firing && self.ships[seat].alive && self.cooldown[seat] == 0 {
-        self.fire(seat);
+      if index < self.cooldown.len() {
+        self.cooldown[index] = self.cooldown[index].saturating_sub(1);
+        if fly.firing && self.ships[index].alive && self.cooldown[index] == 0 {
+          self.fire(index);
+        }
       }
     }
     self.fly_bolts();
+    self.resolve_hits();
+  }
+
+  /// A sphere test per bolt against the ships near it.
+  ///
+  /// Brute force over ships, deliberately: bolts are numerous and short-lived,
+  /// so an index rebuilt for them every tick costs more than the test it saves
+  /// at these counts. If that stops being true the honest fix is to reuse the
+  /// relevance field, which is already rebuilt anyway.
+  fn resolve_hits(&mut self) {
+    let mut struck = Vec::new();
+    self.bolts.retain(|bolt| {
+      for (seat, ship) in self.ships.iter().enumerate() {
+        if !ship.alive || seat as u8 == bolt.from {
+          continue;
+        }
+        let d = Vec3::new(bolt.at.x - ship.at.x, bolt.at.y - ship.at.y, bolt.at.z - ship.at.z);
+        if d.length_squared() <= HIT_RADIUS * HIT_RADIUS {
+          struck.push(seat);
+          return false;
+        }
+      }
+      true
+    });
+
+    for seat in struck {
+      self.hits.push(seat as u16);
+      // Respawned rather than destroyed, because an empty seat is a client with
+      // nothing to fly and a missing bot is a volume that slowly empties.
+      let was_bot = seat >= MAX_PLAYERS;
+      self.spawn_at(seat);
+      let _ = was_bot;
+    }
+  }
+
+  fn spawn_at(&mut self, seat: usize) {
+    let spread = scatter(MAX_SHIPS, VOLUME * 0.85);
+    let n = seat.wrapping_add(self.tick as usize) % spread.len();
+    self.ships[seat] = Ship {
+      at: spread[n],
+      vel: Vec3::ZERO,
+      yaw: self.ships[seat].yaw,
+      pitch: 0.0,
+      alive: true,
+    };
   }
 
   fn fire(&mut self, seat: usize) {
@@ -566,6 +695,75 @@ mod tests {
     assert!(
       (drifted - landed).abs() > 0.1,
       "the delta scheme should be permanently out by the packet it lost, {lost}"
+    );
+  }
+
+  #[test]
+  fn a_bolt_strikes_someone_else_and_never_the_ship_that_fired_it() {
+    let mut space = Space::new();
+    space.spawn(0);
+    space.spawn(1);
+    space.ships[0].at = Vec3::ZERO;
+    space.ships[0].yaw = 0.0;
+    space.ships[0].pitch = 0.0;
+    // Directly ahead, well inside the distance a bolt covers in a second.
+    space.ships[1].at = Vec3::new(0.0, 0.0, 40.0);
+
+    let mut all = [Fly::default(); MAX_PLAYERS];
+    all[0] = Fly {
+      thrust: 0,
+      yaw: 0.0,
+      pitch: 0.0,
+      firing: true,
+    };
+
+    let mut hit = false;
+    for _ in 0..120 {
+      space.step(&all);
+      if space.hits.contains(&1) {
+        hit = true;
+        break;
+      }
+      assert!(!space.hits.contains(&0), "it should never strike itself");
+    }
+    assert!(hit, "a bolt fired down the nose at a ship 40 units away should land");
+  }
+
+  #[test]
+  fn a_struck_ship_comes_back_rather_than_leaving_a_hole() {
+    // An empty seat is a client with nothing to fly, and a missing bot is a
+    // volume that quietly empties over a long session.
+    let mut space = Space::new();
+    space.spawn(0);
+    space.spawn(1);
+    space.ships[0].at = Vec3::ZERO;
+    space.ships[1].at = Vec3::new(0.0, 0.0, 40.0);
+    let before = space.alive();
+
+    let mut all = [Fly::default(); MAX_PLAYERS];
+    all[0] = Fly {
+      thrust: 0,
+      yaw: 0.0,
+      pitch: 0.0,
+      firing: true,
+    };
+    for _ in 0..120 {
+      space.step(&all);
+    }
+    assert_eq!(space.alive(), before, "the population should hold");
+    assert!(space.ships[1].alive);
+  }
+
+  #[test]
+  fn hits_are_cleared_every_tick_because_they_are_events() {
+    let mut space = Space::new();
+    space.spawn(0);
+    space.ships[0].at = Vec3::ZERO;
+    space.hits.push(3);
+    space.step(&[Fly::default(); MAX_PLAYERS]);
+    assert!(
+      !space.hits.contains(&3),
+      "an event that survives its tick is a state wearing the wrong clothes"
     );
   }
 

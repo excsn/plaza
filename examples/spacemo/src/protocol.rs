@@ -83,6 +83,12 @@ pub struct FrameUpdate {
   pub ships: Vec<ShipState>,
   /// Only the bolts this client can see, which churn far faster than ships do.
   pub bolts: Vec<BoltState>,
+  /// Seats struck this tick, of the ones this client can see.
+  ///
+  /// The only **event** on this wire. Every other field describes a state, so a
+  /// lost frame costs freshness and nothing else; a hit appears once and never
+  /// again, which makes it the one thing whose delivery matters.
+  pub hits: Vec<u16>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

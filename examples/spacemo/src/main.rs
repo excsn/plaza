@@ -197,7 +197,7 @@ async fn frame_loop(options: role::Options) {
       // Drawn rather than received, so the local ship is where the player's
       // hand says it is and the rest are where the server last said they were.
       let ships: Vec<_> = client.ships.keys().filter_map(|seat| client.drawn(*seat)).collect();
-      scene.draw_ships(ships.iter(), client.mine);
+      scene.draw_ships(ships.iter(), client.mine, &client.struck);
       scene.draw_bolts(client.bolts.values());
       set_default_camera();
     } else {

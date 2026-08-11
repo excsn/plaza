@@ -103,10 +103,20 @@ impl Scene {
   }
 
   /// Ships the client currently knows about, with `mine` picked out.
-  pub fn draw_ships<'a>(&mut self, ships: impl Iterator<Item = &'a ShipState>, mine: Option<u16>) {
+  pub fn draw_ships<'a>(
+    &mut self,
+    ships: impl Iterator<Item = &'a ShipState>,
+    mine: Option<u16>,
+    struck: &std::collections::HashMap<u16, u64>,
+  ) {
     let mut drawn = 0usize;
     for ship in ships {
-      let tint = if Some(ship.seat) == mine {
+      let tint = if struck.contains_key(&ship.seat) {
+        // A hit is the one thing here that happens rather than *is*, so it has
+        // to be drawn from the client's memory of the event: nothing in a later
+        // frame will mention it again.
+        Color::new(1.0, 0.35, 0.30, 1.0)
+      } else if Some(ship.seat) == mine {
         Color::new(1.0, 0.83, 0.25, 1.0)
       } else {
         Color::new(0.45, 0.72, 0.90, 1.0)

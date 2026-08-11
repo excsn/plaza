@@ -19,6 +19,10 @@ pub struct Controls {
   pub packed: bool,
   /// Whether positions are offsets from the observer rather than places.
   pub relative: bool,
+  /// Synthetic population. The dial the measurement needs: with one ship in
+  /// flight every strategy returns the same answer, so nothing on the panel
+  /// moves when the strategy does.
+  pub bots: usize,
 }
 
 impl Default for Controls {
@@ -27,6 +31,7 @@ impl Default for Controls {
       strategy: Strategy::FlatBand,
       packed: true,
       relative: true,
+      bots: 150,
     }
   }
 }

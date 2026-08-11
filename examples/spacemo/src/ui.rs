@@ -29,6 +29,7 @@ pub fn draw_panel(client: &NetClient, url: &str, dials: &Dials) {
         ui.label(format!("{} ships in view", client.carried));
         ui.label(format!("{} bolts in view", client.bolts_carried));
         ui.label(format!("{} left the radius", client.forgotten));
+        ui.label(format!("{} hits seen", client.hits_seen));
         ui.separator();
 
         let now = client.now_ms();
@@ -56,6 +57,7 @@ pub fn draw_panel(client: &NetClient, url: &str, dials: &Dials) {
           }
           ui.checkbox(&mut held.packed, "bit-packed");
           ui.checkbox(&mut held.relative, "positions relative to the observer");
+          ui.add(egui_macroquad::egui::Slider::new(&mut held.bots, 0..=400).text("bots"));
           if held != was {
             *dials.lock() = held;
           }

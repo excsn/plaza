@@ -139,6 +139,11 @@ pub struct NetClient {
   /// reused slot distinguishable from the bolt that vacated it.
   pub bolts: HashMap<u32, BoltState>,
   pub bolts_carried: usize,
+  /// Seats struck recently, with the frame it happened on, so the renderer can
+  /// flash them. Events do not persist, so this is the client's own memory of
+  /// one rather than something the wire keeps repeating.
+  pub struck: HashMap<u16, u64>,
+  pub hits_seen: u64,
   /// Ships dropped for going quiet, cumulative, so the panel can show that
   /// churn is a cost rather than an error.
   pub forgotten: u64,
@@ -182,6 +187,8 @@ impl NetClient {
       carried: 0,
       bolts: HashMap::new(),
       bolts_carried: 0,
+      struck: HashMap::new(),
+      hits_seen: 0,
       forgotten: 0,
       predicted: None,
       offset: [0.0; 3],
@@ -272,6 +279,12 @@ impl NetClient {
           if let Some(truth) = self.mine.and_then(|mine| self.ships.get(&mine)).map(|k| k.state) {
             self.correct(&truth);
           }
+          for seat in &update.hits {
+            self.struck.insert(*seat, update.frame);
+            self.hits_seen += 1;
+          }
+          let frame = update.frame;
+          self.struck.retain(|_, at| frame.saturating_sub(*at) < 24);
           self.forget_the_quiet();
         }
         SpaceOp::Fly(_) => {}
