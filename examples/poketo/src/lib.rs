@@ -16,7 +16,13 @@
 pub mod battle;
 pub mod grid;
 pub mod protocol;
+pub mod role;
 pub mod trade;
+
+#[cfg(any(feature = "server", all(feature = "client", feature = "websocket")))]
+pub mod net;
+
+pub use playground_common;
 pub mod world;
 #[cfg(feature = "server")]
 pub mod state;

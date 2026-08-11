@@ -3,6 +3,7 @@ name = "poketo"
 version = "0.1.0"
 edition = { workspace = true }
 publish = false
+default-run = "poketo"
 
 [features]
 default = ["native", "client", "server", "websocket"]
@@ -37,6 +38,10 @@ tokio = { workspace = true }
 
 [build-dependencies]
 plaza_wire = { workspace = true, features = ["build"] }
+
+[[bin]]
+name = "poketo"
+path = "src/main.rs"
 
 [lib]
 name = "poketo"
