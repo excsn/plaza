@@ -100,18 +100,33 @@ fn seat_player(state: &mut PoketoState, agent: &Agent<PlayerId>, ctx: &mut Ctx) 
   let spot = town(1, Tile::new(500, 500), 20)[0];
   state.world.seat(seat, spot);
   state.held[seat] = None;
-  ctx
-    .ops_q()
-    .push(TargetedOp::new_system_to(player, vec![PoketoOp::Seated { seat: seat as u16 }]));
+  let token = state.issue_token();
+  state.tokens.insert(player, token);
+  ctx.ops_q().push(TargetedOp::new_system_to(
+    player,
+    vec![PoketoOp::Seated {
+      seat: seat as u16,
+      token,
+    }],
+  ));
   info!(player, seat, "walked into town");
 }
 
 fn depart(state: &mut PoketoState, player: PlayerId) {
   state.agents.remove(&player);
+  let token = state.tokens.remove(&player);
   if let Departure::Freed { seat } = state.roster.depart(&player) {
-    // A battle its owner has left is over, not paused: nothing here can take a
-    // turn on their behalf, and holding it open holds a wild creature hostage.
-    state.end_battle(seat as u16);
+    // **Parked rather than ended.** A turn-based battle is the one thing in
+    // this tree that a disconnection costs nothing, because nothing in it
+    // decays: it is exactly as valid a minute later. Ending it on a dropped
+    // connection throws away the only state here worth resuming, and a client
+    // that reconnects is a new id, so a token is the only thing that can link
+    // the two.
+    if let Some(token) = token {
+      state.park(token, seat as u16);
+    } else {
+      state.end_battle(seat as u16);
+    }
     state.world.remove(seat);
     state.held[seat] = None;
     info!(player, seat, "left town");
@@ -120,6 +135,21 @@ fn depart(state: &mut PoketoState, player: PlayerId) {
 
 fn apply(state: &mut PoketoState, player: PlayerId, seat: usize, op: PoketoOp, ctx: &mut Ctx) {
   match op {
+    PoketoOp::Resume { token } => {
+      let Some(parked) = state.claim(token) else {
+        // Unknown or aged out, so this is a first join wearing a resume, and
+        // the client is already seated fresh. Nothing to say about it.
+        return;
+      };
+      // Put back where it was, doing what it was doing.
+      state.world.seat(seat, parked.at);
+      if let Some(battle) = parked.battle {
+        let snapshot = battle.clone();
+        state.battles.insert(seat as u16, battle);
+        send_battle(ctx, player, &snapshot);
+      }
+      info!(player, seat, "picked up where it left off");
+    }
     PoketoOp::Walk(facing) => {
       // Refused while battling rather than remembered: a direction held through
       // a battle would walk the trainer the instant it ended.
@@ -347,14 +377,90 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn a_battle_its_owner_left_is_over_rather_than_held_open() {
+  async fn a_battle_its_owner_left_is_parked_and_can_be_claimed_back() {
+    // This asserted the opposite until now: that a battle ended when its owner
+    // dropped. That is right for anything that decays and wrong here, because
+    // nothing in a turn-based battle does. It is exactly as valid a minute
+    // later, so throwing it away discards the only state in this example worth
+    // resuming, and the player comes back to nothing.
+    let mut state = PoketoState::new();
+    let out = run(&mut state, LogicInput::AgentJoined {
+      agent: Agent::new_human(7),
+    })
+    .await;
+    let token = ops(&out)
+      .iter()
+      .find_map(|op| match op {
+        PoketoOp::Seated { token, .. } => Some(*token),
+        _ => None,
+      })
+      .expect("a joiner is given something to come back with");
+
+    state.begin_battle(0, 1);
+    let mid_turn = state.battles[&0].clone();
+    run(&mut state, LogicInput::AgentLeft { agent_id: 7 }).await;
+    assert!(!state.battling(0), "not being played while nobody is there");
+    assert!(state.parked.contains_key(&token), "but kept");
+
+    // A new connection, which is a new id: the token is the only thing that
+    // links it to what it was doing.
+    run(&mut state, LogicInput::AgentJoined {
+      agent: Agent::new_human(8),
+    })
+    .await;
+    let seat = state.seat_of(8).unwrap();
+    let out = run(&mut state, LogicInput::AgentOps {
+      source: Agent::new_human(8),
+      ops: vec![PoketoOp::Resume { token }],
+    })
+    .await;
+
+    assert_eq!(state.battles.get(&(seat as u16)), Some(&mid_turn), "the same battle, mid turn");
+    assert!(
+      ops(&out).iter().any(|op| matches!(op, PoketoOp::Battle(_))),
+      "and it is told where it is"
+    );
+    assert!(!state.parked.contains_key(&token), "a token spends once");
+  }
+
+  #[tokio::test]
+  async fn an_unknown_token_is_a_first_join_wearing_a_resume() {
+    // There is nothing to tell a client whose token has expired: it is already
+    // seated, walking around, and a failed resume and a first join are the same
+    // situation from where it is standing.
     let mut state = PoketoState::new();
     run(&mut state, LogicInput::AgentJoined {
       agent: Agent::new_human(7),
     })
     .await;
-    state.begin_battle(0, 1);
+    let out = run(&mut state, LogicInput::AgentOps {
+      source: Agent::new_human(7),
+      ops: vec![PoketoOp::Resume { token: 9999 }],
+    })
+    .await;
+    assert!(ops(&out).is_empty(), "silence rather than a refusal");
+    assert!(!state.battling(0), "and it carries on walking");
+  }
+
+  #[tokio::test]
+  async fn a_parked_seat_nobody_came_back_for_is_eventually_dropped() {
+    let mut state = PoketoState::new();
+    let out = run(&mut state, LogicInput::AgentJoined {
+      agent: Agent::new_human(7),
+    })
+    .await;
+    let token = ops(&out)
+      .iter()
+      .find_map(|op| match op {
+        PoketoOp::Seated { token, .. } => Some(*token),
+        _ => None,
+      })
+      .unwrap();
     run(&mut state, LogicInput::AgentLeft { agent_id: 7 }).await;
-    assert!(!state.battling(0), "nothing here can take a turn on their behalf");
+    assert!(state.parked.contains_key(&token));
+
+    state.tick += crate::state::PARK_TICKS + 1;
+    state.expire_parked();
+    assert!(!state.parked.contains_key(&token), "a window is what stops this being a leak");
   }
 }

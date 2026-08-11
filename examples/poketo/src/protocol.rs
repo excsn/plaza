@@ -58,7 +58,17 @@ pub enum PoketoOp {
   /// Server to client, when a battle starts or a turn resolves.
   Battle(Box<BattleState>),
   /// Server to client, once, on being seated.
-  Seated { seat: u16 },
+  ///
+  /// The token is what makes a reconnection possible at all: a client that
+  /// comes back is a **new connection with a new id**, so the only thing
+  /// linking it to what it was doing is something it kept.
+  Seated { seat: u16, token: u64 },
+  /// Client to server, first thing, to claim what a previous connection left.
+  ///
+  /// Refused silently if the token is unknown or expired, in which case the
+  /// client is simply seated fresh. There is nothing to tell it: a resume that
+  /// fails and a first join are the same situation.
+  Resume { token: u64 },
   /// Server to client, when a battle ends and the overworld resumes.
   Returned,
 

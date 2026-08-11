@@ -32,9 +32,34 @@ pub struct PoketoState {
   pub battles: HashMap<u16, Battle>,
   /// How far a client is told about, in tiles.
   pub view: u32,
+  /// What a dropped connection left behind, by the token it was given.
+  ///
+  /// Kept rather than destroyed, because a turn-based game is the one place
+  /// where a disconnection costs nothing if you wait: nothing decays, so a
+  /// battle is exactly as valid a minute later. The window is what stops it
+  /// being a leak.
+  pub parked: HashMap<u64, Parked>,
+  /// Handed out on seating, so a client has something to come back with.
+  next_token: u64,
+  /// Which token each connected player holds, for parking on departure.
+  pub tokens: HashMap<PlayerId, u64>,
   /// Scratch, so a tick that queries once per client allocates nothing.
   seen: Vec<u16>,
 }
+
+/// What a departed player can come back to.
+#[derive(Clone, Debug)]
+pub struct Parked {
+  pub seat: u16,
+  pub at: Tile,
+  pub battle: Option<Battle>,
+  /// The tick it was parked on, for aging it out.
+  pub since: u64,
+}
+
+/// Ticks a parked seat is kept. A minute at 60Hz, which is a long time to be
+/// reconnecting and no time at all to hold a seat in a town.
+pub const PARK_TICKS: u64 = 3600;
 
 impl std::fmt::Debug for PoketoState {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -58,12 +83,59 @@ impl PoketoState {
       held: vec![None; MAX_TRAINERS],
       battles: HashMap::new(),
       view: VIEW_TILES,
+      parked: HashMap::new(),
+      next_token: 1,
+      tokens: HashMap::new(),
       seen: Vec::new(),
     }
   }
 
   pub fn seat_of(&self, player: PlayerId) -> Option<usize> {
     self.roster.seat_of(&player)
+  }
+
+  /// A token for a newly seated player.
+  pub fn issue_token(&mut self) -> u64 {
+    let token = self.next_token;
+    self.next_token += 1;
+    token
+  }
+
+  /// Parks everything a departing seat was doing, against its token.
+  pub fn park(&mut self, token: u64, seat: u16) {
+    let at = self
+      .world
+      .walkers
+      .get(seat as usize)
+      .map(|w| w.trainer.at)
+      .unwrap_or_default();
+    self.parked.insert(
+      token,
+      Parked {
+        seat,
+        at,
+        battle: self.battles.remove(&seat),
+        since: self.tick,
+      },
+    );
+  }
+
+  /// Takes back what a token was holding, if it is still there.
+  pub fn claim(&mut self, token: u64) -> Option<Parked> {
+    let parked = self.parked.get(&token)?;
+    if self.tick.saturating_sub(parked.since) > PARK_TICKS {
+      // Aged out. Removed here rather than swept, so nothing has to run on a
+      // tick to keep this honest.
+      self.parked.remove(&token);
+      return None;
+    }
+    self.parked.remove(&token)
+  }
+
+  /// Drops parked seats nobody came back for.
+  pub fn expire_parked(&mut self) {
+    let now = self.tick;
+    self.parked.retain(|_, p| now.saturating_sub(p.since) <= PARK_TICKS);
   }
 
   /// Whether this seat is in a battle rather than the overworld.
