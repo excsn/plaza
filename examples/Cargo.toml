@@ -57,6 +57,7 @@ default-members = [
   "puck_rink",
   "quick_draw",
   "shared_counter",
+  "spacemo",
   "table_manners",
   "tag_arena",
   "timed_debuff",
