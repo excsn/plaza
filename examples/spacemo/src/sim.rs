@@ -433,6 +433,20 @@ impl Space {
   /// Locking on the server rather than trusting a client-chosen target: it is
   /// the one place here where a client could name something it has no business
   /// naming, and the check costs a dot product.
+  /// Ticks until this seat can launch again, out of [`MISSILE_EVERY`].
+  ///
+  /// The other half of a silent trigger: a lock is no use if the launcher is
+  /// still reloading and nothing says so.
+  pub fn reload_left(&self, seat: usize) -> u16 {
+    self.missile_cooldown.get(seat).copied().unwrap_or(0)
+  }
+
+  /// The reload a full bar represents, so a client can draw one without
+  /// knowing the cadence.
+  pub const fn reload_ticks() -> u16 {
+    MISSILE_EVERY
+  }
+
   /// What a seat would lock onto if it launched now.
   ///
   /// Public because a client cannot work it out: lock is resolved here, so
@@ -1148,6 +1162,41 @@ mod tests {
         assert!(drift < 0.01, "a bolt should still be on it: {drift}");
       }
     }
+  }
+
+  #[test]
+  fn a_reload_counts_down_and_a_launch_only_happens_at_zero() {
+    let mut space = Space::new();
+    space.spawn(0);
+    space.spawn(1);
+    space.ships[0].at = Vec3::ZERO;
+    space.ships[1].at = Vec3::new(0.0, 0.0, 200.0);
+
+    assert_eq!(space.reload_left(0), 0, "ready before the first shot");
+    space.step(&launching());
+    let fired = space.bolts.len();
+    assert_eq!(fired, 1, "the first launch goes");
+    assert!(space.reload_left(0) > 0, "and starts a reload");
+
+    // Held down, stopping just short of the reload finishing.
+    for _ in 0..Space::reload_ticks() - 2 {
+      space.step(&launching());
+    }
+    assert!(space.reload_left(0) > 0, "still reloading at this point");
+    assert_eq!(
+      space.bolts.iter().filter(|b| b.chasing.is_some()).count(),
+      fired,
+      "a held trigger should not launch again while reloading"
+    );
+
+    // And once it runs out, the held trigger fires again on its own.
+    for _ in 0..3 {
+      space.step(&launching());
+    }
+    assert!(
+      space.bolts.iter().filter(|b| b.chasing.is_some()).count() > fired,
+      "a held trigger should launch again once the reload runs out"
+    );
   }
 
   #[test]

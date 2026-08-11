@@ -33,6 +33,24 @@ pub fn draw_hud(client: &NetClient) {
       );
     }
     let _ = full;
+
+    // A reload bar beside the health pips, because a lock is no use if the
+    // launcher is still reloading and nothing says so.
+    let full_reload = spacemo::sim::Space::reload_ticks() as f32;
+    let ready = 1.0 - (client.reload as f32 / full_reload).clamp(0.0, 1.0);
+    let width = 94.0;
+    draw_rectangle(28.0, screen_height() - 76.0, width, 8.0, Color::new(0.22, 0.22, 0.26, 1.0));
+    draw_rectangle(
+      28.0,
+      screen_height() - 76.0,
+      width * ready,
+      8.0,
+      if client.reload == 0 {
+        Color::new(0.55, 0.85, 1.0, 1.0)
+      } else {
+        Color::new(0.35, 0.45, 0.55, 1.0)
+      },
+    );
   }
 
   // Newest at the bottom, fading with age, because a feed that reorders itself
@@ -70,9 +88,11 @@ pub fn draw_panel(client: &NetClient, url: &str, dials: &Dials) {
 
         ui.label("mouse aims, W/S throttle, space fires");
         ui.label("right click or shift launches a missile");
-        ui.label(match client.locked {
-          Some(seat) => format!("locked: {}", spacemo::net::client::name(seat)),
-          None => "no lock".to_owned(),
+        ui.label(match (client.locked, client.reload) {
+          (Some(seat), 0) => format!("locked: {}", spacemo::net::client::name(seat)),
+          (Some(seat), n) => format!("locked: {} (reloading {n})", spacemo::net::client::name(seat)),
+          (None, 0) => "no lock".to_owned(),
+          (None, n) => format!("no lock, reloading {n}"),
         });
         ui.label(format!("frame {}", client.frame));
         ui.label(format!("{} ships in view", client.carried));
