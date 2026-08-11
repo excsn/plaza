@@ -444,7 +444,7 @@ Turning however long the last frame took into whole fixed steps, or into "is it 
 
 ### Struct `FixedTimestep`
 
-*   **`from_step_ms(step_ms)`** / **`from_hz(hz)`**: the step size. **Panics on zero.**
+*   **`from_step_ms(step_ms)`** / **`from_hz(hz)`**: the step size. **Panics on zero.** `from_hz` is integer division, so a rate that does not divide 1000 truncates: 60 Hz is a 16 ms step running 62.5 times a second. That does **not** match a server driven by `plaza::TickDriver::from_hz`, which is exact at 16.667 ms, so anything predicting through this against such a server runs 4.2% fast and is corrected for it every frame. Pick a rate that divides 1000 when both sides matter, and take whatever delta the simulation integrates from `step_secs()` rather than from the rate, or the interval and the delta disagree by that same 4.2% while looking like one constant.
 *   **`with_max_frame_ms(ms)`**: cap how much elapsed time one `advance` may pay for. Default `DEFAULT_MAX_FRAME_MS` (250 ms, or fifteen steps at 60 Hz): enough that an ordinary hitch catches up smoothly, small enough that a resumed tab skips ahead instead of grinding through the minutes it was asleep.
 *   **`advance(&mut self, elapsed_ms) -> Steps`**: an `ExactSizeIterator` yielding the step duration in milliseconds, once per step this frame paid for. The duration is *yielded* rather than assumed so a caller cannot accidentally integrate by the frame delta instead.
 *   **`step_ms()`**, **`step_secs()`**, **`set_step_ms(ms)`**, **`pending_ms()`**, **`alpha()`** (the fraction of a step accumulated, for interpolating a render between two simulated states), **`dropped_ms()`**, **`reset()`**.

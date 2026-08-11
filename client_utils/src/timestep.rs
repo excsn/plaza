@@ -81,8 +81,21 @@ impl FixedTimestep {
   ///
   /// Integer division, so rates that do not divide 1000 evenly are truncated:
   /// 60 Hz is 16 ms rather than 16.667. That is deliberate at millisecond
-  /// resolution, and it means both sides of a wire agree exactly as long as they
-  /// agree on the rate.
+  /// resolution, and two `FixedTimestep`s agree exactly as long as they agree on
+  /// the rate.
+  ///
+  /// **They do not agree with a server driven by `plaza::TickDriver`.** That
+  /// uses `Duration::from_secs_f64(1.0 / hz)` and is exact, so at 60 Hz it ticks
+  /// every 16.667 ms while this steps every 16, and anything driven from here
+  /// runs 4.2% faster than the loop it is meant to be following. A client
+  /// predicting through this against such a server drifts continuously and is
+  /// corrected every frame for it.
+  ///
+  /// So pick a rate that divides 1000 when both sides matter, 50 Hz or 100 Hz,
+  /// or drive the local side from a float accumulator against `1.0 / hz`. And
+  /// derive whatever delta the simulation integrates from
+  /// [`step_secs`](Self::step_secs) rather than from the rate, or the interval
+  /// and the delta disagree by the same 4.2% while looking like one constant.
   ///
   /// # Panics
   /// Panics if `hz` is zero or above 1000.
@@ -311,6 +324,44 @@ impl Periodic {
   /// Restarts the period from now.
   pub fn reset(&mut self) {
     self.accumulated_ms = 0;
+  }
+}
+
+#[cfg(test)]
+mod rate_tests {
+  use super::*;
+
+  #[test]
+  fn a_rate_that_does_not_divide_a_thousand_is_truncated() {
+    // Pinned rather than described, because the number this produces is what
+    // makes it disagree with an exact driver, and a reader deserves to see it.
+    assert_eq!(FixedTimestep::from_hz(60).step_ms(), 16, "not 16.667");
+    assert_eq!(FixedTimestep::from_hz(50).step_ms(), 20, "50 divides 1000");
+    assert_eq!(FixedTimestep::from_hz(100).step_ms(), 10);
+
+    // Which is 62.5 steps a second where an exact 60 Hz driver ticks 60 times,
+    // so anything driven from here runs 4.2% fast against it.
+    // Fed a second in frame-sized pieces, since one `advance` is capped by
+    // `max_frame_ms` and would otherwise report the cap rather than the rate.
+    let mut clock = FixedTimestep::from_hz(60);
+    let steps: usize = (0..100).map(|_| clock.advance(10).len()).sum();
+    assert_eq!(steps, 62, "a second of elapsed time is {steps} steps of 16ms, not 60");
+  }
+
+  #[test]
+  fn a_simulation_delta_taken_from_the_step_cannot_disagree_with_it() {
+    // The failure this prevents: deriving the interval from a rate in
+    // milliseconds and the delta from the same rate in seconds. One truncates
+    // and the other does not, so simulated time runs fast while both look like
+    // they came from one constant.
+    let step = FixedTimestep::from_hz(60);
+    let from_step = step.step_secs();
+    let from_rate = 1.0 / 60.0f32;
+    assert!(
+      (from_step - from_rate).abs() > 0.0006,
+      "these are the two numbers that must not be mixed: {from_step} against {from_rate}"
+    );
+    assert_eq!(from_step, step.step_ms() as f32 / 1000.0);
   }
 }
 
