@@ -149,6 +149,14 @@ Reading the shape of a counter rather than its value: a count climbing without b
 
 ## The bug catalogue
 
+### Rapier's add_force persists until you reset it (cube_yard)
+
+Every "energy from nowhere" symptom in `cube_yard` traced back to one line that was never written: `reset_forces`. Rapier's `add_force` and `add_torque` accumulate across timesteps until cleared, so a field applied every tick is not a force, it is a force that grows without bound. A roll torque capped at 4.6 rad/s reached 46, cubes were flung two hundred units clean off the floor, and the player was thrown across the yard, all from the same cause.
+
+What made it expensive to find is that each symptom had a plausible local explanation, and each of those explanations was individually true. Setting a velocity on a body you are standing on really is a lift. Pushing radially away from something hovering above really does drive the cube beneath it into the floor. A per-tick velocity change really is an acceleration of sixty times what you wrote. Three real bugs were fixed on the way to the one underneath, and none of them was the reason the numbers were absurd.
+
+The signal that should have been read sooner: absurd *magnitudes*. Not a wrong direction or a wrong shape, but 46 against a cap of 7.5 and positions six hundred units below a floor. A quantity that has no business being that large usually means something is being applied repeatedly, not that a coefficient is mistuned. Tuning coefficients is exactly what the first several attempts did.
+
 ### Setting a velocity on a body you are standing on is a lift (cube_yard)
 
 A magnet that gathers loose cubes was written the obvious way: cubes within reach get the player's velocity, so they ride along. Jump with it on and the player rises for ever, reaching 58 units in a yard 24 across.
