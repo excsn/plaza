@@ -175,10 +175,10 @@ async fn a_client_stops_hearing_about_a_ship_that_leaves_and_lets_go_of_it() {
       .unwrap();
     for targeted in &out.ops {
       for op in &targeted.ops {
-        if let SpaceOp::Frame(update) = op {
-          if update.yours == Some(0) {
-            mirror.receive(update);
-          }
+        if let SpaceOp::Frame(update) = op
+          && update.yours == Some(0)
+        {
+          mirror.receive(update);
         }
       }
     }
