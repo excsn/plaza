@@ -29,12 +29,18 @@ const WINDOW_MS: u64 = 1000;
 /// frame makes the edge of the world strobe; a short grace makes it a fade.
 const FORGET_AFTER: u64 = 30;
 
-/// How fast a correction is bled into the drawn position, per second.
+/// What fraction of a correction survives one sixtieth of a second.
 ///
 /// Not a snap. The local ship is predicted from the same rule the server runs,
 /// so corrections are small and constant rather than rare and large, and
 /// teleporting on each one is far more visible than carrying a little error.
-const EASE_PER_SEC: f32 = 6.0;
+///
+/// Raised to the real elapsed time rather than multiplied by it, which is the
+/// form `plaza_client_utils::AdaptiveDecay` already uses. The linear version
+/// left between 0.00124 and 0.00218 of a correction after a second depending on
+/// the frame rate: too small to see, and the wrong shape for the same reason
+/// the prediction timestep was.
+const EASE_PER_TICK: f32 = 0.9;
 
 /// The most server ticks one rendered frame may run.
 const MAX_CATCHUP: usize = 8;
@@ -429,7 +435,7 @@ impl NetClient {
 
     // Easing stays on real time: it is a rate rather than a rule the server
     // also runs, so it has nothing to stay in step with.
-    let keep = (1.0 - EASE_PER_SEC * dt_secs).clamp(0.0, 1.0);
+    let keep = EASE_PER_TICK.powf(dt_secs * crate::protocol::TICK_HZ as f32);
     for axis in self.offset.iter_mut() {
       *axis *= keep;
       if axis.abs() < 1e-4 {
@@ -617,6 +623,30 @@ mod tests {
   /// A clock that loses its remainder makes every rate measured against it
   /// read high, which in an example built to quote bandwidth is the number
   /// itself being wrong rather than a detail.
+  #[test]
+  fn a_correction_bleeds_off_at_the_same_rate_on_any_display() {
+    // Not a visible bug, unlike the timestep and the clock: every frame rate
+    // left about two thousandths of a correction after a second either way.
+    // Fixed because the form was wrong for the same reason those were, and
+    // because the library block beside it already had it right.
+    let residual = |fps: usize| {
+      let dt = 1.0 / fps as f32;
+      let mut offset = 1.0f32;
+      for _ in 0..fps {
+        offset *= EASE_PER_TICK.powf(dt * crate::protocol::TICK_HZ as f32);
+      }
+      offset
+    };
+    let at60 = residual(60);
+    for fps in [30usize, 120, 144] {
+      let got = residual(fps);
+      assert!(
+        (got - at60).abs() < at60 * 0.02,
+        "{fps}fps left {got:.5} against 60fps {at60:.5}"
+      );
+    }
+  }
+
   #[test]
   fn a_frame_clock_that_truncates_reports_a_rate_that_is_too_high() {
     fn rate(fps: usize, keep_remainder: bool) -> f32 {
