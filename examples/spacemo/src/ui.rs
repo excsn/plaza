@@ -96,7 +96,10 @@ pub fn draw_panel(client: &NetClient, url: &str, dials: &Dials) {
         });
         ui.label(format!("frame {}", client.frame));
         ui.label(format!("{} ships in view", client.carried));
-        ui.label(format!("{} bolts in view", client.bolts_carried));
+        ui.label(format!(
+          "{} bolts in view, {} missiles gone quiet",
+          client.bolts_carried, client.stale_bolts
+        ));
         ui.label(format!("{} left the radius", client.forgotten));
         ui.label(format!("{} hits seen", client.hits_seen));
         ui.label(format!("{} kills, {} deaths", client.kills, client.deaths));
