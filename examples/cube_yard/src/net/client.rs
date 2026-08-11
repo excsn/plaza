@@ -91,7 +91,7 @@ impl Meter {
     }
   }
 
-  /// Kilobits per second over the last [`WINDOW_MS`].
+  /// Kilobits per second over the last second.
   ///
   /// Divided by the whole window rather than by the span of what is still in
   /// it, so a link that has gone quiet reads as falling to zero instead of

@@ -14,7 +14,7 @@
 //! correctness.
 //!
 //! Two details are load-bearing, and one of them plaza already learned the hard
-//! way in [`AckWindow`](plaza_client_utils::AckWindow):
+//! way in [`plaza_client_utils::AckWindow`]:
 //!
 //! - The baseline is the newest **contiguous** acknowledgement, not the newest
 //!   bit set. Receiving packet N+1 after losing N does not put a client in the

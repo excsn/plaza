@@ -189,7 +189,7 @@ pub struct Space {
   /// Cumulative, for the panel: churn is the cost this example exists to show.
   pub spawned: u64,
   pub expired: u64,
-  /// Kills this tick, cleared at the start of every step like [`hits`].
+  /// Kills this tick, cleared at the start of every step like [`Space::hits`].
   pub kills: Vec<Kill>,
   /// When each seat last killed, and how many in a row, for the streak a
   /// client would otherwise have to infer from the order things arrived in.
@@ -438,7 +438,7 @@ impl Space {
   /// Locking on the server rather than trusting a client-chosen target: it is
   /// the one place here where a client could name something it has no business
   /// naming, and the check costs a dot product.
-  /// Ticks until this seat can launch again, out of [`MISSILE_EVERY`].
+  /// Ticks until this seat can launch again, out of [`Space::reload_ticks`].
   ///
   /// The other half of a silent trigger: a lock is no use if the launcher is
   /// still reloading and nothing says so.
