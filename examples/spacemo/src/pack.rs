@@ -38,6 +38,14 @@ const SEAT_BITS: u32 = 10;
 /// Enough for [`crate::sim::MAX_HEALTH`] and a zero.
 const HEALTH_BITS: u32 = 2;
 
+/// The same trap one field along: raising `MAX_HEALTH` past what these bits
+/// hold would clamp every ship to three on the wire while the server tracked
+/// more, and nothing would say so.
+const _: () = assert!(
+  (crate::sim::MAX_HEALTH as u32) < (1 << HEALTH_BITS),
+  "MAX_HEALTH does not fit in HEALTH_BITS"
+);
+
 /// What one ship costs on the wire, derived from the layout rather than written
 /// down beside it.
 ///
@@ -57,7 +65,7 @@ pub fn pack(ships: &[ShipState]) -> Vec<u8> {
   w.varint(ships.len() as u64);
   for ship in ships {
     w.bits(ship.seat as u64, SEAT_BITS);
-    w.bits(ship.health.min(3) as u64, HEALTH_BITS);
+    w.bits(ship.health.min(crate::sim::MAX_HEALTH) as u64, HEALTH_BITS);
     for axis in 0..3 {
       w.quantized(ship.pos[axis], POS.0, POS.1, POS_BITS);
     }
@@ -130,7 +138,7 @@ pub fn pack_relative(ships: &[ShipState], observer: [f32; 3]) -> Vec<u8> {
   w.varint(ships.len() as u64);
   for ship in ships {
     w.bits(ship.seat as u64, SEAT_BITS);
-    w.bits(ship.health.min(3) as u64, HEALTH_BITS);
+    w.bits(ship.health.min(crate::sim::MAX_HEALTH) as u64, HEALTH_BITS);
     for (axis, anchor) in observer.iter().enumerate() {
       w.quantized(ship.pos[axis] - anchor, REL.0, REL.1, REL_BITS);
     }
@@ -180,14 +188,32 @@ pub const fn bolt_bits() -> usize {
   (ID_BITS + 1 + LIFE_BITS + POS_BITS * 3 + VEL_BITS * 3) as usize
 }
 
+/// A slot index shifted up by its generation byte.
+///
+/// Twelve bits of index and eight of generation. Measured at the busiest the
+/// dial allows, 400 bots, the widest index in flight was 1077, so this fits
+/// with a bit to spare. The headroom is thinner than it looks and it is held up
+/// by something unrelated: bots fire on a one-in-five hash gate, and raising
+/// that alone would push the index past what this field can hold. Truncation
+/// here is silent and lands as two shots sharing an id, which a client keyed on
+/// that id resolves by drawing one of them.
 const ID_BITS: u32 = 20;
+
+/// What an id may not exceed, so a change somewhere else cannot quietly start
+/// aliasing shots together.
+const ID_MAX: u32 = (1 << ID_BITS) - 1;
 const LIFE_BITS: u32 = 9;
 
 pub fn pack_bolts(bolts: &[crate::protocol::BoltState]) -> Vec<u8> {
   let mut w = BitWriter::with_capacity(bolts.len() * bolt_bits() / 8 + 4);
   w.varint(bolts.len() as u64);
   for bolt in bolts {
-    w.bits(bolt.id as u64 & ((1 << ID_BITS) - 1), ID_BITS);
+    debug_assert!(
+      bolt.id <= ID_MAX,
+      "a shot id of {} does not fit in {ID_BITS} bits, so it will alias another shot",
+      bolt.id
+    );
+    w.bits(bolt.id as u64 & ID_MAX as u64, ID_BITS);
     w.bool(bolt.homing);
     w.bits(bolt.life.min(511) as u64, LIFE_BITS);
     for axis in 0..3 {
@@ -394,6 +420,31 @@ mod tests {
       .map(|(a, b)| (a.pos[0] - b.pos[0]).abs())
       .fold(0.0f32, f32::max);
     assert!(worst > 1000.0, "absolute should clamp badly out here, not {worst}");
+  }
+
+  #[test]
+  fn a_shot_id_fits_its_field_at_the_busiest_the_dial_allows() {
+    // Predicted from the firing cadence, this needed 21 bits and would have
+    // aliased; measured, the busiest run reaches 19, because bots fire on a
+    // one-in-five gate rather than on every cooldown. The margin is real and
+    // it is held up by a constant that has nothing to do with packing, which
+    // is why the writer asserts rather than trusting the arithmetic.
+    let mut space = crate::sim::Space::new();
+    space.set_bots(400);
+    space.spawn(0);
+    let all = [crate::protocol::Fly::default(); crate::sim::MAX_PLAYERS];
+    let mut widest = 0u32;
+    for _ in 0..400 {
+      space.step(&all);
+      for bolt in &space.bolts {
+        widest = widest.max((bolt.key.index << 8) | bolt.key.generation as u32 & 0xff);
+      }
+    }
+    assert!(widest > 0, "the run has to actually produce shots");
+    assert!(
+      widest <= ID_MAX,
+      "widest id {widest} does not fit in {ID_BITS} bits (max {ID_MAX})"
+    );
   }
 
   #[test]
