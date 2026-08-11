@@ -67,6 +67,7 @@ impl StateLogic<SpaceOp, PlayerId, SpaceState> for SpaceLogic {
       state.packed = wanted.packed;
       state.relative = wanted.relative;
       state.view = wanted.view.clamp(40.0, crate::max_view());
+      state.stream_bolts = wanted.stream_bolts;
       if state.bots != wanted.bots {
         state.bots = wanted.bots;
         state.space.set_bots(wanted.bots);
@@ -145,7 +146,8 @@ fn step_once(state: &mut SpaceState, ctx: &mut Ctx) {
     let seen = state.visible_to(seat).to_vec();
     let ships: Vec<ShipState> = seen.iter().map(|id| ship_state(state, *id as usize)).collect();
     let near = state.bolts_visible_to(seat).to_vec();
-    let bolts: Vec<BoltState> = near
+    let stream = state.stream_bolts;
+    let visible: Vec<BoltState> = near
       .iter()
       .filter_map(|id| state.space.bolts.get(*id as usize))
       .map(|bolt| BoltState {
@@ -153,6 +155,24 @@ fn step_once(state: &mut SpaceState, ctx: &mut Ctx) {
         homing: bolt.chasing.is_some(),
         pos: [bolt.at.x, bolt.at.y, bolt.at.z],
         vel: [bolt.vel.x, bolt.vel.y, bolt.vel.z],
+        life: bolt.life,
+      })
+      .collect();
+
+    let told = state.told.entry(player).or_default();
+    // Anything no longer in flight is forgotten, which is also what lets a
+    // reused slot be announced again rather than mistaken for the shot that
+    // vacated it.
+    let live: std::collections::HashSet<u32> = visible.iter().map(|b| b.id).collect();
+    told.retain(|id| live.contains(id));
+
+    let bolts: Vec<BoltState> = visible
+      .into_iter()
+      .filter(|bolt| {
+        // A homing shot is sent every frame because its path depends on where
+        // its target goes next, and nobody knows that in advance. A straight
+        // one is sent once, and the client carries it forward itself.
+        stream || bolt.homing || told.insert(bolt.id)
       })
       .collect();
     let (ships, bolts) = if state.packed {
@@ -425,6 +445,75 @@ mod tests {
     println!(
       "\n  empty, both say {empty_flat}. populated, {full_flat} against {full_band}.\n  the dial is only a demonstration when there is something to see.\n"
     );
+  }
+
+  /// What it costs to send a path that could have been derived.
+  ///
+  /// The two weapons differ by one field and have opposite wire profiles, and
+  /// this is the number that says so rather than the paragraph.
+  #[tokio::test]
+  async fn a_straight_shot_need_not_have_its_path_sent_and_a_homing_one_must() {
+    let mut rows = Vec::new();
+    for stream in [true, false] {
+      let mut state = SpaceState::new();
+      state.stream_bolts = stream;
+      for id in 0..6u32 {
+        run(&mut state, LogicInput::AgentJoined {
+          agent: Agent::new_human(id),
+        })
+        .await;
+      }
+      // Strung out along +Z, which is where a ship at yaw zero is looking, so
+      // each has the next one inside its lock cone. Lined up across the nose
+      // instead, nothing acquires a target, no missile ever launches, and the
+      // comparison quietly loses the half it exists to make.
+      for seat in 0..6 {
+        state.space.ships[seat].at = Vec3::new(0.0, seat as f32 * 3.0, seat as f32 * 55.0);
+      }
+      for id in 0..6u32 {
+        run(&mut state, LogicInput::AgentOps {
+          source: Agent::new_human(id),
+          ops: vec![SpaceOp::Fly(Fly {
+            thrust: 0,
+            yaw: 0.0,
+            pitch: 0.0,
+            firing: true,
+            launching: id.is_multiple_of(2),
+          })],
+        })
+        .await;
+      }
+
+      let (mut carried, mut counted, mut homing) = (0usize, 0usize, 0usize);
+      for _ in 0..600 {
+        let ops = tick(&mut state).await;
+        for update in frames(&ops) {
+          carried += update.bolts.len();
+          homing += update.bolts.iter().filter(|b| b.homing).count();
+          counted += 1;
+        }
+      }
+      // Asserted rather than assumed. The first version of this scene lined the
+      // ships up across the nose, so nothing acquired a target, no missile ever
+      // launched, and the comparison read 83x while measuring only half of
+      // itself.
+      assert!(homing > 0, "the scene has to actually produce homing shots");
+      rows.push((stream, carried as f32 / counted.max(1) as f32));
+    }
+
+    let streamed = rows.iter().find(|(s, _)| *s).unwrap().1;
+    let spawned = rows.iter().find(|(s, _)| !*s).unwrap().1;
+    println!("\n  shots carried per frame, per client:\n");
+    println!("    every path sent        {streamed:>6.1}");
+    println!("    spawns and homing only {spawned:>6.1}");
+    println!("\n  {:.1}x, and the difference is entirely shots whose whole", streamed / spawned.max(0.01));
+    println!("  future was already implied by where they started.\n");
+
+    assert!(
+      spawned * 3.0 < streamed,
+      "sending a derivable path should cost several times as much: {streamed} against {spawned}"
+    );
+    assert!(spawned > 0.0, "and homing shots still have to cross every frame");
   }
 
   #[tokio::test]

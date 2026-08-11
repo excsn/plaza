@@ -27,6 +27,13 @@ pub struct Controls {
   /// bandwidth directly. Everything else here changes what a byte buys; this
   /// changes how many there are.
   pub view: f32,
+  /// Whether a straight shot's path is sent every frame, or once.
+  ///
+  /// The dial that prices the difference between the two weapons. A bolt flies
+  /// straight, so a client told where it started and how fast can draw the rest
+  /// unaided; a missile turns, so there is no version of it that can be sent
+  /// once. With this off, only new shots and homing ones cross.
+  pub stream_bolts: bool,
 }
 
 impl Default for Controls {
@@ -37,6 +44,7 @@ impl Default for Controls {
       relative: true,
       bots: 150,
       view: crate::default_view(),
+      stream_bolts: true,
     }
   }
 }

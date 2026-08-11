@@ -79,6 +79,9 @@ pub struct BoltState {
   pub id: u32,
   pub pos: [f32; 3],
   pub vel: [f32; 3],
+  /// Ticks it has left, so a client told about a shot **once** knows when to
+  /// stop drawing it without being told again.
+  pub life: u16,
 }
 
 /// One authoritative tick, as one client sees it.

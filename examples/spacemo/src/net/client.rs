@@ -285,7 +285,10 @@ impl NetClient {
           // A bolt is replaced wholesale every frame rather than aged: it lives
           // about a second, so there is no staleness worth carrying, and the
           // set that arrived *is* the set that exists.
-          self.bolts.clear();
+          // Merged rather than replaced. Under `stream_bolts` the set that
+          // arrives is the set that exists and this is the same thing; with it
+          // off, a frame carries only what is *new*, and everything else is
+          // being carried forward here instead.
           for bolt in &update.bolts {
             self.bolts.insert(bolt.id, *bolt);
           }
@@ -370,6 +373,28 @@ impl NetClient {
       self.up.record(self.now_ms, bytes.len());
     }
     self.pump.send_op(&op);
+  }
+
+  /// Carries straight shots forward, and drops the ones whose time is up.
+  ///
+  /// The client half of "send the spawn, not the path". A bolt's whole future
+  /// follows from where it started and how fast, so this is not prediction in
+  /// the reconciliation sense: there is nothing to be wrong about and nothing
+  /// to correct against. A homing shot is skipped, because its path is exactly
+  /// the thing that could not be derived.
+  pub fn carry_bolts(&mut self, dt_secs: f32) {
+    let ticks = dt_secs * crate::protocol::TICK_HZ as f32;
+    self.bolts.retain(|_, bolt| {
+      if bolt.homing {
+        return true;
+      }
+      for axis in 0..3 {
+        bolt.pos[axis] += bolt.vel[axis] * dt_secs;
+      }
+      let spent = ticks.ceil() as u16;
+      bolt.life = bolt.life.saturating_sub(spent);
+      bolt.life > 0
+    });
   }
 
   /// Runs the local ship forward one tick under the held input, and bleeds off
