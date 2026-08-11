@@ -179,7 +179,7 @@ async fn frame_loop(options: role::Options) {
     .into_iter()
     .map(|at| [at.x, at.y, at.z])
     .collect();
-  let mut clock_ms: u64 = 0;
+  let mut clock_ms;
   let mut aim = Aim::default();
   let mut last_mouse = Vec2::ZERO;
 

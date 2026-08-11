@@ -42,8 +42,10 @@ const FORGET_AFTER: u64 = 30;
 /// the prediction timestep was.
 const EASE_PER_TICK: f32 = 0.9;
 
-/// The most server ticks one rendered frame may run.
-const MAX_CATCHUP: usize = 8;
+/// The most wall clock one rendered frame may spend catching up, in
+/// milliseconds. A stalled tab returns to a world it can still reach rather
+/// than freezing for longer than the stall.
+const MAX_FRAME_MS: u64 = 133;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Status {
@@ -188,15 +190,31 @@ pub struct NetClient {
   /// getting wrong, and it should stay small if the shared rule is really
   /// shared.
   pub worst_correction: f32,
-  /// Real time owed to the simulation, in seconds.
+  /// **The rule includes its timestep**, which is what this is here to hold.
   ///
-  /// **The rule includes its timestep.** `advance` moves a ship by one server
-  /// tick, so calling it once per rendered frame silently makes prediction a
-  /// function of the display: measured over one second of wall clock, a ship
-  /// travelled 5.1 units at 30fps, 19.0 at 60 and 67.7 at 120, against the
-  /// server's 19.0. Sharing the rule as code is not enough on its own if the
-  /// two sides disagree about how often to run it.
-  debt: f32,
+  /// `advance` moves a ship by one server tick, so calling it once per rendered
+  /// frame silently makes prediction a function of the display: over one second
+  /// of wall clock a ship travelled 5.1 units at 30fps, 19.0 at 60 and 67.7 at
+  /// 120, against the server's 19.0. Sharing the rule as code is not enough on
+  /// its own if the two sides disagree about how often to run it.
+  ///
+  /// **Not** `plaza_client_utils::FixedTimestep`, and the reason is a defect
+  /// rather than a preference. Its `from_hz` computes `1000 / hz` in integer
+  /// milliseconds, so 60Hz becomes a 16ms step and runs 62.5 times a second;
+  /// `plaza::TickDriver::from_hz`, which is what the server is driven by, uses
+  /// `Duration::from_secs_f64(1.0 / hz)` and is exact. Driving prediction from
+  /// the block therefore ran it 4.2% faster than the server it is predicting,
+  /// measured as 20.19 units of travel a second against the server's 18.98.
+  ///
+  /// A float accumulator against `1.0 / TICK_HZ` has no such rounding, in f64:
+  /// at f32 a second of sixteen-millisecond additions lost a whole step, which
+  /// showed up as 60fps travelling 18.39 where 30 and 120 both managed 18.98.
+  /// When the block and the driver agree on what a rate means, this should use
+  /// the block.
+  debt: f64,
+  /// The last absolute client clock seen, so the elapsed time handed to the
+  /// timestep is a difference of absolute readings and cannot drift.
+  last_ms: Option<u64>,
   held: Fly,
   now_ms: u64,
   sent: Option<Fly>,
@@ -234,6 +252,7 @@ impl NetClient {
       offset: [0.0; 3],
       worst_correction: 0.0,
       debt: 0.0,
+      last_ms: None,
       held: Fly::default(),
       now_ms: 0,
       sent: None,
@@ -418,19 +437,22 @@ impl NetClient {
   /// Runs the local ship forward one tick under the held input, and bleeds off
   /// whatever the last correction was worth.
   pub fn predict(&mut self, dt_secs: f32) {
-    // Whole server ticks, however many of them this frame was worth. Capped, so
-    // a stalled tab returns to a world it can still catch up with rather than
-    // spending a second of wall clock simulating the minute it missed.
-    let step = 1.0 / crate::protocol::TICK_HZ as f32;
-    self.debt = (self.debt + dt_secs).min(step * MAX_CATCHUP as f32);
-    let mut ran = 0;
-    while self.debt >= step && ran < MAX_CATCHUP {
+    // Elapsed as a difference of absolute clock readings, so nothing is lost to
+    // truncation the way accumulating a rounded frame time was.
+    let elapsed = match self.last_ms {
+      Some(was) => self.now_ms.saturating_sub(was),
+      None => 0,
+    };
+    self.last_ms = Some(self.now_ms);
+
+    let step = 1.0 / crate::protocol::TICK_HZ as f64;
+    self.debt = (self.debt + elapsed as f64 / 1000.0).min(MAX_FRAME_MS as f64 / 1000.0);
+    while self.debt >= step {
       if let Some(ship) = &mut self.predicted {
         advance(ship, self.held);
       }
       self.carry_bolts();
       self.debt -= step;
-      ran += 1;
     }
 
     // Easing stays on real time: it is a rate rather than a rule the server
@@ -513,11 +535,10 @@ mod tests {
   use super::*;
   use crate::sim::Ship;
 
-  /// One second of wall clock at a given frame rate, through the same
-  /// accumulator the client uses.
+  /// One second of wall clock at a given frame rate, driven exactly as the
+  /// client drives it: an absolute clock, differenced, through `FixedTimestep`.
   fn travelled(fps: usize) -> f32 {
-    let step = 1.0 / crate::protocol::TICK_HZ as f32;
-    let dt = 1.0 / fps as f32;
+    let step = 1.0 / crate::protocol::TICK_HZ as f64;
     let mut ship = Ship {
       alive: true,
       ..Default::default()
@@ -529,15 +550,15 @@ mod tests {
       firing: false,
       launching: false,
     };
-    let mut debt = 0.0f32;
-    for _ in 0..fps {
-      debt = (debt + dt).min(step * MAX_CATCHUP as f32);
-      let mut ran = 0;
-      while debt >= step && ran < MAX_CATCHUP {
+    let (mut debt, mut last) = (0.0f64, 0u64);
+    for frame in 1..=fps {
+      let now = (frame as f64 / fps as f64 * 1000.0) as u64;
+      debt = (debt + (now - last) as f64 / 1000.0).min(MAX_FRAME_MS as f64 / 1000.0);
+      while debt >= step {
         crate::sim::advance(&mut ship, held);
         debt -= step;
-        ran += 1;
       }
+      last = now;
     }
     ship.at.length()
   }
@@ -568,15 +589,14 @@ mod tests {
   fn a_stall_does_not_simulate_the_minute_it_missed() {
     // A backgrounded tab returns with a large delta. Catching up in one frame
     // would freeze the client for longer than the stall did.
-    let step = 1.0 / crate::protocol::TICK_HZ as f32;
-    let mut debt = 0.0f32;
-    debt = (debt + 60.0).min(step * MAX_CATCHUP as f32);
+    let step = 1.0 / crate::protocol::TICK_HZ as f64;
+    let mut debt = (0.0f64 + 60.0).min(MAX_FRAME_MS as f64 / 1000.0);
     let mut ran = 0;
-    while debt >= step && ran < MAX_CATCHUP {
+    while debt >= step {
       debt -= step;
       ran += 1;
     }
-    assert!(ran <= MAX_CATCHUP, "ran {ran} steps for one frame");
+    assert!(ran <= 9, "ran {ran} steps for one frame");
   }
 
   fn known(seat: u16, seen: u64) -> Known {
