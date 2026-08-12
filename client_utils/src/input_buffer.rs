@@ -14,10 +14,8 @@ use std::fmt::Debug;
 /// finding the correct starting point when replaying inputs during server reconciliation,
 /// especially if the server acknowledges an input that caused a misprediction.
 ///
-/// - `Op`: The application-defined type for client operations/inputs sent to the server.
-///         Must be `Clone` and `Debug`.
-/// - `PredictedStateSnapshot`: A snapshot of the client's predicted state. Must be `Clone` and `Debug`.
-///                             This is often the same as the client's main entity `StateType`.
+/// - `Op`: The application-defined type for client operations/inputs sent to the server. Must be `Clone` and `Debug`.
+/// - `PredictedStateSnapshot`: A snapshot of the client's predicted state. Must be `Clone` and `Debug`. This is often the same as the client's main entity `StateType`.
 #[derive(Debug, Clone)]
 pub struct BufferedInput<Op, PredictedStateSnapshot>
 where
@@ -74,8 +72,7 @@ where
   ///
   /// If the buffer is at maximum capacity, the oldest input is discarded.
   ///
-  /// - `sequence_number`: The sequence number assigned to this input by the client.
-  ///                      Should be monotonically increasing.
+  /// - `sequence_number`: The sequence number assigned to this input by the client. Should be monotonically increasing.
   /// - `op`: The client operation/input being sent to the server.
   /// - `state_before_op_predicted`: A snapshot of the client's predicted entity state
   ///   *immediately before* this `op` was applied locally for prediction.

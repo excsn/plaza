@@ -64,7 +64,6 @@ impl Default for RenderOpts {
 /// arrive. Measured over 3000 enemies, that is 43 px of mean error better than
 /// interpolating at a 1 Hz send rate.
 
-
 /// A remote entity's client-side view: a snapshot buffer plus the render-time
 /// decision (interpolate / extrapolate / hold).
 ///

@@ -442,7 +442,7 @@ fn bookkeeping_vectors() {
 
   // Slot keys: the bit packing is the contract, because `SetDigest` and the delta
   // baselines are keyed on the encoded value.
-  let key_encodings: Vec<Value> = [(0u32, 0u16), (1, 1), (41, 7), (0xFFFF_FFF, 0xFFFF), (7, 65535)]
+  let key_encodings: Vec<Value> = [(0u32, 0u16), (1, 1), (41, 7), (0x0FFF_FFFF, 0xFFFF), (7, 65535)]
     .iter()
     .map(|&(index, generation)| {
       let key = SlotKey { index, generation };

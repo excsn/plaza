@@ -61,8 +61,7 @@ impl ToF32 for std::time::Duration {
 /// This is typically implemented by the application's `StateType` or a dedicated
 /// `RenderStateType` for entities that need smooth visual updates.
 ///
-/// - `Timestamp`: The type used for timestamps (e.g., `u64` ticks, `crate::types::ClientTimeMs`,
-///                `std::time::Duration`). Must be `Copy`, `Debug`, and `PartialOrd`.
+/// - `Timestamp`: The type used for timestamps (e.g., `u64` ticks, `crate::types::ClientTimeMs`, `std::time::Duration`). Must be `Copy`, `Debug`, and `PartialOrd`.
 pub trait Interpolatable<Timestamp>
 where
   Self: Sized + Clone,
@@ -73,8 +72,7 @@ where
   ///
   /// # Arguments
   /// * `other`: The target state to interpolate towards.
-  /// * `t`: The interpolation factor, typically between 0.0 (evaluates to `self`)
-  ///        and 1.0 (evaluates to `other`).
+  /// * `t`: The interpolation factor, typically between 0.0 (evaluates to `self`) and 1.0 (evaluates to `other`).
   /// * `time_a`: The timestamp associated with `self` (the starting state).
   /// * `time_b`: The timestamp associated with `other` (the ending state).
   ///   These timestamps are provided for context, which might be useful for
@@ -115,8 +113,7 @@ where
   /// Creates a new snapshot buffer with a specified maximum number of snapshots to retain.
   ///
   /// # Arguments
-  /// * `max_buffer_size`: The maximum number of snapshots to keep. Must be at least 2
-  ///                      to allow for interpolation between two points.
+  /// * `max_buffer_size`: The maximum number of snapshots to keep. Must be at least 2 to allow for interpolation between two points.
   /// # Panics
   /// Panics if `max_buffer_size` is less than 2.
   pub fn new(max_buffer_size: usize) -> Self {
@@ -220,7 +217,7 @@ where
           return Some(before_snapshot.state.clone());
         }
         let t = target_minus_a_f32 / time_b_minus_a_f32;
-        let t_clamped = t.max(0.0).min(1.0);
+        let t_clamped = t.clamp(0.0, 1.0);
         if (t - t_clamped).abs() > 1e-5 && !(-1e-5..=1.0 + 1e-5).contains(&t) {
           tracing::warn!(target_time = ?target_render_time_on_server_timeline, ts_a = ?before_snapshot.server_timestamp, ts_b = ?after_snapshot.server_timestamp, t_calc = t, t_clamped, "Interpolation factor t was outside [0,1] and clamped significantly.");
         }

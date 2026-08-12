@@ -146,11 +146,11 @@ fn main() {
     // This is what an ideal, zero-latency client would see.
     let actual_server_pos_at_client_time = entity_actual_speed_x * (client_current_time_ms as f32 / 1000.0);
 
-    if extrapolation_base_opt.is_some() {
+    if let Some(base) = &extrapolation_base_opt {
       tracing::info!(
         "{:16} | {:15} | {:18.2} | {:28.2}",
         client_current_time_ms,
-        extrapolation_base_opt.as_ref().unwrap().server_timestamp, // Server time of the base snapshot
+        base.server_timestamp,
         display_position_x,
         actual_server_pos_at_client_time
       );

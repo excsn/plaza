@@ -473,7 +473,7 @@ mod tests {
       // A jittery but honest frame time, never long enough to be clamped.
       let dt = 14 + frame % 7;
       wall += dt;
-      simulated += t.advance(dt).map(|step| step).sum::<u64>();
+      simulated += t.advance(dt).sum::<u64>();
     }
     assert!(wall - simulated < 16, "simulated {simulated} against wall {wall}");
     assert_eq!(t.dropped_ms(), 0);

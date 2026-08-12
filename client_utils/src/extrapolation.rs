@@ -13,10 +13,8 @@ use crate::types::ClientTimeMs;
 /// This is implemented by the application's `StateType` or `RenderStateType` for entities
 /// whose movement can be reasonably predicted for short periods.
 ///
-/// - `VelocityType`: The application-defined type representing the entity's velocity
-///                   (e.g., a struct containing linear and angular velocity).
-/// - `TimeDelta`: The type representing the duration to extrapolate over (e.g., `f32` seconds,
-///                `std::time::Duration`).
+/// - `VelocityType`: The application-defined type representing the entity's velocity (e.g., a struct containing linear and angular velocity).
+/// - `TimeDelta`: The type representing the duration to extrapolate over (e.g., `f32` seconds, `std::time::Duration`).
 pub trait Extrapolatable<VelocityType, TimeDelta>
 where
   Self: Sized + Clone,

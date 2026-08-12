@@ -86,8 +86,13 @@ pub struct HeldInputPredictor<State: Clone + Debug, Input: Clone + Debug, Ctx = 
   blend: f32,
   ctx: Ctx,
   active: bool,
-  teleport: Option<(fn(&State, &State) -> f32, f32)>,
+  teleport: Option<Teleport<State>>,
 }
+
+/// How far apart two states have to be before a correction is snapped rather
+/// than eased: the measure, and the distance past which easing is the wrong
+/// answer.
+type Teleport<State> = (fn(&State, &State) -> f32, f32);
 
 impl<State: Clone + Debug, Input: Clone + Debug + Default, Ctx: Default> HeldInputPredictor<State, Input, Ctx> {
   /// `advance` must be the **server's** integration rule, not a client
