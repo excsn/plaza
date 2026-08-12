@@ -154,7 +154,9 @@ Knowing is the part worth a type. One quiet tick means nothing: a body at the to
 
 Why an entity is in an audience: `Near`, `Subscribed`, or `Either`. Helpers **`is_near()`** and **`is_subscribed()`**.
 
-This belongs on the wire rather than staying server-side. The two are different promises with different lifetimes, and a client that cannot tell them apart cannot draw a party frame for somebody out of view: absence from a later frame means "walked away" for `Near` and "left the world" for `Subscribed`.
+The distinction belongs on the wire, but **this type does not**, and the copy in your protocol is deliberate rather than an oversight. This crate carries no serde, and the coupling is worse than the duplication: a protocol version is a hash of the types on the wire, so a wire type owned by a library means upgrading the library silently re-versions every application using it, and a patch release disconnects clients. Spell the three variants again in your own protocol under a name you chose.
+
+What has to reach the client either way is the distinction itself. The two are different promises with different lifetimes, and a client that cannot tell them apart cannot draw a party frame for somebody out of view: absence from a later frame means "walked away" for `Near` and "left the world" for `Subscribed`.
 
 ### Struct `Subscriptions<K>`
 

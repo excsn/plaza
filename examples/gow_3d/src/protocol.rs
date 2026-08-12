@@ -70,6 +70,12 @@ impl Authority {
 /// Not a hint. A client draws a nameplate for one and a party frame for the
 /// other, and dropping the distinction means a party member who steps out of
 /// view disappears from the interface that exists to track them.
+///
+/// Spelled here rather than taken from `plaza_server_utils::Because`, and that
+/// is deliberate: a protocol version is a hash of the types on the wire, so a
+/// wire type owned by a library would mean a library upgrade re-versions this
+/// example's protocol and disconnects clients over a patch release. The two
+/// say the same thing and are free to move on their own clocks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Because {
   /// Within the view radius.

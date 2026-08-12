@@ -46,6 +46,14 @@ use std::hash::Hash;
 /// a party frame for the other, and the two have different lifetimes: absence
 /// from a later frame means "walked away" for [`Because::Near`] and "left the
 /// world" for [`Because::Subscribed`].
+///
+/// **This does not cross the wire, and the copy in your protocol is
+/// deliberate.** This crate carries no serde on purpose, and the coupling that
+/// would follow is worse than the duplication: a protocol version is a hash of
+/// the types on the wire, so a wire type owned by a library means upgrading
+/// the library silently re-versions every application that uses it, and a
+/// patch release disconnects clients. Spell it again in your protocol, three
+/// variants and a name you chose, and let the two move on their own clocks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Because {
   /// Passed the spatial query.
