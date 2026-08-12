@@ -6,7 +6,7 @@ The crate is `gow_3d` because Cargo rejects a package name beginning with a digi
 
 ```sh
 ./run-native.sh          # play it, and host it, in one window
-./wasm-serve.sh          # the same thing in a browser, on port 8300
+./wasm-serve.sh          # the same thing in a browser, on port 8301
 cargo test -p gow_3d     # the findings, as assertions
 ```
 

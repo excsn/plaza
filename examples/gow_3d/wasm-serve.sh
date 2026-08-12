@@ -7,12 +7,12 @@
 # The build is wasm-build.sh, called here rather than duplicated, so the two
 # scripts cannot drift into building differently.
 #
-# Usage: ./wasm-serve.sh [port]   (default 8300)
+# Usage: ./wasm-serve.sh [port]   (default 8301)
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/.." && pwd)"
-port="${1:-8300}"
+port="${1:-8301}"
 
 "$here/wasm-build.sh"
 
