@@ -88,6 +88,28 @@ The budget is capped at three seconds of travel. Uncapped, a disconnection is a 
 
 **What a refusal does not do is stop anyone.** Measured on the wire: hammering a teleport for 20 seconds gained **180 units against the 187 an honest runner covers**, and logged **591 refusals** doing it. The cheat lands a big jump rarely instead of a small one often, ends up behind, and is loud the entire time. Being loud is the whole of the defence.
 
+## What it costs, since the complexity argument says nothing about bytes
+
+`cargo test -p gow_3d --test wire_cost -- --nocapture`
+
+Everything above is an argument about *complexity*: this genre needs almost no netcode. Bytes are a separate question, and a frame here is built per client rather than broadcast, which is the price the design pays for the relevance it gets.
+
+```
+     in zone    in view        bytes          KiB/s
+           8          8          220            6.4
+          16         16          422           12.4
+          32         25          647           19.0
+          64         31          797           23.3
+```
+
+**Eight times the zone is 3.6x the frame**, because the view saturates: at 64 characters only 31 are in range, and past that a bigger zone is not a bigger frame. That is relevance working, and it is the only thing that makes a per-client frame affordable at all. Without it, building N frames that each cost what a broadcast costs would be strictly worse than broadcasting.
+
+The second channel prices out at **6 bytes per party member the distance query missed**, which is the answer to "surely a second relevance channel doubles the work". It does not, because the union means it only ever carries what the first one dropped.
+
+A cast bar costs about 2 bytes on the characters that have one: sixteen characters casting at once took the frame from 422 bytes to 454. The headline feature of the example is a field, not a frame.
+
+Server-side the multiplication is the thing to watch: 23.3 KiB/s per client at 64 characters is roughly 1.5 MiB/s outbound with all 64 connected, and that is the number a zone budget is actually made of.
+
 ## Tab targeting removes the thing two machines would disagree about
 
 A projectile has to be agreed about. Two machines must decide whether a moving thing met another moving thing, they hold different ideas of where both were, and they disagree by exactly the round trip. That is the problem `hit_scan` and `puck_rink` exist to solve, and it is real work.
