@@ -23,6 +23,12 @@ pub const HIT: u16 = 12;
 /// Grid cell width, a third of the view, which is how the other examples in
 /// this tree size theirs.
 pub const CELL: f32 = VIEW / 3.0;
+/// How long a character stays down before coming back up.
+///
+/// Long enough to be a consequence, short enough that a zone does not empty:
+/// there is no corpse to loot and no graveyard to run from, because both are
+/// content this example does not have.
+pub const DOWN_MS: Ms = 3000;
 /// Metres between floors, which is what makes a zone a building rather than a
 /// field.
 pub const FLOOR_HEIGHT: f32 = 5.0;
@@ -49,7 +55,10 @@ pub struct Character {
   /// When this seat may act again, which is the other half of the design
   /// absorbing latency.
   pub ready_at: Ms,
+  /// Up, and therefore visible, targetable and able to act.
   pub alive: bool,
+  /// When a downed character comes back up.
+  pub up_at: Ms,
 }
 
 impl Character {
@@ -63,6 +72,7 @@ impl Character {
       casting: None,
       ready_at: 0,
       alive: true,
+      up_at: 0,
     }
   }
 }
@@ -222,7 +232,7 @@ impl Zone {
     let Some(character) = self.characters.get_mut(&seat) else {
       return false;
     };
-    if character.casting.is_some() || now < character.ready_at {
+    if !character.alive || character.casting.is_some() || now < character.ready_at {
       return false;
     }
     character.casting = Some(Cast {
@@ -245,6 +255,15 @@ impl Zone {
       self.drive(dt_ms);
     }
     let now = self.now_ms;
+
+    for character in self.characters.values_mut() {
+      if !character.alive && now >= character.up_at {
+        character.alive = true;
+        character.health = 100;
+        self.revives += 1;
+        self.stale = true;
+      }
+    }
     let mut landed = Vec::new();
     for character in self.characters.values_mut() {
       let Some(cast) = character.casting else {
@@ -268,7 +287,7 @@ impl Zone {
         continue;
       };
       let Some(target) = target else { continue };
-      let Some(victim) = self.characters.get_mut(&target) else {
+      let Some(victim) = self.characters.get_mut(&target).filter(|v| v.alive) else {
         continue;
       };
       // One range check, on the server, at the instant it lands. That is the
@@ -278,10 +297,16 @@ impl Zone {
       }
       victim.health = victim.health.saturating_sub(HIT);
       if victim.health == 0 {
-        // Back to full where they stand, because a corpse is content this
-        // example does not have and a zone that empties measures nothing.
-        victim.health = 100;
-        self.revives += 1;
+        // Down rather than gone. It is the third reason somebody leaves your
+        // frame, after walking away and disconnecting, and the one that shows
+        // the two relevance channels apart: a downed **party member** is still
+        // subscribed, so they stay in the party frame at zero health while
+        // their body leaves the world.
+        victim.alive = false;
+        victim.up_at = now + DOWN_MS;
+        victim.casting = None;
+        victim.target = None;
+        self.stale = true;
       }
     }
     landed
@@ -475,21 +500,64 @@ mod tests {
     assert_eq!(zone.characters[&1].target, None, "and dropping a target is allowed");
   }
 
-  #[test]
-  fn a_character_brought_to_nothing_comes_back_up_where_it_stands() {
-    // A zone that empties measures nothing, and a corpse is content this
-    // example does not have.
-    let mut zone = zone();
+  /// Casts at seat 2 until it goes down.
+  fn knock_down(zone: &mut Zone) {
     zone.aim(1, Some(2));
     let mut casts = 0;
-    while zone.revives == 0 {
+    while zone.characters[&2].alive {
       zone.begin_cast(1, 0, 0);
       zone.advance(GLOBAL_COOLDOWN_MS);
       casts += 1;
       assert!(casts < 20, "a hundred health at {HIT} a landing should not take this long");
     }
+  }
+
+  #[test]
+  fn a_downed_character_leaves_the_world_and_comes_back_up() {
+    // A zone that empties measures nothing, and a graveyard is content this
+    // example does not have.
+    let mut zone = zone();
+    knock_down(&mut zone);
+    assert_eq!(zone.characters[&2].health, 0);
+
+    let mut scratch = Vec::new();
+    zone.near(1, &mut scratch);
+    assert!(!scratch.contains(&2), "a downed character is not in view");
+    assert!(!zone.begin_cast(2, 0, 0), "nor able to act");
+
+    zone.advance(DOWN_MS);
+    assert!(zone.characters[&2].alive);
     assert_eq!(zone.characters[&2].health, 100);
     assert_eq!(zone.revives, 1);
+    zone.near(1, &mut scratch);
+    assert!(scratch.contains(&2), "and back in view when it is back up");
+  }
+
+  #[test]
+  fn a_downed_party_member_stays_in_the_party_frame() {
+    // The case that separates the two channels, and the one a player notices:
+    // the body leaves the world and the entry does not, because a party frame
+    // exists precisely to describe somebody you cannot see.
+    let mut zone = zone();
+    zone.parties.join(1, 2);
+    knock_down(&mut zone);
+
+    let mut scratch = Vec::new();
+    let audience = zone.audience_for(1, &mut scratch);
+    assert!(!scratch.contains(&2), "distance dropped them");
+    assert!(audience.seats.contains(&2), "and the subscription kept them");
+    assert_eq!(zone.characters[&2].health, 0, "at zero, which is the point of the frame");
+  }
+
+  #[test]
+  fn a_landing_on_somebody_already_down_does_nothing() {
+    let mut zone = zone();
+    knock_down(&mut zone);
+    let before = zone.revives;
+    zone.begin_cast(1, 0, 0);
+    zone.advance(1);
+    assert_eq!(zone.characters[&2].health, 0);
+    assert_eq!(zone.revives, before, "and does not restart their timer");
   }
 
   #[test]

@@ -180,6 +180,11 @@ fn frame_for(state: &mut GowState, seat: Seat, now: Ms) -> Frame {
       .iter()
       .filter_map(|s| {
         let character = zone.characters.get(s)?;
+        // A downed character is dropped from everyone but the party that is
+        // subscribed to them, which is what a party frame is for.
+        if !character.alive && !zone.parties.of(seat).any(|m| m == *s) && *s != seat {
+          return None;
+        }
         let subscribed = *s != seat && zone.parties.of(seat).any(|m| m == *s);
         let because = match (near.contains(s), subscribed) {
           (true, true) => Because::BothOfThose,

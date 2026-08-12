@@ -126,6 +126,8 @@ A named target is not that problem. The client says who it is aiming at, and whe
 
 The range is checked when the cast **lands**, not when it starts, which is the ordinary case rather than an edge one: a target that walks out of reach during a one-and-a-half second bar is what a fight looks like. Checking at the start would only move the same decision earlier and make it wrong more often.
 
+A landing takes 12 off, and a character brought to zero goes **down** rather than away: out of view, unable to act, and back up three seconds later where it stands. That exists for one reason beyond making the health bars mean something. It is the third way somebody leaves your frame, after walking away and disconnecting, and the one that separates the two relevance channels most visibly: **a downed party member stays in the party frame at zero health while their body leaves the world.** A client with one channel cannot draw that, and a client that treated absence as "gone" would delete the entry that is telling you to go and help them.
+
 ## Two channels of relevance, because an MMO asks two questions
 
 `cargo test -p gow_3d relevance -- --nocapture`
