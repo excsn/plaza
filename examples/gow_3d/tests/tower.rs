@@ -6,9 +6,15 @@
 //! same candidates, and only the per-candidate test differs.
 //!
 //! That was measured in open space, where things are spread out. A tower is the
-//! opposite arrangement and the one a height filter should struggle with: five
-//! hundred people standing on eight floors that share one footprint, so a flat
+//! opposite arrangement and the one a height filter should struggle with:
+//! thirty people on each of twenty-four floors sharing one footprint, so a flat
 //! cell holds every floor at once and the filter throws away almost all of it.
+//!
+//! The floor count is load bearing rather than decorative. The first version of
+//! this was eight floors against a thirty metre view, which is a building the
+//! volumetric grid cannot exclude anything from either, so both arms examined
+//! everyone and the comparison had no contrast. The scene now asserts it
+//! out-reaches the view.
 //!
 //! ```sh
 //! cargo test -p gow_3d --test tower -- --nocapture
