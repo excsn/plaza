@@ -21,6 +21,7 @@ Its only dependency is `plaza_client_utils`, for the shared `Interpolatable` and
 |---|---|
 | A client aims at where a target *was* (it renders remotes in the past), so hits must be judged then, not now | `HistoricalStateBuffer` |
 | A world has more entities than fit on the wire, and players in different places, so each client needs only what is near it | `relevance` (`SpatialGrid`, `VisibilitySet`, Morton keys) |
+| A client also cares about entities *no distance query will ever return*: a party across the zone, a followed player, a guild roster | `subscription` (`Subscriptions`, `Audience`) |
 | Some of those entities are simulation *inputs*, so dropping the distant ones changes the answer, but sending them all does not scale | `aggregate` (`AggregateTree`) |
 | Streaming that set as *entered* and *left* assumes every packet arrives, and one that does not is lost for good | `delta` (`DeltaBaseline`) |
 | A bounded number of seats, where a fresh occupant must not inherit the last one's accumulated state | `seats` (`SeatTable`, `Seating`) |
@@ -71,6 +72,8 @@ Neither shape expresses the other. A grid query is a fresh answer every tick ove
 - **`Because::{Near, Subscribed, Either}`**: why each entry is there, and this has to reach the wire. The two are different *promises*: absence from a later frame means "walked away" for one and "left the world" for the other, so a client that cannot tell them apart will drop a party member the moment they leave view.
 
 Bounded on purpose. A spatial query is limited by how many entities fit in a radius; a subscription is limited by nothing at all unless something says so, and over-limit is refused rather than truncated, since dropping an entry silently to fit is how a client ends up in a party that cannot see one of its members.
+
+The [`subscription_demo`](examples/subscription_demo.rs) example (`cargo run --example subscription_demo -p plaza_server_utils`) walks a party from standing together to scattered across the world. The column worth reading is the one that does not move: the party is covered either way, and all that changes is which channel paid for it.
 
 What stays the app's: whether a subscription is symmetric, what it costs, who may create one, and how it reaches the wire. [`gow_3d`](../examples/gow_3d/) is the example that forced this block's shape and reports what the channel costs.
 

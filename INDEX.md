@@ -184,6 +184,7 @@ The server-side counterpart, also runtime-free and wasm-safe. Shares `client_uti
 | Relevance / interest management: Morton keys, a spatial grid, a visibility-diff bitset, a hysteresis tier boundary | [server_utils/src/relevance.rs](server_utils/src/relevance.rs) |
 | Per-subscriber delta bookkeeping: which packets landed, what to send and what to retract, the rebuild when a mirror has drifted, and the flow control that stops streaming to a reader that stopped reading | [server_utils/src/delta.rs](server_utils/src/delta.rs) |
 | Tick-addressed input buffering: the accepting window, reject-not-correct, level and event semantics | [server_utils/src/input_schedule.rs](server_utils/src/input_schedule.rs) |
+| Subscription relevance, the question a radius cannot ask: who a client chose to care about wherever they are, kept both ways round so a departure knows who to tell | [server_utils/src/subscription.rs](server_utils/src/subscription.rs) |
 | Hierarchical aggregation: a Barnes-Hut tree that coarsens a distant crowd instead of culling it, for entities a client simulates rather than draws | [server_utils/src/aggregate.rs](server_utils/src/aggregate.rs) |
 | A bounded number of seats, and a type that will not let you forget whether one is fresh | [server_utils/src/seats/mod.rs](server_utils/src/seats/mod.rs) |
 | Running totals into rates, with the divide-by-zero guard every copy had to remember | [server_utils/src/meter.rs](server_utils/src/meter.rs) |
@@ -202,7 +203,7 @@ The server-side counterpart, also runtime-free and wasm-safe. Shares `client_uti
 | `core/src/common/scheduler/*` | Scheduler semantics, inline. |
 | `core/src/game_common/reconciliation/*` | Input tracking, delayed input, historical buffer, inline. |
 | `client_utils/src/*` | Prediction, interpolation, extrapolation, smoothing, timestep, mirror, slots, digest, acknowledgement, math, inline. |
-| `server_utils/src/*` | Rewind, relevance, aggregation, delta baselines, seats, rates, inline. |
+| `server_utils/src/*` | Rewind, relevance, subscription, aggregation, delta baselines, seats, rates, inline. |
 | `examples/horde_playground/src/sim/*` | The many-entity case, inline: warm-arena joins, digest rebuilds, lossy corpse recovery, input windows, playout. Named after the historical failures rather than the functions. |
 | `examples/blackhole_playground/src/sim/*` | The field case, inline: aggregation against both baselines, prediction of a forced entity. |
 
