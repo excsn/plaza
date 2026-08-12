@@ -347,6 +347,66 @@ mod tests {
     DeltaMirror::new()
   }
 
+  /// Switching the key scheme at runtime, which nothing was exercising.
+  ///
+  /// The failure it prevents is the one the module docs call the hardest to
+  /// find in the wild: a mirror keyed two ways at once, where entries filed
+  /// under the old scheme are unreachable under the new one and read as a
+  /// permanent divergence that no packet ever repairs.
+  mod switching_the_key_scheme {
+    use super::*;
+
+    #[test]
+    fn switching_clears_the_mirror_because_the_old_keys_are_unreachable() {
+      // Away from the default, which is generations on: switching to the
+      // scheme already in force is the no-op case below, and asserting against
+      // it would have measured nothing.
+      let mut m = mirror();
+      m.begin(1, true);
+      m.insert(SlotKey::new(3, 1), "held");
+      assert!(m.contains(SlotKey::new(3, 1)));
+
+      m.set_generations(false);
+      assert!(!m.contains(SlotKey::new(3, 1)), "filed under a scheme that no longer applies");
+      assert_eq!(m.len(), 0, "so it is dropped rather than left unreachable");
+    }
+
+    #[test]
+    fn switching_to_the_scheme_it_already_has_keeps_everything() {
+      // The guard that makes the setter safe to call from a config reload: an
+      // idempotent write must not cost a rebuild.
+      let mut m = DeltaMirror::<&'static str>::new().with_generations(true);
+      m.begin(1, true);
+      m.insert(SlotKey::new(3, 1), "held");
+
+      m.set_generations(true);
+      assert!(m.contains(SlotKey::new(3, 1)), "nothing changed, so nothing was lost");
+      assert_eq!(m.len(), 1);
+    }
+
+    #[test]
+    fn ignoring_generations_makes_a_recycled_slot_look_like_its_predecessor() {
+      // Why the toggle exists at all: with generations off, a delta meant for
+      // a dead occupant lands on its replacement and nothing counts it. This
+      // is that corruption made visible rather than a bug.
+      let mut blind = DeltaMirror::<&'static str>::new().with_generations(false);
+      blind.begin(1, true);
+      blind.insert(SlotKey::new(3, 1), "the first occupant");
+      assert!(
+        blind.contains(SlotKey::new(3, 2)),
+        "a later generation of the same slot reads as the same entity"
+      );
+
+      let mut careful = DeltaMirror::<&'static str>::new().with_generations(true);
+      careful.begin(1, true);
+      careful.insert(SlotKey::new(3, 1), "the first occupant");
+      assert!(
+        !careful.contains(SlotKey::new(3, 2)),
+        "and with generations on it is a different one"
+      );
+    }
+  }
+
   #[test]
   fn what_the_server_sent_is_what_the_mirror_holds() {
     let mut m = mirror();
