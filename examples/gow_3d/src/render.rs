@@ -125,13 +125,23 @@ impl Scene {
   /// body to draw: the server said where they are, not that you can see them,
   /// and putting a solid through a floor two storeys up is the client inventing
   /// a claim the protocol never made.
-  pub fn draw_characters<'a>(&mut self, seen: impl Iterator<Item = (&'a Seen, Vec3)>, mine: Option<u16>) {
+  pub fn draw_characters<'a>(
+    &mut self,
+    seen: impl Iterator<Item = (&'a Seen, Vec3)>,
+    mine: Option<u16>,
+    flashing: &std::collections::HashSet<u16>,
+  ) {
     let mut drawn = 0usize;
     for (character, at) in seen {
       if !character.because.is_near() {
         continue;
       }
-      let tint = if Some(character.seat) == mine {
+      let tint = if flashing.contains(&character.seat) {
+        // A landing is the one thing here that *happens* rather than *is*, so
+        // it can only be drawn from the client's own memory of the event: no
+        // later frame mentions it.
+        Color::new(1.0, 0.55, 0.35, 1.0)
+      } else if Some(character.seat) == mine {
         Color::new(1.0, 0.83, 0.25, 1.0)
       } else if character.because.is_subscribed() {
         Color::new(0.55, 0.90, 0.62, 1.0)

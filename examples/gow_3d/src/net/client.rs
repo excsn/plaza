@@ -123,9 +123,18 @@ pub struct NetClient {
   /// Claims the server threw out. Zero for an honest client, which is what
   /// makes it worth showing.
   pub refused: u64,
-  /// Casts that went off nearby since the last frame, for the client to play
-  /// once and forget.
+  /// Casts that went off nearby since the last frame.
+  ///
+  /// Replaced every frame, so reading it is the only chance to see one.
   pub landed: Vec<Seat>,
+  /// When each seat's cast last landed, on the client's clock.
+  ///
+  /// Kept because a landing is an **event**: no later frame mentions it, so a
+  /// client that does not remember one has no way to draw it for longer than
+  /// the single frame it arrived in. This is the client-side half of what
+  /// makes an event different from a state, and forgetting it is why the
+  /// server bothers to send it at all.
+  pub flashes: HashMap<Seat, u64>,
   /// Which mode the zone said it is running, on the last frame.
   pub authority: Authority,
   /// How far the server's idea of this client's own position is from the
@@ -168,6 +177,7 @@ impl NetClient {
       meter: Meter::default(),
       refused: 0,
       landed: Vec::new(),
+      flashes: HashMap::new(),
       authority: Authority::Client,
       gap: 0.0,
       worst_gap: 0.0,
@@ -261,6 +271,9 @@ impl NetClient {
     self.tick = frame.tick;
     self.landed = frame.landed;
     self.authority = frame.authority;
+    for seat in &self.landed {
+      self.flashes.insert(*seat, self.now_ms);
+    }
     let now = self.now_ms;
     let mine = self.seat;
 
@@ -359,6 +372,29 @@ impl NetClient {
 
   pub fn unparty(&mut self) {
     self.pump.send_op(&GowOp::Unparty);
+  }
+
+  /// How long a landing stays on screen.
+  pub const FLASH_MS: u64 = 350;
+
+  /// Seats whose cast landed recently enough to still be drawn.
+  ///
+  /// Aged out here rather than on arrival, because the frame that would have
+  /// cleared it is the frame that never mentions it again.
+  pub fn flashing(&self, now_ms: u64) -> std::collections::HashSet<Seat> {
+    self
+      .flashes
+      .iter()
+      .filter(|(_, at)| now_ms.saturating_sub(**at) < Self::FLASH_MS)
+      .map(|(seat, _)| *seat)
+      .collect()
+  }
+
+  /// Drops flashes nobody will draw again, so the map does not grow for the
+  /// length of a session.
+  pub fn forget_old_flashes(&mut self, now_ms: u64) {
+    let cutoff = Self::FLASH_MS;
+    self.flashes.retain(|_, at| now_ms.saturating_sub(*at) < cutoff);
   }
 
   /// What a character is doing, for the nameplate.

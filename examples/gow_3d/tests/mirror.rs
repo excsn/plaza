@@ -255,6 +255,50 @@ async fn a_cast_is_described_while_it_runs_and_announced_once_when_it_lands() {
 }
 
 #[tokio::test]
+async fn a_landing_is_drawable_for_longer_than_the_frame_that_carried_it() {
+  // The client-side half of what makes an event different from a state. The
+  // server mentions a landing on exactly one frame and never again, so a
+  // client that does not remember it can draw it for one frame at most, which
+  // at 30Hz is 33 milliseconds and invisible.
+  let (logic, mut state, mut client, socket) = both_sides().await;
+  send(&logic, &mut state, 2, GowOp::Cast { ability: 0, cast_ms: 60 }).await;
+
+  let mut now = 0u64;
+  let mut landed_at = None;
+  for _ in 0..6 {
+    let out = tick(&logic, &mut state).await;
+    now += 33;
+    deliver(&socket, &ops_for(&out, 0));
+    client.poll(now);
+    if !client.landed.is_empty() {
+      landed_at = Some(now);
+    }
+  }
+  let landed_at = landed_at.expect("the cast landed at all");
+
+  // The frame after is already silent about it, which is the whole point.
+  let out = tick(&logic, &mut state).await;
+  now += 33;
+  deliver(&socket, &ops_for(&out, 0));
+  client.poll(now);
+  assert!(client.landed.is_empty(), "no later frame mentions it");
+
+  // And it is still drawable, from the client's own memory rather than from
+  // anything on the wire.
+  assert!(
+    client.flashing(now).contains(&1),
+    "still on screen {}ms after the one frame that carried it",
+    now - landed_at
+  );
+
+  // Aged out rather than kept for ever, or the map grows for the session.
+  let much_later = landed_at + NetClient::FLASH_MS + 1;
+  assert!(client.flashing(much_later).is_empty());
+  client.forget_old_flashes(much_later);
+  assert!(client.flashes.is_empty(), "and nothing is left holding memory");
+}
+
+#[tokio::test]
 async fn what_each_authority_mode_costs() {
   // The comparison this example was planned around, and the reason both modes
   // live in one build: two builds and two sessions compare two memories of how

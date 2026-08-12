@@ -174,6 +174,7 @@ async fn frame_loop(options: role::Options) {
     let clock_ms = (get_time() * 1000.0) as u64;
 
     client.poll(clock_ms);
+    client.forget_old_flashes(clock_ms);
 
     if client.seeded {
       let (at, forward) = walk(client.at, &mut yaw, dt);
@@ -201,7 +202,8 @@ async fn frame_loop(options: role::Options) {
           (&other.seen, vec3(at.0, at.1, at.2))
         })
         .collect();
-      scene.draw_characters(drawn.iter().map(|(s, v)| (*s, *v)), None);
+      let flashing = client.flashing(clock_ms);
+      scene.draw_characters(drawn.iter().map(|(s, v)| (*s, *v)), None, &flashing);
       scene.draw_cast_bars(drawn.iter().map(|(s, v)| (*s, *v)));
       // The local character, drawn from the local position rather than from
       // anything that crossed the wire.
