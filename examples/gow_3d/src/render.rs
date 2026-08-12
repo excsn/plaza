@@ -57,8 +57,16 @@ pub struct Pose {
 const BODY: f32 = 0.62;
 /// How tall one is drawn.
 const TALL: f32 = 2.0;
-/// Bodies per draw call, well under the 5000-index ceiling.
-const CHUNK: usize = 64;
+/// What macroquad's batcher accepts in one draw call.
+///
+/// Past either of these it warns once and **draws the front of the buffer**, so
+/// the scene is quietly missing rather than broken. Counting bodies per batch
+/// is what let that happen: the count was right when a body was a single box
+/// and wrong the moment a body became a torso, two legs, two arms, a head and a
+/// wedge, which is eight boxes and 288 indices. Sixty-four of those is 18432
+/// against a limit of 5000.
+const MAX_VERTICES: usize = 10000;
+const MAX_INDICES: usize = 5000;
 
 /// How far from the camera the ground is built, in metres.
 pub const SIGHT: f32 = 96.0;
@@ -89,8 +97,18 @@ fn tint_of(cover: Cover) -> Color {
 impl Scene {
   pub fn new() -> Self {
     Self {
-      vertices: Vec::with_capacity(CHUNK * 8),
-      indices: Vec::with_capacity(CHUNK * 36),
+      vertices: Vec::with_capacity(MAX_VERTICES),
+      indices: Vec::with_capacity(MAX_INDICES),
+    }
+  }
+
+  /// Flushes if what is about to be pushed would not fit.
+  ///
+  /// Asked at every push site rather than counted by the caller, so the
+  /// invariant holds however many boxes a body turns out to be.
+  fn room_for(&mut self, vertices: usize, indices: usize) {
+    if self.vertices.len() + vertices > MAX_VERTICES || self.indices.len() + indices > MAX_INDICES {
+      self.flush();
     }
   }
 
@@ -128,6 +146,7 @@ impl Scene {
       ([1, 2, 6, 5], 0.85),
       ([3, 0, 4, 7], 0.50),
     ];
+    self.room_for(CORNERS.len() * FACES.len(), FACES.len() * 6);
     for (face, shade) in FACES {
       let start = self.vertices.len() as u16;
       let shaded = Color::new(tint.r * shade, tint.g * shade, tint.b * shade, tint.a);
@@ -158,6 +177,7 @@ impl Scene {
     let shade = 1.0 - (terrain::steepness(middle.0, middle.1) / 3.0).clamp(0.0, 0.55);
     let tint = Color::new(base.r * shade, base.g * shade, base.b * shade, 1.0);
 
+    self.room_for(4, 6);
     let start = self.vertices.len() as u16;
     for (cx, cz) in corners {
       let y = terrain::ground_at(cx, cz);
@@ -177,7 +197,6 @@ impl Scene {
   pub fn draw_ground(&mut self, eye: Vec3) {
     let steps = (SIGHT / QUAD) as i32;
     let (ox, oz) = ((eye.x / QUAD).floor() * QUAD, (eye.z / QUAD).floor() * QUAD);
-    let mut drawn = 0usize;
     for ix in -steps..steps {
       for iz in -steps..steps {
         let (x, z) = (ox + ix as f32 * QUAD, oz + iz as f32 * QUAD);
@@ -193,10 +212,6 @@ impl Scene {
           continue;
         }
         self.push_ground(x, z);
-        drawn += 1;
-        if drawn.is_multiple_of(CHUNK * 4) {
-          self.flush();
-        }
       }
     }
     self.flush();
@@ -214,7 +229,6 @@ impl Scene {
     flashing: &std::collections::HashSet<u16>,
     target: Option<u16>,
   ) {
-    let mut drawn = 0usize;
     for (character, at, pose) in seen {
       if !character.because.is_near() {
         continue;
@@ -234,10 +248,6 @@ impl Scene {
       self.push_body(at, character.yaw, tint, pose);
       if Some(character.seat) == target {
         self.push_ring(at, 1.5, Color::new(1.0, 0.85, 0.30, 1.0));
-      }
-      drawn += 1;
-      if drawn.is_multiple_of(CHUNK) {
-        self.flush();
       }
     }
     self.flush();
@@ -354,6 +364,7 @@ impl Scene {
     for i in 0..SEGMENTS {
       let a = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
       let b = (i + 1) as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+      self.room_for(4, 6);
       let start = self.vertices.len() as u16;
       for (angle, r) in [(a, radius), (b, radius), (b, radius * 0.82), (a, radius * 0.82)] {
         let p = at + vec3(angle.cos() * r, 0.06, angle.sin() * r);
@@ -424,6 +435,38 @@ pub fn over_the_shoulder(at: Vec3, yaw: f32, distance: f32) -> Camera3D {
     up: Vec3::Y,
     target: at + vec3(0.0, 1.4, 0.0),
     ..Default::default()
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  /// What one body costs, counted the way `push_body` builds it: torso, two
+  /// legs, two arms, head, wedge, and the cast mote.
+  const BOXES_PER_BODY: usize = 8;
+  const VERTICES_PER_BOX: usize = 24;
+  const INDICES_PER_BOX: usize = 36;
+
+  #[test]
+  fn one_body_fits_in_a_draw_call_on_its_own() {
+    // The failure this guards is silent: past the limit macroquad warns once
+    // and draws the front of the buffer, so characters simply stop appearing
+    // and nothing says which ones.
+    assert!(BOXES_PER_BODY * VERTICES_PER_BOX <= MAX_VERTICES);
+    assert!(BOXES_PER_BODY * INDICES_PER_BOX <= MAX_INDICES);
+  }
+
+  #[test]
+  fn a_body_count_would_not_have_been_enough() {
+    // Why the batch is bounded by the buffer rather than by a count of things:
+    // the count was right when a body was one box and wrong the moment it was
+    // eight, and nothing failed loudly enough to notice.
+    let one_box_batch = 64;
+    assert!(
+      one_box_batch * BOXES_PER_BODY * INDICES_PER_BOX > MAX_INDICES,
+      "the old batch size would have fitted, so this test proves nothing"
+    );
   }
 }
 

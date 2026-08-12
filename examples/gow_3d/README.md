@@ -214,6 +214,7 @@ Every one of these is a place where both halves were individually correct.
 - **A landing is an event.** No later frame mentions it, so a client that misses it misses it for good, and it is only sent to clients near enough to have a character for it. Otherwise a client plays an animation on nothing.
 - **The client learns its spawn from the wire.** Computing it from the seat number would be a second derivation of one fact, and those drift.
 - **Leaving the zone leaves the party**, or a health bar keeps updating for somebody who is not here.
+- **A draw batch counted the wrong thing.** The renderer flushed every 64 bodies, which was right when a body was one box and wrong the moment it became eight: 18432 indices against macroquad's limit of 5000. Past that limit the batcher warns once and draws the front of the buffer, so characters were silently missing from the scene. The batch is now bounded by what is in the buffer, asked at every push, so the invariant holds however many boxes a body turns out to be.
 - **The spawn ring wrapped.** A fixed angular step of 0.9 radians reaches 2π at seat 7, so seats 0 and 7 spawned on top of each other. It looked fine for the first handful, which is why the test checks all 64. A golden-angle spiral is the one step that never repeats.
 
 ## Layout
