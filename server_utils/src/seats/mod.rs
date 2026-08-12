@@ -496,6 +496,50 @@ impl<Key: Eq + Hash + Clone> Roster<Key> {
 mod tests {
   use super::*;
 
+  /// The two accessors nothing was calling.
+  mod reading_the_table {
+    use super::*;
+
+    #[test]
+    fn occupants_pairs_every_key_with_the_seat_it_holds() {
+      // The iteration a server does every tick to build per-client output, and
+      // the one place a seat and its holder must not drift apart.
+      let mut table: SeatTable<u32> = SeatTable::new(4);
+      table.seat(10);
+      table.seat(20);
+
+      let mut pairs: Vec<(u32, usize)> = table.occupants().map(|(key, seat)| (*key, seat)).collect();
+      pairs.sort_unstable();
+      assert_eq!(pairs.len(), 2);
+      for (key, seat) in pairs {
+        assert_eq!(table.seat_of(&key), Some(seat), "the pair agrees with the lookup");
+      }
+    }
+
+    #[test]
+    fn occupants_forgets_a_key_that_left() {
+      let mut table: SeatTable<u32> = SeatTable::new(4);
+      table.seat(10);
+      table.seat(20);
+      table.unseat(&10);
+      let held: Vec<u32> = table.occupants().map(|(key, _)| *key).collect();
+      assert_eq!(held, vec![20]);
+    }
+
+    #[test]
+    fn a_locked_roster_says_so() {
+      // Worth pinning because the flag is what a between-rounds game reads to
+      // decide whether a joiner waits, and a lock that does not report itself
+      // is one nobody can show a player.
+      let mut roster: Roster<u32> = Roster::new(4);
+      assert!(!roster.is_locked());
+      roster.lock();
+      assert!(roster.is_locked());
+      roster.unlock();
+      assert!(!roster.is_locked());
+    }
+  }
+
   #[test]
   fn a_joiner_gets_a_seat_and_a_rejoin_gets_the_same_one() {
     let mut seats: SeatTable<u64> = SeatTable::new(4);

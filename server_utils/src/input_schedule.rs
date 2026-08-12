@@ -242,6 +242,53 @@ mod tests {
 
   const WINDOW: InputWindow = InputWindow { max_late: 4, max_early: 30 };
 
+  /// The two diagnostics nothing was calling, which is a shame because they
+  /// are the ones that tell a lag switch apart from a bad connection.
+  mod reading_the_rejections {
+    use super::*;
+
+    #[test]
+    fn the_split_says_which_way_a_client_is_lying() {
+      // `rejected()` alone cannot distinguish the two, and they mean opposite
+      // things: behind the simulation is a backdated input or a slow link,
+      // ahead of it is a client naming ticks that have not happened.
+      let mut s = InputSchedule::new();
+      assert_eq!(s.rejected_split(), (0, 0));
+
+      s.submit(10, "backdated", 20, WINDOW);
+      assert_eq!(s.rejected_split(), (1, 0), "one behind, none ahead");
+
+      s.submit(500, "from the future", 20, WINDOW);
+      assert_eq!(s.rejected_split(), (1, 1));
+      assert_eq!(s.rejected(), 2, "and the total is still the sum");
+    }
+
+    #[test]
+    fn the_margin_is_none_until_something_is_rejected() {
+      // A gauge that reads zero before anything has happened is one nobody can
+      // tell from a client sitting exactly on the boundary.
+      let mut s = InputSchedule::new();
+      assert_eq!(s.last_reject_margin(), None);
+      s.submit(10, "fine", 6, WINDOW);
+      assert_eq!(s.last_reject_margin(), None, "an accepted input is not a rejection");
+    }
+
+    #[test]
+    fn the_margin_is_signed_so_the_direction_survives() {
+      // How far out, and which side. A client ten ticks behind and one ten
+      // ticks ahead are not the same problem, and an unsigned number would
+      // make them look like it.
+      let mut s = InputSchedule::new();
+      s.submit(10, "backdated", 20, WINDOW);
+      let behind = s.last_reject_margin().expect("rejected");
+      assert!(behind < 0, "behind the simulation reads negative: {behind}");
+
+      s.submit(500, "from the future", 20, WINDOW);
+      let ahead = s.last_reject_margin().expect("rejected");
+      assert!(ahead > 0, "and ahead of it reads positive: {ahead}");
+    }
+  }
+
   #[test]
   fn an_input_waits_for_the_tick_it_names() {
     // The whole point: execution time comes from the declaration, not from
