@@ -94,7 +94,7 @@ The budget is capped at three seconds of travel. Uncapped, a disconnection is a 
 
 **Spatial**: who is near me. That is `SpatialGrid`, it is what every example in this tree uses, and it is rebuilt every tick because everyone moves.
 
-**Subscription**: who have I chosen to care about, wherever they are. Your party's health bars update across the zone, and a guild roster is not a distance query at all. **Nothing in plaza has a concept of it**, and it is the one thing this example needs that the library does not offer.
+**Subscription**: who have I chosen to care about, wherever they are. Your party's health bars update across the zone, and a guild roster is not a distance query at all. Nothing in plaza had a concept of it when this example was written, which is what the example was for: [`plaza_server_utils::subscription`](../../server_utils/API_REFERENCE.md) now exists because building this forced its shape. gow_3d still carries its own `Parties`, from before the block did.
 
 The two are different shapes as well as different questions. A grid query is a fresh answer every tick over a set that changes constantly; a party is five entries with a lifetime of an hour. Expressing a party as a relevance radius means an infinite radius; expressing a grid query as a subscription means resubscribing everybody every tick.
 
