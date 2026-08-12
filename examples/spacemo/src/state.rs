@@ -53,6 +53,22 @@ pub struct SpaceState {
   pub bots: usize,
   /// How far a ship can see. The single number the whole example turns on.
   pub view: f32,
+  /// Who each seat is told about because they locked it, wherever it is.
+  ///
+  /// The second channel, and the smallest possible instance of it: one entry,
+  /// held for seconds rather than hours. gow_3d subscribes a party for the
+  /// length of a session; this is the same shape at the opposite extreme, and
+  /// it exists because a lock names a ship the radius may already have culled.
+  /// `LOCK_RANGE` is 320 against a 260 view, so that is not a hypothetical.
+  pub locks: plaza_server_utils::subscription::Subscriptions<u32>,
+  /// How many ships the lock channel added that the radius missed, for the
+  /// panel.
+  pub lock_added: usize,
+  /// Whether a lock is held once taken, and therefore whether it is a
+  /// subscription at all. Off is the older behaviour: re-derived from the cone
+  /// every tick, so it changes as fast as the ships do and a client cannot
+  /// rely on it past the frame it arrived in.
+  pub sticky_locks: bool,
   pub stream_bolts: bool,
   /// Which shots each client has already been told about, so a spawn is sent
   /// once. Pruned against the live set every tick, which is also what lets a
@@ -98,6 +114,9 @@ impl SpaceState {
       relative: true,
       bots: 0,
       view: crate::default_view(),
+      locks: plaza_server_utils::subscription::Subscriptions::new(1),
+      lock_added: 0,
+      sticky_locks: true,
       stream_bolts: true,
       told: HashMap::new(),
     }
@@ -150,8 +169,42 @@ impl SpaceState {
     if !self.visible.contains(&(seat as u32)) {
       self.visible.push(seat as u32);
     }
+    self.visible.sort_unstable();
+
+    // The union of the two channels. A locked ship is in the frame whether or
+    // not the radius reached it, because a reticle over nothing is the client
+    // being told to aim at something it was never sent.
+    let audience = plaza_server_utils::subscription::Audience::of(
+      &self.visible,
+      &self.locks,
+      &(seat as u32),
+    );
+    self.lock_added = audience.added;
+    self.visible.clear();
+    self
+      .visible
+      .extend(audience.entries.iter().map(|(id, _)| *id));
     self.last_seen[seat] = self.visible.len();
     &self.visible
+  }
+
+  /// Re-derives the lock subscriptions from what the simulation holds.
+  ///
+  /// Once a tick, after everything has moved and locks have been resolved. A
+  /// set of one per seat, so this is cheap however many seats there are.
+  pub fn follow_locks(&mut self, _sticky: bool) {
+    for seat in 0..self.space.ships.len() {
+      let held = self.space.lock_for(seat).map(|t| t as u32);
+      let already: Vec<u32> = self.locks.of(&(seat as u32)).copied().collect();
+      for old in already {
+        if Some(old) != held {
+          self.locks.unsubscribe(&(seat as u32), &old);
+        }
+      }
+      if let Some(target) = held {
+        self.locks.subscribe(seat as u32, target);
+      }
+    }
   }
 
   pub fn apply(&mut self, seat: usize, fly: Fly) {
@@ -162,6 +215,92 @@ impl SpaceState {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn a_locked_ship_is_in_the_frame_even_past_the_view_radius() {
+    // The defect this channel exists for, and it was live: LOCK_RANGE is 320
+    // against a 260 view, so the server could tell a client it had locked a
+    // ship it had never been sent. A reticle over nothing.
+    let mut state = SpaceState::new();
+    state.space.spawn(0);
+    state.space.spawn(1);
+    // Dead ahead, inside lock range and outside the view.
+    let nose = state.space.ships[0].facing();
+    let at = state.space.ships[0].at;
+    let far = 290.0;
+    state.space.ships[1].at = plaza_client_utils::math::Vec3::new(
+      at.x + nose.x * far,
+      at.y + nose.y * far,
+      at.z + nose.z * far,
+    );
+    assert!(far > state.view, "the test has to place it outside the radius");
+
+    state.space.resolve_locks(true);
+    state.follow_locks(true);
+    state.reindex();
+    let seen = state.visible_to(0).to_vec();
+    assert_eq!(state.space.lock_for(0), Some(1), "nothing was locked at all");
+    assert!(seen.contains(&1), "the locked ship was culled: {seen:?}");
+    assert_eq!(state.lock_added, 1, "and the channel says what it cost");
+  }
+
+  #[test]
+  fn dropping_the_lock_drops_the_subscription() {
+    // Or the set grows for the length of a session and stops being small,
+    // which is the only thing making a second channel affordable.
+    let mut state = SpaceState::new();
+    state.space.spawn(0);
+    state.space.spawn(1);
+    let nose = state.space.ships[0].facing();
+    let at = state.space.ships[0].at;
+    state.space.ships[1].at =
+      plaza_client_utils::math::Vec3::new(at.x + nose.x * 290.0, at.y + nose.y * 290.0, at.z + nose.z * 290.0);
+    state.space.resolve_locks(true);
+    state.follow_locks(true);
+    assert_eq!(state.space.lock_for(0), Some(1));
+
+    // Out past lock range: the hold breaks and nothing else is in the cone.
+    state.space.ships[1].at = plaza_client_utils::math::Vec3::new(
+      at.x + nose.x * 900.0,
+      at.y + nose.y * 900.0,
+      at.z + nose.z * 900.0,
+    );
+    state.space.resolve_locks(true);
+    state.follow_locks(true);
+    state.reindex();
+    let seen = state.visible_to(0).to_vec();
+    assert_eq!(state.space.lock_for(0), None, "the lock outlived its range");
+    assert!(!seen.contains(&1), "the subscription outlived the lock: {seen:?}");
+    assert_eq!(state.lock_added, 0);
+  }
+
+  #[test]
+  fn a_lock_is_held_rather_than_recomputed() {
+    // A lock re-derived from the cone every tick is a spatial query wearing a
+    // mechanic's name: turn your head and it is gone, so nothing can be
+    // subscribed to it and no player can aim with it.
+    let mut state = SpaceState::new();
+    state.space.spawn(0);
+    state.space.spawn(1);
+    let nose = state.space.ships[0].facing();
+    let at = state.space.ships[0].at;
+    state.space.ships[1].at =
+      plaza_client_utils::math::Vec3::new(at.x + nose.x * 120.0, at.y + nose.y * 120.0, at.z + nose.z * 120.0);
+    state.space.resolve_locks(true);
+    assert_eq!(state.space.lock_for(0), Some(1));
+
+    // Straight off to the side, well outside the cone, still inside range.
+    state.space.ships[1].at = plaza_client_utils::math::Vec3::new(at.x, at.y + 120.0, at.z);
+    state.space.resolve_locks(true);
+    assert_eq!(state.space.lock_for(0), Some(1), "the hold broke on a turn");
+
+    state.space.resolve_locks(false);
+    assert_eq!(
+      state.space.lock_for(0),
+      None,
+      "without the hold it should have been lost the moment it left the cone"
+    );
+  }
 
   #[test]
   fn a_client_always_sees_its_own_ship() {

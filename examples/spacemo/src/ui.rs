@@ -132,6 +132,8 @@ pub fn draw_panel(client: &NetClient, url: &str, dials: &Dials) {
             ui.radio_value(&mut held.strategy, strategy, strategy.name());
           }
           ui.checkbox(&mut held.packed, "bit-packed");
+          ui.checkbox(&mut held.sticky_locks, "held locks (second channel)")
+            .on_hover_text("A lock taken once and kept until it breaks, and therefore a set worth subscribing to: the ship you locked stays in your frame wherever it goes. Off, the cone is re-read every tick and the locked ship is only sent when the radius happened to reach it, so the reticle can name something you were never told about. Lock range is 320 against a default view of 260.");
           ui.checkbox(&mut held.relative, "positions relative to the observer");
           ui.checkbox(&mut held.stream_bolts, "send every bolt's path");
           ui.add(egui_macroquad::egui::Slider::new(&mut held.bots, 0..=400).text("bots"));

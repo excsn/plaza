@@ -125,6 +125,20 @@ Flat, at 110 bits a ship against 119. At the smallest world absolute is still be
 
 There is a round-trip test 200000 units from the origin, which is a place the absolute scheme cannot represent at all: it clamps by over a thousand units.
 
+## A radius cannot answer what a lock asks
+
+`LOCK_RANGE` is 320 units. The default view radius is 260. So a reticle could name a ship the relevance query had already culled, and the client was told "locked: 7" with no ship 7 to draw it on. Relevance had silently broken a mechanic that names an entity, which is the same class of fault `horde_playground` found when an enemy chased a player the client could not place.
+
+Two things were wrong, and the smaller one was the visible one.
+
+**A lock re-derived every tick is a spatial query wearing a mechanic's name.** It was recomputed from the cone on every frame, so it changed as fast as the ships moved: turn your head and it was gone. Nothing can subscribe to a set like that, and no player can aim with it. A lock is now **taken once from the cone and held** until the target dies or leaves lock range, which is what makes it a set at all.
+
+**A held lock is then a subscription**, and `plaza_server_utils::subscription` is the block for it. `Audience::of` unions it with the radius answer, so the locked ship is in the frame wherever it is.
+
+This is the same shape `gow_3d` uses for a party, at the opposite extreme: **one entry, held for seconds rather than a handful held for hours.** That is the point of doing it here rather than only there. The cost is `added`, reported on the panel, and it is at most one ship per client however large the volume gets.
+
+The panel switch turns the hold off, which restores the old behaviour and the old defect together: the cone is re-read every tick and the locked ship is only in your frame when the radius happened to reach it anyway.
+
 ## Prediction, and the rule as code
 
 `advance()` is the whole flight model, and it is a free function called by **both** the server's `Space::step` and the client's predictor. Not described twice, not behind a trait: the same code.

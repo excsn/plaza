@@ -65,6 +65,7 @@ impl StateLogic<SpaceOp, PlayerId, SpaceState> for SpaceLogic {
       // else: the query is the only thing that differs between them.
       state.strategy = wanted.strategy;
       state.packed = wanted.packed;
+      state.sticky_locks = wanted.sticky_locks;
       state.relative = wanted.relative;
       state.view = wanted.view.clamp(40.0, crate::max_view());
       state.stream_bolts = wanted.stream_bolts;
@@ -134,8 +135,9 @@ fn depart(state: &mut SpaceState, player: PlayerId) {
 
 fn step_once(state: &mut SpaceState, ctx: &mut Ctx) {
   let flying = state.flying;
-  state.space.step(&flying);
+  state.space.step_with(&flying, state.sticky_locks);
   state.tick = state.space.tick;
+  state.follow_locks(state.sticky_locks);
   state.reindex();
 
   let players: Vec<PlayerId> = state.agents.keys().copied().collect();

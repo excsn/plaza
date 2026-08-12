@@ -186,6 +186,15 @@ pub struct Space {
   slots: SlotAllocator,
   cooldown: Vec<u16>,
   missile_cooldown: Vec<u16>,
+  /// What each seat currently holds a lock on.
+  ///
+  /// **Held, not re-derived.** A lock recomputed from the cone every tick is a
+  /// spatial query wearing a mechanic's name: it changes as fast as the ships
+  /// move, so nothing can subscribe to it and a client cannot rely on it for
+  /// longer than a frame. Acquired from the cone once and kept until it breaks
+  /// is the version a player can aim with, and the version that is a set worth
+  /// keeping relevant.
+  locked: Vec<Option<u16>>,
   /// Cumulative, for the panel: churn is the cost this example exists to show.
   pub spawned: u64,
   pub expired: u64,
@@ -222,6 +231,7 @@ impl Space {
       slots: SlotAllocator::new(),
       cooldown: vec![0; MAX_SHIPS],
       missile_cooldown: vec![0; MAX_SHIPS],
+      locked: vec![None; MAX_SHIPS],
       spawned: 0,
       expired: 0,
       hits: Vec::new(),
@@ -309,9 +319,20 @@ impl Space {
   }
 
   pub fn step(&mut self, flying: &[Fly; MAX_PLAYERS]) {
+    self.step_with(flying, true)
+  }
+
+  /// The step, with the lock behaviour named.
+  ///
+  /// `sticky` off re-derives every lock from the cone each tick, which is the
+  /// older behaviour and the one the panel switch demonstrates.
+  pub fn step_with(&mut self, flying: &[Fly; MAX_PLAYERS], sticky: bool) {
     self.tick += 1;
     self.hits.clear();
     self.kills.clear();
+    // Before anything fires, and after last tick's movement, so a launch aims
+    // at a lock that describes the world the player is looking at.
+    self.resolve_locks(sticky);
     #[allow(clippy::needless_range_loop)]
     for index in 0..self.ships.len() {
       // Indexed rather than zipped: the player seats read from `flying` and
@@ -452,12 +473,45 @@ impl Space {
     MISSILE_EVERY
   }
 
-  /// What a seat would lock onto if it launched now.
+  /// What a seat currently has a lock on.
   ///
   /// Public because a client cannot work it out: lock is resolved here, so
   /// pressing the button with nothing in the cone does nothing at all, and
   /// without being told, that is indistinguishable from a broken weapon.
   pub fn lock_for(&self, seat: usize) -> Option<u16> {
+    self.locked[seat]
+  }
+
+  /// Whether a held lock is still good: alive, and inside the range it was
+  /// taken at. Deliberately not the cone, because a lock you lose by turning
+  /// your head is one nobody can fly with.
+  fn lock_holds(&self, seat: usize, target: u16) -> bool {
+    let (me, them) = (self.ships[seat], self.ships[target as usize]);
+    if !me.alive || !them.alive {
+      return false;
+    }
+    let to = Vec3::new(them.at.x - me.at.x, them.at.y - me.at.y, them.at.z - me.at.z);
+    to.length() <= LOCK_RANGE
+  }
+
+  /// Keeps a lock that still holds, or takes the nearest thing in the cone.
+  ///
+  /// Called from `step`, after everything has moved, so a caller cannot forget
+  /// it and leave every seat unable to fire.
+  pub fn resolve_locks(&mut self, sticky: bool) {
+    for seat in 0..self.ships.len() {
+      if sticky
+        && let Some(held) = self.locked[seat]
+        && self.lock_holds(seat, held)
+      {
+        continue;
+      }
+      self.locked[seat] = self.acquire_lock(seat);
+    }
+  }
+
+  /// The nearest live ship inside this seat's lock cone.
+  fn acquire_lock(&self, seat: usize) -> Option<u16> {
     let ship = self.ships[seat];
     if !ship.alive {
       return None;
@@ -1260,8 +1314,10 @@ mod tests {
     space.ships[0].yaw = 0.0;
     space.ships[0].pitch = 0.0;
 
-    // Behind: no lock, and a launch that does nothing.
+    // Behind: no lock, and a launch that does nothing. `lock_for` reads what
+    // is held rather than recomputing, so the resolve is what a tick would do.
     space.ships[1].at = Vec3::new(0.0, 0.0, -200.0);
+    space.resolve_locks(true);
     assert_eq!(space.lock_for(0), None, "nothing behind should lock");
     let before = space.bolts.len();
     space.step(&launching());
@@ -1269,6 +1325,7 @@ mod tests {
 
     // Ahead: a lock, and a missile that chases exactly it.
     space.ships[1].at = Vec3::new(0.0, 0.0, 200.0);
+    space.resolve_locks(true);
     assert_eq!(space.lock_for(0), Some(1), "and something ahead should");
     space.step(&launching());
     let chasing: Vec<Option<u16>> = space.bolts.iter().filter(|b| b.chasing.is_some()).map(|b| b.chasing).collect();

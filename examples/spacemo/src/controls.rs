@@ -17,6 +17,14 @@ pub struct Controls {
   pub strategy: Strategy,
   /// Whether frames go out bit-packed or at full serde width.
   pub packed: bool,
+  /// Whether a lock is held once taken, which is what makes it a set worth
+  /// subscribing to rather than a per-tick spatial answer.
+  ///
+  /// Off is the older behaviour: the cone is re-read every tick, so the lock
+  /// changes as fast as the ships do and the locked ship is only in the frame
+  /// when the radius happened to reach it anyway. `LOCK_RANGE` is 320 against a
+  /// default 260 view, so that gap is not hypothetical.
+  pub sticky_locks: bool,
   /// Whether positions are offsets from the observer rather than places.
   pub relative: bool,
   /// Synthetic population. The dial the measurement needs: with one ship in
@@ -44,6 +52,7 @@ impl Default for Controls {
       relative: true,
       bots: 150,
       view: crate::default_view(),
+      sticky_locks: true,
       stream_bolts: true,
     }
   }
