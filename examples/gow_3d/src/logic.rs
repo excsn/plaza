@@ -16,6 +16,7 @@ use plaza::error::StateLogicError;
 use plaza::session::TargetedOp;
 use plaza::state_logic::{LogicInput, LogicOutput, StateLogic};
 use plaza_server_utils::{Admission, Departure};
+use tracing::info;
 
 use crate::casting::Ms;
 use crate::controls::Dial;
@@ -28,6 +29,13 @@ type Ctx = OpsQueue<GowOp, PlayerId>;
 
 /// Milliseconds a tick covers.
 pub const STEP_MS: Ms = 1000 / TICK_HZ;
+
+/// How often the zone says what it has been doing, in ticks.
+///
+/// A headless server has no panel, so the counters it keeps are invisible
+/// unless something says them out loud. Ten seconds is often enough to watch a
+/// zone and rare enough to leave in a log.
+pub const REPORT_EVERY: u64 = TICK_HZ * 10;
 
 #[derive(Default)]
 pub struct GowLogic {
@@ -150,6 +158,9 @@ fn apply(state: &mut GowState, player: PlayerId, seat: Seat, op: GowOp, ctx: &mu
 
 fn step_once(state: &mut GowState, ctx: &mut Ctx) {
   state.tick += 1;
+  if state.tick.is_multiple_of(REPORT_EVERY) {
+    report(state);
+  }
   state.landed = state.zone.advance(STEP_MS);
   let now = state.zone.now_ms;
 
@@ -165,6 +176,36 @@ fn step_once(state: &mut GowState, ctx: &mut Ctx) {
       .ops_q()
       .push(TargetedOp::new_system_to(player, vec![GowOp::World(Box::new(frame))]));
   }
+}
+
+/// Says what the zone has been doing, for a server nobody is watching a panel
+/// for.
+///
+/// The waste figure is the one worth reading: it is what the flat grid handed
+/// back that the distance test then threw away, and in a stacked zone it is
+/// most of it.
+fn report(state: &mut GowState) {
+  let zone = &mut state.zone;
+  let waste = if zone.examined == 0 {
+    0.0
+  } else {
+    (1.0 - zone.returned as f64 / zone.examined as f64) * 100.0
+  };
+  info!(
+    tick = state.tick,
+    characters = zone.characters.len(),
+    authority = zone.authority.label(),
+    casts_landed = zone.landed,
+    revives = zone.revives,
+    claims_refused = zone.refusals,
+    query_waste = format!("{waste:.0}%"),
+    "zone"
+  );
+  // Reset the query counters only, because they describe a window and the
+  // others describe a session: a rate and a total read differently and mixing
+  // them is how a panel starts lying slowly.
+  zone.examined = 0;
+  zone.returned = 0;
 }
 
 /// One client's view, which is the two channels unioned and then labelled.
@@ -295,6 +336,31 @@ mod tests {
     assert_eq!(state.zone.refusals, 1);
 
     let _ = logic;
+  }
+
+  #[tokio::test]
+  async fn the_zone_reports_on_a_tick_boundary_and_resets_only_the_window() {
+    // A counter that describes a window and one that describes a session read
+    // differently, and resetting both together is how a log starts lying
+    // slowly: the totals would restart every ten seconds while claiming to be
+    // totals.
+    let logic = GowLogic::new();
+    let mut state = GowState::new();
+    seated(&mut state, 1);
+    state.zone.landed = 7;
+    state.zone.refusals = 3;
+
+    state.tick = REPORT_EVERY - 1;
+    logic
+      .process_input(&mut state, LogicInput::TimeStep {
+        delta_time: std::time::Duration::from_millis(33),
+      })
+      .await
+      .unwrap();
+
+    assert_eq!(state.zone.examined, 0, "the window resets");
+    assert_eq!(state.zone.landed, 7, "and the totals do not");
+    assert_eq!(state.zone.refusals, 3);
   }
 
   #[tokio::test]

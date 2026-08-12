@@ -201,8 +201,12 @@ impl NetClient {
     self.pump.rtt_ms()
   }
 
+  /// Whether there is a character to draw and move.
+  ///
+  /// Both halves, because a seat without a position is a client that knows its
+  /// number and not where it is standing.
   pub fn ready(&self) -> bool {
-    self.seat.is_some()
+    self.seat.is_some() && self.seeded
   }
 
   /// The party, which is who to draw a frame for whether or not they are in

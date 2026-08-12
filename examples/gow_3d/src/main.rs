@@ -176,7 +176,7 @@ async fn frame_loop(options: role::Options) {
     client.poll(clock_ms);
     client.forget_old_flashes(clock_ms);
 
-    if client.seeded {
+    if client.ready() {
       let (at, forward) = walk(client.at, &mut yaw, dt);
       match client.authority {
         // The client owns it: move, then report.
@@ -189,7 +189,7 @@ async fn frame_loop(options: role::Options) {
 
     clear_background(Color::new(0.04, 0.05, 0.07, 1.0));
 
-    if client.seeded {
+    if client.ready() {
       let here = vec3(client.at.0, client.at.1, client.at.2);
       set_camera(&render::over_the_shoulder(here, yaw, 9.0));
       scene.draw_floors(render::floor_of(client.at.1));
