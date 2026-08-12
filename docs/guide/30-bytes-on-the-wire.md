@@ -26,6 +26,16 @@ The body goes through a `WireCodec`, stateless and swappable. `JsonCodec` is the
 
 That gap points at the rule worth carrying out of this chapter, because the two obvious compaction targets have opposite shapes. **A variant tag is a per-message cost**, so its share is set by your average message size and *small* messages pay most: [curtain_fire](../../examples/curtain_fire/) measures over 15% on a stream of one-line events and about 1% on frame-dominated traffic. **A field name is a per-field cost**, so its share is set by how *wide* a message is and the widest pays most, which is why a per-recipient state view is the expensive case and a two-field notice is not. Establish which of the two you are looking at before you measure anything, because the traffic that is cheap for one is expensive for the other. A hot fieldless enum mapped to a `u8` yourself is the first lever only if your messages are small.
 
+## An event is the only thing you cannot say again
+
+Every other field on a wire describes a state, so a lost frame costs freshness and the next one repairs it. An event happens once and no later frame mentions it, which makes what it carries a decision you get to make exactly once.
+
+The failure is easy to miss because the event *works*: it arrives, and whatever consumed it at the time is satisfied. [gow_3d](../../examples/gow_3d/) sent a landed ability as a list of seats, which was all a coloured flash needed and it looked right for as long as the flash was the only consumer. Adding an animation asked two more questions of the same event, which ability and what it reached, and **neither is recoverable afterwards**: no frame repeats the landing, and the victim's health has already moved by the time the next one arrives, so the amount and the target both have to be inferred from a world that has already changed.
+
+So the rule is to carry what the event's consumers need at the instant it happens, and to be suspicious when the current consumer is trivial, because a trivial consumer tells you nothing about what the field is worth. The corollary is the cheerful one: this is the field a state does not have to carry. gow_3d's landing says who cast, what, and on whom, and none of that appears anywhere else on its wire.
+
+A second, smaller decision rides along: **an event that reached nothing is still an event.** A swing through empty air is sent, or a miss is indistinguishable from a key that did nothing, which is a different bug wearing the same silence.
+
 ## Shipping an update
 
 The scenario that motivates the handshake: a browser client is a build product, and it does not rebuild when the server does. A page loaded before a wire change still loads, still runs, and only the messages whose shape changed are rejected. That failure reads as a netcode bug and is a deployment bug, and it once cost two rounds of diagnosis. The defense has three parts:

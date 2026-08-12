@@ -19,6 +19,16 @@ Two labs carry this argument at different depths:
 
 And one hard-won warning from [pellet_maze](../../examples/pellet_maze/): filtering the snapshot was not enough, because the vanish leaked through an event (`Eaten` named a cell). Secrecy is a property of the whole outbound stream, not of one message in it. If your snapshots are filtered and your events are not, you have a well-organized leak.
 
+## A client is never in its own audience
+
+Relevance answers who *else* a client is told about, and it is easy to let that answer stand in for everything a frame carries. It cannot, because **a client never appears in its own relevance set**, and everything self-referential falls into that gap: your own cast bar, your cooldown, your mana, your health, the place you just respawned at.
+
+[gow_3d](../../examples/gow_3d/) shipped exactly that mistake and it was invisible from the server. Its frame carried the audience and a seat number, and the client drew its own body from its own position while reading everything else out of the list of other people, which never contained it. So a player pressed the cast key, the server genuinely started a bar, ticked it, landed it, and **nothing on screen changed at all**. Three of four keys did nothing, and it was impossible to tell that apart from an empty zone until somebody stood next to a character and watched their bar run instead.
+
+The fix is a block of its own on the frame rather than a lookup into the audience: **what a player must know about themselves is not a subset of what they are told about others, so it does not travel as one.** Once it exists it is also where the awkward cases go, the ones that are about the recipient rather than about the world: how long until you may act again, how long until you are back up, and the one position that travels down the wire instead of up it.
+
+The symptom generalises past games. Any per-recipient view built by filtering a collection has this hole, because the recipient is the one member the filter has no reason to keep.
+
 ## The uniform escape hatch
 
 Per-recipient building costs one provider call and one encode per recipient. When the view genuinely is the same for everyone, `SnapshotRequest::uniform` runs the provider once with no target and encodes once, fanning the same buffer out to all recipients. The measured difference is not subtle: at 256 recipients, tag_arena's uniform pass costs 19.8µs where the per-recipient pass costs 2.87ms. The contract is printed on the tin: a uniform view must contain nothing any recipient may not see. Choose per-recipient by default and uniform when secrecy is provably absent, not the other way around; the expensive direction of that mistake is a leak, and the cheap direction is microseconds.

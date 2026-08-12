@@ -27,6 +27,16 @@ The crate is blunt: extrapolation is the starvation fallback, and dead reckoning
 
 The playground's negative result completes the picture: a curve-fitting extrapolator measurably better on paper changed nothing at normal send rates, because there was no gap to extrapolate. A better extrapolator needs something to extrapolate; `TrajectoryPredictor` earns its keep only below roughly 10Hz.
 
+## Presentation is derived, not sent
+
+A body that slides rather than walks is the commonest reason a correct netcode still looks wrong, and the temptation is to put animation state on the wire: a pose, a phase, an event saying "this one is running now".
+
+It is almost never necessary, because the client already holds what an animation is a function of. [gow_3d](../../examples/gow_3d/) animates a walk cycle from **the speed its interpolation already computes** from the two samples it keeps, a cast pose from the bar already on the frame, a recoil from the landing event already delivered, and a fall from health reaching zero. None of it crosses the wire and none of it needed a new field.
+
+Two details that make derived animation hold up. Phase the cycle on **distance covered rather than on time**, or a body slowing down moonwalks through its own stride. And derive from the sample stream rather than from the render clock, so the animation stays right at any send rate, which is the whole reason it survives the low-rate case this chapter is about.
+
+The one thing that did need the server was death, and it needed relevance rather than a field: a downed character left the spatial index the instant it died, so it left every audience and no client was ever told it had fallen. Bodies stay indexed briefly while they go over. **A thing has to remain relevant for as long as its animation takes**, which is a sentence about interest management rather than about rendering.
+
 ## Lag compensation: the first decision with a loser
 
 Everything so far kept clients pretty. Lag compensation is where authority gets involved, because you aimed at where the target *was* (you render the past, remember), and by the time your shot reaches the server, the target has moved. The server's answer is to rewind: [`HistoricalStateBuffer`](../../server_utils/API_REFERENCE.md) keeps a rolling history of the authoritative world, and the hit is judged against the world at the instant the shooter saw, interpolated between bracketing states through the same `Interpolatable` impl the client uses.
