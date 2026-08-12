@@ -205,6 +205,107 @@ impl CorrectionMonitor {
 mod tests {
   use super::*;
 
+  /// The three tuning knobs and the peek, none of which anything was calling.
+  /// A monitor whose knobs are untested is one whose defaults are the only
+  /// configuration ever measured.
+  mod the_knobs {
+    use super::*;
+
+    /// Feeds a steady level until the monitor is warm.
+    fn warmed(mut m: CorrectionMonitor, level: f32) -> CorrectionMonitor {
+      for i in 0..200 {
+        m.record(level + (i % 5) as f32 * 0.01);
+      }
+      m
+    }
+
+    #[test]
+    fn a_wider_sigma_flags_less() {
+      // The knob's whole purpose, and the direction it has to go: more
+      // standard deviations means a higher bar.
+      let tight = warmed(CorrectionMonitor::new().with_floor(0.1).with_sigma(1.0), 10.0);
+      let loose = warmed(CorrectionMonitor::new().with_floor(0.1).with_sigma(6.0), 10.0);
+      assert!(
+        loose.threshold() > tight.threshold(),
+        "six sigma is a higher bar than one: {} against {}",
+        loose.threshold(),
+        tight.threshold()
+      );
+    }
+
+    #[test]
+    fn a_negative_sigma_is_clamped_rather_than_inverted() {
+      // Otherwise a typo turns the detector inside out and flags everything
+      // *below* the mean, which reads as a broken game rather than a bad
+      // setting.
+      let m = warmed(CorrectionMonitor::new().with_floor(1.0).with_sigma(-3.0), 10.0);
+      assert!(m.threshold() >= m.norm(), "the band never goes below the baseline");
+    }
+
+    #[test]
+    fn smoothing_decides_how_fast_the_baseline_follows_a_step() {
+      // Small alpha describes the run, large alpha describes the last half
+      // second, and the difference is what the doc comment promises.
+      let mut slow = CorrectionMonitor::new().with_floor(0.1).with_smoothing(0.01);
+      let mut fast = CorrectionMonitor::new().with_floor(0.1).with_smoothing(0.5);
+      for _ in 0..200 {
+        slow.record(1.0);
+        fast.record(1.0);
+      }
+      for _ in 0..20 {
+        slow.record(50.0);
+        fast.record(50.0);
+      }
+      assert!(
+        fast.norm() > slow.norm(),
+        "the fast baseline has followed the step further: {} against {}",
+        fast.norm(),
+        slow.norm()
+      );
+    }
+
+    #[test]
+    fn smoothing_outside_zero_to_one_is_clamped() {
+      let m = CorrectionMonitor::new().with_smoothing(9.0);
+      let n = CorrectionMonitor::new().with_smoothing(-9.0);
+      // Neither should panic or diverge; recording has to stay finite.
+      for mut each in [m, n] {
+        for _ in 0..50 {
+          each.record(5.0);
+        }
+        assert!(each.norm().is_finite(), "a clamped alpha keeps the baseline finite");
+      }
+    }
+
+    #[test]
+    fn asking_whether_something_is_abnormal_does_not_record_it() {
+      // The difference between the two calls, and the reason both exist: a
+      // panel asking "would this be flagged" must not move the baseline it is
+      // asking about.
+      let mut m = warmed(CorrectionMonitor::new().with_floor(1.0), 10.0);
+      let before = (m.norm(), m.threshold(), m.counts().1);
+
+      assert!(m.is_abnormal(10_000.0), "plainly out of band");
+      assert_eq!(
+        (m.norm(), m.threshold(), m.counts().1),
+        before,
+        "and asking changed nothing"
+      );
+
+      m.record(10_000.0);
+      assert!(m.counts().1 > before.2, "where recording it does");
+    }
+
+    #[test]
+    fn nothing_is_abnormal_while_the_monitor_is_still_warming_up() {
+      // A threshold built from four samples is a guess, and flagging against a
+      // guess is how a readout cries wolf for the first second of every match.
+      let m = CorrectionMonitor::new().with_floor(0.1);
+      assert!(m.is_warming_up());
+      assert!(!m.is_abnormal(10_000.0), "no verdict before there is a baseline");
+    }
+  }
+
   #[test]
   fn a_steady_stream_of_similar_corrections_is_never_abnormal() {
     // The point of an adaptive threshold: whatever the level, if it is *the*
