@@ -14,6 +14,10 @@ use crate::relevance::{audience, Audience, Parties, Seat};
 
 /// How far a character is told about, in metres.
 pub const VIEW: f32 = 30.0;
+/// How far an ability reaches.
+pub const REACH: f32 = 22.0;
+/// What one landing takes off.
+pub const HIT: u16 = 12;
 /// Metres between floors, which is what makes a zone a building rather than a
 /// field.
 pub const FLOOR_HEIGHT: f32 = 5.0;
@@ -34,6 +38,8 @@ pub struct Character {
   pub health: u16,
   /// What the client says it is holding, used only under server authority.
   pub intent: (f32, i8),
+  /// Who this character's next ability is aimed at.
+  pub target: Option<Seat>,
   pub casting: Option<Cast>,
   /// When this seat may act again, which is the other half of the design
   /// absorbing latency.
@@ -48,6 +54,7 @@ impl Character {
       tracked: Tracked::new(at, now_ms),
       health: 100,
       intent: (0.0, 0),
+      target: None,
       casting: None,
       ready_at: 0,
       alive: true,
@@ -66,6 +73,8 @@ pub struct Zone {
   pub refusals: u64,
   /// Casts that landed, for the panel.
   pub landed: u64,
+  /// Characters brought back up, for the panel.
+  pub revives: u64,
 }
 
 impl Zone {
@@ -82,6 +91,20 @@ impl Zone {
     // Leaving the zone leaves the party, or a health bar keeps updating for
     // somebody who is not here.
     self.parties.leave(seat);
+  }
+
+  /// Aims at a seat, or at nobody.
+  ///
+  /// Checked when the cast lands rather than now, because a target that walks
+  /// away mid-cast is the ordinary case and refusing it here would only move
+  /// the same decision earlier.
+  pub fn aim(&mut self, seat: Seat, at: Option<Seat>) {
+    if at.is_some_and(|other| other == seat || !self.characters.contains_key(&other)) {
+      return;
+    }
+    if let Some(character) = self.characters.get_mut(&seat) {
+      character.target = at;
+    }
   }
 
   /// Records what a client is holding, for the server to integrate.
@@ -172,6 +195,34 @@ impl Zone {
       }
     }
     self.landed += landed.len() as u64;
+
+    // Resolved after the loop, because a landing reads one character and
+    // writes another, and the two can be the same seat's target chain.
+    for caster in &landed {
+      let Some((from, target)) = self
+        .characters
+        .get(caster)
+        .map(|c| (c.tracked.at, c.target))
+      else {
+        continue;
+      };
+      let Some(target) = target else { continue };
+      let Some(victim) = self.characters.get_mut(&target) else {
+        continue;
+      };
+      // One range check, on the server, at the instant it lands. That is the
+      // whole of hit detection here, and the reason nothing has to be agreed.
+      if crate::movement::distance(from, victim.tracked.at) > REACH {
+        continue;
+      }
+      victim.health = victim.health.saturating_sub(HIT);
+      if victim.health == 0 {
+        // Back to full where they stand, because a corpse is content this
+        // example does not have and a zone that empties measures nothing.
+        victim.health = 100;
+        self.revives += 1;
+      }
+    }
     landed
   }
 
@@ -286,6 +337,66 @@ mod tests {
     assert!(zone.advance(400).is_empty(), "not yet");
     assert_eq!(zone.advance(200), vec![1], "now");
     assert!(zone.advance(1000).is_empty(), "and not a second time");
+  }
+
+  #[test]
+  fn a_named_target_is_checked_when_the_cast_lands_not_when_it_starts() {
+    // The whole of hit detection in this genre, and the reason nothing has to
+    // be agreed: no projectile exists, so there is no moving thing for two
+    // machines to disagree about. One range check, on the server, at one
+    // instant.
+    let mut zone = zone();
+    zone.aim(1, Some(2));
+    zone.begin_cast(1, 0, 500);
+
+    // The target walks out of reach while the bar is running, which is the
+    // ordinary case rather than an edge one.
+    zone.advance(250);
+    zone.characters.get_mut(&2).unwrap().tracked.at = (REACH * 3.0, 0.0, 0.0);
+    zone.advance(250);
+    assert_eq!(zone.characters[&2].health, 100, "out of reach when it landed");
+
+    // And back in reach, where the same cast connects. Waiting out the
+    // cooldown first, and asserting the cast actually began: a refused one
+    // leaves the health unchanged for a reason that has nothing to do with
+    // range, which would pass this test for the wrong reason.
+    zone.characters.get_mut(&2).unwrap().tracked.at = (2.0, 0.0, 0.0);
+    zone.advance(GLOBAL_COOLDOWN_MS);
+    assert!(zone.begin_cast(1, 0, 0), "the second cast is off cooldown");
+    zone.advance(1);
+    assert_eq!(zone.characters[&2].health, 100 - HIT);
+  }
+
+  #[test]
+  fn aiming_at_yourself_or_at_nobody_is_refused_rather_than_stored() {
+    // A target that is not there is a target every landing has to re-check,
+    // and a target that is yourself is a rule nobody wants to discover later.
+    let mut zone = zone();
+    zone.aim(1, Some(1));
+    assert_eq!(zone.characters[&1].target, None);
+    zone.aim(1, Some(77));
+    assert_eq!(zone.characters[&1].target, None);
+    zone.aim(1, Some(2));
+    assert_eq!(zone.characters[&1].target, Some(2));
+    zone.aim(1, None);
+    assert_eq!(zone.characters[&1].target, None, "and dropping a target is allowed");
+  }
+
+  #[test]
+  fn a_character_brought_to_nothing_comes_back_up_where_it_stands() {
+    // A zone that empties measures nothing, and a corpse is content this
+    // example does not have.
+    let mut zone = zone();
+    zone.aim(1, Some(2));
+    let mut casts = 0;
+    while zone.revives == 0 {
+      zone.begin_cast(1, 0, 0);
+      zone.advance(GLOBAL_COOLDOWN_MS);
+      casts += 1;
+      assert!(casts < 20, "a hundred health at {HIT} a landing should not take this long");
+    }
+    assert_eq!(zone.characters[&2].health, 100);
+    assert_eq!(zone.revives, 1);
   }
 
   #[test]

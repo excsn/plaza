@@ -135,6 +135,8 @@ pub struct NetClient {
   /// makes an event different from a state, and forgetting it is why the
   /// server bothers to send it at all.
   pub flashes: HashMap<Seat, u64>,
+  /// Who the next ability is aimed at.
+  pub target: Option<Seat>,
   /// Which mode the zone said it is running, on the last frame.
   pub authority: Authority,
   /// How far the server's idea of this client's own position is from the
@@ -178,6 +180,7 @@ impl NetClient {
       refused: 0,
       landed: Vec::new(),
       flashes: HashMap::new(),
+      target: None,
       authority: Authority::Client,
       gap: 0.0,
       worst_gap: 0.0,
@@ -261,6 +264,7 @@ impl NetClient {
         GowOp::Moved { .. }
         | GowOp::Intent { .. }
         | GowOp::Cast { .. }
+        | GowOp::Target { .. }
         | GowOp::Party { .. }
         | GowOp::Unparty => {}
       }
@@ -364,6 +368,12 @@ impl NetClient {
 
   pub fn cast(&mut self, ability: u8, cast_ms: u32) {
     self.pump.send_op(&GowOp::Cast { ability, cast_ms });
+  }
+
+  /// Aims at a seat, and remembers it so the interface can say so.
+  pub fn aim_at(&mut self, seat: Option<Seat>) {
+    self.target = seat;
+    self.pump.send_op(&GowOp::Target { seat });
   }
 
   pub fn party_with(&mut self, seat: Seat) {

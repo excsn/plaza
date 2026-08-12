@@ -132,6 +132,7 @@ fn apply(state: &mut GowState, player: PlayerId, seat: Seat, op: GowOp, ctx: &mu
       }
     }
     GowOp::Intent { yaw, forward } => state.zone.intend(seat, yaw, forward),
+    GowOp::Target { seat: at } => state.zone.aim(seat, at),
     GowOp::Cast { ability, cast_ms } => {
       state.zone.begin_cast(seat, ability, cast_ms as Ms);
     }

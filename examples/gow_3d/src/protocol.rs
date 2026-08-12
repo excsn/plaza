@@ -156,6 +156,14 @@ pub enum GowOp {
 
   /// Client to server: begin an ability.
   Cast { ability: u8, cast_ms: u32 },
+  /// Client to server: what this ability will be aimed at.
+  ///
+  /// The third leg of the genre's latency argument, and the cheapest. A
+  /// projectile has to be agreed about: two machines must decide whether a
+  /// moving thing met another moving thing, and they disagree by exactly the
+  /// round trip. A named target is a range check on the server at the instant
+  /// the cast lands, and there is nothing for anyone to disagree with.
+  Target { seat: Option<u16> },
   /// Client to server: party with a seat.
   Party { seat: u16 },
   /// Client to server: leave the party.

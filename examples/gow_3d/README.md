@@ -10,7 +10,7 @@ The crate is `gow_3d` because Cargo rejects a package name beginning with a digi
 cargo test -p gow_3d     # the findings, as assertions
 ```
 
-Arrows or WASD walk, **Q and E change floor**, 1 casts, 2 parties with the nearest character, 3 leaves. The panel switches who decides where you are, which is the comparison the example is built around. The thing worth doing is walking two floors away from somebody you are partied with: their body leaves the world and their entry stays, with a bearing and a floor offset. That is the whole argument of this example in one action.
+Arrows or WASD walk, **Q and E change floor**, **tab** picks a target, 1 casts, 2 parties with the nearest character, 3 leaves. The panel switches who decides where you are, which is the comparison the example is built around. The thing worth doing is walking two floors away from somebody you are partied with: their body leaves the world and their entry stays, with a bearing and a floor offset. That is the whole argument of this example in one action.
 
 ## What it is for
 
@@ -87,6 +87,14 @@ This is the part that took three tries and is worth the space, because the two w
 The budget is capped at three seconds of travel. Uncapped, a disconnection is a teleport: five minutes of silence would earn the width of the zone several times over. The cap is a compromise and costs exactly what it says, which is that a client returning from a longer stall gets snapped back once.
 
 **What a refusal does not do is stop anyone.** Measured on the wire: hammering a teleport for 20 seconds gained **180 units against the 187 an honest runner covers**, and logged **591 refusals** doing it. The cheat lands a big jump rarely instead of a small one often, ends up behind, and is loud the entire time. Being loud is the whole of the defence.
+
+## Tab targeting removes the thing two machines would disagree about
+
+A projectile has to be agreed about. Two machines must decide whether a moving thing met another moving thing, they hold different ideas of where both were, and they disagree by exactly the round trip. That is the problem `hit_scan` and `puck_rink` exist to solve, and it is real work.
+
+A named target is not that problem. The client says who it is aiming at, and when the cast lands the server does **one range check, at one instant, on positions it already has**. There is no projectile in flight for anyone to disagree about, and no rewind, no lag compensation and no hit registration to argue over. This is the third leg of the genre's latency argument and by far the cheapest.
+
+The range is checked when the cast **lands**, not when it starts, which is the ordinary case rather than an edge one: a target that walks out of reach during a one-and-a-half second bar is what a fight looks like. Checking at the start would only move the same decision earlier and make it wrong more often.
 
 ## Two channels of relevance, because an MMO asks two questions
 

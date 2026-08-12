@@ -216,7 +216,7 @@ async fn frame_loop(options: role::Options) {
     }
 
     draw_text(
-      "arrows or WASD to walk, Q and E to change floor, 1 to cast, 2 to party with the nearest",
+      "arrows or WASD walk, Q and E change floor, tab targets, 1 casts, 2 parties with the nearest",
       24.0,
       screen_height() - 24.0,
       20.0,
@@ -234,10 +234,31 @@ async fn frame_loop(options: role::Options) {
     if is_key_pressed(KeyCode::Key3) {
       client.unparty();
     }
+    // Tab targeting, which is the point rather than a convenience: naming the
+    // target is what removes the thing two machines would otherwise have to
+    // agree about.
+    if is_key_pressed(KeyCode::Tab) {
+      let next = cycle_target(&client);
+      client.aim_at(next);
+    }
 
     ui::draw_panel(&mut client, &url, &dials);
     egui_macroquad::draw();
     next_frame().await;
+  }
+}
+
+/// The next target in view, in seat order, wrapping back to none.
+///
+/// Seat order rather than distance order, because a list that reorders itself
+/// as people move is one nobody can cycle through.
+#[cfg(all(feature = "client", feature = "websocket"))]
+fn cycle_target(client: &NetClient) -> Option<u16> {
+  let mut seats: Vec<u16> = client.in_view().map(|other| other.seen.seat).collect();
+  seats.sort_unstable();
+  match client.target {
+    None => seats.first().copied(),
+    Some(current) => seats.iter().copied().find(|seat| *seat > current),
   }
 }
 

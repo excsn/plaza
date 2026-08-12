@@ -102,6 +102,17 @@ pub fn draw_panel(client: &mut NetClient, url: &str, dials: &Dials) {
       ui.label(format!("claims refused {}", client.refused));
       ui.separator();
 
+      match client.target.and_then(|seat| client.others.get(&seat)) {
+        Some(other) => {
+          ui.label(format!("target        seat {}", other.seen.seat));
+          ui.label(format!("their health  {}", other.seen.health));
+        }
+        None => {
+          ui.label("target        none (tab)");
+        }
+      }
+      ui.separator();
+
       // The comparison this example was planned around, in one session rather
       // than two builds. Switch the dial and watch both rows move: under
       // client authority the gap is a send interval's travel, under server
