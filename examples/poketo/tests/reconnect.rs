@@ -26,6 +26,7 @@ use plaza_wire::{frame, MsgPackCodec, WireCodec};
 use plaza_ws::scripted::ScriptedSocket;
 use poketo::battle::Choice;
 use poketo::grid::Facing;
+use poketo::world::STEP_TICKS;
 use poketo::logic::PoketoLogic;
 use poketo::net::client::NetClient;
 use poketo::protocol::{PlayerId, PoketoOp};
@@ -92,22 +93,25 @@ async fn tick(logic: &PoketoLogic, state: &mut PoketoState) -> LogicOutput<Poket
     .unwrap()
 }
 
-/// Walks a seat until it is in a battle, or gives up.
+/// Walks a seat back and forth through tall grass until it is in a battle.
 ///
-/// Encounters are random by design, so the walk is the fixture: stepping about
-/// on grass until one starts is what a player does.
+/// The seat is *put* in the grass rather than left to find some. Nothing
+/// begins outside it, and the map is a function of the tile, so where the grass
+/// is can be looked up rather than wandered into.
+const RUN: u32 = 10;
+
 async fn walk_into_a_battle(logic: &PoketoLogic, state: &mut PoketoState, id: PlayerId, seat: u16) -> bool {
-  for step in 0..600u32 {
-    let facing = match step % 4 {
-      0 => Facing::North,
-      1 => Facing::East,
-      2 => Facing::South,
-      _ => Facing::West,
-    };
+  let start = poketo::terrain::grass_run(poketo::world::TOWN_CENTRE, RUN).expect("a patch of tall grass somewhere");
+  state.world.seat(seat as usize, start);
+
+  for leg in 0..40u32 {
+    let facing = if leg % 2 == 0 { Facing::East } else { Facing::West };
     send(logic, state, id, PoketoOp::Walk(Some(facing))).await;
-    tick(logic, state).await;
-    if state.battles.contains_key(&seat) {
-      return true;
+    for _ in 0..(RUN - 1) * u32::from(STEP_TICKS) {
+      tick(logic, state).await;
+      if state.battles.contains_key(&seat) {
+        return true;
+      }
     }
   }
   false
@@ -124,18 +128,15 @@ async fn a_choice_resent_after_a_reconnect_does_not_play_twice() {
   join(&logic, &mut state, 1).await;
 
   let seat = state.seat_of(1).expect("seated") as u16;
-  if !walk_into_a_battle(&logic, &mut state, 1, seat).await {
-    // Encounters are odds rather than a schedule. Reporting the skip rather
-    // than passing quietly, because a test that silently stops exercising its
-    // subject is worse than one that fails.
-    println!("\n  no encounter in 600 steps, which is unlucky rather than wrong\n");
-    return;
-  }
+  assert!(
+    walk_into_a_battle(&logic, &mut state, 1, seat).await,
+    "pacing a patch of tall grass has to start something"
+  );
 
   let turn = state.battles[&seat].turn;
   send(&logic, &mut state, 1, PoketoOp::Choose {
     turn,
-    choice: Choice::Strike,
+    choice: Choice::First,
   })
   .await;
 
@@ -166,7 +167,7 @@ async fn a_choice_resent_after_a_reconnect_does_not_play_twice() {
   // The resend, addressed to the turn it was for.
   send(&logic, &mut state, 2, PoketoOp::Choose {
     turn,
-    choice: Choice::Strike,
+    choice: Choice::First,
   })
   .await;
 

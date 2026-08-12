@@ -26,8 +26,8 @@ fi
 #    compiles a rapier it would not run: unlike puck_rink, nothing here
 #    re-simulates, and the client only draws what arrives.
 #
-#    CUBE_YARD_FEATURES adds to that set, if you add any features worth passing.
-features="web${CUBE_YARD_FEATURES:+,$CUBE_YARD_FEATURES}"
+#    POKETO_FEATURES adds to that set, if you add any features worth passing.
+features="web${POKETO_FEATURES:+,$POKETO_FEATURES}"
 echo "==> building browser client (release wasm, features: $features)"
 ( cd "$root" && cargo build -p poketo --bin poketo --target wasm32-unknown-unknown --release --no-default-features --features "$features" )
 

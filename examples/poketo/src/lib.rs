@@ -17,6 +17,7 @@ pub mod battle;
 pub mod grid;
 pub mod protocol;
 pub mod role;
+pub mod terrain;
 pub mod trade;
 
 #[cfg(any(feature = "server", all(feature = "client", feature = "websocket")))]

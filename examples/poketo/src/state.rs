@@ -10,16 +10,19 @@ use std::collections::HashMap;
 
 use plaza_server_utils::Roster;
 
-use crate::battle::Battle;
+use crate::battle::{Battle, Creature};
 use crate::grid::{Facing, Tile};
 use crate::protocol::PlayerId;
-use crate::world::{World, MAX_TRAINERS, VIEW_TILES};
+use crate::terrain;
+use crate::world::{World, MAX_TRAINERS, PLAYER_SEATS};
 
-/// How often a step onto a wild tile starts something, as one in this many.
+/// How often a step into tall grass starts something, as one in this many.
 ///
-/// Rare enough that walking is walking, common enough that a test which walks
-/// for a few seconds sees one.
-pub const ENCOUNTER_ODDS: u64 = 12;
+/// The rate is two rules rather than one: this, and the fact that only tall
+/// grass counts at all. Walking anywhere at one in twelve made an encounter a
+/// tax on moving; walking into a patch you can see, at one in thirty, makes it
+/// something you decided to do. A slider moves it from here at runtime.
+pub const ENCOUNTER_ODDS: u64 = crate::protocol::DEFAULT_ENCOUNTER_ODDS as u64;
 
 pub struct PoketoState {
   pub world: World,
@@ -28,10 +31,15 @@ pub struct PoketoState {
   pub agents: HashMap<PlayerId, plaza::agent::Agent<PlayerId>>,
   /// What each seat is holding in the overworld.
   pub held: Vec<Option<Facing>>,
+  /// The creature each seat owns, which is the only thing here that
+  /// accumulates. Indexed by seat, like `held`.
+  pub party: Vec<Creature>,
+  /// Scratch for the tick, so the walk does not rebuild a direction list.
+  pub held_now: Vec<Option<Facing>>,
   /// A seat is in here **or** in the world, never both.
   pub battles: HashMap<u16, Battle>,
-  /// How far a client is told about, in tiles.
-  pub view: u32,
+  /// The knobs the town runs on, which a client may ask to move.
+  pub tuning: crate::protocol::Tuning,
   /// What a dropped connection left behind, by the token it was given.
   ///
   /// Kept rather than destroyed, because a turn-based game is the one place
@@ -53,6 +61,10 @@ pub struct Parked {
   pub seat: u16,
   pub at: Tile,
   pub battle: Option<Battle>,
+  /// Kept for the same reason the battle is: experience does not decay either,
+  /// and coming back to a level-one creature is losing the only thing here
+  /// worth having.
+  pub party: Creature,
   /// The tick it was parked on, for aging it out.
   pub since: u64,
 }
@@ -75,14 +87,18 @@ impl Default for PoketoState {
 
 impl PoketoState {
   pub fn new() -> Self {
+    let mut world = World::new();
+    world.populate(crate::world::TOWN_CENTRE, 30);
     Self {
-      world: World::new(),
+      world,
       tick: 0,
-      roster: Roster::new(MAX_TRAINERS),
+      roster: Roster::new(PLAYER_SEATS),
       agents: HashMap::new(),
       held: vec![None; MAX_TRAINERS],
+      party: vec![Creature::of_kind(0); MAX_TRAINERS],
+      held_now: Vec::new(),
       battles: HashMap::new(),
-      view: VIEW_TILES,
+      tuning: crate::protocol::Tuning::new(),
       parked: HashMap::new(),
       next_token: 1,
       tokens: HashMap::new(),
@@ -115,6 +131,7 @@ impl PoketoState {
         seat,
         at,
         battle: self.battles.remove(&seat),
+        party: self.party[seat as usize],
         since: self.tick,
       },
     );
@@ -146,7 +163,7 @@ impl PoketoState {
   /// The trainers a seat can see, itself included, and nobody who is away in a
   /// battle.
   pub fn visible_to(&mut self, seat: usize) -> &[u16] {
-    let view = self.view;
+    let view = self.tuning.view_tiles;
     self.world.visible_to(seat, view, &mut self.seen);
     // A trainer in a battle is not standing in the overworld, so it is not
     // drawn there either. The alternative is a body everyone can see and
@@ -159,30 +176,101 @@ impl PoketoState {
   ///
   /// Hashed from the tile and the tick rather than rolled, so a replay of the
   /// same walk produces the same encounters and a test is a measurement.
+  /// Gated on the ground first: nothing starts outside the tall grass, which
+  /// is what makes an encounter somewhere you chose to walk.
   pub fn encounter_at(&self, at: Tile, seat: usize) -> bool {
+    if !terrain::wild(at) {
+      return false;
+    }
     let mut seed = (at.x as u64) << 32 | at.y as u64;
     seed ^= (self.tick / 7).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     seed ^= seat as u64;
     seed ^= seed >> 33;
     seed = seed.wrapping_mul(0xff51_afd7_ed55_8ccd);
     seed ^= seed >> 29;
-    seed.is_multiple_of(ENCOUNTER_ODDS)
+    seed.is_multiple_of(self.tuning.encounter_odds.max(1) as u64)
   }
 
-  /// Moves a seat out of the overworld and into a battle.
+  /// What lives in the grass here, and how grown it is.
+  ///
+  /// Level rises with the zone, so walking further is walking into harder
+  /// fights and no difficulty setting has to exist.
+  pub fn wild_at(&self, at: Tile, zone: u8) -> Creature {
+    let kind = (at.x ^ at.y) as u8;
+    let spread = ((at.x.wrapping_mul(31) ^ at.y.wrapping_mul(17)) % 3) as u8;
+    Creature::of_kind_at(kind, 1 + zone * 4 + spread)
+  }
+
+  /// Moves a seat out of the overworld and into a battle against `wild`.
   ///
   /// The wild side takes a seat number no player can hold, so a battle is
   /// always between two sides and the rules never need a case for "against
   /// nobody".
-  pub fn begin_battle(&mut self, seat: u16, kind: u8) {
-    let wild = WILD_SEAT;
-    self.battles.insert(seat, Battle::between(seat, wild, (kind, kind.wrapping_add(1))));
+  pub fn begin_battle(&mut self, seat: u16, wild: Creature) {
+    let seed = (self.tick as u32).wrapping_mul(0x9E37_79B9).wrapping_add(seat as u32);
+    let mine = self.party[seat as usize];
+    self
+      .battles
+      .insert(seat, Battle::between_at(mine, wild, (seat, WILD_SEAT), seed));
     self.held[seat as usize] = None;
   }
 
-  /// Puts a seat back in the overworld where it was standing.
+  /// Puts a seat back in the overworld, keeping whatever its creature did.
+  ///
+  /// **Losing sends you back to the start, whole.** A creature walked out on
+  /// the single point it had left could only lose again, and the nearest spring
+  /// is a region's walk away through the grass that just beat it, so the one
+  /// thing a player could do is the one thing that cannot work. Winning leaves
+  /// the damage on, because that is what a spring is for.
   pub fn end_battle(&mut self, seat: u16) {
-    self.battles.remove(&seat);
+    let Some(battle) = self.battles.remove(&seat) else {
+      return;
+    };
+    let Some(side) = battle.sides.iter().find(|s| s.seat == seat) else {
+      return;
+    };
+
+    let mut mine = side.creature;
+    let won = battle.winner == Some(seat);
+    if won {
+      if let Some(beaten) = battle.sides.iter().find(|s| s.seat != seat).map(|s| s.creature) {
+        mine.absorb(Creature::xp_for_win(&beaten));
+      }
+      mine.health = mine.health.max(1);
+    } else {
+      mine.health = mine.full_health();
+      // Sent back rather than left where it fell. The trainer's tile simply
+      // changes by more than a step, which is all a client needs to know that
+      // what happened was not a walk.
+      let spot = crate::world::spawn_spot();
+      if let Some(walker) = self.world.walkers.get_mut(seat as usize) {
+        walker.trainer.at = spot;
+        walker.trainer.phase = 0;
+        walker.stepping = 0;
+        walker.arrived = false;
+      }
+    }
+    self.party[seat as usize] = mine;
+  }
+
+  /// Mends a seat's creature if it is standing somewhere that does that.
+  ///
+  /// Returns whether anything changed, so a tick that heals nobody sends
+  /// nothing: this is a change, and a change is what this example sends.
+  pub fn mend(&mut self, seat: usize) -> bool {
+    let Some(walker) = self.world.walkers.get(seat) else {
+      return false;
+    };
+    if !terrain::mends(walker.trainer.at) {
+      return false;
+    }
+    let creature = &mut self.party[seat];
+    let full = creature.full_health();
+    if creature.health >= full {
+      return false;
+    }
+    creature.health = full;
+    true
   }
 }
 
@@ -206,7 +294,7 @@ mod tests {
     let seen = state.visible_to(0).to_vec();
     assert!(seen.contains(&1), "neighbours see each other while walking");
 
-    state.begin_battle(1, 0);
+    state.begin_battle(1, Creature::of_kind(0));
     let seen = state.visible_to(0).to_vec();
     assert!(!seen.contains(&1), "and not while one of them is away");
     assert!(seen.contains(&0), "which does not hide the watcher from itself");
@@ -219,7 +307,7 @@ mod tests {
     let mut state = PoketoState::new();
     state.world.seat(0, Tile::new(10, 10));
     state.held[0] = Some(Facing::East);
-    state.begin_battle(0, 1);
+    state.begin_battle(0, Creature::of_kind(1));
     assert_eq!(state.held[0], None);
   }
 
@@ -231,12 +319,34 @@ mod tests {
     let at = Tile::new(40, 40);
     assert_eq!(state.encounter_at(at, 0), state.encounter_at(at, 0));
 
-    // And it does happen, at roughly the odds it claims.
-    let hits = (0..600)
-      .filter(|i| state.encounter_at(Tile::new(*i % 64, *i / 64), 0))
-      .count();
-    assert!(hits > 10, "walking should start something eventually: {hits} in 600 tiles");
-    assert!(hits < 200, "and not constantly: {hits}");
+    // And it does happen, at roughly the odds it claims, on the ground that
+    // has them.
+    let grass: Vec<Tile> = (0..40_000u32)
+      .map(|i| Tile::new(400 + i % 200, 400 + i / 200))
+      .filter(|t| terrain::wild(*t))
+      .collect();
+    assert!(grass.len() > 1000, "a 200 by 200 patch of map should hold grass: {}", grass.len());
+
+    let hits = grass.iter().filter(|t| state.encounter_at(**t, 0)).count();
+    let rate = hits as f32 / grass.len() as f32;
+    let claimed = 1.0 / ENCOUNTER_ODDS as f32;
+    assert!(
+      (claimed * 0.4..claimed * 2.5).contains(&rate),
+      "one in {ENCOUNTER_ODDS} of grass tiles, roughly: {rate}"
+    );
+  }
+
+  #[test]
+  fn nothing_starts_outside_the_tall_grass() {
+    // The half of the encounter rate that is not a number: walking a path is
+    // walking, and an encounter is somewhere you chose to step.
+    let state = PoketoState::new();
+    for i in 0..40_000u32 {
+      let at = Tile::new(400 + i % 200, 400 + i / 200);
+      if !terrain::wild(at) {
+        assert!(!state.encounter_at(at, 0), "something started on open ground at {at:?}");
+      }
+    }
   }
 
   #[test]

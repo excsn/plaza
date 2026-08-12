@@ -15,6 +15,26 @@ pub const STEP_TICKS: u8 = 8;
 /// The most trainers a map holds, which is what a seat index has to address.
 pub const MAX_TRAINERS: usize = 1024;
 
+/// Seats a player can be given.
+///
+/// The rest of `MAX_TRAINERS` belongs to the town itself, so a town full of its
+/// own people can never refuse a player a seat, and a wanderer's seat index can
+/// never collide with one the roster hands out.
+pub const PLAYER_SEATS: usize = 256;
+
+/// Wanderers the town seats on each of its maps.
+pub const NPCS_PER_ZONE: usize = 60;
+
+const _: () = assert!(PLAYER_SEATS + NPCS_PER_ZONE * ZONES as usize <= MAX_TRAINERS);
+
+/// Where the town is, and where a joiner arrives.
+///
+/// Chosen rather than picked: the map is a function, so the tile whose
+/// surroundings come closest to a town (about half open grass, a fifth tall
+/// grass to hunt in, a road through it and no lake) can be searched for. The
+/// middle of the map is a lake.
+pub const TOWN_CENTRE: Tile = Tile { x: 600, y: 730 };
+
 /// How far a client is told about, in tiles, as a square rather than a circle.
 ///
 /// Square because the map is square and a town is square: a circular radius on
@@ -38,6 +58,12 @@ pub struct Walker {
   pub zone: u8,
   /// Ticks left in the step being taken, zero when standing.
   pub stepping: u8,
+  /// Set on the tick this walker's tile changed, and only that tick.
+  ///
+  /// Belongs to the simulation because arriving is a step's whole event, and
+  /// reconstructing it by diffing every tile against last tick's copy costs a
+  /// vector a frame to recover something the step already knew.
+  pub arrived: bool,
   pub alive: bool,
 }
 
@@ -75,8 +101,27 @@ impl World {
       },
       zone: 0,
       stepping: 0,
+      arrived: false,
       alive: true,
     };
+  }
+
+  /// Seats the town's own wanderers, past the last seat a player can hold.
+  ///
+  /// Most of them walk maps nobody is on, which is the point rather than
+  /// waste: it makes "somebody on another map is absent rather than far away"
+  /// a live measurement instead of something only a test has ever seen.
+  pub fn populate(&mut self, centre: Tile, spread: u32) {
+    for (n, at) in town(NPCS_PER_ZONE * ZONES as usize, centre, spread).into_iter().enumerate() {
+      let seat = PLAYER_SEATS + n;
+      self.seat(seat, at);
+      self.walkers[seat].zone = (n / NPCS_PER_ZONE) as u8;
+    }
+  }
+
+  /// The seats the town walks itself.
+  pub fn npc_seats(&self) -> std::ops::Range<usize> {
+    PLAYER_SEATS..(PLAYER_SEATS + NPCS_PER_ZONE * ZONES as usize).min(self.walkers.len())
   }
 
   pub fn remove(&mut self, seat: usize) {
@@ -89,14 +134,25 @@ impl World {
     self.walkers.iter().filter(|w| w.alive).count()
   }
 
+  /// One tick at the default pace.
+  pub fn step(&mut self, held: &[Option<Facing>]) {
+    self.step_at(held, STEP_TICKS);
+  }
+
   /// One tick. `held` is the direction each seat is holding, if any.
   ///
   /// A held direction that cannot be walked still turns the trainer, which is
   /// what lets someone face a wall deliberately, and is the behaviour every
   /// game of this shape has.
-  pub fn step(&mut self, held: &[Option<Facing>]) {
+  ///
+  /// `step_ticks` is a parameter rather than the constant because it is one of
+  /// the knobs the town exposes. It must never be zero: the phase is computed
+  /// by dividing by it.
+  pub fn step_at(&mut self, held: &[Option<Facing>], step_ticks: u8) {
+    let step_ticks = step_ticks.max(1);
     self.tick += 1;
     for (seat, walker) in self.walkers.iter_mut().enumerate() {
+      walker.arrived = false;
       if !walker.alive {
         continue;
       }
@@ -114,7 +170,7 @@ impl World {
           // Turned to face a wall, which is a thing people do deliberately.
           continue;
         }
-        walker.stepping = STEP_TICKS;
+        walker.stepping = step_ticks;
       }
 
       walker.stepping -= 1;
@@ -123,11 +179,12 @@ impl World {
         // the one it left, which is the rule a client draws between.
         if let Some(next) = walker.trainer.facing.step(walker.trainer.at) {
           walker.trainer.at = next;
+          walker.arrived = true;
         }
         walker.trainer.phase = 0;
       } else {
-        let done = STEP_TICKS - walker.stepping;
-        walker.trainer.phase = (done as u32 * PHASE_STEPS as u32 / STEP_TICKS as u32) as u8;
+        let done = step_ticks - walker.stepping;
+        walker.trainer.phase = (done as u32 * PHASE_STEPS as u32 / step_ticks as u32) as u8;
       }
     }
   }
@@ -185,6 +242,15 @@ impl World {
     out.clear();
     out.extend((0..self.walkers.len()).map(|seat| self.wander(seat)));
   }
+}
+
+/// Where a trainer arrives, joining or beaten.
+///
+/// One function rather than the same expression written twice, because the two
+/// callers being *nearly* the same is how a defeat starts putting people
+/// somewhere a joiner never sees.
+pub fn spawn_spot() -> Tile {
+  crate::terrain::standable_near(town(1, TOWN_CENTRE, 20)[0], crate::terrain::SPAWN_RINGS)
 }
 
 /// A deterministic spread of starting tiles, clustered rather than uniform.
@@ -293,6 +359,59 @@ mod tests {
     world.travel(0, 1);
     assert_eq!(world.walkers[0].stepping, 0, "a step belongs to the map it began on");
     assert_eq!(world.walkers[0].trainer.phase, 0);
+  }
+
+  #[test]
+  fn a_walker_reports_arriving_only_on_the_tick_its_tile_changed() {
+    // The tick an encounter is checked on. Reconstructing it by diffing every
+    // tile against a copy of last tick's costs a vector a frame to recover
+    // something the step already knew.
+    let mut world = World::new();
+    world.seat(0, Tile::new(10, 10));
+    let held = holding(1, 0, Facing::East);
+
+    for tick in 1..=STEP_TICKS as usize * 2 {
+      world.step(&held);
+      let arrived = world.walkers[0].arrived;
+      assert_eq!(
+        arrived,
+        tick % STEP_TICKS as usize == 0,
+        "tick {tick} should{} be an arrival",
+        if arrived { " not" } else { "" }
+      );
+    }
+  }
+
+  #[test]
+  fn the_towns_own_people_cannot_take_a_players_seat() {
+    // A town full of its own wanderers has to leave every player seat open, or
+    // the map populates itself and then turns people away.
+    let mut world = World::new();
+    world.populate(TOWN_CENTRE, 30);
+    assert!(world.alive() > 0, "the town should have people in it");
+    for seat in 0..PLAYER_SEATS {
+      assert!(!world.walkers.get(seat).is_some_and(|w| w.alive), "seat {seat} is a player's");
+    }
+    assert!(world.npc_seats().all(|seat| world.walkers[seat].alive));
+  }
+
+  #[test]
+  fn most_of_the_town_walks_a_map_nobody_is_on() {
+    // Which is what makes "somebody on another map is absent rather than far
+    // away" a live measurement rather than something only a test has seen.
+    let mut world = World::new();
+    world.populate(TOWN_CENTRE, 30);
+    world.seat(0, TOWN_CENTRE);
+
+    let mut seen = Vec::new();
+    world.visible_to(0, MAP, &mut seen);
+    assert!(seen.len() > 1, "the ones sharing this map are visible: {}", seen.len());
+    assert!(
+      seen.len() < world.alive(),
+      "and the ones on other maps are not, at any distance: {} of {}",
+      seen.len(),
+      world.alive()
+    );
   }
 
   #[test]

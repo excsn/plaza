@@ -149,6 +149,20 @@ Reading the shape of a counter rather than its value: a count climbing without b
 
 ## The bug catalogue
 
+### A result and the removal of its audience cannot ride in one batch (poketo)
+
+`poketo` ended a battle the moment it was decided, sending the final state and the op that returns the seat to the overworld together. A client applies a batch in order, so it set the finished battle and cleared it inside one loop, and the win or loss was never drawn for a single frame. From the chair it looked like pressing a key and being dumped back outside with no explanation, and nothing about it looked wrong from the server, where every op was correct and in the right order.
+
+The general form: **an op that says "here is what happened" and an op that says "you are no longer here to see it" must not be sent together**, because the second destroys the audience for the first. It generalises past this game to death screens, round summaries, kick reasons, disconnect causes and any "you have left" that arrives beside the reason. Whether the gap is a delay, an acknowledgement or an input is a design choice; that there has to be a gap is not.
+
+The fix that does not cost anything structurally is to let the state persist and have the client say when it is done with it. Here the decided battle stays in the collection it was already in and the client sends `Dismiss`, so the seat is still in exactly one place, the transcript is still resumable, and a drop mid-result still parks.
+
+This is also a reminder about what tests cannot see. Every reconnection and ordering test was green throughout, because every op was individually correct; what was wrong was that two of them arrived together. Only playing it found it.
+
+### A rule that is not a payload does not belong in a hashed file (poketo)
+
+The resolver hashes what the ops reach, so a type near the wire moves the version whether or not it is on the wire. poketo's terrain function is a pure rule that nothing sends, and it lives in its own `terrain.rs` for that reason: tuning the ground should not invalidate every connected client. See [a protocol hash over the ops misses the types they carry](#a-protocol-hash-over-the-ops-misses-the-types-they-carry-poketo) for the hash itself.
+
 ### Rapier's add_force persists until you reset it (cube_yard)
 
 Every "energy from nowhere" symptom in `cube_yard` traced back to one line that was never written: `reset_forces`. Rapier's `add_force` and `add_torque` accumulate across timesteps until cleared, so a field applied every tick is not a force, it is a force that grows without bound. A roll torque capped at 4.6 rad/s reached 46, cubes were flung two hundred units clean off the floor, and the player was thrown across the yard, all from the same cause.

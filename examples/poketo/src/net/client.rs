@@ -13,7 +13,7 @@ use plaza_wire::{MsgPackCodec, WireCodec};
 use plaza_ws::pump::{mismatch_message, Arrival, FramePump};
 use plaza_ws::{Event, State};
 
-use crate::battle::Choice;
+use crate::battle::{Choice, Creature};
 use crate::grid::{Facing, Trainer};
 use crate::protocol::{BattleState, Overworld, PoketoOp, PROTOCOL};
 
@@ -81,7 +81,22 @@ pub struct NetClient {
   pub world: Option<Overworld>,
   /// The battle, when in one. Never both.
   pub battle: Option<BattleState>,
+  /// The creature this client owns. Arrives on a change, so it is whatever the
+  /// last one said however long ago that was.
+  pub party: Option<Creature>,
   pub meter: Meter,
+  /// Health as drawn, per side, trailing what arrived. Presentation only.
+  shown: Vec<(u16, f32)>,
+  /// The turn the last log belongs to, so a hit reads once rather than for as
+  /// long as the turn lasts.
+  pub struck_at: u64,
+  /// Where this client's own trainer was standing, for telling a teleport from
+  /// a step without being told which it was.
+  stood: Option<crate::grid::Tile>,
+  /// When it last arrived somewhere it could not have walked to.
+  pub jumped_at: u64,
+  /// The knobs as the server has them.
+  pub tuning: crate::protocol::Tuning,
   /// Battles entered, for the panel: the number that says the two regimes are
   /// actually being switched between rather than one being simulated.
   pub battles_seen: u64,
@@ -111,7 +126,13 @@ impl NetClient {
       token: None,
       world: None,
       battle: None,
+      party: None,
       meter: Meter::default(),
+      shown: Vec::new(),
+      struck_at: 0,
+      stood: None,
+      jumped_at: 0,
+      tuning: crate::protocol::Tuning::new(),
       battles_seen: 0,
       now_ms: 0,
       held: None,
@@ -193,19 +214,54 @@ impl NetClient {
           self.token = Some(token);
         }
         PoketoOp::World(world) => {
+          // A tile that changed by more than one step was not walked to, so it
+          // was a teleport. Worked out here rather than announced: the rule
+          // that a step moves exactly one tile is already shared, so the client
+          // can tell the difference without a byte being spent saying so.
+          if let (Some(seat), Some(was)) = (self.seat, self.stood) {
+            if let Some(now) = world.trainers.iter().find(|t| t.seat == seat)
+              && was.steps_to(now.at) > 1
+            {
+              self.jumped_at = self.now_ms;
+            }
+          }
+          self.stood = self.seat.and_then(|seat| {
+            world
+              .trainers
+              .iter()
+              .find(|t| t.seat == seat)
+              .map(|t| t.at)
+          });
+
           // Arriving in the overworld is what ends a battle on this side, so a
           // client cannot be drawing a battle it is no longer in.
           self.battle = None;
+          self.shown.clear();
           self.world = Some(*world);
         }
         PoketoOp::Battle(battle) => {
           if self.battle.is_none() {
             self.battles_seen += 1;
+            self.shown.clear();
+          }
+          if !battle.battle.log.is_empty() {
+            self.struck_at = self.now_ms;
           }
           self.world = None;
           self.battle = Some(*battle);
         }
+        PoketoOp::Party(creature) => {
+          self.party = Some(creature);
+        }
+        PoketoOp::Tuned(tuning) => {
+          // What the server settled on, which is what the panel shows: a
+          // slider that kept its own value would drift from the town it is
+          // supposed to be describing.
+          self.tuning = tuning;
+        }
         PoketoOp::Returned => {
+          // The world frame that follows carries the new tile, and that is what
+          // decides whether this was a walk back out or a defeat sent home.
           self.battle = None;
         }
         _ => {}
@@ -231,7 +287,68 @@ impl NetClient {
     let Some(state) = &self.battle else {
       return;
     };
+    if state.battle.finished() {
+      return;
+    }
     let turn = state.battle.turn;
     self.pump.send_op(&PoketoOp::Choose { turn, choice });
+  }
+
+  /// Asks the server to move a knob. It decides, and answers with `Tuned`.
+  pub fn tune(&mut self, tuning: crate::protocol::Tuning) {
+    self.pump.send_op(&PoketoOp::Tune(tuning));
+  }
+
+  /// Says the result has been read, so the seat may go back to the overworld.
+  pub fn dismiss(&mut self) {
+    if self.battle.as_ref().is_some_and(|s| s.battle.finished()) {
+      self.pump.send_op(&PoketoOp::Dismiss);
+    }
+  }
+
+  /// What this client's own trainer is standing on, so the panel can say what
+  /// the ground means without the ground ever having been sent.
+  pub fn standing_on(&self) -> Option<crate::terrain::Terrain> {
+    self.mine().map(|t| crate::terrain::terrain_at(t.at))
+  }
+
+  /// Whether the battle on screen is over and waiting to be read.
+  pub fn decided(&self) -> bool {
+    self.battle.as_ref().is_some_and(|s| s.battle.finished())
+  }
+
+  /// Health as it is being drawn, which trails what arrived.
+  ///
+  /// Presentation only. A health bar that snaps says a number changed; one that
+  /// runs down says something was hit, and this example had no way at all to
+  /// tell those apart.
+  pub fn shown_health(&self, seat: u16) -> f32 {
+    self.shown.iter().find(|(s, _)| *s == seat).map(|(_, h)| *h).unwrap_or(0.0)
+  }
+
+  /// Ticks the drawn health toward the real one.
+  pub fn ease(&mut self, dt: f32) {
+    let Some(state) = &self.battle else {
+      self.shown.clear();
+      return;
+    };
+    for side in state.battle.sides.iter() {
+      let target = side.creature.health as f32;
+      match self.shown.iter_mut().find(|(s, _)| *s == side.seat) {
+        // A first sighting is not a change, so it starts where it is rather
+        // than running down from zero.
+        None => self.shown.push((side.seat, target)),
+        Some((_, shown)) => {
+          let step = (side.creature.full_health() as f32 * dt * 1.6).max(dt * 12.0);
+          if (*shown - target).abs() <= step {
+            *shown = target;
+          } else if *shown > target {
+            *shown -= step;
+          } else {
+            *shown += step;
+          }
+        }
+      }
+    }
   }
 }

@@ -9,7 +9,7 @@
 //! ```
 
 use poketo::grid::{trainer_bits, trainer_bits_quantised, Tile};
-use poketo::world::{town, World, STEP_TICKS};
+use poketo::world::{town, World, NPCS_PER_ZONE, STEP_TICKS, TOWN_CENTRE, VIEW_TILES, ZONES};
 
 const TICK_HZ: f32 = 60.0;
 
@@ -131,6 +131,51 @@ fn arriving_in_a_populated_zone_costs_one_ordinary_frame() {
   assert!(
     (0.8..=1.25).contains(&ratio),
     "arriving should cost about what standing there costs: {arriving} against {resident}"
+  );
+}
+
+/// What a town that walks itself costs the person walking through it.
+///
+/// The other two benchmarks build a world by hand to ask a question about
+/// radius. This one asks what the example actually does now: `populate` seats
+/// the town's own wanderers across every zone, and a client standing in one of
+/// them is told about the ones sharing its map and about none of the rest.
+///
+/// The zone rule is the whole of that saving and it costs nothing to apply. It
+/// is not a distance check that happens to exclude them, it is that somebody on
+/// another map is **absent**, so they are never considered at any radius.
+#[test]
+fn what_the_towns_own_wanderers_cost_a_client() {
+  let mut world = World::new();
+  world.populate(TOWN_CENTRE, 30);
+  world.seat(0, TOWN_CENTRE);
+
+  let (mut held, mut seen) = (Vec::new(), Vec::new());
+  let (mut total, mut frames) = (0usize, 0usize);
+  for _ in 0..400 {
+    world.wandering(&mut held);
+    world.step(&held);
+    world.visible_to(0, VIEW_TILES, &mut seen);
+    total += seen.len();
+    frames += 1;
+  }
+  let seen_per_frame = total as f32 / frames as f32;
+  let alive = world.alive();
+  let sharing = NPCS_PER_ZONE + 1;
+
+  println!("\n  a town of {} wanderers across {ZONES} zones, one client at {VIEW_TILES} tiles:\n", alive - 1);
+  println!("    on this map        {sharing}");
+  println!("    in view            {seen_per_frame:.1}");
+  println!("    on the wire        {:.1} KiB/s", kib_per_sec(seen_per_frame, trainer_bits()));
+  println!(
+    "\n  {:.0}% of the town is on another map and is never considered at any\n  radius: absent rather than far away, which is what a zone is for.\n",
+    (alive - sharing) as f32 * 100.0 / alive as f32
+  );
+
+  assert!(seen_per_frame > 1.0, "a populated town should have people in view");
+  assert!(
+    seen_per_frame <= sharing as f32,
+    "and nobody from another map, at any distance: {seen_per_frame} against {sharing}"
   );
 }
 

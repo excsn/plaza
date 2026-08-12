@@ -5,11 +5,17 @@ use poketo::role;
 use poketo::role::Role;
 
 #[cfg(all(feature = "client", feature = "websocket"))]
-use poketo::battle::{Choice, Creature};
+mod panels;
 #[cfg(all(feature = "client", feature = "websocket"))]
-use poketo::grid::{Facing, PHASE_STEPS};
+mod render;
 #[cfg(all(feature = "client", feature = "websocket"))]
-use poketo::net::client::{NetClient, Status};
+mod ui;
+
+#[cfg(all(feature = "client", feature = "websocket"))]
+use poketo::battle::Choice;
+use poketo::grid::Facing;
+#[cfg(all(feature = "client", feature = "websocket"))]
+use poketo::net::client::NetClient;
 
 /// Never `process::exit` on wasm: the call traps and the page dies with
 /// `unreachable executed` and no reason.
@@ -62,10 +68,6 @@ fn window_conf() -> Conf {
   }
 }
 
-/// Pixels one tile is drawn at.
-#[cfg(all(feature = "client", feature = "websocket"))]
-const TILE: f32 = 28.0;
-
 #[cfg(all(feature = "client", feature = "websocket"))]
 fn read_walk() -> Option<Facing> {
   // One direction at a time, because a step is one direction: holding two is a
@@ -114,169 +116,121 @@ async fn frame_loop(options: role::Options) {
     Ok(client) => client,
     Err(e) => return give_up(format!("could not connect to {url}: {e}")),
   };
+  let art = render::Art::load();
+
+  // `POKETO_SHOT=path` writes one frame and exits, which is what makes a look
+  // at the real renderer something a script can do rather than something a
+  // person has to be present for. `POKETO_SHOT_AFTER` waits that many frames
+  // first, for a shot with the world already arrived.
+  let shot_after = std::env::var("POKETO_SHOT").ok();
+  let shot_frames: u32 = std::env::var("POKETO_SHOT_AFTER")
+    .ok()
+    .and_then(|n| n.parse().ok())
+    .unwrap_or(120);
+  let mut frames = 0u32;
+  let mut stats = false;
+  let mut knobs = false;
 
   let mut clock_ms;
   loop {
     clock_ms = (get_time() * 1000.0) as u64;
     client.poll(clock_ms);
 
-    if client.battling() {
+    // The frame Esc is pressed feeds the game nothing, in either direction.
+    // Without that, closing the overlay is a keypress that also dismisses a
+    // decided battle, because any key does.
+    let toggled = is_key_pressed(KeyCode::Escape) || is_key_pressed(KeyCode::F1);
+    if is_key_pressed(KeyCode::Escape) {
+      stats = !stats;
+    }
+    if is_key_pressed(KeyCode::F1) {
+      knobs = !knobs;
+    }
+
+    if stats || knobs || toggled {
+      // Reading is not walking: a direction held when this opened would carry
+      // the trainer into the grass while nobody was looking at the town.
+      client.walk(None);
+      client.ease(get_frame_time());
+    } else if client.battling() {
       // Nothing is held while in a battle, or the trainer walks the instant it
       // ends, having been holding a direction the whole time it was away.
       client.walk(None);
-      if is_key_pressed(KeyCode::Key1) {
-        client.choose(Choice::Strike);
+      client.ease(get_frame_time());
+      if client.decided() {
+        // Never dismissed automatically, so a shot can be taken of the one
+        // screen this example could not previously draw at all.
+        if get_last_key_pressed().is_some() {
+          client.dismiss();
+        }
+      } else {
+        for (key, choice) in ui::KEYS {
+          if is_key_pressed(key) {
+            client.choose(choice);
+          }
+        }
+        if shot_after.is_some() && frames.is_multiple_of(20) {
+          client.choose(Choice::First);
+        }
       }
-      if is_key_pressed(KeyCode::Key2) {
-        client.choose(Choice::Guard);
-      }
+    } else if shot_after.is_some() {
+      // Nobody is at the keyboard in shot mode, and a trainer that never
+      // arrives anywhere never meets anything. Circling rather than heading
+      // off in one direction, because one direction walks out of the town and
+      // into the middle of a lake.
+      client.walk(Some(match frames / 24 % 4 {
+        0 => Facing::North,
+        1 => Facing::East,
+        2 => Facing::South,
+        _ => Facing::West,
+      }));
     } else {
       client.walk(read_walk());
     }
 
     clear_background(Color::new(0.09, 0.11, 0.10, 1.0));
     if client.battling() {
-      draw_battle(&client);
+      render::draw_battle(&client, &art);
+      ui::draw_battle_hud(&client);
     } else {
-      draw_town(&client);
+      render::draw_town(&client, &art);
     }
-    draw_panel(&client, &url);
+    if stats {
+      ui::draw_stats(&client, &url);
+    } else {
+      ui::draw_panel(&client, &url);
+    }
+    // Last, so the widgets sit over the world rather than under it.
+    if knobs && let Some(asked) = panels::draw(&client, &url) {
+      client.tune(asked);
+    }
+
+    // Taken after the frame is drawn and before it is presented, so what lands
+    // in the file is the frame that was on screen rather than the one before
+    // it. `screencapture` cannot reach a GL window without the recording
+    // permission, so this is the only way to look at what shipped.
+    if is_key_pressed(KeyCode::F2) {
+      shoot(&format!("poketo-{}.png", client.now_ms()));
+    }
+    if let Some(path) = &shot_after {
+      frames += 1;
+      if frames >= shot_frames {
+        shoot(path);
+        return;
+      }
+    }
     next_frame().await;
   }
 }
 
-/// The town, centred on whoever is playing.
+/// Writes what is on screen to a PNG.
 #[cfg(all(feature = "client", feature = "websocket"))]
-fn draw_town(client: &NetClient) {
-  let Some(mine) = client.mine() else {
-    draw_text("walking into town", 24.0, 48.0, 28.0, GRAY);
+fn shoot(path: &str) {
+  let image = get_screen_data();
+  if cfg!(target_arch = "wasm32") {
+    println!("screenshots are a native thing; nothing written for {path}");
     return;
-  };
-  let (mx, my) = mine.drawn();
-  let (cx, cy) = (screen_width() / 2.0, screen_height() / 2.0);
-
-  // A faint grid, so a step reads as a step rather than as drift. Without it
-  // discrete movement is indistinguishable from slow continuous movement.
-  let span = 26;
-  for n in -span..=span {
-    let x = cx + (n as f32 - mx.fract()) * TILE;
-    let y = cy + (n as f32 - my.fract()) * TILE;
-    let line = Color::new(0.14, 0.17, 0.15, 1.0);
-    draw_line(x, 0.0, x, screen_height(), 1.0, line);
-    draw_line(0.0, y, screen_width(), y, 1.0, line);
   }
-
-  for trainer in client.trainers() {
-    let (tx, ty) = trainer.drawn();
-    let x = cx + (tx - mx) * TILE;
-    let y = cy + (ty - my) * TILE;
-    let mine = Some(trainer.seat) == client.seat;
-    let body = if mine {
-      Color::new(1.0, 0.83, 0.25, 1.0)
-    } else {
-      Color::new(0.45, 0.72, 0.90, 1.0)
-    };
-    draw_rectangle(x - TILE * 0.35, y - TILE * 0.35, TILE * 0.7, TILE * 0.7, body);
-
-    // A nose, so a facing is visible while standing still, which is most of
-    // the time and is what a step is about to be.
-    let (dx, dy) = match trainer.facing {
-      Facing::North => (0.0, -1.0),
-      Facing::South => (0.0, 1.0),
-      Facing::East => (1.0, 0.0),
-      Facing::West => (-1.0, 0.0),
-    };
-    draw_circle(x + dx * TILE * 0.3, y + dy * TILE * 0.3, TILE * 0.1, Color::new(0.05, 0.06, 0.06, 1.0));
-  }
-}
-
-/// A battle, which is a page of text and two buttons, because that is what a
-/// turn-based battle is.
-#[cfg(all(feature = "client", feature = "websocket"))]
-fn draw_battle(client: &NetClient) {
-  let Some(state) = &client.battle else {
-    return;
-  };
-  let battle = &state.battle;
-  let (cx, top) = (screen_width() / 2.0, 140.0);
-
-  draw_text(format!("turn {}", battle.turn), cx - 40.0, top - 60.0, 30.0, LIGHTGRAY);
-  for (n, side) in battle.sides.iter().enumerate() {
-    let y = top + n as f32 * 110.0;
-    let full = Creature::of_kind(side.creature.kind).health as f32;
-    let left = side.creature.health as f32 / full.max(1.0);
-    let yours = Some(side.seat) == client.seat;
-    draw_text(
-      format!(
-        "{} {}",
-        Creature::name(side.creature.kind),
-        if yours { "(yours)" } else { "" }
-      ),
-      cx - 220.0,
-      y,
-      30.0,
-      if yours { YELLOW } else { SKYBLUE },
-    );
-    draw_rectangle(cx - 220.0, y + 14.0, 440.0, 16.0, Color::new(0.2, 0.2, 0.22, 1.0));
-    draw_rectangle(cx - 220.0, y + 14.0, 440.0 * left, 16.0, Color::new(0.45, 0.85, 0.55, 1.0));
-    draw_text(
-      format!("{} / {}", side.creature.health, full as u8),
-      cx + 232.0,
-      y + 28.0,
-      22.0,
-      LIGHTGRAY,
-    );
-  }
-
-  if let Some(winner) = battle.winner {
-    let mine = Some(winner) == client.seat;
-    draw_text(
-      if mine { "it goes down" } else { "yours goes down" },
-      cx - 120.0,
-      top + 260.0,
-      32.0,
-      if mine { GREEN } else { RED },
-    );
-  } else {
-    draw_text("1  strike        2  guard", cx - 170.0, top + 260.0, 30.0, LIGHTGRAY);
-    if state.awaiting {
-      draw_text("waiting on you", cx - 90.0, top + 300.0, 24.0, GRAY);
-    }
-  }
-}
-
-#[cfg(all(feature = "client", feature = "websocket"))]
-fn draw_panel(client: &NetClient, url: &str) {
-  let now = client.now_ms();
-  let lines = [
-    match &client.status {
-      Status::Connecting => format!("connecting to {url}"),
-      Status::Joined => format!("connected to {url}"),
-      Status::Gone(reason) => reason.clone(),
-    },
-    match client.rtt_ms() {
-      Some(rtt) => format!("rtt {rtt:.0} ms"),
-      None => "rtt -".to_owned(),
-    },
-    format!(
-      "{} in view, {} battles",
-      client.trainers().len(),
-      client.battles_seen
-    ),
-    format!(
-      "{:.1} KiB/s session, {:.1} KiB/s recent",
-      client.meter.session_kib_per_sec(now),
-      client.meter.kib_per_sec(now)
-    ),
-    // The number the whole example is about: a battle is silence.
-    if client.battling() {
-      "in a battle: nothing arrives on a tick".to_owned()
-    } else {
-      "walking: a frame every tick".to_owned()
-    },
-    format!("step is {PHASE_STEPS} phases of a tile"),
-  ];
-  for (n, line) in lines.iter().enumerate() {
-    draw_text(line, 16.0, 26.0 + n as f32 * 22.0, 20.0, Color::new(0.75, 0.78, 0.76, 1.0));
-  }
+  image.export_png(path);
+  println!("wrote {path}");
 }
