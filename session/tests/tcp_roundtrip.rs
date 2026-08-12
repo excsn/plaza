@@ -149,6 +149,36 @@ async fn answer_probes(
   others
 }
 
+/// Answers probes until the link has a measurement, then returns it.
+///
+/// A fixed frame count is not enough after a profile change: probes launched
+/// under the old profile are deliberately discarded when their pong arrives,
+/// and how many of those are sitting in the client's buffer depends on
+/// scheduler timing, so any fixed budget can be spent entirely on answers the
+/// server throws away. Bounded by `with_patience` like every other wait here.
+async fn answer_until_measured(
+  session: &TcpPlazaSession<TestOp, PlayerId>,
+  id: &PlayerId,
+  client: &mut Framed<TcpStream, LengthDelimitedCodec>,
+) -> (Duration, u64) {
+  with_patience(async {
+    loop {
+      if let Some(measured) = session.manager().agent_link_rtt(id) {
+        return measured;
+      }
+      let arrived = tokio::time::timeout(Duration::from_millis(50), client.next()).await;
+      if let Ok(Some(Ok(frame))) = arrived {
+        let (tag, body) = plaza_wire::frame::split(&frame).expect("non-empty");
+        if plaza_wire::frame::Kind::from_byte(tag) == Some(plaza_wire::frame::Kind::Ping) {
+          let reply = plaza_wire::frame::answer_ping(&JsonCodec, body, Some(777)).expect("answerable");
+          client.send(reply.into()).await.expect("pong");
+        }
+      }
+    }
+  })
+  .await
+}
+
 #[tokio::test]
 async fn a_tcp_connection_measures_a_round_trip_it_has_no_ping_frame_for() {
   // The gap this closes: the WebSocket transport times its own ping frame and
@@ -201,9 +231,7 @@ async fn an_impaired_link_delays_every_frame_including_the_probe() {
     LinkProfile::symmetric(DirectionProfile::delayed(one_way)),
   );
 
-  answer_probes(&mut client, 3).await;
-
-  let (rtt, _) = measured(&session, &player_id).await;
+  let (rtt, _) = answer_until_measured(&session, &player_id, &mut client).await;
   assert!(
     rtt >= one_way * 2,
     "a probe rides the impairment in both directions: {rtt:?}"
@@ -406,8 +434,7 @@ async fn a_link_slower_than_the_probe_interval_is_still_measured() {
     LinkProfile::symmetric(DirectionProfile::delayed(one_way)),
   );
 
-  answer_probes(&mut client, 6).await;
-  let (rtt, _) = measured(&session, &player_id).await;
+  let (rtt, _) = answer_until_measured(&session, &player_id, &mut client).await;
   assert!(rtt >= one_way * 2, "a 200ms link measures 200ms, not nothing: {rtt:?}");
 }
 
