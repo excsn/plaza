@@ -29,6 +29,89 @@ fn bar(x: f32, y: f32, w: f32, h: f32, share: f32, tint: Color, label: &str) {
   draw_text(label, x + 6.0, y + h - 5.0, h - 5.0, WHITE);
 }
 
+/// Health bars that drain toward the truth instead of jumping to it.
+///
+/// Kept on the client because it is presentation: the server says what the
+/// health is, and how a bar gets there is the interface's business.
+#[derive(Default)]
+pub struct Trailing {
+  shares: std::collections::HashMap<u16, (f32, u64)>,
+}
+
+impl Trailing {
+  /// How long a trailing bar takes to catch up.
+  const DRAIN_MS: f32 = 550.0;
+
+  pub fn follow(&mut self, client: &NetClient, now_ms: u64) {
+    for other in client.others.values() {
+      let share = other.seen.health as f32 / other.seen.max_health.max(1) as f32;
+      let entry = self.shares.entry(other.seen.seat).or_insert((share, now_ms));
+      if share > entry.0 {
+        // Healing catches up at once: a bar that crept upward would read as
+        // the heal arriving late rather than as the bar being slow.
+        *entry = (share, now_ms);
+      } else if share < entry.0 {
+        let elapsed = now_ms.saturating_sub(entry.1) as f32;
+        let drained = (elapsed / Self::DRAIN_MS).clamp(0.0, 1.0);
+        let from = entry.0;
+        entry.0 = from + (share - from) * drained;
+        if (entry.0 - share).abs() < 0.005 {
+          *entry = (share, now_ms);
+        }
+      } else {
+        entry.1 = now_ms;
+      }
+    }
+    self.shares.retain(|seat, _| client.others.contains_key(seat));
+  }
+
+  pub fn share_for(&self, seat: u16, _now_ms: u64) -> f32 {
+    self.shares.get(&seat).map(|(share, _)| *share).unwrap_or(0.0)
+  }
+}
+
+/// Damage and healing, floating off whoever it happened to.
+///
+/// Projected by hand because the numbers are screen-space text over a
+/// world-space point, and that is the one thing a 3D camera cannot draw for
+/// you.
+pub fn draw_popups(client: &NetClient, camera: &Camera3D, now_ms: u64) {
+  let matrix = camera.matrix();
+  for popup in &client.popups {
+    let age = popup.age(now_ms);
+    let world = vec3(popup.at.0, popup.at.1 + 2.4 + age * 1.6, popup.at.2);
+    let clip = matrix * world.extend(1.0);
+    if clip.w <= 0.0 {
+      continue;
+    }
+    let ndc = clip.truncate() / clip.w;
+    if ndc.x.abs() > 1.2 || ndc.y.abs() > 1.2 {
+      continue;
+    }
+    let x = (ndc.x * 0.5 + 0.5) * screen_width();
+    let y = (1.0 - (ndc.y * 0.5 + 0.5)) * screen_height();
+
+    let (text, tint) = if popup.amount > 0 {
+      (
+        format!("-{}", popup.amount),
+        if popup.mine { RED } else { Color::new(1.0, 0.85, 0.45, 1.0) },
+      )
+    } else {
+      (format!("+{}", -popup.amount), GREEN)
+    };
+    let size = if popup.mine { 30.0 } else { 24.0 };
+    let fade = 1.0 - age;
+    let width = measure_text(&text, None, size as u16, 1.0).width;
+    draw_text(
+      &text,
+      x - width / 2.0,
+      y,
+      size,
+      Color::new(tint.r, tint.g, tint.b, fade),
+    );
+  }
+}
+
 pub fn draw_hud(client: &NetClient, yaw: f32) {
   player_frame(client);
   target_frame(client);
@@ -63,14 +146,41 @@ fn player_frame(client: &NetClient) {
   );
 
   if let Some(up_in) = you.up_in_ms {
-    let message = format!("down, up in {:.1}s", up_in as f32 / 1000.0);
-    let width = measure_text(&message, None, 30, 1.0).width;
+    // The whole screen says it, because being dead and not knowing when that
+    // ends is the one state a player cannot act their way out of.
+    draw_rectangle(
+      0.0,
+      0.0,
+      screen_width(),
+      screen_height(),
+      Color::new(0.35, 0.02, 0.04, 0.28),
+    );
+    let dead = "you have fallen";
+    let width = measure_text(dead, None, 46, 1.0).width;
+    draw_text(dead, screen_width() / 2.0 - width / 2.0, screen_height() * 0.38, 46.0, RED);
+
+    let counting = format!("back up in {:.1}s", up_in as f32 / 1000.0);
+    let width = measure_text(&counting, None, 30, 1.0).width;
     draw_text(
-      &message,
+      &counting,
       screen_width() / 2.0 - width / 2.0,
-      screen_height() * 0.4,
+      screen_height() * 0.44,
       30.0,
-      RED,
+      Color::new(1.0, 0.85, 0.8, 1.0),
+    );
+
+    // A bar for the wait, because a number counting down is harder to read at
+    // a glance than something visibly emptying.
+    let w = 320.0;
+    let left = (up_in as f32 / gow_3d::zone::DOWN_MS as f32).clamp(0.0, 1.0);
+    bar(
+      screen_width() / 2.0 - w / 2.0,
+      screen_height() * 0.47,
+      w,
+      14.0,
+      1.0 - left,
+      Color::new(0.85, 0.55, 0.35, 1.0),
+      "",
     );
   }
 }

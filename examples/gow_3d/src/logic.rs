@@ -292,9 +292,14 @@ fn frame_for(state: &mut GowState, seat: Seat, now: Ms) -> Frame {
       .iter()
       .filter_map(|s| {
         let character = zone.characters.get(s)?;
-        // A downed character is dropped from everyone but the party that is
-        // subscribed to them, which is what a party frame is for.
-        if !character.alive && !zone.parties.of(seat).any(|m| m == *s) && *s != seat {
+        // A body falls where everyone can see it, and then it is gone from
+        // them and still in the party frame of anyone subscribed. Dropping it
+        // the instant it died is what made beasts vanish in mid-air.
+        if !character.alive
+          && !character.still_falling(now)
+          && !zone.parties.of(seat).any(|m| m == *s)
+          && *s != seat
+        {
           return None;
         }
         let subscribed = *s != seat && zone.parties.of(seat).any(|m| m == *s);
@@ -466,6 +471,51 @@ mod tests {
     );
     assert_eq!(state.zone.landed, 7, "and the totals do not");
     assert_eq!(state.zone.refusals, 3);
+  }
+
+  #[test]
+  fn a_body_stays_in_the_frame_while_it_falls_and_then_goes() {
+    // A beast that vanished the instant it died read as a rendering fault
+    // rather than as a death, because nothing on screen ever fell over. The
+    // window is long enough to play the fall and short enough that the two
+    // relevance channels still come apart afterwards.
+    use crate::zone::{CORPSE_MS, DOWN_MS};
+    let mut state = GowState::new();
+    let a = seated(&mut state, 1);
+    let far = seated(&mut state, 2);
+    state.zone.admit_beast(9, spawn_at(a));
+
+    state.zone.characters.get_mut(&9).unwrap().alive = false;
+    state.zone.characters.get_mut(&9).unwrap().health = 0;
+    state.zone.characters.get_mut(&9).unwrap().up_at = state.zone.now_ms + DOWN_MS;
+
+    let now = state.zone.now_ms;
+    let frame = frame_for(&mut state, a, now);
+    assert!(
+      frame.characters.iter().any(|c| c.seat == 9),
+      "the body was gone before it could fall"
+    );
+
+    state.zone.advance(CORPSE_MS + 100);
+    let now = state.zone.now_ms;
+    let frame = frame_for(&mut state, a, now);
+    assert!(
+      !frame.characters.iter().any(|c| c.seat == 9),
+      "the body never left"
+    );
+
+    // And a subscribed one is still there, which is the distinction the
+    // window was kept short to preserve.
+    state.zone.parties.join(a, far);
+    state.zone.characters.get_mut(&far).unwrap().alive = false;
+    state.zone.characters.get_mut(&far).unwrap().health = 0;
+    state.zone.characters.get_mut(&far).unwrap().up_at = now + DOWN_MS;
+    state.zone.advance(CORPSE_MS + 100);
+    let now = state.zone.now_ms;
+    let frame = frame_for(&mut state, a, now);
+    let entry = frame.characters.iter().find(|c| c.seat == far);
+    assert!(entry.is_some(), "a downed party member left the party frame");
+    assert_eq!(entry.unwrap().health, 0);
   }
 
   #[tokio::test]

@@ -129,6 +129,9 @@ async fn frame_loop(options: role::Options, bots: usize) {
   let mut yaw = 0.0f32;
   let mut body = Body::new((0.0, 0.0, 0.0));
   let mut seeded = false;
+  let mut forward_held = false;
+  let mut trailing = ui::Trailing::default();
+  let mut falling = render::Falling::default();
   let mut notice: Option<(String, u64)> = None;
 
   loop {
@@ -140,6 +143,7 @@ async fn frame_loop(options: role::Options, bots: usize) {
 
     client.poll(clock_ms);
     client.forget_old_flashes(clock_ms);
+    trailing.follow(&client, clock_ms);
 
     if client.ready() {
       if !seeded {
@@ -160,6 +164,7 @@ async fn frame_loop(options: role::Options, bots: usize) {
       } else {
         0
       };
+      forward_held = forward != 0;
 
       match client.authority {
         // The client owns it: move, then report.
@@ -220,21 +225,61 @@ async fn frame_loop(options: role::Options, bots: usize) {
       set_camera(&render::over_the_shoulder(here, yaw, 9.0));
       scene.draw_ground(here);
 
+      let clock = clock_ms as f32 / 1000.0;
+      let flashing = client.flashing(clock_ms);
       let drawn: Vec<_> = client
         .others
         .values()
         .map(|other| {
           let at = other.drawn_at(clock_ms);
-          (&other.seen, vec3(at.0, at.1, at.2))
+          let speed = other.speed();
+          let pose = render::Pose {
+            clock,
+            // Stride runs on distance covered, so a body slowing down does
+            // not moonwalk through its own cycle.
+            stride: clock * speed * 1.5,
+            gait: (speed / gow_3d::movement::RUN_SPEED).clamp(0.0, 1.2),
+            cast: other
+              .seen
+              .casting_ms
+              .map(|left| 1.0 - (left as f32 / 2000.0).clamp(0.0, 1.0))
+              .unwrap_or(0.0),
+            hit: if flashing.contains(&other.seen.seat) { 1.0 } else { 0.0 },
+            dying: falling.progress(other.seen.seat, other.seen.health, clock_ms),
+          };
+          (&other.seen, vec3(at.0, at.1, at.2), pose)
         })
         .collect();
-      let flashing = client.flashing(clock_ms);
-      scene.draw_characters(drawn.iter().map(|(s, v)| (*s, *v)), &flashing, client.target);
+
+      scene.draw_characters(drawn.iter().map(|(s, v, p)| (*s, *v, *p)), &flashing, client.target);
+
       // The local character, drawn from the local position rather than from
       // anything that crossed the wire.
-      scene.draw_local(here, yaw);
-      scene.draw_plates(drawn.iter().map(|(s, v)| (*s, *v)));
+      let my_speed = if forward_held { RUN_SPEED } else { 0.0 };
+      scene.draw_local(here, yaw, render::Pose {
+        clock,
+        stride: clock * my_speed * 1.5,
+        gait: (my_speed / RUN_SPEED).clamp(0.0, 1.0),
+        cast: client.my_cast().map(|(_, share)| share).unwrap_or(0.0),
+        hit: 0.0,
+        dying: client
+          .you
+          .and_then(|you| you.up_in_ms)
+          .map(|left| {
+            let fallen = gow_3d::zone::DOWN_MS.saturating_sub(left as u64) as f32;
+            (fallen / render::FALL_MS).clamp(0.0, 1.0)
+          })
+          .unwrap_or(0.0),
+      });
+
+      scene.draw_plates(
+        drawn
+          .iter()
+          .map(|(s, v, _)| (*s, *v, trailing.share_for(s.seat, clock_ms))),
+      );
+      let camera = render::over_the_shoulder(here, yaw, 9.0);
       set_default_camera();
+      ui::draw_popups(&client, &camera, clock_ms);
 
       ui::draw_hud(&client, yaw);
       if let Some((message, at)) = &notice {
@@ -269,25 +314,32 @@ async fn frame_loop(options: role::Options, bots: usize) {
   }
 }
 
-/// The next hostile target in view, in seat order, wrapping back to none.
+/// The next hostile target, nearest first, then outward, wrapping around.
 ///
-/// Seat order rather than distance order, because a list that reorders itself
-/// as things move is one nobody can cycle through.
+/// Nearest first because that is what a player means by the key: the thing in
+/// front of them. Cycling then walks outward rather than by seat number, so a
+/// second press reaches the next thing over rather than an arbitrary index.
 #[cfg(all(feature = "client", feature = "websocket"))]
 fn cycle_target(client: &NetClient) -> Option<u16> {
-  let mut seats: Vec<u16> = client
+  let mut ranked: Vec<(f32, u16)> = client
     .in_view()
     .filter(|other| other.seen.kind == gow_3d::protocol::Kind::Beast)
-    .map(|other| other.seen.seat)
+    .filter(|other| other.seen.health > 0)
+    .map(|other| {
+      (
+        gow_3d::movement::distance(client.at, other.seen.at),
+        other.seen.seat,
+      )
+    })
     .collect();
-  seats.sort_unstable();
-  match client.target {
+  // Distance, then seat, so two things at the same range do not swap places
+  // between presses and make the cycle unpredictable.
+  ranked.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+
+  let seats: Vec<u16> = ranked.into_iter().map(|(_, seat)| seat).collect();
+  match client.target.and_then(|current| seats.iter().position(|s| *s == current)) {
+    Some(index) => seats.get(index + 1).or_else(|| seats.first()).copied(),
     None => seats.first().copied(),
-    Some(current) => seats
-      .iter()
-      .copied()
-      .find(|seat| *seat > current)
-      .or_else(|| seats.first().copied()),
   }
 }
 

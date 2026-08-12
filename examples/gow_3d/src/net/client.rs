@@ -84,6 +84,27 @@ impl Meter {
   }
 }
 
+/// A number that floated off somebody when their health moved.
+#[derive(Clone, Copy, Debug)]
+pub struct Popup {
+  pub at: (f32, f32, f32),
+  /// Positive for damage taken, negative for healing.
+  pub amount: i32,
+  pub since_ms: u64,
+  /// Whether it happened to the local player, which is drawn louder.
+  pub mine: bool,
+}
+
+impl Popup {
+  /// How long one stays on screen.
+  pub const LIFE_MS: u64 = 1100;
+
+  /// How far through its life it is, `0.0..1.0`.
+  pub fn age(&self, now_ms: u64) -> f32 {
+    (now_ms.saturating_sub(self.since_ms) as f32 / Self::LIFE_MS as f32).clamp(0.0, 1.0)
+  }
+}
+
 /// Somebody else, and where they were the last two times we heard.
 #[derive(Clone, Copy, Debug)]
 pub struct Other {
@@ -91,6 +112,18 @@ pub struct Other {
   /// Where they were on the previous frame, to interpolate from.
   pub was: (f32, f32, f32),
   pub since_ms: u64,
+}
+
+impl Other {
+  /// How fast they are moving over the ground, in units a second.
+  ///
+  /// Derived from the two samples the interpolation already keeps rather than
+  /// sent, because a walk cycle is presentation and nothing on the wire should
+  /// pay for it.
+  pub fn speed(&self) -> f32 {
+    let gap = SEND_EVERY_MS as f32 / 1000.0;
+    crate::movement::ground_distance(self.was, self.seen.at) / gap.max(0.001)
+  }
 }
 
 impl Other {
@@ -141,6 +174,13 @@ pub struct NetClient {
   pub flashes: HashMap<Seat, u64>,
   /// Who the next ability is aimed at.
   pub target: Option<Seat>,
+  /// Health changes worth showing, and when each was noticed.
+  ///
+  /// Derived from watching the number move rather than sent, because the
+  /// server already says what everyone's health is and a second message
+  /// saying by how much it changed would be two derivations of one fact.
+  pub popups: Vec<Popup>,
+  health_was: HashMap<Seat, u16>,
   /// Which mode the zone said it is running, on the last frame.
   pub authority: Authority,
   /// How far the server's idea of this client's own position is from the
@@ -187,6 +227,8 @@ impl NetClient {
       landed: Vec::new(),
       flashes: HashMap::new(),
       target: None,
+      popups: Vec::new(),
+      health_was: HashMap::new(),
       authority: Authority::Client,
       gap: 0.0,
       worst_gap: 0.0,
@@ -334,6 +376,30 @@ impl NetClient {
         });
     }
 
+    for seen in &frame.characters {
+      if let Some(before) = self.health_was.insert(seen.seat, seen.health)
+        && before != seen.health
+      {
+        self.popups.push(Popup {
+          at: seen.at,
+          amount: before as i32 - seen.health as i32,
+          since_ms: now,
+          mine: Some(seen.seat) == mine,
+        });
+      }
+    }
+    if let Some(you) = frame.you
+      && let Some(before) = self.health_was.insert(you.seat, you.health)
+      && before != you.health
+    {
+      self.popups.push(Popup {
+        at: self.at,
+        amount: before as i32 - you.health as i32,
+        since_ms: now,
+        mine: true,
+      });
+    }
+
     // A frame is the whole audience, not a delta, so absence means out of it.
     // Safe here in a way it is not over an unreliable transport: a lost frame
     // would otherwise despawn everybody at once.
@@ -422,11 +488,17 @@ impl NetClient {
       .collect()
   }
 
-  /// Drops flashes nobody will draw again, so the map does not grow for the
+  /// Drops flashes and popups nobody will draw again, so neither grows for the
   /// length of a session.
   pub fn forget_old_flashes(&mut self, now_ms: u64) {
     let cutoff = Self::FLASH_MS;
     self.flashes.retain(|_, at| now_ms.saturating_sub(*at) < cutoff);
+    self
+      .popups
+      .retain(|p| now_ms.saturating_sub(p.since_ms) < Popup::LIFE_MS);
+    self.health_was.retain(|seat, _| {
+      self.others.contains_key(seat) || Some(*seat) == self.seat
+    });
   }
 
   /// What a character is doing, for the nameplate.

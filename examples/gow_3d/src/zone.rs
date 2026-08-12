@@ -25,6 +25,13 @@ pub const VIEW: f32 = 46.0;
 pub const CELL: f32 = VIEW / 3.0;
 /// How long a character stays down before coming back up.
 pub const DOWN_MS: Ms = 6000;
+/// How long a body stays in everyone's frame after it falls.
+///
+/// Long enough for a client to play the fall, short enough that the two
+/// relevance channels still come apart: past this the body is gone from the
+/// people standing next to it and still in the party frame of anyone
+/// subscribed, which is the whole distinction this example is about.
+pub const CORPSE_MS: Ms = 1600;
 
 pub const MAX_HEALTH: u16 = 100;
 pub const MAX_MANA: u16 = 100;
@@ -79,6 +86,17 @@ pub struct Character {
 }
 
 impl Character {
+  /// When this character fell. A body is downed for `DOWN_MS`, so the moment
+  /// it dropped is the moment it comes back up less that.
+  pub fn downed_at(&self) -> Ms {
+    self.up_at.saturating_sub(DOWN_MS)
+  }
+
+  /// Whether a downed body is still worth sending to whoever is nearby.
+  pub fn still_falling(&self, now_ms: Ms) -> bool {
+    !self.alive && now_ms.saturating_sub(self.downed_at()) < CORPSE_MS
+  }
+
   pub fn adventurer(seat: Seat, at: (f32, f32, f32), now_ms: Ms) -> Self {
     Self {
       seat,
@@ -360,6 +378,12 @@ impl Zone {
       let Some(spell) = ability(*index) else { continue };
       self.resolve(*caster, spell);
     }
+    // The clock moved, so the index describes a world that no longer exists:
+    // a body may have finished falling out of it without anybody touching a
+    // position. Marking it here rather than at each of the places that might
+    // have caused it is what keeps that from being a hunt for the one caller
+    // that forgot.
+    self.stale = true;
     landed.into_iter().map(|(seat, _)| seat).collect()
   }
 
@@ -475,7 +499,15 @@ impl Zone {
   fn reindex(&mut self) {
     self.stale = false;
     self.grid.clear();
-    for character in self.characters.values().filter(|c| c.alive) {
+    let now = self.now_ms;
+    // A body still going over is still in the world. Excluding it here is what
+    // made a beast disappear the instant it died: it left the index, so it
+    // left every audience, so no client was ever told it had fallen.
+    for character in self
+      .characters
+      .values()
+      .filter(|c| c.alive || c.still_falling(now))
+    {
       self
         .grid
         .insert(character.seat as u32, character.tracked.at.0, character.tracked.at.2);
@@ -493,7 +525,9 @@ impl Zone {
     if self.stale {
       self.reindex();
     }
-    let Some(from) = self.characters.get(&seat).filter(|c| c.alive).map(|c| c.tracked.at) else {
+    // A downed player still watches the zone while they wait, so the viewer's
+    // own liveness does not gate the query.
+    let Some(from) = self.characters.get(&seat).map(|c| c.tracked.at) else {
       return;
     };
     let mut candidates = Vec::new();
@@ -697,9 +731,13 @@ mod tests {
     }
     assert_eq!(zone.slain, 1);
 
+    // Still there while it goes over, and gone once it has.
     let mut scratch = Vec::new();
     zone.near(1, &mut scratch);
-    assert!(!scratch.contains(&2), "a downed character is not in view");
+    assert!(scratch.contains(&2), "a body has to be visible long enough to fall");
+    zone.advance(CORPSE_MS + 100);
+    zone.near(1, &mut scratch);
+    assert!(!scratch.contains(&2), "a fallen character is not in view");
 
     zone.advance(DOWN_MS);
     assert!(zone.characters[&2].alive);
