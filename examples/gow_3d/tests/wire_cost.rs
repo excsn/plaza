@@ -154,7 +154,7 @@ fn a_party_across_the_zone_costs_one_entry_each() {
   // Four party members, all far enough away that distance would never have
   // returned them.
   for member in 1..=4u16 {
-    state.zone.characters.get_mut(&member).unwrap().tracked.at = (400.0 + member as f32 * 10.0, 0.0, 400.0);
+    state.zone.place(member, (400.0 + member as f32 * 10.0, 0.0, 400.0));
     state.zone.parties.join(0, member);
   }
   let partied = encoded(&mut state, 0);

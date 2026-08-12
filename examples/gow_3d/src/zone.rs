@@ -7,6 +7,8 @@
 
 use std::collections::HashMap;
 
+use plaza_server_utils::relevance::{GridQuantizer, SpatialGrid};
+
 use crate::casting::{Ms, GLOBAL_COOLDOWN_MS};
 use crate::controls::Authority;
 use crate::movement::{Tracked, Verdict};
@@ -18,6 +20,9 @@ pub const VIEW: f32 = 30.0;
 pub const REACH: f32 = 22.0;
 /// What one landing takes off.
 pub const HIT: u16 = 12;
+/// Grid cell width, a third of the view, which is how the other examples in
+/// this tree size theirs.
+pub const CELL: f32 = VIEW / 3.0;
 /// Metres between floors, which is what makes a zone a building rather than a
 /// field.
 pub const FLOOR_HEIGHT: f32 = 5.0;
@@ -62,10 +67,29 @@ impl Character {
   }
 }
 
-#[derive(Default)]
 pub struct Zone {
   pub characters: HashMap<Seat, Character>,
   pub parties: Parties,
+  /// The library's flat `(x, z)` grid, rebuilt each tick because everyone
+  /// moves.
+  ///
+  /// Two-dimensional, which is the right default and the wrong one here, and
+  /// `tests/tower.rs` is the measurement of how wrong: in a stacked building a
+  /// flat cell holds every floor at once, so the height filter below throws
+  /// away 72% of what the grid hands back. Kept rather than hidden, because
+  /// the whole point of this example is that the trade is visible.
+  grid: SpatialGrid<u32>,
+  /// Whether the grid still describes where everyone is.
+  ///
+  /// A rebuilt-on-tick index is one a caller can read before the first tick,
+  /// or after a spawn, and get an empty answer that is indistinguishable from
+  /// "nobody is nearby". Marking it instead means a stale index cannot be
+  /// queried at all: the read rebuilds it.
+  stale: bool,
+  /// Candidates the grid returned, and how many survived the height test, for
+  /// the panel.
+  pub examined: u64,
+  pub returned: u64,
   pub authority: Authority,
   pub now_ms: Ms,
   /// Claims the validator refused, which is the only signal there is that
@@ -77,6 +101,24 @@ pub struct Zone {
   pub revives: u64,
 }
 
+impl Default for Zone {
+  fn default() -> Self {
+    Self {
+      characters: HashMap::new(),
+      parties: Parties::default(),
+      grid: SpatialGrid::new(GridQuantizer::new((0.0, 0.0), CELL)),
+      stale: true,
+      examined: 0,
+      returned: 0,
+      authority: Authority::default(),
+      now_ms: 0,
+      refusals: 0,
+      landed: 0,
+      revives: 0,
+    }
+  }
+}
+
 impl Zone {
   pub fn new() -> Self {
     Self::default()
@@ -84,13 +126,29 @@ impl Zone {
 
   pub fn admit(&mut self, seat: Seat, at: (f32, f32, f32)) {
     self.characters.insert(seat, Character::new(seat, at, self.now_ms));
+    self.stale = true;
   }
 
   pub fn remove(&mut self, seat: Seat) {
     self.characters.remove(&seat);
+    self.stale = true;
     // Leaving the zone leaves the party, or a health bar keeps updating for
     // somebody who is not here.
     self.parties.leave(seat);
+  }
+
+  /// Puts a character somewhere, and tells the index about it.
+  ///
+  /// The only way to move somebody that is not a claim or a driven step.
+  /// Writing `tracked.at` directly leaves the spatial index describing where
+  /// they used to be, and a query then answers from the old world with no sign
+  /// that anything is wrong, which a test doing exactly that is how this
+  /// method came to exist.
+  pub fn place(&mut self, seat: Seat, at: (f32, f32, f32)) {
+    if let Some(character) = self.characters.get_mut(&seat) {
+      character.tracked.at = at;
+      self.stale = true;
+    }
   }
 
   /// Aims at a seat, or at nobody.
@@ -129,6 +187,7 @@ impl Zone {
       let travel = step * forward as f32;
       let at = character.tracked.at;
       character.tracked.at = (at.0 + yaw.sin() * travel, at.1, at.2 + yaw.cos() * travel);
+      self.stale = true;
     }
   }
 
@@ -148,6 +207,8 @@ impl Zone {
     let verdict = character.tracked.claim(to, now);
     if verdict == Verdict::Refused {
       self.refusals += 1;
+    } else {
+      self.stale = true;
     }
     verdict
   }
@@ -226,22 +287,54 @@ impl Zone {
     landed
   }
 
+  /// Rebuilds the spatial index. Called once a tick, before anyone queries it.
+  ///
+  /// Rebuilt rather than updated, which is what every example in this tree
+  /// does and for the same reason: in a zone where everyone moves, tracking
+  /// which cell each character left costs more than filling an index whose
+  /// buckets already have their capacity.
+  fn reindex(&mut self) {
+    self.stale = false;
+    self.grid.clear();
+    for character in self.characters.values().filter(|c| c.alive) {
+      self
+        .grid
+        .insert(character.seat as u32, character.tracked.at.0, character.tracked.at.2);
+    }
+  }
+
   /// Who is within the view radius of a seat, itself included.
-  pub fn near(&self, seat: Seat, out: &mut Vec<Seat>) {
+  ///
+  /// The grid answers in two axes and the height test finishes the job. It is
+  /// exact either way: a flat query returns the **column**, a superset of the
+  /// sphere, so nobody is ever missed and the filter only removes false
+  /// positives.
+  pub fn near(&mut self, seat: Seat, out: &mut Vec<Seat>) {
     out.clear();
-    let Some(from) = self.characters.get(&seat).filter(|c| c.alive) else {
+    if self.stale {
+      self.reindex();
+    }
+    let Some(from) = self.characters.get(&seat).filter(|c| c.alive).map(|c| c.tracked.at) else {
       return;
     };
-    for character in self.characters.values().filter(|c| c.alive) {
-      if crate::movement::distance(from.tracked.at, character.tracked.at) <= VIEW {
-        out.push(character.seat);
+    let mut candidates = Vec::new();
+    self.grid.query_radius(from.0, from.2, VIEW, &mut candidates);
+    self.examined += candidates.len() as u64;
+    for id in candidates {
+      let other = id as Seat;
+      let Some(character) = self.characters.get(&other) else {
+        continue;
+      };
+      if crate::movement::distance(from, character.tracked.at) <= VIEW {
+        out.push(other);
       }
     }
+    self.returned += out.len() as u64;
     out.sort_unstable();
   }
 
   /// Everything a seat is told about this tick: near, plus subscribed.
-  pub fn audience_for(&self, seat: Seat, scratch: &mut Vec<Seat>) -> Audience {
+  pub fn audience_for(&mut self, seat: Seat, scratch: &mut Vec<Seat>) -> Audience {
     self.near(seat, scratch);
     audience(scratch, &self.parties, seat)
   }
@@ -352,7 +445,7 @@ mod tests {
     // The target walks out of reach while the bar is running, which is the
     // ordinary case rather than an edge one.
     zone.advance(250);
-    zone.characters.get_mut(&2).unwrap().tracked.at = (REACH * 3.0, 0.0, 0.0);
+    zone.place(2, (REACH * 3.0, 0.0, 0.0));
     zone.advance(250);
     assert_eq!(zone.characters[&2].health, 100, "out of reach when it landed");
 
@@ -360,7 +453,7 @@ mod tests {
     // cooldown first, and asserting the cast actually began: a refused one
     // leaves the health unchanged for a reason that has nothing to do with
     // range, which would pass this test for the wrong reason.
-    zone.characters.get_mut(&2).unwrap().tracked.at = (2.0, 0.0, 0.0);
+    zone.place(2, (2.0, 0.0, 0.0));
     zone.advance(GLOBAL_COOLDOWN_MS);
     assert!(zone.begin_cast(1, 0, 0), "the second cast is off cooldown");
     zone.advance(1);

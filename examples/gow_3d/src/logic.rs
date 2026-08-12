@@ -231,7 +231,7 @@ mod tests {
     let a = seated(&mut state, 1);
     let b = seated(&mut state, 2);
     let far = seated(&mut state, 3);
-    state.zone.characters.get_mut(&far).unwrap().tracked.at = (500.0, 0.0, 500.0);
+    state.zone.place(far, (500.0, 0.0, 500.0));
     state.zone.parties.join(a, far);
 
     let frame = frame_for(&mut state, a, 0);
@@ -263,13 +263,13 @@ mod tests {
     let mut state = GowState::new();
     let a = seated(&mut state, 1);
     let far = seated(&mut state, 2);
-    state.zone.characters.get_mut(&far).unwrap().tracked.at = (500.0, 0.0, 500.0);
+    state.zone.place(far, (500.0, 0.0, 500.0));
     state.landed = vec![far];
 
     let frame = frame_for(&mut state, a, 0);
     assert!(frame.landed.is_empty());
 
-    state.zone.characters.get_mut(&far).unwrap().tracked.at = spawn_at(far);
+    state.zone.place(far, spawn_at(far));
     let frame = frame_for(&mut state, a, 0);
     assert_eq!(frame.landed, vec![far], "and one beside you is");
   }

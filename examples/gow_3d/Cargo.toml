@@ -8,7 +8,7 @@ default-run = "gow_3d"
 [features]
 default = ["native", "client", "server", "websocket"]
 client = []
-server = ["dep:plaza_session", "dep:plaza_server_utils", "dep:plaza_wire", "dep:actix-web", "dep:tokio", "dep:async-trait", "dep:tracing"]
+server = ["dep:plaza_session", "dep:plaza_wire", "dep:actix-web", "dep:tokio", "dep:async-trait", "dep:tracing"]
 native = ["plaza_ws/native"]
 web = ["client", "websocket", "plaza_ws/miniquad"]
 websocket = ["dep:plaza_ws", "dep:plaza_wire"]
@@ -23,7 +23,11 @@ serde = { workspace = true }
 plaza_ws = { workspace = true, optional = true, features = ["pump"] }
 plaza_wire = { workspace = true, optional = true, features = ["default", "msgpack"] }
 plaza_session = { workspace = true, features = ["default", "actix_host"], optional = true }
-plaza_server_utils = { workspace = true, optional = true }
+# Not optional and not server-only: the zone's spatial index is the relevance
+# this example is about, and the crate is pure logic that compiles to wasm, as
+# netcode_playground has been demonstrating for longer than this example has
+# existed.
+plaza_server_utils = { workspace = true }
 actix-web = { version = "^4", optional = true }
 tokio = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }

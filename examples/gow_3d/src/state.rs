@@ -75,9 +75,9 @@ impl GowState {
   }
 
   /// Borrows the scratch buffer for one audience query.
-  pub fn with_scratch<T>(&mut self, f: impl FnOnce(&Zone, &mut Vec<Seat>) -> T) -> T {
+  pub fn with_scratch<T>(&mut self, f: impl FnOnce(&mut Zone, &mut Vec<Seat>) -> T) -> T {
     let mut scratch = std::mem::take(&mut self.scratch);
-    let out = f(&self.zone, &mut scratch);
+    let out = f(&mut self.zone, &mut scratch);
     self.scratch = scratch;
     out
   }
