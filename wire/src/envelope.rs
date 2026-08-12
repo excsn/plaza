@@ -33,7 +33,6 @@ use serde::{Deserialize, Serialize};
 /// server's own bookkeeping rather than anything a client is told. A type that
 /// genuinely embeds an id in a payload declares that itself, which is where the
 /// requirement belongs; `Agent` below is one such type.
-
 pub trait AgentId: Clone + Debug + Eq + Hash + Send + Sync + 'static {}
 
 impl<T> AgentId for T where T: Clone + Debug + Eq + Hash + Send + Sync + 'static {}

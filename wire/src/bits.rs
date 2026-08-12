@@ -210,9 +210,9 @@ impl BitWriter {
     }
     let sign = if quat[largest] < 0.0 { -1.0 } else { 1.0 };
     self.bits(largest as u64, SMALLEST_THREE_INDEX_BITS);
-    for i in 0..4 {
+    for (i, value) in quat.iter().enumerate() {
       if i != largest {
-        self.quantized(quat[i] * sign, -SMALLEST_THREE_BOUND, SMALLEST_THREE_BOUND, bits);
+        self.quantized(value * sign, -SMALLEST_THREE_BOUND, SMALLEST_THREE_BOUND, bits);
       }
     }
   }
@@ -304,10 +304,10 @@ impl<'a> BitReader<'a> {
     let largest = self.bits(SMALLEST_THREE_INDEX_BITS)? as usize;
     let mut quat = [0.0f32; 4];
     let mut sum = 0.0f32;
-    for i in 0..4 {
+    for (i, slot) in quat.iter_mut().enumerate() {
       if i != largest {
         let v = self.quantized(-SMALLEST_THREE_BOUND, SMALLEST_THREE_BOUND, bits)?;
-        quat[i] = v;
+        *slot = v;
         sum += v * v;
       }
     }

@@ -300,7 +300,7 @@ mod tests {
     );
 
     buffer.clear_inputs_for_client(&player1);
-    assert!(buffer.inputs_by_client.get(&player1).is_none());
-    assert!(buffer.inputs_by_client.get(&player2).is_some());
+    assert!(!buffer.inputs_by_client.contains_key(&player1));
+    assert!(buffer.inputs_by_client.contains_key(&player2));
   }
 }
