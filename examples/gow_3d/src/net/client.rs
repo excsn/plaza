@@ -20,7 +20,7 @@ use plaza_wire::{MsgPackCodec, WireCodec};
 use plaza_ws::pump::{mismatch_message, Arrival, FramePump};
 use plaza_ws::{Event, State};
 
-use crate::protocol::{Because, Frame, GowOp, Seen, PROTOCOL, TICK_HZ};
+use crate::protocol::{Authority, Because, Frame, GowOp, Seen, PROTOCOL, TICK_HZ};
 use crate::relevance::Seat;
 
 const WIRE: MsgPackCodec = MsgPackCodec;
@@ -126,9 +126,21 @@ pub struct NetClient {
   /// Casts that went off nearby since the last frame, for the client to play
   /// once and forget.
   pub landed: Vec<Seat>,
+  /// Which mode the zone said it is running, on the last frame.
+  pub authority: Authority,
+  /// How far the server's idea of this client's own position is from the
+  /// client's, right now.
+  ///
+  /// The measurement the whole comparison comes down to. Under client
+  /// authority it is the send interval's worth of travel and nothing else.
+  /// Under server authority it is a round trip of it, because the local
+  /// character has moved and the answer has not come back yet.
+  pub gap: f32,
+  pub worst_gap: f32,
   now_ms: u64,
   last_sent_ms: u64,
   last_sent_at: Option<(f32, f32, f32)>,
+  last_intent: Option<(u32, i8)>,
   events: Vec<Event>,
   arrivals: Vec<Arrival>,
 }
@@ -156,9 +168,13 @@ impl NetClient {
       meter: Meter::default(),
       refused: 0,
       landed: Vec::new(),
+      authority: Authority::Client,
+      gap: 0.0,
+      worst_gap: 0.0,
       now_ms: 0,
       last_sent_ms: 0,
       last_sent_at: None,
+      last_intent: None,
       events: Vec::new(),
       arrivals: Vec::new(),
     }
@@ -232,7 +248,11 @@ impl NetClient {
           self.at = at;
           self.last_sent_at = None;
         }
-        GowOp::Moved { .. } | GowOp::Cast { .. } | GowOp::Party { .. } | GowOp::Unparty => {}
+        GowOp::Moved { .. }
+        | GowOp::Intent { .. }
+        | GowOp::Cast { .. }
+        | GowOp::Party { .. }
+        | GowOp::Unparty => {}
       }
     }
   }
@@ -240,18 +260,30 @@ impl NetClient {
   fn on_frame(&mut self, frame: Frame) {
     self.tick = frame.tick;
     self.landed = frame.landed;
+    self.authority = frame.authority;
     let now = self.now_ms;
     let mine = self.seat;
 
     for seen in &frame.characters {
       if Some(seen.seat) == mine {
-        // Taken once, to learn where the zone put us, and never again: after
-        // that the server is repeating the position this client gave it, and
-        // applying it would be reconciling against an echo of ourselves.
         if !self.seeded {
+          // Taken once, to learn where the zone put us.
           self.at = seen.at;
           self.seeded = true;
+        } else if self.authority == Authority::Server {
+          // The server owns it, so this is not an echo, it is the answer. No
+          // prediction and no reconciliation: the character is drawn where the
+          // server last said, which is what makes the round trip visible
+          // rather than hidden, and visible is the point of the comparison.
+          self.gap = crate::movement::distance(self.at, seen.at);
+          self.at = seen.at;
+        } else {
+          // Under client authority it *is* an echo of what we already said, so
+          // the distance to it is the round trip's worth of travel and nothing
+          // is applied.
+          self.gap = crate::movement::distance(self.at, seen.at);
         }
+        self.worst_gap = self.worst_gap.max(self.gap);
         continue;
       }
       self
@@ -274,6 +306,29 @@ impl NetClient {
     // would otherwise despawn everybody at once.
     let present: std::collections::HashSet<Seat> = frame.characters.iter().map(|s| s.seat).collect();
     self.others.retain(|seat, _| present.contains(seat));
+  }
+
+  /// Reports the direction being held, for when the server owns the position.
+  ///
+  /// Sent at the same rate a position is, and only on a change, so the two
+  /// arms of the comparison are not separated by their send policy.
+  pub fn intend(&mut self, yaw: f32, forward: i8) {
+    if self.now_ms.saturating_sub(self.last_sent_ms) < SEND_EVERY_MS {
+      return;
+    }
+    if self.last_intent == Some((yaw.to_bits(), forward)) {
+      return;
+    }
+    self.last_sent_ms = self.now_ms;
+    self.last_intent = Some((yaw.to_bits(), forward));
+    self.pump.send_op(&GowOp::Intent { yaw, forward });
+  }
+
+  /// Clears the worst-case reading, for comparing one mode against the other
+  /// in one session.
+  pub fn forget_the_worst(&mut self) {
+    self.worst_gap = 0.0;
+    self.refused = 0;
   }
 
   /// Reports where the player is, at the send rate and only when it changed.

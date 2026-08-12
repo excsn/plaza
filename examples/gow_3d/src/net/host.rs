@@ -12,6 +12,7 @@ use plaza_session::SessionOptions;
 use plaza_wire::frame::ProtocolVersion;
 use plaza_wire::MsgPackCodec;
 
+use crate::controls::Dial;
 use crate::logic::GowLogic;
 use crate::protocol::{GowOp, PlayerId, PROTOCOL, TICK_HZ};
 use crate::state::GowState;
@@ -33,7 +34,7 @@ async fn ws_route(
 }
 
 /// Runs the zone until the process ends.
-pub async fn serve(bind: &str, static_dir: Option<String>) -> std::io::Result<()> {
+pub async fn serve(bind: &str, static_dir: Option<String>, dial: Dial) -> std::io::Result<()> {
   init_logging();
 
   let sim_clock = Arc::new(AtomicU64::new(0));
@@ -45,7 +46,7 @@ pub async fn serve(bind: &str, static_dir: Option<String>) -> std::io::Result<()
     }),
   );
 
-  let logic = GowLogic::new().with_clock(sim_clock);
+  let logic = GowLogic::new().with_clock(sim_clock).with_dial(dial);
   // No snapshot provider, and less of a compromise here than anywhere else in
   // the tree: a joiner's first ordinary frame is already the complete audience,
   // because nothing in this example is a delta against a baseline.

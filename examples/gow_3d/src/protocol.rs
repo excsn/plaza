@@ -31,6 +31,16 @@ pub fn frame_to_ms(frame: u64) -> u64 {
   frame * 1000 / TICK_HZ
 }
 
+/// Who decides where a character is, as the wire carries it.
+///
+/// On the frame rather than assumed, because a client that guesses wrong
+/// either fights the server for its own position or stops moving entirely.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Authority {
+  Server,
+  Client,
+}
+
 /// Why a character is in your frame.
 ///
 /// Not a hint. A client draws a nameplate for one and a party frame for the
@@ -73,6 +83,9 @@ pub struct Seen {
 pub struct Frame {
   pub tick: u64,
   pub yours: Option<u16>,
+  /// Which mode the zone is running, so a client knows whether to report a
+  /// position or ask for one.
+  pub authority: Authority,
   pub characters: Vec<Seen>,
   /// Casts that went off since the last frame.
   ///
@@ -101,6 +114,14 @@ pub enum GowOp {
   /// Rare by design, and not a correction to ease off: an honest client never
   /// sees one, so smoothing it would be smoothing a cheat.
   Refused { at: (f32, f32, f32) },
+
+  /// Client to server: the direction being held, for when the **server**
+  /// decides where you are.
+  ///
+  /// The other half of the comparison this example exists to make. An intent
+  /// is smaller than a position and cannot be a lie about where you are, and
+  /// it costs a round trip before your own character moves.
+  Intent { yaw: f32, forward: i8 },
 
   /// Client to server: begin an ability.
   Cast { ability: u8, cast_ms: u32 },

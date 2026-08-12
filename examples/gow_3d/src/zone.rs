@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 
 use crate::casting::{Ms, GLOBAL_COOLDOWN_MS};
+use crate::controls::Authority;
 use crate::movement::{Tracked, Verdict};
 use crate::relevance::{audience, Audience, Parties, Seat};
 
@@ -31,6 +32,8 @@ pub struct Character {
   /// Where the **client** says it is, which the server only sanity-checks.
   pub tracked: Tracked,
   pub health: u16,
+  /// What the client says it is holding, used only under server authority.
+  pub intent: (f32, i8),
   pub casting: Option<Cast>,
   /// When this seat may act again, which is the other half of the design
   /// absorbing latency.
@@ -44,6 +47,7 @@ impl Character {
       seat,
       tracked: Tracked::new(at, now_ms),
       health: 100,
+      intent: (0.0, 0),
       casting: None,
       ready_at: 0,
       alive: true,
@@ -55,6 +59,7 @@ impl Character {
 pub struct Zone {
   pub characters: HashMap<Seat, Character>,
   pub parties: Parties,
+  pub authority: Authority,
   pub now_ms: Ms,
   /// Claims the validator refused, which is the only signal there is that
   /// somebody is not playing the same game.
@@ -79,8 +84,40 @@ impl Zone {
     self.parties.leave(seat);
   }
 
+  /// Records what a client is holding, for the server to integrate.
+  pub fn intend(&mut self, seat: Seat, yaw: f32, forward: i8) {
+    if let Some(character) = self.characters.get_mut(&seat) {
+      character.intent = (yaw, forward.clamp(-1, 1));
+    }
+  }
+
+  /// Moves everyone from their held input, which is what the server does when
+  /// it is the one deciding.
+  ///
+  /// The same speed constant the validator polices under the other mode, so
+  /// the two arms of the comparison are not quietly running different games.
+  fn drive(&mut self, dt_ms: Ms) {
+    let step = crate::movement::RUN_SPEED * (dt_ms as f32 / 1000.0);
+    for character in self.characters.values_mut() {
+      let (yaw, forward) = character.intent;
+      if forward == 0 {
+        continue;
+      }
+      let travel = step * forward as f32;
+      let at = character.tracked.at;
+      character.tracked.at = (at.0 + yaw.sin() * travel, at.1, at.2 + yaw.cos() * travel);
+    }
+  }
+
   /// Takes a claimed position, or does not.
+  ///
+  /// Refused outright under server authority: a position from a client that
+  /// does not own one is not a claim to check, it is a packet from a client
+  /// that has not noticed the mode changed.
   pub fn claim(&mut self, seat: Seat, to: (f32, f32, f32)) -> Verdict {
+    if self.authority == Authority::Server {
+      return Verdict::Refused;
+    }
     let now = self.now_ms;
     let Some(character) = self.characters.get_mut(&seat) else {
       return Verdict::Refused;
@@ -120,6 +157,9 @@ impl Zone {
   /// than described.
   pub fn advance(&mut self, dt_ms: Ms) -> Vec<Seat> {
     self.now_ms += dt_ms;
+    if self.authority == Authority::Server {
+      self.drive(dt_ms);
+    }
     let now = self.now_ms;
     let mut landed = Vec::new();
     for character in self.characters.values_mut() {

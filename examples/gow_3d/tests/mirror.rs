@@ -20,6 +20,7 @@
 
 #![cfg(all(feature = "server", feature = "client", feature = "websocket"))]
 
+use gow_3d::controls::{Authority, Controls};
 use gow_3d::logic::GowLogic;
 use gow_3d::net::client::NetClient;
 use gow_3d::protocol::{Because, GowOp, PlayerId};
@@ -251,4 +252,123 @@ async fn a_cast_is_described_while_it_runs_and_announced_once_when_it_lands() {
 
   assert!(saw_bar >= 8, "the bar is described every tick it runs: {saw_bar}");
   assert_eq!(announcements, 1, "and the landing is announced exactly once");
+}
+
+#[tokio::test]
+async fn what_each_authority_mode_costs() {
+  // The comparison this example was planned around, and the reason both modes
+  // live in one build: two builds and two sessions compare two memories of how
+  // something felt.
+  //
+  // Same walk, same speed constant, same send rate, driven through the real
+  // wire both ways. What differs is who decides.
+  let dial = Controls::default().shared();
+  let logic = GowLogic::new().with_dial(dial.clone());
+
+  println!("\n  a straight walk, 60 ticks, by who decides where you are:\n");
+  println!("{:>16} {:>14} {:>14} {:>12}", "authority", "gap now", "worst gap", "refusals");
+
+  let mut rows = Vec::new();
+  for mode in [Authority::Client, Authority::Server] {
+    dial.lock().authority = mode;
+
+    let mut state = GowState::new();
+    seat(&logic, &mut state, 1).await;
+    seat(&logic, &mut state, 2).await;
+    let socket = ScriptedSocket::new();
+    let mut client = NetClient::from_socket(Box::new(socket.clone()));
+    client.poll(0);
+    deliver(&socket, &[GowOp::Seated { seat: 0 }]);
+    client.poll(0);
+    let out = tick(&logic, &mut state).await;
+    deliver(&socket, &ops_for(&out, 0));
+    client.poll(0);
+
+    let mut now = 0u64;
+    for _ in 0..60 {
+      // The client walks forward at the honest speed, exactly as `walk` does.
+      let step = gow_3d::movement::RUN_SPEED * 33.0 / 1000.0;
+      match client.authority {
+        gow_3d::protocol::Authority::Client => {
+          let at = (client.at.0, client.at.1, client.at.2 + step);
+          client.moved_to(at);
+          send(&logic, &mut state, 1, GowOp::Moved { at }).await;
+        }
+        gow_3d::protocol::Authority::Server => {
+          client.intend(0.0, 1);
+          send(&logic, &mut state, 1, GowOp::Intent { yaw: 0.0, forward: 1 }).await;
+        }
+      }
+      let out = tick(&logic, &mut state).await;
+      now += 33;
+      deliver(&socket, &ops_for(&out, 0));
+      client.poll(now);
+    }
+
+    println!(
+      "{:>16} {:>13.2}u {:>13.2}u {:>12}",
+      mode.label(),
+      client.gap,
+      client.worst_gap,
+      state.zone.refusals
+    );
+    rows.push((mode, client.worst_gap, state.zone.refusals, client.at));
+  }
+
+  let (_, client_worst, client_refusals, client_at) = rows[0];
+  let (_, server_worst, server_refusals, server_at) = rows[1];
+
+  println!("\n  no network delay is simulated here at all, and the two still");
+  println!("  differ: server authority starts a tick behind because nothing");
+  println!("  local moves until the answer arrives. Latency adds to both, but");
+  println!("  only one of them is starting from zero.\n");
+
+  // Both modes actually moved the character, or the comparison is between two
+  // things standing still.
+  assert!(client_at.2 > 10.0, "the client-authority walk went somewhere: {client_at:?}");
+  assert!(server_at.2 > 10.0, "and so did the server-authority one: {server_at:?}");
+
+  // Neither mode produced a refusal on an honest walk. Under server authority
+  // that is because no position was ever claimed, which is the security half
+  // of what the mode buys.
+  assert_eq!(client_refusals, 0, "an honest client-authority walk is never refused");
+  assert_eq!(server_refusals, 0, "and a server-authority one has nothing to refuse");
+
+  // The gap is what the two modes actually trade, and this harness delivers
+  // every packet instantly, which is what makes the reading worth having: it
+  // is the floor, not a measurement of some particular connection.
+  assert_eq!(client_worst, 0.0, "the client's own position cannot disagree with itself");
+
+  // One tick of travel, before a single millisecond of network delay exists.
+  // That is the cost of asking rather than telling, and everything a real
+  // connection adds is on top of it.
+  let one_tick = gow_3d::movement::RUN_SPEED * 33.0 / 1000.0;
+  assert!(
+    (server_worst - one_tick).abs() < 0.01,
+    "server authority is a tick behind at zero latency: {server_worst} against {one_tick}"
+  );
+}
+
+#[tokio::test]
+async fn a_position_from_a_client_that_does_not_own_one_is_refused() {
+  // A client that has not noticed the mode changed is not a cheat, but taking
+  // its word would be: under server authority a claimed position is not a
+  // claim to check, it is a packet from a client running the other game.
+  let dial = Controls::default().shared();
+  dial.lock().authority = Authority::Server;
+  let logic = GowLogic::new().with_dial(dial);
+  let mut state = GowState::new();
+  seat(&logic, &mut state, 1).await;
+  tick(&logic, &mut state).await;
+
+  let before = state.zone.characters[&0].tracked.at;
+  send(&logic, &mut state, 1, GowOp::Moved { at: (900.0, 0.0, 0.0) }).await;
+  assert_eq!(state.zone.characters[&0].tracked.at, before, "the server kept its own");
+
+  // And it is **not** counted as a refusal, which is the part worth pinning.
+  // The refusal count is the only evidence this design has that somebody is
+  // cheating, and a packet that merely crossed a mode change is not evidence
+  // of anything. Counting it would make the number jump every time the dial
+  // moves, which is exactly when somebody is looking at it.
+  assert_eq!(state.zone.refusals, 0, "a mode change is not a cheat");
 }

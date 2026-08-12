@@ -6,8 +6,13 @@
 //! are partied with and watch their entry stay while their body goes.
 
 use gow_3d::net::client::{NetClient, Status};
-use gow_3d::protocol::Because;
+use gow_3d::protocol::{Authority, Because};
 use macroquad::prelude::*;
+
+/// The dial, present only in the process that is also the server. A joiner is
+/// handed `None`, and sees the mode the frame reports rather than one it can
+/// change.
+pub type Dials = Option<gow_3d::controls::Dial>;
 
 /// Health, and what the second channel is currently costing.
 pub fn draw_hud(client: &NetClient, yaw: f32) {
@@ -56,7 +61,7 @@ pub fn draw_hud(client: &NetClient, yaw: f32) {
   }
 }
 
-pub fn draw_panel(client: &NetClient, url: &str) {
+pub fn draw_panel(client: &mut NetClient, url: &str, dials: &Dials) {
   let now = client.now_ms();
   let near = client.in_view().count();
   let subscribed = client
@@ -95,6 +100,31 @@ pub fn draw_panel(client: &NetClient, url: &str) {
       // Zero for an honest client, which is the only reason it is worth a row:
       // a number that is always zero is a number you notice changing.
       ui.label(format!("claims refused {}", client.refused));
+      ui.separator();
+
+      // The comparison this example was planned around, in one session rather
+      // than two builds. Switch the dial and watch both rows move: under
+      // client authority the gap is a send interval's travel, under server
+      // authority it is a round trip's, and the local character stops
+      // answering the key immediately.
+      ui.label(format!("authority     {}", match client.authority {
+        Authority::Server => "server decides",
+        Authority::Client => "client decides",
+      }));
+      ui.label(format!("position gap  {:.2} u", client.gap));
+      ui.label(format!("worst gap     {:.2} u", client.worst_gap));
+
+      if let Some(dial) = dials {
+        let current = dial.lock().authority;
+        if ui.button(format!("switch to {}", current.other().label())).clicked() {
+          dial.lock().authority = current.other();
+          // Or the worst case carries across the switch and the two arms are
+          // compared against one number that belongs to whichever came first.
+          client.forget_the_worst();
+        }
+      } else {
+        ui.label("(the host owns this dial)");
+      }
     });
   });
 }

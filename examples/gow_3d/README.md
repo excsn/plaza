@@ -10,7 +10,7 @@ The crate is `gow_3d` because Cargo rejects a package name beginning with a digi
 cargo test -p gow_3d     # the findings, as assertions
 ```
 
-Arrows or WASD walk, **Q and E change floor**, 1 casts, 2 parties with the nearest character, 3 leaves. The thing worth doing is walking two floors away from somebody you are partied with: their body leaves the world and their entry stays, with a bearing and a floor offset. That is the whole argument of this example in one action.
+Arrows or WASD walk, **Q and E change floor**, 1 casts, 2 parties with the nearest character, 3 leaves. The panel switches who decides where you are, which is the comparison the example is built around. The thing worth doing is walking two floors away from somebody you are partied with: their body leaves the world and their entry stays, with a bearing and a floor offset. That is the whole argument of this example in one action.
 
 ## What it is for
 
@@ -59,6 +59,20 @@ Every other example in this tree is server-authoritative, because that is the ri
 Read it as a cliff rather than a curve. **A cheat inside the tolerance simply works, at exactly the rate it claims.** A ten percent overrun is indistinguishable from a late packet, and a threshold tight enough to catch it throws out honest players on bad connections. Past the tolerance it collapses: a 2x claim achieves 13% of an honest run, because almost every claim is refused and the server keeps its own position. There is no setting that separates 1.3x from a bad connection, because they are the same observation.
 
 Anyone reading this as an endorsement of client authority has been failed by the example. It is a demonstration of a trade with the price visible.
+
+### Both modes, one build
+
+The plan for this example asked for the comparison rather than either mode alone, so both are live and the panel switches between them. Two builds and two sessions compare two memories of how something felt.
+
+```
+       authority        gap now      worst gap     refusals
+          client          0.00u          0.00u            0
+          server          0.23u          0.23u            0
+```
+
+That is measured with **no network delay simulated at all**, which is what makes it worth having: it is the floor rather than a reading off one connection. Client authority cannot disagree with itself. Server authority is already one tick of travel behind, because nothing local moves until the answer arrives, and everything a real connection adds sits on top of that.
+
+Neither arm produced a refusal on an honest walk, and under server authority that is because no position was ever claimed. Sending one anyway is refused and **not counted**: a packet that merely crossed a mode change is not evidence of cheating, and counting it would make the number jump every time the dial moves, which is exactly when somebody is reading it.
 
 ### The validator is a budget, not a per-claim allowance
 

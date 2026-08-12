@@ -18,8 +18,9 @@ use plaza::state_logic::{LogicInput, LogicOutput, StateLogic};
 use plaza_server_utils::{Admission, Departure};
 
 use crate::casting::Ms;
+use crate::controls::{Authority, Dial};
 use crate::movement::Verdict;
-use crate::protocol::{frame_to_ms, Because, Frame, GowOp, PlayerId, Seen, TICK_HZ};
+use crate::protocol::{self, frame_to_ms, Because, Frame, GowOp, PlayerId, Seen, TICK_HZ};
 use crate::relevance::Seat;
 use crate::state::{spawn_at, GowState};
 
@@ -31,6 +32,7 @@ pub const STEP_MS: Ms = 1000 / TICK_HZ;
 #[derive(Default)]
 pub struct GowLogic {
   clock: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
+  dial: Option<Dial>,
 }
 
 impl std::fmt::Debug for GowLogic {
@@ -46,6 +48,11 @@ impl GowLogic {
 
   pub fn with_clock(mut self, clock: std::sync::Arc<std::sync::atomic::AtomicU64>) -> Self {
     self.clock = Some(clock);
+    self
+  }
+
+  pub fn with_dial(mut self, dial: Dial) -> Self {
+    self.dial = Some(dial);
     self
   }
 }
@@ -74,7 +81,14 @@ impl StateLogic<GowOp, PlayerId, GowState> for GowLogic {
           }
         }
       }
-      LogicInput::TimeStep { .. } => step_once(state, &mut ctx),
+      LogicInput::TimeStep { .. } => {
+        // Read once a tick rather than once a frame, so a mode change lands on
+        // a tick boundary and cannot split one.
+        if let Some(dial) = &self.dial {
+          state.zone.authority = dial.lock().authority;
+        }
+        step_once(state, &mut ctx)
+      }
     }
 
     if let Some(clock) = &self.clock {
@@ -117,6 +131,7 @@ fn apply(state: &mut GowState, player: PlayerId, seat: Seat, op: GowOp, ctx: &mu
         ctx.ops_q().push(TargetedOp::new_system_to(player, vec![GowOp::Refused { at: held }]));
       }
     }
+    GowOp::Intent { yaw, forward } => state.zone.intend(seat, yaw, forward),
     GowOp::Cast { ability, cast_ms } => {
       state.zone.begin_cast(seat, ability, cast_ms as Ms);
     }
@@ -155,6 +170,7 @@ fn step_once(state: &mut GowState, ctx: &mut Ctx) {
 fn frame_for(state: &mut GowState, seat: Seat, now: Ms) -> Frame {
   let tick = state.tick;
   let landed = state.landed.clone();
+  let authority = state.zone.authority;
   state.with_scratch(|zone, scratch| {
     let audience = zone.audience_for(seat, scratch);
     let near: std::collections::HashSet<Seat> = scratch.iter().copied().collect();
@@ -183,6 +199,10 @@ fn frame_for(state: &mut GowState, seat: Seat, now: Ms) -> Frame {
     Frame {
       tick,
       yours: Some(seat),
+      authority: match authority {
+        Authority::Server => protocol::Authority::Server,
+        Authority::Client => protocol::Authority::Client,
+      },
       characters,
       // Only the ones this client can see. A landing across the zone is not
       // news, and sending it would be describing something the client has no

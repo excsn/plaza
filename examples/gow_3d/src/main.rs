@@ -6,6 +6,8 @@ mod render;
 #[cfg(all(feature = "client", feature = "websocket"))]
 mod ui;
 
+#[cfg(feature = "server")]
+use gow_3d::controls::Controls;
 use gow_3d::role;
 use gow_3d::role::Role;
 use macroquad::prelude::*;
@@ -36,7 +38,11 @@ fn main() {
   #[cfg(feature = "server")]
   if options.role == Role::Headless {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-    if let Err(e) = runtime.block_on(gow_3d::net::host::serve(&options.bind, options.static_dir.clone())) {
+    if let Err(e) = runtime.block_on(gow_3d::net::host::serve(
+      &options.bind,
+      options.static_dir.clone(),
+      Controls::default().shared(),
+    )) {
       eprintln!("3DGoW stopped: {e}");
       std::process::exit(1);
     }
@@ -74,7 +80,7 @@ const TURN_SPEED: f32 = 2.6;
 /// is: no prediction, no input buffer, no sequence numbers, no reconciliation.
 /// The character moves because the key is down, and the server is told after.
 #[cfg(all(feature = "client", feature = "websocket"))]
-fn walk(at: (f32, f32, f32), yaw: &mut f32, dt: f32) -> (f32, f32, f32) {
+fn walk(at: (f32, f32, f32), yaw: &mut f32, dt: f32) -> ((f32, f32, f32), i8) {
   use gow_3d::movement::RUN_SPEED;
 
   if is_key_down(KeyCode::Left) || is_key_down(KeyCode::A) {
@@ -84,12 +90,12 @@ fn walk(at: (f32, f32, f32), yaw: &mut f32, dt: f32) -> (f32, f32, f32) {
     *yaw -= TURN_SPEED * dt;
   }
 
-  let forward = if is_key_down(KeyCode::Up) || is_key_down(KeyCode::W) {
-    1.0
+  let forward: i8 = if is_key_down(KeyCode::Up) || is_key_down(KeyCode::W) {
+    1
   } else if is_key_down(KeyCode::Down) || is_key_down(KeyCode::S) {
-    -1.0
+    -1
   } else {
-    0.0
+    0
   };
 
   let mut y = at.1;
@@ -103,26 +109,34 @@ fn walk(at: (f32, f32, f32), yaw: &mut f32, dt: f32) -> (f32, f32, f32) {
     y = ((render::floor_of(y) - 1).max(0)) as f32 * gow_3d::zone::FLOOR_HEIGHT;
   }
 
-  let step = RUN_SPEED * dt * forward;
+  let step = RUN_SPEED * dt * forward as f32;
   let half = render::FLOOR_SPAN / 2.0 - 1.0;
   (
-    (at.0 + yaw.sin() * step).clamp(-half, half),
-    y,
-    (at.2 + yaw.cos() * step).clamp(-half, half),
+    (
+      (at.0 + yaw.sin() * step).clamp(-half, half),
+      y,
+      (at.2 + yaw.cos() * step).clamp(-half, half),
+    ),
+    forward,
   )
 }
 
 #[cfg(all(feature = "client", feature = "websocket"))]
 async fn frame_loop(options: role::Options) {
+  // One handle for the panel and one for the logic, in the process that is
+  // both the host and the server. A joiner never has one.
   #[cfg(feature = "server")]
-  if options.role.runs_a_server() {
+  let dial = options.role.runs_a_server().then(|| Controls::default().shared());
+
+  #[cfg(feature = "server")]
+  if let Some(dial) = dial.clone() {
     let bind = options.bind.clone();
     let static_dir = options.static_dir.clone();
     std::thread::Builder::new()
       .name("zone".to_owned())
       .spawn(move || {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-        if let Err(e) = runtime.block_on(gow_3d::net::host::serve(&bind, static_dir)) {
+        if let Err(e) = runtime.block_on(gow_3d::net::host::serve(&bind, static_dir, dial)) {
           eprintln!("3DGoW stopped: {e}");
         }
       })
@@ -144,6 +158,11 @@ async fn frame_loop(options: role::Options) {
     Err(e) => return give_up(format!("could not connect to {url}: {e}")),
   };
 
+  #[cfg(feature = "server")]
+  let dials: ui::Dials = dial;
+  #[cfg(not(feature = "server"))]
+  let dials: ui::Dials = None;
+
   let mut scene = render::Scene::new();
   let mut yaw = 0.0f32;
 
@@ -157,8 +176,14 @@ async fn frame_loop(options: role::Options) {
     client.poll(clock_ms);
 
     if client.seeded {
-      let at = walk(client.at, &mut yaw, dt);
-      client.moved_to(at);
+      let (at, forward) = walk(client.at, &mut yaw, dt);
+      match client.authority {
+        // The client owns it: move, then report.
+        gow_3d::protocol::Authority::Client => client.moved_to(at),
+        // The server owns it: ask, and wait. Nothing local moves, which is the
+        // whole of what this arm of the comparison looks like.
+        gow_3d::protocol::Authority::Server => client.intend(yaw, forward),
+      }
     }
 
     clear_background(Color::new(0.04, 0.05, 0.07, 1.0));
@@ -208,7 +233,7 @@ async fn frame_loop(options: role::Options) {
       client.unparty();
     }
 
-    ui::draw_panel(&client, &url);
+    ui::draw_panel(&mut client, &url, &dials);
     egui_macroquad::draw();
     next_frame().await;
   }
