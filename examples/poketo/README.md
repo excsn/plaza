@@ -75,4 +75,20 @@ Two more, both about refusing to do half a thing. An unfinished trade yields **n
 
 ## Where it sits
 
+## What a reconnection actually costs
+
+`cargo test -p poketo --test reconnect -- --nocapture`
+
+The plan for this example named one failure it had to pin: **an operation applied twice because a reconnect re-sent it.** Both sides have to be running to see it, because each is individually right. The client is correct to resend, since it never heard an answer. The server is correct to accept a choice. What neither owns is whether this choice is the same one.
+
+```
+  a choice for turn 1, resent on a new connection after the old
+  one dropped: health [13, 22] before and [13, 22] after, turn
+  2 both times.
+```
+
+The turn number on the choice is the entire mechanism. A choice that named only itself would be indistinguishable from a fresh one, and the resend would play the move again. A resend is therefore **silence** rather than a correction, which is why nothing is sent back for one.
+
+Two smaller things the same test pins. A resumed client is told where it is by the ordinary frame rather than by anything special, so a reconnection needs no catch-up protocol. And a token that aged out is seated fresh with no error, because a resume that fails and a first join are the same situation, and inventing an error would make every client handle a case with no different answer.
+
 [spacemo](../spacemo/) is the far end of the same axis: nothing in its design absorbs latency, so the netcode has to. This is the near end twice over, once because movement is discrete and once because a battle is turn-based. [The netcode chapter](../../docs/guide/02-choosing-your-netcode.md) is the argument; these are the two ends of it running.
