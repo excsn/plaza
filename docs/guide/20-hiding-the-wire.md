@@ -37,6 +37,23 @@ Magnitude is a separate axis from rate. A fixed duration clears a large error an
 
 The discrete case deserves its own sentence: a grid game cannot ease half a cell, so [bomb_grid](../../examples/bomb_grid/) counts snaps instead of smoothing them, and its measurement is the chapter's cleanest fact: latency alone causes zero snaps when the comparison is made at the frame's own timestamp. What snaps a player is a lost input, not a slow wire.
 
+## The cheapest prediction is the one the design made unnecessary
+
+Before you reach for any of this, ask what the player is already waiting for. [gow_3d](../../examples/gow_3d/) is the counter-example to the whole chapter: a zone of characters with no prediction, no reconciliation, no input buffer, no sequence numbers and no correction to ease off, that still feels responsive on a bad connection, because the genre's designers made the player wait before the network ever got involved.
+
+An ability with a cast time hides its round trip, because the bar is already running. Be precise about the mechanism, though, since "cast times hide latency" is repeated more often than it is examined: **the delay never shrinks.** It is the same 150ms at every cast time. What changes is the *share* of the wait that was delay, and the share is what a player perceives.
+
+```
+      cast     rtt 30    rtt 150    rtt 300
+         0       100%       100%       100%
+       400         7%        27%        43%
+      1500         2%         9%        17%
+```
+
+At a cast time the genre actually uses, a bad connection is a smaller share of the wait than a good connection is of an instant ability. The global cooldown does the same job for the *inputs* that a cast time does for the outcome: a player who cannot act again for a second and a half is a player whose next input was never going to be frame-tight, which is why an instant ability is not the exception it looks like. The two waits overlap rather than stack, so a long cast is free rather than doubly expensive.
+
+Set that beside [puck_rink](../../examples/puck_rink/), which spends owned fixed-point arithmetic, per-frame digests and re-simulation of every confirmed frame to hide a hundred milliseconds on five bodies. Both are correct answers. The difference is that one asked the network and the other asked the designer, and it is worth knowing which question you are allowed to ask before you build the machinery in this chapter.
+
 ## Ripping it apart
 
 The bundles (`PredictedPlayer`, `HeldInputPredictor`) are wired from public primitives and nothing more, and the crate's docs name the parts so you can re-wire them: the input buffer, the predicted entity, the smoother, the estimators are each independently useful. The crate has no workspace dependencies at all, so any engine loop, wasm included, can host whichever subset you keep.
