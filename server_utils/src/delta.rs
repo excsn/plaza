@@ -545,6 +545,68 @@ impl DeltaBaseline {
 mod tests {
   use super::*;
 
+  /// The two accessors nothing was exercising, and the surprise inside one of
+  /// them.
+  mod what_nothing_was_calling {
+    use super::*;
+
+    #[test]
+    fn changing_the_policy_throws_away_the_acknowledged_baseline() {
+      // Worth pinning because it is a side effect of a setter: the next plan
+      // after a policy change is a **full rebuild**, not a delta, and a server
+      // that flips policy per tick would send a baseline per tick while every
+      // number on its panel still said "delta".
+      let mut baseline = DeltaBaseline::new(8).with_policy(RecoveryPolicy::AckRecovery);
+      let world = keys(&[1, 2, 3]);
+      baseline.plan(&world, 1);
+      baseline.observe_ack(1, 1, digest(&world));
+      assert_eq!(baseline.acked_seq(), Some(1), "there is a baseline to lose");
+
+      let before = baseline.full_rebuilds();
+      baseline.set_policy(RecoveryPolicy::Naive);
+      assert_eq!(baseline.acked_seq(), None, "the acknowledged state is gone");
+
+      let plan = baseline.plan(&world, 2);
+      assert!(plan.full_baseline, "so the next plan is a rebuild");
+      assert!(baseline.full_rebuilds() > before);
+    }
+
+    #[test]
+    fn setting_the_policy_it_already_has_changes_nothing() {
+      // The guard that makes the above safe to call from a config reload: an
+      // idempotent write must not cost a baseline.
+      let mut baseline = DeltaBaseline::new(8).with_policy(RecoveryPolicy::AckRecovery);
+      let world = keys(&[1, 2, 3]);
+      baseline.plan(&world, 1);
+      baseline.observe_ack(1, 1, digest(&world));
+
+      baseline.set_policy(RecoveryPolicy::AckRecovery);
+      assert_eq!(baseline.acked_seq(), Some(1), "still acknowledged");
+      assert!(!baseline.plan(&world, 2).full_baseline, "and still a delta");
+    }
+
+    #[test]
+    fn unacked_counts_what_is_still_in_flight() {
+      // The number a panel would show for "how far behind is this client",
+      // and it has to fall when an acknowledgement arrives or it is a leak
+      // rather than a measurement.
+      let mut baseline = DeltaBaseline::new(8);
+      let world = keys(&[1, 2, 3]);
+      for seq in 1..=3 {
+        baseline.plan(&world, seq);
+      }
+      let behind = baseline.unacked();
+      assert!(behind > 0, "three sent and none acknowledged: {behind}");
+
+      baseline.observe_ack(3, 0b111, digest(&world));
+      assert!(
+        baseline.unacked() < behind,
+        "acknowledging has to reduce it: {} against {behind}",
+        baseline.unacked()
+      );
+    }
+  }
+
   fn keys(items: &[u64]) -> BTreeSet<u64> {
     items.iter().copied().collect()
   }
