@@ -41,6 +41,9 @@ fn encoded(state: &mut GowState, seat: u16) -> usize {
         seat: *s,
         at: character.tracked.at,
         health: character.health,
+        max_health: character.max_health,
+        yaw: character.yaw,
+        kind: character.kind,
         because: match (near.contains(s), subscribed) {
           (true, true) => Because::BothOfThose,
           (true, false) => Because::Near,
@@ -53,7 +56,18 @@ fn encoded(state: &mut GowState, seat: u16) -> usize {
 
   let frame = GowOp::World(Box::new(Frame {
     tick: state.tick,
-    yours: Some(seat),
+    you: Some(gow_3d::protocol::You {
+      seat,
+      health: 100,
+      max_health: 100,
+      mana: 100,
+      max_mana: 100,
+      casting_ms: None,
+      casting: None,
+      ready_in_ms: 0,
+      up_in_ms: None,
+      target: None,
+    }),
     authority: Authority::Client,
     characters,
     landed: Vec::new(),

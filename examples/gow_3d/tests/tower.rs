@@ -21,6 +21,7 @@
 //! ```
 
 /// Metres between floors. Far enough that nobody sees through one.
+/// Vertical spacing between the crowds sharing one footprint.
 const FLOOR_HEIGHT: f32 = 5.0;
 /// How far a character is told about.
 const VIEW: f32 = 30.0;
@@ -196,7 +197,7 @@ fn one_floor_of_the_same_crowd_costs_the_filter_nothing() {
 #[cfg(feature = "server")]
 mod in_the_real_zone {
   use gow_3d::state::{spawn_at, GowState, MAX_CHARACTERS};
-  use gow_3d::zone::{FLOOR_HEIGHT, VIEW};
+  use super::FLOOR_HEIGHT;
 
   /// Runs one query per character and returns what the server's own grid
   /// examined against what survived the distance test.
@@ -224,14 +225,14 @@ mod in_the_real_zone {
   }
 
   #[test]
-  fn the_index_excludes_nobody_because_the_zone_is_smaller_than_the_view() {
+  fn stacking_a_crowd_makes_a_flat_cell_hand_back_what_height_then_discards() {
     let (flat_examined, flat_returned) = one_round(false);
     let (tower_examined, tower_returned) = one_round(true);
 
     println!("\n  the server's own grid, {MAX_CHARACTERS} characters, per query:\n");
     println!("{:>14} {:>12} {:>12} {:>10}", "arrangement", "examined", "returned", "wasted");
     for (name, examined, returned) in [
-      ("one floor", flat_examined, flat_returned),
+      ("spread out", flat_examined, flat_returned),
       ("a tower", tower_examined, tower_returned),
     ] {
       println!(
@@ -240,28 +241,23 @@ mod in_the_real_zone {
       );
     }
 
-    // The number that explains the rest: the grid hands back every character
-    // in the zone whatever the arrangement, because a query of radius VIEW
-    // covers a zone this small entirely.
-    assert_eq!(
-      flat_examined, MAX_CHARACTERS as f64,
-      "the grid returned everyone, so it partitioned nothing"
-    );
-    assert_eq!(tower_examined, MAX_CHARACTERS as f64);
-
-    println!("\n  the grid excluded nobody in either arrangement, which is the");
-    println!("  finding rather than a flaw: a zone {:.0}m across against a {VIEW:.0}m view", 80.0);
-    println!("  is smaller than one query, so the index is a linear scan with");
-    println!("  cell arithmetic on top. It earns its keep when the world is");
-    println!("  bigger than the question, and this one is not yet.\n");
-    println!("  The 72% above is therefore a claim about arrangement at scale,");
-    println!("  not something this zone reproduces at sixty-four characters.\n");
-
-    // And the part that is about arrangement rather than indexing: stacking
-    // changes who can see whom, which is the thing the height test decides.
+    // Spread over the landscape, the grid is doing its job: a query of radius
+    // VIEW covers a fraction of a zone this size, so most of the world is
+    // never looked at.
     assert!(
-      (tower_returned - flat_returned).abs() > 1.0,
-      "stacking has to change what is visible or nothing was tested: {flat_returned:.1} to {tower_returned:.1}"
+      flat_examined < MAX_CHARACTERS as f64,
+      "the grid returned everyone, so it partitioned nothing: {flat_examined}"
     );
+
+    // Stack the same people into one footprint and the flat cell holds every
+    // storey at once, so it hands back far more than the query wanted.
+    assert!(
+      tower_examined > flat_examined * 1.5,
+      "stacking examined {tower_examined} against {flat_examined} spread out"
+    );
+
+    println!("\n  the same people, in one footprint instead of across the country:");
+    println!("  {:.1}x examined for {:.1}x returned, which is the case a height", tower_examined / flat_examined.max(0.01), tower_returned / flat_returned.max(0.01));
+    println!("  filter pays for and a third grid axis would not.\n");
   }
 }

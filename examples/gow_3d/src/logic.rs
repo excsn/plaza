@@ -21,9 +21,9 @@ use tracing::info;
 use crate::casting::Ms;
 use crate::controls::Dial;
 use crate::movement::Verdict;
-use crate::protocol::{frame_to_ms, Because, Frame, GowOp, PlayerId, Seen, TICK_HZ};
+use crate::protocol::{frame_to_ms, Because, Frame, GowOp, PlayerId, Seen, You, TICK_HZ};
 use crate::relevance::Seat;
-use crate::state::{spawn_at, GowState};
+use crate::state::{den_at, spawn_at, GowState, MAX_CHARACTERS};
 
 type Ctx = OpsQueue<GowOp, PlayerId>;
 
@@ -37,10 +37,17 @@ pub const STEP_MS: Ms = 1000 / TICK_HZ;
 /// zone and rare enough to leave in a log.
 pub const REPORT_EVERY: u64 = TICK_HZ * 10;
 
+/// How many beasts the zone keeps, which is the only content it has.
+pub const BEASTS: usize = 18;
+
 #[derive(Default)]
 pub struct GowLogic {
   clock: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
   dial: Option<Dial>,
+  /// Adventurers the zone seats for itself, so a lone player is not alone.
+  bots: usize,
+  /// Beasts the zone keeps, which is the only content it has.
+  beasts: usize,
 }
 
 impl std::fmt::Debug for GowLogic {
@@ -62,6 +69,64 @@ impl GowLogic {
   pub fn with_dial(mut self, dial: Dial) -> Self {
     self.dial = Some(dial);
     self
+  }
+
+  /// Seats the zone's own characters: adventurers to share it with, and
+  /// beasts to fight. Zero of both is a bare zone, which is what the tests and
+  /// the measurements want.
+  pub fn with_bots(mut self, bots: usize) -> Self {
+    self.bots = bots;
+    self.beasts = if bots == 0 { 0 } else { BEASTS };
+    self
+  }
+
+  pub fn with_beasts(mut self, beasts: usize) -> Self {
+    self.beasts = beasts;
+    self
+  }
+}
+
+impl GowLogic {
+  /// Seats the zone's own characters, once.
+  ///
+  /// They take roster seats exactly as a player does, so nothing downstream
+  /// knows the difference, and they are deliberately absent from `agents`,
+  /// which is what keeps a frame from being built and encoded for a character
+  /// with no socket.
+  fn populate(&self, state: &mut GowState) {
+    if state.populated {
+      return;
+    }
+    state.populated = true;
+
+    let room = MAX_CHARACTERS.saturating_sub(self.beasts);
+    for i in 0..self.bots.min(room) {
+      let id = PlayerId::MAX - i as PlayerId;
+      let Admission::Seated { seat, .. } = state.roster.admit(id) else {
+        break;
+      };
+      let seat = seat as Seat;
+      let at = spawn_at(seat);
+      state.zone.admit(seat, at);
+      state.bots.take_seat(seat, at);
+    }
+
+    for i in 0..self.beasts {
+      let id = PlayerId::MAX - (MAX_CHARACTERS + i) as PlayerId;
+      let Admission::Seated { seat, .. } = state.roster.admit(id) else {
+        break;
+      };
+      state.zone.admit_beast(seat as Seat, den_at(i));
+    }
+
+    // Two parties among the zone's own, so the second relevance channel has
+    // something in it before a player has made a friend.
+    let seated: Vec<Seat> = state.bots.seats().collect();
+    for pair in seated.chunks(3) {
+      for other in pair.iter().skip(1) {
+        state.zone.parties.join(pair[0], *other);
+      }
+    }
   }
 }
 
@@ -95,6 +160,7 @@ impl StateLogic<GowOp, PlayerId, GowState> for GowLogic {
         if let Some(dial) = &self.dial {
           state.zone.authority = dial.lock().authority;
         }
+        self.populate(state);
         step_once(state, &mut ctx)
       }
     }
@@ -133,7 +199,8 @@ fn depart(state: &mut GowState, player: PlayerId) {
 
 fn apply(state: &mut GowState, player: PlayerId, seat: Seat, op: GowOp, ctx: &mut Ctx) {
   match op {
-    GowOp::Moved { at } => {
+    GowOp::Moved { at, yaw } => {
+      state.zone.face(seat, yaw);
       if state.zone.claim(seat, at) == Verdict::Refused {
         let held = state.zone.characters.get(&seat).map(|c| c.tracked.at).unwrap_or_default();
         ctx.ops_q().push(TargetedOp::new_system_to(player, vec![GowOp::Refused { at: held }]));
@@ -161,6 +228,9 @@ fn step_once(state: &mut GowState, ctx: &mut Ctx) {
   if state.tick.is_multiple_of(REPORT_EVERY) {
     report(state);
   }
+  let mut bots = std::mem::take(&mut state.bots);
+  bots.steer(&mut state.zone, STEP_MS);
+  state.bots = bots;
   state.landed = state.zone.advance(STEP_MS);
   let now = state.zone.now_ms;
 
@@ -213,6 +283,7 @@ fn frame_for(state: &mut GowState, seat: Seat, now: Ms) -> Frame {
   let tick = state.tick;
   let landed = state.landed.clone();
   let authority = state.zone.authority;
+  let you = you_of(state, seat, now);
   state.with_scratch(|zone, scratch| {
     let audience = zone.audience_for(seat, scratch);
     let near: std::collections::HashSet<Seat> = scratch.iter().copied().collect();
@@ -236,6 +307,9 @@ fn frame_for(state: &mut GowState, seat: Seat, now: Ms) -> Frame {
           seat: *s,
           at: character.tracked.at,
           health: character.health,
+          max_health: character.max_health,
+          yaw: character.yaw,
+          kind: character.kind,
           because,
           casting_ms: character
             .casting
@@ -245,7 +319,7 @@ fn frame_for(state: &mut GowState, seat: Seat, now: Ms) -> Frame {
       .collect();
     Frame {
       tick,
-      yours: Some(seat),
+      you,
       authority,
       characters,
       // Only the ones this client can see. A landing across the zone is not
@@ -253,6 +327,32 @@ fn frame_for(state: &mut GowState, seat: Seat, now: Ms) -> Frame {
       // character for.
       landed: landed.iter().copied().filter(|s| near.contains(s)).collect(),
     }
+  })
+}
+
+/// What a player is told about themselves.
+///
+/// Its own block rather than a lookup into the audience list, because that is
+/// the defect this fixes: a client drew its own body from its own position and
+/// read everything else out of the list of other people, so its cast bar, its
+/// mana and its cooldown were never read at all and every key press was
+/// silent. What a player must know about themselves is not a subset of what
+/// they are told about anyone else.
+fn you_of(state: &GowState, seat: Seat, now: Ms) -> Option<You> {
+  let character = state.zone.characters.get(&seat)?;
+  Some(You {
+    seat,
+    health: character.health,
+    max_health: character.max_health,
+    mana: character.mana.round() as u16,
+    max_mana: crate::zone::MAX_MANA,
+    casting_ms: character
+      .casting
+      .map(|cast| cast.lands_at.saturating_sub(now) as u32),
+    casting: character.casting.map(|cast| cast.ability),
+    ready_in_ms: character.ready_at.saturating_sub(now) as u32,
+    up_in_ms: (!character.alive).then(|| character.up_at.saturating_sub(now) as u32),
+    target: character.target,
   })
 }
 
@@ -329,7 +429,7 @@ mod tests {
     let seat = seated(&mut state, 1);
 
     let mut ctx = Ctx::new();
-    apply(&mut state, 1, seat, GowOp::Moved { at: (900.0, 0.0, 0.0) }, &mut ctx);
+    apply(&mut state, 1, seat, GowOp::Moved { at: (900.0, 0.0, 0.0), yaw: 0.0 }, &mut ctx);
     let ops = ctx.into_ops();
     assert_eq!(ops.len(), 1);
     assert!(matches!(ops[0].ops[0], GowOp::Refused { .. }));
@@ -350,6 +450,7 @@ mod tests {
     state.zone.landed = 7;
     state.zone.refusals = 3;
 
+    state.zone.examined = 999_999;
     state.tick = REPORT_EVERY - 1;
     logic
       .process_input(&mut state, LogicInput::TimeStep {
@@ -358,9 +459,50 @@ mod tests {
       .await
       .unwrap();
 
-    assert_eq!(state.zone.examined, 0, "the window resets");
+    assert!(
+      state.zone.examined < 999_999,
+      "the window did not reset: {}",
+      state.zone.examined
+    );
     assert_eq!(state.zone.landed, 7, "and the totals do not");
     assert_eq!(state.zone.refusals, 3);
+  }
+
+  #[tokio::test]
+  async fn a_zone_with_bots_seats_them_on_the_first_tick() {
+    // The complaint that started this: a player joined a tower with nobody in
+    // it, so every key was dead and the panel reported on an audience of zero.
+    let logic = GowLogic::new().with_bots(24);
+    let mut state = GowState::new();
+    logic
+      .process_input(&mut state, LogicInput::TimeStep {
+        delta_time: std::time::Duration::from_millis(33),
+      })
+      .await
+      .unwrap();
+
+    assert_eq!(state.bots.len(), 24, "no adventurers were seated");
+    let beasts = state.zone.characters.values().filter(|c| c.is_beast()).count();
+    assert_eq!(beasts, BEASTS, "no beasts were seated");
+    assert!(
+      state.zone.parties.of(0).count() > 0,
+      "nobody was partied, so the second channel is empty before a player acts"
+    );
+  }
+
+  #[tokio::test]
+  async fn a_bare_zone_stays_bare() {
+    // The measurements and every other test in here want an empty zone, so
+    // seating content must be something a caller asks for.
+    let logic = GowLogic::new();
+    let mut state = GowState::new();
+    logic
+      .process_input(&mut state, LogicInput::TimeStep {
+        delta_time: std::time::Duration::from_millis(33),
+      })
+      .await
+      .unwrap();
+    assert!(state.zone.characters.is_empty());
   }
 
   #[tokio::test]

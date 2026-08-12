@@ -1,6 +1,6 @@
 # 3DGoW
 
-A zone of characters in a tower, and the netcode a game does not need because its design already absorbed the latency.
+A small MMO zone on generated ground, and the netcode a game does not need because its design already absorbed the latency.
 
 The crate is `gow_3d` because Cargo rejects a package name beginning with a digit.
 
@@ -10,7 +10,11 @@ The crate is `gow_3d` because Cargo rejects a package name beginning with a digi
 cargo test -p gow_3d     # the findings, as assertions
 ```
 
-Arrows or WASD walk, **Q and E change floor**, **tab** picks a target, 1 casts, 2 parties with the nearest character, 3 leaves. The panel switches who decides where you are, which is the comparison the example is built around. The thing worth doing is walking two floors away from somebody you are partied with: their body leaves the world and their entry stays, with a bearing and a floor offset. That is the whole argument of this example in one action.
+WASD walks, **space jumps**, **tab** cycles a beast to fight, **1** Strike, **2** Bolt, **3** Mend, **P** parties with the nearest adventurer and **O** leaves. `--bots N` sets how many adventurers the zone seats for itself; it seats eighteen beasts alongside them.
+
+The zone is not empty and never was meant to be: two dozen adventurers hunt beasts across a landscape of hills, water and rock while you do. In ten seconds of a headless zone that is 104 casts landing and 8 characters coming back up, with nobody connected at all.
+
+The thing worth doing is walking away from somebody you are partied with. Their body leaves the world and their entry stays, with a bearing and a height offset. That is the whole argument of this example in one action.
 
 ## What it is for
 
@@ -150,11 +154,25 @@ The union is what keeps the second channel cheap: it costs only the members dist
 
 This is why `Because::{Near, Subscribed, BothOfThose}` is on the wire. Distance and subscription are different *promises*: the neighbour vanishes when you walk away and the party member does not. A client that cannot tell them apart cannot draw a party frame for somebody out of view, which is the entire feature.
 
+## The ground is a rule, not a payload
+
+`terrain.rs` derives the height of any point from its coordinates with three octaves of value noise over one seed, so a landscape of hills, coastline, rock and snow costs **nothing on the wire** and has no load step. Both ends run the same function: the client builds its mesh from it, and the server validates against it.
+
+That second half is what makes the third movement rule possible. A speed budget cannot see a client hovering, because hovering costs no horizontal distance at all. A height rule can, and it is exact precisely because the ground is derived rather than sent:
+
+- a claim further than the budget allows is refused,
+- a claim outside the world is refused,
+- a claim more than a jump's apex above the ground is refused.
+
+Jumping is client-side physics, since the client owns its position. The apex falls out of `JUMP_SPEED` and `GRAVITY`, and `MAX_AIR` is that apex plus slack, so an honest jump is never refused and a flying client always is.
+
+One thing the terrain changed about the validator itself: the budget is spent on **ground distance**, not on the 3D step. Charging the climb means walking up a slope is indistinguishable from running, and an honest player on a hillside gets refused for the crime of going uphill.
+
 ## Where spacemo's answer stops being free
 
 `cargo test -p gow_3d --test tower -- --nocapture`
 
-spacemo asked whether a volumetric grid earns its place and answered no: a flat `(x, z)` grid with a height filter is **exact at identical query cost**, because it touches the same cells and examines the same candidates. That was measured in open space. A tower is the arrangement it should be worst at.
+spacemo asked whether a volumetric grid earns its place and answered no: a flat `(x, z)` grid with a height filter is **exact at identical query cost**, because it touches the same cells and examines the same candidates. That was measured in open space. A stacked crowd is the arrangement it should be worst at.
 
 ```
         strategy     returned     examined     wasted
@@ -170,17 +188,17 @@ The first version of the scene was eight floors against a thirty metre view, so 
 
 ### And what the running zone actually does
 
-The same test file asks the same question of the real `Zone`, using the grid the server queries every tick, and gets a different answer:
+The same test file asks the same question of the real `Zone`, using the grid the server queries every tick:
 
 ```
    arrangement     examined     returned     wasted
-     one floor         64.0         21.9        66%
-       a tower         64.0         27.0        58%
+    spread out         29.3         20.4        30%
+       a tower         64.0         40.8        36%
 ```
 
-**The index excludes nobody.** It hands back all 64 characters in either arrangement, because an 80-metre zone against a 30-metre view is smaller than a single query, so `SpatialGrid` here is a linear scan with cell arithmetic on top. It earns its keep when the world is bigger than the question, and this one is not yet.
+Spread across a 240-metre world against a 46-metre view, the index is doing its job: a query looks at 29 of 64 characters, so most of the zone is never touched. Push the same people into one footprint and it examines all 64, **2.2x** the work for 2.0x the answer.
 
-That is worth saying plainly because the test was written expecting to reproduce the 72% and did not. The model above is a claim about *arrangement at scale*; sixty-four characters in one small zone is not that, and tuning the scene until it agreed would have produced a number that described nothing. The grid stays because it is what the example should demonstrate and because the zone is the thing that would grow, not because it is currently paying for itself.
+This is the second version of that measurement, and the first one is worth recording. When the world was an 80-metre tower the index excluded nobody at all, because the zone was smaller than a single query, and the test said so rather than being tuned until it agreed. Making the world bigger than the question is what turned `SpatialGrid` from cell arithmetic over a linear scan into something that pays for itself.
 
 ## What the tick actually does
 
@@ -202,14 +220,17 @@ Every one of these is a place where both halves were individually correct.
 
 | file | what is in it |
 | --- | --- |
+| `terrain.rs` | the ground, derived from a seed on both ends |
+| `abilities.rs` | three abilities: a cost, a wait, a range, an effect |
 | `casting.rs` | cast times, the global cooldown, and what they are worth |
 | `movement.rs` | the claim validator, and what it cannot do |
 | `relevance.rs` | parties, and the union of the two channels |
-| `zone.rs` | the characters, and the rules that hold them together |
+| `zone.rs` | the characters, the beasts that hunt them, and the rules that hold it together |
+| `bots.rs` | the adventurers the zone seats for itself |
 | `protocol.rs` | the wire, including `Because` |
 | `logic.rs` | the tick, which is mostly a send |
 | `state.rs` | what the server owns |
 | `net/` | both ends of the wire |
-| `render.rs`, `ui.rs`, `main.rs` | the tower, and the party frame |
+| `render.rs`, `ui.rs`, `main.rs` | the landscape, the bars, and the party frame |
 | `tests/tower.rs` | where the height filter stops being free |
 | `tests/mirror.rs` | both sides run together, which is where the seams show |

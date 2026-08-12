@@ -44,7 +44,7 @@ fn ops_for(out: &LogicOutput<GowOp, PlayerId>, seat: u16) -> Vec<GowOp> {
     .iter()
     .flat_map(|t| t.ops.iter())
     .filter(|op| match op {
-      GowOp::World(frame) => frame.yours == Some(seat),
+      GowOp::World(frame) => frame.you.map(|you| you.seat) == Some(seat),
       _ => true,
     })
     .cloned()
@@ -117,9 +117,12 @@ async fn a_character_who_walks_away_is_dropped_and_a_party_member_is_not() {
   let per_tick = gow_3d::movement::RUN_SPEED * 33.0 / 1000.0;
   let from = state.zone.characters[&1].tracked.at;
   let mut now = 33;
-  for step in 1..=600u32 {
+  for step in 1..=300u32 {
     let x = from.0 + step as f32 * per_tick;
-    send(&logic, &mut state, 2, GowOp::Moved { at: (x, from.1, from.2) }).await;
+    // Following the ground, because the validator refuses a claim hanging in
+    // the air and terrain is the one thing both ends derive rather than send.
+    let at = (x, gow_3d::terrain::ground_at(x, from.2), from.2);
+    send(&logic, &mut state, 2, GowOp::Moved { at, yaw: 0.0 }).await;
     let out = tick(&logic, &mut state).await;
     now += 33;
     deliver(&socket, &ops_for(&out, 0));
@@ -149,8 +152,8 @@ async fn a_refusal_snaps_and_an_honest_client_never_sees_one() {
   let mut now = 0;
   for step in 1..=30u32 {
     let at = (from.0 + step as f32 * 0.2, from.1, from.2);
-    client.moved_to(at);
-    send(&logic, &mut state, 1, GowOp::Moved { at }).await;
+    client.moved_to(at, 0.0);
+    send(&logic, &mut state, 1, GowOp::Moved { at, yaw: 0.0 }).await;
     let out = tick(&logic, &mut state).await;
     now += 33;
     deliver(&socket, &ops_for(&out, 0));
@@ -160,7 +163,7 @@ async fn a_refusal_snaps_and_an_honest_client_never_sees_one() {
   assert_eq!(state.zone.refusals, 0);
 
   // A claim across the zone in one tick.
-  let out = send(&logic, &mut state, 1, GowOp::Moved { at: (900.0, 0.0, 0.0) }).await;
+  let out = send(&logic, &mut state, 1, GowOp::Moved { at: (900.0, 0.0, 0.0), yaw: 0.0 }).await;
   deliver(&socket, &ops_for(&out, 0));
   client.poll(now);
   assert_eq!(client.refused, 1);
@@ -175,26 +178,40 @@ async fn a_refusal_snaps_and_an_honest_client_never_sees_one() {
   let started = state.zone.now_ms;
   let began_at = state.zone.characters[&0].tracked.at;
   let before = state.zone.refusals;
+  let mut walked = 0.0f32;
+  let mut last = began_at;
   for _ in 0..600 {
     // Twenty units ahead of wherever it actually is, which is inside what the
     // budget banks and so a jump that really does land every couple of
     // seconds. A jump bigger than the cap is refused for ever and proves
     // nothing: the average has to be tested against a cheat that works.
     let here = state.zone.characters[&0].tracked.at;
+    walked += gow_3d::movement::ground_distance(last, here);
+    last = here;
+    // Around a circle rather than off in one direction, or the world's own
+    // edge stops the cheat before the validator does and the test measures
+    // the wrong bound.
+    let angle = (state.zone.now_ms as f32 / 4000.0) % std::f32::consts::TAU;
+    let (nx, nz) = (here.0 + angle.cos() * 20.0, here.2 + angle.sin() * 20.0);
     send(&logic, &mut state, 1, GowOp::Moved {
-      at: (here.0 + 20.0, here.1, here.2),
+      yaw: 0.0,
+      at: (nx, gow_3d::terrain::ground_at(nx, nz), nz),
     })
     .await;
     tick(&logic, &mut state).await;
   }
   let elapsed = (state.zone.now_ms - started) as f32 / 1000.0;
-  let gained = gow_3d::movement::distance(began_at, state.zone.characters[&0].tracked.at);
+  walked += gow_3d::movement::ground_distance(last, state.zone.characters[&0].tracked.at);
+  let gained = walked;
   let honest = gow_3d::movement::RUN_SPEED * gow_3d::movement::TOLERANCE * elapsed;
   println!(
-    "\n  hammering a teleport for {elapsed:.0}s: {gained:.0} units gained against\n  {honest:.0} an honest runner would cover, and {} refusals logged.\n",
+    "\n  hammering a teleport for {elapsed:.0}s: {gained:.0} units walked against\n  {honest:.0} an honest runner would cover, and {} refusals logged.\n",
     state.zone.refusals - before
   );
-  assert!(gained > 100.0, "the cheat has to land jumps or the cap is untested: {gained}");
+  assert!(
+    gained > honest * 0.4,
+    "the cheat has to land jumps or the cap is untested: {gained} against {honest}"
+  );
   assert!(gained <= honest, "a cheat cannot outrun the allowance it is waiting on");
   assert!(state.zone.refusals - before > 500, "and it is loud throughout");
 }
@@ -216,7 +233,7 @@ async fn the_client_never_reconciles_against_an_echo_of_itself() {
   assert_eq!(client.at, state.zone.characters[&0].tracked.at);
 
   // Everything after it is an echo of what this client already said.
-  client.moved_to((1.0, 0.0, 0.0));
+  client.moved_to((1.0, 0.0, 0.0), 0.0);
   for _ in 0..5 {
     let out = tick(&logic, &mut state).await;
     deliver(&socket, &ops_for(&out, 0));
@@ -231,15 +248,15 @@ async fn a_cast_is_described_while_it_runs_and_announced_once_when_it_lands() {
   let (logic, mut state, mut client, socket) = both_sides().await;
 
   send(&logic, &mut state, 2, GowOp::Cast {
-    ability: 0,
-    cast_ms: 300,
+    ability: 1,
+    cast_ms: 1500,
   })
   .await;
 
   let mut now = 0;
   let mut saw_bar = 0;
   let mut announcements = 0;
-  for _ in 0..20 {
+  for _ in 0..60 {
     let out = tick(&logic, &mut state).await;
     now += 33;
     deliver(&socket, &ops_for(&out, 0));
@@ -335,8 +352,8 @@ async fn what_each_authority_mode_costs() {
       match client.authority {
         gow_3d::protocol::Authority::Client => {
           let at = (client.at.0, client.at.1, client.at.2 + step);
-          client.moved_to(at);
-          send(&logic, &mut state, 1, GowOp::Moved { at }).await;
+          client.moved_to(at, 0.0);
+          send(&logic, &mut state, 1, GowOp::Moved { at, yaw: 0.0 }).await;
         }
         gow_3d::protocol::Authority::Server => {
           client.intend(0.0, 1);
@@ -388,8 +405,14 @@ async fn what_each_authority_mode_costs() {
   // connection adds is on top of it.
   let one_tick = gow_3d::movement::RUN_SPEED * 33.0 / 1000.0;
   assert!(
-    (server_worst - one_tick).abs() < 0.01,
-    "server authority is a tick behind at zero latency: {server_worst} against {one_tick}"
+    server_worst >= one_tick * 0.9,
+    "server authority is at least a tick behind: {server_worst} against {one_tick}"
+  );
+  // Loose upward, because a driven step also climbs whatever the ground does
+  // under it, and that rise is part of the distance.
+  assert!(
+    server_worst < one_tick * 3.0,
+    "and not more than a step's worth of it: {server_worst}"
   );
 }
 
@@ -406,7 +429,7 @@ async fn a_position_from_a_client_that_does_not_own_one_is_refused() {
   tick(&logic, &mut state).await;
 
   let before = state.zone.characters[&0].tracked.at;
-  send(&logic, &mut state, 1, GowOp::Moved { at: (900.0, 0.0, 0.0) }).await;
+  send(&logic, &mut state, 1, GowOp::Moved { at: (900.0, 0.0, 0.0), yaw: 0.0 }).await;
   assert_eq!(state.zone.characters[&0].tracked.at, before, "the server kept its own");
 
   // And it is **not** counted as a refusal, which is the part worth pinning.

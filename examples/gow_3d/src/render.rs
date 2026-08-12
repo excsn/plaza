@@ -1,4 +1,4 @@
-//! Drawing a tower of characters.
+//! Drawing a zone of generated ground.
 //!
 //! Same mesh-per-frame approach the other 3D examples in this tree arrived at,
 //! and the same ceiling, which is worth restating because its failure mode is
@@ -6,28 +6,26 @@
 //! indices, warns once, and draws the front of the buffer. A scene that exceeds
 //! it is quietly missing rather than broken.
 //!
-//! The floors are the point of the scene rather than decoration. spacemo
-//! concluded a flat grid with a height filter beats a volumetric one, and
-//! `tests/tower.rs` found the arrangement where that stops being free. Being
-//! able to walk up eight floors and watch who you are told about is that
-//! finding at a size a person can see.
+//! The ground is built from the same [`terrain`](gow_3d::terrain) rule the
+//! server validates against, so nothing about the landscape crosses the wire
+//! and the two ends cannot disagree about where the floor is.
 
 use macroquad::prelude::*;
 
-use gow_3d::protocol::Seen;
-use gow_3d::zone::FLOOR_HEIGHT;
+use gow_3d::protocol::{Kind, Seen};
+use gow_3d::terrain::{self, Cover};
 
 /// Half-width of a character's box.
-const BODY: f32 = 0.9;
+const BODY: f32 = 0.62;
 /// How tall one is drawn.
 const TALL: f32 = 2.0;
 /// Bodies per draw call, well under the 5000-index ceiling.
-const CHUNK: usize = 128;
+const CHUNK: usize = 64;
 
-/// How wide a floor is drawn, in metres.
-pub const FLOOR_SPAN: f32 = 60.0;
-/// Floors in the tower.
-pub const FLOORS: i32 = 8;
+/// How far from the camera the ground is built, in metres.
+pub const SIGHT: f32 = 96.0;
+/// Width of one ground quad. Smaller is smoother and costs quads squared.
+const QUAD: f32 = 4.0;
 
 pub struct Scene {
   vertices: Vec<Vertex>,
@@ -37,6 +35,16 @@ pub struct Scene {
 impl Default for Scene {
   fn default() -> Self {
     Self::new()
+  }
+}
+
+fn tint_of(cover: Cover) -> Color {
+  match cover {
+    Cover::Water => Color::new(0.12, 0.30, 0.46, 1.0),
+    Cover::Sand => Color::new(0.68, 0.62, 0.42, 1.0),
+    Cover::Grass => Color::new(0.24, 0.42, 0.24, 1.0),
+    Cover::Rock => Color::new(0.36, 0.35, 0.34, 1.0),
+    Cover::Snow => Color::new(0.80, 0.83, 0.88, 1.0),
   }
 }
 
@@ -97,39 +105,76 @@ impl Scene {
     }
   }
 
-  /// The floors, drawn as grids so height is readable without a horizon.
+  /// One quad of ground, coloured by what grows on it and shaded by its slope.
+  fn push_ground(&mut self, x: f32, z: f32) {
+    let corners = [
+      (x, z),
+      (x + QUAD, z),
+      (x + QUAD, z + QUAD),
+      (x, z + QUAD),
+    ];
+    let middle = (x + QUAD * 0.5, z + QUAD * 0.5);
+    let base = tint_of(terrain::cover_at(middle.0, middle.1));
+    // Steeper ground is darker, which is the only lighting there is and the
+    // only reason the relief reads at all on an unlit renderer.
+    let shade = 1.0 - (terrain::steepness(middle.0, middle.1) / 3.0).clamp(0.0, 0.55);
+    let tint = Color::new(base.r * shade, base.g * shade, base.b * shade, 1.0);
+
+    let start = self.vertices.len() as u16;
+    for (cx, cz) in corners {
+      let y = terrain::ground_at(cx, cz);
+      self
+        .vertices
+        .push(Vertex::new2(vec3(cx, y, cz), Vec2::ZERO, tint));
+    }
+    self
+      .indices
+      .extend([start, start + 1, start + 2, start, start + 2, start + 3]);
+  }
+
+  /// The ground around the camera.
   ///
-  /// Only the ones near the camera: eight full grids is more lines than the
-  /// scene is worth, and a floor two above your head tells you nothing.
-  pub fn draw_floors(&mut self, standing_on: i32) {
-    let step = 6.0;
-    for floor in (standing_on - 1).max(0)..=(standing_on + 1).min(FLOORS - 1) {
-      let y = floor as f32 * FLOOR_HEIGHT;
-      let tint = if floor == standing_on {
-        Color::new(0.30, 0.34, 0.42, 1.0)
-      } else {
-        Color::new(0.16, 0.18, 0.24, 1.0)
-      };
-      let mut at = -FLOOR_SPAN / 2.0;
-      while at <= FLOOR_SPAN / 2.0 {
-        draw_line_3d(vec3(at, y, -FLOOR_SPAN / 2.0), vec3(at, y, FLOOR_SPAN / 2.0), tint);
-        draw_line_3d(vec3(-FLOOR_SPAN / 2.0, y, at), vec3(FLOOR_SPAN / 2.0, y, at), tint);
-        at += step;
+  /// Rebuilt every frame from the rule rather than kept, because the rule is
+  /// cheap and a cached mesh is a second copy of the world that can go stale.
+  pub fn draw_ground(&mut self, eye: Vec3) {
+    let steps = (SIGHT / QUAD) as i32;
+    let (ox, oz) = ((eye.x / QUAD).floor() * QUAD, (eye.z / QUAD).floor() * QUAD);
+    let mut drawn = 0usize;
+    for ix in -steps..steps {
+      for iz in -steps..steps {
+        let (x, z) = (ox + ix as f32 * QUAD, oz + iz as f32 * QUAD);
+        if !(-terrain::EDGE..=terrain::EDGE).contains(&x)
+          || !(-terrain::EDGE..=terrain::EDGE).contains(&z)
+        {
+          continue;
+        }
+        // Round rather than square, so turning does not reveal a corner of
+        // world that was not there a moment ago.
+        let (dx, dz) = (x + QUAD * 0.5 - eye.x, z + QUAD * 0.5 - eye.z);
+        if dx * dx + dz * dz > SIGHT * SIGHT {
+          continue;
+        }
+        self.push_ground(x, z);
+        drawn += 1;
+        if drawn.is_multiple_of(CHUNK * 4) {
+          self.flush();
+        }
       }
     }
+    self.flush();
   }
 
   /// Characters, with the local one picked out.
   ///
   /// A subscribed character out of view is **not** drawn as a body. There is no
   /// body to draw: the server said where they are, not that you can see them,
-  /// and putting a solid through a floor two storeys up is the client inventing
-  /// a claim the protocol never made.
+  /// and putting a solid through a hillside is the client inventing a claim the
+  /// protocol never made.
   pub fn draw_characters<'a>(
     &mut self,
     seen: impl Iterator<Item = (&'a Seen, Vec3)>,
-    mine: Option<u16>,
     flashing: &std::collections::HashSet<u16>,
+    target: Option<u16>,
   ) {
     let mut drawn = 0usize;
     for (character, at) in seen {
@@ -141,14 +186,17 @@ impl Scene {
         // it can only be drawn from the client's own memory of the event: no
         // later frame mentions it.
         Color::new(1.0, 0.55, 0.35, 1.0)
-      } else if Some(character.seat) == mine {
-        Color::new(1.0, 0.83, 0.25, 1.0)
+      } else if character.kind == Kind::Beast {
+        Color::new(0.62, 0.28, 0.30, 1.0)
       } else if character.because.is_subscribed() {
         Color::new(0.55, 0.90, 0.62, 1.0)
       } else {
         Color::new(0.50, 0.66, 0.88, 1.0)
       };
-      self.push_box(at + vec3(0.0, TALL / 2.0, 0.0), vec3(BODY, TALL / 2.0, BODY), tint);
+      self.push_body(at, character.yaw, tint);
+      if Some(character.seat) == target {
+        self.push_ring(at, 1.5, Color::new(1.0, 0.85, 0.30, 1.0));
+      }
       drawn += 1;
       if drawn.is_multiple_of(CHUNK) {
         self.flush();
@@ -157,63 +205,104 @@ impl Scene {
     self.flush();
   }
 
+  /// A body, and the wedge that says which way it is looking.
+  ///
+  /// Without the wedge a third-person character reads as sliding rather than
+  /// walking, because nothing on a box changes when it turns.
+  fn push_body(&mut self, at: Vec3, yaw: f32, tint: Color) {
+    self.push_box(at + vec3(0.0, TALL / 2.0, 0.0), vec3(BODY, TALL / 2.0, BODY), tint);
+    let facing = vec3(yaw.sin(), 0.0, yaw.cos());
+    self.push_box(
+      at + vec3(0.0, TALL * 0.78, 0.0) + facing * (BODY + 0.22),
+      vec3(0.26, 0.26, 0.26),
+      Color::new(
+        (tint.r + 0.35).min(1.0),
+        (tint.g + 0.35).min(1.0),
+        (tint.b + 0.35).min(1.0),
+        1.0,
+      ),
+    );
+  }
+
   /// The local character, drawn from the local position.
   ///
   /// Separate from the others on purpose: it is the one body on screen that is
   /// not a report of where somebody was, so it never interpolates and never
   /// lags a tick behind the key that moved it.
-  pub fn draw_local(&mut self, at: Vec3) {
-    self.push_box(
-      at + vec3(0.0, TALL / 2.0, 0.0),
-      vec3(BODY, TALL / 2.0, BODY),
-      Color::new(1.0, 0.83, 0.25, 1.0),
-    );
+  pub fn draw_local(&mut self, at: Vec3, yaw: f32) {
+    self.push_body(at, yaw, Color::new(1.0, 0.83, 0.25, 1.0));
     self.flush();
   }
 
-  /// A bar over the head of anyone casting.
+  /// A flat ring on the ground, for whoever is targeted.
+  fn push_ring(&mut self, at: Vec3, radius: f32, tint: Color) {
+    const SEGMENTS: usize = 16;
+    for i in 0..SEGMENTS {
+      let a = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+      let b = (i + 1) as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+      let start = self.vertices.len() as u16;
+      for (angle, r) in [(a, radius), (b, radius), (b, radius * 0.82), (a, radius * 0.82)] {
+        let p = at + vec3(angle.cos() * r, 0.06, angle.sin() * r);
+        self.vertices.push(Vertex::new2(p, Vec2::ZERO, tint));
+      }
+      self
+        .indices
+        .extend([start, start + 1, start + 2, start, start + 2, start + 3]);
+    }
+  }
+
+  /// A bar over the head of anyone casting, plus a health bar for anything
+  /// hurt.
   ///
-  /// Drawn in the world rather than on the HUD because the thing a player reads
-  /// off it is *who* is casting, and a list of names would be a different
-  /// question.
-  pub fn draw_cast_bars<'a>(&mut self, seen: impl Iterator<Item = (&'a Seen, Vec3)>) {
+  /// Drawn in the world rather than on the HUD because what a player reads off
+  /// it is *who*, and a list of names would be a different question.
+  pub fn draw_plates<'a>(&mut self, seen: impl Iterator<Item = (&'a Seen, Vec3)>) {
     for (character, at) in seen {
-      let Some(left_ms) = character.casting_ms.filter(|_| character.because.is_near()) else {
+      if !character.because.is_near() {
         continue;
-      };
-      let top = at + vec3(0.0, TALL + 0.6, 0.0);
-      let width = 1.6;
-      // Against the longest cast rather than against its own remaining time, or
-      // every bar would read full whatever it is doing.
-      let share = (left_ms as f32 / 2500.0).clamp(0.0, 1.0);
-      draw_line_3d(
-        top - vec3(width, 0.0, 0.0),
-        top + vec3(width, 0.0, 0.0),
-        Color::new(0.20, 0.20, 0.26, 1.0),
-      );
-      draw_line_3d(
-        top - vec3(width, 0.0, 0.0),
-        top - vec3(width - width * 2.0 * (1.0 - share), 0.0, 0.0),
-        Color::new(1.0, 0.80, 0.35, 1.0),
-      );
+      }
+      if character.health < character.max_health {
+        let share = character.health as f32 / character.max_health.max(1) as f32;
+        let tint = if character.kind == Kind::Beast {
+          Color::new(0.85, 0.30, 0.30, 1.0)
+        } else {
+          Color::new(0.40, 0.85, 0.45, 1.0)
+        };
+        bar_3d(at + vec3(0.0, TALL + 0.55, 0.0), 1.5, share, tint);
+      }
+      if let Some(left_ms) = character.casting_ms {
+        let top = at + vec3(0.0, TALL + 0.95, 0.0);
+        // Against the longest cast rather than against its own remaining time,
+        // or every bar would read full whatever it is doing.
+        let share = 1.0 - (left_ms as f32 / 2500.0).clamp(0.0, 1.0);
+        bar_3d(top, 1.6, share, Color::new(1.0, 0.80, 0.35, 1.0));
+      }
     }
   }
 }
 
+/// One horizontal bar in the world, filled from the left.
+fn bar_3d(at: Vec3, half_width: f32, share: f32, tint: Color) {
+  let left = at - vec3(half_width, 0.0, 0.0);
+  let right = at + vec3(half_width, 0.0, 0.0);
+  draw_line_3d(left, right, Color::new(0.10, 0.10, 0.14, 1.0));
+  draw_line_3d(left, left + (right - left) * share.clamp(0.0, 1.0), tint);
+}
+
 /// A camera behind and above the character, which is the genre's own.
+///
+/// Lifted clear of the ground behind the player, so walking downhill does not
+/// put the camera inside the hill.
 pub fn over_the_shoulder(at: Vec3, yaw: f32, distance: f32) -> Camera3D {
   let back = vec3(-yaw.sin(), 0.0, -yaw.cos()) * distance;
+  let eye = at + back + vec3(0.0, 4.5, 0.0);
+  let floor = terrain::ground_at(eye.x, eye.z) + 1.4;
   Camera3D {
-    position: at + back + vec3(0.0, 4.5, 0.0),
+    position: vec3(eye.x, eye.y.max(floor), eye.z),
     up: Vec3::Y,
     target: at + vec3(0.0, 1.4, 0.0),
     ..Default::default()
   }
-}
-
-/// Which floor a height is standing on.
-pub fn floor_of(y: f32) -> i32 {
-  (y / FLOOR_HEIGHT).round() as i32
 }
 
 /// Where a subscribed character sits on the compass, for the party panel.

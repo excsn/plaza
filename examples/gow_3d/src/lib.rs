@@ -16,12 +16,14 @@
 //! relevance**: spatial answers who is near, and a party answers who you have
 //! chosen to care about wherever they are.
 
+pub mod abilities;
 pub mod casting;
 pub mod controls;
 pub mod movement;
 pub mod relevance;
 pub mod protocol;
 pub mod role;
+pub mod terrain;
 pub mod zone;
 
 #[cfg(any(feature = "server", all(feature = "client", feature = "websocket")))]
@@ -29,6 +31,16 @@ pub mod net;
 
 pub use playground_common;
 
+/// How many adventurers the zone seats for itself when nothing says otherwise.
+///
+/// Named here rather than in `bots`, which is server-only: a browser client
+/// parses the same command line and must still compile without a zone in it.
+pub fn bots_default() -> usize {
+  24
+}
+
+#[cfg(feature = "server")]
+pub mod bots;
 #[cfg(feature = "server")]
 pub mod logic;
 #[cfg(feature = "server")]

@@ -10,6 +10,8 @@ use std::collections::HashMap;
 
 use plaza_server_utils::Roster;
 
+use crate::bots::Bots;
+
 use crate::protocol::PlayerId;
 use crate::relevance::Seat;
 use crate::zone::Zone;
@@ -21,12 +23,23 @@ pub const MAX_CHARACTERS: usize = 64;
 ///
 /// A spiral rather than a ring, because a ring of a fixed angular step wraps:
 /// the first version stepped 0.9 radians and put seat 7 on top of seat 0. The
-/// golden angle is the one step that never repeats.
+/// golden angle is the one step that never repeats. The ground then decides
+/// the height and nudges the point onto footing, so nobody spawns in the sea
+/// or inside a cliff.
 pub fn spawn_at(seat: Seat) -> (f32, f32, f32) {
   const GOLDEN: f32 = 2.399_963_2;
   let angle = seat as f32 * GOLDEN;
-  let radius = 8.0 + (seat as f32).sqrt() * 4.0;
-  (angle.cos() * radius, 0.0, angle.sin() * radius)
+  let radius = 10.0 + (seat as f32).sqrt() * 7.0;
+  crate::terrain::footing_near(angle.cos() * radius, angle.sin() * radius)
+}
+
+/// Where the zone's beasts live, spread wider than the adventurers so there is
+/// somewhere to walk to before the fighting starts.
+pub fn den_at(index: usize) -> (f32, f32, f32) {
+  const GOLDEN: f32 = 2.399_963_2;
+  let angle = index as f32 * GOLDEN + 0.7;
+  let radius = 26.0 + (index as f32).sqrt() * 11.0;
+  crate::terrain::footing_near(angle.cos() * radius, angle.sin() * radius)
 }
 
 pub struct GowState {
@@ -39,6 +52,10 @@ pub struct GowState {
   /// Held for exactly one tick because it is an event: keeping it longer would
   /// send it twice and clearing it earlier would lose it.
   pub landed: Vec<Seat>,
+  /// The zone's own adventurers, so a lone player has a world around them.
+  pub bots: Bots,
+  /// Whether the zone has seated its own characters yet.
+  pub populated: bool,
   /// Scratch, so a tick that queries once per client allocates nothing.
   scratch: Vec<Seat>,
 }
@@ -66,6 +83,8 @@ impl GowState {
       roster: Roster::new(MAX_CHARACTERS),
       agents: HashMap::new(),
       landed: Vec::new(),
+      bots: Bots::default(),
+      populated: false,
       scratch: Vec::new(),
     }
   }

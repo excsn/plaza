@@ -89,7 +89,12 @@ impl Tracked {
     self.budget = (self.budget + RUN_SPEED * TOLERANCE * elapsed)
       .min(RUN_SPEED * TOLERANCE * (MAX_BANKED_MS / 1000.0));
 
-    let moved = distance(self.at, to);
+    // Horizontal only. A run speed is a speed over the ground, and charging a
+    // climb against it means walking up a hill is indistinguishable from
+    // running, so an honest player on a slope is refused. What a claim does
+    // vertically is the air rule's business, and that rule is exact because
+    // the ground is derived rather than sent.
+    let moved = ground_distance(self.at, to);
     if moved > self.budget {
       self.refusals += 1;
       return Verdict::Refused;
@@ -102,10 +107,94 @@ impl Tracked {
   }
 }
 
+/// Distance over the ground, ignoring the climb.
+pub fn ground_distance(a: (f32, f32, f32), b: (f32, f32, f32)) -> f32 {
+  let (dx, dz) = (b.0 - a.0, b.2 - a.2);
+  (dx * dx + dz * dz).sqrt()
+}
+
 pub fn distance(a: (f32, f32, f32), b: (f32, f32, f32)) -> f32 {
   let (dx, dy, dz) = (b.0 - a.0, b.1 - a.1, b.2 - a.2);
   (dx * dx + dy * dy + dz * dz).sqrt()
 }
+
+/// Upward speed a jump starts with.
+pub const JUMP_SPEED: f32 = 8.4;
+
+/// Downward acceleration, in units per second squared.
+pub const GRAVITY: f32 = 22.0;
+
+/// How far above the ground a claim may be before the server stops believing
+/// it.
+///
+/// A jump reaches `JUMP_SPEED^2 / (2 * GRAVITY)`, so the ceiling is that plus
+/// room for a slope the client and server rounded differently. It is the one
+/// check a height rule makes possible and a speed budget cannot: a client
+/// flying costs no horizontal distance at all.
+pub const MAX_AIR: f32 = JUMP_SPEED * JUMP_SPEED / (2.0 * GRAVITY) + 2.5;
+
+/// A character with vertical motion, which is the client's own half of this
+/// example: the server never simulates one.
+#[derive(Clone, Copy, Debug)]
+pub struct Body {
+  pub at: (f32, f32, f32),
+  pub vy: f32,
+  pub grounded: bool,
+}
+
+impl Body {
+  pub fn new(at: (f32, f32, f32)) -> Self {
+    Self {
+      at,
+      vy: 0.0,
+      grounded: true,
+    }
+  }
+
+  /// Walks by `wish`, applies gravity, and lands on the ground.
+  ///
+  /// `ground` is the terrain rule, passed in rather than called directly so the
+  /// tests can stand this on a flat floor and a staircase without a world.
+  pub fn step(
+    &mut self,
+    wish: (f32, f32),
+    jump: bool,
+    dt: f32,
+    ground: impl Fn(f32, f32) -> f32,
+  ) {
+    if jump && self.grounded {
+      self.vy = JUMP_SPEED;
+      self.grounded = false;
+    }
+
+    let (mut x, mut z) = (self.at.0 + wish.0, self.at.2 + wish.1);
+    x = x.clamp(-crate::terrain::EDGE + 2.0, crate::terrain::EDGE - 2.0);
+    z = z.clamp(-crate::terrain::EDGE + 2.0, crate::terrain::EDGE - 2.0);
+
+    let floor = ground(x, z);
+    // A step up a slope is a step, not a fall: walking into a hillside must
+    // not launch anyone, and walking off one must not stick them to it.
+    if self.grounded && (floor - self.at.1).abs() <= STEP_UP {
+      self.at = (x, floor, z);
+      self.vy = 0.0;
+      return;
+    }
+
+    self.vy -= GRAVITY * dt;
+    let y = self.at.1 + self.vy * dt;
+    if y <= floor {
+      self.at = (x, floor, z);
+      self.vy = 0.0;
+      self.grounded = true;
+    } else {
+      self.at = (x, y, z);
+      self.grounded = false;
+    }
+  }
+}
+
+/// The tallest rise a walking character takes without leaving the ground.
+pub const STEP_UP: f32 = 1.2;
 
 /// How far a character gets in a second at a given multiple of the honest
 /// speed, once a validator has refused everything it can.
@@ -127,6 +216,60 @@ pub fn gained(multiplier: f32, ticks: u32, step_ms: u64) -> f32 {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn a_jump_leaves_the_ground_and_comes_back_to_it() {
+    let flat = |_: f32, _: f32| 0.0;
+    let mut body = Body::new((0.0, 0.0, 0.0));
+    body.step((0.0, 0.0), true, 1.0 / 60.0, flat);
+    assert!(!body.grounded, "the jump never left the ground");
+
+    let mut peak: f32 = 0.0;
+    for _ in 0..240 {
+      body.step((0.0, 0.0), false, 1.0 / 60.0, flat);
+      peak = peak.max(body.at.1);
+      if body.grounded {
+        break;
+      }
+    }
+    assert!(body.grounded, "the jump never landed");
+    assert!(peak > 1.0, "the jump only reached {peak}");
+    assert!(peak < MAX_AIR, "a jump must stay inside what the server will believe");
+    assert_eq!(body.at.1, 0.0);
+  }
+
+  #[test]
+  fn a_second_jump_needs_the_ground_first() {
+    let flat = |_: f32, _: f32| 0.0;
+    let mut body = Body::new((0.0, 0.0, 0.0));
+    body.step((0.0, 0.0), true, 1.0 / 60.0, flat);
+    let rising = body.vy;
+    body.step((0.0, 0.0), true, 1.0 / 60.0, flat);
+    assert!(body.vy < rising, "a second press re-launched a body already in the air");
+  }
+
+  #[test]
+  fn walking_a_slope_does_not_launch_or_stick() {
+    // The case a naive ground clamp gets wrong in both directions: a rise
+    // becomes a jump and a drop becomes flight.
+    let hill = |x: f32, _: f32| x * 0.5;
+    let mut body = Body::new((0.0, 0.0, 0.0));
+    for _ in 0..120 {
+      body.step((0.1, 0.0), false, 1.0 / 60.0, hill);
+      assert!(body.grounded, "a walk up a slope left the ground at x={}", body.at.0);
+      assert!((body.at.1 - hill(body.at.0, 0.0)).abs() < 1e-4);
+    }
+  }
+
+  #[test]
+  fn a_body_stays_inside_the_world() {
+    let flat = |_: f32, _: f32| 0.0;
+    let mut body = Body::new((0.0, 0.0, 0.0));
+    for _ in 0..4000 {
+      body.step((1.0, 1.0), false, 1.0 / 60.0, flat);
+    }
+    assert!(body.at.0 <= crate::terrain::EDGE && body.at.2 <= crate::terrain::EDGE);
+  }
 
   #[test]
   fn a_plausible_step_is_taken_as_the_truth() {

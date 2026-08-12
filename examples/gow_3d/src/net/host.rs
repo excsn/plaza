@@ -34,7 +34,12 @@ async fn ws_route(
 }
 
 /// Runs the zone until the process ends.
-pub async fn serve(bind: &str, static_dir: Option<String>, dial: Dial) -> std::io::Result<()> {
+pub async fn serve(
+  bind: &str,
+  static_dir: Option<String>,
+  dial: Dial,
+  bots: usize,
+) -> std::io::Result<()> {
   init_logging();
 
   let sim_clock = Arc::new(AtomicU64::new(0));
@@ -46,7 +51,7 @@ pub async fn serve(bind: &str, static_dir: Option<String>, dial: Dial) -> std::i
     }),
   );
 
-  let logic = GowLogic::new().with_clock(sim_clock).with_dial(dial);
+  let logic = GowLogic::new().with_bots(bots).with_clock(sim_clock).with_dial(dial);
   // No snapshot provider, and less of a compromise here than anywhere else in
   // the tree: a joiner's first ordinary frame is already the complete audience,
   // because nothing in this example is a delta against a baseline.

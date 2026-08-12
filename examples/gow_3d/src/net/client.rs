@@ -20,7 +20,7 @@ use plaza_wire::{MsgPackCodec, WireCodec};
 use plaza_ws::pump::{mismatch_message, Arrival, FramePump};
 use plaza_ws::{Event, State};
 
-use crate::protocol::{Authority, Because, Frame, GowOp, Seen, PROTOCOL, TICK_HZ};
+use crate::protocol::{Authority, Because, Frame, GowOp, Seen, You, PROTOCOL, TICK_HZ};
 use crate::relevance::Seat;
 
 const WIRE: MsgPackCodec = MsgPackCodec;
@@ -118,6 +118,10 @@ pub struct NetClient {
   /// second derivation of one fact, and those drift.
   pub seeded: bool,
   pub others: HashMap<Seat, Other>,
+  /// Everything the server says about you, which is where the local interface
+  /// reads health, mana, the cast bar and the cooldown from. Nothing here is
+  /// derivable from `others`, which never contains your own seat.
+  pub you: Option<You>,
   pub tick: u64,
   pub meter: Meter,
   /// Claims the server threw out. Zero for an honest client, which is what
@@ -151,6 +155,7 @@ pub struct NetClient {
   now_ms: u64,
   last_sent_ms: u64,
   last_sent_at: Option<(f32, f32, f32)>,
+  last_sent_yaw: f32,
   last_intent: Option<(u32, i8)>,
   events: Vec<Event>,
   arrivals: Vec<Arrival>,
@@ -175,6 +180,7 @@ impl NetClient {
       at: (0.0, 0.0, 0.0),
       seeded: false,
       others: HashMap::new(),
+      you: None,
       tick: 0,
       meter: Meter::default(),
       refused: 0,
@@ -187,6 +193,7 @@ impl NetClient {
       now_ms: 0,
       last_sent_ms: 0,
       last_sent_at: None,
+      last_sent_yaw: 0.0,
       last_intent: None,
       events: Vec::new(),
       arrivals: Vec::new(),
@@ -277,6 +284,10 @@ impl NetClient {
 
   fn on_frame(&mut self, frame: Frame) {
     self.tick = frame.tick;
+    self.you = frame.you;
+    if let Some(you) = frame.you {
+      self.target = you.target;
+    }
     self.landed = frame.landed;
     self.authority = frame.authority;
     for seat in &self.landed {
@@ -284,6 +295,7 @@ impl NetClient {
     }
     let now = self.now_ms;
     let mine = self.seat;
+
 
     for seen in &frame.characters {
       if Some(seen.seat) == mine {
@@ -356,22 +368,28 @@ impl NetClient {
   ///
   /// The local position is authoritative, so this is a report rather than a
   /// request: nothing waits on the answer and nothing here is rolled back.
-  pub fn moved_to(&mut self, at: (f32, f32, f32)) {
+  pub fn moved_to(&mut self, at: (f32, f32, f32), yaw: f32) {
     self.at = at;
     if self.now_ms.saturating_sub(self.last_sent_ms) < SEND_EVERY_MS {
       return;
     }
     // Standing still costs nothing, which is most of a zone most of the time.
-    if self.last_sent_at == Some(at) {
+    // The facing is part of that: turning on the spot is worth a packet
+    // because everyone else draws a body from it.
+    if self.last_sent_at == Some(at) && (self.last_sent_yaw - yaw).abs() < 0.05 {
       return;
     }
     self.last_sent_ms = self.now_ms;
     self.last_sent_at = Some(at);
-    self.pump.send_op(&GowOp::Moved { at });
+    self.last_sent_yaw = yaw;
+    self.pump.send_op(&GowOp::Moved { at, yaw });
   }
 
-  pub fn cast(&mut self, ability: u8, cast_ms: u32) {
-    self.pump.send_op(&GowOp::Cast { ability, cast_ms });
+  pub fn cast(&mut self, ability: u8) {
+    self.pump.send_op(&GowOp::Cast {
+      ability,
+      cast_ms: crate::abilities::ability(ability).map(|a| a.cast_ms as u32).unwrap_or(0),
+    });
   }
 
   /// Aims at a seat, and remembers it so the interface can say so.
@@ -414,6 +432,42 @@ impl NetClient {
   /// What a character is doing, for the nameplate.
   pub fn casting_of(&self, seat: Seat) -> Option<u32> {
     self.others.get(&seat).and_then(|o| o.seen.casting_ms)
+  }
+
+  /// What the local player is casting, if anything, as a share run so far.
+  ///
+  /// Read from `you` rather than from the audience list, which is the whole
+  /// point of that block existing: a client never appears in its own list.
+  pub fn my_cast(&self) -> Option<(u8, f32)> {
+    let you = self.you?;
+    let index = you.casting?;
+    let left = you.casting_ms.unwrap_or(0) as f32;
+    let total = crate::abilities::ability(index)?.cast_ms.max(1) as f32;
+    Some((index, (1.0 - left / total).clamp(0.0, 1.0)))
+  }
+
+  /// Whether an ability may be pressed right now, and why not if not.
+  pub fn can_cast(&self, index: u8) -> Result<(), &'static str> {
+    let Some(you) = self.you else { return Err("not seated") };
+    if you.up_in_ms.is_some() {
+      return Err("you are down");
+    }
+    let Some(spell) = crate::abilities::ability(index) else {
+      return Err("no such ability");
+    };
+    if you.casting.is_some() {
+      return Err("already casting");
+    }
+    if you.ready_in_ms > 0 {
+      return Err("cooling down");
+    }
+    if you.mana < spell.mana {
+      return Err("not enough mana");
+    }
+    if spell.hostile && self.target.is_none() {
+      return Err("no target");
+    }
+    Ok(())
   }
 
   pub fn because_of(&self, seat: Seat) -> Option<Because> {

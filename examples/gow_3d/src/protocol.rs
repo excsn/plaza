@@ -96,23 +96,68 @@ impl Because {
   }
 }
 
+/// What a character is.
+///
+/// On the wire because a client draws them differently and may only attack one
+/// of them, and both of those are decisions a client makes every frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Kind {
+  /// Somebody playing, or one of the zone's own adventurers.
+  #[default]
+  Adventurer,
+  /// Something to fight.
+  Beast,
+}
+
 /// One character, as another client sees them.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Seen {
   pub seat: u16,
   pub at: (f32, f32, f32),
   pub health: u16,
+  pub max_health: u16,
+  /// Which way they are facing, so a body reads as a body rather than a box.
+  pub yaw: f32,
+  pub kind: Kind,
   pub because: Because,
   /// Milliseconds left on their cast, if any, so a client can draw the bar
   /// that is the entire latency argument.
   pub casting_ms: Option<u32>,
 }
 
+/// Everything the local player needs about themselves.
+///
+/// Separate from the `Seen` entry for the same seat, and that separation is the
+/// fix for a real defect: a client drew its own body from its own position and
+/// took everything else from the audience list, so its own cast bar, health and
+/// cooldown were never read at all. A player pressed a key and nothing on
+/// screen moved. What a player must be told about themselves is not a subset of
+/// what they are told about others, so it does not travel as one.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct You {
+  pub seat: u16,
+  pub health: u16,
+  pub max_health: u16,
+  pub mana: u16,
+  pub max_mana: u16,
+  /// Milliseconds left on your own cast.
+  pub casting_ms: Option<u32>,
+  /// Which ability is casting, so the bar can name it.
+  pub casting: Option<u8>,
+  /// Milliseconds until you may act again.
+  pub ready_in_ms: u32,
+  /// Milliseconds until you are back up, while down.
+  pub up_in_ms: Option<u32>,
+  /// Who you are aimed at, as the server understands it.
+  pub target: Option<u16>,
+}
+
 /// What one client is told, every send tick.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Frame {
   pub tick: u64,
-  pub yours: Option<u16>,
+  /// Everything about the player this frame is for.
+  pub you: Option<You>,
   /// Which mode the zone is running, so a client knows whether to report a
   /// position or ask for one.
   pub authority: Authority,
@@ -138,7 +183,7 @@ pub enum GowOp {
   ///
   /// The direction that makes this example what it is. The server takes it if
   /// it is reachable and keeps its own position if it is not.
-  Moved { at: (f32, f32, f32) },
+  Moved { at: (f32, f32, f32), yaw: f32 },
   /// Server to client: your claim was not plausible, and here is where I have
   /// you.
   ///
