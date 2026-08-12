@@ -549,6 +549,73 @@ mod tests {
     RollbackSession::new(World { pos: [0, 0] }, vec![NEUTRAL, NEUTRAL], RollbackConfig { max_rollback_frames: 64 }, step)
   }
 
+  /// The predictor swap, and the readouts nothing was calling.
+  ///
+  /// A rollback session's whole cost is how often it has to re-simulate, and
+  /// that is decided by how good the guess was. The default repeats the last
+  /// input, which is right for a held direction and wrong for anything that
+  /// alternates, so being able to replace it is not a nicety.
+  mod the_predictor {
+    use super::*;
+
+    /// Always guesses neutral, which is wrong whenever the peer is holding a
+    /// direction: the pessimistic predictor, for measuring against.
+    fn always_neutral(_last: &In, _frame: Frame) -> In {
+      NEUTRAL
+    }
+
+    /// Runs a session where the peer holds a steady input that arrives late,
+    /// and reports how many rollbacks it cost.
+    fn rollbacks_with(predictor: Option<fn(&In, Frame) -> In>) -> u64 {
+      let mut s = session();
+      if let Some(predictor) = predictor {
+        s = s.with_predictor(predictor);
+      }
+      for frame in 0..20u64 {
+        s.queue_local_input(0, In(1));
+        // The peer has been holding the same direction throughout, and each
+        // confirmation lands two frames after the fact.
+        if frame >= 2 {
+          s.confirm_remote_input(1, frame - 2, In(1));
+        }
+        s.advance_frame();
+      }
+      s.rollback_count()
+    }
+
+    #[test]
+    fn a_predictor_that_guesses_right_costs_fewer_rollbacks() {
+      // The measurement that says the knob does anything: repeating the last
+      // input is exactly right for a peer holding a direction, and guessing
+      // neutral is wrong every frame.
+      let repeating = rollbacks_with(None);
+      let neutral = rollbacks_with(Some(always_neutral));
+      assert!(
+        neutral > repeating,
+        "the wrong guess re-simulates more: {neutral} against {repeating}"
+      );
+    }
+
+    #[test]
+    fn the_frame_counters_agree_with_what_was_driven() {
+      // `current_frame`, `confirmed_frame` and `num_players` are what an
+      // application shows and branches on, and none of them had a test.
+      let mut s = session();
+      assert_eq!(s.num_players(), 2);
+      assert_eq!(s.current_frame(), 0);
+      assert_eq!(s.confirmed_frame(1), None, "nothing confirmed yet");
+
+      for frame in 0..5u64 {
+        s.queue_local_input(0, In(1));
+        s.confirm_remote_input(1, frame, In(0));
+        s.advance_frame();
+      }
+
+      assert_eq!(s.current_frame(), 5, "five frames driven, five frames on");
+      assert_eq!(s.confirmed_frame(1), Some(4), "and the peer is confirmed through the last");
+    }
+  }
+
   // A ground-truth simulation with every input known up front, for comparison.
   fn ground_truth(inputs0: &[In], inputs1: &[In]) -> World {
     let mut w = World { pos: [0, 0] };
