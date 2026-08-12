@@ -44,43 +44,60 @@ pub enum Verdict {
 #[derive(Clone, Copy, Debug)]
 pub struct Tracked {
   pub at: (f32, f32, f32),
-  /// When the last accepted claim was made, in milliseconds.
+  /// When the clock was last read, in milliseconds.
   pub at_ms: u64,
+  /// Distance this character has earned and not yet spent.
+  ///
+  /// A budget rather than a per-claim allowance, and the difference is the
+  /// whole of the validator's correctness. Measuring each claim against the
+  /// time since the last one has to credit *something* when two arrive in the
+  /// same millisecond, and whatever it credits is a rate a client can claim at
+  /// will: crediting one tick let a client sending twice a tick move at twice
+  /// the speed. A budget cannot be gamed that way because it accrues from the
+  /// clock alone, however often it is asked.
+  pub budget: f32,
   pub refusals: u32,
 }
+
+/// The most distance a character may bank while nobody is hearing from them.
+///
+/// Uncapped, a disconnection is a teleport: five minutes of silence earns the
+/// width of the zone several times over. Capped too tightly, an honest client
+/// coming back from a stall is refused for the gap. A few seconds is the
+/// compromise, and it is a compromise rather than a solution.
+pub const MAX_BANKED_MS: f32 = 3000.0;
 
 impl Tracked {
   pub fn new(at: (f32, f32, f32), now_ms: u64) -> Self {
     Self {
       at,
       at_ms: now_ms,
+      // One tick's worth to begin with, or the first claim after being seated
+      // is refused for arriving before the clock moved.
+      budget: RUN_SPEED * TOLERANCE * (CLOCK_GRAIN_MS as f32 / 1000.0),
       refusals: 0,
     }
   }
 
-  /// Takes a claimed position, if it is one the character could have reached.
+  /// Takes a claimed position, if it is one the character could have paid for.
   ///
   /// The elapsed time is the server's, not the client's, or the cheat is to
   /// claim a long gap and a long distance together.
   pub fn claim(&mut self, to: (f32, f32, f32), now_ms: u64) -> Verdict {
-    // Credited against at least one tick, because the server's clock only
-    // moves on one. Two claims arriving between ticks measure zero elapsed
-    // against each other, and without this the second is refused however
-    // honest it was: jitter alone would produce refusals, and refusals are the
-    // only signal this design has that somebody is cheating. The cost is
-    // stated rather than hidden, and it is the same trade `TOLERANCE` already
-    // makes: the cheat budget is one tick's distance wider.
-    let elapsed = now_ms.saturating_sub(self.at_ms).max(CLOCK_GRAIN_MS) as f32 / 1000.0;
-    let allowed = RUN_SPEED * TOLERANCE * elapsed;
+    let elapsed = now_ms.saturating_sub(self.at_ms) as f32 / 1000.0;
+    self.at_ms = now_ms;
+    self.budget = (self.budget + RUN_SPEED * TOLERANCE * elapsed)
+      .min(RUN_SPEED * TOLERANCE * (MAX_BANKED_MS / 1000.0));
+
     let moved = distance(self.at, to);
-    // A first claim after a long silence is allowed a long distance, which is
-    // correct: the character really did have that long to walk.
-    if moved > allowed {
+    if moved > self.budget {
       self.refusals += 1;
       return Verdict::Refused;
     }
+    // Spent rather than reset, so a character who walks slowly banks the rest
+    // and one who sprints in bursts averages the same as one who does not.
+    self.budget -= moved;
     self.at = to;
-    self.at_ms = now_ms;
     Verdict::Accepted
   }
 }
@@ -130,11 +147,19 @@ mod tests {
   }
 
   #[test]
-  fn a_long_silence_earns_a_long_step() {
-    // A character really did have ten seconds to walk, so refusing the distance
-    // would be punishing a client for a gap the network caused.
-    let mut t = Tracked::new((0.0, 0.0, 0.0), 0);
-    assert_eq!(t.claim((60.0, 0.0, 0.0), 10_000), Verdict::Accepted);
+  fn a_silence_earns_distance_up_to_the_cap_and_no_further() {
+    // A character really did have that long to walk, so refusing the distance
+    // outright would punish a client for a gap the network caused. Banking it
+    // without limit is the other failure: five minutes of silence would earn
+    // the width of the zone several times over, and a disconnection would be a
+    // teleport. The cap is a compromise and costs exactly what it says: a
+    // client returning from a stall longer than it gets snapped back once.
+    let mut within = Tracked::new((0.0, 0.0, 0.0), 0);
+    assert_eq!(within.claim((20.0, 0.0, 0.0), 3_000), Verdict::Accepted);
+
+    let mut beyond = Tracked::new((0.0, 0.0, 0.0), 0);
+    assert_eq!(beyond.claim((60.0, 0.0, 0.0), 10_000), Verdict::Refused);
+    assert_eq!(beyond.claim((28.0, 0.0, 0.0), 10_000), Verdict::Accepted, "up to the cap");
   }
 
   #[test]
@@ -142,11 +167,22 @@ mod tests {
     // Without a credited grain this is the shape of a false positive that
     // costs the design its only signal: an honest client whose packets bunch
     // up gets refused for it, and the refusal count stops meaning anything.
+    // Two halves of a tick's travel, which is what a client sending twice in a
+    // tick actually reports. Two *whole* steps in no elapsed time is not a
+    // bunched packet, it is twice the speed, and the budget refuses it.
     let mut t = Tracked::new((0.0, 0.0, 0.0), 0);
     let step = RUN_SPEED * (CLOCK_GRAIN_MS as f32 / 1000.0);
-    assert_eq!(t.claim((step, 0.0, 0.0), 0), Verdict::Accepted);
-    assert_eq!(t.claim((step * 2.0, 0.0, 0.0), 0), Verdict::Accepted, "same millisecond");
+    assert_eq!(t.claim((step / 2.0, 0.0, 0.0), 0), Verdict::Accepted);
+    assert_eq!(t.claim((step, 0.0, 0.0), 0), Verdict::Accepted, "same millisecond");
     assert_eq!(t.refusals, 0);
+
+    let mut greedy = Tracked::new((0.0, 0.0, 0.0), 0);
+    assert_eq!(greedy.claim((step, 0.0, 0.0), 0), Verdict::Accepted);
+    assert_eq!(
+      greedy.claim((step * 2.0, 0.0, 0.0), 0),
+      Verdict::Refused,
+      "two whole steps in no time is twice the speed, not a bunched packet"
+    );
   }
 
   #[test]

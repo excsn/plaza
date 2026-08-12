@@ -175,13 +175,13 @@ async fn a_refusal_snaps_and_an_honest_client_never_sees_one() {
   let began_at = state.zone.characters[&0].tracked.at;
   let before = state.zone.refusals;
   for _ in 0..600 {
-    // Fifty units ahead of wherever it actually is, which is a jump the
-    // accruing allowance really does reach every few seconds. A target so far
-    // away that it is never accepted would prove nothing: the cap has to be
-    // tested against a cheat that lands.
+    // Twenty units ahead of wherever it actually is, which is inside what the
+    // budget banks and so a jump that really does land every couple of
+    // seconds. A jump bigger than the cap is refused for ever and proves
+    // nothing: the average has to be tested against a cheat that works.
     let here = state.zone.characters[&0].tracked.at;
     send(&logic, &mut state, 1, GowOp::Moved {
-      at: (here.0 + 50.0, here.1, here.2),
+      at: (here.0 + 20.0, here.1, here.2),
     })
     .await;
     tick(&logic, &mut state).await;
