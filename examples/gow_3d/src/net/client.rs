@@ -190,6 +190,11 @@ pub struct NetClient {
   /// reads health, mana, the cast bar and the cooldown from. Nothing here is
   /// derivable from `others`, which never contains your own seat.
   pub you: Option<You>,
+  /// The last spawn counter this client acted on, so a relocation is applied
+  /// exactly once however many frames repeat it.
+  spawn_seen: u32,
+  /// Where the server put us, waiting to be taken by the frame loop.
+  teleport: Option<(f32, f32, f32)>,
   pub tick: u64,
   pub meter: Meter,
   /// Claims the server threw out. Zero for an honest client, which is what
@@ -258,6 +263,8 @@ impl NetClient {
       seeded: false,
       others: HashMap::new(),
       you: None,
+      spawn_seen: 0,
+      teleport: None,
       tick: 0,
       meter: Meter::default(),
       refused: 0,
@@ -367,6 +374,14 @@ impl NetClient {
     self.you = frame.you;
     if let Some(you) = frame.you {
       self.target = you.target;
+      if you.spawn != self.spawn_seen {
+        self.spawn_seen = you.spawn;
+        self.at = you.at;
+        self.teleport = Some(you.at);
+        // Or the send filter decides nothing changed and the server never
+        // hears where we actually are.
+        self.last_sent_at = None;
+      }
     }
     self.landed = frame.landed;
     self.authority = frame.authority;
@@ -549,6 +564,20 @@ impl NetClient {
   /// What a character is doing, for the nameplate.
   pub fn casting_of(&self, seat: Seat) -> Option<u32> {
     self.others.get(&seat).and_then(|o| o.seen.casting_ms)
+  }
+
+  /// Somewhere the server put this client, to be taken once.
+  ///
+  /// A respawn moves a character the client otherwise owns, so this is the one
+  /// place a position comes *down* the wire and is applied rather than
+  /// compared. Everything else about the local player's position is a report.
+  pub fn take_teleport(&mut self) -> Option<(f32, f32, f32)> {
+    self.teleport.take()
+  }
+
+  /// Whether the player is down and waiting to come back up.
+  pub fn is_down(&self) -> bool {
+    self.you.is_some_and(|you| you.up_in_ms.is_some())
   }
 
   /// What the local player is casting, if anything, as a share run so far.

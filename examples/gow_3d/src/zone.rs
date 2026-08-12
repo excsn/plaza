@@ -83,6 +83,9 @@ pub struct Character {
   pub home: (f32, f32, f32),
   /// When a beast may swing again.
   pub swing_at: Ms,
+  /// How many times this character has been placed somewhere it did not walk
+  /// to. Read by the client to know an arrival is not an echo.
+  pub spawns: u32,
 }
 
 impl Character {
@@ -114,6 +117,7 @@ impl Character {
       up_at: 0,
       home: at,
       swing_at: 0,
+      spawns: 1,
     }
   }
 
@@ -352,6 +356,9 @@ impl Zone {
         character.mana = MAX_MANA as f32;
         character.tracked = Tracked::new(at, now);
         character.target = None;
+        // The client owns its position, so it has to be told it was moved or
+        // it stands where it died and every claim it sends is refused.
+        character.spawns += 1;
         self.revives += 1;
         self.stale = true;
       }

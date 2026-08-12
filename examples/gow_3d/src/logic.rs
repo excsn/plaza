@@ -366,6 +366,8 @@ fn you_of(state: &GowState, seat: Seat, now: Ms) -> Option<You> {
     ready_in_ms: character.ready_at.saturating_sub(now) as u32,
     up_in_ms: (!character.alive).then(|| character.up_at.saturating_sub(now) as u32),
     target: character.target,
+    at: character.tracked.at,
+    spawn: character.spawns,
   })
 }
 
@@ -480,6 +482,31 @@ mod tests {
     );
     assert_eq!(state.zone.landed, 7, "and the totals do not");
     assert_eq!(state.zone.refusals, 3);
+  }
+
+  #[tokio::test]
+  async fn a_respawn_tells_the_client_it_was_moved() {
+    // The client owns its own position, so a respawn is the one time a
+    // position travels downward. Without the counter it stands where it died,
+    // sending claims the server refuses for the rest of the session.
+    use crate::zone::DOWN_MS;
+    let mut state = GowState::new();
+    let seat = seated(&mut state, 1);
+    let before = you_of(&state, seat, 0).unwrap();
+
+    state.zone.characters.get_mut(&seat).unwrap().alive = false;
+    state.zone.characters.get_mut(&seat).unwrap().health = 0;
+    state.zone.characters.get_mut(&seat).unwrap().up_at = DOWN_MS;
+    state.zone.advance(DOWN_MS + 1);
+
+    let after = you_of(&state, seat, state.zone.now_ms).unwrap();
+    assert!(after.spawn > before.spawn, "the client is never told it moved");
+    assert_eq!(
+      after.at,
+      state.zone.characters[&seat].tracked.at,
+      "and it has to be told where"
+    );
+    assert!(after.up_in_ms.is_none(), "it should be back up");
   }
 
   #[test]

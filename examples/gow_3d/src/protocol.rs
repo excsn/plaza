@@ -150,6 +150,19 @@ pub struct You {
   pub up_in_ms: Option<u32>,
   /// Who you are aimed at, as the server understands it.
   pub target: Option<u16>,
+  /// Where the server has you standing.
+  ///
+  /// Normally an echo of what this client already said, and ignored as one.
+  /// After a respawn it is not, which is what `spawn` exists to tell apart.
+  pub at: (f32, f32, f32),
+  /// How many times this character has been put somewhere it did not walk to.
+  ///
+  /// A counter rather than a flag, because the client has to apply the move
+  /// **once**: a flag that stayed set would fight every step afterwards, and
+  /// one that cleared itself could be missed by a dropped frame. The client
+  /// compares it against the last one it acted on, so a missed frame is caught
+  /// by the next.
+  pub spawn: u32,
 }
 
 /// An ability going off, which is the one thing on this wire that **happens**

@@ -67,6 +67,8 @@ fn encoded(state: &mut GowState, seat: u16) -> usize {
       ready_in_ms: 0,
       up_in_ms: None,
       target: None,
+      at: (0.0, 0.0, 0.0),
+      spawn: 1,
     }),
     authority: Authority::Client,
     characters,

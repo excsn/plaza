@@ -155,6 +155,12 @@ async fn frame_loop(options: role::Options, bots: usize) {
         body = Body::new(client.at);
         seeded = true;
       }
+      // The one position that arrives rather than departs. A respawn puts the
+      // character on fresh footing, and a client that kept walking from where
+      // it died would have every claim refused.
+      if let Some(at) = client.take_teleport() {
+        body = Body::new(at);
+      }
 
       // A dead or departed target is not a target. Dropping it here rather
       // than waiting for the server keeps the reticle, the camera and the
@@ -169,14 +175,19 @@ async fn frame_loop(options: role::Options, bots: usize) {
         }
       }
 
-      let turning = is_key_down(KeyCode::Left)
-        || is_key_down(KeyCode::A)
-        || is_key_down(KeyCode::Right)
-        || is_key_down(KeyCode::D);
-      if is_key_down(KeyCode::Left) || is_key_down(KeyCode::A) {
+      // Nothing answers a key while down. Walking a corpse around is not a
+      // feature, and every claim it sent would be refused anyway once the
+      // server had moved the body to its spawn.
+      let alive = !client.is_down();
+      let turning = alive
+        && (is_key_down(KeyCode::Left)
+          || is_key_down(KeyCode::A)
+          || is_key_down(KeyCode::Right)
+          || is_key_down(KeyCode::D));
+      if alive && (is_key_down(KeyCode::Left) || is_key_down(KeyCode::A)) {
         yaw += TURN_SPEED * dt;
       }
-      if is_key_down(KeyCode::Right) || is_key_down(KeyCode::D) {
+      if alive && (is_key_down(KeyCode::Right) || is_key_down(KeyCode::D)) {
         yaw -= TURN_SPEED * dt;
       }
 
@@ -204,7 +215,9 @@ async fn frame_loop(options: role::Options, bots: usize) {
           yaw += delta * (TRACK_SPEED * dt).min(1.0);
         }
       }
-      let forward: i8 = if is_key_down(KeyCode::Up) || is_key_down(KeyCode::W) {
+      let forward: i8 = if !alive {
+        0
+      } else if is_key_down(KeyCode::Up) || is_key_down(KeyCode::W) {
         1
       } else if is_key_down(KeyCode::Down) || is_key_down(KeyCode::S) {
         -1
@@ -218,7 +231,7 @@ async fn frame_loop(options: role::Options, bots: usize) {
         gow_3d::protocol::Authority::Client => {
           let step = RUN_SPEED * dt * forward as f32;
           let wish = (yaw.sin() * step, yaw.cos() * step);
-          body.step(wish, is_key_pressed(KeyCode::Space), dt, terrain::ground_at);
+          body.step(wish, alive && is_key_pressed(KeyCode::Space), dt, terrain::ground_at);
           client.at = body.at;
           client.moved_to(body.at, yaw);
         }
@@ -233,7 +246,7 @@ async fn frame_loop(options: role::Options, bots: usize) {
       // Tab targeting, which is the point rather than a convenience: naming the
       // target is what removes the thing two machines would otherwise have to
       // agree about.
-      if is_key_pressed(KeyCode::Tab) {
+      if alive && is_key_pressed(KeyCode::Tab) {
         let next = cycle_target(&client);
         if next.is_none() {
           notice = Some(("nothing in range to target".to_owned(), clock_ms));
@@ -246,7 +259,7 @@ async fn frame_loop(options: role::Options, bots: usize) {
         (KeyCode::Key2, 1),
         (KeyCode::Key3, 2),
       ] {
-        if is_key_pressed(key) {
+        if alive && is_key_pressed(key) {
           match client.can_cast(index) {
             Ok(()) => client.cast(index),
             Err(why) => notice = Some((why.to_owned(), clock_ms)),
@@ -254,13 +267,13 @@ async fn frame_loop(options: role::Options, bots: usize) {
         }
       }
 
-      if is_key_pressed(KeyCode::P) {
+      if alive && is_key_pressed(KeyCode::P) {
         match nearest_ally(&client) {
           Some(seat) => client.party_with(seat),
           None => notice = Some(("nobody nearby to party with".to_owned(), clock_ms)),
         }
       }
-      if is_key_pressed(KeyCode::O) {
+      if alive && is_key_pressed(KeyCode::O) {
         client.unparty();
       }
     }
