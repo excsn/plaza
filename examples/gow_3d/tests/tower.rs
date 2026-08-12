@@ -185,3 +185,83 @@ fn one_floor_of_the_same_crowd_costs_the_filter_nothing() {
   println!("\n  the same 720 people on one floor: filter examines {ratio:.2}x the volume grid\n");
   assert!(ratio < 1.05, "level on one floor: {ratio}");
 }
+
+
+/// The same question asked of the running zone rather than a synthetic scene.
+///
+/// The scene above is a model of two strategies. This runs the real `Zone`,
+/// with the grid the server queries every tick, and reads the counters it keeps
+/// while doing it. It was written expecting to reproduce the 72% waste and it
+/// does not, for a reason worth more than the agreement would have been.
+#[cfg(feature = "server")]
+mod in_the_real_zone {
+  use gow_3d::state::{spawn_at, GowState, MAX_CHARACTERS};
+  use gow_3d::zone::{FLOOR_HEIGHT, VIEW};
+
+  /// Runs one query per character and returns what the server's own grid
+  /// examined against what survived the distance test.
+  fn one_round(stacked: bool) -> (f64, f64) {
+    let mut state = GowState::new();
+    for seat in 0..MAX_CHARACTERS as u16 {
+      state.zone.admit(seat, spawn_at(seat));
+    }
+    if stacked {
+      for seat in 0..MAX_CHARACTERS as u16 {
+        let floor = (seat % 24) as f32;
+        let at = spawn_at(seat);
+        state.zone.place(seat, (at.0 * 0.12, floor * FLOOR_HEIGHT, at.2 * 0.12));
+      }
+    }
+
+    state.zone.examined = 0;
+    state.zone.returned = 0;
+    let mut scratch = Vec::new();
+    for seat in 0..MAX_CHARACTERS as u16 {
+      state.zone.near(seat, &mut scratch);
+    }
+    let n = MAX_CHARACTERS as f64;
+    (state.zone.examined as f64 / n, state.zone.returned as f64 / n)
+  }
+
+  #[test]
+  fn the_index_excludes_nobody_because_the_zone_is_smaller_than_the_view() {
+    let (flat_examined, flat_returned) = one_round(false);
+    let (tower_examined, tower_returned) = one_round(true);
+
+    println!("\n  the server's own grid, {MAX_CHARACTERS} characters, per query:\n");
+    println!("{:>14} {:>12} {:>12} {:>10}", "arrangement", "examined", "returned", "wasted");
+    for (name, examined, returned) in [
+      ("one floor", flat_examined, flat_returned),
+      ("a tower", tower_examined, tower_returned),
+    ] {
+      println!(
+        "{name:>14} {examined:>12.1} {returned:>12.1} {:>9.0}%",
+        (1.0 - returned / examined.max(0.01)) * 100.0
+      );
+    }
+
+    // The number that explains the rest: the grid hands back every character
+    // in the zone whatever the arrangement, because a query of radius VIEW
+    // covers a zone this small entirely.
+    assert_eq!(
+      flat_examined, MAX_CHARACTERS as f64,
+      "the grid returned everyone, so it partitioned nothing"
+    );
+    assert_eq!(tower_examined, MAX_CHARACTERS as f64);
+
+    println!("\n  the grid excluded nobody in either arrangement, which is the");
+    println!("  finding rather than a flaw: a zone {:.0}m across against a {VIEW:.0}m view", 80.0);
+    println!("  is smaller than one query, so the index is a linear scan with");
+    println!("  cell arithmetic on top. It earns its keep when the world is");
+    println!("  bigger than the question, and this one is not yet.\n");
+    println!("  The 72% above is therefore a claim about arrangement at scale,");
+    println!("  not something this zone reproduces at sixty-four characters.\n");
+
+    // And the part that is about arrangement rather than indexing: stacking
+    // changes who can see whom, which is the thing the height test decides.
+    assert!(
+      (tower_returned - flat_returned).abs() > 1.0,
+      "stacking has to change what is visible or nothing was tested: {flat_returned:.1} to {tower_returned:.1}"
+    );
+  }
+}

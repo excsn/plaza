@@ -166,6 +166,20 @@ So the recommendation holds with a boundary attached: **filter on height when th
 
 The first version of the scene was eight floors against a thirty metre view, so the volume grid's vertical reach covered the whole building and excluded nothing. A tower has to out-reach the view for the question to exist, and the test asserts that now.
 
+### And what the running zone actually does
+
+The same test file asks the same question of the real `Zone`, using the grid the server queries every tick, and gets a different answer:
+
+```
+   arrangement     examined     returned     wasted
+     one floor         64.0         21.9        66%
+       a tower         64.0         27.0        58%
+```
+
+**The index excludes nobody.** It hands back all 64 characters in either arrangement, because an 80-metre zone against a 30-metre view is smaller than a single query, so `SpatialGrid` here is a linear scan with cell arithmetic on top. It earns its keep when the world is bigger than the question, and this one is not yet.
+
+That is worth saying plainly because the test was written expecting to reproduce the 72% and did not. The model above is a claim about *arrangement at scale*; sixty-four characters in one small zone is not that, and tuning the scene until it agreed would have produced a number that described nothing. The grid stays because it is what the example should demonstrate and because the zone is the thing that would grow, not because it is currently paying for itself.
+
 ## What the tick actually does
 
 Almost nothing, and that is the finding rather than a gap. Nobody's position is computed, because the clients own those, and the only thing with a clock is a cast bar. What is left is answering, once per client, who you are told about and why.
