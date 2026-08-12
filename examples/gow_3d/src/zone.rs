@@ -14,7 +14,7 @@ use crate::abilities::{ability, Ability, CLAW};
 use crate::casting::{Ms, GLOBAL_COOLDOWN_MS};
 use crate::controls::Authority;
 use crate::movement::{distance, Tracked, Verdict, MAX_AIR};
-use crate::protocol::Kind;
+use crate::protocol::{Kind, Landed};
 use crate::relevance::{audience, Audience, Parties, Seat};
 use crate::terrain;
 
@@ -331,7 +331,7 @@ impl Zone {
   ///
   /// Returns the seats whose cast landed, because that is an **event**: it
   /// happens once and no later frame mentions it.
-  pub fn advance(&mut self, dt_ms: Ms) -> Vec<Seat> {
+  pub fn advance(&mut self, dt_ms: Ms) -> Vec<Landed> {
     self.now_ms += dt_ms;
     if self.authority == Authority::Server {
       self.drive(dt_ms);
@@ -374,9 +374,15 @@ impl Zone {
 
     // Resolved after the loop, because a landing reads one character and
     // writes another, and the two can be the same seat's target chain.
+    let mut out = Vec::with_capacity(landed.len());
     for (caster, index) in &landed {
       let Some(spell) = ability(*index) else { continue };
-      self.resolve(*caster, spell);
+      let victim = self.resolve(*caster, spell);
+      out.push(Landed {
+        seat: *caster,
+        ability: *index,
+        victim,
+      });
     }
     // The clock moved, so the index describes a world that no longer exists:
     // a body may have finished falling out of it without anybody touching a
@@ -384,34 +390,29 @@ impl Zone {
     // have caused it is what keeps that from being a hunt for the one caller
     // that forgot.
     self.stale = true;
-    landed.into_iter().map(|(seat, _)| seat).collect()
+    out
   }
 
   /// Applies one landed ability. The whole of hit detection, on the server, at
   /// one instant, against a named target.
-  fn resolve(&mut self, caster: Seat, spell: Ability) {
-    let Some((from, target, kind)) = self
+  fn resolve(&mut self, caster: Seat, spell: Ability) -> Option<Seat> {
+    let (from, target, kind) = self
       .characters
       .get(&caster)
-      .map(|c| (c.tracked.at, c.target, c.kind))
-    else {
-      return;
-    };
-    let Some(target) = target else { return };
-    let Some(victim) = self.characters.get_mut(&target).filter(|v| v.alive) else {
-      return;
-    };
+      .map(|c| (c.tracked.at, c.target, c.kind))?;
+    let target = target?;
+    let victim = self.characters.get_mut(&target).filter(|v| v.alive)?;
     if distance(from, victim.tracked.at) > spell.range {
-      return;
+      return None;
     }
     let friendly = victim.kind == kind;
     if spell.hostile == friendly {
-      return;
+      return None;
     }
 
     if spell.heal > 0 {
       victim.health = (victim.health + spell.heal).min(victim.max_health);
-      return;
+      return Some(target);
     }
 
     victim.health = victim.health.saturating_sub(spell.damage);
@@ -430,6 +431,7 @@ impl Zone {
       }
       self.stale = true;
     }
+    Some(target)
   }
 
   /// What the beasts do, which is the only simulation the server runs.
@@ -598,7 +600,8 @@ mod tests {
     assert!(!zone.begin_cast(1, 1, 0), "not while already casting");
 
     let landed = zone.advance(BOLT.cast_ms);
-    assert_eq!(landed, vec![1], "and it lands once");
+    assert_eq!(landed.len(), 1, "and it lands once");
+    assert_eq!(landed[0].seat, 1);
   }
 
   #[test]
@@ -645,11 +648,41 @@ mod tests {
   }
 
   #[test]
+  fn a_landing_says_what_it_was_and_what_it_reached() {
+    // Both halves are needed to draw it and neither is derivable later: no
+    // frame mentions a landing twice, and by the time one arrives the
+    // victim's health has already moved.
+    let mut zone = Zone::new();
+    zone.admit(1, (0.0, 0.0, 0.0));
+    zone.admit_beast(2, (3.0, 0.0, 0.0));
+    zone.aim(1, Some(2));
+    zone.begin_cast(1, 0, 0);
+    let landed = zone.advance(1);
+    assert_eq!(landed.len(), 1);
+    assert_eq!(landed[0].ability, 0);
+    assert_eq!(landed[0].victim, Some(2));
+  }
+
+  #[test]
+  fn a_swing_through_empty_air_is_still_an_event() {
+    // Otherwise a press that misses is indistinguishable from a press that did
+    // nothing, which is the whole complaint the feedback work started from.
+    let mut zone = Zone::new();
+    zone.admit(1, (0.0, 0.0, 0.0));
+    zone.begin_cast(1, 0, 0);
+    let landed = zone.advance(1);
+    assert_eq!(landed.len(), 1, "the cast has to be announced");
+    assert_eq!(landed[0].victim, None, "and say that it reached nobody");
+  }
+
+  #[test]
   fn a_landing_is_reported_once_and_never_again() {
     let mut zone = zone();
     zone.begin_cast(1, 1, 0);
     assert!(zone.advance(BOLT.cast_ms - 100).is_empty(), "not yet");
-    assert_eq!(zone.advance(200), vec![1], "now");
+    let now = zone.advance(200);
+    assert_eq!(now.len(), 1, "now");
+    assert_eq!(now[0].seat, 1);
     assert!(zone.advance(1000).is_empty(), "and not a second time");
   }
 

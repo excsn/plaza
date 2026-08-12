@@ -152,6 +152,22 @@ pub struct You {
   pub target: Option<u16>,
 }
 
+/// An ability going off, which is the one thing on this wire that **happens**
+/// rather than **is**.
+///
+/// The seat alone was enough while the only consumer was a coloured flash. An
+/// animation needs to know which ability and what it reached, and neither is
+/// derivable from a later frame: no frame mentions a landing again, and the
+/// victim's health has already moved by the time one arrives.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Landed {
+  pub seat: u16,
+  pub ability: u8,
+  /// Who it reached, if anyone. `None` for a cast that landed on nothing,
+  /// which is a swing through empty air rather than nothing at all.
+  pub victim: Option<u16>,
+}
+
 /// What one client is told, every send tick.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Frame {
@@ -168,7 +184,7 @@ pub struct Frame {
   /// **event**: no later frame mentions it, so a client that misses this one
   /// misses it for good, and putting it here at least ties it to a tick the
   /// client can name.
-  pub landed: Vec<u16>,
+  pub landed: Vec<Landed>,
 }
 
 /// plaza-wire: root

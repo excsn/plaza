@@ -20,7 +20,7 @@ use plaza_wire::{MsgPackCodec, WireCodec};
 use plaza_ws::pump::{mismatch_message, Arrival, FramePump};
 use plaza_ws::{Event, State};
 
-use crate::protocol::{Authority, Because, Frame, GowOp, Seen, You, PROTOCOL, TICK_HZ};
+use crate::protocol::{Authority, Because, Frame, GowOp, Landed, Seen, You, PROTOCOL, TICK_HZ};
 use crate::relevance::Seat;
 
 const WIRE: MsgPackCodec = MsgPackCodec;
@@ -81,6 +81,41 @@ impl Meter {
     };
     let elapsed = now_ms.saturating_sub(since).max(1) as f32 / 1000.0;
     self.total_bytes as f32 / elapsed / 1024.0
+  }
+}
+
+/// An ability going off, kept long enough to draw.
+///
+/// A landing is an event, so this is the client's own memory of one: nothing
+/// on the wire mentions it again, and an animation outlives the frame that
+/// carried it by design.
+#[derive(Clone, Copy, Debug)]
+pub struct Effect {
+  pub ability: u8,
+  pub seat: Seat,
+  pub victim: Option<Seat>,
+  pub since_ms: u64,
+}
+
+impl Effect {
+  /// How long each kind stays on screen. A swing is short because the arm has
+  /// to be back where the body is; a heal lingers because it is the only one
+  /// with nothing violent to say.
+  pub fn life_ms(&self) -> u64 {
+    match self.ability {
+      0 => 320,
+      1 => 420,
+      _ => 700,
+    }
+  }
+
+  /// How far through, `0.0..1.0`.
+  pub fn age(&self, now_ms: u64) -> f32 {
+    (now_ms.saturating_sub(self.since_ms) as f32 / self.life_ms() as f32).clamp(0.0, 1.0)
+  }
+
+  pub fn done(&self, now_ms: u64) -> bool {
+    now_ms.saturating_sub(self.since_ms) >= self.life_ms()
   }
 }
 
@@ -163,7 +198,7 @@ pub struct NetClient {
   /// Casts that went off nearby since the last frame.
   ///
   /// Replaced every frame, so reading it is the only chance to see one.
-  pub landed: Vec<Seat>,
+  pub landed: Vec<Landed>,
   /// When each seat's cast last landed, on the client's clock.
   ///
   /// Kept because a landing is an **event**: no later frame mentions it, so a
@@ -180,6 +215,8 @@ pub struct NetClient {
   /// server already says what everyone's health is and a second message
   /// saying by how much it changed would be two derivations of one fact.
   pub popups: Vec<Popup>,
+  /// Abilities going off nearby, for as long as each is worth drawing.
+  pub effects: Vec<Effect>,
   health_was: HashMap<Seat, u16>,
   /// Which mode the zone said it is running, on the last frame.
   pub authority: Authority,
@@ -228,6 +265,7 @@ impl NetClient {
       flashes: HashMap::new(),
       target: None,
       popups: Vec::new(),
+      effects: Vec::new(),
       health_was: HashMap::new(),
       authority: Authority::Client,
       gap: 0.0,
@@ -332,8 +370,14 @@ impl NetClient {
     }
     self.landed = frame.landed;
     self.authority = frame.authority;
-    for seat in &self.landed {
-      self.flashes.insert(*seat, self.now_ms);
+    for hit in &self.landed {
+      self.flashes.insert(hit.seat, self.now_ms);
+      self.effects.push(Effect {
+        ability: hit.ability,
+        seat: hit.seat,
+        victim: hit.victim,
+        since_ms: self.now_ms,
+      });
     }
     let now = self.now_ms;
     let mine = self.seat;
@@ -496,6 +540,7 @@ impl NetClient {
     self
       .popups
       .retain(|p| now_ms.saturating_sub(p.since_ms) < Popup::LIFE_MS);
+    self.effects.retain(|e| !e.done(now_ms));
     self.health_was.retain(|seat, _| {
       self.others.contains_key(seat) || Some(*seat) == self.seat
     });

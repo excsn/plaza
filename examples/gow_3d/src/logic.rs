@@ -330,7 +330,15 @@ fn frame_for(state: &mut GowState, seat: Seat, now: Ms) -> Frame {
       // Only the ones this client can see. A landing across the zone is not
       // news, and sending it would be describing something the client has no
       // character for.
-      landed: landed.iter().copied().filter(|s| near.contains(s)).collect(),
+      // Visible caster **or** visible victim: a bolt from somebody you cannot
+      // see landing on somebody you can is an effect you should watch arrive,
+      // and one from somebody you can see reaching out of your view is a swing
+      // you should watch leave.
+      landed: landed
+        .iter()
+        .copied()
+        .filter(|l| near.contains(&l.seat) || l.victim.is_some_and(|v| near.contains(&v)))
+        .collect(),
     }
   })
 }
@@ -415,14 +423,15 @@ mod tests {
     let a = seated(&mut state, 1);
     let far = seated(&mut state, 2);
     state.zone.place(far, (500.0, 0.0, 500.0));
-    state.landed = vec![far];
+    state.landed = vec![crate::protocol::Landed { seat: far, ability: 0, victim: None }];
 
     let frame = frame_for(&mut state, a, 0);
     assert!(frame.landed.is_empty());
 
     state.zone.place(far, spawn_at(far));
     let frame = frame_for(&mut state, a, 0);
-    assert_eq!(frame.landed, vec![far], "and one beside you is");
+    assert_eq!(frame.landed.len(), 1, "and one beside you is");
+    assert_eq!(frame.landed[0].seat, far);
   }
 
   #[tokio::test]

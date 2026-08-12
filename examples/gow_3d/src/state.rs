@@ -51,7 +51,7 @@ pub struct GowState {
   ///
   /// Held for exactly one tick because it is an event: keeping it longer would
   /// send it twice and clearing it earlier would lose it.
-  pub landed: Vec<Seat>,
+  pub landed: Vec<crate::protocol::Landed>,
   /// The zone's own adventurers, so a lone player has a world around them.
   pub bots: Bots,
   /// Whether the zone has seated its own characters yet.

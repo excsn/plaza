@@ -76,6 +76,11 @@ fn window_conf() -> Conf {
 #[cfg(all(feature = "client", feature = "websocket"))]
 const TURN_SPEED: f32 = 2.6;
 
+/// How fast the camera comes round onto a target, as a share of the remaining
+/// angle per second.
+#[cfg(all(feature = "client", feature = "websocket"))]
+const TRACK_SPEED: f32 = 4.5;
+
 /// How long a message stays on screen after a key could not be honoured.
 #[cfg(all(feature = "client", feature = "websocket"))]
 const NOTICE_MS: u64 = 1600;
@@ -151,11 +156,53 @@ async fn frame_loop(options: role::Options, bots: usize) {
         seeded = true;
       }
 
+      // A dead or departed target is not a target. Dropping it here rather
+      // than waiting for the server keeps the reticle, the camera and the
+      // action bar from all describing something that is no longer there.
+      if let Some(target) = client.target {
+        let gone = client
+          .others
+          .get(&target)
+          .is_none_or(|other| other.seen.health == 0);
+        if gone {
+          client.aim_at(None);
+        }
+      }
+
+      let turning = is_key_down(KeyCode::Left)
+        || is_key_down(KeyCode::A)
+        || is_key_down(KeyCode::Right)
+        || is_key_down(KeyCode::D);
       if is_key_down(KeyCode::Left) || is_key_down(KeyCode::A) {
         yaw += TURN_SPEED * dt;
       }
       if is_key_down(KeyCode::Right) || is_key_down(KeyCode::D) {
         yaw -= TURN_SPEED * dt;
+      }
+
+      // With something targeted and nobody steering, the camera comes round to
+      // face it, so walking forward closes the distance. Eased rather than
+      // snapped, and given up the moment the player turns, or the camera
+      // fights the hands holding it.
+      if !turning
+        && let Some(target) = client.target
+        && let Some(other) = client.others.get(&target)
+      {
+        let to = other.drawn_at(clock_ms);
+        let (dx, dz) = (to.0 - client.at.0, to.2 - client.at.2);
+        if dx * dx + dz * dz > 1.0 {
+          let wanted = dx.atan2(dz);
+          // Shortest way round, or a target behind you sends the camera the
+          // long way about.
+          let mut delta = wanted - yaw;
+          while delta > std::f32::consts::PI {
+            delta -= std::f32::consts::TAU;
+          }
+          while delta < -std::f32::consts::PI {
+            delta += std::f32::consts::TAU;
+          }
+          yaw += delta * (TRACK_SPEED * dt).min(1.0);
+        }
       }
       let forward: i8 = if is_key_down(KeyCode::Up) || is_key_down(KeyCode::W) {
         1
@@ -245,6 +292,7 @@ async fn frame_loop(options: role::Options, bots: usize) {
               .map(|left| 1.0 - (left as f32 / 2000.0).clamp(0.0, 1.0))
               .unwrap_or(0.0),
             hit: if flashing.contains(&other.seen.seat) { 1.0 } else { 0.0 },
+            swing: swing_of(&client, other.seen.seat, clock_ms),
             dying: falling.progress(other.seen.seat, other.seen.health, clock_ms),
           };
           (&other.seen, vec3(at.0, at.1, at.2), pose)
@@ -262,6 +310,7 @@ async fn frame_loop(options: role::Options, bots: usize) {
         gait: (my_speed / RUN_SPEED).clamp(0.0, 1.0),
         cast: client.my_cast().map(|(_, share)| share).unwrap_or(0.0),
         hit: 0.0,
+        swing: client.seat.map(|s| swing_of(&client, s, clock_ms)).unwrap_or(0.0),
         dying: client
           .you
           .and_then(|you| you.up_in_ms)
@@ -271,6 +320,17 @@ async fn frame_loop(options: role::Options, bots: usize) {
           })
           .unwrap_or(0.0),
       });
+
+      // Effects want a position for any seat they name, which is either
+      // somebody drawn this frame or the local player.
+      let mine = client.seat;
+      let at_of = |seat: u16| -> Option<Vec3> {
+        if Some(seat) == mine {
+          return Some(here);
+        }
+        drawn.iter().find(|(s, _, _)| s.seat == seat).map(|(_, v, _)| *v)
+      };
+      scene.draw_effects(&client.effects, at_of, clock_ms);
 
       scene.draw_plates(
         drawn
@@ -312,6 +372,19 @@ async fn frame_loop(options: role::Options, bots: usize) {
     egui_macroquad::draw();
     next_frame().await;
   }
+}
+
+/// How far through a melee swing this seat is, from the client's own memory of
+/// the landing.
+#[cfg(all(feature = "client", feature = "websocket"))]
+fn swing_of(client: &NetClient, seat: u16, now_ms: u64) -> f32 {
+  client
+    .effects
+    .iter()
+    .filter(|e| e.seat == seat && e.ability == 0)
+    .map(|e| e.age(now_ms))
+    .find(|age| *age < 1.0)
+    .unwrap_or(0.0)
 }
 
 /// The next hostile target, nearest first, then outward, wrapping around.

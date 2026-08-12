@@ -49,6 +49,10 @@ pub struct Pose {
   pub cast: f32,
   /// How recently they were hit, `1.0` at the moment of it.
   pub hit: f32,
+  /// How far through a melee swing, `0.0..1.0`. Separate from `cast`, because
+  /// an instant ability has no bar to raise the arms with and would otherwise
+  /// be a key press with nothing on the body to show for it.
+  pub swing: f32,
   /// How far through falling over, `0.0` upright and `1.0` flat.
   pub dying: f32,
 }
@@ -309,14 +313,23 @@ impl Scene {
     let torso = base + vec3(0.0, hips + (TALL - hips) * 0.5 + bob, 0.0) + facing * lean;
     self.push_box(torso, vec3(BODY, (TALL - hips) * 0.5, BODY * 0.8), tint);
 
-    // Arms, and the cast is what raises them: a bar running with nothing on
-    // screen doing anything is the reason a press felt like it did nothing.
+    // Arms. A cast raises them and holds; a swing throws one forward and
+    // brings it back, which is the whole difference between an ability with a
+    // bar and one without.
     let reach = pose.cast;
-    let arm_swing = -stride.sin() * 0.3 * pose.gait * (1.0 - reach);
+    let swung = (pose.swing * std::f32::consts::PI).sin();
+    let arm_swing = -stride.sin() * 0.3 * pose.gait * (1.0 - reach) * (1.0 - swung);
     for (arm, phase) in [(-1.0f32, arm_swing), (1.0, -arm_swing)] {
       let lift = vec3(0.0, reach * 0.55, 0.0) + facing * (reach * 0.5);
+      // The right arm does the swinging, so a strike reads as one blow rather
+      // than a shrug.
+      let strike = if arm > 0.0 {
+        facing * (swung * 1.05) + vec3(0.0, swung * 0.5, 0.0)
+      } else {
+        Vec3::ZERO
+      };
       self.push_box(
-        torso + side * (BODY + 0.16) * arm + facing * phase + lift + vec3(0.0, -0.12, 0.0),
+        torso + side * (BODY + 0.16) * arm + facing * phase + lift + strike + vec3(0.0, -0.12, 0.0),
         vec3(0.16, (TALL - hips) * 0.34, 0.16),
         Color::new(tint.r * 0.85, tint.g * 0.85, tint.b * 0.85, 1.0),
       );
@@ -414,6 +427,95 @@ impl Scene {
   }
 }
 
+impl Scene {
+  /// Abilities going off: a swing arc, a bolt in flight, motes rising off a
+  /// heal.
+  ///
+  /// Drawn from the client's own memory of the landing event, because nothing
+  /// on the wire mentions one twice.
+  pub fn draw_effects(
+    &mut self,
+    effects: &[gow_3d::net::client::Effect],
+    at_of: impl Fn(u16) -> Option<Vec3>,
+    now_ms: u64,
+  ) {
+    for effect in effects {
+      let Some(from) = at_of(effect.seat) else { continue };
+      let age = effect.age(now_ms);
+      let to = effect.victim.and_then(&at_of);
+      match effect.ability {
+        // Strike: an arc sweeping across the front of the body.
+        0 => {
+          let facing = to
+            .map(|t| (t - from).normalize_or_zero())
+            .unwrap_or(Vec3::Z);
+          let side = vec3(facing.z, 0.0, -facing.x);
+          for step in 0..6 {
+            let along = step as f32 / 5.0;
+            // The arc leads the swing and fades behind it.
+            let phase = (age * 1.4 - along * 0.35).clamp(0.0, 1.0);
+            if phase <= 0.0 || phase >= 1.0 {
+              continue;
+            }
+            let angle = (phase - 0.5) * 2.2;
+            let reach = 1.5 + along * 0.5;
+            self.push_box(
+              from
+                + vec3(0.0, TALL * 0.62, 0.0)
+                + facing * (angle.cos() * reach)
+                + side * (angle.sin() * reach),
+              vec3(0.14, 0.14, 0.14),
+              Color::new(1.0, 0.94, 0.75, 1.0),
+            );
+          }
+        }
+        // Bolt: a streak that crosses to the target, then bursts.
+        1 => {
+          let Some(to) = to else { continue };
+          let (start, end) = (from + vec3(0.0, TALL * 0.7, 0.0), to + vec3(0.0, TALL * 0.5, 0.0));
+          let travel = (age * 2.0).clamp(0.0, 1.0);
+          for tail in 0..5 {
+            let t = (travel - tail as f32 * 0.06).clamp(0.0, 1.0);
+            let size = 0.26 - tail as f32 * 0.04;
+            self.push_box(
+              start + (end - start) * t,
+              vec3(size, size, size),
+              Color::new(0.65, 0.80, 1.0, 1.0),
+            );
+          }
+          if travel >= 1.0 {
+            let burst = ((age - 0.5) * 2.0).clamp(0.0, 1.0);
+            for i in 0..6 {
+              let a = i as f32 / 6.0 * std::f32::consts::TAU;
+              let r = 0.4 + burst * 1.4;
+              self.push_box(
+                end + vec3(a.cos() * r, burst * 0.8, a.sin() * r),
+                vec3(0.16, 0.16, 0.16),
+                Color::new(0.75, 0.88, 1.0, 1.0),
+              );
+            }
+          }
+        }
+        // Mend: motes rising off whoever was healed.
+        _ => {
+          let Some(to) = to else { continue };
+          for i in 0..5 {
+            let offset = i as f32 / 5.0;
+            let rise = ((age + offset) % 1.0) * 2.6;
+            let a = offset * std::f32::consts::TAU + age * 2.0;
+            self.push_box(
+              to + vec3(a.cos() * 0.7, rise, a.sin() * 0.7),
+              vec3(0.13, 0.13, 0.13),
+              Color::new(0.55, 1.0, 0.65, 1.0),
+            );
+          }
+        }
+      }
+    }
+    self.flush();
+  }
+}
+
 /// One horizontal bar in the world, filled from the left.
 fn bar_3d(at: Vec3, half_width: f32, share: f32, tint: Color) {
   let left = at - vec3(half_width, 0.0, 0.0);
@@ -438,6 +540,16 @@ pub fn over_the_shoulder(at: Vec3, yaw: f32, distance: f32) -> Camera3D {
   }
 }
 
+/// Where a subscribed character sits on the compass, for the party panel.
+///
+/// The one piece of the interface that only exists because of the second
+/// relevance channel: a direction to somebody you cannot see.
+pub fn bearing(from: Vec3, to: Vec3, yaw: f32) -> f32 {
+  let delta = to - from;
+  let angle = delta.x.atan2(delta.z);
+  angle - yaw
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -453,8 +565,8 @@ mod tests {
     // The failure this guards is silent: past the limit macroquad warns once
     // and draws the front of the buffer, so characters simply stop appearing
     // and nothing says which ones.
-    assert!(BOXES_PER_BODY * VERTICES_PER_BOX <= MAX_VERTICES);
-    assert!(BOXES_PER_BODY * INDICES_PER_BOX <= MAX_INDICES);
+    const { assert!(BOXES_PER_BODY * VERTICES_PER_BOX <= MAX_VERTICES) };
+    const { assert!(BOXES_PER_BODY * INDICES_PER_BOX <= MAX_INDICES) };
   }
 
   #[test]
@@ -468,14 +580,4 @@ mod tests {
       "the old batch size would have fitted, so this test proves nothing"
     );
   }
-}
-
-/// Where a subscribed character sits on the compass, for the party panel.
-///
-/// The one piece of the interface that only exists because of the second
-/// relevance channel: a direction to somebody you cannot see.
-pub fn bearing(from: Vec3, to: Vec3, yaw: f32) -> f32 {
-  let delta = to - from;
-  let angle = delta.x.atan2(delta.z);
-  angle - yaw
 }
