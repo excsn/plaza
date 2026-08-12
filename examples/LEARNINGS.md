@@ -710,6 +710,16 @@ The correct shape is a **budget that accrues from the clock and is spent by move
 
 This generalises past games. Any check of the form "is this request allowed given the time since the last one" has the same two failure modes, and the same fix: rate limits, token refills, retry backoffs, and quota accounting all want an accruing bucket rather than a per-request allowance.
 
+### A protocol hash over the ops misses the types they carry (poketo)
+
+`plaza_wire::build::emit(&[paths])` hashes the files you list. poketo listed `protocol.rs`, which is where its ops are defined, and the ops carry types from two other files: `Overworld` embeds `Trainer`, `BattleState` embeds `Battle`. A creature could gain a field, or a tile change shape, without the version moving at all. Two builds that disagreed about the wire would complete the handshake, agree they matched, and then mis-decode, which is worse than refusing to connect because it looks like a game bug.
+
+The repair that only fixes the instance is adding the two files to the list. The repair that fixes the class is `Wire::detect()`, which starts from types tagged `/// plaza-wire: root` and walks their fields transitively, so a payload two files away counts and a type nobody references warns rather than silently drops out. **Walking the fields is the only version of this that a person cannot forget to update**, and a hand-maintained list of what is on the wire is exactly the artifact that goes stale during the refactor that needed it.
+
+Verified rather than assumed, because a version hash is the kind of thing that looks right whatever it does: adding a field to `Creature`, two files from the ops, moved the version from 3864428394 to 561229205, and reverting restored it exactly. Under the file list it did not move.
+
+The resolver also caught something the hash was never the point of. gow_3d had **two `Authority` types**, one in `controls.rs` and one in `protocol.rs`, with a `match` converting between them; the resolver refused to build, naming both. That is the two-derivations-of-one-fact shape this catalogue keeps returning to, and a build step that indexes wire types by name turns out to be a detector for it.
+
 ### Smaller ones worth remembering
 
 **Three measurements whose scenes could not show the effect (gow_3d).** A tower test comparing a height filter against a volumetric grid, where the tower was 40m tall and the view radius 30m, so the volume grid's vertical reach covered the whole building and excluded nobody: both arms examined all 480 people and the comparison had no contrast. A walk test that started every character with a 12-unit jump onto the axis it was walking them along, so the validator was right to refuse it and the refusal count measured the test rather than the code. A cheat-cap test whose jump was larger than the cap could ever bank, so it landed nothing and "gained no more than an honest runner" passed with **zero gained**. Same shape three times: the code was fine, the scene could not produce the phenomenon, and each one returned a plausible number rather than an error. The fixes are all assertions about the *scene* now (the tower must out-reach the view; the cheat must land jumps before the cap is checked), because a fixture that silently stops exercising the thing is worse than one that breaks.

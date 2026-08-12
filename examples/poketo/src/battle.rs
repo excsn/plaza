@@ -19,18 +19,94 @@
 use serde::{Deserialize, Serialize};
 
 /// What a side can do with a turn.
+///
+/// An index into the acting creature's own move table rather than a move name,
+/// so a choice can never name a move its creature does not have, and the wire
+/// carries two bits instead of a move list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Choice {
-  /// Trade damage, decided by speed.
-  Strike,
-  /// Take less this turn, and recover a little.
+  First,
+  Second,
+  Third,
+  /// Take less this turn, and recover a little. Every creature has it.
   Guard,
 }
 
-/// One creature, with the three numbers a battle needs.
+impl Choice {
+  pub const ALL: [Choice; 4] = [Choice::First, Choice::Second, Choice::Third, Choice::Guard];
+
+  pub fn slot(self) -> usize {
+    match self {
+      Choice::First => 0,
+      Choice::Second => 1,
+      Choice::Third => 2,
+      Choice::Guard => 3,
+    }
+  }
+}
+
+/// Which of the three ways a move can land against another.
+///
+/// Three, in a cycle, because a battle needs a reason to choose and not a
+/// spreadsheet: thorn beats spore beats quill beats thorn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Element {
+  Thorn,
+  Spore,
+  Quill,
+}
+
+impl Element {
+  /// Damage multiplier as sixteenths, so effectiveness is integer arithmetic
+  /// and two machines cannot round it differently.
+  pub fn against(self, other: Element) -> u32 {
+    let beats = matches!(
+      (self, other),
+      (Element::Thorn, Element::Spore) | (Element::Spore, Element::Quill) | (Element::Quill, Element::Thorn)
+    );
+    let loses = matches!(
+      (self, other),
+      (Element::Spore, Element::Thorn) | (Element::Quill, Element::Spore) | (Element::Thorn, Element::Quill)
+    );
+    match (beats, loses) {
+      (true, _) => 24,
+      (_, true) => 10,
+      _ => 16,
+    }
+  }
+}
+
+/// What a move does beyond its damage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Effect {
+  None,
+  /// Halves the target's speed for the rest of the battle, which changes who
+  /// acts first from the next turn on.
+  Slow,
+  /// Heals the actor rather than striking.
+  Recover,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Move {
+  pub name: &'static str,
+  pub element: Element,
+  pub power: u8,
+  /// Percent, checked against a hash of the turn rather than a roll.
+  pub accuracy: u8,
+  pub effect: Effect,
+}
+
+/// Damage a level adds, as sixteenths of the base. Level one is base.
+const LEVEL_SIXTEENTHS: u32 = 3;
+
+/// One creature: what it is, how far it has come, and the three numbers a
+/// battle needs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Creature {
   pub kind: u8,
+  pub level: u8,
+  pub xp: u16,
   pub health: u8,
   pub power: u8,
   pub speed: u8,
@@ -40,25 +116,28 @@ impl Creature {
   /// The invented roster. Deliberately three, because a battle needs a reason
   /// to choose and not a collection to complete.
   pub fn of_kind(kind: u8) -> Self {
-    match kind % 3 {
-      0 => Self {
-        kind: 0,
-        health: 24,
-        power: 6,
-        speed: 5,
-      },
-      1 => Self {
-        kind: 1,
-        health: 18,
-        power: 8,
-        speed: 7,
-      },
-      _ => Self {
-        kind: 2,
-        health: 30,
-        power: 5,
-        speed: 3,
-      },
+    Self::of_kind_at(kind, 1)
+  }
+
+  /// The same roster grown to a level, by scaling the base numbers.
+  pub fn of_kind_at(kind: u8, level: u8) -> Self {
+    let (health, power, speed) = match kind % 3 {
+      0 => (24u32, 6u32, 5u32),
+      1 => (18, 8, 7),
+      _ => (30, 5, 3),
+    };
+    let level = level.max(1);
+    let grown = |base: u32| -> u8 {
+      let steps = (level - 1) as u32;
+      (base + base * steps * LEVEL_SIXTEENTHS / 16).min(u8::MAX as u32) as u8
+    };
+    Self {
+      kind: kind % 3,
+      level,
+      xp: 0,
+      health: grown(health),
+      power: grown(power),
+      speed: grown(speed),
     }
   }
 
@@ -68,6 +147,127 @@ impl Creature {
       1 => "Quillick",
       _ => "Mossgab",
     }
+  }
+
+  /// Full health for this creature as it stands, which is what `Guard` heals
+  /// toward and what a health bar is drawn against.
+  pub fn full_health(&self) -> u8 {
+    Self::of_kind_at(self.kind, self.level).health
+  }
+
+  /// The four a creature can choose between. Slot three is always `Guard`.
+  pub fn moves(kind: u8) -> [Move; 4] {
+    let guard = Move {
+      name: "Guard",
+      element: Element::Thorn,
+      power: 0,
+      accuracy: 100,
+      effect: Effect::Recover,
+    };
+    match kind % 3 {
+      0 => [
+        Move {
+          name: "Thornlash",
+          element: Element::Thorn,
+          power: 6,
+          accuracy: 95,
+          effect: Effect::None,
+        },
+        Move {
+          name: "Bramblewrack",
+          element: Element::Thorn,
+          power: 11,
+          accuracy: 60,
+          effect: Effect::None,
+        },
+        Move {
+          name: "Rootbind",
+          element: Element::Spore,
+          power: 3,
+          accuracy: 90,
+          effect: Effect::Slow,
+        },
+        guard,
+      ],
+      1 => [
+        Move {
+          name: "Quillshot",
+          element: Element::Quill,
+          power: 8,
+          accuracy: 95,
+          effect: Effect::None,
+        },
+        Move {
+          name: "Bristlestorm",
+          element: Element::Quill,
+          power: 14,
+          accuracy: 55,
+          effect: Effect::None,
+        },
+        Move {
+          name: "Dartstep",
+          element: Element::Quill,
+          power: 4,
+          accuracy: 100,
+          effect: Effect::Slow,
+        },
+        guard,
+      ],
+      _ => [
+        Move {
+          name: "Mosscuff",
+          element: Element::Spore,
+          power: 5,
+          accuracy: 95,
+          effect: Effect::None,
+        },
+        Move {
+          name: "Sporecloud",
+          element: Element::Spore,
+          power: 10,
+          accuracy: 65,
+          effect: Effect::None,
+        },
+        Move {
+          name: "Regrow",
+          element: Element::Spore,
+          power: 0,
+          accuracy: 100,
+          effect: Effect::Recover,
+        },
+        guard,
+      ],
+    }
+  }
+
+  /// What beating `beaten` is worth.
+  pub fn xp_for_win(beaten: &Creature) -> u16 {
+    (beaten.level as u16 + 1) * 6
+  }
+
+  /// XP to reach the next level from this one.
+  pub fn xp_to_level(level: u8) -> u16 {
+    (level as u16) * 20
+  }
+
+  /// Takes XP, growing a level at a time. `true` if it grew.
+  ///
+  /// Health is not restored by a level: a creature that levels mid-battle keeps
+  /// the damage it has taken, or winning would heal you.
+  pub fn absorb(&mut self, xp: u16) -> bool {
+    self.xp = self.xp.saturating_add(xp);
+    let mut grew = false;
+    while self.level < u8::MAX && self.xp >= Self::xp_to_level(self.level) {
+      self.xp -= Self::xp_to_level(self.level);
+      let taken = self.full_health().saturating_sub(self.health);
+      self.level += 1;
+      let grown = Self::of_kind_at(self.kind, self.level);
+      self.health = grown.health.saturating_sub(taken);
+      self.power = grown.power;
+      self.speed = grown.speed;
+      grew = true;
+    }
+    grew
   }
 }
 
@@ -108,26 +308,68 @@ pub struct Battle {
   pub sides: [Side; 2],
   /// Whose seat won, once somebody has.
   pub winner: Option<u16>,
+  /// Distinguishes two battles that would otherwise resolve identically, so
+  /// the accuracy hash is not the same sequence in every battle in the town.
+  pub seed: u32,
+  /// What the last resolved turn did, for the client to read out. Presentation
+  /// only: nothing in the rules consults it.
+  pub log: Vec<Landed>,
+}
+
+/// One action of a resolved turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Landed {
+  pub seat: u16,
+  pub choice: Choice,
+  pub missed: bool,
+  pub damage: u8,
+  /// Sixteenths, so `24` reads as effective and `10` as resisted.
+  pub effectiveness: u8,
 }
 
 impl Battle {
   pub fn between(a: u16, b: u16, kinds: (u8, u8)) -> Self {
+    Self::between_at(a, b, kinds, (1, 1), 0)
+  }
+
+  pub fn between_at(a: u16, b: u16, kinds: (u8, u8), levels: (u8, u8), seed: u32) -> Self {
     Self {
       turn: 1,
       sides: [
         Side {
           seat: a,
-          creature: Creature::of_kind(kinds.0),
+          creature: Creature::of_kind_at(kinds.0, levels.0),
           chosen: None,
         },
         Side {
           seat: b,
-          creature: Creature::of_kind(kinds.1),
+          creature: Creature::of_kind_at(kinds.1, levels.1),
           chosen: None,
         },
       ],
       winner: None,
+      seed,
+      log: Vec::new(),
     }
+  }
+
+  /// Whether a move lands, as a function of the transcript rather than a roll.
+  ///
+  /// Every input is already in the battle both ends hold, so a replay produces
+  /// the same misses and there is no stream position to drift after a resend.
+  fn lands(&self, side: usize, mv: &Move) -> bool {
+    if mv.accuracy >= 100 {
+      return true;
+    }
+    let mut seed = (self.seed as u64) << 32 | self.turn as u64;
+    seed ^= (side as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    seed ^= (mv.power as u64) << 8;
+    seed ^= seed >> 33;
+    seed = seed.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    seed ^= seed >> 29;
+    seed = seed.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+    seed ^= seed >> 32;
+    (seed % 100) < mv.accuracy as u64
   }
 
   fn index_of(&self, seat: u16) -> Option<usize> {

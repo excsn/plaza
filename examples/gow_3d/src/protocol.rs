@@ -31,14 +31,38 @@ pub fn frame_to_ms(frame: u64) -> u64 {
   frame * 1000 / TICK_HZ
 }
 
-/// Who decides where a character is, as the wire carries it.
+/// Who decides where a character is.
 ///
 /// On the frame rather than assumed, because a client that guesses wrong
 /// either fights the server for its own position or stops moving entirely.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// One type rather than a wire copy and a server copy. The two started out
+/// separate with a `match` converting between them, which is two derivations
+/// of one fact and the shape every drift bug in this tree has had.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Authority {
+  /// The server integrates held input and says where everyone is, including
+  /// you. The baseline, and what every other example in this tree does.
   Server,
+  /// The client says where it is and the server sanity-checks.
+  #[default]
   Client,
+}
+
+impl Authority {
+  pub fn label(self) -> &'static str {
+    match self {
+      Authority::Server => "server",
+      Authority::Client => "client",
+    }
+  }
+
+  pub fn other(self) -> Self {
+    match self {
+      Authority::Server => Authority::Client,
+      Authority::Client => Authority::Server,
+    }
+  }
 }
 
 /// Why a character is in your frame.
@@ -96,6 +120,7 @@ pub struct Frame {
   pub landed: Vec<u16>,
 }
 
+/// plaza-wire: root
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum GowOp {
   /// Server to client, every send tick.

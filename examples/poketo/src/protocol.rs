@@ -51,6 +51,7 @@ pub struct BattleState {
   pub awaiting: bool,
 }
 
+/// plaza-wire: root
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum PoketoOp {
   /// Server to client, every send tick, while walking around.

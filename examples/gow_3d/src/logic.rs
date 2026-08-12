@@ -18,9 +18,9 @@ use plaza::state_logic::{LogicInput, LogicOutput, StateLogic};
 use plaza_server_utils::{Admission, Departure};
 
 use crate::casting::Ms;
-use crate::controls::{Authority, Dial};
+use crate::controls::Dial;
 use crate::movement::Verdict;
-use crate::protocol::{self, frame_to_ms, Because, Frame, GowOp, PlayerId, Seen, TICK_HZ};
+use crate::protocol::{frame_to_ms, Because, Frame, GowOp, PlayerId, Seen, TICK_HZ};
 use crate::relevance::Seat;
 use crate::state::{spawn_at, GowState};
 
@@ -199,10 +199,7 @@ fn frame_for(state: &mut GowState, seat: Seat, now: Ms) -> Frame {
     Frame {
       tick,
       yours: Some(seat),
-      authority: match authority {
-        Authority::Server => protocol::Authority::Server,
-        Authority::Client => protocol::Authority::Client,
-      },
+      authority,
       characters,
       // Only the ones this client can see. A landing across the zone is not
       // news, and sending it would be describing something the client has no

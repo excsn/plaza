@@ -69,6 +69,75 @@ pub struct Tile {
   pub y: u32,
 }
 
+/// What is underfoot.
+///
+/// Decoration and encounter rule only: nothing here blocks a step, so no
+/// terrain can strand a trainer on a tile it cannot leave.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Terrain {
+  Path,
+  #[default]
+  Grass,
+  /// The only ground an encounter starts on.
+  TallGrass,
+  Water,
+  Tree,
+}
+
+/// Tiles across one region, which decides which mix of terrain it holds.
+const REGION: u32 = 16;
+/// Tiles across one patch, which decides the tile within that mix.
+const PATCH: u32 = 4;
+
+/// One value per cell, from splitmix over the cell's coordinates.
+///
+/// The same mixing [`crate::state::PoketoState::encounter_at`] uses, so the
+/// crate has one hashing idiom rather than two.
+fn cell(x: u32, y: u32, salt: u64) -> u32 {
+  let mut seed = ((x as u64) << 32 | y as u64) ^ salt;
+  seed ^= seed >> 33;
+  seed = seed.wrapping_mul(0xff51_afd7_ed55_8ccd);
+  seed ^= seed >> 29;
+  seed = seed.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+  seed ^= seed >> 32;
+  (seed >> 32) as u32
+}
+
+/// What a tile is made of, computed rather than stored or sent.
+///
+/// **Nothing about the map crosses the wire.** Both ends run this, so terrain
+/// costs no bytes, no storage and no join protocol, and a client cannot hold a
+/// map that disagrees with the server's.
+pub fn terrain_at(at: Tile) -> Terrain {
+  // A patch consulted one tile off its own square, so patch edges are ragged
+  // rather than a visible grid of squares laid over the map.
+  let wobble = cell(at.x, at.y, 0x1D8E_4E27_C47D_124F);
+  let patch = cell(
+    (at.x + (wobble & 1)) / PATCH,
+    (at.y + ((wobble >> 1) & 1)) / PATCH,
+    0x2545_f491_4f6c_dd1d,
+  ) % 100;
+
+  match cell(at.x / REGION, at.y / REGION, 0x9E37_79B9_7F4A_7C15) % 100 {
+    0..=14 => match patch {
+      0..=49 => Terrain::Water,
+      50..=79 => Terrain::Grass,
+      _ => Terrain::TallGrass,
+    },
+    15..=39 => match patch {
+      0..=44 => Terrain::Tree,
+      45..=74 => Terrain::Grass,
+      _ => Terrain::TallGrass,
+    },
+    _ => match patch {
+      0..=14 => Terrain::Path,
+      15..=64 => Terrain::Grass,
+      65..=89 => Terrain::TallGrass,
+      _ => Terrain::Tree,
+    },
+  }
+}
+
 impl Tile {
   pub fn new(x: u32, y: u32) -> Self {
     Self { x, y }
@@ -199,6 +268,58 @@ mod tests {
       phase: PHASE_STEPS / 2,
     };
     assert_eq!(trainer.drawn(), (0.0, 0.0));
+  }
+
+  #[test]
+  fn terrain_is_the_same_tile_for_the_same_tile_forever() {
+    // The whole reason nothing about the map is sent: both ends run this, so a
+    // disagreement about what is underfoot is not representable.
+    for (x, y) in [(0, 0), (17, 4), (500, 500), (MAP - 1, MAP - 1)] {
+      let at = Tile::new(x, y);
+      assert_eq!(terrain_at(at), terrain_at(at));
+    }
+  }
+
+  #[test]
+  fn a_map_has_patches_of_everything_and_is_mostly_walkable_ground() {
+    // White noise would read as static rather than as a place, and grass has to
+    // dominate or the town is a lake.
+    let mut counts = [0usize; 5];
+    for y in 0..256 {
+      for x in 0..256 {
+        let n = match terrain_at(Tile::new(x, y)) {
+          Terrain::Path => 0,
+          Terrain::Grass => 1,
+          Terrain::TallGrass => 2,
+          Terrain::Water => 3,
+          Terrain::Tree => 4,
+        };
+        counts[n] += 1;
+      }
+    }
+    let total: usize = counts.iter().sum();
+    assert!(counts.iter().all(|c| *c > 0), "every kind should appear: {counts:?}");
+    assert!(counts[1] * 3 > total, "grass should be the ground you mostly walk on: {counts:?}");
+    let tall = counts[2] as f32 / total as f32;
+    assert!((0.08..0.35).contains(&tall), "tall grass should be a patch to step into, not the map: {tall}");
+  }
+
+  #[test]
+  fn terrain_clusters_rather_than_alternating_every_tile() {
+    // A tile whose neighbour is never the same kind is noise, and no patch of
+    // grass would be large enough to see, let alone to walk into deliberately.
+    let mut same = 0;
+    let mut pairs = 0;
+    for y in 400..500 {
+      for x in 400..500 {
+        if terrain_at(Tile::new(x, y)) == terrain_at(Tile::new(x + 1, y)) {
+          same += 1;
+        }
+        pairs += 1;
+      }
+    }
+    let run = same as f32 / pairs as f32;
+    assert!(run > 0.5, "neighbouring tiles should usually agree: {run}");
   }
 
   #[test]
