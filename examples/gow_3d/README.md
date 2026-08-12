@@ -108,7 +108,15 @@ The second channel prices out at **6 bytes per party member the distance query m
 
 A cast bar costs about 2 bytes on the characters that have one: sixteen characters casting at once took the frame from 422 bytes to 454. The headline feature of the example is a field, not a frame.
 
-Server-side the multiplication is the thing to watch: 23.3 KiB/s per client at 64 characters is roughly 1.5 MiB/s outbound with all 64 connected, and that is the number a zone budget is actually made of.
+Server-side, the total is what a zone budget is made of, and it is worth **measuring rather than multiplying**:
+
+```
+    measured        1068 KiB/s
+    estimated       1494 KiB/s   (one client's frame times 64)
+    per client  422 bytes at the thinnest, 797 at the busiest
+```
+
+One client's frame times the client count overstates it by 40%, because every client has a different audience: the characters out at the rim of the spiral see fewer people than the ones in the middle, and a per-client design is exactly the design where "times N" is the wrong arithmetic. This README carried the multiplied figure for one commit before the measurement replaced it, which is the same mistake this tree keeps relearning in smaller print.
 
 ## Tab targeting removes the thing two machines would disagree about
 

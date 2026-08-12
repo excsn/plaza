@@ -107,6 +107,43 @@ fn what_a_zone_costs_per_client() {
 }
 
 #[test]
+fn the_server_side_total_is_measured_rather_than_multiplied() {
+  // One client's frame times the client count is an estimate, and it sits
+  // badly next to measured numbers: every client has a different audience, and
+  // the ones out at the rim of the spiral see fewer people than the ones in
+  // the middle. Summing the frames the server would actually build is the only
+  // honest version of this figure.
+  let mut state = zone_of(MAX_CHARACTERS);
+  let middle = encoded(&mut state, 0);
+
+  let mut total = 0usize;
+  let (mut smallest, mut largest) = (usize::MAX, 0usize);
+  for seat in 0..MAX_CHARACTERS as u16 {
+    let bytes = encoded(&mut state, seat);
+    total += bytes;
+    smallest = smallest.min(bytes);
+    largest = largest.max(bytes);
+  }
+
+  let measured = per_second(total) / 1024.0;
+  let estimated = per_second(middle * MAX_CHARACTERS) / 1024.0;
+  println!("\n  every frame the server builds in one tick, at {MAX_CHARACTERS} connected:\n");
+  println!("    measured    {measured:>8.0} KiB/s");
+  println!("    estimated   {estimated:>8.0} KiB/s   (one client's frame times {MAX_CHARACTERS})");
+  println!("    per client  {smallest} bytes at the thinnest, {largest} at the busiest\n");
+  println!("  the rim of the spiral sees fewer people than the middle, so the");
+  println!("  multiplication overstates it. Worth measuring rather than");
+  println!("  reasoning about, which is the whole rule this tree keeps relearning.\n");
+
+  // The spread is the reason the estimate is wrong, so it has to be real.
+  assert!(
+    largest > smallest,
+    "clients must actually differ or the multiplication would have been fine: {smallest} to {largest}"
+  );
+  assert!(measured > 0.0);
+}
+
+#[test]
 fn a_party_across_the_zone_costs_one_entry_each() {
   // Priced separately because it is the one cost this example adds that no
   // other example in the tree pays, and "a second channel" sounds expensive
