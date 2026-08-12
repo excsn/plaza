@@ -16,6 +16,16 @@ The mechanism is the same seam `card_table` uses, asked a different question: th
 
 The query behind it is a query. 240 relics sit in a uniform grid keyed by cell; a pass gathers the cells your scouts' vision touches and then measures. A linear scan over 240 would work fine and teach nothing, which is exactly why the panel shows what the grid *offered* next to what survived: a typical view is **17 relics sent from 103 offered, out of 240 in the world**.
 
+## Where the second channel must not go
+
+`gow_3d`, `horde_playground` and `spacemo` all gained a subscription channel beside their spatial one: a party, a squad, a target lock. Each is a set you chose, told to you wherever its members are, which no radius will ever return.
+
+This example deliberately has none, and the reason is the example itself. **A subscription is permission to be told about something you cannot see.** Here, not being able to see is the entire mechanic, so that permission is exactly what must not exist: any set a player could subscribe to is somebody else's scouts or somebody else's relic, and reaching either through the fog is the cheat the whole thing is built to prevent.
+
+The one set that is legitimately yours at any distance is your own scouts, and it is already unconditional: `my_units` bypasses vision, `enemy_units` goes through `can_see`. That is the second channel, keyed on ownership, and it needs no subscription block to express because it can never grow past what you already own.
+
+So the rule the four examples make together is not "use both channels". It is that a second channel is a **grant**, and a game whose subject is what a player may hold has to be able to say no to one.
+
 ## The panel counts ops, not frames
 
 This is the amendment `pellet_maze` forced on this example before it was written. It shipped a per-recipient frame that filtered correctly and leaked anyway, because the events beside it named cells nobody had scouted. A readout proving "hidden positions never crossed the wire" is therefore the *minimum* here, not the demonstration, and it has to account for every op rather than every frame.
