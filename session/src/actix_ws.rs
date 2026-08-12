@@ -299,6 +299,7 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
   let mut up = Conditioner::new(conn_id, queues.conditioner);
   let mut down = Conditioner::new(conn_id ^ DOWN_SEED_FLIP, queues.conditioner);
   let mut probe = ProbeState::new(manager.probes());
+  let mut link_generation = link.generation();
   let mut next_probe = probe.first_due(tokio::time::Instant::now());
   let mut deadline: Option<tokio::time::Instant> = None;
   let mut deadline_farewell: Option<OutboundFrame> = None;
@@ -322,6 +323,17 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
 
   let close_reason = loop {
     let next_release = earliest(up.next_release(), down.next_release());
+
+    // A probe launched under one profile whose pong arrives under another
+    // measured neither: its outbound leg rode the old link and its return the
+    // new one. Dropping the outstanding timestamps sends those pongs down the
+    // existing answers-no-open-probe branch, so a straddling sample is
+    // discarded instead of latching the minimum.
+    let generation = link.generation();
+    if generation != link_generation {
+      link_generation = generation;
+      probe.forget_in_flight();
+    }
 
     tokio::select! {
       // Server -> client.

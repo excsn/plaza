@@ -633,6 +633,9 @@ struct ClientHandle<ID: AgentId> {
 pub struct LinkHandle {
   impaired: AtomicBool,
   profile: RwLock<LinkProfile>,
+  /// Bumped on every [`set`](Self::set), so a connection task can tell that
+  /// the profile moved without holding what it last saw.
+  generation: AtomicU64,
 }
 
 impl LinkHandle {
@@ -640,7 +643,15 @@ impl LinkHandle {
     Self {
       impaired: AtomicBool::new(false),
       profile: RwLock::new(LinkProfile::default()),
+      generation: AtomicU64::new(0),
     }
+  }
+
+  /// Which setting of the profile is current. A probe launched under one
+  /// generation whose answer arrives under another measured a link that
+  /// existed for neither leg's whole journey, and its sample is about nothing.
+  pub fn generation(&self) -> u64 {
+    self.generation.load(Ordering::Acquire)
   }
 
   /// Whether anything at all is being done to this link. One relaxed load,
@@ -656,10 +667,24 @@ impl LinkHandle {
   fn set(&self, profile: LinkProfile) {
     *self.profile.write() = profile;
     self.impaired.store(!profile.is_passthrough(), Ordering::Release);
+    self.generation.fetch_add(1, Ordering::Release);
   }
 }
 
 impl<ID: AgentId> ClientHandle<ID> {
+  /// Forgets the link readings, because the link they described is gone.
+  ///
+  /// The minimum cannot recover on its own: it only ever falls, so one sample
+  /// taken over the old profile is the smallest this connection ever reports,
+  /// for the rest of its life. Only the two link-path values are cleared. The
+  /// transport's own round trip measures the socket beneath the conditioner,
+  /// which did not change, and the sample counts are lifetime totals whose
+  /// zero doubles as "never measured" elsewhere.
+  fn forget_link_measurements(&self) {
+    self.link_rtt_us.store(0, Ordering::Relaxed);
+    self.min_link_rtt_us.store(0, Ordering::Relaxed);
+  }
+
   fn new(agent: Agent<ID>, to_client_tx: SessionSender<OutboundFrame>, now_us: u64) -> Self {
     let (orders_tx, orders_rx) = session_channel::<ConnectionOrder>(ORDER_QUEUE_DEPTH);
     Self {
@@ -1480,6 +1505,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
     let connections = self.connections.read();
     for (_, handle) in connections.for_agent(id) {
       handle.link.set(profile);
+      handle.forget_link_measurements();
     }
   }
 
@@ -1491,6 +1517,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
     let connections = self.connections.read();
     for handle in connections.handles() {
       handle.link.set(profile);
+      handle.forget_link_measurements();
     }
   }
 

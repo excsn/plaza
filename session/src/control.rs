@@ -67,6 +67,18 @@ pub struct ProbeState {
   schedule: Probes,
 }
 
+impl ProbeState {
+  /// Forgets every probe still in flight, without touching the sequence.
+  ///
+  /// For the link's profile changing under them: a probe launched under one
+  /// profile whose pong arrives under another measured a path that existed for
+  /// neither leg's whole journey. Its pong then answers no open probe and is
+  /// discarded, which is the branch that already exists for the abandoned.
+  pub fn forget_in_flight(&mut self) {
+    self.outstanding.clear();
+  }
+}
+
 impl Default for ProbeState {
   fn default() -> Self {
     Self::new(&Probes::default())
@@ -238,6 +250,38 @@ mod tests {
     let (kind, body) = frame::split(frame_bytes).unwrap();
     assert_eq!(frame::Kind::from_byte(kind), Some(frame::Kind::Pong));
     JsonCodec.decode(body).unwrap()
+  }
+
+  #[tokio::test]
+  async fn a_pong_that_straddles_a_profile_change_is_discarded_not_recorded() {
+    // The sample that poisoned the minimum: a probe launched under one profile
+    // whose answer arrives under another rode the old link out and the new one
+    // back, so it measured neither. Forgetting the in-flight probes on the
+    // change sends its pong down the answers-no-open-probe branch.
+    let manager = manager();
+    let agent = Agent::new_human(7u32);
+    let (tx, _rx) = plaza::session::session_channel(4);
+    let conn_id = manager.register(agent, tx).await;
+
+    let mut probe = ProbeState::default();
+    let sent = make_probe(&JsonCodec, &mut probe, Instant::now());
+    let (_, body) = frame::split(&sent).unwrap();
+    let origin = JsonCodec.decode::<frame::Ping>(body).unwrap().origin;
+
+    probe.forget_in_flight();
+    let out = handle_inbound(pong_frame(origin), &JsonCodec, None, &mut probe, conn_id, &manager);
+    assert!(matches!(out, Inbound::Consumed));
+    assert!(
+      manager.agent_link_rtt(&7).is_none(),
+      "a straddling sample records nothing"
+    );
+
+    // And the next full-journey probe measures normally.
+    let sent = make_probe(&JsonCodec, &mut probe, Instant::now());
+    let (_, body) = frame::split(&sent).unwrap();
+    let origin = JsonCodec.decode::<frame::Ping>(body).unwrap().origin;
+    handle_inbound(pong_frame(origin), &JsonCodec, None, &mut probe, conn_id, &manager);
+    assert!(manager.agent_link_rtt(&7).is_some(), "and measuring resumes at once");
   }
 
   #[tokio::test]
