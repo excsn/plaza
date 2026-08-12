@@ -410,6 +410,8 @@ pub struct Client {
   /// both the corner-camera regression and the detached-marker bug, so it is
   /// counted rather than quiet.
   view_fallbacks: std::sync::atomic::AtomicU64,
+  /// The players this client subscribed to, from the last player frame.
+  squad: Vec<PlayerId>,
   /// Purchases asked for and not yet answered.
   ///
   /// Tracked so a request is made once rather than every frame until it lands.
@@ -467,6 +469,7 @@ impl Client {
       health_queue: Vec::new(),
       health_at_ms: 0,
       view_fallbacks: std::sync::atomic::AtomicU64::new(0),
+      squad: Vec::new(),
       pending_buys: Vec::new(),
       wrong_rule_packets: 0,
       player_health: vec![PLAYER_MAX_HEALTH as u8; player_count],
@@ -654,6 +657,15 @@ impl Client {
   /// claim it cannot support, and the honest answer is to fade it out rather
   /// than to keep drawing it at full strength. Even with a far tier this
   /// happens: a player who disconnects stops arriving in either tier.
+  /// The squad this client was told it belongs to, as of the last frame.
+  ///
+  /// A squadmate never fades off the map, because the reason they are in the
+  /// frame is that this client chose them: their absence would mean they left
+  /// the arena, not that they walked out of view.
+  pub fn squad(&self) -> &[PlayerId] {
+    &self.squad
+  }
+
   pub fn player_age_secs(&self, p: usize) -> Option<f32> {
     if !self.knows_player(p) {
       return None;
@@ -854,6 +866,8 @@ impl Client {
   /// this arrives separately from, and far more often than, the entity stream.
   pub fn on_player_frame(&mut self, frame: &PlayerFrame, recv_ms: u64) {
     self.now_ms = recv_ms;
+    self.squad.clear();
+    self.squad.extend_from_slice(&frame.squad);
     for (p, pos) in &frame.players {
       self.observe_player(*p as usize, *pos, frame.server_time_ms);
     }
@@ -1596,6 +1610,7 @@ mod tests {
       server_time_ms: t,
       players: vec![(0, Vec2::new(x, 0.0)), (1, Vec2::new(0.0, 0.0))],
       vitals: vec![],
+      squad: Vec::new(),
       distant: vec![],
     };
     client.on_player_frame(&at(1_000, 0.0), 1_000);
@@ -1645,6 +1660,7 @@ mod tests {
       server_time_ms: 1_000,
       players: vec![(0, Vec2::new(50.0, 50.0)), (1, Vec2::new(60.0, 60.0))],
       vitals: vec![(0, 1, false), (1, 5, false)],
+      squad: Vec::new(),
       distant: vec![],
     };
     client.on_player_frame(&hit, 1_000);
@@ -1669,6 +1685,7 @@ mod tests {
       server_time_ms: 6_900,
       players: vec![(0, Vec2::new(0.0, 0.0)), (1, Vec2::new(0.0, 0.0))],
       vitals: vec![],
+      squad: Vec::new(),
       distant: vec![],
     };
     client.on_player_frame(&frame, 7_550);
@@ -1690,6 +1707,7 @@ mod tests {
       server_time_ms: 1_000,
       players: vec![(0, Vec2::new(50.0, 50.0))],
       vitals: vec![],
+      squad: Vec::new(),
       distant: vec![],
     };
     client.on_player_frame(&frame, 1_000);
@@ -1761,6 +1779,7 @@ mod tests {
       // Only players 0 and 2 are relevant to this client.
       players: vec![(0, Vec2::new(100.0, 100.0)), (2, Vec2::new(140.0, 100.0))],
       vitals: vec![(0, 50, false), (2, 90, true)],
+      squad: Vec::new(),
       distant: vec![],
     };
     client.on_player_frame(&frame, 1_000);
@@ -1945,6 +1964,7 @@ mod tests {
         server_time_ms: t,
         players: vec![(0, Vec2::new(t as f32 * 0.19, 0.0))],
         vitals: vec![],
+        squad: Vec::new(),
         distant: vec![],
       };
       client.on_player_frame(&frame, t);
@@ -1975,6 +1995,7 @@ mod tests {
         server_time_ms: t,
         players: vec![(0, Vec2::new(t as f32, 0.0))],
         vitals: vec![],
+        squad: Vec::new(),
         distant: vec![],
       };
       client.on_player_frame(&frame, t);

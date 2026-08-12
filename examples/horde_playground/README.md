@@ -96,6 +96,28 @@ Two details that are easy to leave out. The boundary has **hysteresis**, a small
 
 **Staleness is still drawn honestly**, because a peer can go quiet for reasons distance does not cover: disconnected, or never seated. The client records when it last heard about each player, and the minimap fades a marker out and then drops it rather than holding a confident dot for somebody who has gone.
 
+### A third answer: who you chose, wherever they are
+
+The far tier answers "where is everybody" cheaply. It does not answer "where is my squad", and the difference is not precision, it is that **a far tier is a broadcast wearing relevance's clothes**: it sends every player to every player, just at two bytes and a slow clock. The cost is therefore the arena's, and it grows with the square of the population exactly as the thing this example set out to avoid.
+
+`plaza_server_utils::subscription` is the other shape. A squad is four entries with the lifetime of a session, where a grid query is a fresh answer every round over a set that never stops changing, and neither expresses the other: a squad as a radius means an infinite radius, and a grid query as a subscription means resubscribing everybody every round. `Audience::of` unions the two and reports `added`, which is the number the second channel actually costs: the squadmates distance missed, and nothing at all for the ones standing beside you.
+
+`cargo test -p horde_playground --lib what_the_second -- --nocapture`
+
+```
+   players     far tier B   squad only B        ratio
+         8             36             39         0.9x
+        32            108             39         2.8x
+        64            204             39         5.2x
+       128            396             39        10.2x
+```
+
+**The subscription is flat and the broadcast is not**, which is the whole finding. Below about eight players the far tier is simply cheaper and the second channel does not pay, which is worth stating rather than hiding: a channel that is right at scale can be wrong at the size you are testing at.
+
+It also removes the reason the map had to fade. A far-tier marker is a stale guess about a stranger, so fading it is honest. A squadmate is in your frame because you asked for them, so their position is as fresh as somebody standing next to you, and the map draws them solid and never drops them. The two checkboxes are separate on purpose: turn the far tier off with squads on and the map keeps your squad and forgets the strangers, which is the trade stated as an interface.
+
+The wire says **why** each player is present, the same distinction `gow_3d` puts on its frame and for the same reason. Absence means "walked out of view" for one and "left the arena" for the other, and a client that cannot tell them apart fades a squadmate the moment they round a corner.
+
 ## One timeline, declared by the server
 
 The render delay is **a property of the world, not of anybody's link**. Every client shows `server_now - render_delay_ms`, the same instant on every screen.

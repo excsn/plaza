@@ -125,6 +125,10 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls) {
       .on_hover_text("Off, a dropped packet is lost forever. On, clients acknowledge what they hold and the next diff re-derives the difference.");
     ui.checkbox(&mut controls.relevance, "per-player relevance")
       .on_hover_text("Off: every player is sent every entity, the broadcast this example exists to avoid.");
+    ui.checkbox(&mut controls.squads, "squad subscriptions (second channel)")
+      .on_hover_text("Who you have chosen to care about, wherever they are. A squad of four, told to you at full precision and rate whatever the distance, which no radius will ever return. Off, a squadmate two rooms away is a far-tier smudge on a slow clock like any stranger.");
+    ui.checkbox(&mut controls.far_tier, "far tier (everyone else, quantised)")
+      .on_hover_text("Every player not otherwise relevant, two bytes each, on a slow clock. It is a broadcast wearing relevance's clothes: the cost is every player on every frame it is due, where a subscription costs the handful you chose. Turn it off with squads on and the map keeps your squad and forgets the strangers.");
     ui.checkbox(&mut controls.generational_ids, "generational entity handles")
       .on_hover_text("A handle names a slot and its occupant. Off, a reference to a dead entity lands on whoever recycled its slot.");
     ui.checkbox(&mut controls.debug_digest, "debug digest mismatches (verbose)")

@@ -15,6 +15,7 @@ use plaza_server_utils::delta::{DeltaBaseline, RecoveryPolicy};
 use plaza_server_utils::history::HistoricalStateBuffer;
 use plaza_server_utils::input_schedule::{InputSchedule, InputWindow};
 use plaza_server_utils::relevance::{GridQuantizer, SetDigest, SpatialGrid, TierBoundary, VisibilitySet};
+use plaza_server_utils::subscription::{Audience, Subscriptions};
 
 use crate::sim::types::{PlayerFrame, 
   coin_pull, difficulty, step_player, enemy_speed_scale, repulsor_pulse, quantize_far, step_coin, step_enemy, Coin, CoinId, Controls, Crowd, Enemy, EnemyKind, EntityIndex, Handle, LeaveReason, Packet, PlayerId, Projectile, Sample, Shot, ShotId, Spawn, Upgrade, Vec2, Wallet, COIN_PICKUP_RADIUS, COIN_DROP_IN, COIN_TTL_MS, ARENA_H, ARENA_W, CELL_SIZE, CONTACT_HIT_DAMAGE, FIRE_INTERVAL_MS, HIT_INVULN_MS, HIT_RADIUS, NOVA_INTERVAL_MS,
@@ -27,6 +28,28 @@ const RETARGET_INTERVAL_MS: u64 = 1000;
 /// [`TierBoundary`](plaza_server_utils::relevance::TierBoundary) for why the
 /// two radii differ.
 const NEAR_TIER: TierBoundary = TierBoundary::new(VIEW_RADIUS * 1.3, VIEW_RADIUS * 1.5);
+
+/// How many players are in one squad.
+///
+/// Small on purpose, and the reason the second channel is affordable: a
+/// subscription set is a handful of long-lived entries where a grid query is a
+/// constantly changing many.
+pub const SQUAD_SIZE: usize = 4;
+
+/// Everyone divided into squads, which is what a raid roster is.
+///
+/// Assigned rather than chosen, because this example has no interface for
+/// choosing and the measurement does not need one: what is being priced is the
+/// channel, not the social feature on top of it.
+fn squads_of(player_count: usize) -> Subscriptions<PlayerId> {
+  let mut squads = Subscriptions::new(SQUAD_SIZE);
+  for group in (0..player_count as PlayerId).collect::<Vec<_>>().chunks(SQUAD_SIZE) {
+    for other in group.iter().skip(1) {
+      squads.pair(group[0], *other);
+    }
+  }
+  squads
+}
 /// One far-tier update every this many player frames. At the default 8 Hz
 /// player rate that is one every two seconds, which is a marker gliding on a
 /// map rather than a position anybody aims with.
@@ -71,6 +94,18 @@ pub struct Server {
 
   grid: SpatialGrid<EntityIndex>,
   cur_vis: Vec<VisibilitySet>,
+  /// Who each player has chosen to care about, wherever they are.
+  ///
+  /// The second channel, beside the spatial one. A squad is a handful of
+  /// entries with a lifetime of a whole session, where a grid query is a fresh
+  /// answer every round over a set that never stops changing, and neither
+  /// expresses the other.
+  squads: Subscriptions<PlayerId>,
+  /// How many of each recipient's relevant players are there only because they
+  /// were subscribed to, for the panel.
+  squad_added: Vec<usize>,
+  /// Each recipient's squad, so a frame can say why somebody is in it.
+  squad_of: Vec<Vec<PlayerId>>,
   announced_target: Vec<PlayerId>,
 
 
@@ -237,6 +272,9 @@ impl Server {
       history: HistoricalStateBuffer::new(TRUTH_HISTORY),
       grid: SpatialGrid::new(GridQuantizer::new((0.0, 0.0), CELL_SIZE)),
       cur_vis: (0..player_count).map(|_| VisibilitySet::with_capacity(enemy_count as u32)).collect(),
+      squads: squads_of(player_count),
+      squad_added: vec![0; player_count],
+      squad_of: vec![Vec::new(); player_count],
       announced_target,
       clock_ms: 0,
       input_schedules: (0..player_count).map(|_| InputSchedule::new()).collect(),
@@ -394,7 +432,7 @@ impl Server {
       self.pending_players = Some(
         (0..self.players.len())
           .filter(|&c| !self.seat_stalled(c))
-          .map(|c| (c as PlayerId, self.build_player_frame(c, far_due)))
+          .map(|c| (c as PlayerId, self.build_player_frame(c, far_due, controls)))
           .collect(),
       );
     }
@@ -968,6 +1006,12 @@ impl Server {
     self.relevant_players[c].len()
   }
 
+  /// Puts a player somewhere, for tests that need a known arrangement.
+  #[cfg(test)]
+  pub fn place_player_for_test(&mut self, p: usize, at: Vec2) {
+    self.players[p] = at;
+  }
+
   /// Which player an enemy is chasing, if this handle still names a live one.
   /// For checking that a client was told where its enemies' targets are.
   pub fn enemy_target(&self, handle: Handle) -> Option<PlayerId> {
@@ -986,33 +1030,49 @@ impl Server {
   /// and reused by the player stream on its own clock. At most one entity
   /// interval stale, which costs nothing: a player who has just come into view
   /// is one interval late rather than absent.
-  fn recompute_relevant_players(&mut self, c: usize) {
+  fn recompute_relevant_players(&mut self, c: usize, controls: &Controls) {
     let eye = self.players[c];
-    let mut needed: BTreeSet<PlayerId> = BTreeSet::new();
+    let mut near: Vec<PlayerId> = Vec::new();
     // Yourself, always: your own marker and health are not optional.
-    needed.insert(c as PlayerId);
+    near.push(c as PlayerId);
     for (p, pos) in self.players.iter().enumerate() {
+      if p == c {
+        continue;
+      }
       // The threshold the renderer draws a peer at, so the wire carries exactly
       // what the screen can use. The previous set is the hysteresis memory, so
       // this costs no extra state.
       let was_near = self.relevant_players[c].contains(&(p as PlayerId));
       if NEAR_TIER.admits(was_near, pos.dist(eye)) {
-        needed.insert(p as PlayerId);
+        near.push(p as PlayerId);
       }
     }
     for idx in self.cur_vis[c].iter() {
-      needed.insert(self.enemies[idx as usize].target);
+      near.push(self.enemies[idx as usize].target);
     }
+    near.sort_unstable();
+    near.dedup();
+
+    // The union of the two channels, and the count the second one actually
+    // costs: `added` is the squadmates distance missed, and nothing at all for
+    // the ones standing beside you.
+    let empty = Subscriptions::new(SQUAD_SIZE);
+    let chosen = if controls.squads { &self.squads } else { &empty };
+    let audience = Audience::of(&near, chosen, &(c as PlayerId));
+    self.squad_added[c] = audience.added;
+
     let out = &mut self.relevant_players[c];
     out.clear();
-    out.extend(needed);
+    out.extend(audience.entries.iter().map(|(p, _)| *p));
+    self.squad_of[c].clear();
+    self.squad_of[c].extend(chosen.of(&(c as PlayerId)).copied());
   }
 
   /// One recipient's player frame: the near tier every time, and the far tier
   /// only on the frames it is due.
-  fn build_player_frame(&self, c: usize, far_due: bool) -> PlayerFrame {
+  fn build_player_frame(&self, c: usize, far_due: bool, controls: &Controls) -> PlayerFrame {
     let relevant = &self.relevant_players[c];
-    let distant = if far_due {
+    let distant = if far_due && controls.far_tier {
       (0..self.players.len())
         .map(|p| p as PlayerId)
         .filter(|p| !relevant.contains(p))
@@ -1031,8 +1091,21 @@ impl Server {
         .iter()
         .map(|&p| (p, self.player_health(p as usize), self.clock_ms < self.player_shield_until_ms[p as usize]))
         .collect(),
+      // Which of them are there because this client chose them rather than
+      // because it can see them. The same distinction gow_3d puts on its wire,
+      // and for the same reason: absence means "walked away" for one and "left
+      // the arena" for the other, so a client that cannot tell them apart
+      // fades a squadmate off its map the moment they round a corner.
+      squad: self.squad_of[c].clone(),
       distant,
     }
+  }
+
+  /// How many players this client is told about only because it subscribed to
+  /// them, and how many the far tier is carrying. The two halves of the trade,
+  /// for the panel.
+  pub fn squad_cost(&self, c: usize) -> (usize, usize) {
+    (self.squad_added[c], self.players.len().saturating_sub(self.relevant_players[c].len()))
   }
 
   fn build_packets(&mut self, controls: &Controls) -> Vec<(PlayerId, Packet)> {
@@ -1109,7 +1182,7 @@ impl Server {
       // Which players this client needs, from the visible set just computed.
       // Both streams read it: the entity packet for wallets, and the player
       // stream on its own clock.
-      self.recompute_relevant_players(p);
+      self.recompute_relevant_players(p, controls);
 
       // The pool's own key, not one packed here: the digest, the delta baseline
       // and the client's mirror all key on `SlotKey::encode`, and a second
@@ -1334,6 +1407,104 @@ fn player_drift(p: usize, t: f32, spread: bool) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  /// A server where player zero stands alone and everyone else is across the
+  /// arena, so nothing reaches player zero by distance.
+  ///
+  /// One corner rather than a scatter: an arena this size holds only a handful
+  /// of positions further apart than the near tier, so spreading 128 players
+  /// out puts them back inside each other's radius and measures nothing.
+  fn player_zero_alone(players: usize) -> (Server, Controls) {
+    let controls = Controls {
+      player_count: players,
+      ..Controls::default()
+    };
+    // No enemies: an enemy chasing somebody is a third reason a player is
+    // relevant, and this is measuring the other two.
+    let mut sim = Server::new(0, players, true);
+    sim.place_player_for_test(0, Vec2::new(ARENA_W * 0.04, ARENA_H * 0.04));
+    for p in 1..players {
+      sim.place_player_for_test(p, Vec2::new(ARENA_W * 0.96, ARENA_H * 0.96));
+    }
+    (sim, controls)
+  }
+
+  #[test]
+  fn a_squadmate_is_told_about_across_the_arena_and_a_stranger_is_not() {
+    // The second channel, and the reason a radius cannot express it: these
+    // players are as far apart as the arena allows, and four of them are still
+    // in each other's frames because they chose to be.
+    let (mut sim, mut controls) = player_zero_alone(16);
+
+    controls.squads = true;
+    sim.recompute_relevant_players(0, &controls);
+    let with = sim.relevant_players[0].clone();
+    assert!(
+      with.len() > 1,
+      "nobody but yourself, so the subscription never reached anyone"
+    );
+    for mate in 1..SQUAD_SIZE as PlayerId {
+      assert!(with.contains(&mate), "squadmate {mate} was not in the frame");
+    }
+    assert!(
+      !with.contains(&(SQUAD_SIZE as PlayerId)),
+      "somebody outside the squad arrived by subscription: {with:?}"
+    );
+    assert_eq!(sim.squad_added[0], SQUAD_SIZE - 1, "the added count is what the channel costs");
+
+    controls.squads = false;
+    sim.recompute_relevant_players(0, &controls);
+    let without = sim.relevant_players[0].clone();
+    assert_eq!(without.len(), 1, "only yourself, once the channel is off: {without:?}");
+  }
+
+  #[test]
+  fn what_the_second_channel_costs_against_the_far_tier() {
+    // The trade this example did not have a way to state: a far tier is a
+    // broadcast wearing relevance's clothes, and it costs every player on
+    // every frame it is due. A subscription costs the handful you chose.
+    println!("\n  one client's player frame, standing alone:\n");
+    println!("{:>10} {:>14} {:>14} {:>12}", "players", "far tier B", "squad only B", "ratio");
+    let mut costs = Vec::new();
+
+    for players in [8usize, 32, 64, 128] {
+      let (mut sim, mut controls) = player_zero_alone(players);
+
+      controls.squads = false;
+      controls.far_tier = true;
+      sim.recompute_relevant_players(0, &controls);
+      let far = sim.build_player_frame(0, true, &controls).bytes();
+
+      controls.squads = true;
+      controls.far_tier = false;
+      sim.recompute_relevant_players(0, &controls);
+      let squad = sim.build_player_frame(0, true, &controls).bytes();
+
+      println!("{players:>10} {far:>14} {squad:>14} {:>11.1}x", far as f32 / squad as f32);
+      costs.push((players, far, squad));
+    }
+
+    println!("\n  the far tier grows with the arena and the squad does not. Below the");
+    println!("  crossover the broadcast is simply cheaper, which is worth stating:");
+    println!("  a second channel is not free and does not pay at every size.\n");
+
+    // The claim, at both ends. A small arena is cheaper to broadcast; a large
+    // one is not, and the whole point is that only one of the two grows.
+    let (_, small_far, small_squad) = costs[0];
+    let (_, big_far, big_squad) = costs[costs.len() - 1];
+    assert!(
+      small_squad >= small_far,
+      "the far tier should still win at eight players: {small_squad} against {small_far}"
+    );
+    assert!(
+      big_squad * 3 < big_far,
+      "at 128 players the squad channel cost {big_squad} against the far tier's {big_far}"
+    );
+    assert_eq!(
+      big_squad, small_squad,
+      "the subscription cost moved with the player count, so it is not a subscription"
+    );
+  }
 
   #[test]
   fn every_player_starts_inside_the_arena_however_many_there_are() {

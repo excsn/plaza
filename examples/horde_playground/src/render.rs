@@ -14,6 +14,9 @@ use horde_playground::sim::{Controls, EnemyKind, Vec2 as SimVec2, World, ARENA_H
 
 const C_YOU: Color = SKYBLUE;
 const C_PEER: Color = Color::new(0.5, 0.8, 1.0, 0.9);
+/// Somebody this client subscribed to, which is a different promise from
+/// somebody it can see.
+const C_SQUAD: Color = Color::new(0.45, 0.95, 0.55, 1.0);
 const C_KNOWN: Color = ORANGE;
 const C_TRUTH: Color = Color::new(1.0, 0.6, 0.2, 0.35);
 const C_VIEW: Color = Color::new(0.4, 0.9, 0.5, 0.55);
@@ -702,8 +705,17 @@ pub fn draw_client_minimap(client: &horde_playground::net::client::NetClient, co
     // it for a while. A marker that keeps its full colour is claiming a peer is
     // there now; drawing one from a sample nobody has refreshed in a minute is
     // how the map came to show teammates frozen in places they had long left.
-    let Some(alpha) = peer_alpha(client.sim.player_age_secs(i)) else { continue };
+    // A squadmate is never faded and never dropped. The fade exists because a
+    // far-tier marker is a stale guess about a stranger; a squadmate is in the
+    // frame because this client asked for them, so their position is as fresh
+    // as anyone's standing next to you.
+    let squad = client.sim.squad().contains(&(i as horde_playground::sim::PlayerId));
     let (x, y) = (ox + p.x * s, oy + p.y * s);
+    if squad {
+      draw_circle(x, y, 3.2, C_SQUAD);
+      continue;
+    }
+    let Some(alpha) = peer_alpha(client.sim.player_age_secs(i)) else { continue };
     draw_circle(x, y, 2.5, Color { a: alpha, ..C_PEER });
   }
   draw_circle_lines(ox + you.x * s, oy + you.y * s, VIEW_RADIUS * s, 1.5, C_VIEW);

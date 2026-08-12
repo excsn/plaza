@@ -705,6 +705,14 @@ pub struct PlayerFrame {
   /// Health and shield for the same set, paired with the id rather than
   /// positional, because the set is a subset now.
   pub vitals: Vec<(PlayerId, u8, bool)>,
+  /// Which of `players` are here because this recipient subscribed to them.
+  ///
+  /// The second channel of relevance, beside the spatial one. Without it a
+  /// squadmate is only ever a far-tier smudge refreshed on a slow clock, which
+  /// is why the minimap had to fade its peer markers: it could not tell a
+  /// teammate two rooms away from a stranger it saw once.
+  #[serde(default)]
+  pub squad: Vec<PlayerId>,
   /// Everyone else, at map resolution and a low rate: the **far tier**.
   ///
   /// Sending nothing at all past the view radius is what made a teammate freeze
@@ -741,7 +749,7 @@ impl PlayerFrame {
   /// Roughly what this costs on the wire: a timestamp, then an id and a
   /// quantized position each, plus an id, a health byte and a shield bit.
   pub fn bytes(&self) -> usize {
-    8 + self.players.len() * (1 + POS_BYTES) + self.vitals.len() * 2 + self.distant.len() * 3
+    8 + self.players.len() * (1 + POS_BYTES) + self.vitals.len() * 2 + self.squad.len() + self.distant.len() * 3
   }
 
   /// The same content with a UUID per player and raw `f32` positions.
@@ -1151,6 +1159,15 @@ pub struct Controls {
   /// apply-on-arrival, kept so the difference is measurable rather than argued.
   pub input_playout: bool,
   pub relevance: bool,
+  /// Whether the second channel is on: a squad you are told about wherever
+  /// they are.
+  pub squads: bool,
+  /// Whether the far tier is on: everybody else, quantised, on a slow clock.
+  ///
+  /// Separate switches on purpose, because the point is the comparison. The
+  /// far tier is a broadcast wearing relevance's clothes, and it costs every
+  /// player on every frame it is due; a squad costs the handful you chose.
+  pub far_tier: bool,
   pub mode: RemoteMode,
   pub smooth: bool,
   pub spread_players: bool,
@@ -1232,6 +1249,8 @@ impl Default for Controls {
       input_max_late_ticks: 4,
       input_max_early_ticks: 10,
       relevance: true,
+      squads: true,
+      far_tier: true,
       mode: RemoteMode::Simulate,
       smooth: true,
       spread_players: true,
