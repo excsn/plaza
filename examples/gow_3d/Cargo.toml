@@ -3,6 +3,7 @@ name = "gow_3d"
 version = "0.1.0"
 edition = { workspace = true }
 publish = false
+default-run = "gow_3d"
 
 [features]
 default = ["native", "client", "server", "websocket"]
@@ -37,6 +38,10 @@ tokio = { workspace = true }
 
 [build-dependencies]
 plaza_wire = { workspace = true, features = ["build"] }
+
+[[bin]]
+name = "gow_3d"
+path = "src/main.rs"
 
 [lib]
 name = "gow_3d"

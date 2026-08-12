@@ -206,12 +206,21 @@ async fn the_client_never_reconciles_against_an_echo_of_itself() {
   // position that was already true.
   let (logic, mut state, mut client, socket) = both_sides().await;
 
-  client.moved_to((1.0, 0.0, 0.0));
+  // The first frame is the exception, and the only one: it is where the client
+  // learns where the zone put it.
   let out = tick(&logic, &mut state).await;
   deliver(&socket, &ops_for(&out, 0));
   client.poll(33);
+  assert!(client.seeded, "the spawn comes off the wire rather than being computed twice");
+  assert_eq!(client.at, state.zone.characters[&0].tracked.at);
 
-  // The server still has them at spawn, because the claim has not been sent.
+  // Everything after it is an echo of what this client already said.
+  client.moved_to((1.0, 0.0, 0.0));
+  for _ in 0..5 {
+    let out = tick(&logic, &mut state).await;
+    deliver(&socket, &ops_for(&out, 0));
+    client.poll(66);
+  }
   assert!(!client.others.contains_key(&0), "its own seat is not one of the others");
   assert_eq!(client.at, (1.0, 0.0, 0.0), "the local position is untouched by the frame");
 }

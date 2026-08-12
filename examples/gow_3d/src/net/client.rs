@@ -111,6 +111,12 @@ pub struct NetClient {
   pub seat: Option<Seat>,
   /// Where the player is, which is the truth rather than a prediction of one.
   pub at: (f32, f32, f32),
+  /// Whether the server's first frame has said where this client starts.
+  ///
+  /// Taken from the wire rather than computed from the seat, so the spawn is
+  /// derived once. A client that ran the same placement itself would be a
+  /// second derivation of one fact, and those drift.
+  pub seeded: bool,
   pub others: HashMap<Seat, Other>,
   pub tick: u64,
   pub meter: Meter,
@@ -144,6 +150,7 @@ impl NetClient {
       status: Status::Connecting,
       seat: None,
       at: (0.0, 0.0, 0.0),
+      seeded: false,
       others: HashMap::new(),
       tick: 0,
       meter: Meter::default(),
@@ -238,9 +245,13 @@ impl NetClient {
 
     for seen in &frame.characters {
       if Some(seen.seat) == mine {
-        // Skipped rather than applied: the server is repeating the position
-        // this client gave it, and taking it back would be reconciling against
-        // an echo of ourselves.
+        // Taken once, to learn where the zone put us, and never again: after
+        // that the server is repeating the position this client gave it, and
+        // applying it would be reconciling against an echo of ourselves.
+        if !self.seeded {
+          self.at = seen.at;
+          self.seeded = true;
+        }
         continue;
       }
       self
