@@ -209,6 +209,36 @@ impl<K: Eq + Hash + Clone> Subscriptions<K> {
     }
   }
 
+  /// Takes a key out of its symmetric group, leaving directed subscriptions
+  /// alone, and returns who was told.
+  ///
+  /// Leaving a party is not the same event as leaving the world, which is what
+  /// [`remove`](Self::remove) is for, and an application that only has the
+  /// second one ends up spelling this out of `unsubscribe` calls in both
+  /// directions and getting the dissolve wrong.
+  ///
+  /// **A group of one is dissolved rather than kept.** Leaving the last member
+  /// subscribed to nobody costs a lookup for ever to answer a question no
+  /// longer being asked, and it makes `group_of` report a party where a player
+  /// sees none.
+  pub fn leave_group(&mut self, key: &K) -> Vec<K> {
+    let members: Vec<K> = self.group_of(key).into_iter().filter(|m| m != key).collect();
+    for other in &members {
+      self.unsubscribe(key, other);
+      self.unsubscribe(other, key);
+    }
+    if members.len() == 1 {
+      // One left behind is not a party. Their side of every remaining
+      // symmetric link in this group goes too.
+      let alone = members[0].clone();
+      for other in self.group_of(&alone).into_iter().filter(|m| *m != alone) {
+        self.unsubscribe(&alone, &other);
+        self.unsubscribe(&other, &alone);
+      }
+    }
+    members
+  }
+
   /// Removes a key entirely, both directions, and returns everyone who was
   /// subscribed to it.
   ///
@@ -428,6 +458,65 @@ mod tests {
     subs.remove(&1);
     assert_eq!(subs.count_of(&2), 0);
     assert_eq!(subs.subscribers().count(), 0, "no empty sets left holding memory");
+  }
+
+  #[test]
+  fn unsubscribing_one_direction_leaves_the_other_and_is_no_longer_a_group() {
+    // The directed primitive, and the case worth pinning: half a symmetric
+    // pair is not a party, it is one person watching another, and `group_of`
+    // has to say so or a health bar keeps drawing for somebody who left.
+    let mut subs: Subscriptions<u32> = Subscriptions::default();
+    subs.pair(1, 2);
+    subs.unsubscribe(&1, &2);
+
+    assert!(!subs.is_subscribed(&1, &2));
+    assert!(subs.is_subscribed(&2, &1), "the other direction is untouched");
+    assert_eq!(subs.group_of(&1), vec![1], "and neither is in a group any more");
+    assert_eq!(subs.group_of(&2), vec![2]);
+  }
+
+  #[test]
+  fn unsubscribing_something_that_was_never_there_changes_nothing() {
+    let mut subs: Subscriptions<u32> = Subscriptions::default();
+    subs.subscribe(1, 2);
+    subs.unsubscribe(&1, &9);
+    subs.unsubscribe(&9, &1);
+    assert!(subs.is_subscribed(&1, &2));
+    assert_eq!(subs.subscribers().count(), 1, "and leaves no empty sets behind");
+  }
+
+  #[test]
+  fn leaving_a_party_is_not_leaving_the_world() {
+    // Two different events that an application with only `remove` cannot tell
+    // apart: one keeps you in the zone with your spectators still watching.
+    let mut subs: Subscriptions<u32> = Subscriptions::default();
+    subs.group(1, 2);
+    subs.group(1, 3);
+    subs.subscribe(9, 1);
+
+    let told = subs.leave_group(&1);
+    assert_eq!(told.len(), 2, "both remaining members were told");
+    assert_eq!(subs.group_of(&1), vec![1], "out of the party");
+    assert!(subs.is_subscribed(&9, &1), "and still being watched by a spectator");
+
+    let mut left = subs.group_of(&2);
+    left.sort_unstable();
+    assert_eq!(left, vec![2, 3], "the rest of the party is intact");
+  }
+
+  #[test]
+  fn the_second_to_last_leaving_dissolves_what_is_left() {
+    // A group of one is not a group, and leaving it subscribed costs a lookup
+    // for ever to answer a question nobody is asking.
+    let mut subs: Subscriptions<u32> = Subscriptions::default();
+    subs.group(1, 2);
+    subs.group(1, 3);
+
+    subs.leave_group(&3);
+    assert_eq!(subs.group_of(&1).len(), 2, "two is still a party");
+    subs.leave_group(&2);
+    assert_eq!(subs.group_of(&1), vec![1], "one is not");
+    assert_eq!(subs.subscribers().count(), 0, "and nothing is left holding memory");
   }
 
   #[test]
