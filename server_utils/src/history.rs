@@ -144,6 +144,50 @@ impl<
 mod tests {
   use super::*;
 
+  /// The two cleanup calls nothing was exercising. A rewind buffer that never
+  /// forgets is a leak with a plausible excuse, and both of these are what an
+  /// application calls when an entity dies or a round ends.
+  mod forgetting {
+    use super::*;
+
+    #[test]
+    fn removing_one_entity_leaves_the_others_alone() {
+      let mut buffer: HistoricalStateBuffer<u32, f32, u64> = HistoricalStateBuffer::new(8);
+      buffer.record_state(1, 0, 1.0);
+      buffer.record_state(2, 0, 2.0);
+
+      buffer.remove_entity_history(&1);
+      assert!(buffer.get_state_at_or_before(&1, 0).is_none(), "gone");
+      assert!(buffer.get_state_at_or_before(&2, 0).is_some(), "and its neighbour is not");
+    }
+
+    #[test]
+    fn removing_an_entity_that_was_never_recorded_is_not_an_error() {
+      // Called from a death handler, which fires for entities that never moved
+      // and therefore never got a sample.
+      let mut buffer: HistoricalStateBuffer<u32, f32, u64> = HistoricalStateBuffer::new(8);
+      buffer.record_state(1, 0, 1.0);
+      buffer.remove_entity_history(&99);
+      assert!(buffer.get_state_at_or_before(&1, 0).is_some());
+    }
+
+    #[test]
+    fn clearing_leaves_a_buffer_that_still_works() {
+      // A round ending is not the buffer ending: it has to keep recording
+      // afterwards, or the next round rewinds into nothing.
+      let mut buffer: HistoricalStateBuffer<u32, f32, u64> = HistoricalStateBuffer::new(8);
+      buffer.record_state(1, 0, 1.0);
+      buffer.record_state(2, 0, 2.0);
+
+      buffer.clear_all_history();
+      assert!(buffer.get_state_at_or_before(&1, 0).is_none());
+      assert!(buffer.get_state_at_or_before(&2, 0).is_none());
+
+      buffer.record_state(1, 10, 3.0);
+      assert!(buffer.get_state_at_or_before(&1, 10).is_some(), "and the next round records fine");
+    }
+  }
+
   // Time is plain `u64` milliseconds: the `ToF32` bound exists so that no
   // custom time type is needed, and this test is where that stays true.
   #[derive(Debug, Clone, PartialEq)]

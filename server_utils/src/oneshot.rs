@@ -120,6 +120,41 @@ mod tests {
   use super::*;
 
   #[test]
+  fn a_custom_schedule_is_the_one_that_is_used() {
+    // `with_schedule` had no test, which for a constructor whose whole job is
+    // to override two constants means the defaults were what every test
+    // measured. A link that loses a lot wants a shorter retry and more of
+    // them, and nothing was checking it could ask for either.
+    let mut p: Pending<u8, &str> = Pending::with_schedule(10, 5);
+    p.declare(1, "welcome", 0);
+
+    assert!(p.due(9, true).is_empty(), "not before the custom interval");
+    assert_eq!(p.due(10, true).len(), 1, "and exactly on it");
+
+    // Five attempts counts the caller's own first send, as `declare` does and
+    // as the default-schedule test above spells out, so `due` yields four.
+    let mut repeats = 1;
+    let mut now = 10;
+    for _ in 0..8 {
+      now += 10;
+      repeats += p.due(now, true).len();
+    }
+    assert_eq!(repeats, 4, "four repeats against the default's {}: {repeats}", ATTEMPTS - 1);
+    assert!(p.is_empty(), "and then it gives up rather than repeating for ever");
+  }
+
+  #[test]
+  fn a_reliable_link_forgets_everything_rather_than_repeating_it() {
+    // The `lossy` flag is not a hint. On a link that cannot lose a message,
+    // repeating one is pure waste, and the entry is dropped rather than kept
+    // in case the caller changes its mind.
+    let mut p: Pending<u8, &str> = Pending::with_schedule(10, 5);
+    p.declare(1, "welcome", 0);
+    assert!(p.due(100, false).is_empty(), "nothing to repeat");
+    assert!(p.is_empty(), "and nothing kept waiting to be");
+  }
+
+  #[test]
   fn an_unconfirmed_op_is_said_again_when_it_comes_due() {
     let mut p: Pending<u8, &str> = Pending::new();
     p.declare(1, "welcome", 0);
