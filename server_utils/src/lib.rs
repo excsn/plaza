@@ -9,6 +9,9 @@
 //! - [`relevance`]: deciding what each client needs to see, so a world larger
 //!   than one screen with more entities than fit on the wire still scales.
 //!   Z-order (Morton) keys, a spatial grid, and a fast visibility diff.
+//! - [`subscription`]: the relevance a distance query cannot answer, who a
+//!   client has *chosen* to care about wherever they are, kept both ways round
+//!   so a departure knows who to tell.
 //! - [`aggregate`]: the third option between sending everything and sending
 //!   nothing, for the entities a client must *compute* with rather than merely
 //!   draw. A Barnes-Hut tree that keeps a distant crowd's contribution and drops
@@ -38,6 +41,7 @@ pub mod priority;
 pub mod relevance;
 pub mod render_error;
 pub mod rest;
+pub mod subscription;
 pub mod seats;
 
 pub use aggregate::{AggregateTree, Summary, WeightedPoint};
@@ -49,6 +53,7 @@ pub use priority::PriorityAccumulator;
 pub use relevance::{GridQuantizer, SetDigest, SpatialGrid, TierBoundary, VisibilitySet};
 pub use render_error::{RenderError, render_error_at};
 pub use rest::RestDetector;
+pub use subscription::{Audience, Because, Subscriptions};
 // The key space `DeltaBaseline` works in, and the client-side mirror that has to
 // agree with it. Both live in the client crate, because a browser client needs
 // them and must not inherit a server to get them.

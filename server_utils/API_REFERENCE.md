@@ -146,6 +146,35 @@ Knowing is the part worth a type. One quiet tick means nothing: a body at the to
 *   **`at_rest(index) -> bool`**, **`ticks_still(index) -> u32`** (for scaling priority smoothly instead of switching on a threshold), **`wake(index)`** for a teleport or respawn that no velocity test would catch.
 *   **`resize`**, **`len`**, **`is_empty`**.
 
+## 5d. Subscription (module `subscription`)
+
+[Relevance](#5-relevance-module-relevance) answers *who is near me*, over a set that changes every tick. This answers *who have I chosen to care about, wherever they are*, over a set that changes every few hours. Neither expresses the other: a party as a relevance radius is an infinite radius, and a grid query as a subscription is resubscribing everybody every tick.
+
+### Enum `Because`
+
+Why an entity is in an audience: `Near`, `Subscribed`, or `Either`. Helpers **`is_near()`** and **`is_subscribed()`**.
+
+This belongs on the wire rather than staying server-side. The two are different promises with different lifetimes, and a client that cannot tell them apart cannot draw a party frame for somebody out of view: absence from a later frame means "walked away" for `Near` and "left the world" for `Subscribed`.
+
+### Struct `Subscriptions<K>`
+
+A directed subscription set with a reverse index. Directed because a spectator following a player does not make the player follow the spectator.
+
+*   **`new(limit)`** / **`default()`**: `limit` caps outgoing subscriptions per key (`usize::MAX` by default). Bounded on purpose: a radius is limited by how many entities fit in it, and a subscription is limited by nothing unless something says so.
+*   **`subscribe(who, to) -> bool`**: one direction. False if it would pass the limit, or if `who == to`.
+*   **`pair(a, b) -> bool`**: both directions, **all or nothing**. A half-applied symmetric relationship is worse than a refused one, since one side draws a party frame and the other does not.
+*   **`group(a, b) -> bool`**: merges the two symmetric groups into one, everyone subscribed to everyone. Refused whole if the result would pass the limit, changing nothing. This is the party-joins-party operation, and the one that is easy to get wrong by adding one person to one side.
+*   **`group_of(&key) -> Vec<K>`**: the symmetric group holding `key`, `key` included; a key with no subscriptions is a group of one. One-sided subscriptions are excluded, or following somebody would drag them into your party.
+*   **`remove(&key) -> Vec<K>`**: drops the key both directions and **returns everyone who was subscribed to it**. Those are the clients whose interface still has an entry for something no longer present, and finding them by scanning every subscriber is the alternative. Call it on departure: a subscription that outlives its subject is a health bar that keeps updating for somebody who left.
+*   **`unsubscribe(&who, &from)`**, **`of(&key)`**, **`watchers(&key)`**, **`count_of(&key)`**, **`is_subscribed(&who, &to)`**, **`subscribers()`**, **`clear()`**.
+
+### Struct `Audience<K>`
+
+*   **`of(near: &[K], subs, viewer) -> Audience<K>`**: unions a spatial answer with the viewer's subscriptions. `near` may be in any order; `entries` comes back sorted, so a diff against the previous tick means something.
+*   **`entries: Vec<(K, Because)>`**, **`near: usize`**, **`added: usize`**.
+*   **`added`** is the measurement worth reporting: what the second channel cost, which is only the members distance missed. A subscriber standing beside the viewer costs nothing extra, and in a game where parties stay together that is most of the time.
+*   **`keys()`**, **`visible()`** (near only, the ones there is a body to draw), **`why(&key)`**, **`len()`**, **`is_empty()`**.
+
 ## 6. Aggregation (module `aggregate`)
 
 The third option between sending every entity and sending none, for entities a client must *compute* with rather than merely draw. Relevance culling drops a distant contribution entirely; aggregation keeps it and drops only its resolution, replacing a distant group with one stand-in at its weighted centroid. This is the Barnes-Hut construction.

@@ -60,6 +60,20 @@ A multiplayer world is bigger than one screen and its players stand apart, so se
 
 What stays the app's: the cell size and origin, the relevance rule (a radius, a frustum, a team), and how the streams are encoded on the wire. This only makes them cheap to compute. The [`relevance_demo`](examples/relevance_demo.rs) example (`cargo run --example relevance_demo -p plaza_server_utils`) shows a field of entities and moving players, and reports the bandwidth the filter saves.
 
+## Subscription (the relevance distance cannot answer)
+
+`relevance` answers *who is near me*. An MMO asks a second question that a radius cannot express: **who have I chosen to care about, wherever they are.** Party health bars update across a zone, raid frames work through a wall, a spectator follows one player around a map, and a guild roster is not a distance query at all.
+
+Neither shape expresses the other. A grid query is a fresh answer every tick over a set that changes constantly; a subscription is a handful of entries with a lifetime measured in hours. A party as a relevance radius means an infinite radius; a grid query as a subscription means resubscribing everybody every tick.
+
+- **`Subscriptions<K>`**: a directed subscription set kept **both ways round**. Both directions are asked every tick: a sender needs the set it must include, and a departing key needs everyone who has to be told. Kept one way, that second question costs a scan of every subscriber in the world on every departure, so `remove` returns the watchers instead. Directed by default because a spectator is not a party; `pair` and `group` are there for the symmetric case, and `group` merges two groups whole rather than adding one person to one side.
+- **`Audience::of(near, subs, viewer)`**: unions a spatial answer with a subscription set, sorted so a diff between ticks means something. Its `added` field is the number the second channel actually costs, which is the members distance missed and nothing at all for the ones standing beside you.
+- **`Because::{Near, Subscribed, Either}`**: why each entry is there, and this has to reach the wire. The two are different *promises*: absence from a later frame means "walked away" for one and "left the world" for the other, so a client that cannot tell them apart will drop a party member the moment they leave view.
+
+Bounded on purpose. A spatial query is limited by how many entities fit in a radius; a subscription is limited by nothing at all unless something says so, and over-limit is refused rather than truncated, since dropping an entry silently to fit is how a client ends up in a party that cannot see one of its members.
+
+What stays the app's: whether a subscription is symmetric, what it costs, who may create one, and how it reaches the wire. [`gow_3d`](../examples/gow_3d/) is the example that forced this block's shape and reports what the channel costs.
+
 ## Filling the packet (priority, and what is asleep)
 
 Relevance answers *who can see what*, which is a yes or no. It does not answer what comes next: a hundred entities are relevant, the budget holds twenty, so which twenty this tick? First-twenty-by-id starves the tail, and so does nearest-twenty. That is the difference between a bandwidth **budget** and a bandwidth **outcome**, where the packet is whatever size the world happened to be.
