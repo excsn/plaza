@@ -1,48 +1,62 @@
 # API Reference: `plaza`
 
-## 1. Introduction & Core Concepts
+`plaza` is the controller loop and the traits an application implements around it: the rules, what a joiner is sent, what an agent may do, and the transport it all reaches.
 
-`plaza` is the core crate of the Plaza workspace: a server-authoritative loop for applications where several agents act on one shared state.
+## Contents
 
-An application supplies four things; `plaza` runs the loop around them.
+- [1. Agents](#1-agents)
+  - [Trait `AgentId`](#trait-agentid)
+  - [Enum `Agent<ID: AgentId>`](#enum-agentid-agentid)
+- [2. Application Traits](#2-application-traits)
+  - [Trait `StateLogic`](#trait-statelogic)
+  - [Trait `SnapshotProvider`](#trait-snapshotprovider)
+  - [Struct `NoSnapshots`](#struct-nosnapshots)
+  - [Struct `SnapshotFn<F>`](#struct-snapshotfnf)
+  - [Trait `OpGuard` (module `op_guard`)](#trait-opguard-module-opguard)
+- [3. The Controller](#3-the-controller)
+  - [Struct `StateControllerBuilder<Op, ID, StateType, SL, Sess, SP, G = NoGuard>`](#struct-statecontrollerbuilderop-id-statetype-sl-sess-sp-g-noguard)
+  - [Struct `StateController<Op, ID, StateType, SL, Sess, SP, G = NoGuard>`](#struct-statecontrollerop-id-statetype-sl-sess-sp-g-noguard)
+  - [Enum `ControllerCommand<Op, ID: AgentId, StateType>`](#enum-controllercommandop-id-agentid-statetype)
+  - [Type Alias `CommandSender<Op, ID, StateType>`](#type-alias-commandsenderop-id-statetype)
+  - [Function `query_with`](#function-querywith)
+  - [Function `query_state`](#function-querystate)
+  - [Struct `StateReader<StateType>`](#struct-statereaderstatetype)
+  - [Controller Constants](#controller-constants)
+- [4. Sessions (Transport)](#4-sessions-transport)
+  - [Trait `Session`](#trait-session)
+  - [Enum `PresenceEvent<ID: AgentId>`](#enum-presenceeventid-agentid)
+  - [Enum `MessageTarget<ID: AgentId>`](#enum-messagetargetid-agentid)
+  - [Struct `SessionMessage<Op, ID: AgentId>`](#struct-sessionmessageop-id-agentid)
+  - [Struct `TargetedOp<Op, ID: AgentId>`](#struct-targetedopop-id-agentid)
+  - [Struct `InProcessSession<Op, ID: AgentId>`](#struct-inprocesssessionop-id-agentid)
+  - [Type Aliases](#type-aliases)
+  - [Session Constants](#session-constants)
+- [5. Time](#5-time)
+  - [Struct `TickDriver`](#struct-tickdriver)
+- [6. Observability (module `stats`)](#6-observability-module-stats)
+  - [Struct `ControllerStats`](#struct-controllerstats)
+- [7. Module `common`: reusable infrastructure](#7-module-common-reusable-infrastructure)
+  - [`common::scheduler`](#commonscheduler)
+  - [`common::reconnect`](#commonreconnect)
+  - [`common::closure`](#commonclosure)
+  - [`common::fsm`](#commonfsm)
+  - [`common::participants`](#commonparticipants)
+  - [`common::math`](#commonmath)
+- [8. Module `game_common`: game patterns](#8-module-gamecommon-game-patterns)
+  - [`game_common::reconciliation`](#gamecommonreconciliation)
+  - [`game_common::flow_control`](#gamecommonflowcontrol)
+  - [`game_common::scorekeeping`](#gamecommonscorekeeping)
+  - [`game_common::input_intent`](#gamecommoninputintent)
+- [9. Module `app_common`: collaboration payloads](#9-module-appcommon-collaboration-payloads)
+- [10. Crate Re-exports](#10-crate-re-exports)
+- [11. Error Handling](#11-error-handling)
+  - [Enum `PlazaError<ID: AgentId>`](#enum-plazaerrorid-agentid)
+  - [Enum `SessionError<ID: AgentId>`](#enum-sessionerrorid-agentid)
+  - [Enum `StateLogicError`](#enum-statelogicerror)
+  - [Enum `SnapshotError<ID: AgentId>`](#enum-snapshoterrorid-agentid)
+  - [Enum `QueryError`](#enum-queryerror)
 
-*   **`StateType`**: the shared state. Any `Debug + Send + Sync + 'static` type; `Clone` is needed only if you call [`query_state`](#function-query_state), which copies the whole of it.
-*   **`Op`**: the discrete actions that change it. `Clone + Debug + Send + Sync + 'static`, and `Serialize`/`Deserialize` if it crosses a network.
-*   **[`StateLogic`](#trait-statelogic)**: the rules. The only place state is mutated.
-*   **[`SnapshotProvider`](#trait-snapshotprovider)**: what a client is sent, built per recipient.
-
-**Single-actor model.** A [`StateController`](#struct-statecontrollerop-id-statetype-sl-sess-sp-g--noguard) owns the state and mutates it only from its own task, processing one input at a time. Application logic therefore needs no locking. Nothing in this crate spawns a task except [`TickDriver`](#struct-tickdriver) and the caller's own `controller.run()`.
-
-**Identity.** `ID` is the application's identifier type. Anything satisfying [`AgentId`](#trait-agentid) qualifies through a blanket impl, so it is rarely implemented by hand. [`Agent<ID>`](#enum-agentid-agentid) wraps it and distinguishes humans, bots, and the system.
-
-**Transport is a trait.** [`Session`](#trait-session) abstracts the network. [`InProcessSession`](#struct-inprocesssessionop-id-agentid) ships here for tests and local play; the `plaza_session` crate provides WebSocket and TCP implementations.
-
-## 2. Error Handling
-
-### Enum `PlazaError<ID: AgentId>`
-
-The crate's umbrella error. Implements `std::error::Error` via `thiserror`.
-
-*   **Variants**: `Session(SessionError<ID>)`, `StateLogic(StateLogicError)`, `Snapshot(SnapshotError<ID>)`, `Serialization { message, source }`, `Deserialization { message, source }`, `Configuration(String)`, `InvalidArgument(String)`, `NotFoundById { id }`, `Io(std::io::Error)`, `Internal(String)`, `NotImplemented(String)`, `Application(Box<dyn Error>)`.
-*   **Constructors**: `ser`, `deser` (wrap a source error), `ser_msg`, `deser_msg` (message only).
-
-### Enum `SessionError<ID: AgentId>`
-
-Transport-level failures: `AgentNotFound { id }`, `ConnectionError { id, details }`, `SendError(String)`, `SessionClosed`, `Timeout(String)`, `AuthenticationFailed { id, reason }`, `PermissionDenied { id, action }`, `TransportError(String)`.
-
-### Enum `StateLogicError`
-
-Returned by `StateLogic::process_input` when an input cannot be applied: `InvalidOperation(String)`, `Conflict(String)`, `PreconditionFailed(String)`, `Internal(String)`. The controller logs and continues, so a rejected op does not stop the loop.
-
-### Enum `SnapshotError<ID: AgentId>`
-
-`CreationFailed(String)`, `InvalidContext { id, reason }`, `NotFound { id }`, `Internal(String)`.
-
-### Enum `QueryError`
-
-`ControllerGone`: the only way [`query_state`](#function-query_state) can fail.
-
-## 3. Agents
+## 1. Agents
 
 `AgentId` and `Agent` are **defined in [`plaza_wire`](../wire/) and re-exported here**, so a wasm client (which cannot depend on core) and a server name the same types. The paths below (`plaza::AgentId`, `plaza::Agent`, ...) resolve exactly as documented.
 
@@ -67,7 +81,7 @@ Identity only. A display name is application data; keep it in your own state or 
     *   `is_system(&self) -> bool`
 *   **Traits**: `Display` writes `human:7` / `bot:7` / `SYSTEM`, allocating nothing. `PartialEq`/`Hash` are by identity alone.
 
-## 4. Application Traits
+## 2. Application Traits
 
 ### Trait `StateLogic`
 
@@ -162,7 +176,7 @@ pub trait OpGuard<Op, ID: AgentId, StateType>: Send + Sync + 'static {
 }
 ```
 
-**The seam for authorization.** "May this agent do this at all" is a different question from "what does the act do", and an application answering both inside `StateLogic` smears its security checks through its handlers. The controller runs the guard per op, ahead of `process_input`, so it is the one auditable place for the first question; a refused op never reaches the rules. Installed with [`StateControllerBuilder::guard`](#struct-statecontrollerbuilderop-id-statetype-sl-sess-sp-g--noguard); the default is `NoGuard`.
+**The seam for authorization.** "May this agent do this at all" is a different question from "what does the act do", and an application answering both inside `StateLogic` smears its security checks through its handlers. The controller runs the guard per op, ahead of `process_input`, so it is the one auditable place for the first question; a refused op never reaches the rules. Installed with [`StateControllerBuilder::guard`](#struct-statecontrollerbuilderop-id-statetype-sl-sess-sp-g-noguard); the default is `NoGuard`.
 
 The guard judges the actor's standing, not the act's content: whether a seated, living player may vote in this phase is the guard's, whether the player they voted for exists stays in the rules. The state is read-only, so authorization cannot mutate. **Sync on purpose**: it runs per op on the controller's task, and a permission that lives in a database belongs loaded into state, not fetched mid-stream.
 
@@ -195,14 +209,14 @@ let guard = Arc::new(GuardFn(screen));
 
 A named function coerces cleanly; a closure usually needs its argument types written out.
 
-## 5. The Controller
+## 3. The Controller
 
 ### Struct `StateControllerBuilder<Op, ID, StateType, SL, Sess, SP, G = NoGuard>`
 
 *   **`new(op_handler: Arc<SL>, session: Arc<Sess>, snapshot_provider: Arc<SP>, initial_state: StateType) -> Self`** All components are required, which is why `build` is infallible.
 *   **`without_snapshots(op_handler: Arc<SL>, session: Arc<Sess>, initial_state: StateType) -> Self`**: the same for an application where joining carries no catch-up. Supplies [`NoSnapshots`](#struct-nosnapshots), so `SP` is fixed to it. Everything else is unchanged, including `SendSnapshots`, which becomes a request that sends nothing.
 *   **`guard(op_guard: Arc<G2>) -> StateControllerBuilder<.., G2>`**: the [`OpGuard`](#trait-opguard-module-op_guard) screening agent ops ahead of `StateLogic`. Default `NoGuard`.
-*   **`command_buffer(size: usize) -> Self`**: command channel depth. Default [`DEFAULT_COMMAND_BUFFER`](#constants) (32).
+*   **`command_buffer(size: usize) -> Self`**: command channel depth. Default [`DEFAULT_COMMAND_BUFFER`](#controller-constants) (32).
 *   **`snapshot_context_on_join(context: Option<SnapshotContext>) -> Self`**: context for the snapshot a joining agent receives. Defaults to `Full`.
 *   **`build(self) -> (CommandSender<Op, ID, StateType>, StateController<..>)`**
 
@@ -251,11 +265,11 @@ The whole-state case of `query_with`, and the **only** place `StateType: Clone` 
 
 What `QueryCurrentState` carries: a boxed `FnOnce(&StateType) + Send`, with `StateReader::new` to build one. Reach for it only when constructing the command by hand; `query_with` builds both it and the reply channel.
 
-### Constants
+### Controller Constants
 
 *   `DEFAULT_COMMAND_BUFFER: usize = 32`
 
-## 6. Sessions (Transport)
+## 4. Sessions (Transport)
 
 ### Trait `Session`
 
@@ -311,12 +325,12 @@ Loopback transport for tests, demos, and local play. Each client gets its own in
 *   **`session_channel<T: Send>(capacity) -> (SessionSender<T>, SessionReceiver<T>)`**: the constructor behind every `Session` stream, so a transport outside this workspace produces the exact type the trait returns without a fibre dependency of its own. Panics if `capacity` is zero.
 *   `ClientInbox<Op, ID>`: the receiving end of a simulated client.
 
-### Constants
+### Session Constants
 
 *   `DEFAULT_SESSION_CAPACITY: usize = 256`
 *   `DEFAULT_CLIENT_CAPACITY: usize = 64`
 
-## 7. Time
+## 5. Time
 
 ### Struct `TickDriver`
 
@@ -335,12 +349,12 @@ The interval and the step are separate on purpose. Waking more often than you st
 
 **A predicted simulation should still own its own quantum.** `run_fixed` fixes the driver, not the contract: a different driver, a test harness, or a hand-rolled loop can still hand the logic an arbitrary delta. Accumulating inside the simulation as well costs four lines and means the guarantee cannot be broken from outside; `examples/bomb_grid` does both, and `plaza_client_utils::FixedTimestep` is the same pattern for the client side.
 
-## 8. Observability (module `stats`)
+## 6. Observability (module `stats`)
 
 ### Struct `ControllerStats`
 
 Live counters for one running controller, obtained from
-[`StateControllerBuilder::stats`](#struct-statecontrollerbuilderop-id-statetype-sl-sess-sp-g--noguard) before `build`
+[`StateControllerBuilder::stats`](#struct-statecontrollerbuilderop-id-statetype-sl-sess-sp-g-noguard) before `build`
 (or `with_stats` to supply one you already hold), and from `StateController::stats` after.
 
 *   **`ticks()`**, **`commands()`**, **`ops()`**, **`joins()`**, **`leaves()`**, **`snapshots()`**.
@@ -355,7 +369,7 @@ Live counters for one running controller, obtained from
 
 A reading is a **sample**, not a transaction: two fields read in succession may straddle a tick boundary, which matters if you compute a ratio from them.
 
-## 9. Module `common`: reusable infrastructure
+## 7. Module `common`: reusable infrastructure
 
 ### `common::scheduler`
 
@@ -405,7 +419,7 @@ Repeating schedules skip ahead past `now` after a stall rather than replaying ev
 
 Serde-friendly PODs for op payloads: `Vec2`, `Vec3`, `Quat` (with `Quat::IDENTITY`, and `Default` returning identity rather than zeroes). Applications with real math needs should use their own types: every payload is generic over them.
 
-## 10. Module `game_common`: game patterns
+## 8. Module `game_common`: game patterns
 
 ### `game_common::reconciliation`
 
@@ -451,15 +465,40 @@ All three types are `Clone` and hold no timers, channels, or boxed closures, so 
 
 *   **Struct `PlayerIntent<ID, Intent>`**: `new`.
 
-## 11. Module `app_common`: collaboration payloads
+## 9. Module `app_common`: collaboration payloads
 
 Op shapes for non-game applications. These are payload definitions, not engines; the application still writes the logic.
 
-*   **`locking`**: `LockManager<R, ID>` (`try_acquire_lock`, `release_lock`, `force_release_lock`, `get_lock_owner`), `LockInfo`, and the request/release/notice payloads.
+*   **`locking`**: `LockManager<R, ID>` (`try_acquire_lock`, `release_lock`, `force_release_lock`, `get_lock_owner`), `LockInfo`, and the payloads: `RequestLockPayload<R>`, `ReleaseLockPayload<R>`, `LockAcquiredNoticePayload<R, ID>`, `LockDeniedNoticePayload<R>` (which carries the reason), `LockReleasedNoticePayload<R, ID>`.
 *   **`presence`**: `UpdatePresencePayload`, `PresenceChangedNoticePayload`, and fragments `CursorPositionPayload`, `SelectionPayload`, `ActivityStatusPayload`.
 *   **`ordered_collection_ops`**: `InsertListItemPayload`, `RemoveListItemPayload`, `MoveListItemPayload`, `UpdateListItemPayload`.
 *   **`object_property_ops`**: `CreateObjectPayload`, `DeleteObjectPayload`, `SetObjectPropertyPayload`, `DeleteObjectPropertyPayload`.
 
-## 12. Crate Re-exports
+## 10. Crate Re-exports
 
 For convenience, the crate root re-exports: `Agent`, `AgentId`, `CommandSender`, `ControllerCommand`, `StateController`, `StateControllerBuilder`, `query_state`, `query_with`, `StateReader`, `NoSnapshots`, `PlazaError`, `InProcessSession`, `MessageTarget`, `Session`, `SessionMessage`, `TargetedOp`, `SnapshotProvider`, `LogicInput`, `StateLogic`, `TickDriver`.
+
+## 11. Error Handling
+
+### Enum `PlazaError<ID: AgentId>`
+
+The crate's umbrella error. Implements `std::error::Error` via `thiserror`.
+
+*   **Variants**: `Session(SessionError<ID>)`, `StateLogic(StateLogicError)`, `Snapshot(SnapshotError<ID>)`, `Serialization { message, source }`, `Deserialization { message, source }`, `Configuration(String)`, `InvalidArgument(String)`, `NotFoundById { id }`, `Io(std::io::Error)`, `Internal(String)`, `NotImplemented(String)`, `Application(Box<dyn Error>)`.
+*   **Constructors**: `ser`, `deser` (wrap a source error), `ser_msg`, `deser_msg` (message only).
+
+### Enum `SessionError<ID: AgentId>`
+
+Transport-level failures: `AgentNotFound { id }`, `ConnectionError { id, details }`, `SendError(String)`, `SessionClosed`, `Timeout(String)`, `AuthenticationFailed { id, reason }`, `PermissionDenied { id, action }`, `TransportError(String)`.
+
+### Enum `StateLogicError`
+
+Returned by `StateLogic::process_input` when an input cannot be applied: `InvalidOperation(String)`, `Conflict(String)`, `PreconditionFailed(String)`, `Internal(String)`. The controller logs and continues, so a rejected op does not stop the loop.
+
+### Enum `SnapshotError<ID: AgentId>`
+
+`CreationFailed(String)`, `InvalidContext { id, reason }`, `NotFound { id }`, `Internal(String)`.
+
+### Enum `QueryError`
+
+`ControllerGone`: the only way [`query_state`](#function-query_state) can fail.

@@ -49,7 +49,7 @@ cd examples
 cargo run -p plaza_example_shared_counter
 ```
 
-Turning the browser playgrounds into real listen-servers surfaced a run of bugs whose causes were consistently not where the symptoms pointed, and most of what is in `client_utils` and `server_utils` today is what those argued for. [`examples/LEARNINGS.md`](examples/LEARNINGS.md) is the record: the principles that prevent whole classes of bug, what broke and which reasonable theories were wrong, and what all of it changed in plaza itself.
+Turning the browser playgrounds into real listen-servers surfaced a run of bugs whose causes were consistently not where the symptoms pointed, and most of what is in `client_utils` and `server_utils` today is what those argued for.
 
 ## License
 

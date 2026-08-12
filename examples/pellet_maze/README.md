@@ -137,7 +137,7 @@ The rule being shared is what makes a wrong junction *rare*. It is what makes a 
 - **[src/net/](src/net/)** wraps that for a real wire and **adds no rules**. The arena is the same server behind `plaza`'s `StateLogic`, dispatching a frame per seat; the client is the same client behind a socket, a clock estimate, and a connection state.
 - **[src/render.rs](src/render.rs)** and **[src/ui.rs](src/ui.rs)** draw it and put the numbers on screen.
 
-Both sides step in whole `SIM_STEP_MS` ticks and the server's host uses [`TickDriver::run_fixed`](../../core/API_REFERENCE.md#struct-tickdriver). `the_prediction_is_driven_by_the_clock_not_by_how_often_it_is_polled` and `an_irregular_tick_driver_produces_the_same_world_as_a_regular_one` hold that from both ends. This is not a matter of taste: the four bugs it prevents are written up in [LEARNINGS.md](../LEARNINGS.md#four-bugs-with-one-shape-bomb-grid) and cost a full debugging session in the example before this one.
+Both sides step in whole `SIM_STEP_MS` ticks and the server's host uses [`TickDriver::run_fixed`](../../core/API_REFERENCE.md#struct-tickdriver). `the_prediction_is_driven_by_the_clock_not_by_how_often_it_is_polled` and `an_irregular_tick_driver_produces_the_same_world_as_a_regular_one` hold that from both ends. This is not a matter of taste: it is what [bomb_grid](../bomb_grid/) cost a full debugging session to establish.
 
 ## Notes
 

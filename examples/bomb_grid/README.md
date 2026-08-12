@@ -87,7 +87,7 @@ This example was written with a shared rule and tick-addressed inputs from the f
 
 Both sides now step in whole `SIM_STEP_MS` ticks. The client catches up to `clock / SIM_STEP_MS` one step at a time; the server accumulates elapsed time and spends it the same way, and its host uses [`TickDriver::run_fixed`](../../core/API_REFERENCE.md#struct-tickdriver), which exists because of this example. The `dt` parameter is gone from the client's `tick` entirely: a caller must not be able to influence how fast a prediction runs. The simulation keeps its own accumulator as well as using the fixed driver, deliberately, so a different driver cannot silently break the guarantee.
 
-**Three of the four looked exactly like network faults**, which is the part worth carrying away. A correction is what a network problem looks like, so a correction is where you stop looking. The full write-up is in [LEARNINGS.md](../LEARNINGS.md#four-bugs-with-one-shape-bomb-grid).
+**Three of the four looked exactly like network faults**, which is the part worth carrying away. A correction is what a network problem looks like, so a correction is where you stop looking.
 
 ## Where the wire went
 

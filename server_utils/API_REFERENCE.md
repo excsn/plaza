@@ -1,18 +1,60 @@
 # API Reference: `plaza_server_utils`
 
-## 1. Introduction & Core Concepts
+`plaza_server_utils` is the server half of interest management and delta streaming: who is told about what, in what order, how often, and how the two ends prove they still agree.
 
-`plaza_server_utils` is the **server half** of the pure netcode primitives, mirroring `plaza_client_utils`. It is pure logic with no async runtime, so a server simulation compiles to wasm alongside its clients, and it shares the client crate's `Interpolatable` and `ToF32` traits so one state type serves both sides.
+## Contents
 
-It provides the building block lag compensation rests on (a rewind of past entity state), the `relevance` building blocks for interest management (deciding what each client needs to see), `aggregate` for the entities a client must compute with rather than merely draw, `delta` for streaming that set to a subscriber reliably, `input_schedule` for tick-addressed input buffering (two players who pressed together execute together, whatever their ping), and the two small blocks a real server writes anyway: `seats` and `meter`.
+- [1. Core API](#1-core-api)
+  - [Struct `HistoricalStateBuffer<EntityId, EntityStateSnapshot, ServerTime>`](#struct-historicalstatebufferentityid-entitystatesnapshot-servertime)
+  - [Function `render_error_at`](#function-rendererrorat)
+  - [Struct `RenderError`](#struct-rendererror)
+  - [Struct `TimedState<ServerTime, State>`](#struct-timedstateservertime-state)
+  - [Shared traits](#shared-traits)
+- [2. Sizing the buffer](#2-sizing-the-buffer)
+- [3. Relevance (module `relevance`)](#3-relevance-module-relevance)
+  - [Module `relevance::morton`](#module-relevancemorton)
+  - [Struct `GridQuantizer`](#struct-gridquantizer)
+  - [Struct `SpatialGrid<Id: Copy>`](#struct-spatialgridid-copy)
+  - [Struct `TierBoundary`](#struct-tierboundary)
+  - [Struct `VisibilitySet`](#struct-visibilityset)
+  - [Struct `SetDigest` (re-exported)](#struct-setdigest-re-exported)
+- [4. Priority (module `priority`)](#4-priority-module-priority)
+  - [Struct `PriorityAccumulator`](#struct-priorityaccumulator)
+- [5. At rest (module `rest`)](#5-at-rest-module-rest)
+  - [Struct `RestDetector`](#struct-restdetector)
+- [6. Subscription (module `subscription`)](#6-subscription-module-subscription)
+  - [Enum `Because`](#enum-because)
+  - [Struct `Subscriptions<K>`](#struct-subscriptionsk)
+  - [Struct `Audience<K>`](#struct-audiencek)
+- [7. Aggregation (module `aggregate`)](#7-aggregation-module-aggregate)
+  - [Struct `WeightedPoint`](#struct-weightedpoint)
+  - [Struct `AggregateTree`](#struct-aggregatetree)
+  - [Struct `Summary`](#struct-summary)
+  - [Choosing `theta`](#choosing-theta)
+- [8. Delta streaming (module `delta`)](#8-delta-streaming-module-delta)
+  - [The two failure modes this exists to prevent](#the-two-failure-modes-this-exists-to-prevent)
+  - [The digest is also the resume story](#the-digest-is-also-the-resume-story)
+  - [Two invariants, both load bearing](#two-invariants-both-load-bearing)
+  - [Enum `RecoveryPolicy`](#enum-recoverypolicy)
+  - [Struct `DeltaPlan`](#struct-deltaplan)
+  - [Struct `DeltaBaseline`](#struct-deltabaseline)
+- [9. Input scheduling (module `input_schedule`)](#9-input-scheduling-module-inputschedule)
+  - [Struct `InputWindow`](#struct-inputwindow)
+  - [Enum `Submission`](#enum-submission)
+  - [Struct `InputSchedule<Input>`](#struct-inputscheduleinput)
+- [10. Seats (module `seats`)](#10-seats-module-seats)
+  - [Enum `Seating`](#enum-seating)
+  - [Struct `SeatTable<Key>`](#struct-seattablekey)
+  - [Struct `SeatSlots<Key>`](#struct-seatslotskey)
+  - [Struct `RankedQueue<Key>`](#struct-rankedqueuekey)
+  - [Struct `Roster<Key>`](#struct-rosterkey)
+- [11. Rates (module `meter`)](#11-rates-module-meter)
+  - [Struct `RateMeter`](#struct-ratemeter)
+- [12. One-shot ops (module `oneshot`)](#12-one-shot-ops-module-oneshot)
+  - [Struct `Pending<K, Op>`](#struct-pendingk-op)
+- [13. Error Handling](#13-error-handling)
 
-**What is re-exported rather than defined here.** `SetDigest`, `SlotKey`, `SlotAllocator`, `ReusePolicy`, `DeltaMirror`, `Agreement`, and `Divergence` come from `plaza_client_utils`, as do the shared `Interpolatable` and `ToF32` traits. Both sides of a delta stream have to agree about them exactly, and a second implementation that agrees today is a disagreement waiting to happen, whose failure would present as a divergence about the *world* rather than about the arithmetic. The direction is not arbitrary: the client crate is the lower one, and a browser client needs these types and must not inherit a server to get them.
-
-## 2. Error Handling
-
-This crate defines no error type. `HistoricalStateBuffer::get_state_at_or_before` returns `Option`, `None` meaning the entity has no recorded history.
-
-## 3. Core API
+## 1. Core API
 
 ### Struct `HistoricalStateBuffer<EntityId, EntityStateSnapshot, ServerTime>`
 
@@ -55,11 +97,11 @@ One recorded entry: `time`, `state`. Exposed for callers that inspect raw histor
 
 `Interpolatable` and `ToF32` are re-exported from `plaza_client_utils`. Implement `Interpolatable<ServerTime>` on your snapshot type to allow interpolated rewinds; it is the same trait a client implements for its `SnapshotBuffer`, so a single impl covers both.
 
-## 4. Sizing the buffer
+## 2. Sizing the buffer
 
 `max_snapshots_per_entity` should cover the largest rewind you will ask for: roughly `(max expected client latency + interpolation delay) / server tick interval`, plus a margin. Too small and old-enough shots clamp to the oldest retained state instead of rewinding accurately.
 
-## 5. Relevance (module `relevance`)
+## 3. Relevance (module `relevance`)
 
 Interest management: sending each client only the entities near it, and the change since last tick. Building blocks, not a policy, the cell size, the relevance rule, and the wire encoding stay yours.
 
@@ -118,22 +160,22 @@ An order-independent checksum of a set of `u64` keys, for giving a delta-relevan
 
 Attach the comparison to the **report**, not to the state change. Running it only when an acknowledgement advances the frontier skips the one case it is for: a client re-acknowledging the same sequence still tells you what it holds, and a mirror that loses something *without* losing a packet reports it exactly then.
 
-## 5b. Priority (module `priority`)
+## 4. Priority (module `priority`)
 
-[Relevance](#5-relevance-module-relevance) answers *who can see what*, which is a yes or no. It does not answer what follows: a hundred entities are relevant, the budget holds twenty, so which twenty go this tick? Sending the first twenty by id starves the tail forever, and so does sending the nearest twenty. That is what turns a bandwidth budget into a bandwidth *outcome*.
+[Relevance](#3-relevance-module-relevance) answers *who can see what*, which is a yes or no. It does not answer what follows: a hundred entities are relevant, the budget holds twenty, so which twenty go this tick? Sending the first twenty by id starves the tail forever, and so does sending the nearest twenty. That is what turns a bandwidth budget into a bandwidth *outcome*.
 
 ### Struct `PriorityAccumulator`
 
-Per-entity priority that survives the ticks an entity is not sent on. Indexed densely, so a [`SlotKey`](#struct-slotkey) is already the index.
+Per-entity priority that survives the ticks an entity is not sent on. Indexed densely, so a [`SlotKey`](../client_utils/API_REFERENCE.md#struct-slotkey) is already the index.
 
 *   **`new(entities)`**, **`resize(entities)`**, **`len()`**, **`is_empty()`**, **`clear()`**.
 *   **`bump(&mut self, index, priority: f32)`**: adds this tick's priority. An index past the end grows the space rather than panicking, since an allocator handing out a fresh slot is ordinary.
 *   **`fill(&mut self, budget: usize, cost: impl Fn(usize) -> usize, out: &mut Vec<usize>)`**: fills `budget` with the highest scorers, clearing `out` first and returning indices highest-priority first. **Chosen entities reset to zero; skipped ones keep what they had**, which is what stops anything starving. The walk continues past an entity that does not fit rather than stopping, so one large entity near the front cannot leave the rest of the packet empty; its priority keeps climbing until it wins outright. Ties break by index, so a server and a replay of it choose alike.
 *   **`score(index) -> f32`**, **`forget(index)`**: drop an entity to zero without sending it, for a despawn or for something that has gone irrelevant and should not return holding a hoard.
 
-Entities at zero or below are never chosen, so a negative score is how you say "not this one" without removing it. The per-tick priority is yours: distance, ownership, whether it is [at rest](#5c-at-rest-module-rest), how long since it changed.
+Entities at zero or below are never chosen, so a negative score is how you say "not this one" without removing it. The per-tick priority is yours: distance, ownership, whether it is [at rest](#5-at-rest-module-rest), how long since it changed.
 
-## 5c. At rest (module `rest`)
+## 5. At rest (module `rest`)
 
 In a settled scene most things are not moving, and saying so costs one bit against the thirty-three a velocity costs.
 
@@ -146,9 +188,9 @@ Knowing is the part worth a type. One quiet tick means nothing: a body at the to
 *   **`at_rest(index) -> bool`**, **`ticks_still(index) -> u32`** (for scaling priority smoothly instead of switching on a threshold), **`wake(index)`** for a teleport or respawn that no velocity test would catch.
 *   **`resize`**, **`len`**, **`is_empty`**.
 
-## 5d. Subscription (module `subscription`)
+## 6. Subscription (module `subscription`)
 
-[Relevance](#5-relevance-module-relevance) answers *who is near me*, over a set that changes every tick. This answers *who have I chosen to care about, wherever they are*, over a set that changes every few hours. Neither expresses the other: a party as a relevance radius is an infinite radius, and a grid query as a subscription is resubscribing everybody every tick.
+[Relevance](#3-relevance-module-relevance) answers *who is near me*, over a set that changes every tick. This answers *who have I chosen to care about, wherever they are*, over a set that changes every few hours. Neither expresses the other: a party as a relevance radius is an infinite radius, and a grid query as a subscription is resubscribing everybody every tick.
 
 ### Enum `Because`
 
@@ -178,7 +220,7 @@ A directed subscription set with a reverse index. Directed because a spectator f
 *   **`added`** is the measurement worth reporting: what the second channel cost, which is only the members distance missed. A subscriber standing beside the viewer costs nothing extra, and in a game where parties stay together that is most of the time.
 *   **`keys()`**, **`visible()`** (near only, the ones there is a body to draw), **`why(&key)`**, **`len()`**, **`is_empty()`**.
 
-## 6. Aggregation (module `aggregate`)
+## 7. Aggregation (module `aggregate`)
 
 The third option between sending every entity and sending none, for entities a client must *compute* with rather than merely draw. Relevance culling drops a distant contribution entirely; aggregation keeps it and drops only its resolution, replacing a distant group with one stand-in at its weighted centroid. This is the Barnes-Hut construction.
 
@@ -208,7 +250,7 @@ Not a monotone dial. Below roughly `0.7` it is sound and trades accuracy for wor
 
 **Check which resource it buys back before believing it addresses yours.** In the black hole example the field was a third of the bandwidth and all of the per-machine compute, so coarsening it halved the work (7.6 to 3.7 M force evaluations/sec at `theta = 0.5`) while total bandwidth moved 17%. Aggregation reads like a bandwidth technique and is often a compute one.
 
-## 7. Delta streaming (module `delta`)
+## 8. Delta streaming (module `delta`)
 
 `relevance` tells you what changed; this owns the bookkeeping that gets it to a subscriber and keeps it there. One `DeltaBaseline` per subscriber. It is deliberately set-theoretic and knows nothing about what a key means: keys are `u64`, entering and leaving are the only events, and mapping a key back to a spawn payload or a despawn reason is the application's job. The client's half is `plaza_client_utils::DeltaMirror`, and the two are keyed by the same `SlotKey` and checked by the same `SetDigest`.
 
@@ -271,7 +313,7 @@ What to send this round. `full_baseline: bool` (the subscriber must clear its mi
 
 **A phantom count alone cannot verify any of this**, which is why the `missing` column is there. A starved mirror agrees with everything: zero corpses, digest agreement, and a flattering render error, because error only averages over entities both sides have. Every metric of the form "wrong things present" needs its "right things absent" twin, or a change is free to satisfy one by breaking the other. `missing` never reaches zero, because entities that just became relevant are still in flight; the number to watch is whether it stays at that floor.
 
-## 8. Input scheduling (module `input_schedule`)
+## 9. Input scheduling (module `input_schedule`)
 
 Tick-addressed input buffering: the server side of "two players who pressed together execute together, whatever their ping". A client does not send "move now". It names **the server's own tick** its input is meant for, computed from its clock estimate plus the playout depth the server advertised, and the server buffers the input until that tick runs. Applied on arrival instead, the nearer player gets its ping difference as free head start, and anything decided by who-was-where-first is decided by the network.
 
@@ -313,7 +355,7 @@ One seat's buffered inputs and the counters that judge the window. Keep one per 
 
 **Why the split and the margin are worth keeping.** A single `rejected` total says a client cannot act and nothing about why, and the two sides have opposite causes: a steady negative margin means everything feeding that client's aim (its clock estimate, and the newest server stamp it has actually received) trails the simulation, which points at its downstream; a positive one means its clock runs fast. Diagnosing this from the client alone is not possible, because a rejected input is still acknowledged on arrival, so the client sees a healthy acknowledgement stream while nothing it does takes effect.
 
-## 9. Seats (module `seats`)
+## 10. Seats (module `seats`)
 
 ### Enum `Seating`
 
@@ -351,7 +393,7 @@ Three rules run through it. **Promotion happens on the tick**: `admit` and `depa
 *   **`expire(&key) -> Option<usize>`**: releases a held seat whose grace ran out. **`resolve() -> Vec<Shuffle<Key>>`**: seats the waitlist into open seats in queue order, then settles rank displacement; a no-op while locked. `Shuffle` is **`Promoted { key, seat }`** (the seat is fresh) or **`Displaced { key, seat }`** (requeued at the tail of their own rank band).
 *   **`seat_of(&key)`**, **`seat_state(seat) -> SeatState`** (`Human(&Key)` / `Held(&Key)` / `Open`), **`seats()`**, **`waiting()`**, **`capacity()`**, **`occupied_count()`** (held seats count: a held seat is not free), **`is_full()`**.
 
-## 10. Rates (module `meter`)
+## 11. Rates (module `meter`)
 
 ### Struct `RateMeter`
 
@@ -367,7 +409,7 @@ A running total, a sample count, an elapsed clock, and the three questions over 
 
 Trivial arithmetic, and every hand-rolled copy had to remember the same divide-by-zero guard, whose absence renders as `NaN` on the first frame and looks like the thing being measured is broken. `share_of` is here because **measuring a stream's share of the packet before optimising its encoding** is the check that would have saved three separate rounds of optimising the wrong thing: despawn ids were 1.2% of horde's traffic while position samples were 86.1%.
 
-## 11. One-shot ops (module `oneshot`)
+## 12. One-shot ops (module `oneshot`)
 
 ### Struct `Pending<K, Op>`
 
@@ -378,3 +420,7 @@ Saying a one-shot thing until the other end proves it heard. Every server has a 
 *   **`due(now_ms, lossy: bool) -> Vec<(K, Op)>`**: whatever is due to be said again. `lossy` is false on a link that cannot lose a frame, where this forgets everything instead: on a reliable stream a lost segment is retransmitted, so repeating anything is noise on the wire. A peer past its attempts is dropped rather than retried for ever; the transport will confirm it is gone soon enough.
 *   **`confirm(&key)`**: the peer said something, which proves it heard. Call it from the op path; no ack op has to exist, because a client that is talking has plainly received whatever let it talk.
 *   **`is_empty()`**.
+
+## 13. Error Handling
+
+This crate defines no error type. `HistoricalStateBuffer::get_state_at_or_before` returns `Option`, `None` meaning the entity has no recorded history.

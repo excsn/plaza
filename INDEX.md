@@ -7,7 +7,6 @@ Companion to [README.md](README.md) (what Plaza is). This file answers "where do
 | File | What it is for |
 |---|---|
 | [README.md](README.md) | What Plaza is, and the crate map. |
-| [examples/LEARNINGS.md](examples/LEARNINGS.md) | What the playgrounds taught: the principles, the bug catalogue, the diagnostic playbook. |
 
 Each crate also carries a `README.md` (how to use it) and an `API_REFERENCE.md` (its full public surface).
 

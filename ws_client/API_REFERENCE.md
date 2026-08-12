@@ -1,67 +1,42 @@
 # API Reference: `plaza_ws`
 
-## 1. Introduction & Core Concepts
+`plaza_ws` is one WebSocket client API over three backends: native, browser, and an in-process loopback, plus the pump that turns a socket into typed messages.
 
-`plaza_ws` is one client-side WebSocket interface, whatever is underneath. `plaza_session` covers the server and is tokio/actix by construction, so it cannot help a client, least of all a browser one. This crate is the other half: the socket a *client* holds, with the same shape on a desktop, in a browser, and in-process.
+## Contents
 
-**It is built for a frame loop, not for an async runtime.** [`Socket::poll`](#method-poll) is non-blocking and drains into a caller-owned buffer. That is the whole ergonomic decision, and it is made for macroquad-style applications, which have a synchronous `loop { ...; next_frame().await }` and nowhere to put a future. An `async fn recv()` would be the natural Rust API and would be unusable there. Reusing the buffer also keeps a per-frame call allocation-free, matching how `plaza_server_utils` hands back its results.
+- [1. Core API](#1-core-api)
+  - [Trait `Socket`](#trait-socket)
+  - [Enum `Event`](#enum-event)
+  - [Enum `CloseReason`](#enum-closereason)
+  - [Enum `State`](#enum-state)
+  - [Trait `SendJson` (feature `json`)](#trait-sendjson-feature-json)
+  - [Function `connect`](#function-connect)
+  - [Function `connect_boxed`](#function-connectboxed)
+- [2. Module `backlog`](#2-module-backlog)
+  - [Function `trim_backlog`](#function-trimbacklog)
+  - [Struct `DroppedBacklog`](#struct-droppedbacklog)
+- [3. Module `loopback` (feature `loopback`, on by default)](#3-module-loopback-feature-loopback-on-by-default)
+  - [Function `loopback::pair`](#function-loopbackpair)
+  - [Struct `LoopbackSocket`](#struct-loopbacksocket)
+- [4. Module `native` (feature `native`, non-wasm32 only)](#4-module-native-feature-native-non-wasm32-only)
+  - [Function `native::connect`](#function-nativeconnect)
+  - [Struct `NativeSocket`](#struct-nativesocket)
+- [5. Module `miniquad` (feature `miniquad`, wasm32 only)](#5-module-miniquad-feature-miniquad-wasm32-only)
+  - [Function `miniquad::connect`](#function-miniquadconnect)
+  - [Function `miniquad::page_url`](#function-miniquadpageurl)
+  - [Struct `MiniquadSocket`](#struct-miniquadsocket)
+  - [Function `plaza_ws_crate_version`](#function-plazawscrateversion)
+- [6. Module `pump` (feature `pump`)](#6-module-pump-feature-pump)
+  - [Struct `FramePump<C: WireCodec>`](#struct-framepumpc-wirecodec)
+  - [Enum `Arrival`](#enum-arrival)
+  - [Function `mismatch_message`](#function-mismatchmessage)
+- [7. Module `scripted` (feature `scripted`)](#7-module-scripted-feature-scripted)
+  - [Struct `ScriptedSocket`](#struct-scriptedsocket)
+- [8. Feature Flags](#8-feature-flags)
+- [9. Error Handling](#9-error-handling)
+  - [Enum `WsError`](#enum-wserror)
 
-```rust
-let mut events = Vec::new();
-// once per frame
-socket.poll(&mut events);
-for event in events.drain(..) {
-  match event {
-    Event::Open => println!("connected"),
-    Event::Message(bytes) => println!("{} bytes", bytes.len()),
-    Event::Text(text) => println!("{text}"),
-    Event::Closed(reason) => println!("gone: {reason:?}"),
-  }
-}
-```
-
-### Backends
-
-Each is a feature, and they compose: a native host that also plays enables `native` *and* `loopback`, and talks to both over the same trait.
-
-| feature | where | underneath |
-|---|---|---|
-| `loopback` | anywhere | in-process channels, no dependencies |
-| `native` | desktop | `tungstenite` on a worker thread |
-| `miniquad` | browser, under macroquad | our own JS, registered as a miniquad plugin |
-
-### Why the browser backend is ours rather than a crate
-
-Because the constraint is the *host page's loader*, not the platform. `web-sys` (and so `gloo-net`, and so `tokio-tungstenite-wasm`) needs `wasm-bindgen`, which rewrites the module with `wasm-bindgen-cli` and ships its own JS to instantiate it. miniquad's `mq_js_bundle.js` builds its own import object, lets plugins extend it, and instantiates the raw module itself. Both want to own instantiation, so under macroquad the wasm-bindgen route does not work, and it fails in the worst way available: miniquad stubs out imports nothing provides, so such a build loads happily and then silently does nothing.
-
-So the [`miniquad`](#7-module-miniquad-feature-miniquad-wasm32-only) backend is a few `extern "C"` declarations against our own JS plugin (`js/plaza_ws.js`), which needs no crate at all. The two crates that *do* use miniquad's plugin mechanism, `sapp-jsutils` and `quad-net`, are barely maintained, and the mechanism is small enough not to need them.
-
-An application that is **not** built on macroquad has the opposite problem and wants the wasm-bindgen route. That is a natural fourth backend (`tokio-tungstenite-wasm` behind a `web` feature) and is deliberately absent until something needs it, rather than shipped untested.
-
-## 2. Error Handling
-
-### Enum `WsError`
-
-```rust
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum WsError {
-  Closed,
-  BadUrl(String),
-  Connect(String),
-  Send(String),
-}
-```
-
-Implements `Display` and `std::error::Error`.
-
-*   **`Closed`**: the socket is closed; nothing further can be sent.
-*   **`BadUrl(String)`**: the URL could not be parsed or its scheme is not `ws`/`wss`.
-*   **`Connect(String)`**: the connection could not be established.
-*   **`Send(String)`**: a send failed. In practice this variant surfaces from [`SendJson`](#trait-sendjson-feature-json) when serialization fails; transport-level send failures on a live socket arrive as an [`Event::Closed`](#enum-event) instead.
-
-Note the split between the two ways things go wrong. `Result` covers what a call can know immediately (a bad URL, a socket already closed); everything that happens later on the wire (a failed handshake, a lost connection) arrives as an [`Event::Closed`](#enum-event) from [`poll`](#method-poll), so a frame loop has one place to handle it.
-
-## 3. Core API
+## 1. Core API
 
 ### Trait `Socket`
 
@@ -175,7 +150,7 @@ pub fn connect(url: &str) -> Result<impl Socket + use<>, WsError>
 
 Connects using whichever real transport this build has for its target.
 
-The choice is never ambiguous: `native` exists only off wasm and `miniquad` only on it, so a build that enables both features (the normal shape for an application shipping a desktop and a browser client from one crate) still has exactly one real backend per target. Present when the enabled backend exists for the target: (`native`, not wasm32) or (`miniquad`, wasm32). [`loopback`](#5-module-loopback-feature-loopback-on-by-default) is never chosen here because it connects to a peer rather than to a URL.
+The choice is never ambiguous: `native` exists only off wasm and `miniquad` only on it, so a build that enables both features (the normal shape for an application shipping a desktop and a browser client from one crate) still has exactly one real backend per target. Present when the enabled backend exists for the target: (`native`, not wasm32) or (`miniquad`, wasm32). [`loopback`](#3-module-loopback-feature-loopback-on-by-default) is never chosen here because it connects to a peer rather than to a URL.
 
 ### Function `connect_boxed`
 
@@ -187,7 +162,7 @@ pub fn connect_boxed(url: &str) -> Result<Box<dyn Socket>, WsError>
 
 Unlike `connect`, this exists in **every** build. A build with no real backend gets a runtime `WsError::Connect("this build has no socket backend compiled in")` instead of a compile error, because such a build is legitimate (an offline teaching build still compiles its connect path) and every application ends up writing this same fallback arm itself.
 
-## 4. Module `backlog`
+## 2. Module `backlog`
 
 Discarding a resume backlog before any of it is parsed. Always compiled; `trim_backlog` and `DroppedBacklog` are re-exported at the crate root.
 
@@ -221,7 +196,7 @@ pub struct DroppedBacklog {
 
 What a trim discarded, for the application's meters and panel. The bytes still crossed the wire: count them as received, because the meters measure the link, not what the client chose to read. `bytes` is counted from payload lengths alone; nothing was parsed.
 
-## 5. Module `loopback` (feature `loopback`, on by default)
+## 3. Module `loopback` (feature `loopback`, on by default)
 
 An in-process pair, for a host that also plays.
 
@@ -257,7 +232,7 @@ One end of an in-process pair, backed by `std::sync::mpsc` channels. Behavioral 
 *   A peer that was *dropped* without closing reads as `Event::Closed(CloseReason::Error(..))`, not a clean close, because an application's reconnect decision turns on the difference.
 *   `state()` is `Open` until closed; there is no `Connecting` phase.
 
-## 6. Module `native` (feature `native`, non-wasm32 only)
+## 4. Module `native` (feature `native`, non-wasm32 only)
 
 Desktop, over `tungstenite` on a worker thread.
 
@@ -284,11 +259,11 @@ The frame-loop end of the worker. Further behavior, from the worker loop:
 
 TLS (`wss://`) is available through tungstenite's `rustls-tls-webpki-roots` feature, which this crate's `native` feature enables.
 
-## 7. Module `miniquad` (feature `miniquad`, wasm32 only)
+## 5. Module `miniquad` (feature `miniquad`, wasm32 only)
 
 Browser, under a macroquad/miniquad page. The socket lives in JavaScript and this is the thin Rust side of it. See `js/plaza_ws.js`, which must be included in the page after `mq_js_bundle.js` and before `load()`.
 
-**No dependencies, by choice.** The obvious crates for this job are all `wasm-bindgen` underneath and cannot work here (see [section 1](#why-the-browser-backend-is-ours-rather-than-a-crate)), and the two crates that do use miniquad's plugin mechanism are barely maintained. The mechanism itself is a handful of `extern "C"` declarations, so the module uses the mechanism and skips the dependency.
+**No dependencies, by choice.** The obvious crates for this job are all `wasm-bindgen` underneath and cannot work here, and the two crates that do use miniquad's plugin mechanism are barely maintained. The mechanism itself is a handful of `extern "C"` declarations, so the module uses the mechanism and skips the dependency.
 
 The Rust side never allocates in JS and JS never calls back into wasm. Events are queued in JavaScript and drained on demand: ask what kind is at the front, ask how long it is, hand over a buffer, repeat. That is three crossings per event and it removes every reentrancy question, which matters because a callback into wasm during a frame could land in the middle of the borrow the frame loop is already holding.
 
@@ -321,7 +296,7 @@ pub extern "C" fn plaza_ws_crate_version() -> u32
 
 Not for calling from Rust; it is the version export miniquad's loader checks the JS plugin against. Without it the loader logs that the plugin "is present in JS bundle, but is not used in the rust code". Exporting it turns that into a real check: a page serving an older `plaza_ws.js` than the wasm was built against now says so, instead of failing somewhere later for no visible reason.
 
-## 8. Module `pump` (feature `pump`)
+## 6. Module `pump` (feature `pump`)
 
 The client side of plaza's framed protocol, pumped once per frame. Owns the [`Socket`](#trait-socket), a `plaza_client_utils::Timeline`, and the kind dispatch: it schedules pings, answers the server's probes, feeds pongs to the clock estimators, sends and checks the `Hello`, and hands the application only what it owns. Pulls in `plaza_wire` (with `serde`) and `plaza_client_utils`.
 
@@ -356,7 +331,7 @@ impl<C: WireCodec> FramePump<C> {
 }
 ```
 
-`poll` is `drain` plus `digest` glued together. A client that trims a resume backlog needs its hands between the socket and the dispatch, so the two halves are also public: `drain` into a caller-owned event buffer, [`trim_backlog`](#4-module-backlog), call `on_resume` if anything was dropped, then `digest` the survivors.
+`poll` is `drain` plus `digest` glued together. A client that trims a resume backlog needs its hands between the socket and the dispatch, so the two halves are also public: `drain` into a caller-owned event buffer, [`trim_backlog`](#2-module-backlog), call `on_resume` if anything was dropped, then `digest` the survivors.
 
 `protocol` is the build's wire format number (from `plaza_wire::build`); it goes out as the `Hello` when the socket opens and is compared against the server's. `send_ops` returns the frame's wire length, or `None` if the value would not serialise. The byte counters are cumulative so a windowed meter diffs them; they count everything, probes and answers included.
 
@@ -381,21 +356,44 @@ pub fn mismatch_message(ours: u32, theirs: u32) -> String
 
 The standard wording for a protocol mismatch, for the common client whose build is a cached browser bundle ("...reload to get the current client"). Word your own if yours is not.
 
-## 9. Module `scripted` (feature `scripted`)
+## 7. Module `scripted` (feature `scripted`)
 
 ### Struct `ScriptedSocket`
 
 A socket whose arrivals the test scripts: what a hidden tab's receive queue looks like from the Rust side, without a browser. `feed(Event)` / `feed_message(Vec<u8>)` queue arrivals for the next `poll`; `sent()` returns everything sent so far as raw bytes; `close_by_peer(code, reason)` flips the state and queues the `Closed` event behind whatever is already waiting, exactly as a real socket delivers it. Clones share the same queues, so the test keeps one handle while the code under test owns another as its `Box<dyn Socket>`. Pulls in `parking_lot`.
 
-## 10. Feature Flags
+## 8. Feature Flags
 
 | Feature | Default | Effect |
 |---|---|---|
-| `loopback` | yes | Compiles [`loopback`](#5-module-loopback-feature-loopback-on-by-default). No dependencies. |
-| `native` | no | Compiles [`native`](#6-module-native-feature-native-non-wasm32-only) (non-wasm32 targets only) and pulls in `tungstenite` with rustls TLS. |
-| `miniquad` | no | Compiles [`miniquad`](#7-module-miniquad-feature-miniquad-wasm32-only) (wasm32 targets only). No dependencies; requires `js/plaza_ws.js` in the page. |
+| `loopback` | yes | Compiles [`loopback`](#3-module-loopback-feature-loopback-on-by-default). No dependencies. |
+| `native` | no | Compiles [`native`](#4-module-native-feature-native-non-wasm32-only) (non-wasm32 targets only) and pulls in `tungstenite` with rustls TLS. |
+| `miniquad` | no | Compiles [`miniquad`](#5-module-miniquad-feature-miniquad-wasm32-only) (wasm32 targets only). No dependencies; requires `js/plaza_ws.js` in the page. |
 | `json` | no | Compiles [`SendJson`](#trait-sendjson-feature-json) and pulls in `serde` and `serde_json`. Off by default because the transport itself has no opinion about what rides on it. |
-| `pump` | no | Compiles [`pump`](#8-module-pump-feature-pump) and pulls in `plaza_wire` (with `serde`) and `plaza_client_utils`. |
-| `scripted` | no | Compiles [`scripted`](#9-module-scripted-feature-scripted) and pulls in `parking_lot`. Meant for `dev-dependencies`. |
+| `pump` | no | Compiles [`pump`](#6-module-pump-feature-pump) and pulls in `plaza_wire` (with `serde`) and `plaza_client_utils`. |
+| `scripted` | no | Compiles [`scripted`](#7-module-scripted-feature-scripted) and pulls in `parking_lot`. Meant for `dev-dependencies`. |
 
 The module `cfg`s combine feature and target: `native` code exists only when the target is not wasm32, and `miniquad` code only when it is, so enabling both features is safe and each build gets the one that applies, including through the free [`connect`](#function-connect) function.
+
+## 9. Error Handling
+
+### Enum `WsError`
+
+```rust
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WsError {
+  Closed,
+  BadUrl(String),
+  Connect(String),
+  Send(String),
+}
+```
+
+Implements `Display` and `std::error::Error`.
+
+*   **`Closed`**: the socket is closed; nothing further can be sent.
+*   **`BadUrl(String)`**: the URL could not be parsed or its scheme is not `ws`/`wss`.
+*   **`Connect(String)`**: the connection could not be established.
+*   **`Send(String)`**: a send failed. In practice this variant surfaces from [`SendJson`](#trait-sendjson-feature-json) when serialization fails; transport-level send failures on a live socket arrive as an [`Event::Closed`](#enum-event) instead.
+
+Note the split between the two ways things go wrong. `Result` covers what a call can know immediately (a bad URL, a socket already closed); everything that happens later on the wire (a failed handshake, a lost connection) arrives as an [`Event::Closed`](#enum-event) from [`poll`](#method-poll), so a frame loop has one place to handle it.

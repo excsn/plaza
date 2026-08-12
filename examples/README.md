@@ -2,6 +2,24 @@
 
 One crate each, smallest first. Run any of them with `cargo run -p <crate>` (the crate name is in the last column). The two playgrounds are the exception: they target the browser and have their own scripts, see their READMEs.
 
+## Recommended Examples
+
+- [`blackhole_playground`](blackhole_playground/): thousands of pellets, no pellets on the wire.
+- [`horde_playground`](horde_playground/): 128 players, thousands of monsters, one small packet.
+- [`pellet_maze`](pellet_maze/): dots and ghosts. "Turn left" is a place, not a direction.
+- [`bomb_grid`](bomb_grid/): bombs and chain reactions, where a correction cannot hide.
+- [`seed_defense`](seed_defense/): send a seed; every machine imagines the same monsters.
+- [`curtain_fire`](curtain_fire/): a bullet hell where their bullets are free and yours are not.
+- [`hit_scan`](hit_scan/): you shot them behind cover. Somebody has to lose.
+- [`poketo`](poketo/): a tile overworld and turn-based battles. Two netcodes, one game.
+- [`field_orders`](field_orders/): tactics where a phase ends when the army does, not the clock.
+- [`quick_draw`](quick_draw/): a duel decided between two ticks, both clocks lying.
+
+### 3D
+- [`cube_yard`](cube_yard/): 901 solver-driven cubes taken from 23.90 Mbit/sec to 0.23 in four measured stages.
+- [`spacemo`](spacemo/): interest management in a volume, where a flat grid never misses anyone and over-returns at **7.1x** the bandwidth.
+- [`gow_3d`](gow_3d/): the netcode a game does not need because its design already absorbed the latency, plus relevance a radius cannot express.
+
 | Example | Shows | Crate |
 |---|---|---|
 | [`shared_counter`](shared_counter/) | The smallest complete application: two clients share one value. | `plaza_example_shared_counter` |
@@ -44,7 +62,7 @@ One crate each, smallest first. Run any of them with `cargo run -p <crate>` (the
 
 Nine of these ship a static page. The frame layer they share, the kind byte, the ping answer, and the variant-name helpers, is one file: [`wire/js/plaza_protocol.js`](../wire/js/plaza_protocol.js), served as a copy beside each page and refreshed by [`sync_protocol_js.sh`](sync_protocol_js.sh). Nothing compiles a page, so [`check_pages.py`](check_pages.py) does what a compiler would: it pins the canonical file's kind bytes to `plaza_wire::frame::Kind`, fails any copy that drifts from it, refuses a page that reads ops without a variant-name helper when its server has a fieldless variant, and runs the one hand-written MessagePack codec against the fixtures the Rust side wrote. `../check.sh` runs it. It exists because `parlour_game`'s page encoded an ops batch as a map rather than a sequence, so every play was discarded and the turn timeout played for the player, which reads like a game rule rather than a bug.
 
-Turning the last two into real listen-servers surfaced a run of bugs whose causes were consistently not where the symptoms pointed. [LEARNINGS.md](LEARNINGS.md) is the record: the principles that prevent whole classes of bug, what broke and which reasonable theories were wrong, how each was actually found, what all of it changed in plaza itself, and what is deliberately left unpredicted so nobody "fixes" it.
+Turning the last two into real listen-servers surfaced a run of bugs whose causes were consistently not where the symptoms pointed.
 
 For example:
 

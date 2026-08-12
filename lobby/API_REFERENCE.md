@@ -1,34 +1,33 @@
 # API Reference: `plaza_lobby`
 
-## 1. Introduction & Core Concepts
+`plaza_lobby` is room lifecycle above a controller: creating, listing, joining and reaping rooms, with the queues, reservations and tickets around them.
 
-`plaza_lobby` manages **rooms on a single server**: creating them, listing them, authorizing joins, and cleaning up finished ones. Each room is a `plaza` `StateController` running as its own task in the same process.
+## Contents
 
-The division of labour:
+- [1. Core Types](#1-core-types)
+  - [Type Aliases](#type-aliases)
+  - [Trait `RoomFactory`](#trait-roomfactory)
+  - [Trait `RoomHandle<GameAgentID: AgentId, CustomRoomSettings>`](#trait-roomhandlegameagentid-agentid-customroomsettings)
+  - [Struct `InProcessRoomHandle<GameOp, GameID, GameStateType, CustomRoomSettings>`](#struct-inprocessroomhandlegameop-gameid-gamestatetype-customroomsettings)
+- [2. The Manager](#2-the-manager)
+  - [Struct `InMemoryLobbyManager<F: RoomFactory>`](#struct-inmemorylobbymanagerf-roomfactory)
+- [3. Payloads](#3-payloads)
+  - [Requests](#requests)
+  - [Responses and notices](#responses-and-notices)
+- [4. Latency admission and routing](#4-latency-admission-and-routing)
+- [5. Queues, reservations and tickets](#5-queues-reservations-and-tickets)
+  - [Struct `MatchQueue<ID: AgentId, T: SchedulerInstant>`](#struct-matchqueueid-agentid-t-schedulerinstant)
+  - [Struct `Formed<ID: AgentId>`](#struct-formedid-agentid)
+  - [Struct `SeatReservations<ID: AgentId>`](#struct-seatreservationsid-agentid)
+  - [Trait `TicketStore<ID: AgentId>` and `Ticket<ID>`](#trait-ticketstoreid-agentid-and-ticketid)
+  - [Struct `MapTicketRegistry<ID: AgentId>`](#struct-mapticketregistryid-agentid)
+  - [Struct `CachedTicketRegistry<ID: AgentId>` (feature `cache`)](#struct-cachedticketregistryid-agentid-feature-cache)
+  - [Writing a third](#writing-a-third)
+  - [Expiry does not stand alone](#expiry-does-not-stand-alone)
+- [6. Error Handling](#6-error-handling)
+  - [Enum `LobbyError`](#enum-lobbyerror)
 
-*   **You implement [`RoomFactory`](#trait-roomfactory)**: how a room of your game is built. Plaza cannot know what your game needs, so spawning the controller is yours.
-*   **The crate provides [`InMemoryLobbyManager`](#struct-inmemorylobbymanagerf-roomfactory)**: the registry and the join/list/reap flows around your factory.
-*   **Rooms are reached through [`RoomHandle`](#trait-roomhandlegameagentid-agentid-customroomsettings)**: the lobby talks to a room only through `plaza`'s `ControllerCommand` channel, so it needs no knowledge of your game's types beyond the associated types you declare.
-
-**Authorization, not connection.** A successful join means the lobby has *authorized* a player and returns the endpoint to connect to. The gameplay join happens when that client connects to the room's own transport and the room's `Session` fires its presence event. The lobby never proxies gameplay traffic.
-
-**Single server.** Rooms are in-process tasks. Nothing here coordinates across machines; that is an application concern.
-
-## 2. Error Handling
-
-### Enum `LobbyError`
-
-`Clone + Debug`, implements `std::error::Error` via `thiserror`.
-
-*   `RoomNotFound(RoomId)`
-*   `RoomSpawnFailed(String)`: returned by your factory.
-*   `PlayerActionInvalid(String)`
-*   `InvalidRoomSettings(String)`
-*   `JoinRoomFailed(String)`: wrong password, room full, room refused.
-*   `InternalOrchestrationError(String)`
-*   `NotImplemented(String)`
-
-## 3. Core Types
+## 1. Core Types
 
 ### Type Aliases
 
@@ -77,7 +76,7 @@ A room running as a task in this process.
 *   **Public fields**: `room_id`, `command_tx`, `metadata`, `game_session_endpoint`.
 *   Implements `RoomHandle`. The stored password hash is never exposed in `RoomMetadata`, which reports only whether one exists.
 
-## 4. The Manager
+## 2. The Manager
 
 ### Struct `InMemoryLobbyManager<F: RoomFactory>`
 
@@ -101,7 +100,7 @@ A room running as a task in this process.
 *   **`room(&self, room_id: &RoomId) -> Option<Arc<InProcessRoomHandle<..>>>`** The way to send a specific room a `ControllerCommand`, read its metadata, or update its player count.
 *   **`rooms(&self) -> Vec<Arc<InProcessRoomHandle<..>>>`**
 
-## 5. Payloads
+## 3. Payloads
 
 Serde-serializable message shapes for a client-facing lobby protocol. They are data definitions: routing them is the application's job.
 
@@ -122,7 +121,7 @@ Serde-serializable message shapes for a client-facing lobby protocol. They are d
 *   **`RoomMetadataUpdatedNoticePayload<CustomGameSettings>`**: `updated_metadata`.
 *   **`RoomClosedNoticePayload`**: `room_id`, `reason`.
 
-## 5b. Latency admission and routing
+## 4. Latency admission and routing
 
 A room states what its simulation can carry; the caller supplies what the server measured; the lobby matches.
 
@@ -132,11 +131,16 @@ A room states what its simulation can carry; the caller supplies what the server
 *   **`rooms_playable_at(one_way_ms) -> Vec<RoomMetadata<_>>`**: the rooms this connection could actually play in, tightest schedule first so a fast link is not sent to the room built for slow ones. A room with no limit sorts last: it takes anybody, so it is the fallback rather than the first choice.
 *   **`RoomFilters::playable_at_one_way_ms`**: the same, applied to a room listing.
 
+Module **`routing`** holds the rule as two free functions over a set of rooms rather than a lobby:
+
+*   **`playable_at(one_way_ms, rooms) -> Vec<RoomMetadata<S>>`**: what `rooms_playable_at` is. Full rooms are dropped as well as unsuitable ones.
+*   **`best_for(one_way_ms, rooms) -> Option<RoomMetadata<S>>`**: the single best fit. `None` is the only case that justifies refusing somebody.
+
 **Why the decision is here rather than in the room.** A room can only say yes or no. A lobby can say *where*, which is the useful thing to do about a slow connection: route it to a room whose schedule is deep enough instead of turning it away. Refusal is what is left when nothing fits, not the primary behaviour.
 
 **Why the measurement is not here.** Measuring needs the socket, deciding needs the rule, and routing needs the set of rooms. Those are three layers and they belong to the transport, the room, and the lobby respectively. Collapsing any two of them puts a number in a place that cannot check it.
 
-## 5c. Queues, reservations and tickets
+## 5. Queues, reservations and tickets
 
 Three blocks either side of what the manager answers. Each holds no timers and spawns nothing, so an application drives it from its own `StateLogic`, in the manner of `plaza::common::reconnect::ReconnectTracker`.
 
@@ -216,40 +220,16 @@ A room in another process cannot share a map. Implement `TicketStore` to verify 
 
 A ticket outliving its `SeatReservations` entry lands a placed player as a spectator holding a spent ticket, and the reverse orphans a seat. Redemption is two steps in two places, the route spending the ticket and the room's logic consuming the reservation, so a ticket window must be **shorter** than the reservation's by at least the time a session takes to come up. Equal windows look correct and are not. `lobby_world` states both numbers adjacently for that reason: `PLACEMENT_WINDOW` at 30s and `RESERVATION_WINDOW` at 45s.
 
-## 6. Putting It Together
+## 6. Error Handling
 
-```rust,ignore
-#[async_trait]
-impl RoomFactory for MyGameFactory {
-  type CustomGameSettings = MySettings;
-  type GameOp = MyOp;
-  type GameID = PlayerId;
-  type GameStateType = MyState;
+### Enum `LobbyError`
 
-  async fn spawn_room(
-    &self,
-    room_id: RoomId,
-    settings: &RoomSettings<MySettings>,
-  ) -> Result<InProcessRoomHandle<MyOp, PlayerId, MyState, MySettings>, LobbyError> {
-    let session = ActixWsPlazaSession::<MyOp, PlayerId>::new();
-    let (command_tx, controller) = StateControllerBuilder::new(
-      Arc::new(MyLogic), session.clone(), Arc::new(MySnapshotter), MyState::default(),
-    ).build();
-    let task = tokio::spawn(controller.run());
+`Clone + Debug`, implements `std::error::Error` via `thiserror`.
 
-    Ok(InProcessRoomHandle::new(
-      room_id,
-      RoomMetadata { /* from settings */ },
-      command_tx,
-      task,
-      format!("ws://host/game/{room_id}"),
-      settings.password_hash.clone(),
-    ))
-  }
-}
-
-let lobby = InMemoryLobbyManager::new(Arc::new(MyGameFactory))
-  .with_password_verifier(Arc::new(|attempt, hash| argon2_verify(attempt, hash)));
-```
-
-Call `reap_finished_rooms` periodically (a scheduled job or a tick), since nothing reaps automatically.
+*   `RoomNotFound(RoomId)`
+*   `RoomSpawnFailed(String)`: returned by your factory.
+*   `PlayerActionInvalid(String)`
+*   `InvalidRoomSettings(String)`
+*   `JoinRoomFailed(String)`: wrong password, room full, room refused.
+*   `InternalOrchestrationError(String)`
+*   `NotImplemented(String)`

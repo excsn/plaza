@@ -1,20 +1,50 @@
 # API Reference: `plaza_session`
 
-## 1. Introduction & Core Concepts
+`plaza_session` implements `plaza::session::Session` over real network transports: actix-web WebSockets and length-delimited TCP.
 
-`plaza_session` implements [`plaza::session::Session`] over real network transports, so an application can hand a `StateController` a WebSocket or TCP endpoint instead of writing one.
+## Contents
 
-**One shared core, thin adapters.** Everything that is not socket I/O (connection registry, message targeting, serialization, and the bridge that turns raw bytes into typed `SessionMessage`s), lives in [`manager`](#4-module-manager). The per-protocol modules only pump bytes. Adding a transport means writing a pump and delegating the trait.
+- [Feature Flags](#feature-flags)
+- [1. Module `codec`](#1-module-codec)
+  - [Trait `WireCodec`](#trait-wirecodec)
+  - [Struct `JsonCodec`](#struct-jsoncodec)
+- [2. Module `manager`](#2-module-manager)
+  - [Struct `ConnectionManager<ID: AgentId>`](#struct-connectionmanagerid-agentid)
+  - [Struct `TransportSession<Op, ID, C: WireCodec>`](#struct-transportsessionop-id-c-wirecodec)
+  - [Type `SessionClock` and struct `SessionOptions`](#type-sessionclock-and-struct-sessionoptions)
+- [3. Module `conditioner`](#3-module-conditioner)
+  - [Type Alias `LinkSink` and struct `LinkPublisher`](#type-alias-linksink-and-struct-linkpublisher)
+  - [Function `target_matches`](#function-targetmatches)
+  - [Type Alias `OutboundFrame`](#type-alias-outboundframe)
+  - [Enum `ConnectionOrder`](#enum-connectionorder)
+  - [Struct `IncomingFrame<ID>`](#struct-incomingframeid)
+  - [Structs `Queues` and `Limits`](#structs-queues-and-limits)
+  - [Struct `Overflow`](#struct-overflow)
+  - [Constants](#constants)
+- [4. Module `workload`](#4-module-workload)
+- [5. Module `actix_ws` (feature `actix_ws`)](#5-module-actixws-feature-actixws)
+  - [Struct `ActixWsPlazaSession<Op, ID, C = JsonCodec>`](#struct-actixwsplazasessionop-id-c-jsoncodec)
+- [6. Module `tcp` (feature `tcp`)](#6-module-tcp-feature-tcp)
+  - [Struct `TcpPlazaSession<Op, ID, C = JsonCodec>`](#struct-tcpplazasessionop-id-c-jsoncodec)
+  - [Type Alias `AgentFactory<ID>`](#type-alias-agentfactoryid)
+  - [Struct `Refusal`](#struct-refusal)
+- [7. Module `host` (feature `actix_host`)](#7-module-host-feature-actixhost)
+  - [Struct `Host`](#struct-host)
+  - [Struct `SimHost` and struct `SimWiring`](#struct-simhost-and-struct-simwiring)
+  - [Function `lan_address() -> Option<String>`](#function-lanaddress---optionstring)
+  - [Function `init_logging()`](#function-initlogging)
+- [8. Module `stats`](#8-module-stats)
+  - [Struct `TransportStats`](#struct-transportstats)
+- [9. The control plane in pieces](#9-the-control-plane-in-pieces)
+  - [Struct `LinkDriver<ID, C>`](#struct-linkdriverid-c)
+  - [Enum `Inbound`](#enum-inbound)
+  - [Struct `LinkHandle`](#struct-linkhandle)
+  - [Struct `ProbeState` and function `make_probe`](#struct-probestate-and-function-makeprobe)
+  - [Function `earliest` and constant `DOWN_SEED_FLIP`](#function-earliest-and-constant-downseedflip)
+- [10. Error Handling](#10-error-handling)
+  - [Enum `SessionLayerError`](#enum-sessionlayererror)
 
-**No actors.** Connection state sits behind a `parking_lot::RwLock` and atomics, so transports call the manager's methods directly from their connection tasks. There is no command channel and no mailbox round-trip. The one question asked on every frame, whether a link is impaired, is a `bool` beside the profile rather than the profile itself, so an unimpaired connection never takes that lock.
-
-**A tokio runtime is required.** Every constructor spawns the deserialize bridge. `TcpPlazaSession::bind*` is `async` so this is implicit; the synchronous ones (`ActixWsPlazaSession::{new, with_codec, with_protocol, with_options}`, `TransportSession::{new, with_protocol, with_options}`) panic outside a runtime, and the panic comes from tokio rather than from here.
-
-**Pluggable wire format.** All encoding and decoding goes through [`WireCodec`](#trait-wirecodec). [`JsonCodec`](#struct-jsoncodec) is the default; supply your own for MessagePack, bincode, or anything else without touching transport code.
-
-**Backpressure policy.** Configurable per juncture, and by default what it always was: outbound sends use `try_send`, so a client that stopped reading loses the frame rather than stalling the controller for everyone, while the deserialize bridge awaits, so a busy controller backs traffic up behind it. [`Overflow`](#struct-overflow) changes either, and [`Queues`](#structs-queues-and-limits) changes how much fits before the question arises.
-
-### Feature Flags
+## Feature Flags
 
 | Feature | Default | Enables |
 |---|---|---|
@@ -24,26 +54,11 @@
 | `json` | yes | `JsonCodec`, and the codec a session type falls back to when it names none. Enables `plaza_wire/json`, which is what pulls in `serde_json`. |
 | `msgpack` | no | `MsgPackCodec` (compact) and `MsgPackNamedCodec` (struct field names kept, for a peer that decodes by name). Enables `plaza_wire/msgpack`. |
 
-[`manager`](#4-module-manager), [`codec`](#3-module-codec), and [`error`](#2-error-handling) compile unconditionally.
+[`manager`](#2-module-manager), [`codec`](#1-module-codec), and [`error`](#10-error-handling) compile unconditionally.
 
 **Dropping `serde_json`.** Turn off `json` and the crate no longer builds it: `plaza_session = { version = "0.7", default-features = false, features = ["tcp", "msgpack"] }`. Nothing else has to change, because `plaza` and `plaza_wire` are depended on with `default-features = false` here and neither `plaza` nor `plaza_lobby` names a codec at all, so no internal dependency forces the choice back on. Bring your own codec and you can drop `msgpack` too, leaving no built-in format compiled.
 
-Two consequences worth knowing before you do. Without `json` the session types have no default type parameter, so `ActixWsPlazaSession<Op, Id>` becomes `ActixWsPlazaSession<Op, Id, MyCodec>`, and the zero-argument constructors (`ActixWsPlazaSession::new`, `TcpPlazaSession::bind`) are gone with it; use `with_codec` and `bind_with_codec`. And **`actix_ws` re-introduces `serde_json` regardless**, because actix-web depends on it unconditionally for its own extractors. A build that genuinely excludes it is a `tcp` or custom-transport build.
-
-## 2. Error Handling
-
-### Enum `SessionLayerError`
-
-Transport failures. Deliberately **non-generic**: these concern sockets and wire formats, not application agent IDs.
-
-*   **Variants**:
-    *   `Bind { addr: String, source: std::io::Error }`
-    *   `Serialization { transport: &'static str, context: &'static str, source: Box<dyn Error + Send + Sync> }`
-    *   `Deserialization { transport, context, source }`
-    *   `ClientSendFailed { transport, conn_id: ConnectionId, reason: &'static str }`
-*   **Conversion**: `impl<ID: AgentId> From<SessionLayerError> for PlazaError<ID>`. Serialization and deserialization map onto the matching `PlazaError` variants; everything else becomes `PlazaError::Session(TransportError(..))` using `Display`, so the `#[source]` chain stays readable.
-
-## 3. Module `codec`
+## 1. Module `codec`
 
 ### Trait `WireCodec`
 
@@ -63,18 +78,17 @@ Implementations must be stateless and cheap to clone, one lives inside every ses
 
 The default. Human-readable, so a browser console or `websocat` can inspect traffic. `Debug + Clone + Copy + Default`.
 
-## 4. Module `manager`
+## 2. Module `manager`
 
 Shared machinery. Most applications use it only through a transport, but it is public so new transports can be written outside this crate.
 
 ### Struct `ConnectionManager<ID: AgentId>`
 
-The connection registry plus the notification channels a `StateController` consumes.
-
-Connections are held by id and **indexed by agent**, because both halves of the surface below need them that way: a target naming agents resolves by lookup, and the `agent_*` readers answer about one player without walking every connection. An agent may hold several connections at once (a reconnect that overlaps the old socket, a second device), so the index maps an id to all of them and `set_agent_link_profile`, `record_protocol` and `agent_link_dropped` act on each, while `agent_rtt`, `agent_link_rtt` and `protocol` answer from the first registered.
+The connection registry plus the notification channels a `StateController` consumes. Connections are held by id and indexed by agent. An agent may hold several at once, so `set_agent_link_profile`, `record_protocol` and `agent_link_dropped` act on each, while `agent_rtt`, `agent_link_rtt` and `protocol` answer from the first registered.
 
 *   **`new(transport: &'static str, capacity: usize) -> Self`**
 *   **`with_hello(transport: &'static str, capacity: usize, hello: Option<OutboundFrame>) -> Self`**: the same, plus a pre-encoded frame pushed to every connection the moment it registers. `TransportSession::with_protocol` builds one `Kind::Hello` frame at construction and hands it here, so the handshake costs one encode for the process rather than one per client.
+*   **`with_hello_and_clock(transport, capacity, hello: Option<OutboundFrame>, clock: Option<SessionClock>) -> Self`**: the same again, plus the clock a `Pong` is stamped with.
 *   **`with_options(transport: &'static str, hello: Option<OutboundFrame>, options: &SessionOptions) -> Self`**: takes the clock, queue depths and limits from `options`. `hello` stays a separate argument because the manager holds the encoded frame while `options` holds the version it was built from. The `capacity` constructors above are this one with `inbound`, `decoded` and `presence` all set to that number.
 *   **`queues(&self) -> &Queues`**, **`limits(&self) -> &Limits`**: what this manager was built with. A transport adapter reads `queues().outbound` when it creates a connection's outbound queue, `queues().conditioner` for its delay queues, `limits().probe_slots` for the probe table, and whichever byte cap its own framing enforces.
 *   **`async register(&self, agent: Agent<ID>, to_client_tx: SessionSender<OutboundFrame>) -> ConnectionId`**: records a connected client, sends the hello frame if there is one, and announces the join. Build the queue with `plaza::session::session_channel`, so a transport never names the channel crate. `async` because announcing may wait under `PresenceOverflow::Backpressure`.
@@ -102,7 +116,8 @@ Connections are held by id and **indexed by agent**, because both halves of the 
 *   **`rtt(conn_id)`** / **`min_rtt(conn_id)`** / **`rtt_samples(conn_id)`**: the same, per connection.
 *   **`record_rtt(conn_id, Duration)`**: what a transport calls when it has timed one.
 *   **`agent_link_rtt(&self, id: &ID)`** / **`link_rtt(conn_id)`** / **`min_link_rtt(conn_id)`** / **`link_rtt_samples(conn_id)`** / **`record_link_rtt(conn_id, Duration)`**: the same family for the round trip measured over the frame path, probe frame out and `Pong` back, through whatever impairment the link carries. The transport family above measures the socket underneath all of that; the difference between the two is what plaza and the configured link cost. A transport with no ping frame of its own reports only this one.
-*   **`set_link_profile(conn_id, LinkProfile)`** / **`set_agent_link_profile(&ID, LinkProfile)`** / **`set_all_link_profiles(LinkProfile)`** / **`link_profile(conn_id)`**: the delay, jitter and loss frames ride through. See [`conditioner`](#module-conditioner).
+*   **`set_link_profile(conn_id, LinkProfile)`** / **`set_agent_link_profile(&ID, LinkProfile)`** / **`set_all_link_profiles(LinkProfile)`** / **`link_profile(conn_id)`**: the delay, jitter and loss frames ride through. See [`conditioner`](#3-module-conditioner). The agent and all-connection forms also **clear the link readings** they touch, because `agent_link_rtt` reports a minimum and a minimum taken under the old link would outlive it. The sample count and the transport-plane numbers are left alone, since those describe the socket rather than the link. `set_link_profile`, the single-connection form, does not clear them.
+*   **`link_handle(&self, conn_id) -> Option<Arc<LinkHandle>>`**: the shared profile cell, taken once by a connection task. See [`LinkHandle`](#struct-linkhandle).
 *   **`record_link_drop(conn_id)`** / **`link_dropped(conn_id)`** / **`agent_link_dropped(&ID)`** / **`total_link_dropped()`**: how many frames the link threw away, which only a `Delivery::Datagram` profile ever does. The transports call the first whenever `Conditioner::push` refuses a frame. Worth exposing because the application cannot count these itself: what the link lost never reaches it.
 *   **`clock(&self) -> Option<&SessionClock>`**: the clock a `Pong` is stamped with, if one was installed.
 *   **`record_protocol(&self, agent: &Agent<ID>, version: ProtocolVersion)`** / **`protocol(&self, id: &ID) -> Option<ProtocolVersion>`**: what a peer declared in its `Hello`, kept per agent. The deserialize bridge records it; an application reads it to decide what a given client can be sent, or to tell it to reload.
@@ -114,7 +129,7 @@ The `take_*` methods hand out single-consumer streams; calling one twice panics.
 
 A complete `Session` implementation over any byte transport. Both shipped adapters wrap one and delegate to it.
 
-*   **`with_protocol(transport: &'static str, codec: C, capacity: usize, protocol: ProtocolVersion) -> Arc<Self>`**: spawns the deserialize bridge and declares what this build speaks (from [`plaza_wire::build`](../wire/API_REFERENCE.md#7-module-build-feature-build)). It encodes one `Kind::Hello` frame up front for `ConnectionManager::with_hello` to send on every connection, and tells the bridge what to compare an inbound `Hello` against.
+*   **`with_protocol(transport: &'static str, codec: C, capacity: usize, protocol: ProtocolVersion) -> Arc<Self>`**: spawns the deserialize bridge and declares what this build speaks (from [`plaza_wire::build`](../wire/API_REFERENCE.md#6-module-build-feature-build)). It encodes one `Kind::Hello` frame up front for `ConnectionManager::with_hello` to send on every connection, and tells the bridge what to compare an inbound `Hello` against.
 *   **`new(transport: &'static str, codec: C, capacity: usize) -> Arc<Self>`**: the same with `ProtocolVersion::UNKNOWN`, which declares nothing and so disables the check rather than failing it.
 *   **`with_options(transport: &'static str, codec: C, options: SessionOptions) -> Arc<Self>`**: what the two above delegate to. It takes no `capacity`, because `options.queues` carries every depth including the bridge's own output queue.
 *   **`manager(&self) -> &Arc<ConnectionManager<ID>>`**
@@ -155,7 +170,7 @@ SessionOptions::with_protocol(ProtocolVersion(PROTOCOL))
 
 The clock is read when answering a latency probe and its reading becomes `Pong.responder`. It is called on a connection task, so an authoritative clock living on the simulation loop is **published** rather than borrowed: store the tick into an `AtomicU64` and close over it. **The unit is the application's**; nothing here reads the value as a quantity, converts it, or has a default for it. Without a clock, `Pong.responder` is `None`, and a client can still measure a round trip but cannot estimate the offset between the two clocks.
 
-## Module `conditioner`
+## 3. Module `conditioner`
 
 ```rust
 pub enum Delivery { Reliable, Datagram }   // Reliable is the default
@@ -172,6 +187,10 @@ Impairment applied where the link is. `up` is what the client sends, `down` what
 **No frame kind is exempt under either model.** Under `Reliable` nothing is lost. Under `Datagram` a lost probe costs one sample of the several the session keeps in flight, and a lost `Hello` reads as a peer that declared nothing, the case that handshake already survives. The queue bound is the one place a frame is discarded outright, and it stands for a socket buffer running out rather than for anything the network did; control frames are still admitted there.
 
 **The jitter draw is reproducible**: an inline xorshift seeded from the connection id, not from the clock, so an impaired session re-runs the same way.
+
+**`DirectionProfile::is_passthrough()`** is the question the fast path asks, and **`LinkProfile::is_passthrough()`** is true only when both directions are.
+
+A `Conditioner` is one direction's queue, driven through three calls: **`next_release() -> Option<Instant>`**, the release time of the head frame and so what to sleep until; **`pop_ready(now) -> Option<Frame>`**, the next frame that has come due; **`is_empty()`**. A frame may take the fast path only when the profile is passthrough **and** the queue is empty: a connection set back to passthrough can still hold delayed frames, and releasing a new one past them reorders the stream.
 
 **`Conditioner::drain()`** empties the queue in order with release times ignored: what a close uses to flush what was queued rather than wait out a simulated delay.
 
@@ -202,7 +221,7 @@ The targeting rules in scanning form, for a transport that keeps its own registr
 
 A newtype over a refcounted buffer: one fully-encoded message, kind tag then body, in either direction. **Cloning shares rather than copies**, which is what makes a broadcast to N recipients cost a refcount bump each instead of N allocations, inside `broadcast`'s read guard. It is a newtype rather than an alias so that guarantee belongs to this crate rather than to whichever buffer type it holds.
 
-Get one with `Frame::from(Vec<u8>)` or `Frame::from(bytes::Bytes)`; read it through `AsRef<[u8]>` or `Deref<Target = [u8]>`; hand the shared buffer to a writer that wants one with `into_bytes()`. A transport that already speaks `Bytes`, which both shipped ones and most WebSocket and QUIC crates do, converts for free in either direction, and one that reads into a `Vec<u8>` never needs that crate at all. `OutboundFrame` is an alias for it, under the name a transport adapter meets it by.
+Get one with `Frame::from(Vec<u8>)` or `Frame::from(bytes::Bytes)`; read it through `AsRef<[u8]>` or `Deref<Target = [u8]>`, or ask directly with **`len()`** and **`is_empty()`**; hand the shared buffer to a writer that wants one with `into_bytes()`. A transport that already speaks `Bytes`, which both shipped ones and most WebSocket and QUIC crates do, converts for free in either direction, and one that reads into a `Vec<u8>` never needs that crate at all. `OutboundFrame` is an alias for it, under the name a transport adapter meets it by.
 
 ### Enum `ConnectionOrder`
 
@@ -242,9 +261,7 @@ pub struct Probes {
 
 `Probes` is separate from `Limits` because a schedule is not a cap. `Probes::off()` and `SessionOptions::without_probes()` stop this session measuring; an inbound `Ping` is still answered, since refusing it would break a peer measuring its own side, and `agent_link_rtt` then stays `None`. `ConnectionManager::probes()` reads it back, which is where a transport adapter sets up its timer. Defaults: enabled, 16 slots, 8 probes at 125ms, then one every 5s.
 
-Both are plain structs with `Default`, reachable through [`SessionOptions`](#type-sessionclock-and-struct-sessionoptions) and readable off a manager with `ConnectionManager::queues()` / `limits()`, which is where a transport adapter picks them up. `Queues::for_workload` and `Limits::for_workload` derive them from a [`Workload`](#module-workload).
-
-The defaults below are a starting point rather than a prescription: what suits a 16-player room and what suits a 4000-connection relay are not the same number, and only the application knows which it is. Raising a depth costs memory times connections; lowering it makes the queue drop sooner. `inbound`, `decoded` and `presence` share a default because they used to share one constructor argument, not because they carry comparable traffic: presence is one event per connect, the other two are every frame from every client.
+Both are plain structs with `Default`, reachable through [`SessionOptions`](#type-sessionclock-and-struct-sessionoptions) and readable off a manager with `ConnectionManager::queues()` / `limits()`, which is where a transport adapter picks them up. `Queues::for_workload` and `Limits::for_workload` derive them from a [`Workload`](#4-module-workload).
 
 The two byte caps are separate because they bound different mechanisms, and each defaults to what its transport enforced before it was nameable. A build serving both transports that wants one number sets both.
 
@@ -259,6 +276,8 @@ pub struct Overflow {
 ```
 
 What each queue does when it is full. `Default` is `Drop` on all three, which is what shipped before the policy existed. Reach it through `SessionOptions::overflow(..)`, the one-call builders `disconnect_slow_clients` / `backpressure_inbound` / `backpressure_presence`, or `Overflow::for_workload`. `ConnectionManager::overflow()` reads it back.
+
+`Overflow::drop_everywhere()` is `Default` under a name. `Overflow::block_where_possible()` waits at the two queues that have an arm to wait on and leaves `outbound` on `Drop`.
 
 Three types rather than one shared enum, because the coherent arms differ and a shared enum would make `presence: Disconnect` typeable. `Disconnect` belongs to `outbound` alone: an inbound queue fills because the controller is behind, which names nothing a particular client did, and a lost presence event is a bookkeeping failure that disconnecting would compound. There is no `block_everywhere` for the same reason in reverse: `broadcast` fans out under the registry's read guard and has no arm that can wait, so `Overflow::block_where_possible()` leaves `outbound` on `Drop` and says so.
 
@@ -276,7 +295,7 @@ Both are reachable only because `forward_incoming`, `register`, `deregister` and
 *   `DEFAULT_PROBE_SLOTS: usize = 16`: `Probes::slots`, about two seconds of the probe's fast phase.
 *   `DEFAULT_PROBE_FAST_PINGS: u32 = 8`, `DEFAULT_PROBE_FAST_INTERVAL: Duration = 125ms`, `DEFAULT_PROBE_IDLE_INTERVAL: Duration = 5s`: the schedule.
 
-## Module `workload`
+## 4. Module `workload`
 
 ```rust
 pub struct Workload {
@@ -313,7 +332,7 @@ Three constants are judgement rather than measurement, and say so in their own d
 
 *   **`new() -> Arc<Self>`**: JSON on the wire, the usual choice for browsers. Only on `C = JsonCodec`.
 *   **`with_codec(codec: C) -> Arc<Self>`**: declares nothing, so no `Hello` is sent and the version check is off.
-*   **`with_protocol(codec: C, protocol: ProtocolVersion) -> Arc<Self>`**: announces `protocol` (from [`plaza_wire::build`](../wire/API_REFERENCE.md#7-module-build-feature-build)) as a `Hello` before anything else, so a client learns about a skew on connect rather than by mis-decoding an op. This is the only way a WebSocket session declares a version: without it the handshake is unreachable for exactly the browser and mobile clients it exists for, and an installed app cannot be forced to reload the way a page can. `ProtocolVersion::UNKNOWN` is what `with_codec` passes.
+*   **`with_protocol(codec: C, protocol: ProtocolVersion) -> Arc<Self>`**: announces `protocol` (from [`plaza_wire::build`](../wire/API_REFERENCE.md#6-module-build-feature-build)) as a `Hello` before anything else, so a client learns about a skew on connect rather than by mis-decoding an op. This is the only way a WebSocket session declares a version: without it the handshake is unreachable for exactly the browser and mobile clients it exists for, and an installed app cannot be forced to reload the way a page can. `ProtocolVersion::UNKNOWN` is what `with_codec` passes.
 *   **`with_options(codec: C, options: SessionOptions) -> Arc<Self>`**: `with_protocol` plus a [`SessionClock`](#type-sessionclock-and-struct-sessionoptions) for stamping `Pong.responder`. The other constructors delegate to it with no clock.
 *   **`handle_connection(&self, req: &HttpRequest, stream: web::Payload, agent: Agent<ID>) -> Result<HttpResponse, actix_web::Error>`** Completes the handshake, registers the connection, and spawns its pump. Return the `HttpResponse` from your route. `agent` identifies the client: derive it from an auth token, a query string, or mint a fresh id for anonymous play.
 *   **`connection_rtt(conn_id) -> Option<(Duration, Duration, u64)>`** (smoothed, minimum, samples), **`agent_rtt(id) -> Option<(Duration, u64)>`**, **`connection_link_rtt(conn_id)`**, **`agent_link_rtt(id)`**, **`set_agent_link_profile(id, LinkProfile)`**, **`set_all_link_profiles(LinkProfile)`**, **`link_dropped()`**, **`agent_link_dropped(id)`**, **`stats() -> Arc<TransportStats>`**: available whatever the codec. They read the manager underneath, so a session built `with_codec` gets the same measurements as a JSON one.
@@ -365,7 +384,7 @@ A refusal happens **before** `register`: nothing is allocated, announced, or sna
 
 ### Struct `Refusal`
 
-*   **`farewell: Option<Frame>`**: bytes to write before the socket closes, already encoded; the transport does not know what reason they spell. Encode an op of your own vocabulary with [`TransportSession::encode_message`](#struct-transportsessionop-id-c) or by hand.
+*   **`farewell: Option<Frame>`**: bytes to write before the socket closes, already encoded; the transport does not know what reason they spell. Encode an op of your own vocabulary with [`TransportSession::encode_message`](#struct-transportsessionop-id-c-wirecodec) or by hand.
 *   **`silent()`** / **`saying(farewell: Frame)`**: constructors.
 
 Each refusal is counted on [`TransportStats::refused`](#struct-transportstats).
@@ -419,18 +438,6 @@ Turns on a console subscriber, once. `plaza` and `plaza_session` are instrumente
 
 **What is deliberately not here.** Deciding what a process *is* (headless, observer, host, joiner) and parsing that off a command line. The browser client needs the same vocabulary and a wasm bundle must not inherit an HTTP server to learn the name of its own role, and argument parsing is an opinion every real application already has. That lives in `examples/playground_common/` as shared scaffolding rather than in a library crate.
 
-### Measured latency, and why the transport owns it
-
-The WebSocket adapter times its **own ping frame**, so a consumer gets a per-connection latency without adding anything to its application protocol. Probes go out fast for the first eight and then settle to upkeep, because a caller deciding whether a connection can meet a schedule wants several samples in the first second and nothing much after that.
-
-Two probes run per connection: the WebSocket's own ping frame (the transport plane, underneath the conditioner) and a `Kind::Ping` frame (the plaza plane, through it). Both are recorded; comparing them is how a slow client is diagnosed.
-
-**The server timing its own probe is the only version worth having**, and it matters wherever the number gates something. A client reporting its own latency can understate it; timing the probe is spoof-proof in the direction that counts, since a client can delay its reply and only make itself look worse.
-
-Prefer **`min_rtt`** when comparing against a budget. Jitter only ever adds delay, so the smallest sample is the honest estimate of the link, where a mean flatters a connection that is usually fine and occasionally awful.
-
-This is deliberately measurement only. What to do with it, admit, refuse, route to a different room, size a schedule, is policy, and it belongs to whoever owns the rule the latency has to satisfy.
-
 ## 8. Module `stats`
 
 ### Struct `TransportStats`
@@ -438,6 +445,7 @@ This is deliberately measurement only. What to do with it, admit, refuse, route 
 Live counters for one transport, from `ActixWsPlazaSession::stats` or `ConnectionManager::stats`.
 
 *   **`inbound()`** / **`inbound_dropped()`**, **`outbound()`** / **`outbound_dropped()`**, **`presence_dropped()`**, **`refused()`**.
+*   **`record_refused()`**: what a transport calls when it turns a socket away before `register`. Nothing else here can see such a socket.
 
 The fan-out uses `try_send` by default: a wedged client must not stall the controller. The drop used to be announced only with `warn!`, which a human reads afterwards and a server cannot read at all, so the events are countable and an application can shed load deliberately instead of degrading quietly. What the default does when a queue fills is now [`Overflow`](#struct-overflow)'s to say, and the counters read the same whichever arm is chosen.
 
@@ -445,41 +453,58 @@ The fan-out uses `try_send` by default: a wedged client must not stall the contr
 
 **The three are separate on purpose.** An outbound drop is usually benign for a stream of absolute state, since the next frame supersedes it. An inbound drop is ops a client already sent and believes arrived, and nothing upstream will retry, so it is lost player input. A presence drop is a correctness failure from a single occurrence: a lost join leaves the controller with a client it never heard of, a lost leave leaves it holding a seat forever. One health number would hide the third behind the first.
 
-## 9. Writing Another Transport
+## 9. The control plane in pieces
 
-Requires a tokio runtime; see §1.
+The pieces [`LinkDriver`](#struct-linkdriverid-c) assembles, each usable alone by an adapter that needs a different arrangement.
 
-1.  `TransportSession::with_options(name, codec, options)`, and keep the `Arc`.
-2.  Per connection: `session_channel(manager.queues().outbound)`, `manager.register(agent, tx).await`, then `LinkDriver::new(&manager, conn_id, codec)` and `manager.take_orders(conn_id)`.
-3.  Run a loop over four things: a frame off your socket, a frame off the outbound queue, `driver.deadline()`, and the order stream. Hand the first three to the driver and act on what it returns; on `ConnectionOrder::Close`, flush (the conditioner's `drain()`, then the outbound queue's `try_recv`), write the farewell, close the socket, and exit the loop. The orders must be their own `select!` arm: the outbound arm is disabled once `deregister` drops the sender.
-4.  On exit, `manager.deregister(conn_id).await`.
-5.  Delegate the three `Session` methods to the inner `TransportSession`, and after `broadcast` call `disconnect_overflowed` with what it returned.
+### Struct `LinkDriver<ID, C>`
 
-```rust,ignore
-loop {
-  tokio::select! {
-    inbound = socket.read_frame() => match driver.inbound(inbound?, Instant::now()) {
-      Inbound::Reply(reply) => socket.write(reply).await?,
-      Inbound::Forward(frame) => manager.forward_incoming(agent.clone(), frame).await,
-      Inbound::Consumed => {}
-    },
-    outbound = to_client_rx.recv() => {
-      if let Some(frame) = driver.outbound(outbound?, Instant::now()) {
-        socket.write(frame).await?;
-      }
-    }
-    _ = sleep_until(driver.deadline().unwrap_or_else(far_future)), if driver.deadline().is_some() => {
-      for frame in driver.due(Instant::now()) { socket.write(frame).await?; }
-      for frame in driver.take_forwarded() { manager.forward_incoming(agent.clone(), frame).await; }
-    }
-  }
-}
-```
+One connection's link plane: impairment both ways, probes, and their deadlines. It holds a [`LinkHandle`](#struct-linkhandle) rather than reading the profile off the registry.
 
-`examples/foreign_soil` is a working transport built this way, in a crate with no privileged access and with neither shipped transport compiled in. Its connection loop is 65 lines, about 25 of them reading and writing a socket.
+*   **`new(manager, conn_id, codec) -> Option<Self>`**: `None` when `conn_id` is not registered, which means a transport called this before `register` or after `deregister`.
+*   **`inbound(frame, now) -> Inbound`**: answers probes, times the ones this side sent, and applies upstream impairment.
+*   **`outbound(frame, now) -> Option<Frame>`**: `None` when the frame was queued behind downstream impairment or thrown away by a `Datagram` profile's loss, and the frame itself when it may go straight out.
+*   **`deadline() -> Option<Instant>`**: the earliest of the next probe and the two conditioners' heads, which is what the connection task sleeps until.
+*   **`due(now) -> Vec<Frame>`**: everything owed to the socket now, in order: released downstream frames, replies to probes that came out of the upstream queue, and a fresh probe if one fell due.
+*   **`take_forwarded() -> Vec<Frame>`**: inbound frames whose delay has expired, for `forward_incoming`. Separate from `due`'s return because these go to the application rather than the socket, and that call is `async` while `due` is not.
 
-**What you still write.** Framing, and enforcing `Limits::max_frame_bytes` with it. Those are what a transport is.
+### Enum `Inbound`
 
-**If the driver does not suit.** It is a convenience, not a ceiling, and it reaches for nothing you cannot. `Conditioner`, `ProbeState` and `LinkHandle` are public and each is useful alone, so an adapter that needs different behaviour assembles them itself and loses nothing. The case to expect is a transport whose link genuinely reorders: the shipped conditioner releases monotonically because a byte stream does not, so a datagram transport keeps the probe plane and writes its own release queue.
+What `LinkDriver::inbound` decided: **`Forward(Frame)`** (not ours, hand it to the application), **`Reply(Frame)`** (ours, and it wants an answer written back to the peer), **`Consumed`** (ours, and finished with).
 
-**Answer probes or say why not.** A `Kind::Ping` handed to `forward_incoming` is answered by nobody; the bridge drops it and warns once per connection, and the client measuring its round trip waits forever. The driver handles this, so the only way to get it wrong now is to bypass the driver and forget.
+### Struct `LinkHandle`
+
+One connection's impairment, taken from [`ConnectionManager::link_handle`](#struct-connectionmanagerid-agentid) and held by the connection task for its lifetime.
+
+The profile is 80 bytes and cannot be an atomic; the question the frame path asks is one bit. **`impaired() -> bool`** is that bit, one relaxed load. **`read() -> LinkProfile`** takes the lock, for the frames that need the numbers. The flag and the profile are not written atomically together, so a profile installed between one frame and the next may miss that frame. That is deliberate: the alternative is a lock on the path this type exists to keep clear.
+
+**`generation() -> u64`** counts settings of the profile, so a connection task can tell the profile moved without holding a copy of it. A probe sent under one generation whose `Pong` arrives under another measured a path that existed for neither leg's whole journey, and recording it poisons a minimum for the life of the connection.
+
+### Struct `ProbeState` and function `make_probe`
+
+The probe table and its schedule, one per connection.
+
+*   **`new(&Probes) -> Self`**: from the schedule on [`Probes`](#structs-queues-and-limits).
+*   **`interval() -> Option<Duration>`**: until the next probe: `fast_interval` for the first `fast_pings`, then `idle_interval`. `None` when this session does not probe.
+*   **`first_due(now) -> Option<Instant>`**: when the first one is due.
+*   **`forget_in_flight()`**: discards every outstanding probe without touching the sequence number, so their pongs answer no open probe and are dropped. Call it when `generation()` moves.
+*   **`make_probe(&codec, &mut ProbeState, now) -> Frame`**: builds the next probe. Its origin is a sequence number, not a clock reading: the session times the round trip with an `Instant` it keeps, so its own probes need no clock and no unit.
+
+### Function `earliest` and constant `DOWN_SEED_FLIP`
+
+**`earliest(a: Option<Instant>, b: Option<Instant>) -> Option<Instant>`**: the sooner of two optional deadlines, or whichever one exists.
+
+**`DOWN_SEED_FLIP: u64`**: xor a connection id with this to seed the downstream conditioner. Seeding both directions from the connection id is what makes an impaired session re-run identically; the flip is what keeps the two directions from drawing the same jitter sequence.
+
+## 10. Error Handling
+
+### Enum `SessionLayerError`
+
+Transport failures. Deliberately **non-generic**: these concern sockets and wire formats, not application agent IDs.
+
+*   **Variants**:
+    *   `Bind { addr: String, source: std::io::Error }`
+    *   `Serialization { transport: &'static str, context: &'static str, source: Box<dyn Error + Send + Sync> }`
+    *   `Deserialization { transport, context, source }`
+    *   `ClientSendFailed { transport, conn_id: ConnectionId, reason: &'static str }`
+*   **Conversion**: `impl<ID: AgentId> From<SessionLayerError> for PlazaError<ID>`. Serialization and deserialization map onto the matching `PlazaError` variants; everything else becomes `PlazaError::Session(TransportError(..))` using `Display`, so the `#[source]` chain stays readable.

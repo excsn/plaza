@@ -14,6 +14,7 @@ Every block, one line each, sorted by the itch it scratches. Links go to the cra
 | `query_with` / `ControllerStats` | asking a running controller a question / watching its health without touching its queue | [core](../../core/API_REFERENCE.md) |
 | `ReconnectTracker` | disconnect grace, driven from your tick, meaning of expiry stays yours | [core](../../core/API_REFERENCE.md) |
 | `SeatTable` / `Seating` | bounded seats where a fresh occupant must not inherit the last one's state | [server_utils](../../server_utils/API_REFERENCE.md) |
+| `Roster` | the same, when a seat number is what your ops and your wire actually carry | [server_utils](../../server_utils/API_REFERENCE.md) |
 
 ## Showing the world (chapters 10, 11)
 
@@ -21,6 +22,7 @@ Every block, one line each, sorted by the itch it scratches. Links go to the cra
 |---|---|---|
 | `SnapshotProvider` / `SnapshotRequest` | what a joiner or a refresh is sent; per-recipient secrecy or the uniform fast path | [core](../../core/API_REFERENCE.md) |
 | `morton`, `GridQuantizer`, `SpatialGrid` | gathering nearby ids without scanning the world | [server_utils](../../server_utils/API_REFERENCE.md) |
+| `Subscriptions` / `Audience` | relevance a distance query cannot answer: a party, a guild, a watchlist, wherever its members are | [server_utils](../../server_utils/API_REFERENCE.md) |
 | `VisibilitySet` | a per-client visible set with a fast entered/left diff for spawn and despawn streams | [server_utils](../../server_utils/API_REFERENCE.md) |
 | `TierBoundary` | any wire-affecting threshold that would flap on an edge-loiterer | [server_utils](../../server_utils/API_REFERENCE.md) |
 | `AggregateTree` | distant entities the client computes with, not just draws | [server_utils](../../server_utils/API_REFERENCE.md) |
