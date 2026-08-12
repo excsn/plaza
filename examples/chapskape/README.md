@@ -67,6 +67,8 @@ The client acts on a click immediately and the server acts on it a tick and a ro
 
 `route diverged` on the panel should read zero for a whole session. A number climbing there means the rule stopped being one rule.
 
+The check is also **switched off for a chase**, and that is not an exemption, it is what the counter is about. Attacking something makes the server steer the body toward a target that keeps moving; the client never claimed to have worked that route out, so counting it would bury the one reading the panel exists for under the commonest thing in the game. It comes back on the moment the next click is a place. `a_chase_is_not_a_divergence` pins both halves.
+
 ## A still world is a different relevance problem from a moving one
 
 Four thousand props exist and perhaps one changes a tick. Every relevance path in this tree is built for movers: a grid query rebuilt every tick and a diff that pays for the whole set whether or not anything in it moved.

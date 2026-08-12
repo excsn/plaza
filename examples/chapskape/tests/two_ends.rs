@@ -381,3 +381,66 @@ async fn a_pack_arrives_once_and_then_stops_arriving() {
   assert_eq!(beats, 1, "the pack was sent {beats} times without changing");
   assert_eq!(client.pack.len(), chapskape::pack::SLOTS);
 }
+
+#[tokio::test]
+async fn a_chase_is_not_a_divergence() {
+  // The counter only means something if it is quiet when nothing is wrong. A
+  // chase is the server steering a body toward something that keeps moving,
+  // which the client never claimed to have worked out, so counting it would
+  // bury the one reading the panel exists for under the commonest thing in the
+  // game.
+  let (logic, mut state, mut client, socket) = both_sides(Relevance::OnChange).await;
+  let me = client.predicted;
+  let patch = world::footing_near(Tile::new(me.x + 6, me.y + 4));
+  state.zone.admit(9, patch, chapskape::protocol::Look::Brute);
+  state.zone.actors.get_mut(&9).unwrap().max_health = 4000;
+  state.zone.actors.get_mut(&9).unwrap().health = 4000;
+
+  // The client is told the brute is there before it can click on it.
+  let out = tick(&logic, &mut state).await;
+  deliver(&socket, &ops_for(&out, 0));
+  client.poll(TICK_MS);
+  assert!(client.others.contains_key(&9));
+
+  client.attack(9);
+  send(&logic, &mut state, 1, SkapeOp::Attack { seat: 9 }).await;
+
+  let mut now = TICK_MS;
+  for step in 0..40u64 {
+    // The brute wanders off every few ticks, so the server re-routes and the
+    // client's own route is stale by design.
+    if step % 5 == 0 {
+      let away = state.zone.actors[&9].tile;
+      state.zone.actors.get_mut(&9).unwrap().tile =
+        world::footing_near(Tile::new(away.x + 2, away.y + 1));
+    }
+    let out = tick(&logic, &mut state).await;
+    now += TICK_MS;
+    deliver(&socket, &ops_for(&out, 0));
+    client.poll(now);
+  }
+
+  assert_eq!(client.diverged, 0, "a chase was counted as a route coming apart");
+  assert_eq!(
+    client.predicted, state.zone.actors[&0].tile,
+    "the client lost the body it was drawing"
+  );
+
+  // And an ordinary walk afterwards is checked again, because the counter has
+  // to come back on once the client is answering its own question.
+  let from = client.predicted;
+  let to = world::footing_near(Tile::new(from.x - 9, from.y - 6));
+  client.walk_to(to);
+  let drawn = client.plan.len();
+  send(&logic, &mut state, 1, SkapeOp::WalkTo { tile: to }).await;
+  let before = client.confirmations;
+  for _ in 0..(drawn + 3) {
+    let out = tick(&logic, &mut state).await;
+    now += TICK_MS;
+    deliver(&socket, &ops_for(&out, 0));
+    client.poll(now);
+  }
+  assert!(client.confirmations > before, "the check never came back on");
+  assert_eq!(client.diverged, 0);
+  assert_eq!(client.predicted, to);
+}

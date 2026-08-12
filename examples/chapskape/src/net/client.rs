@@ -160,6 +160,14 @@ pub struct NetClient {
   pub plan: VecDeque<Tile>,
   /// The same squares again, spent against what the server confirms.
   expect: VecDeque<Tile>,
+  /// Whether the current journey is one the client claimed to have worked out.
+  ///
+  /// A walk and a walk-then-work are: the destination is a square that will
+  /// still be there. A chase is not, because the server re-routes toward a body
+  /// that keeps moving and the client never claimed to predict where it went.
+  /// Counting those as divergence would bury the reading under the one
+  /// situation the client was never answering.
+  checking: bool,
   /// Where the whole journey ends, for redrawing the route after a surprise.
   goal: Option<Goal>,
   finder: Pathfinder,
@@ -229,6 +237,7 @@ impl NetClient {
       confirmed: Tile::default(),
       plan: VecDeque::new(),
       expect: VecDeque::new(),
+      checking: false,
       goal: None,
       finder: Pathfinder::new(),
       next_step_ms: 0,
@@ -508,6 +517,7 @@ impl NetClient {
       if refusal == Refusal::NoRoute {
         self.plan.clear();
         self.expect.clear();
+        self.checking = false;
         self.goal = None;
         self.predicted = you.tile;
         self.was = you.tile;
@@ -530,6 +540,9 @@ impl NetClient {
     if tile == self.confirmed {
       return;
     }
+    if !self.checking {
+      return self.follow(tile);
+    }
     self.confirmations += 1;
     // Two, because running covers two squares in a tick and the first of them
     // is a square nothing ever reports.
@@ -540,7 +553,14 @@ impl NetClient {
           return;
         }
         Some(_) => continue,
-        None => break,
+        None => {
+          // The route this client drew is spent and the body is still moving,
+          // which means the server is steering it rather than walking a
+          // journey that was asked for. Follow it; there is nothing left to
+          // check against.
+          self.checking = false;
+          return self.follow(tile);
+        }
       }
     }
     self.diverged += 1;
@@ -549,8 +569,24 @@ impl NetClient {
       since_ms: self.now_ms,
       loud: true,
     });
+    self.checking = false;
     self.confirmed = tile;
     self.jump_to(tile);
+  }
+
+  /// Takes a square the server moved the body to, and eases into it.
+  ///
+  /// Not a correction and not a snap. It is the ordinary case for anything the
+  /// server steers, and drawing it as one step from the last square is what
+  /// keeps a chase from reading as a teleport once a tick.
+  fn follow(&mut self, tile: Tile) {
+    self.was = self.predicted;
+    self.predicted = tile;
+    self.confirmed = tile;
+    self.plan.clear();
+    self.expect.clear();
+    self.stepped_ms = self.now_ms;
+    self.next_step_ms = self.now_ms + self.tick_ms;
   }
 
   fn on_happened(&mut self, happened: Happened) {
@@ -618,9 +654,10 @@ impl NetClient {
   ///
   /// In that order, and the order is the point: the body is already walking
   /// before the op has left the machine.
-  fn set_out(&mut self, goal: Goal) {
+  fn set_out(&mut self, goal: Goal, checking: bool) {
     let route = self.finder.route(self.predicted, goal);
     self.goal = Some(goal);
+    self.checking = checking;
     self.plan = route.iter().copied().collect();
     self.expect = route.into_iter().collect();
     self.next_step_ms = self.now_ms;
@@ -642,7 +679,7 @@ impl NetClient {
       });
       return;
     }
-    self.set_out(Goal::On(tile));
+    self.set_out(Goal::On(tile), true);
     self.count_op();
     self.pump.send_op(&SkapeOp::WalkTo { tile });
   }
@@ -654,7 +691,7 @@ impl NetClient {
       Some(crate::world::prop_tile(object))
     };
     if let Some(tile) = tile {
-      self.set_out(Goal::Beside(tile));
+      self.set_out(Goal::Beside(tile), true);
     }
     self.count_op();
     self.pump.send_op(&SkapeOp::Interact { object });
@@ -663,7 +700,7 @@ impl NetClient {
   pub fn attack(&mut self, seat: Seat) {
     if let Some(other) = self.others.get(&seat) {
       let tile = other.tile;
-      self.set_out(Goal::Beside(tile));
+      self.set_out(Goal::Beside(tile), false);
     }
     self.count_op();
     self.pump.send_op(&SkapeOp::Attack { seat });
@@ -672,7 +709,7 @@ impl NetClient {
   pub fn take(&mut self, ground: u32) {
     if let Some(lying) = self.ground.iter().find(|l| l.id == ground) {
       let tile = lying.tile;
-      self.set_out(Goal::On(tile));
+      self.set_out(Goal::On(tile), true);
     }
     self.count_op();
     self.pump.send_op(&SkapeOp::Take { ground });
@@ -696,6 +733,7 @@ impl NetClient {
   pub fn cancel(&mut self) {
     self.plan.clear();
     self.expect.clear();
+    self.checking = false;
     self.goal = None;
     self.count_op();
     self.pump.send_op(&SkapeOp::Cancel);
