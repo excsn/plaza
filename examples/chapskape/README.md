@@ -89,8 +89,8 @@ Measured on a frame, in a lived-in world:
 
 ```
        props bytes/frame bytes/second of that, props
-  every tick        851         1419          75.9
-   on change        781         1302           6.9
+  every tick        762         1270          75.9
+   on change        692         1154           6.9
 ```
 
 Two things make the cheap mode possible, and neither is the diff.
@@ -114,12 +114,14 @@ The rule is enforced where it matters rather than where it is easy. A client who
 `fog_skirmish` filters a shared world per viewer, which is a different thing: the fog hides something that is there for everybody. Nothing in a pack is filtered, because nobody else's world contains it.
 
 ```
-  a frame carrying the pack: 85 bytes
-  a frame not carrying it:   46 bytes
+  a frame carrying the pack: 86 bytes
+  a frame not carrying it:   47 bytes
   sent 2 times in 40 ticks
 ```
 
 Sent when it moves, so standing in a field is free. The instant worth watching is the crossing: a drop turns private state into world state, and a pickup turns it back.
+
+**A private channel needs both halves, and forgetting the second one is a bug you can see.** `Private` is the state half: a pack and five totals, true until they are not, repeated whenever they move. `Yours` is the transcript half: what *just* changed, said once, never mentioned again. Experience arriving and a level going up are transcript, and they first went out on the **shared** event list, which is wrong twice over. Everybody within sight paid for every body's experience, worth 89 bytes a frame in a lived-in world. And they carried no seat, so a client had no way to tell its own from anyone else's and announced every passing woodcutter's level as the player's own. Both faults have one fix, and it is not a seat field: an event nobody else needs goes where nobody else can read it.
 
 ## The tick is vocabulary rather than something to hide
 
@@ -127,10 +129,10 @@ Every other example in this tree spends effort concealing its tick from the pers
 
 ```
    tick ms  bytes/frame   bytes/second
-       600          779           1298
-       300          796           2655
-       150          699           4663
-        50          565          11309
+       600          688           1147
+       300          713           2378
+       150          677           4510
+        50          562          11240
 ```
 
 A shorter tick makes each frame a little smaller, because less happens in one, and the bill several times larger anyway. Everything this example says about free round trips is said at six hundred milliseconds.
@@ -161,6 +163,7 @@ That loop being **closed** is the discipline that keeps the content from running
 Every one of these is a place where both halves were individually correct.
 
 - **A click mid-walk is not a divergence.** Both ends expand the destination from the square they are on, and mid-walk those are different squares, so the routes differ honestly. Treating that as disagreement produced a body that jumped backward on every re-click, which is the commonest thing anybody does.
+- **A transcript is either shared or private, and guessing wrong shows.** A blow is worth telling everyone near enough to watch it land. What one body gathered, and what it learned by gathering it, is not, and putting it on the shared list meant a client heard every bot's level-up as its own. Adding a seat and filtering would have fixed the display and left the waste; moving it to the private stream fixed both, and the frame got 89 bytes smaller.
 - **A click changes where the body is going and nothing else.** The drawn point, the square being stepped into and the step clock all describe where it *is*, and rewriting any of them on a click is a jump: rebasing the crossing to a square's centre teleported the rest of a square, and granting an immediate free step let fast clicking outrun the server and be pulled back at rest, both of which read exactly like a server correction with no server involved. A body at rest sets off on the click; a walking one keeps its cadence and turns at the next square. `the_drawn_body_never_jumps_however_fast_the_clicks_come` polls at 50ms under click spam and holds the worst frame-to-frame movement to walking speed: 0.118 squares against the 1.0 the old code produced.
 - **The draw distance has to follow the camera.** A fixed radius is a disc of countryside floating in the sky the moment somebody zooms out, and a scene with an edge in it looks wrong all over rather than in one place. Following the camera is four times the ground at full zoom, which is only affordable because corner heights are a table: 8495 quads and 1435 prop boxes is 102630 indices, and computing every corner from three octaves of noise instead would be six hundred thousand hashes to draw one picture. The rim fades into the sky, so where it does end reads as weather.
 - **A walk cycle that never stopped.** A body is drawn between the two squares it was last on, and those two are only rewritten when it takes a step, so an arrived body holds two different squares for ever and walks on the spot until the next click. The fix is that the clock is half the question: you are walking if you have squares left **or** you are still crossing the last one. Everybody else was drawn from the same rule and had the same bug, which is the tell that it was a rule and not a slip.

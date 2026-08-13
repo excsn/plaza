@@ -24,7 +24,9 @@ use std::collections::{HashMap, VecDeque};
 
 use crate::pack::Pack;
 use crate::path::{Goal, Pathfinder};
-use crate::protocol::{Doing, Fire, Happened, Item, Look, Lying, ObjectState, Queued, Refusal, Seat, Tile};
+use crate::protocol::{
+  Doing, Fire, Happened, Item, Look, Lying, ObjectState, Queued, Refusal, Seat, Tile, Yours,
+};
 use crate::skills::{self, Skill, SKILLS};
 use crate::world::{self, Prop};
 
@@ -120,6 +122,12 @@ pub struct Actor {
   pub refused: Option<Refusal>,
   /// Whether the pack or the skill sheet moved since the last frame.
   pub private_moved: bool,
+  /// What happened to this body alone this tick, waiting to be told to it.
+  ///
+  /// Cleared at the top of every tick, so one that nobody is listening to
+  /// cannot accumulate: most of these bodies are the world's own and will never
+  /// be sent a frame.
+  pub told: Vec<Yours>,
 }
 
 impl Actor {
@@ -148,6 +156,7 @@ impl Actor {
       swing_at: 0,
       refused: None,
       private_moved: true,
+      told: Vec::new(),
     }
   }
 
@@ -163,21 +172,20 @@ impl Actor {
     self.look == Look::Person
   }
 
-  fn earn(&mut self, skill: Skill, amount: u32, events: &mut Vec<(Tile, Happened)>, seat: Seat) {
+  fn earn(&mut self, skill: Skill, amount: u32) {
     let before = self.level(skill);
     self.xp[skill.index()] += amount;
     self.private_moved = true;
-    let _ = seat;
-    events.push((self.tile, Happened::Earned {
+    self.told.push(Yours::Earned {
       skill: skill.index() as u8,
       amount: amount.min(u16::MAX as u32) as u16,
-    }));
+    });
     let after = self.level(skill);
     if after > before {
-      events.push((self.tile, Happened::Levelled {
+      self.told.push(Yours::Levelled {
         skill: skill.index() as u8,
         level: after,
-      }));
+      });
     }
   }
 }
@@ -539,6 +547,9 @@ impl Zone {
   pub fn advance(&mut self) {
     self.tick += 1;
     self.events.clear();
+    for actor in self.actors.values_mut() {
+      actor.told.clear();
+    }
 
     self.depleted.retain(|_, ready_at| *ready_at > self.tick);
     self.fires.retain(|_, (_, out_at)| *out_at > self.tick);
@@ -745,15 +756,9 @@ impl Zone {
       return;
     }
     actor.private_moved = true;
-    let tile = actor.tile;
+    actor.told.push(Yours::Gathered { item });
     let (skill, _) = prop.needs();
-    let xp = prop.xp();
-    let mut events = std::mem::take(&mut self.events);
-    events.push((tile, Happened::Gathered { seat, item }));
-    if let Some(actor) = self.actors.get_mut(&seat) {
-      actor.earn(skill, xp, &mut events, seat);
-    }
-    self.events = events;
+    actor.earn(skill, prop.xp());
     self.gathered += 1;
 
     // A prop gives up more than once before it goes, so working one is a
@@ -792,13 +797,8 @@ impl Zone {
     };
     actor.pack.replace(slot, Item::CookedFish);
     actor.private_moved = true;
-    let tile = actor.tile;
-    let mut events = std::mem::take(&mut self.events);
-    events.push((tile, Happened::Gathered { seat, item: Item::CookedFish }));
-    if let Some(actor) = self.actors.get_mut(&seat) {
-      actor.earn(Skill::Cooking, skills::XP_COOKING, &mut events, seat);
-    }
-    self.events = events;
+    actor.told.push(Yours::Gathered { item: Item::CookedFish });
+    actor.earn(Skill::Cooking, skills::XP_COOKING);
   }
 
   fn take(&mut self, seat: Seat, ground: u32) {
@@ -865,15 +865,13 @@ impl Zone {
     }
 
     self.blows += 1;
-    let mut events = std::mem::take(&mut self.events);
-    events.push((tile, Happened::Hit { by: seat, on: other, damage: dealt }));
+    self.events.push((tile, Happened::Hit { by: seat, on: other, damage: dealt }));
     if fell {
-      events.push((carcass, Happened::Fell { seat: other }));
+      self.events.push((carcass, Happened::Fell { seat: other }));
     }
     if let Some(actor) = self.actors.get_mut(&seat) {
-      actor.earn(Skill::Combat, dealt as u32 * skills::XP_PER_DAMAGE, &mut events, seat);
+      actor.earn(Skill::Combat, dealt as u32 * skills::XP_PER_DAMAGE);
     }
-    self.events = events;
 
     if fell {
       self.falls += 1;
@@ -1055,8 +1053,13 @@ mod tests {
     until(&mut zone, 200, |z| z.actors[&1].pack.count_of(Item::Logs) > 0);
     assert!(zone.actors[&1].xp[Skill::Woodcutting.index()] > 0, "no experience");
     assert!(
-      zone.events.iter().any(|(_, e)| matches!(e, Happened::Gathered { .. })),
+      zone.actors[&1].told.iter().any(|e| matches!(e, Yours::Gathered { .. })),
       "nothing said it had happened"
+    );
+    assert!(
+      zone.events.is_empty(),
+      "one body's woodcutting was announced to the whole clearing: {:?}",
+      zone.events
     );
   }
 

@@ -608,3 +608,83 @@ async fn the_drawn_body_never_jumps_however_fast_the_clicks_come() {
   assert!(worst < 0.5, "the body jumped {worst} squares between frames");
   assert_eq!(client.diverged, 0);
 }
+
+#[tokio::test]
+async fn one_bodys_experience_is_nobody_elses_news() {
+  // The defect this pins had two faces. The wire one is that everybody within
+  // sight paid for every body's experience. The visible one is worse: the
+  // events carried no seat, so a client had no way to tell its own from anyone
+  // else's and announced every passing woodcutter's level as its own.
+  let logic = SkapeLogic::new();
+  let mut state = SkapeState::new();
+  seat(&logic, &mut state, 1).await;
+  seat(&logic, &mut state, 2).await;
+
+  let mine = ScriptedSocket::new();
+  let mut worker = NetClient::from_socket(Box::new(mine.clone()));
+  let theirs = ScriptedSocket::new();
+  let mut bystander = NetClient::from_socket(Box::new(theirs.clone()));
+  worker.poll(0);
+  bystander.poll(0);
+  deliver(&mine, &[SkapeOp::Seated { seat: 0, tile: state.zone.actors[&0].tile }]);
+  deliver(&theirs, &[SkapeOp::Seated { seat: 1, tile: state.zone.actors[&1].tile }]);
+  worker.poll(0);
+  bystander.poll(0);
+
+  // One of them chops, the other stands beside them and watches.
+  let tree = a_prop_near(state.zone.actors[&0].tile, Prop::Tree);
+  state.zone.actors.get_mut(&0).unwrap().tile =
+    world::footing_near(Tile::new(tree.x + 1, tree.y));
+  state.zone.actors.get_mut(&1).unwrap().tile =
+    world::footing_near(Tile::new(tree.x + 2, tree.y + 1));
+  send(&logic, &mut state, 1, SkapeOp::Interact {
+    object: world::prop_id(tree),
+  })
+  .await;
+
+  // Collected as they arrive rather than read at the end: a notice lives a few
+  // seconds and forty ticks is most of a minute, so the end of the run has
+  // forgotten everything the test is about.
+  let mut worker_said: std::collections::BTreeSet<String> = Default::default();
+  let mut bystander_said: std::collections::BTreeSet<String> = Default::default();
+
+  let mut now = 0;
+  for _ in 0..40 {
+    let out = tick(&logic, &mut state).await;
+    now += TICK_MS;
+    for op in ops_for(&out, 1) {
+      // The bystander's own frame must not mention any of it, in either half.
+      if let SkapeOp::World(frame) = &op {
+        assert!(
+          frame.you.as_ref().is_none_or(|you| you.happened.is_empty()),
+          "the bystander was told about somebody else's work: {:?}",
+          frame.you.as_ref().map(|you| &you.happened)
+        );
+        assert!(
+          frame.events.is_empty(),
+          "somebody else's woodcutting reached the shared transcript: {:?}",
+          frame.events
+        );
+      }
+      deliver(&theirs, std::slice::from_ref(&op));
+    }
+    deliver(&mine, &ops_for(&out, 0));
+    worker.poll(now);
+    bystander.poll(now);
+    worker_said.extend(worker.notices.iter().map(|notice| notice.text.clone()));
+    bystander_said.extend(bystander.notices.iter().map(|notice| notice.text.clone()));
+  }
+
+  assert!(
+    state.zone.actors[&0].xp[chapskape::skills::Skill::Woodcutting.index()] > 0,
+    "nobody chopped anything, so the test proves nothing"
+  );
+  assert!(
+    worker_said.iter().any(|text| text.contains("woodcutting")),
+    "the one doing the work was never told about it: {worker_said:?}"
+  );
+  assert!(
+    bystander_said.is_empty(),
+    "the bystander was told: {bystander_said:?}"
+  );
+}
