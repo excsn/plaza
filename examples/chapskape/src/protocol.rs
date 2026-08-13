@@ -176,19 +176,40 @@ pub struct Lying {
   pub public_in: u16,
 }
 
-/// Something that happened once and is never mentioned again.
+/// Something that happened once in the world, and is never mentioned again.
 ///
-/// The half of the wire that is a transcript rather than a state. A client
-/// that misses one has missed it: no later frame repeats a hit, and the health
-/// it changed has already moved on.
+/// The half of the wire that is a transcript rather than a state. A client that
+/// misses one has missed it: no later frame repeats a hit, and the health it
+/// changed has already moved on.
+///
+/// Everything here is a **shared** event, which is a stricter test than it
+/// sounds: a blow is worth telling everyone near enough to watch it land, and
+/// nothing else in this game passes that. What one body gathered and what it
+/// learned by gathering it are [`Yours`], because they are nobody else's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Happened {
   /// Somebody landed a blow on somebody.
   Hit { by: Seat, on: Seat, damage: u16 },
   /// A body went down.
   Fell { seat: Seat },
+}
+
+/// Something that happened once, to you, and to nobody else.
+///
+/// The transcript half of the private channel, and the half that is easy to
+/// forget exists. [`Private`] is the state half: a pack and five totals, true
+/// until they are not, sent again whenever they move. This is what *just
+/// changed*, said once, and no later frame mentions it.
+///
+/// Putting these on the shared event list instead is a defect with two faces.
+/// The wire one is that everybody within sight pays for every body's
+/// experience. The visible one is worse: `Earned` and `Levelled` carried no
+/// seat at all, so a client had no way to tell its own from anyone else's and
+/// announced every passing woodcutter's level as its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Yours {
   /// A gathering action produced something.
-  Gathered { seat: Seat, item: Item },
+  Gathered { item: Item },
   /// Experience arrived, which is the one number a player watches for.
   Earned { skill: u8, amount: u16 },
   /// A level went up, which is worth interrupting the screen for.
@@ -256,6 +277,12 @@ pub struct You {
   pub up_in: Option<u16>,
   /// Sent only on a change, which is what makes the private channel cheap.
   pub private: Option<Private>,
+  /// What just happened to you, said once.
+  ///
+  /// Beside `private` rather than inside it, because the two are different
+  /// kinds of thing on different schedules: a pack is repeated whenever it
+  /// moves and a transcript is said once and never again.
+  pub happened: Vec<Yours>,
   pub refused: Option<Refusal>,
   /// How many times you have been put somewhere you did not walk to.
   ///

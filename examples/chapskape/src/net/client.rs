@@ -29,7 +29,7 @@ use plaza_ws::{Event, State};
 use crate::path::{Goal, Pathfinder};
 use crate::protocol::{
   Doing, Fire, Frame, Happened, Item, Look, Lying, Queued, Refusal, Relevance, Seat, SkapeOp, Tile,
-  You, PROTOCOL, TICK_MS,
+  You, Yours, PROTOCOL, TICK_MS,
 };
 
 const WIRE: MsgPackCodec = MsgPackCodec;
@@ -573,6 +573,9 @@ impl NetClient {
       }
     }
 
+    for yours in you.happened.iter().copied() {
+      self.on_yours(yours);
+    }
     self.confirm(you.tile);
     if let Some(private) = you.private.clone() {
       self.pack = private.pack;
@@ -659,16 +662,24 @@ impl NetClient {
         });
       }
       Happened::Fell { .. } => {}
-      Happened::Gathered { seat, item } => {
-        if Some(seat) == self.seat {
-          self.notices.push(Notice {
-            text: format!("you get some {}", item.name()),
-            since_ms: now,
-            loud: false,
-          });
-        }
-      }
-      Happened::Earned { skill, amount } => {
+    }
+  }
+
+  /// Something that happened to this client and to nobody else.
+  ///
+  /// No seat to check, because there is nobody else it could have been about.
+  /// That is the whole of the fix for a real defect: these arrived on the
+  /// shared event list carrying no seat at all, so every passing woodcutter's
+  /// level was announced as this player's own.
+  fn on_yours(&mut self, yours: Yours) {
+    let now = self.now_ms;
+    match yours {
+      Yours::Gathered { item } => self.notices.push(Notice {
+        text: format!("you get some {}", item.name()),
+        since_ms: now,
+        loud: false,
+      }),
+      Yours::Earned { skill, amount } => {
         if let Some(name) = crate::skills::Skill::from_index(skill as usize) {
           self.notices.push(Notice {
             text: format!("+{amount} {}", name.name()),
@@ -677,7 +688,7 @@ impl NetClient {
           });
         }
       }
-      Happened::Levelled { skill, level } => {
+      Yours::Levelled { skill, level } => {
         self.levels.insert(skill, level);
         if let Some(name) = crate::skills::Skill::from_index(skill as usize) {
           self.notices.push(Notice {

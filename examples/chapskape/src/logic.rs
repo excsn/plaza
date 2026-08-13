@@ -382,6 +382,9 @@ fn you_of(state: &mut SkapeState, seat: Seat) -> Option<You> {
   });
   actor.private_moved = false;
   let refused = actor.refused.take();
+  // Taken rather than copied: a transcript said twice is a level announced
+  // twice, and the zone clears these on the next tick anyway.
+  let happened = std::mem::take(&mut actor.told);
   Some(You {
     seat,
     tile: actor.tile,
@@ -393,6 +396,7 @@ fn you_of(state: &mut SkapeState, seat: Seat) -> Option<You> {
     running: actor.running,
     up_in: (!actor.alive()).then(|| actor.up_at.saturating_sub(tick).min(u16::MAX as u64) as u16),
     private,
+    happened,
     refused,
     spawn: actor.spawns,
   })
