@@ -22,8 +22,32 @@ use chapskape::world::{self, Ground, Prop};
 const MAX_VERTICES: usize = 10000;
 const MAX_INDICES: usize = 5000;
 
-/// How far from the camera the ground is built, in squares.
-pub const SIGHT: i16 = 30;
+/// The colour the sky is painted, which the far ground fades into.
+///
+/// One constant rather than two, because a horizon that fades toward a
+/// different blue from the one behind it is a ring, and a ring is worse than
+/// the edge it was meant to hide.
+pub const SKY: Color = Color::new(0.55, 0.68, 0.80, 1.0);
+
+/// The closest and furthest the ground is ever built, in squares.
+const NEAREST_SIGHT: i16 = 26;
+const FURTHEST_SIGHT: i16 = 52;
+
+/// Beyond this a tree is one box rather than three.
+///
+/// A view that follows the camera is four times the quads at full zoom, and
+/// props are the expensive half of it. Nobody can read a canopy from forty
+/// squares away, so nothing is lost by not drawing one.
+const NEAR_PROP: i16 = 24;
+
+/// How far the ground is built for a camera at this distance.
+///
+/// Fixed, it was a disc of countryside floating in the sky the moment anybody
+/// zoomed out, which is the sort of fault that makes a whole scene look wrong
+/// rather than one thing in it.
+pub fn sight_for(distance: f32) -> i16 {
+  ((distance * 1.35) as i16 + 14).clamp(NEAREST_SIGHT, FURTHEST_SIGHT)
+}
 
 /// How tall a person is drawn, in squares.
 const TALL: f32 = 1.8;
@@ -61,8 +85,32 @@ fn item_tint(item: Item) -> Color {
 }
 
 /// Where a point on the ground is, in world space.
+///
+/// Continuous, for the handful of bodies and markers that stand between
+/// squares. The surface itself is built from [`corner_point`], which is the
+/// same heights read out of a table.
 pub fn ground_point(x: f32, z: f32) -> Vec3 {
   vec3(x, world::stand_height(x, z), z)
+}
+
+/// A square's corner, which is what the surface is built from.
+pub fn corner_point(x: i16, z: i16) -> Vec3 {
+  vec3(x as f32, world::corner_height(x, z), z as f32)
+}
+
+/// How far into the haze a point is, `0.0` clear and `1.0` gone.
+fn haze(distance: f32, sight: i16) -> f32 {
+  let start = sight as f32 * 0.62;
+  ((distance - start) / (sight as f32 - start).max(1.0)).clamp(0.0, 1.0)
+}
+
+fn into_sky(tint: Color, share: f32) -> Color {
+  Color::new(
+    tint.r + (SKY.r - tint.r) * share,
+    tint.g + (SKY.g - tint.g) * share,
+    tint.b + (SKY.b - tint.b) * share,
+    1.0,
+  )
 }
 
 /// Everything that makes a body move, none of which crosses the wire.
@@ -164,10 +212,11 @@ impl Scene {
   ///
   /// Rebuilt rather than kept, because the rule is cheap and a cached mesh is a
   /// second copy of the world that can go stale.
-  pub fn draw_ground(&mut self, middle: Tile) {
-    for dy in -SIGHT..SIGHT {
-      for dx in -SIGHT..SIGHT {
-        if dx * dx + dy * dy > SIGHT * SIGHT {
+  pub fn draw_ground(&mut self, middle: Tile, sight: i16) {
+    for dy in -sight..sight {
+      for dx in -sight..sight {
+        let square = (dx * dx + dy * dy) as f32;
+        if square > (sight * sight) as f32 {
           continue;
         }
         let tile = Tile::new(middle.x + dx, middle.y + dy);
@@ -182,14 +231,20 @@ impl Scene {
         let shade = chequer
           * (1.0 - (world::steepness(tile) / 2.5).clamp(0.0, 0.45))
           * (0.86 + world::tile_height(tile) / 40.0).clamp(0.7, 1.15);
-        let tint = Color::new(base.r * shade, base.g * shade, base.b * shade, 1.0);
-        let (x, z) = (tile.x as f32, tile.y as f32);
+        // Into the sky at the rim. A draw distance has to end somewhere, and
+        // haze is what makes ending somewhere read as weather rather than as
+        // the edge of the world.
+        let tint = into_sky(
+          Color::new(base.r * shade, base.g * shade, base.b * shade, 1.0),
+          haze(square.sqrt(), sight),
+        );
+        let (x, z) = (tile.x, tile.y);
         self.push_quad(
           [
-            ground_point(x, z),
-            ground_point(x + 1.0, z),
-            ground_point(x + 1.0, z + 1.0),
-            ground_point(x, z + 1.0),
+            corner_point(x, z),
+            corner_point(x + 1, z),
+            corner_point(x + 1, z + 1),
+            corner_point(x, z + 1),
           ],
           tint,
         );
@@ -203,10 +258,11 @@ impl Scene {
   /// `standing` is the only thing about them the client was told: whether one
   /// is out. Everything else about a prop, including that it exists at all, is
   /// derived here and on the server from the same seed.
-  pub fn draw_props(&mut self, middle: Tile, standing: impl Fn(u32) -> bool, clock: f32) {
-    for dy in -SIGHT..SIGHT {
-      for dx in -SIGHT..SIGHT {
-        if dx * dx + dy * dy > SIGHT * SIGHT {
+  pub fn draw_props(&mut self, middle: Tile, sight: i16, standing: impl Fn(u32) -> bool, clock: f32) {
+    for dy in -sight..sight {
+      for dx in -sight..sight {
+        let square = (dx * dx + dy * dy) as f32;
+        if square > (sight * sight) as f32 {
           continue;
         }
         let tile = Tile::new(middle.x + dx, middle.y + dy);
@@ -214,23 +270,44 @@ impl Scene {
           continue;
         };
         let up = standing(world::prop_id(tile));
+        let distance = square.sqrt();
         let at = ground_point(tile.x as f32 + 0.5, tile.y as f32 + 0.5);
+        let fade = haze(distance, sight);
+        let far = distance > NEAR_PROP as f32;
         match prop {
-          Prop::Tree | Prop::Oak => self.push_tree(at, prop == Prop::Oak, up, tile, clock),
-          Prop::Rock | Prop::Vein => self.push_rock(at, prop == Prop::Vein, up),
-          Prop::Fish => self.push_shoal(at, up, clock),
+          Prop::Tree | Prop::Oak => self.push_tree(at, prop == Prop::Oak, up, tile, clock, far, fade),
+          Prop::Rock | Prop::Vein => self.push_rock(at, prop == Prop::Vein, up, fade),
+          // A shimmer on the water is not readable at any distance, so it is
+          // simply not drawn past the near band.
+          Prop::Fish => {
+            if !far {
+              self.push_shoal(at, up, clock)
+            }
+          }
         }
       }
     }
     self.flush();
   }
 
-  fn push_tree(&mut self, at: Vec3, oak: bool, standing: bool, tile: Tile, clock: f32) {
-    let bark = if oak {
-      Color::new(0.32, 0.22, 0.13, 1.0)
-    } else {
-      Color::new(0.40, 0.28, 0.17, 1.0)
-    };
+  fn push_tree(
+    &mut self,
+    at: Vec3,
+    oak: bool,
+    standing: bool,
+    tile: Tile,
+    clock: f32,
+    far: bool,
+    fade: f32,
+  ) {
+    let bark = into_sky(
+      if oak {
+        Color::new(0.32, 0.22, 0.13, 1.0)
+      } else {
+        Color::new(0.40, 0.28, 0.17, 1.0)
+      },
+      fade,
+    );
     if !standing {
       // A stump, so a wood that has been worked reads as worked rather than as
       // a wood that was never there.
@@ -238,20 +315,31 @@ impl Scene {
       return;
     }
     let height = if oak { 2.6 } else { 1.9 };
+    let leaf = into_sky(
+      if oak {
+        Color::new(0.16, 0.34, 0.16, 1.0)
+      } else {
+        Color::new(0.22, 0.46, 0.20, 1.0)
+      },
+      fade,
+    );
+    let crown = if oak { 0.85 } else { 0.62 };
+    if far {
+      self.push_box(
+        at + vec3(0.0, height * 0.75, 0.0),
+        vec3(crown * 0.9, height * 0.7, crown * 0.9),
+        leaf,
+      );
+      return;
+    }
     self.push_box(
       at + vec3(0.0, height * 0.4, 0.0),
       vec3(0.13, height * 0.4, 0.13),
       bark,
     );
-    let leaf = if oak {
-      Color::new(0.16, 0.34, 0.16, 1.0)
-    } else {
-      Color::new(0.22, 0.46, 0.20, 1.0)
-    };
     // A different sway per square, from the square, so a wood moves without
     // moving together.
     let sway = ((clock + (tile.x as f32 * 0.7 + tile.y as f32 * 1.3)).sin()) * 0.05;
-    let crown = if oak { 0.85 } else { 0.62 };
     self.push_box(
       at + vec3(sway, height * 0.85, sway * 0.6),
       vec3(crown, crown * 0.7, crown),
@@ -264,10 +352,14 @@ impl Scene {
     );
   }
 
-  fn push_rock(&mut self, at: Vec3, vein: bool, standing: bool) {
-    let stone = Color::new(0.44, 0.44, 0.47, 1.0);
+  fn push_rock(&mut self, at: Vec3, vein: bool, standing: bool, fade: f32) {
+    let stone = into_sky(Color::new(0.44, 0.44, 0.47, 1.0), fade);
     if !standing {
-      self.push_box(at + vec3(0.0, 0.08, 0.0), vec3(0.34, 0.08, 0.34), Color::new(0.30, 0.29, 0.29, 1.0));
+      self.push_box(
+        at + vec3(0.0, 0.08, 0.0),
+        vec3(0.34, 0.08, 0.34),
+        into_sky(Color::new(0.30, 0.29, 0.29, 1.0), fade),
+      );
       return;
     }
     self.push_box(at + vec3(0.0, 0.3, 0.0), vec3(0.42, 0.3, 0.42), stone);
@@ -280,7 +372,7 @@ impl Scene {
       self.push_box(
         at + vec3(-0.1, 0.5, 0.2),
         vec3(0.12, 0.12, 0.12),
-        Color::new(0.85, 0.72, 0.35, 1.0),
+        into_sky(Color::new(0.85, 0.72, 0.35, 1.0), fade),
       );
     }
   }
@@ -693,4 +785,83 @@ pub fn fire_tiles(client: &NetClient) -> Vec<Tile> {
   let mut tiles: Vec<Tile> = client.fires.values().map(|fire| fire.tile).collect();
   tiles.sort_unstable();
   tiles
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  const VERTICES_PER_BOX: usize = 24;
+  const INDICES_PER_BOX: usize = 36;
+
+  #[test]
+  fn the_ground_always_reaches_further_than_the_camera_stands_back() {
+    // The fault this replaced: a fixed radius is a disc of countryside floating
+    // in the sky the moment anybody zooms out, and a scene with an edge in it
+    // looks wrong all over rather than in one place.
+    for tenths in 70..=420 {
+      let distance = tenths as f32 / 10.0;
+      let sight = sight_for(distance);
+      assert!(
+        sight as f32 > distance,
+        "at {distance} back the ground stops at {sight}"
+      );
+    }
+    assert!(sight_for(7.0) <= sight_for(42.0), "zooming out drew less ground");
+  }
+
+  #[test]
+  fn the_widest_view_is_a_scene_somebody_can_draw() {
+    // A draw distance that follows the camera is four times the ground at full
+    // zoom, so what it costs is worth stating rather than discovering on a
+    // slower machine. The batcher's own limit is per call and is handled at
+    // every push; this is the whole frame.
+    let sight = FURTHEST_SIGHT;
+    let middle = world::the_green();
+    let mut quads = 0usize;
+    let mut boxes = 0usize;
+    for dy in -sight..sight {
+      for dx in -sight..sight {
+        let square = (dx * dx + dy * dy) as f32;
+        if square > (sight * sight) as f32 {
+          continue;
+        }
+        let tile = Tile::new(middle.x + dx, middle.y + dy);
+        if !world::in_bounds(tile) {
+          continue;
+        }
+        quads += 1;
+        boxes += match world::prop_at(tile) {
+          Some(Prop::Tree) | Some(Prop::Oak) => {
+            if square.sqrt() > NEAR_PROP as f32 { 1 } else { 3 }
+          }
+          Some(Prop::Rock) | Some(Prop::Vein) => 2,
+          Some(Prop::Fish) => {
+            if square.sqrt() > NEAR_PROP as f32 { 0 } else { 3 }
+          }
+          None => 0,
+        };
+      }
+    }
+    let indices = quads * 6 + boxes * INDICES_PER_BOX;
+    let vertices = quads * 4 + boxes * VERTICES_PER_BOX;
+    println!(
+      "\n  at full zoom: {quads} ground quads, {boxes} prop boxes, {indices} indices, {vertices} vertices\n"
+    );
+    assert!(
+      indices < 220_000,
+      "a frame at full zoom is {indices} indices, which is a slideshow"
+    );
+    assert!(quads > 6000, "only {quads} quads at full zoom, so the rim is still in shot");
+  }
+
+  #[test]
+  fn a_body_fits_in_a_draw_call_on_its_own() {
+    // The failure this guards is silent: past the limit macroquad warns once
+    // and draws the front of the buffer, so things simply stop appearing and
+    // nothing says which.
+    const BOXES_PER_BODY: usize = 9;
+    const { assert!(BOXES_PER_BODY * VERTICES_PER_BOX <= MAX_VERTICES) };
+    const { assert!(BOXES_PER_BODY * INDICES_PER_BOX <= MAX_INDICES) };
+  }
 }

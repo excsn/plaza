@@ -157,7 +157,7 @@ async fn frame_loop(options: role::Options, bots: usize) {
       pitch = (pitch + dt).min(1.45);
     }
     if is_key_down(KeyCode::Down) || is_key_down(KeyCode::S) {
-      pitch = (pitch - dt).max(0.22);
+      pitch = (pitch - dt).max(0.42);
     }
     if is_mouse_button_pressed(MouseButton::Right) {
       dragging_from = Some(mouse);
@@ -168,7 +168,7 @@ async fn frame_loop(options: role::Options, bots: usize) {
     if let Some(from) = dragging_from {
       let delta = mouse - from;
       yaw -= delta.x * 0.006;
-      pitch = (pitch + delta.y * 0.004).clamp(0.22, 1.45);
+      pitch = (pitch + delta.y * 0.004).clamp(0.42, 1.45);
       dragging_from = Some(mouse);
     }
     let (_, wheel) = mouse_wheel();
@@ -215,14 +215,15 @@ async fn frame_loop(options: role::Options, bots: usize) {
       }
     }
 
-    clear_background(Color::new(0.55, 0.68, 0.80, 1.0));
+    clear_background(render::SKY);
 
     if client.ready() {
       let middle = Tile::new(mx.round() as i16, mz.round() as i16);
       set_camera(&camera);
 
-      scene.draw_ground(middle);
-      scene.draw_props(middle, |id| client.prop_standing(id), clock);
+      let sight = render::sight_for(distance);
+      scene.draw_ground(middle, sight);
+      scene.draw_props(middle, sight, |id| client.prop_standing(id), clock);
       scene.draw_fires(render::fire_tiles(&client).into_iter(), clock);
       scene.draw_lying(
         client

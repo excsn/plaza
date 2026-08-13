@@ -67,7 +67,11 @@ The client acts on a click immediately and the server acts on it a tick and a ro
 
 `route diverged` on the panel should read zero for a whole session. A number climbing there means the rule stopped being one rule.
 
-The check is also **switched off for a chase**, and that is not an exemption, it is what the counter is about. Attacking something makes the server steer the body toward a target that keeps moving; the client never claimed to have worked that route out, so counting it would bury the one reading the panel exists for under the commonest thing in the game. It comes back on the moment the next click is a place. `a_chase_is_not_a_divergence` pins both halves.
+**A shared rule only buys a free prediction when both ends start from the same state**, and that turned out to be narrower than it first looks. A click taken while standing still is that moment: the server has confirmed the square the body is on and nothing is outstanding, so both ends expand the same destination from the same place and get the same route, square for square.
+
+A click taken **mid-walk** is not, and no amount of shared rule fixes it. By the time the op lands the server is a square or two behind, it re-routes from where it is, and the two walk different lines to the same place. A chase is not either, because the target keeps moving. So neither is checked, neither is counted, and, most importantly, **neither snaps the body**. That last part is what the first version got wrong: it counted a re-click as divergence and corrected to the server's square, which is a correction for something that was never wrong and reads on screen as the world undoing your input.
+
+Reconciliation happens once, when the walking is over and there is nothing left to walk, which is when the two ends agree anyway. `clicking_again_mid_walk_does_not_snap_the_body_back` and `a_chase_is_not_a_divergence` pin both halves.
 
 ## A still world is a different relevance problem from a moving one
 
@@ -156,6 +160,8 @@ That loop being **closed** is the discipline that keeps the content from running
 
 Every one of these is a place where both halves were individually correct.
 
+- **A click mid-walk is not a divergence.** Both ends expand the destination from the square they are on, and mid-walk those are different squares, so the routes differ honestly. Treating that as disagreement produced a body that jumped backward on every re-click, which is the commonest thing anybody does.
+- **The draw distance has to follow the camera.** A fixed radius is a disc of countryside floating in the sky the moment somebody zooms out, and a scene with an edge in it looks wrong all over rather than in one place. Following the camera is four times the ground at full zoom, which is only affordable because corner heights are a table: 8495 quads and 1435 prop boxes is 102630 indices, and computing every corner from three octaves of noise instead would be six hundred thousand hashes to draw one picture. The rim fades into the sky, so where it does end reads as weather.
 - **A walk cycle that never stopped.** A body is drawn between the two squares it was last on, and those two are only rewritten when it takes a step, so an arrived body holds two different squares for ever and walks on the spot until the next click. The fix is that the clock is half the question: you are walking if you have squares left **or** you are still crossing the last one. Everybody else was drawn from the same rule and had the same bug, which is the tell that it was a rule and not a slip.
 - **A hash map's order reached the random stream.** `think()` collected the wandering bodies straight out of a `HashMap`, and every one of them then drew from one shared xorshift, so the same tick run twice was not the same tick. The fix is a sort; the reason it is not tidiness is that the order decides who wanders where. `a_tick_is_the_same_tick_when_it_is_run_again` is what found it.
 - **A client is never in its own audience.** `You` exists for that reason, and gow_3d shipped the other way round: a client that read itself out of the list of other people read nothing at all, and every key press was silent.
