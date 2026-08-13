@@ -303,7 +303,9 @@ fn timing_vectors() {
     .map(|&elapsed| {
       let steps = timestep.advance(elapsed);
       let count = steps.len();
-      let step_values: Vec<u64> = steps.collect();
+      // The fixture speaks whole milliseconds, which a 16ms step round-trips
+      // exactly; the Dart mirror has not moved to sub-millisecond steps.
+      let step_values: Vec<u64> = steps.map(|step| step.as_millis() as u64).collect();
       json!({
         "elapsed_ms": elapsed,
         "steps": count,

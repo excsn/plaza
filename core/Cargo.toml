@@ -25,6 +25,7 @@ tokio = { version = "^1", features = ["macros", "sync", "time"] }
 tracing = { workspace = true }
 
 [dev-dependencies]
+plaza_client_utils = { version = "0.6.0", path = "../client_utils" }
 tokio = { version = "^1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 uuid = { workspace = true }
 tracing-subscriber = { workspace = true }

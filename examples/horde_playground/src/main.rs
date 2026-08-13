@@ -167,8 +167,8 @@ async fn offline() {
 
   loop {
     let input = read_input();
-    for step_ms in timestep.advance((get_frame_time() * 1000.0) as u64) {
-      world.step(step_ms, input, &controls);
+    for step in timestep.advance((get_frame_time() * 1000.0) as u64) {
+      world.step(step.as_millis() as u64, input, &controls);
     }
 
     let cam = Camera::follow(world.players()[0]);
@@ -305,11 +305,11 @@ async fn networked(
     if input.x == 0.0 && input.y == 0.0 {
       input = touch.dir();
     }
-    for step_ms in timestep.advance(step_budget) {
+    for step in timestep.advance(step_budget) {
       if plays {
         client.send_input(input, &controls_now);
       }
-      client.tick(step_ms, &controls_now);
+      client.tick(step.as_millis() as u64, &controls_now);
     }
 
     if client.ready() && ready_at.is_none() {
