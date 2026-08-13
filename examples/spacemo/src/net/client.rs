@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
 
+use plaza_client_utils::FixedTimestep;
 use plaza_wire::{MsgPackCodec, WireCodec};
 use plaza_ws::pump::{mismatch_message, Arrival, FramePump};
 use plaza_ws::{Event, State};
@@ -266,20 +267,10 @@ pub struct NetClient {
   /// 120, against the server's 19.0. Sharing the rule as code is not enough on
   /// its own if the two sides disagree about how often to run it.
   ///
-  /// **Not** `plaza_client_utils::FixedTimestep`, and the reason is a defect
-  /// rather than a preference. Its `from_hz` computes `1000 / hz` in integer
-  /// milliseconds, so 60Hz becomes a 16ms step and runs 62.5 times a second;
-  /// `plaza::TickDriver::from_hz`, which is what the server is driven by, uses
-  /// `Duration::from_secs_f64(1.0 / hz)` and is exact. Driving prediction from
-  /// the block therefore ran it 4.2% faster than the server it is predicting,
-  /// measured as 20.19 units of travel a second against the server's 18.98.
-  ///
-  /// A float accumulator against `1.0 / TICK_HZ` has no such rounding, in f64:
-  /// at f32 a second of sixteen-millisecond additions lost a whole step, which
-  /// showed up as 60fps travelling 18.39 where 30 and 120 both managed 18.98.
-  /// When the block and the driver agree on what a rate means, this should use
-  /// the block.
-  debt: f64,
+  /// The block's `from_hz` is the same expression as `plaza::TickDriver`'s and
+  /// a test in `plaza` pins the two to each other, so stepping from here means
+  /// the same thing by 60Hz as the driver the server runs on.
+  timestep: FixedTimestep,
   /// The last absolute client clock seen, so the elapsed time handed to the
   /// timestep is a difference of absolute readings and cannot drift.
   last_ms: Option<u64>,
@@ -329,7 +320,7 @@ impl NetClient {
       offset: [0.0; 3],
       worst_correction: 0.0,
       teleports: 0,
-      debt: 0.0,
+      timestep: FixedTimestep::from_hz(crate::protocol::TICK_HZ as u32).with_max_frame_ms(MAX_FRAME_MS),
       last_ms: None,
       held: Fly::default(),
       now_ms: 0,
@@ -510,7 +501,7 @@ impl NetClient {
   /// to correct against. A homing shot is skipped, because its path is exactly
   /// the thing that could not be derived.
   fn carry_bolts(&mut self) {
-    let step = 1.0 / crate::protocol::TICK_HZ as f32;
+    let step = self.timestep.step_secs();
     self.bolts.retain(|_, bolt| {
       // A homing shot is not carried forward, because its path cannot be
       // derived. It is dropped when the server stops mentioning it, below.
@@ -548,14 +539,11 @@ impl NetClient {
     };
     self.last_ms = Some(self.now_ms);
 
-    let step = 1.0 / crate::protocol::TICK_HZ as f64;
-    self.debt = (self.debt + elapsed as f64 / 1000.0).min(MAX_FRAME_MS as f64 / 1000.0);
-    while self.debt >= step {
+    for _ in self.timestep.advance(elapsed) {
       if let Some(ship) = &mut self.predicted {
         advance(ship, self.held);
       }
       self.carry_bolts();
-      self.debt -= step;
     }
 
     // Easing stays on real time: it is a rate rather than a rule the server
@@ -655,7 +643,6 @@ mod tests {
   /// One second of wall clock at a given frame rate, driven exactly as the
   /// client drives it: an absolute clock, differenced, through `FixedTimestep`.
   fn travelled(fps: usize) -> f32 {
-    let step = 1.0 / crate::protocol::TICK_HZ as f64;
     let mut ship = Ship {
       alive: true,
       ..Default::default()
@@ -667,13 +654,12 @@ mod tests {
       firing: false,
       launching: false,
     };
-    let (mut debt, mut last) = (0.0f64, 0u64);
+    let mut timestep = FixedTimestep::from_hz(crate::protocol::TICK_HZ as u32).with_max_frame_ms(MAX_FRAME_MS);
+    let mut last = 0u64;
     for frame in 1..=fps {
       let now = (frame as f64 / fps as f64 * 1000.0) as u64;
-      debt = (debt + (now - last) as f64 / 1000.0).min(MAX_FRAME_MS as f64 / 1000.0);
-      while debt >= step {
+      for _ in timestep.advance(now - last) {
         crate::sim::advance(&mut ship, held);
-        debt -= step;
       }
       last = now;
     }
@@ -706,13 +692,8 @@ mod tests {
   fn a_stall_does_not_simulate_the_minute_it_missed() {
     // A backgrounded tab returns with a large delta. Catching up in one frame
     // would freeze the client for longer than the stall did.
-    let step = 1.0 / crate::protocol::TICK_HZ as f64;
-    let mut debt = (0.0f64 + 60.0).min(MAX_FRAME_MS as f64 / 1000.0);
-    let mut ran = 0;
-    while debt >= step {
-      debt -= step;
-      ran += 1;
-    }
+    let mut timestep = FixedTimestep::from_hz(crate::protocol::TICK_HZ as u32).with_max_frame_ms(MAX_FRAME_MS);
+    let ran = timestep.advance(60_000).len();
     assert!(ran <= 9, "ran {ran} steps for one frame");
   }
 
