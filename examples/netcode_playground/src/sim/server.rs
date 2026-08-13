@@ -105,8 +105,8 @@ impl ToyServer {
   pub fn advance(&mut self, dt_ms: u64, step_ms: u64) -> Vec<ServerPacket> {
     self.step.set_step_ms(step_ms.max(1));
     let mut packets = Vec::new();
-    for step_ms in self.step.advance(dt_ms) {
-      self.clock_ms += step_ms;
+    for step in self.step.advance(dt_ms) {
+      self.clock_ms += step.as_millis() as u64;
       packets.push(self.tick());
     }
     packets

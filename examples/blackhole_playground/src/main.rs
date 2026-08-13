@@ -178,8 +178,8 @@ async fn offline() {
   loop {
     let input = read_input();
     let mut dash = is_key_pressed(KeyCode::Space);
-    for step_ms in timestep.advance((get_frame_time() * 1000.0) as u64) {
-      world.step(step_ms, input, dash, &controls);
+    for step in timestep.advance((get_frame_time() * 1000.0) as u64) {
+      world.step(step.as_millis() as u64, input, dash, &controls);
       dash = false; // one dash request per press, not per step
     }
 
@@ -283,12 +283,12 @@ async fn networked(options: role::Options, controls: std::sync::Arc<parking_lot:
     }
     let dash = is_key_pressed(KeyCode::Space);
     let mut dash_this_step = dash;
-    for step_ms in timestep.advance(dt_ms) {
+    for step in timestep.advance(dt_ms) {
       if plays {
-        client.send_input(input, dash_this_step, step_ms as f32 / 1000.0);
+        client.send_input(input, dash_this_step, step.as_secs_f32());
         dash_this_step = false;
       }
-      client.tick(step_ms, &controls_now);
+      client.tick(step.as_millis() as u64, &controls_now);
     }
 
     if client.ready() && ready_at.is_none() {

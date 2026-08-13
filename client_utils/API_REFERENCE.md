@@ -357,10 +357,10 @@ Second-order dead reckoning for one scalar: keeps the last three samples, takes 
 
 ### Struct `FixedTimestep`
 
-*   **`from_step_ms(step_ms)`** / **`from_hz(hz)`**: **panics on zero.** `from_hz` is integer division, so a rate that does not divide 1000 truncates: 60 Hz is a 16 ms step running 62.5 times a second. That does **not** match `plaza::TickDriver::from_hz`, which is exact at 16.667 ms, so a client predicting through this against such a server runs 4.2% fast. Pick a rate that divides 1000 when both sides matter, and take the delta from `step_secs()` rather than from the rate.
-*   **`with_max_frame_ms(ms)`**: cap how much elapsed time one `advance` may pay for. Default `DEFAULT_MAX_FRAME_MS`, 250 ms.
-*   **`advance(&mut self, elapsed_ms) -> Steps`**: an `ExactSizeIterator` yielding the step duration in milliseconds, once per step this frame paid for. The duration is *yielded* so a caller cannot integrate by the frame delta instead.
-*   **`step_ms()`**, **`step_secs()`**, **`set_step_ms(ms)`**, **`pending_ms()`**, **`alpha()`** (the fraction of a step accumulated), **`dropped_ms()`**, **`reset()`**.
+*   **`from_step(Duration)`** / **`from_step_ms(step_ms)`** / **`from_hz(hz)`**: **panics on zero.** `from_hz` is exact to the nanosecond, the same expression as `plaza::TickDriver::from_hz` (`Duration::from_secs_f64(1.0 / hz)`), and a test in `plaza` pins the two to each other: 60 Hz is a 16.666667 ms step on both sides. Internals are integer nanoseconds, so no float error accumulates.
+*   **`with_max_frame_ms(ms)`**: cap how much elapsed time one `advance` may pay for. Default `DEFAULT_MAX_FRAME`, 250 ms. This cap is elapsed *time*; `TickDriver` caps a stall at `MAX_STEPS_PER_WAKE` whole steps, a benign difference for a predicted client since corrections flow from the server.
+*   **`advance(&mut self, elapsed_ms) -> Steps`**: an `ExactSizeIterator` yielding the step as a `Duration`, once per step this frame paid for. The step is *yielded* so a caller cannot integrate by the frame delta instead.
+*   **`step()`**, **`step_secs()`**, **`set_step(Duration)`** / **`set_step_ms(ms)`**, **`pending_ms()`**, **`alpha()`** (the fraction of a step accumulated), **`dropped_ms()`**, **`reset()`**.
 
 `dropped_ms` is real time the simulation never ran because the cap refused it. If you also keep a clock, advance it by *simulated* time, not wall time.
 

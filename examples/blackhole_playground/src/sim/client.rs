@@ -124,9 +124,9 @@ impl Client {
       return;
     }
     let field = self.field.clone();
-    for step_ms in self.sim.advance(dt_ms) {
+    for step in self.sim.advance(dt_ms) {
       for pellet in self.pellets.values_mut() {
-        step_pellet(pellet, &field, step_ms as f32 / 1000.0);
+        step_pellet(pellet, &field, step.as_secs_f32());
       }
     }
   }

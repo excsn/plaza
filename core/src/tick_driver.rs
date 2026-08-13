@@ -338,4 +338,22 @@ mod tests {
     // Returns rather than looping or panicking.
     TickDriver::from_hz(500).run_fixed(tx, Duration::from_millis(2)).await;
   }
+
+  #[test]
+  fn the_driver_and_the_client_timestep_mean_the_same_thing_by_a_rate() {
+    // Both compute `Duration::from_secs_f64(1.0 / hz)`, duplicated because a
+    // dependency edge between the crates would be wrong in either direction:
+    // this one is tokio-bound and `plaza_client_utils` must stay runtime-free.
+    // This is the pin that keeps the duplicates identical. Its ancestor defect:
+    // the timestep once truncated to whole milliseconds, so a 60Hz client
+    // stepped every 16ms against a driver ticking every 16.667, and ran 4.2%
+    // fast into a permanent correction.
+    for hz in [10, 24, 30, 50, 60, 64, 100, 120, 128, 144, 240, 250, 500, 1000] {
+      assert_eq!(
+        TickDriver::from_hz(hz).interval,
+        plaza_client_utils::FixedTimestep::from_hz(hz).step(),
+        "at {hz}Hz"
+      );
+    }
+  }
 }

@@ -154,8 +154,8 @@ impl Server {
     // `server_time_ms` has to say when its state is from: a client integrates the
     // field forward by that packet's age, so a clock ahead of the state it
     // describes would make every client over-integrate.
-    for step_ms in self.sim.advance(dt_ms) {
-      self.clock_ms += step_ms;
+    for step in self.sim.advance(dt_ms) {
+      self.clock_ms += step.as_millis() as u64;
       self.step(seats);
     }
 

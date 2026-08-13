@@ -19,6 +19,19 @@
 //! [`Steps`] yields the step duration rather than leaving the caller to supply
 //! one.
 //!
+//! # Agreeing with the driver on the other end
+//!
+//! [`from_hz`](FixedTimestep::from_hz) computes the step with the same
+//! expression `plaza::TickDriver::from_hz` uses,
+//! `Duration::from_secs_f64(1.0 / hz)`, so the two sides of a predicted
+//! simulation mean the same thing by a rate; a test in `plaza` pins the two
+//! expressions to each other. The internals are integer nanoseconds, so no
+//! accumulation of float error can reintroduce a gap. What still differs is a
+//! stall: `TickDriver` caps catch-up at `MAX_STEPS_PER_WAKE` whole steps where
+//! this caps it at [`with_max_frame_ms`] of elapsed time. Benign for a
+//! predicted client, because corrections flow from the server, but a
+//! difference to know about.
+//!
 //! # The clamp, which is the actual reason this is a type
 //!
 //! A backgrounded browser tab, a laptop resuming from sleep, or a breakpoint in a
@@ -42,6 +55,8 @@
 //! [`with_max_frame_ms`]: FixedTimestep::with_max_frame_ms
 //! [`dropped_ms`]: FixedTimestep::dropped_ms
 
+use std::time::Duration;
+
 /// Turns elapsed real time into a whole number of fixed-size steps.
 ///
 /// ```
@@ -50,58 +65,58 @@
 /// # let mut world = World;
 /// let mut timestep = FixedTimestep::from_hz(60);
 /// // Per frame, however long the frame took:
-/// for step_ms in timestep.advance(33) {
-///   world.step(step_ms as f32 / 1000.0);
+/// for step in timestep.advance(33) {
+///   world.step(step.as_secs_f32());
 /// }
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FixedTimestep {
-  step_ms: u64,
-  accumulated_ms: u64,
-  max_frame_ms: u64,
-  dropped_ms: u64,
+  step_nanos: u64,
+  accumulated_nanos: u64,
+  max_frame_nanos: u64,
+  dropped_nanos: u64,
+}
+
+fn whole_nanos(duration: Duration) -> u64 {
+  u64::try_from(duration.as_nanos()).expect("a timestep duration fits in u64 nanoseconds")
 }
 
 impl FixedTimestep {
-  /// A step of `step_ms`, with the default catch-up cap.
+  /// A step of `step`, with the default catch-up cap.
   ///
   /// # Panics
-  /// Panics if `step_ms` is zero, which would make every frame an infinite loop.
-  pub fn from_step_ms(step_ms: u64) -> Self {
-    assert!(step_ms > 0, "a fixed timestep must be greater than zero");
+  /// Panics if `step` is zero, which would make every frame an infinite loop.
+  pub fn from_step(step: Duration) -> Self {
+    assert!(!step.is_zero(), "a fixed timestep must be greater than zero");
     Self {
-      step_ms,
-      accumulated_ms: 0,
-      max_frame_ms: DEFAULT_MAX_FRAME_MS,
-      dropped_ms: 0,
+      step_nanos: whole_nanos(step),
+      accumulated_nanos: 0,
+      max_frame_nanos: whole_nanos(DEFAULT_MAX_FRAME),
+      dropped_nanos: 0,
     }
   }
 
-  /// A step of `1000 / hz` milliseconds.
-  ///
-  /// Integer division, so rates that do not divide 1000 evenly are truncated:
-  /// 60 Hz is 16 ms rather than 16.667. That is deliberate at millisecond
-  /// resolution, and two `FixedTimestep`s agree exactly as long as they agree on
-  /// the rate.
-  ///
-  /// **They do not agree with a server driven by `plaza::TickDriver`.** That
-  /// uses `Duration::from_secs_f64(1.0 / hz)` and is exact, so at 60 Hz it ticks
-  /// every 16.667 ms while this steps every 16, and anything driven from here
-  /// runs 4.2% faster than the loop it is meant to be following. A client
-  /// predicting through this against such a server drifts continuously and is
-  /// corrected every frame for it.
-  ///
-  /// So pick a rate that divides 1000 when both sides matter, 50 Hz or 100 Hz,
-  /// or drive the local side from a float accumulator against `1.0 / hz`. And
-  /// derive whatever delta the simulation integrates from
-  /// [`step_secs`](Self::step_secs) rather than from the rate, or the interval
-  /// and the delta disagree by the same 4.2% while looking like one constant.
+  /// A step of `step_ms` milliseconds.
   ///
   /// # Panics
-  /// Panics if `hz` is zero or above 1000.
+  /// Panics if `step_ms` is zero.
+  pub fn from_step_ms(step_ms: u64) -> Self {
+    Self::from_step(Duration::from_millis(step_ms))
+  }
+
+  /// A step of exactly `1.0 / hz` seconds, to the nanosecond.
+  ///
+  /// The same expression `plaza::TickDriver::from_hz` uses, so a simulation
+  /// stepped from here and one driven by that agree on what a rate means,
+  /// whether or not it divides a round number: 60 Hz is a step of 16.666667 ms
+  /// here and there both. An integer-millisecond step would make 16 of it and
+  /// run 4.2% fast against the driver, which reads as a permanent correction.
+  ///
+  /// # Panics
+  /// Panics if `hz` is zero.
   pub fn from_hz(hz: u32) -> Self {
-    assert!(hz > 0 && hz <= 1000, "a timestep rate must be between 1 and 1000 Hz, got {hz}");
-    Self::from_step_ms((1000 / hz) as u64)
+    assert!(hz > 0, "a timestep rate must be greater than zero Hz");
+    Self::from_step(Duration::from_secs_f64(1.0 / f64::from(hz)))
   }
 
   /// The most elapsed time one [`advance`](Self::advance) will pay for, in ms.
@@ -109,9 +124,9 @@ impl FixedTimestep {
   /// Anything beyond it is discarded and counted in [`dropped_ms`](Self::dropped_ms).
   /// Lower means a resumed tab catches up less and skips more; higher means it
   /// catches up more and risks a visible hitch doing it. The default is
-  /// [`DEFAULT_MAX_FRAME_MS`].
+  /// [`DEFAULT_MAX_FRAME`].
   pub fn with_max_frame_ms(mut self, max_frame_ms: u64) -> Self {
-    self.max_frame_ms = max_frame_ms;
+    self.max_frame_nanos = whole_nanos(Duration::from_millis(max_frame_ms));
     self
   }
 
@@ -119,19 +134,20 @@ impl FixedTimestep {
   ///
   /// The accumulator is drained here rather than as the iterator is consumed, so
   /// the time is spent whether or not the caller runs every step. Each item is
-  /// the step duration in milliseconds, which is the value the simulation must
-  /// advance by: taking it from the iterator is what stops a caller from
-  /// accidentally stepping by the frame delta instead.
+  /// the step duration, which is the value the simulation must advance by:
+  /// taking it from the iterator is what stops a caller from accidentally
+  /// stepping by the frame delta instead.
   pub fn advance(&mut self, elapsed_ms: u64) -> Steps {
-    if elapsed_ms > self.max_frame_ms {
-      self.dropped_ms += elapsed_ms - self.max_frame_ms;
+    let elapsed_nanos = elapsed_ms.saturating_mul(1_000_000);
+    if elapsed_nanos > self.max_frame_nanos {
+      self.dropped_nanos += elapsed_nanos - self.max_frame_nanos;
     }
-    self.accumulated_ms += elapsed_ms.min(self.max_frame_ms);
-    let count = self.accumulated_ms / self.step_ms;
-    self.accumulated_ms -= count * self.step_ms;
+    self.accumulated_nanos += elapsed_nanos.min(self.max_frame_nanos);
+    let count = self.accumulated_nanos / self.step_nanos;
+    self.accumulated_nanos -= count * self.step_nanos;
     Steps {
       remaining: count as u32,
-      step_ms: self.step_ms,
+      step: Duration::from_nanos(self.step_nanos),
     }
   }
 
@@ -147,24 +163,32 @@ impl FixedTimestep {
   /// both sides agree on, or for a stream where nothing integrates.
   ///
   /// # Panics
-  /// Panics if `step_ms` is zero.
-  pub fn set_step_ms(&mut self, step_ms: u64) {
-    assert!(step_ms > 0, "a fixed timestep must be greater than zero");
-    self.step_ms = step_ms;
+  /// Panics if `step` is zero.
+  pub fn set_step(&mut self, step: Duration) {
+    assert!(!step.is_zero(), "a fixed timestep must be greater than zero");
+    self.step_nanos = whole_nanos(step);
   }
 
-  pub fn step_ms(&self) -> u64 {
-    self.step_ms
+  /// See [`set_step`](Self::set_step).
+  ///
+  /// # Panics
+  /// Panics if `step_ms` is zero.
+  pub fn set_step_ms(&mut self, step_ms: u64) {
+    self.set_step(Duration::from_millis(step_ms));
+  }
+
+  pub fn step(&self) -> Duration {
+    Duration::from_nanos(self.step_nanos)
   }
 
   /// The step as seconds, which is what most integration wants.
   pub fn step_secs(&self) -> f32 {
-    self.step_ms as f32 / 1000.0
+    self.step().as_secs_f32()
   }
 
-  /// Time carried over, always less than one step.
+  /// Time carried over, always less than one step, in whole milliseconds.
   pub fn pending_ms(&self) -> u64 {
-    self.accumulated_ms
+    self.accumulated_nanos / 1_000_000
   }
 
   /// How far between the last step and the next, in `0.0..1.0`.
@@ -174,17 +198,17 @@ impl FixedTimestep {
   /// and the refresh rate disagree. Optional, and worth knowing exists, because
   /// the usual first diagnosis of that stutter is that the step rate is too low.
   pub fn alpha(&self) -> f32 {
-    self.accumulated_ms as f32 / self.step_ms as f32
+    self.accumulated_nanos as f32 / self.step_nanos as f32
   }
 
-  /// Elapsed time the catch-up cap has refused, in total.
+  /// Elapsed time the catch-up cap has refused, in total whole milliseconds.
   ///
   /// Real time the simulation never ran. Non-zero after a tab was backgrounded,
   /// a machine slept, or a frame took pathologically long, and worth surfacing
   /// somewhere: a world quietly behind wall time explains a whole class of
   /// "it desynced and I do not know when" reports.
   pub fn dropped_ms(&self) -> u64 {
-    self.dropped_ms
+    self.dropped_nanos / 1_000_000
   }
 
   /// Discards the carried remainder, for a world that has been rebuilt.
@@ -192,7 +216,7 @@ impl FixedTimestep {
   /// Leaves `dropped_ms` alone, which is a running total for the session rather
   /// than for the current world.
   pub fn reset(&mut self) {
-    self.accumulated_ms = 0;
+    self.accumulated_nanos = 0;
   }
 }
 
@@ -201,14 +225,14 @@ impl FixedTimestep {
 /// Enough that an ordinary hitch is caught up smoothly, small enough that a
 /// resumed tab skips ahead instead of grinding through the minutes it was
 /// asleep.
-pub const DEFAULT_MAX_FRAME_MS: u64 = 250;
+pub const DEFAULT_MAX_FRAME: Duration = Duration::from_millis(250);
 
 /// The steps one [`FixedTimestep::advance`] paid for, each yielding the step
-/// duration in milliseconds.
+/// duration.
 #[derive(Clone, Copy, Debug)]
 pub struct Steps {
   remaining: u32,
-  step_ms: u64,
+  step: Duration,
 }
 
 impl Steps {
@@ -223,14 +247,14 @@ impl Steps {
 }
 
 impl Iterator for Steps {
-  type Item = u64;
+  type Item = Duration;
 
-  fn next(&mut self) -> Option<u64> {
+  fn next(&mut self) -> Option<Duration> {
     if self.remaining == 0 {
       return None;
     }
     self.remaining -= 1;
-    Some(self.step_ms)
+    Some(self.step)
   }
 
   fn size_hint(&self) -> (usize, Option<usize>) {
@@ -332,36 +356,32 @@ mod rate_tests {
   use super::*;
 
   #[test]
-  fn a_rate_that_does_not_divide_a_thousand_is_truncated() {
-    // Pinned rather than described, because the number this produces is what
-    // makes it disagree with an exact driver, and a reader deserves to see it.
-    assert_eq!(FixedTimestep::from_hz(60).step_ms(), 16, "not 16.667");
-    assert_eq!(FixedTimestep::from_hz(50).step_ms(), 20, "50 divides 1000");
-    assert_eq!(FixedTimestep::from_hz(100).step_ms(), 10);
+  fn a_rate_that_does_not_divide_a_thousand_is_exact_anyway() {
+    // Pinned in nanoseconds, because this number disagreeing with the server's
+    // driver is the defect this module used to document instead of fix.
+    assert_eq!(FixedTimestep::from_hz(60).step(), Duration::from_secs_f64(1.0 / 60.0));
+    assert_eq!(FixedTimestep::from_hz(60).step().as_nanos(), 16_666_667);
+    assert_eq!(FixedTimestep::from_hz(50).step(), Duration::from_millis(20));
 
-    // Which is 62.5 steps a second where an exact 60 Hz driver ticks 60 times,
-    // so anything driven from here runs 4.2% fast against it.
-    // Fed a second in frame-sized pieces, since one `advance` is capped by
-    // `max_frame_ms` and would otherwise report the cap rather than the rate.
+    // A second of elapsed time is 59 whole steps with the 60th owed 20ns later,
+    // where the old integer-millisecond step produced 62 and ran 4.2% fast.
+    // Fed in frame-sized pieces, since one `advance` is capped by the max frame
+    // and would otherwise report the cap rather than the rate.
     let mut clock = FixedTimestep::from_hz(60);
     let steps: usize = (0..100).map(|_| clock.advance(10).len()).sum();
-    assert_eq!(steps, 62, "a second of elapsed time is {steps} steps of 16ms, not 60");
+    assert_eq!(steps, 59, "a second of elapsed time is {steps} steps of 16.666667ms");
+    let steps: usize = (0..9_900).map(|_| clock.advance(10).len()).sum();
+    assert_eq!(steps + 59, 5_999, "a hundred seconds stays within one step of 60Hz");
   }
 
   #[test]
   fn a_simulation_delta_taken_from_the_step_cannot_disagree_with_it() {
-    // The failure this prevents: deriving the interval from a rate in
-    // milliseconds and the delta from the same rate in seconds. One truncates
-    // and the other does not, so simulated time runs fast while both look like
-    // they came from one constant.
+    // The failure this prevents: deriving the interval from a rate one way and
+    // the delta from the same rate another. The delta is defined as a reading
+    // of the step, so the two cannot be mixed from different derivations.
     let step = FixedTimestep::from_hz(60);
-    let from_step = step.step_secs();
-    let from_rate = 1.0 / 60.0f32;
-    assert!(
-      (from_step - from_rate).abs() > 0.0006,
-      "these are the two numbers that must not be mixed: {from_step} against {from_rate}"
-    );
-    assert_eq!(from_step, step.step_ms() as f32 / 1000.0);
+    assert_eq!(step.step_secs(), step.step().as_secs_f32());
+    assert!((step.step_secs() - 1.0 / 60.0).abs() < 1e-7);
   }
 }
 
@@ -384,10 +404,10 @@ mod tests {
     // different step sizes are not the same simulation, and the drift reads as
     // network jitter, so taking the step from here is what keeps them equal.
     let mut t = FixedTimestep::from_hz(60);
-    assert_eq!(t.step_ms(), 16);
-    let steps: Vec<u64> = t.advance(50).collect();
-    assert_eq!(steps, vec![16, 16, 16]);
-    assert!((t.step_secs() - 0.016).abs() < 1e-6);
+    assert_eq!(t.step(), Duration::from_secs_f64(1.0 / 60.0));
+    let steps: Vec<Duration> = t.advance(50).collect();
+    assert_eq!(steps, vec![t.step(); 2], "50ms buys two 16.667ms steps");
+    assert!((t.step_secs() - 1.0 / 60.0).abs() < 1e-7);
   }
 
   #[test]
@@ -467,15 +487,15 @@ mod tests {
     // state is from. Frame times that do not divide the step are the case that
     // breaks a naive accumulator.
     let mut t = FixedTimestep::from_step_ms(16);
-    let mut simulated = 0u64;
-    let mut wall = 0u64;
+    let mut simulated = Duration::ZERO;
+    let mut wall = Duration::ZERO;
     for frame in 0..1000u64 {
       // A jittery but honest frame time, never long enough to be clamped.
       let dt = 14 + frame % 7;
-      wall += dt;
-      simulated += t.advance(dt).sum::<u64>();
+      wall += Duration::from_millis(dt);
+      simulated += t.advance(dt).sum::<Duration>();
     }
-    assert!(wall - simulated < 16, "simulated {simulated} against wall {wall}");
+    assert!(wall - simulated < Duration::from_millis(16), "simulated {simulated:?} against wall {wall:?}");
     assert_eq!(t.dropped_ms(), 0);
   }
 

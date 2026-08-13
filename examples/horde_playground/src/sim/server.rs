@@ -387,8 +387,8 @@ impl Server {
     // and a client subtracts it from its own clock to project a sample forward,
     // so a clock that ran ahead of the state it describes would have every client
     // projecting the horde into a future the server never simulated.
-    for step_ms in self.sim.advance(dt_ms) {
-      self.clock_ms += step_ms;
+    for step in self.sim.advance(dt_ms) {
+      self.clock_ms += step.as_millis() as u64;
       // Per step, not per packet: an input is due at a *tick*, so consuming the
       // queue once per network frame would collapse everything that arrived
       // between two ticks onto whichever one happened to run next.
