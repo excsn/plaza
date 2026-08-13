@@ -42,7 +42,7 @@ pub use playground_common;
 /// Named here rather than in `bots`, which is server-only: a browser client
 /// parses the same command line and must still compile without a world in it.
 pub fn bots_default() -> usize {
-  28
+  90
 }
 
 pub mod controls;

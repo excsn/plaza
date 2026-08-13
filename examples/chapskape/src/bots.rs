@@ -251,7 +251,7 @@ impl Bots {
 pub fn stock(zone: &mut Zone, seats: impl Iterator<Item = Seat>, hens: usize) {
   for (index, seat) in seats.enumerate() {
     let angle = index as f32 * 2.399_963_2;
-    let radius = 14.0 + (index as f32).sqrt() * 9.0;
+    let radius = 10.0 + (index as f32).sqrt() * 6.0;
     let hint = Tile::new(
       (world::SIZE / 2) as i16 + (angle.cos() * radius) as i16,
       (world::SIZE / 2) as i16 + (angle.sin() * radius) as i16,

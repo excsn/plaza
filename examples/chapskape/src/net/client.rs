@@ -113,8 +113,14 @@ impl Other {
     )
   }
 
-  pub fn moving(&self) -> bool {
-    self.was != self.tile
+  /// Whether they are still crossing the gap between two squares.
+  ///
+  /// The clock is half the question and the reason is worth stating: `was` only
+  /// moves when the square does, so a body that has stopped keeps two different
+  /// squares on it for ever and reads as walking on the spot until it happens
+  /// to move again.
+  pub fn moving(&self, now_ms: u64, tick_ms: u64) -> bool {
+    self.was != self.tile && now_ms.saturating_sub(self.since_ms) < tick_ms
   }
 }
 
@@ -358,12 +364,24 @@ impl NetClient {
     )
   }
 
-  pub fn walking(&self) -> bool {
-    !self.plan.is_empty() || self.was != self.predicted
+  /// Whether the local body has squares left or is still crossing the last one.
+  ///
+  /// The clock is the half that is easy to leave out, and leaving it out is a
+  /// walk cycle that never stops: `was` is only written when a step is taken,
+  /// so an arrived body holds two different squares for ever and keeps walking
+  /// on the spot until the next click.
+  pub fn walking(&self, now_ms: u64) -> bool {
+    !self.plan.is_empty() || self.crossing(now_ms)
   }
 
-  pub fn facing(&self) -> u8 {
-    if self.was == self.predicted {
+  fn crossing(&self, now_ms: u64) -> bool {
+    self.was != self.predicted && now_ms.saturating_sub(self.stepped_ms) < self.tick_ms
+  }
+
+  /// Which way the body is turned: the way it is going while it is going
+  /// somewhere, and whatever the server says once it has arrived.
+  pub fn facing(&self, now_ms: u64) -> u8 {
+    if !self.crossing(now_ms) {
       return self.you.as_ref().map(|you| you.facing).unwrap_or(4);
     }
     crate::zone::facing_between(self.was, self.predicted)

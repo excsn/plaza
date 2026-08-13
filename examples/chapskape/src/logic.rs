@@ -41,9 +41,9 @@ type Ctx = OpsQueue<SkapeOp, PlayerId>;
 pub const REPORT_EVERY: u64 = 50;
 
 /// Hens, which are there to be a first fight rather than a threat.
-pub const HENS: usize = 34;
+pub const HENS: usize = 60;
 /// Brutes, which are the reason a level matters.
-pub const BRUTES: usize = 24;
+pub const BRUTES: usize = 46;
 
 /// The most game ticks one wake-up may run.
 ///
@@ -107,7 +107,11 @@ impl SkapeLogic {
       };
       let seat = seat as Seat;
       let angle = index as f32 * 2.399_963_2;
-      let radius = 6.0 + (index as f32).sqrt() * 6.0;
+      // Tighter than a plain spiral would be. A world this wide spreads a
+      // population out until a view of it is empty, and an empty view is the
+      // one thing this example cannot afford: it is what made gow_3d's bugs
+      // invisible.
+      let radius = 4.0 + (index as f32).sqrt() * 3.5;
       let hint = Tile::new(
         world::SIZE / 2 + (angle.cos() * radius) as i16,
         world::SIZE / 2 + (angle.sin() * radius) as i16,
@@ -580,7 +584,7 @@ mod tests {
       frame.ground.len()
     );
     assert!(
-      frame.actors.len() >= 4,
+      frame.actors.len() >= 10,
       "a joiner arrived to {} bodies, which is an empty world",
       frame.actors.len()
     );
