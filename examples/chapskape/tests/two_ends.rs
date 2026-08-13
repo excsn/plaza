@@ -444,3 +444,51 @@ async fn a_chase_is_not_a_divergence() {
   assert_eq!(client.diverged, 0);
   assert_eq!(client.predicted, to);
 }
+
+#[tokio::test]
+async fn a_body_stops_walking_when_it_gets_there() {
+  // Presentation derived from interpolation, and the half that is easy to leave
+  // out. The two squares a body is drawn between are only rewritten when it
+  // takes a step, so an arrived body holds two different ones for ever and
+  // walks on the spot until the next click. The clock is what ends the walk.
+  let (logic, mut state, mut client, socket) = both_sides(Relevance::OnChange).await;
+  let from = client.predicted;
+  let to = world::footing_near(Tile::new(from.x + 8, from.y + 5));
+
+  client.walk_to(to);
+  let squares = client.plan.len();
+  send(&logic, &mut state, 1, SkapeOp::WalkTo { tile: to }).await;
+
+  let mut now = 0;
+  for _ in 0..squares {
+    let out = tick(&logic, &mut state).await;
+    now += TICK_MS;
+    deliver(&socket, &ops_for(&out, 0));
+    client.poll(now);
+  }
+  assert_eq!(client.predicted, to, "never arrived");
+  assert!(client.walking(now), "the last square is still being crossed");
+
+  // One tick later the crossing is over and so is the walk cycle, whether or
+  // not another frame ever arrives.
+  client.poll(now + TICK_MS);
+  assert!(!client.walking(now + TICK_MS), "the walk cycle never stopped");
+  assert!(!client.walking(now + TICK_MS * 20), "and it never stopped later either");
+
+  // Everybody else is drawn from the same rule, and had the same bug.
+  let out = tick(&logic, &mut state).await;
+  deliver(&socket, &ops_for(&out, 0));
+  client.poll(now + TICK_MS * 2);
+  state.zone.admit(9, Tile::new(to.x + 2, to.y), chapskape::protocol::Look::Hen);
+  for _ in 0..3 {
+    let out = tick(&logic, &mut state).await;
+    now += TICK_MS;
+    deliver(&socket, &ops_for(&out, 0));
+    client.poll(now);
+  }
+  let hen = client.others.get(&9).copied().expect("the hen was never described");
+  assert!(
+    !hen.moving(now + TICK_MS * 20, client.tick_ms),
+    "a body that stopped moving still reads as walking"
+  );
+}

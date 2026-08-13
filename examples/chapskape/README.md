@@ -8,9 +8,9 @@ A square of countryside you click at: trees to chop, rocks to mine, shoals to fi
 cargo test -p chapskape    # the findings, as assertions
 ```
 
-**Click somewhere to go there.** Click a tree, a rock or a shoal to walk over and work it; click a brute to fight it; click something lying about to pick it up. **R** runs, **space** stops, and clicking a square of your pack uses it while shift-clicking drops it. Right-drag or the arrow keys swing the camera. `--bots N` sets how many of the world's own it seats.
+**Click somewhere to go there.** Click a tree, a rock or a shoal to walk over and work it; click a brute to fight it; click something lying about to pick it up. **R** runs, **space** stops, and clicking a square of your pack uses it while shift-clicking drops it. Right-drag or the arrow keys swing the camera. `--bots N` sets how many of the world's own it seats, ninety by default.
 
-The world is 4037 props over 192x192 squares, and it is inhabited before you arrive: two dozen bodies chopping, fishing, cooking and fighting. Two minutes into a headless run with nobody connected, a joiner arrives to six people in view and ten things lying on the ground.
+The world is 4037 props over 192x192 squares, and 196 bodies live in it before you arrive: ninety of the world's own chopping, fishing, cooking and fighting, and a hundred and six hens and brutes between them. Two minutes into a headless run with nobody connected, a joiner arrives to **21 bodies in view and 22 things lying on the ground**.
 
 The thing worth doing is dropping something and watching the ring around it. It is yours alone for fifty ticks, and **nobody else is even told it is there** until the timer runs out.
 
@@ -81,12 +81,12 @@ Four thousand props exist and perhaps one changes a tick. Every relevance path i
     on change      8 entries sent,  320 if every frame carried them
 ```
 
-Measured on a frame, in a world with two dozen bodies working in it:
+Measured on a frame, in a lived-in world:
 
 ```
        props bytes/frame bytes/second of that, props
-  every tick        588          980          73.4
-   on change        520          867           6.4
+  every tick        851         1419          75.9
+   on change        781         1302           6.9
 ```
 
 Two things make the cheap mode possible, and neither is the diff.
@@ -123,10 +123,10 @@ Every other example in this tree spends effort concealing its tick from the pers
 
 ```
    tick ms  bytes/frame   bytes/second
-       600          511            852
-       300          512           1708
-       150          360           2401
-        50          225           4495
+       600          779           1298
+       300          796           2655
+       150          699           4663
+        50          565          11309
 ```
 
 A shorter tick makes each frame a little smaller, because less happens in one, and the bill several times larger anyway. Everything this example says about free round trips is said at six hundred milliseconds.
@@ -144,8 +144,8 @@ It is derived **once**, though, and that is arithmetic rather than principle. A 
 `cargo test -p chapskape --lib the_world_gets_on -- --nocapture`
 
 ```
-  after 400 ticks: 126 gathered, 131 blows, 30 felled, 3682 experience,
-                   25 levels, 55 props used up, 15 on the ground
+  after 400 ticks: 126 gathered, 104 blows, 16 felled, 3333 experience,
+                   24 levels, 42 props used up
 ```
 
 The world's own live the same loop a player does, through the same ops a client sends, so nothing downstream knows the difference. Chop until the pack is heavy, set light to the logs, catch fish, cook them on the fire, go and fight something, eat when it hurts, start again.
@@ -156,6 +156,7 @@ That loop being **closed** is the discipline that keeps the content from running
 
 Every one of these is a place where both halves were individually correct.
 
+- **A walk cycle that never stopped.** A body is drawn between the two squares it was last on, and those two are only rewritten when it takes a step, so an arrived body holds two different squares for ever and walks on the spot until the next click. The fix is that the clock is half the question: you are walking if you have squares left **or** you are still crossing the last one. Everybody else was drawn from the same rule and had the same bug, which is the tell that it was a rule and not a slip.
 - **A hash map's order reached the random stream.** `think()` collected the wandering bodies straight out of a `HashMap`, and every one of them then drew from one shared xorshift, so the same tick run twice was not the same tick. The fix is a sort; the reason it is not tidiness is that the order decides who wanders where. `a_tick_is_the_same_tick_when_it_is_run_again` is what found it.
 - **A client is never in its own audience.** `You` exists for that reason, and gow_3d shipped the other way round: a client that read itself out of the list of other people read nothing at all, and every key press was silent.
 - **A refusal a player cannot read is a broken key.** Every one is named on the wire and said in words, once. `NeedsLevel` carries the skill and the level, because "nothing happened" and "you need woodcutting 8" look identical from the outside.

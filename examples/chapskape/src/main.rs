@@ -260,7 +260,7 @@ async fn frame_loop(options: role::Options, bots: usize) {
         let pose = render::Pose {
           clock,
           stride: clock * per_second * 3.4,
-          gait: if other.moving() { 1.0 } else { 0.0 },
+          gait: if other.moving(clock_ms, tick_ms) { 1.0 } else { 0.0 },
           work: (clock * 1.3).fract(),
           swing: client.swinging(other.seat, clock_ms),
           dying: (other.doing == Doing::Dead).then_some(1.0).unwrap_or(0.0),
@@ -283,7 +283,7 @@ async fn frame_loop(options: role::Options, bots: usize) {
       let mine = render::Pose {
         clock,
         stride: clock * per_second * 3.4,
-        gait: if client.walking() { 1.0 } else { 0.0 },
+        gait: if client.walking(clock_ms) { 1.0 } else { 0.0 },
         work: (clock * 1.3).fract(),
         swing: client
           .seat
@@ -293,9 +293,9 @@ async fn frame_loop(options: role::Options, bots: usize) {
       };
       scene.draw_body(
         here,
-        client.facing(),
+        client.facing(clock_ms),
         Look::Person,
-        if client.walking() { Doing::Walking } else { doing },
+        if client.walking(clock_ms) { Doing::Walking } else { doing },
         Color::new(0.95, 0.80, 0.30, 1.0),
         mine,
       );

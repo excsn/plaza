@@ -32,7 +32,7 @@ use crate::world::{self, Prop};
 pub const VIEW: i32 = 24;
 
 /// How many actors the world holds.
-pub const MAX_ACTORS: usize = 240;
+pub const MAX_ACTORS: usize = 320;
 
 pub const PERSON_HEALTH: u16 = 30;
 pub const HEN_HEALTH: u16 = 6;
