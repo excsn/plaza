@@ -189,7 +189,13 @@ pub struct NetClient {
   next_step_ms: u64,
   /// When the last local step happened, for drawing between squares.
   stepped_ms: u64,
-  was: Tile,
+  /// The point the current crossing started from, in squares.
+  ///
+  /// A point rather than a square, because a click can land mid-crossing and a
+  /// click changes where the body is going, never where it is. Rebasing this to
+  /// a square's centre on a click was a visible jump of most of a square, which
+  /// read as a server correction and had nothing to do with the server.
+  from: (f32, f32),
 
   pub seeded: bool,
   pub others: HashMap<Seat, Other>,
@@ -256,7 +262,7 @@ impl NetClient {
       finder: Pathfinder::new(),
       next_step_ms: 0,
       stepped_ms: 0,
-      was: Tile::default(),
+      from: (0.0, 0.0),
       seeded: false,
       others: HashMap::new(),
       you: None,
@@ -352,7 +358,9 @@ impl NetClient {
     }
     let steps = if self.you.as_ref().is_some_and(|you| you.running) { 2 } else { 1 };
     while now_ms >= self.next_step_ms && !self.plan.is_empty() {
-      self.was = self.predicted;
+      // The next crossing starts wherever the body is drawn right now, which
+      // is what keeps the picture continuous whatever the route has been doing.
+      self.from = self.drawn_at(now_ms);
       for _ in 0..steps {
         if let Some(next) = self.plan.pop_front() {
           self.predicted = next;
@@ -363,28 +371,32 @@ impl NetClient {
     }
   }
 
-  /// Where the local body is drawn, in squares, between one square and the next.
+  /// Where the local body is drawn, in squares, between one point and the next.
   pub fn drawn_at(&self, now_ms: u64) -> (f32, f32) {
     let t = (now_ms.saturating_sub(self.stepped_ms) as f32 / self.tick_ms.max(1) as f32)
       .clamp(0.0, 1.0);
     (
-      self.was.x as f32 + (self.predicted.x - self.was.x) as f32 * t,
-      self.was.y as f32 + (self.predicted.y - self.was.y) as f32 * t,
+      self.from.0 + (self.predicted.x as f32 - self.from.0) * t,
+      self.from.1 + (self.predicted.y as f32 - self.from.1) * t,
     )
   }
 
   /// Whether the local body has squares left or is still crossing the last one.
   ///
   /// The clock is the half that is easy to leave out, and leaving it out is a
-  /// walk cycle that never stops: `was` is only written when a step is taken,
-  /// so an arrived body holds two different squares for ever and keeps walking
-  /// on the spot until the next click.
+  /// walk cycle that never stops: `from` is only rewritten when a step is
+  /// taken, so an arrived body holds a stale start point for ever and keeps
+  /// walking on the spot until the next click.
   pub fn walking(&self, now_ms: u64) -> bool {
     !self.plan.is_empty() || self.crossing(now_ms)
   }
 
   fn crossing(&self, now_ms: u64) -> bool {
-    self.was != self.predicted && now_ms.saturating_sub(self.stepped_ms) < self.tick_ms
+    let (dx, dy) = (
+      self.predicted.x as f32 - self.from.0,
+      self.predicted.y as f32 - self.from.1,
+    );
+    dx * dx + dy * dy > 1e-4 && now_ms.saturating_sub(self.stepped_ms) < self.tick_ms
   }
 
   /// Which way the body is turned: the way it is going while it is going
@@ -393,7 +405,16 @@ impl NetClient {
     if !self.crossing(now_ms) {
       return self.you.as_ref().map(|you| you.facing).unwrap_or(4);
     }
-    crate::zone::facing_between(self.was, self.predicted)
+    let (dx, dy) = (
+      self.predicted.x as f32 - self.from.0,
+      self.predicted.y as f32 - self.from.1,
+    );
+    let sx = if dx > 0.35 { 1i16 } else if dx < -0.35 { -1 } else { 0 };
+    let sy = if dy > 0.35 { 1i16 } else if dy < -0.35 { -1 } else { 0 };
+    match crate::zone::FACINGS.iter().position(|step| *step == (sx, sy)) {
+      Some(index) => index as u8,
+      None => self.you.as_ref().map(|you| you.facing).unwrap_or(4),
+    }
   }
 
   fn on_ops(&mut self, body: &[u8]) {
@@ -423,7 +444,7 @@ impl NetClient {
   fn jump_to(&mut self, tile: Tile) {
     self.predicted = tile;
     self.confirmed = tile;
-    self.was = tile;
+    self.from = (tile.x as f32, tile.y as f32);
     self.plan.clear();
     self.expect.clear();
     self.goal = None;
@@ -546,8 +567,9 @@ impl NetClient {
         self.expect.clear();
         self.checking = false;
         self.goal = None;
+        self.from = self.drawn_at(now);
         self.predicted = you.tile;
-        self.was = you.tile;
+        self.stepped_ms = now;
       }
     }
 
@@ -609,7 +631,9 @@ impl NetClient {
     if self.walking(now_ms) || self.confirmed == self.predicted || !self.seeded {
       return;
     }
-    self.was = self.predicted;
+    // Eased across a tick like any other step, because even the rare
+    // reconciliation must not look like one.
+    self.from = self.drawn_at(now_ms);
     self.predicted = self.confirmed;
     self.plan.clear();
     self.expect.clear();
@@ -687,6 +711,7 @@ impl NetClient {
     // checkable is that there was no old journey: the server has confirmed the
     // square the body is standing on and nothing is outstanding, so both ends
     // are about to expand the same destination from the same place.
+    let was_walking = !self.plan.is_empty() || self.crossing(self.now_ms);
     self.checking = checkable
       && self.plan.is_empty()
       && self.expect.is_empty()
@@ -695,9 +720,16 @@ impl NetClient {
     self.goal = Some(goal);
     self.plan = route.iter().copied().collect();
     self.expect = route.into_iter().collect();
-    self.next_step_ms = self.now_ms;
-    self.stepped_ms = self.now_ms;
-    self.was = self.predicted;
+    // A click changes where the body is going and nothing else. `from`,
+    // `predicted` and the step clock all describe where it *is*, and rewriting
+    // any of them here is a jump: mid-crossing, `from = predicted` teleported
+    // the rest of a square, and an immediate free step let fast clicking
+    // outrun the server and be pulled back at rest, which read exactly like a
+    // correction. A body at rest sets off now; a walking one keeps its cadence
+    // and turns at the next square.
+    if !was_walking {
+      self.next_step_ms = self.now_ms;
+    }
   }
 
   fn count_op(&mut self) {

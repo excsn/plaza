@@ -563,3 +563,48 @@ async fn clicking_again_mid_walk_does_not_snap_the_body_back() {
   assert_eq!(client.predicted, state.zone.actors[&0].tile, "they never converged");
   assert_eq!(client.predicted, last);
 }
+
+#[tokio::test]
+async fn the_drawn_body_never_jumps_however_fast_the_clicks_come() {
+  // The property the eye actually checks, at the granularity the eye checks it:
+  // polled every fifty milliseconds while clicks land every hundred and fifty,
+  // swinging around the compass. A click changes where the body is going and
+  // never where it is, so the drawn point moves at walking speed and nothing
+  // else, whatever the route, the server, or the click rate are doing.
+  let (logic, mut state, mut client, socket) = both_sides(Relevance::OnChange).await;
+  let start = client.predicted;
+
+  let mut now = 0u64;
+  let mut last = client.drawn_at(now);
+  let mut worst = 0.0f32;
+  for i in 0..400u64 {
+    now += 50;
+    client.poll(now);
+
+    if i % 3 == 0 {
+      let angle = i as f32 * 0.9;
+      let to = world::footing_near(Tile::new(
+        start.x + (angle.cos() * 13.0) as i16,
+        start.y + (angle.sin() * 13.0) as i16,
+      ));
+      client.walk_to(to);
+      send(&logic, &mut state, 1, SkapeOp::WalkTo { tile: to }).await;
+    }
+    if i % 12 == 0 {
+      let out = tick(&logic, &mut state).await;
+      deliver(&socket, &ops_for(&out, 0));
+      client.poll(now);
+    }
+
+    let here = client.drawn_at(now);
+    let step = ((here.0 - last.0).powi(2) + (here.1 - last.1).powi(2)).sqrt();
+    worst = worst.max(step);
+    last = here;
+  }
+
+  // Fifty milliseconds of walking is a twelfth of a square, and a run is twice
+  // that. Half a square in one frame is a teleport whatever caused it.
+  println!("\n  worst movement between 50ms frames: {worst:.3} squares\n");
+  assert!(worst < 0.5, "the body jumped {worst} squares between frames");
+  assert_eq!(client.diverged, 0);
+}
