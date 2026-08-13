@@ -116,6 +116,10 @@ pub fn steepness(tile: Tile) -> f32 {
 /// from nothing else.
 struct Table {
   height: Vec<f32>,
+  /// The height at a square's **corner**, which is what a surface is built
+  /// from. `(SIZE + 1)` of them per side, because a row of squares has one more
+  /// corner than it has squares.
+  corner: Vec<f32>,
   ground: Vec<Ground>,
   prop: Vec<Option<Prop>>,
   walkable: Vec<bool>,
@@ -172,12 +176,34 @@ fn build_table() -> Table {
     .map(|index| prop[index].is_none() && !matches!(ground[index], Ground::Water | Ground::Stone))
     .collect();
 
+  let mut corner = Vec::with_capacity((SIZE as usize + 1) * (SIZE as usize + 1));
+  for z in 0..=SIZE {
+    for x in 0..=SIZE {
+      corner.push(height_at(x as f32, z as f32).max(WATER));
+    }
+  }
+
   Table {
     height,
+    corner,
     ground,
     prop,
     walkable,
   }
+}
+
+/// The height of a square's corner, as the surface is drawn from it.
+///
+/// A lookup rather than three octaves of noise, and the difference is the
+/// reason the draw distance can follow the camera at all: a view of fifty
+/// squares is eight thousand quads and four corners each, and computing every
+/// one of those from the rule every frame is six hundred thousand hashes to
+/// draw one picture.
+pub fn corner_height(x: i16, z: i16) -> f32 {
+  if x < 0 || z < 0 || x > SIZE || z > SIZE {
+    return height_at(x as f32, z as f32).max(WATER);
+  }
+  table().corner[z as usize * (SIZE as usize + 1) + x as usize]
 }
 
 fn index_of(tile: Tile) -> usize {

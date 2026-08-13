@@ -492,3 +492,74 @@ async fn a_body_stops_walking_when_it_gets_there() {
     "a body that stopped moving still reads as walking"
   );
 }
+
+#[tokio::test]
+async fn clicking_again_mid_walk_does_not_snap_the_body_back() {
+  // The one that reads as a rollback and is not one. A click taken while the
+  // body is already moving reaches the server a square or two later than the
+  // client acted on it, so the server re-routes from where *it* is and the two
+  // walk different lines to the same place. Counting that as divergence and
+  // snapping to the server's square is a correction for something that was
+  // never wrong, and it is what a player sees as the world undoing their input.
+  let (logic, mut state, mut client, socket) = both_sides(Relevance::OnChange).await;
+  let start = client.predicted;
+  let first = world::footing_near(Tile::new(start.x + 20, start.y + 14));
+
+  client.walk_to(first);
+  send(&logic, &mut state, 1, SkapeOp::WalkTo { tile: first }).await;
+
+  let mut now = 0;
+  for _ in 0..4 {
+    let out = tick(&logic, &mut state).await;
+    now += TICK_MS;
+    deliver(&socket, &ops_for(&out, 0));
+    client.poll(now);
+  }
+
+  // Somewhere else, decided while walking, and clicked several more times the
+  // way anybody actually plays.
+  let mut was = client.predicted;
+  for step in 1..=4i16 {
+    let next = world::footing_near(Tile::new(start.x - step * 4, start.y + step * 3));
+    client.walk_to(next);
+    assert!(
+      client.predicted.steps_to(was) <= 2,
+      "the body jumped from {was:?} to {:?} on a re-click",
+      client.predicted
+    );
+    was = client.predicted;
+    send(&logic, &mut state, 1, SkapeOp::WalkTo { tile: next }).await;
+    for _ in 0..3 {
+      let out = tick(&logic, &mut state).await;
+      now += TICK_MS;
+      deliver(&socket, &ops_for(&out, 0));
+      client.poll(now);
+      assert!(
+        client.predicted.steps_to(was) <= 2,
+        "the body jumped from {was:?} to {:?} while walking",
+        client.predicted
+      );
+      was = client.predicted;
+    }
+  }
+
+  assert_eq!(client.diverged, 0, "a re-click was counted as a route coming apart");
+  assert!(
+    client.notices.iter().all(|notice| !notice.text.contains("different way")),
+    "the player was told the world disagreed with them"
+  );
+
+  // And the two ends do agree once the walking is over, which is what makes
+  // waiting to settle the right moment rather than a way of hiding a drift.
+  let last = world::footing_near(Tile::new(start.x - 16, start.y + 12));
+  client.walk_to(last);
+  send(&logic, &mut state, 1, SkapeOp::WalkTo { tile: last }).await;
+  for _ in 0..60 {
+    let out = tick(&logic, &mut state).await;
+    now += TICK_MS;
+    deliver(&socket, &ops_for(&out, 0));
+    client.poll(now);
+  }
+  assert_eq!(client.predicted, state.zone.actors[&0].tile, "they never converged");
+  assert_eq!(client.predicted, last);
+}

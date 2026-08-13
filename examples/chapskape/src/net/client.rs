@@ -166,13 +166,21 @@ pub struct NetClient {
   pub plan: VecDeque<Tile>,
   /// The same squares again, spent against what the server confirms.
   expect: VecDeque<Tile>,
-  /// Whether the current journey is one the client claimed to have worked out.
+  /// Whether the current journey is one both ends expanded from the same
+  /// square, and therefore one the shared rule actually promises to agree on.
   ///
-  /// A walk and a walk-then-work are: the destination is a square that will
-  /// still be there. A chase is not, because the server re-routes toward a body
-  /// that keeps moving and the client never claimed to predict where it went.
-  /// Counting those as divergence would bury the reading under the one
-  /// situation the client was never answering.
+  /// **A shared rule only buys a free prediction when both ends start from the
+  /// same state**, and that is narrower than it first looks. A click taken
+  /// while standing still is that moment: the server has confirmed the square
+  /// the client is on and nothing is outstanding, so both expand the
+  /// destination from it and get the same route.
+  ///
+  /// A click taken mid-walk is not, and no amount of shared rule fixes it. By
+  /// the time the op lands the server is a square or two behind, it re-routes
+  /// from where it is, and the two walk different lines to the same place. A
+  /// chase is not either, because the target keeps moving. Neither is a
+  /// disagreement about the rule, so neither is counted, and neither snaps the
+  /// body back.
   checking: bool,
   /// Where the whole journey ends, for redrawing the route after a surprise.
   goal: Option<Goal>,
@@ -328,6 +336,7 @@ impl NetClient {
       self.status = Status::Gone("connection lost".to_owned());
     }
     self.walk_myself(now_ms);
+    self.settle(now_ms);
     self.forget_what_is_over(now_ms);
   }
 
@@ -558,26 +567,23 @@ impl NetClient {
     if tile == self.confirmed {
       return;
     }
+    self.confirmed = tile;
     if !self.checking {
-      return self.follow(tile);
+      // Nothing to check against, and nothing to correct either: the body
+      // keeps walking the route it drew and [`settle`] takes the server's
+      // square once it has stopped.
+      return;
     }
     self.confirmations += 1;
     // Two, because running covers two squares in a tick and the first of them
     // is a square nothing ever reports.
     for _ in 0..2 {
       match self.expect.pop_front() {
-        Some(next) if next == tile => {
-          self.confirmed = tile;
-          return;
-        }
+        Some(next) if next == tile => return,
         Some(_) => continue,
         None => {
-          // The route this client drew is spent and the body is still moving,
-          // which means the server is steering it rather than walking a
-          // journey that was asked for. Follow it; there is nothing left to
-          // check against.
           self.checking = false;
-          return self.follow(tile);
+          return;
         }
       }
     }
@@ -588,23 +594,27 @@ impl NetClient {
       loud: true,
     });
     self.checking = false;
-    self.confirmed = tile;
-    self.jump_to(tile);
   }
 
-  /// Takes a square the server moved the body to, and eases into it.
+  /// Takes the server's square, once the body has stopped and has nothing left
+  /// to walk.
   ///
-  /// Not a correction and not a snap. It is the ordinary case for anything the
-  /// server steers, and drawing it as one step from the last square is what
-  /// keeps a chase from reading as a teleport once a tick.
-  fn follow(&mut self, tile: Tile) {
+  /// The whole of the reconciliation in this client, and it is deliberately not
+  /// a per-tick correction. Snapping a walking body to a square the server
+  /// happens to be on reads as a rollback and is wrong besides: the two ends
+  /// are walking to the same place from different starts and will arrive
+  /// together. Waiting until the walking is over means the usual case is a
+  /// no-op, because by then they agree.
+  fn settle(&mut self, now_ms: u64) {
+    if self.walking(now_ms) || self.confirmed == self.predicted || !self.seeded {
+      return;
+    }
     self.was = self.predicted;
-    self.predicted = tile;
-    self.confirmed = tile;
+    self.predicted = self.confirmed;
     self.plan.clear();
     self.expect.clear();
-    self.stepped_ms = self.now_ms;
-    self.next_step_ms = self.now_ms + self.tick_ms;
+    self.stepped_ms = now_ms;
+    self.next_step_ms = now_ms + self.tick_ms;
   }
 
   fn on_happened(&mut self, happened: Happened) {
@@ -672,10 +682,17 @@ impl NetClient {
   ///
   /// In that order, and the order is the point: the body is already walking
   /// before the op has left the machine.
-  fn set_out(&mut self, goal: Goal, checking: bool) {
+  fn set_out(&mut self, goal: Goal, checkable: bool) {
+    // Asked before the old journey is thrown away, because what makes this one
+    // checkable is that there was no old journey: the server has confirmed the
+    // square the body is standing on and nothing is outstanding, so both ends
+    // are about to expand the same destination from the same place.
+    self.checking = checkable
+      && self.plan.is_empty()
+      && self.expect.is_empty()
+      && self.confirmed == self.predicted;
     let route = self.finder.route(self.predicted, goal);
     self.goal = Some(goal);
-    self.checking = checking;
     self.plan = route.iter().copied().collect();
     self.expect = route.into_iter().collect();
     self.next_step_ms = self.now_ms;
