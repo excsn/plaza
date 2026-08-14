@@ -23,9 +23,10 @@
 use gow_3d::controls::{Authority, Controls};
 use gow_3d::logic::GowLogic;
 use gow_3d::net::client::NetClient;
-use gow_3d::protocol::{Because, GowOp, PlayerId};
+use gow_3d::protocol::{Because, Delivery, GowOp, PlayerId};
 use gow_3d::state::GowState;
 use plaza::agent::Agent;
+use plaza::session::MessageTarget;
 use plaza::state_logic::{LogicInput, LogicOutput, StateLogic};
 use plaza_wire::{frame, MsgPackCodec, WireCodec};
 use plaza_ws::scripted::ScriptedSocket;
@@ -47,6 +48,30 @@ fn ops_for(out: &LogicOutput<GowOp, PlayerId>, seat: u16) -> Vec<GowOp> {
       GowOp::World(frame) => frame.you.map(|you| you.seat) == Some(seat),
       _ => true,
     })
+    .cloned()
+    .collect()
+}
+
+/// Everything one **player** is actually addressed this tick, respecting the
+/// target.
+///
+/// [`ops_for`] flattens every targeted op and filters only `World` by seat,
+/// which is fine while the only shared op is a frame addressed to one agent.
+/// Under [`Delivery::Cells`] it would hand a client every cell in the zone
+/// regardless of who the server addressed it to, and the test would pass
+/// because the client saw too much rather than because delivery worked.
+fn addressed_to(out: &LogicOutput<GowOp, PlayerId>, player: PlayerId) -> Vec<GowOp> {
+  out
+    .ops
+    .iter()
+    .filter(|t| match &t.target {
+      MessageTarget::Agent(id) => *id == player,
+      MessageTarget::Agents(ids) => ids.contains(&player),
+      MessageTarget::All => true,
+      MessageTarget::AllExcept(id) => *id != player,
+      MessageTarget::AllExceptThese(ids) => !ids.contains(&player),
+    })
+    .flat_map(|t| t.ops.iter())
     .cloned()
     .collect()
 }
@@ -441,4 +466,59 @@ async fn a_position_from_a_client_that_does_not_own_one_is_refused() {
   // of anything. Counting it would make the number jump every time the dial
   // moves, which is exactly when somebody is looking at it.
   assert_eq!(state.zone.refusals, 0, "a mode change is not a cheat");
+}
+
+#[tokio::test]
+async fn a_client_fed_cell_ops_holds_the_same_world_as_one_fed_joined_frames() {
+  // The both-sides test for `Delivery::Cells`, which is where its one real
+  // risk lives: the client buffers cell payloads as they arrive and applies
+  // them when the frame terminating the tick lands. Nothing else exercises
+  // that reassembly against a socket, and a client that applied them early or
+  // dropped the buffer would still pass every logic-level test.
+  async fn world(delivery: Delivery) -> Vec<(u16, bool, bool)> {
+    let (logic, mut state, mut client, socket) = both_sides().await;
+    state.delivery = delivery;
+    let mut now = 0;
+    for _ in 0..4 {
+      let out = tick(&logic, &mut state).await;
+      now += 33;
+      // Only what the server addressed to this player, so a cell it was never
+      // sent cannot arrive by accident.
+      deliver(&socket, &addressed_to(&out, 1));
+      client.poll(now);
+    }
+    let mut held: Vec<(u16, bool, bool)> = client
+      .others
+      .iter()
+      .map(|(seat, other)| (*seat, other.seen.because.is_near(), other.seen.because.is_subscribed()))
+      .collect();
+    held.sort();
+    held
+  }
+
+  let joined = world(Delivery::Joined).await;
+  let celled = world(Delivery::Cells).await;
+
+  assert!(!joined.is_empty(), "the client has to be holding somebody");
+  assert_eq!(joined, celled, "cell ops reassembled into a different world");
+}
+
+#[tokio::test]
+async fn a_cell_op_a_client_was_not_addressed_never_reaches_it() {
+  // The other half: relevance under `Cells` lives in the recipient list rather
+  // than in the payload, so a client standing alone must be addressed no cell
+  // holding somebody across the zone.
+  let (logic, mut state, mut client, socket) = both_sides().await;
+  state.delivery = Delivery::Cells;
+  // Seat 1 walks to the far corner, well outside seat 0's cell window.
+  state.zone.place(1, (500.0, 0.0, 500.0));
+
+  let out = tick(&logic, &mut state).await;
+  deliver(&socket, &addressed_to(&out, 1));
+  client.poll(33);
+
+  assert!(
+    !client.others.contains_key(&1),
+    "a cell across the zone was addressed to a client that cannot see it"
+  );
 }
