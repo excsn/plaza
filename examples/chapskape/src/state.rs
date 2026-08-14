@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 
 use plaza_client_utils::FixedTimestep;
-use plaza_server_utils::{Crew, Roster};
+use plaza_server_utils::{Crew, Roster, Told};
 
 use crate::bots::Bots;
 use crate::controls::Relevance;
@@ -43,7 +43,7 @@ pub struct SkapeState {
   pub now_ms: u64,
   /// What each viewer has been told about the props, by id against the tick
   /// they come back on.
-  pub told: HashMap<Seat, HashMap<u32, u32>>,
+  pub told: Told<Seat, u32, u32>,
   /// Prop entries actually put on the wire.
   pub object_entries: u64,
   /// Prop entries that would have gone out if every frame carried the lot.
@@ -84,7 +84,7 @@ impl SkapeState {
       tick_ms: TICK_MS,
       ticker: FixedTimestep::from_step_ms(TICK_MS).with_max_steps(CATCH_UP).with_max_frame_ms(3_600_000),
       now_ms: 0,
-      told: HashMap::new(),
+      told: Told::new(),
       object_entries: 0,
       object_entries_repeated: 0,
       frames_sent: 0,
@@ -112,32 +112,26 @@ impl SkapeState {
 
     let out = match self.mode {
       Relevance::EveryTick => {
-        self.told.remove(&seat);
+        self.told.forget(&seat);
         visible.clone()
       }
       Relevance::OnChange => {
-        let known = self.told.entry(seat).or_default();
-        let mut changed: Vec<ObjectState> = visible
-          .iter()
-          .filter(|state| known.get(&state.id) != Some(&state.ready_at))
-          .copied()
-          .collect();
-        let still: std::collections::HashSet<u32> = visible.iter().map(|s| s.id).collect();
-        // What the viewer knows and no longer sees is not the same question as
-        // what came back. A prop that left the view is forgotten silently; one
-        // that is standing again has to be said, or the client draws a stump
-        // for ever.
-        let gone: Vec<u32> = known.keys().copied().filter(|id| !still.contains(id)).collect();
-        for id in gone {
-          known.remove(&id);
-          let tile = crate::world::prop_tile(id);
-          if middle.steps_to(tile) <= crate::zone::VIEW {
-            changed.push(ObjectState { id, ready_at: 0 });
+        let mut changed: Vec<ObjectState> = Vec::new();
+        self.told.diff(seat, visible.iter().map(|state| (state.id, state.ready_at)), |id, ready_at| {
+          match ready_at {
+            Some(ready_at) => changed.push(ObjectState { id, ready_at: *ready_at }),
+            // What the viewer knows and no longer sees is not the same
+            // question as what came back. A prop that left the view is
+            // forgotten silently; one that is standing again has to be said,
+            // or the client draws a stump for ever.
+            None => {
+              let tile = crate::world::prop_tile(id);
+              if middle.steps_to(tile) <= crate::zone::VIEW {
+                changed.push(ObjectState { id, ready_at: 0 });
+              }
+            }
           }
-        }
-        for state in &visible {
-          known.insert(state.id, state.ready_at);
-        }
+        });
         changed.sort_unstable_by_key(|state| state.id);
         changed
       }
@@ -150,7 +144,7 @@ impl SkapeState {
   }
 
   pub fn forget(&mut self, seat: Seat) {
-    self.told.remove(&seat);
+    self.told.forget(&seat);
   }
 }
 
