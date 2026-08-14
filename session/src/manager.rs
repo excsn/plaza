@@ -577,6 +577,15 @@ pub struct InboundVolume {
   pub bytes: u64,
 }
 
+/// Monotonic outbound counters for one connection: what was handed to its
+/// queue, not what the socket managed to write. Windowing and thresholds are
+/// the application's; diff two readings, or feed them to a `RateMeter`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct OutboundVolume {
+  pub frames: u64,
+  pub bytes: u64,
+}
+
 struct ClientHandle<ID: AgentId> {
   agent: Agent<ID>,
   to_client_tx: SessionSender<OutboundFrame>,
@@ -589,6 +598,8 @@ struct ClientHandle<ID: AgentId> {
   last_activity_us: AtomicU64,
   inbound_frames: AtomicU64,
   inbound_bytes: AtomicU64,
+  outbound_frames: AtomicU64,
+  outbound_bytes: AtomicU64,
   /// Round trip to this client, in microseconds, `0` before the first sample.
   ///
   /// Atomics rather than a lock, so a connection task recording a sample needs
@@ -695,6 +706,8 @@ impl<ID: AgentId> ClientHandle<ID> {
       last_activity_us: AtomicU64::new(now_us),
       inbound_frames: AtomicU64::new(0),
       inbound_bytes: AtomicU64::new(0),
+      outbound_frames: AtomicU64::new(0),
+      outbound_bytes: AtomicU64::new(0),
       rtt_us: AtomicU64::new(0),
       min_rtt_us: AtomicU64::new(0),
       samples: AtomicU64::new(0),
@@ -1130,6 +1143,29 @@ impl<ID: AgentId> ConnectionManager<ID> {
     })
   }
 
+  /// Monotonic outbound counters for one connection: what [`broadcast`] handed
+  /// to its queue. [`TransportStats`] counts the session; this answers "who
+  /// is being sent the traffic", which the session-wide numbers cannot.
+  ///
+  /// [`broadcast`]: Self::broadcast
+  pub fn connection_outbound(&self, conn_id: ConnectionId) -> Option<OutboundVolume> {
+    let connections = self.connections.read();
+    let handle = connections.get(conn_id)?;
+    Some(OutboundVolume {
+      frames: handle.outbound_frames.load(Ordering::Relaxed),
+      bytes: handle.outbound_bytes.load(Ordering::Relaxed),
+    })
+  }
+
+  /// The same, summed over an agent's connections.
+  pub fn agent_outbound(&self, id: &ID) -> OutboundVolume {
+    let connections = self.connections.read();
+    connections.for_agent(id).fold(OutboundVolume::default(), |sum, (_, handle)| OutboundVolume {
+      frames: sum.frames + handle.outbound_frames.load(Ordering::Relaxed),
+      bytes: sum.bytes + handle.outbound_bytes.load(Ordering::Relaxed),
+    })
+  }
+
   /// The live connections an agent holds, newest last. Empty for an agent with
   /// none, which includes one that just left.
   ///
@@ -1299,6 +1335,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
     let mut full: Option<ConnectionId> = None;
     let mut overflowed = Vec::new();
 
+    let frame_bytes = frame.len() as u64;
     let (mut sent, mut dropped) = (0u64, 0u64);
     connections.for_target(target, |conn_id, handle| {
       // try_send, not send: a wedged client must never stall the controller,
@@ -1311,10 +1348,12 @@ impl<ID: AgentId> ConnectionManager<ID> {
         }
       } else {
         sent += 1;
+        handle.outbound_frames.fetch_add(1, Ordering::Relaxed);
+        handle.outbound_bytes.fetch_add(frame_bytes, Ordering::Relaxed);
       }
     });
     drop(connections);
-    self.stats.record_outbound(sent, dropped);
+    self.stats.record_outbound(sent, dropped, sent * frame_bytes);
 
     match full {
       Some(conn_id) if !disconnecting => Err(SessionLayerError::ClientSendFailed {
@@ -2073,6 +2112,31 @@ mod tests {
       let queued = inbox.try_recv().expect("the agent's own frame");
       assert_eq!(queued.as_ptr(), addressed[index], "an addressed frame is that agent's");
     }
+  }
+
+  #[tokio::test]
+  async fn what_a_connection_was_sent_is_counted_where_it_was_queued() {
+    // Queued, not written: the socket task owns the write, and a frame the
+    // fan-out dropped was never this connection's traffic.
+    let manager = manager_with(Overflow::default());
+    let (tx, _inbox) = session_channel(4);
+    let roomy = manager.register(Agent::new_human(1u32), tx).await;
+    let (tx, _cramped_inbox) = session_channel(1);
+    let cramped = manager.register(Agent::new_human(2u32), tx).await;
+
+    let frame: OutboundFrame = Frame::from(vec![7u8; 100]);
+    manager.broadcast(&MessageTarget::All, frame.clone()).expect("both take the first");
+    let second = manager.broadcast(&MessageTarget::All, frame);
+    assert!(second.is_err(), "the cramped queue is full");
+
+    let roomy_sent = manager.connection_outbound(roomy).expect("known connection");
+    assert_eq!((roomy_sent.frames, roomy_sent.bytes), (2, 200));
+    let cramped_sent = manager.connection_outbound(cramped).expect("known connection");
+    assert_eq!((cramped_sent.frames, cramped_sent.bytes), (1, 100), "a dropped frame is not traffic");
+    let summed = manager.agent_outbound(&1u32);
+    assert_eq!((summed.frames, summed.bytes), (2, 200));
+
+    assert_eq!(manager.stats().outbound_bytes(), 300, "the session counts what every queue took");
   }
 
   #[tokio::test]
