@@ -6,15 +6,13 @@
 //! ground itself is not owned, because it is a rule both ends derive from
 //! [`terrain`](crate::terrain) rather than a payload anyone sends.
 
-use std::collections::HashMap;
-
-use plaza_server_utils::relevance::{GridQuantizer, SpatialGrid};
+use plaza_server_utils::relevance::{CellSpace, CellTable, GridQuantizer, SpatialGrid};
 
 use crate::abilities::{ability, Ability, CLAW};
 use crate::casting::{Ms, GLOBAL_COOLDOWN_MS};
 use crate::controls::Authority;
 use crate::movement::{distance, Tracked, Verdict, MAX_AIR};
-use crate::protocol::{Kind, Landed};
+use crate::protocol::{Kind, Landed, Packed, Seen};
 use crate::relevance::{audience, Audience, Parties, Seat};
 use crate::terrain;
 
@@ -140,8 +138,85 @@ impl Character {
   }
 }
 
+/// Everyone in the zone, indexed by the seat rather than hashed on it.
+///
+/// A seat comes from `Roster`, which hands out the lowest free one, so seats
+/// are dense from zero and a slot lookup is an offset. That matters because of
+/// where the lookup sits: a frame is built per client and reads every character
+/// in that client's audience, so the count is clients times audience, which at
+/// four thousand of each is a hundred and eighty thousand lookups a tick.
+///
+/// The surface is `HashMap`'s on purpose, down to taking `&Seat`, so the
+/// seventy-odd call sites that read it did not have to change to say the same
+/// thing a different way.
+#[derive(Debug, Default, Clone)]
+pub struct Bodies {
+  slots: Vec<Option<Character>>,
+  live: usize,
+}
+
+impl Bodies {
+  pub fn get(&self, seat: &Seat) -> Option<&Character> {
+    self.slots.get(*seat as usize)?.as_ref()
+  }
+
+  pub fn get_mut(&mut self, seat: &Seat) -> Option<&mut Character> {
+    self.slots.get_mut(*seat as usize)?.as_mut()
+  }
+
+  pub fn contains_key(&self, seat: &Seat) -> bool {
+    self.get(seat).is_some()
+  }
+
+  pub fn insert(&mut self, seat: Seat, character: Character) {
+    let index = seat as usize;
+    if index >= self.slots.len() {
+      self.slots.resize_with(index + 1, || None);
+    }
+    if self.slots[index].replace(character).is_none() {
+      self.live += 1;
+    }
+  }
+
+  pub fn remove(&mut self, seat: &Seat) -> Option<Character> {
+    let taken = self.slots.get_mut(*seat as usize)?.take();
+    if taken.is_some() {
+      self.live -= 1;
+    }
+    taken
+  }
+
+  pub fn len(&self) -> usize {
+    self.live
+  }
+
+  pub fn is_empty(&self) -> bool {
+    self.live == 0
+  }
+
+  pub fn values(&self) -> impl Iterator<Item = &Character> {
+    self.slots.iter().flatten()
+  }
+
+  pub fn values_mut(&mut self) -> impl Iterator<Item = &mut Character> {
+    self.slots.iter_mut().flatten()
+  }
+
+  pub fn keys(&self) -> impl Iterator<Item = Seat> + '_ {
+    self.values().map(|c| c.seat)
+  }
+}
+
+impl std::ops::Index<&Seat> for Bodies {
+  type Output = Character;
+
+  fn index(&self, seat: &Seat) -> &Character {
+    self.get(seat).expect("no character in that seat")
+  }
+}
+
 pub struct Zone {
-  pub characters: HashMap<Seat, Character>,
+  pub characters: Bodies,
   pub parties: Parties,
   /// The library's flat `(x, z)` grid, rebuilt each tick because everyone
   /// moves.
@@ -151,8 +226,16 @@ pub struct Zone {
   /// filter is exact at identical query cost. `tests/tower.rs` is where that
   /// stops holding, on the one structure in the zone that stacks.
   grid: SpatialGrid<u32>,
+  /// The same cells as `grid`, addressed densely, because publishing keys three
+  /// tables by cell and every one of them is read `viewers x cells-per-view`
+  /// times a tick. `publish_costs` prices the hash those lookups would
+  /// otherwise pay at 1.39x of a whole tick, and 8x on the fan-out path.
+  space: CellSpace,
   /// Whether the grid still describes where everyone is.
   stale: bool,
+  /// What the grid last handed back, kept so a query per client per tick is
+  /// not also an allocation per client per tick.
+  candidates: Vec<u32>,
   /// Candidates the grid returned, and how many survived the height test, for
   /// the panel.
   pub examined: u64,
@@ -173,10 +256,15 @@ pub struct Zone {
 impl Default for Zone {
   fn default() -> Self {
     Self {
-      characters: HashMap::new(),
+      characters: Bodies::default(),
       parties: Parties::default(),
       grid: SpatialGrid::new(GridQuantizer::new((-terrain::EDGE, -terrain::EDGE), CELL)),
+      space: CellSpace::new(
+        GridQuantizer::new((-terrain::EDGE, -terrain::EDGE), CELL),
+        terrain::EDGE * 2.0,
+      ),
       stale: true,
+      candidates: Vec::new(),
       examined: 0,
       returned: 0,
       authority: Authority::default(),
@@ -192,6 +280,23 @@ impl Default for Zone {
 impl Zone {
   pub fn new() -> Self {
     Self::default()
+  }
+
+  /// A zone whose spatial index reaches `extent` units from the origin in each
+  /// direction.
+  ///
+  /// [`GridQuantizer`] clamps anything outside its origin into the boundary
+  /// cells, and [`publish`](Self::publish) ships whole cells, so an index
+  /// smaller than the world does not merely waste query effort the way a
+  /// per-client distance test did: it puts bodies nobody can see on the wire.
+  /// Anything spreading a population past [`terrain::EDGE`] must say so here.
+  pub fn spanning(extent: f32) -> Self {
+    let quantizer = GridQuantizer::new((-extent, -extent), CELL);
+    Self {
+      grid: SpatialGrid::new(quantizer),
+      space: CellSpace::new(quantizer, extent * 2.0),
+      ..Self::default()
+    }
   }
 
   pub fn admit(&mut self, seat: Seat, at: (f32, f32, f32)) {
@@ -539,11 +644,14 @@ impl Zone {
     let Some(from) = self.characters.get(&seat).map(|c| c.tracked.at) else {
       return;
     };
-    let mut candidates = Vec::new();
+    // `query_radius` extends rather than clears, so a reused buffer has to be
+    // emptied here or every query inherits the last one's answer.
+    let mut candidates = std::mem::take(&mut self.candidates);
+    candidates.clear();
     self.grid.query_radius(from.0, from.2, VIEW, &mut candidates);
     self.examined += candidates.len() as u64;
-    for id in candidates {
-      let other = id as Seat;
+    for id in &candidates {
+      let other = *id as Seat;
       let Some(character) = self.characters.get(&other) else {
         continue;
       };
@@ -551,6 +659,7 @@ impl Zone {
         out.push(other);
       }
     }
+    self.candidates = candidates;
     self.returned += out.len() as u64;
     out.sort_unstable();
   }
@@ -559,6 +668,169 @@ impl Zone {
   pub fn audience_for(&mut self, seat: Seat, scratch: &mut Vec<Seat>) -> Audience {
     self.near(seat, scratch);
     audience(scratch, &self.parties, seat)
+  }
+
+  /// Packs the spatial channel once for the whole zone: one payload per
+  /// occupied grid cell, each shared by every client whose view touches the
+  /// cell. This is what stops the build cost tracking the client count.
+  pub fn publish_at(&mut self, into: &mut Publication, precision: crate::protocol::Precision) {
+    if self.stale {
+      self.reindex();
+    }
+    let now = self.now_ms;
+    into.cells.clear_each();
+    into.coarse.clear_each();
+    into.occupied = 0;
+    for (key, ids) in self.grid.occupied() {
+      let (cx, cz) = plaza_server_utils::relevance::morton::decode_2d(key);
+      let at = self.space.index_at(cx, cz);
+      let live = ids.iter().filter(|id| self.characters.contains_key(&(**id as Seat))).count();
+      let mut w = plaza_wire::bits::BitWriter::with_capacity(ids.len() * 16);
+      match precision {
+        crate::protocol::Precision::Absolute => {
+          crate::pack::open(&mut w, live);
+          for id in ids {
+            let Some(character) = self.characters.get(&(*id as Seat)) else { continue };
+            crate::pack::write(&mut w, &seen_of(character, now));
+          }
+        }
+        crate::protocol::Precision::CellRelative => {
+          crate::pack::open_cell(&mut w, at, live);
+          let corner = self.space.corner(at);
+          for id in ids {
+            let Some(character) = self.characters.get(&(*id as Seat)) else { continue };
+            crate::pack::write_in_cell(&mut w, &seen_of(character, now), corner);
+          }
+        }
+        crate::protocol::Precision::Graded => {
+          let corner = self.space.corner(at);
+          crate::pack::open_graded(&mut w, at, live, false);
+          let mut c = plaza_wire::bits::BitWriter::with_capacity(ids.len() * 14);
+          crate::pack::open_graded(&mut c, at, live, true);
+          for id in ids {
+            let Some(character) = self.characters.get(&(*id as Seat)) else { continue };
+            let body = seen_of(character, now);
+            crate::pack::write_in_cell_at(&mut w, &body, corner, crate::pack::REL_BITS);
+            crate::pack::write_in_cell_at(&mut c, &body, corner, crate::pack::GRADED_COARSE_BITS);
+          }
+          if let Some(slot) = into.coarse.get_mut(at) {
+            *slot = Some(Packed::new(c.finish()));
+          }
+        }
+      }
+      if let Some(slot) = into.cells.get_mut(at) {
+        *slot = Some(Packed::new(w.finish()));
+        into.occupied += 1;
+      }
+    }
+  }
+
+  /// A publication sized to this zone, for a caller that reuses one across
+  /// ticks rather than allocating per tick.
+  pub fn publication(&self) -> Publication {
+    Publication {
+      cells: CellTable::new(self.space),
+      coarse: CellTable::new(self.space),
+      occupied: 0,
+    }
+  }
+
+  /// The dense indices of the cells a view standing at `(x, z)` touches.
+  ///
+  /// Cell-granular like the grid itself: a superset of the view disc, which is
+  /// the precision the spatial channel trades for being shared.
+  pub fn cells_touching(&self, x: f32, z: f32) -> impl Iterator<Item = usize> + use<> {
+    self.space.indices_in_radius(x, z, VIEW)
+  }
+
+  /// The dense index of the cell a point falls in.
+  pub fn cell_index(&self, x: f32, z: f32) -> usize {
+    self.space.index_of(x, z)
+  }
+
+  pub fn space(&self) -> &CellSpace {
+    &self.space
+  }
+
+  /// The half-extent this zone's index covers, which is what a client needs to
+  /// rebuild the same [`CellSpace`].
+  pub fn extent(&self) -> f32 {
+    -self.space.quantizer().corner(0, 0).0
+  }
+}
+
+/// The `CellSpace` a zone of half-extent `extent` uses.
+///
+/// Both ends derive it from one number rather than the server describing every
+/// cell, which is the same rule the terrain follows.
+pub fn space_for(extent: f32) -> CellSpace {
+  CellSpace::new(GridQuantizer::new((-extent, -extent), CELL), extent * 2.0)
+}
+
+/// One tick's spatial channel: a packed payload per occupied cell, keyed by
+/// [`CellSpace`] so a viewer's lookups are array indexes rather than hashes.
+///
+/// Under [`Precision::Graded`](crate::protocol::Precision::Graded) each cell is
+/// published twice, at both widths, because the width a viewer wants depends on
+/// its distance to the cell and a shared payload cannot answer per viewer.
+pub struct Publication {
+  cells: CellTable<Option<Packed>>,
+  coarse: CellTable<Option<Packed>>,
+  occupied: usize,
+}
+
+/// How far a cell's centre may be before a viewer takes its coarse payload.
+pub const COARSE_BEYOND: f32 = VIEW / 2.0;
+
+/// Whether a cell `(dx, dz)` away is far enough to take the coarse width.
+///
+/// A function of the **offset alone**, because cell centres sit on a regular
+/// lattice: every viewer in one cell reads every cell in its window the same
+/// way. That is what turns a per-listener distance into a fixed 7x7 mask, and
+/// it is the reason the graded audience split need not touch a viewer at all.
+pub const fn offset_is_coarse(dx: i32, dz: i32) -> bool {
+  let (x, z) = (dx as f32 * CELL, dz as f32 * CELL);
+  x * x + z * z > COARSE_BEYOND * COARSE_BEYOND
+}
+
+impl Publication {
+  pub fn cell(&self, index: usize) -> Option<&Packed> {
+    self.cells.get(index).and_then(|slot| slot.as_ref())
+  }
+
+  /// The payload a viewer `distance` from this cell's centre should be sent.
+  pub fn cell_for(&self, index: usize, distance: f32) -> Option<&Packed> {
+    if distance > COARSE_BEYOND
+      && let Some(Some(payload)) = self.coarse.get(index)
+    {
+      return Some(payload);
+    }
+    self.cell(index)
+  }
+
+  /// Every occupied cell and its payload, for a caller addressing per cell
+  /// rather than assembling per viewer.
+  pub fn occupied(&self) -> impl Iterator<Item = (usize, &Packed)> {
+    self.cells.occupied().filter_map(|(at, slot)| slot.as_ref().map(|p| (at, p)))
+  }
+
+  pub fn cells(&self) -> usize {
+    self.occupied
+  }
+}
+
+/// One character as the wire describes them. `because` is not on the wire:
+/// the reader stamps it from which channel the entry arrived on.
+pub fn seen_of(character: &Character, now: Ms) -> Seen {
+  Seen {
+    seat: character.seat,
+    at: character.tracked.at,
+    health: character.health,
+    max_health: character.max_health,
+    yaw: character.yaw,
+    kind: character.kind,
+    because: crate::protocol::Because::Near,
+    casting_ms: character.casting.map(|cast| cast.lands_at.saturating_sub(now) as u32),
   }
 }
 

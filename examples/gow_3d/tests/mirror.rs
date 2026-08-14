@@ -114,10 +114,13 @@ async fn a_character_who_walks_away_is_dropped_and_a_party_member_is_not() {
   // At the honest run speed and **from where they actually are**: a walk that
   // starts with a jump to the axis is a teleport, and the validator is right
   // to refuse it.
+  // Far enough to leave the *cell* window, not just the view disc: relevance
+  // is cell-granular, so a body can be described up to a cell width past the
+  // radius before absence begins.
   let per_tick = gow_3d::movement::RUN_SPEED * 33.0 / 1000.0;
   let from = state.zone.characters[&1].tracked.at;
   let mut now = 33;
-  for step in 1..=300u32 {
+  for step in 1..=450u32 {
     let x = from.0 + step as f32 * per_tick;
     // Following the ground, because the validator refuses a claim hanging in
     // the air and terrain is the one thing both ends derive rather than send.

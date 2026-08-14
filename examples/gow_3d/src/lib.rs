@@ -21,6 +21,7 @@ pub mod casting;
 pub mod controls;
 pub mod movement;
 pub mod relevance;
+pub mod pack;
 pub mod protocol;
 pub mod role;
 pub mod terrain;

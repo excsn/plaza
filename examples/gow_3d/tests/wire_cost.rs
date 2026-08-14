@@ -3,8 +3,9 @@
 //! The argument this example makes is that a genre whose design already
 //! absorbed the latency needs almost no netcode. That is an argument about
 //! *complexity*, and it says nothing about bytes, so the bytes are worth
-//! measuring separately: a frame here is built per client rather than
-//! broadcast, which is the cost the design pays for the relevance it gets.
+//! measuring separately: a frame here is assembled per client from shared
+//! cell payloads, which is the byte cost the design pays for the relevance
+//! it gets and for a build that does not track the client count.
 //!
 //! Encoded with the codec the example actually uses, rather than counted by
 //! hand from field widths. A hand count is a second derivation of one fact and
@@ -17,7 +18,8 @@
 #![cfg(feature = "server")]
 
 use gow_3d::casting::Ms;
-use gow_3d::protocol::{Authority, Because, Frame, GowOp, Seen, TICK_HZ};
+use gow_3d::logic::frame_for;
+use gow_3d::protocol::{Delivery, GowOp, Precision, TICK_HZ};
 use gow_3d::state::{spawn_at, GowState, MAX_CHARACTERS};
 use plaza_wire::{MsgPackCodec, WireCodec};
 
@@ -26,54 +28,15 @@ fn per_second(bytes: usize) -> f32 {
   bytes as f32 * TICK_HZ as f32
 }
 
-/// The frame one seat would be sent, encoded.
+/// The frame one seat would be sent, encoded. The frame the server really
+/// builds, via `publish` and `frame_for`, rather than a reconstruction: a
+/// measurement that reconstructs its subject stops measuring the moment a
+/// field moves.
 fn encoded(state: &mut GowState, seat: u16) -> usize {
-  let mut scratch = Vec::new();
-  let audience = state.zone.audience_for(seat, &mut scratch);
-  let near: std::collections::HashSet<u16> = scratch.iter().copied().collect();
-  let characters: Vec<Seen> = audience
-    .seats
-    .iter()
-    .filter_map(|s| {
-      let character = state.zone.characters.get(s)?;
-      let subscribed = *s != seat && state.zone.parties.of(seat).any(|m| m == *s);
-      Some(Seen {
-        seat: *s,
-        at: character.tracked.at,
-        health: character.health,
-        max_health: character.max_health,
-        yaw: character.yaw,
-        kind: character.kind,
-        because: match (near.contains(s), subscribed) {
-          (true, true) => Because::BothOfThose,
-          (true, false) => Because::Near,
-          (false, _) => Because::Subscribed,
-        },
-        casting_ms: character.casting.map(|c| c.lands_at.saturating_sub(0) as u32),
-      })
-    })
-    .collect();
-
-  let frame = GowOp::World(Box::new(Frame {
-    tick: state.tick,
-    you: Some(gow_3d::protocol::You {
-      seat,
-      health: 100,
-      max_health: 100,
-      mana: 100,
-      max_mana: 100,
-      casting_ms: None,
-      casting: None,
-      ready_in_ms: 0,
-      up_in_ms: None,
-      target: None,
-      at: (0.0, 0.0, 0.0),
-      spawn: 1,
-    }),
-    authority: Authority::Client,
-    characters,
-    landed: Vec::new(),
-  }));
+  let now = state.zone.now_ms;
+  let mut published = state.zone.publication();
+  state.zone.publish_at(&mut published, Precision::Absolute);
+  let frame = GowOp::World(Box::new(frame_for(state, &published, Delivery::Joined, Precision::Absolute, seat, now)));
   MsgPackCodec.encode(&vec![frame]).expect("encodes").len()
 }
 
@@ -164,13 +127,22 @@ fn a_party_across_the_zone_costs_one_entry_each() {
   // Priced separately because it is the one cost this example adds that no
   // other example in the tree pays, and "a second channel" sounds expensive
   // until it has a number.
+  // **The move has to happen before the baseline, and that is the correction
+  // this test carries.** It used to walk four members out of view and into a
+  // party in one step, so the audience count never changed: four entries left
+  // the near channel and the same four arrived on the subscribed one. It
+  // measured a difference anyway, because MessagePack spelled `Because` as its
+  // variant name and "Subscribed" is six characters longer than "Near". That
+  // six was the README's per-member figure, and it was the length of a word.
+  // Packed, the tag is two bits and the number went to zero, which is what
+  // exposed it.
   let mut state = zone_of(MAX_CHARACTERS);
-  let alone = encoded(&mut state, 0);
-
-  // Four party members, all far enough away that distance would never have
-  // returned them.
   for member in 1..=4u16 {
     state.zone.place(member, (400.0 + member as f32 * 10.0, 0.0, 400.0));
+  }
+  let alone = encoded(&mut state, 0);
+
+  for member in 1..=4u16 {
     state.zone.parties.join(0, member);
   }
   let partied = encoded(&mut state, 0);

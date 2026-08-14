@@ -96,6 +96,54 @@ impl Because {
   }
 }
 
+/// How the spatial channel reaches a client.
+///
+/// Both ship, because which one is right is a property of the world rather
+/// than of the code, and the only honest way to choose is to run both. They
+/// carry the same bodies and differ in how many times the server touches them:
+/// `publish_costs` measures 1.95x for the first against a payload per cell in
+/// the frame, and 7.66x for the second, at gow's own density.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Delivery {
+  /// The cells a client's view touches are concatenated into one byte string
+  /// on its frame. One message per client per tick, and the server copies each
+  /// payload once per viewer.
+  #[default]
+  Joined,
+  /// Each cell payload is its own op, addressed to every client whose view
+  /// touches it, so the server encodes it **once per tick** however many
+  /// clients hear it and never assembles a per-client buffer at all. The
+  /// frame still terminates the tick, which is what tells a client its cells
+  /// have all arrived.
+  Cells,
+}
+
+/// How a position inside a cell payload is written.
+///
+/// Orthogonal to [`Delivery`]: it changes what a payload *contains* rather
+/// than how it reaches anyone, and both deliveries carry either.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Precision {
+  /// Quantised over the whole world, 18 bits an axis. A payload needs to say
+  /// nothing about which cell it is.
+  #[default]
+  Absolute,
+  /// Quantised over one cell's width, 13 bits an axis at a *finer* step, with
+  /// the cell's index in the payload header so a reader can find its corner.
+  /// Ten bits saved a body against a couple of bytes a cell, so it pays
+  /// exactly when cells are full and costs when they are thin.
+  CellRelative,
+  /// Cell-relative, and a cell far enough from a viewer drops three more bits
+  /// an axis, which at that distance is still inside a pixel.
+  ///
+  /// The width cannot be chosen per viewer, because a cell is packed once and
+  /// shared: that is the same constraint that took the relevance tag off the
+  /// wire. So the zone publishes **both** widths and each viewer takes the one
+  /// its own distance to that cell earns. Publishing costs twice; publishing
+  /// was never the expensive part.
+  Graded,
+}
+
 /// What a character is.
 ///
 /// On the wire because a client draws them differently and may only attack one
@@ -190,7 +238,33 @@ pub struct Frame {
   /// Which mode the zone is running, so a client knows whether to report a
   /// position or ask for one.
   pub authority: Authority,
-  pub characters: Vec<Seen>,
+  /// How the spatial channel reached this client, so it knows where to read
+  /// the bodies from.
+  pub delivery: Delivery,
+  /// How positions inside the cell payloads are written.
+  pub precision: Precision,
+  /// The zone's half-extent, so a client can rebuild the server's `CellSpace`
+  /// and turn a payload's cell index into the corner its positions are
+  /// relative to. Derived rather than sent per body, which is the whole point.
+  pub extent: f32,
+  /// The spatial channel under [`Delivery::Joined`]: the payloads of every
+  /// grid cell this client's view touches, concatenated.
+  ///
+  /// Each payload is built **once per tick per cell** and shared by every
+  /// client whose view touches that cell, which is what stops the build cost
+  /// tracking the client count. They concatenate because each opens with its
+  /// own count, so a reader loops until the buffer runs out. Cell-granular
+  /// rather than a disc, so it can include a body just past the view radius.
+  /// Empty under [`Delivery::Cells`], where the payloads arrive as their own
+  /// ops. Read it with [`Frame::seen`] either way.
+  pub bodies: Packed,
+  /// The subscription channel: party members with no payload in `cells`,
+  /// packed per client. Out of view, or a corpse the world has let go of.
+  pub extras: Packed,
+  /// Who this client is partied with, so [`Frame::seen`] can label a cell
+  /// entry [`Because::BothOfThose`]. The only per-viewer relevance fact left
+  /// on the frame; the entries themselves no longer carry one.
+  pub party: Vec<u16>,
   /// Casts that went off since the last frame.
   ///
   /// Carried on the frame rather than sent separately because a landing is an
@@ -200,11 +274,121 @@ pub struct Frame {
   pub landed: Vec<Landed>,
 }
 
+impl Frame {
+  /// Everyone in this frame, unpacked and labelled.
+  ///
+  /// A client calls it once and iterates what comes back; it is a decode, not
+  /// an accessor. Cell entries are [`Because::Near`], upgraded to
+  /// [`Because::BothOfThose`] when the seat is in `party`; extras are
+  /// [`Because::Subscribed`]. The channels are disjoint by construction, so
+  /// nobody is listed twice.
+  pub fn seen(&self) -> Vec<Seen> {
+    self.seen_with(&[])
+  }
+
+  /// [`seen`](Self::seen) for a client that received its cells as their own
+  /// ops, which it hands back here so both channels are labelled in one place.
+  pub fn seen_with(&self, cells: &[Packed]) -> Vec<Seen> {
+    let mut out = Vec::new();
+    match self.precision {
+      Precision::Absolute => {
+        crate::pack::unpack_into(&self.bodies.0, Because::Near, &mut out);
+        for cell in cells {
+          crate::pack::unpack_into(&cell.0, Because::Near, &mut out);
+        }
+      }
+      Precision::CellRelative => {
+        // Rebuilt from `extent`, which is the one number a client needs to
+        // turn a payload's cell index into the corner its positions are
+        // relative to. Derived once rather than sent per body.
+        let space = crate::zone::space_for(self.extent);
+        crate::pack::unpack_cells_into(&self.bodies.0, &space, Because::Near, &mut out);
+        for cell in cells {
+          crate::pack::unpack_cells_into(&cell.0, &space, Because::Near, &mut out);
+        }
+      }
+      Precision::Graded => {
+        let space = crate::zone::space_for(self.extent);
+        crate::pack::unpack_graded_into(&self.bodies.0, &space, Because::Near, &mut out);
+        for cell in cells {
+          crate::pack::unpack_graded_into(&cell.0, &space, Because::Near, &mut out);
+        }
+      }
+    }
+    let from_cells = out.len();
+    crate::pack::unpack_into(&self.extras.0, Because::Subscribed, &mut out);
+    if !self.party.is_empty() {
+      for one in &mut out[..from_cells] {
+        if self.party.contains(&one.seat) {
+          one.because = Because::BothOfThose;
+        }
+      }
+    }
+    out
+  }
+}
+
+/// A hand-packed array, carried as bytes rather than as a sequence of them.
+///
+/// MessagePack spells a `Vec<u8>` as an array of integers, one tag per byte,
+/// which would give most of the packing back. `serialize_bytes` is what makes a
+/// byte string a byte string, and it is fifteen lines, so here it is.
+/// Refcounted rather than owned, because **one assembled body blob is shared by
+/// every viewer standing in the same cell**. Two viewers in one cell touch the
+/// same cells and receive the same bytes, so cloning a `Packed` into each of
+/// their frames must be a refcount bump and not a copy; copying it per viewer
+/// is most of what made the per-client assembly expensive.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Packed(pub std::sync::Arc<Vec<u8>>);
+
+impl Packed {
+  pub fn new(bytes: Vec<u8>) -> Self {
+    Self(std::sync::Arc::new(bytes))
+  }
+
+  pub fn as_slice(&self) -> &[u8] {
+    &self.0
+  }
+}
+
+impl Serialize for Packed {
+  fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_bytes(&self.0)
+  }
+}
+
+impl<'de> Deserialize<'de> for Packed {
+  fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+    struct Visitor;
+    impl serde::de::Visitor<'_> for Visitor {
+      type Value = Vec<u8>;
+      fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("bytes")
+      }
+      fn visit_bytes<E: serde::de::Error>(self, v: &[u8]) -> Result<Vec<u8>, E> {
+        Ok(v.to_vec())
+      }
+      fn visit_byte_buf<E: serde::de::Error>(self, v: Vec<u8>) -> Result<Vec<u8>, E> {
+        Ok(v)
+      }
+    }
+    d.deserialize_bytes(Visitor).map(Packed::new)
+  }
+}
+
 /// plaza-wire: root
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum GowOp {
   /// Server to client, every send tick.
   World(Box<Frame>),
+  /// Server to client under [`Delivery::Cells`]: one grid cell's bodies, sent
+  /// to every client whose view touches that cell.
+  ///
+  /// Encoded once per tick however many clients receive it, which is the whole
+  /// point of it being its own op rather than a field on each of their frames.
+  /// A client collects these until the tick's `World` arrives and applies them
+  /// together, so the pair is what a frame was.
+  Cell(Packed),
   /// Server to client, once, on being seated.
   Seated { seat: u16 },
 

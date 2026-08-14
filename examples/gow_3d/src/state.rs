@@ -16,7 +16,14 @@ use crate::protocol::PlayerId;
 use crate::relevance::Seat;
 use crate::zone::Zone;
 
-/// The most characters in one zone.
+/// How many characters a zone seats unless something says otherwise.
+///
+/// The number the example is *played* at, not a ceiling the design rests on:
+/// [`GowState::with_capacity`] takes any, and `examples/zone_scale.rs` runs the
+/// sweep that says what the shape costs past it. Nothing here is sized in a way
+/// that cares, which is the claim that sweep exists to check rather than
+/// assert: the spawn spiral's radius grows as `sqrt(seat)` so density is flat,
+/// and the audience query is a grid lookup rather than a scan.
 pub const MAX_CHARACTERS: usize = 64;
 
 /// Where a character starts.
@@ -45,6 +52,9 @@ pub fn den_at(index: usize) -> (f32, f32, f32) {
 pub struct GowState {
   pub zone: Zone,
   pub tick: u64,
+  /// Seats this zone holds. Read where the zone seats its own characters, so
+  /// bots and beasts scale with it rather than with a constant.
+  pub capacity: usize,
   pub roster: Roster<PlayerId>,
   pub agents: HashMap<PlayerId, plaza::agent::Agent<PlayerId>>,
   /// Casts that landed on this tick, cleared when they have been sent.
@@ -56,6 +66,27 @@ pub struct GowState {
   pub bots: Bots,
   /// Whether the zone has seated its own characters yet.
   pub populated: bool,
+  /// How the spatial channel reaches clients this tick.
+  pub delivery: crate::protocol::Delivery,
+  /// How positions inside cell payloads are written this tick.
+  pub precision: crate::protocol::Precision,
+  /// Last tick's publication, kept so a per-tick rebuild reuses its cells
+  /// rather than allocating one payload slot per cell per tick.
+  pub published: Option<crate::zone::Publication>,
+  /// One assembled body blob per occupied viewer-cell, shared by refcount
+  /// between every viewer standing in it.
+  pub assembled: plaza_server_utils::relevance::CellTable<Option<crate::protocol::Packed>>,
+  /// Viewers bucketed by the cell they stand in. Every viewer in one cell has
+  /// the same window and the same near/far reading of it, so this is the key
+  /// the whole addressing layer wants.
+  pub viewers: plaza_server_utils::relevance::CellTable<Vec<PlayerId>>,
+  /// Who is listening to each cell at the coarse width, under
+  /// [`Precision::Graded`](crate::protocol::Precision::Graded).
+  pub audience_far: plaza_server_utils::relevance::CellTable<Vec<PlayerId>>,
+  /// Who is listening to each cell, under [`Delivery::Cells`](crate::protocol::Delivery::Cells).
+  /// The inverse of a view query, and the cost that scheme pays instead of
+  /// assembling a buffer per client.
+  pub audience: plaza_server_utils::relevance::CellTable<Vec<PlayerId>>,
   /// Scratch, so a tick that queries once per client allocates nothing.
   scratch: Vec<Seat>,
 }
@@ -77,10 +108,35 @@ impl Default for GowState {
 
 impl GowState {
   pub fn new() -> Self {
+    Self::with_capacity(MAX_CHARACTERS)
+  }
+
+  /// A zone seating `capacity` characters.
+  pub fn with_capacity(capacity: usize) -> Self {
+    Self::spanning(capacity, crate::terrain::EDGE)
+  }
+
+  /// A zone seating `capacity` characters over a world reaching `extent` units
+  /// from the origin. See [`Zone::spanning`] for why a measurement that
+  /// spreads a population past [`crate::terrain::EDGE`] must say so.
+  pub fn spanning(capacity: usize, extent: f32) -> Self {
+    let zone = Zone::spanning(extent);
+    let audience = plaza_server_utils::relevance::CellTable::new(*zone.space());
+    let assembled = plaza_server_utils::relevance::CellTable::new(*zone.space());
+    let viewers = plaza_server_utils::relevance::CellTable::new(*zone.space());
+    let audience_far = plaza_server_utils::relevance::CellTable::new(*zone.space());
     Self {
-      zone: Zone::new(),
+      assembled,
+      viewers,
+      audience_far,
+      delivery: crate::protocol::Delivery::default(),
+      precision: crate::protocol::Precision::default(),
+      published: None,
+      audience,
+      zone,
       tick: 0,
-      roster: Roster::new(MAX_CHARACTERS),
+      capacity,
+      roster: Roster::new(capacity),
       agents: HashMap::new(),
       landed: Vec::new(),
       bots: Bots::default(),
