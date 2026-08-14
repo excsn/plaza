@@ -22,6 +22,7 @@ Its only dependency is `plaza_client_utils`, for the shared `Interpolatable` and
 | A client aims at where a target *was* (it renders remotes in the past), so hits must be judged then, not now | `HistoricalStateBuffer` |
 | A world has more entities than fit on the wire, and players in different places, so each client needs only what is near it | `relevance` (`SpatialGrid`, `VisibilitySet`, Morton keys) |
 | The world has a third axis, and whether it deserves an index is a measurement | `field` (`Field` with `Flat` / `FlatBand` / `Volume`, `Query` instrumentation) |
+| Bots should hold real seats, off the send path, and yield them to people | `seats::Crew` (fill through the roster, prune after displacement) |
 | A client also cares about entities *no distance query will ever return*: a party across the zone, a followed player, a guild roster | `subscription` (`Subscriptions`, `Audience`) |
 | Some of those entities are simulation *inputs*, so dropping the distant ones changes the answer, but sending them all does not scale | `aggregate` (`AggregateTree`) |
 | Streaming that set as *entered* and *left* assumes every packet arrives, and one that does not is lost for good | `delta` (`DeltaBaseline`) |

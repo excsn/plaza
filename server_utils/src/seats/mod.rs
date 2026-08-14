@@ -29,9 +29,11 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
+pub mod crew;
 pub mod queue;
 pub mod slots;
 
+pub use crew::Crew;
 pub use queue::RankedQueue;
 pub use slots::SeatSlots;
 
