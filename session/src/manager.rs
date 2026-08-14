@@ -31,6 +31,7 @@ use crate::codec::WireCodec;
 use plaza_wire::frame::{self, ProtocolVersion};
 use crate::conditioner::LinkProfile;
 use crate::error::SessionLayerError;
+use crate::gate::{Bucket, Over, Rate, Verdict};
 use crate::stats::TransportStats;
 
 /// Default capacity for the notification channels the controller consumes.
@@ -192,6 +193,13 @@ pub struct Limits {
   pub max_frame_bytes: usize,
   /// Largest inbound message once continuations are joined. WebSocket only.
   pub max_message_bytes: usize,
+  /// How fast one connection may send, or `None` to admit whatever arrives.
+  ///
+  /// The two caps above bound one frame; this bounds the stream of them, and
+  /// together they are a byte ceiling. `None` by default, because how fast is
+  /// too fast is a question about the application's own protocol: see
+  /// [`gate`](crate::gate).
+  pub inbound_rate: Option<Rate>,
 }
 
 impl Default for Limits {
@@ -199,6 +207,7 @@ impl Default for Limits {
     Self {
       max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
       max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
+      inbound_rate: None,
     }
   }
 }
@@ -351,6 +360,21 @@ impl SessionOptions {
   /// than discarding ops it already sent.
   pub fn backpressure_inbound(mut self) -> Self {
     self.overflow.inbound = InboundOverflow::Backpressure;
+    self
+  }
+
+  /// Caps how fast one connection may send, before the queue they all share.
+  ///
+  /// ```rust,ignore
+  /// SessionOptions::with_protocol(ProtocolVersion(PROTOCOL))
+  ///   .workload(&Workload::action())
+  ///   .rate_limit_inbound(Rate::per_second(240.0))
+  /// ```
+  ///
+  /// See [`gate`](crate::gate) for what the two numbers mean and why there is
+  /// no default.
+  pub fn rate_limit_inbound(mut self, rate: Rate) -> Self {
+    self.limits.inbound_rate = Some(rate);
     self
   }
 
@@ -575,6 +599,10 @@ const ORDER_QUEUE_DEPTH: usize = 4;
 pub struct InboundVolume {
   pub frames: u64,
   pub bytes: u64,
+  /// Of those frames, how many the [`gate`](crate::gate) refused. Counted here
+  /// as well as in the totals, because a client being shed is sending: the
+  /// distinction a rate limit is for is invisible in `frames` alone.
+  pub shed: u64,
 }
 
 /// Monotonic outbound counters for one connection: what was handed to its
@@ -598,6 +626,11 @@ struct ClientHandle<ID: AgentId> {
   last_activity_us: AtomicU64,
   inbound_frames: AtomicU64,
   inbound_bytes: AtomicU64,
+  inbound_shed: AtomicU64,
+  /// This connection's tokens. A lock rather than atomics because a bucket is
+  /// two numbers that have to move together, and it is taken by one connection
+  /// task on its own frames.
+  gate: parking_lot::Mutex<Bucket>,
   outbound_frames: AtomicU64,
   outbound_bytes: AtomicU64,
   /// Round trip to this client, in microseconds, `0` before the first sample.
@@ -696,7 +729,7 @@ impl<ID: AgentId> ClientHandle<ID> {
     self.min_link_rtt_us.store(0, Ordering::Relaxed);
   }
 
-  fn new(agent: Agent<ID>, to_client_tx: SessionSender<OutboundFrame>, now_us: u64) -> Self {
+  fn new(agent: Agent<ID>, to_client_tx: SessionSender<OutboundFrame>, now_us: u64, rate: Option<&Rate>) -> Self {
     let (orders_tx, orders_rx) = session_channel::<ConnectionOrder>(ORDER_QUEUE_DEPTH);
     Self {
       agent,
@@ -706,6 +739,8 @@ impl<ID: AgentId> ClientHandle<ID> {
       last_activity_us: AtomicU64::new(now_us),
       inbound_frames: AtomicU64::new(0),
       inbound_bytes: AtomicU64::new(0),
+      inbound_shed: AtomicU64::new(0),
+      gate: parking_lot::Mutex::new(Bucket::full(rate, now_us)),
       outbound_frames: AtomicU64::new(0),
       outbound_bytes: AtomicU64::new(0),
       rtt_us: AtomicU64::new(0),
@@ -1039,7 +1074,10 @@ impl<ID: AgentId> ConnectionManager<ID> {
     self
       .connections
       .write()
-      .insert(conn_id, ClientHandle::new(agent.clone(), to_client_tx, self.now_us()));
+      .insert(
+        conn_id,
+        ClientHandle::new(agent.clone(), to_client_tx, self.now_us(), self.limits.inbound_rate.as_ref()),
+      );
     debug!(transport = self.transport, conn_id, agent = %agent, "Connection registered.");
 
     if !self.announce(PresenceEvent::Joined { agent, conn_id }).await {
@@ -1084,18 +1122,40 @@ impl<ID: AgentId> ConnectionManager<ID> {
     self.epoch.elapsed().as_micros() as u64
   }
 
-  /// Stamps activity and counts one data frame from this connection.
+  /// Stamps activity, counts one data frame from this connection, and says
+  /// whether it is within the rate this session allows.
   ///
   /// Called by the control plane at the one place a probe has already been
   /// told apart from data, which is what makes "probes do not count" true by
-  /// construction rather than by every transport remembering it.
-  pub fn record_inbound_activity(&self, conn_id: ConnectionId, bytes: usize) {
+  /// construction rather than by every transport remembering it. It is also the
+  /// last point before the queue every connection shares, which is why the
+  /// [`gate`](crate::gate) is consulted here and not deeper: a flood dropped
+  /// after that queue has already cost everybody else their frames.
+  ///
+  /// A shed frame still counts as a frame and still stamps activity. It
+  /// arrived, and a flooder is the opposite of idle.
+  #[must_use = "a frame the gate refused must not be forwarded"]
+  pub fn record_inbound_activity(&self, conn_id: ConnectionId, bytes: usize) -> Verdict {
     let now_us = self.now_us();
     let connections = self.connections.read();
-    if let Some(handle) = connections.get(conn_id) {
-      handle.last_activity_us.store(now_us, Ordering::Relaxed);
-      handle.inbound_frames.fetch_add(1, Ordering::Relaxed);
-      handle.inbound_bytes.fetch_add(bytes as u64, Ordering::Relaxed);
+    let Some(handle) = connections.get(conn_id) else {
+      return Verdict::Admit;
+    };
+    handle.last_activity_us.store(now_us, Ordering::Relaxed);
+    handle.inbound_frames.fetch_add(1, Ordering::Relaxed);
+    handle.inbound_bytes.fetch_add(bytes as u64, Ordering::Relaxed);
+
+    let Some(rate) = self.limits.inbound_rate.as_ref() else {
+      return Verdict::Admit;
+    };
+    if handle.gate.lock().take(rate, now_us) {
+      return Verdict::Admit;
+    }
+    handle.inbound_shed.fetch_add(1, Ordering::Relaxed);
+    self.stats.record_inbound_shed();
+    match rate.over {
+      Over::Shed => Verdict::Shed,
+      Over::Close => Verdict::Close,
     }
   }
 
@@ -1131,6 +1191,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
     Some(InboundVolume {
       frames: handle.inbound_frames.load(Ordering::Relaxed),
       bytes: handle.inbound_bytes.load(Ordering::Relaxed),
+      shed: handle.inbound_shed.load(Ordering::Relaxed),
     })
   }
 
@@ -1140,6 +1201,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
     connections.for_agent(id).fold(InboundVolume::default(), |sum, (_, handle)| InboundVolume {
       frames: sum.frames + handle.inbound_frames.load(Ordering::Relaxed),
       bytes: sum.bytes + handle.inbound_bytes.load(Ordering::Relaxed),
+      shed: sum.shed + handle.inbound_shed.load(Ordering::Relaxed),
     })
   }
 
@@ -1915,7 +1977,7 @@ mod tests {
   use crate::conditioner::DirectionProfile;
 
   fn handle(agent: Agent<u32>) -> ClientHandle<u32> {
-    ClientHandle::new(agent, session_channel(4).0, 0)
+    ClientHandle::new(agent, session_channel(4).0, 0, None)
   }
 
   #[test]

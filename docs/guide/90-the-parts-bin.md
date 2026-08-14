@@ -104,6 +104,7 @@ Every block, one line each, sorted by the itch it scratches. Links go to the cra
 | `close_connection` / `deregister_agent` / `disconnect_all` | ending sessions with the reason arriving first, one, all-of-one, or everyone | [session](../../session/API_REFERENCE.md) |
 | `idle_for` / `agent_idle_for` | AFK rules that probe traffic cannot postpone | [session](../../session/API_REFERENCE.md) |
 | `connection_inbound` / `agent_inbound` | attributing a flood to the connection sending it | [session](../../session/API_REFERENCE.md) |
+| `SessionOptions::rate_limit_inbound`, `Rate` | making that flood cost only the connection sending it | [session](../../session/API_REFERENCE.md) |
 | `set_deadline` | credits, trials, and token expiry as one renewable mechanism | [session](../../session/API_REFERENCE.md) |
 
 ## Rooms and placement (chapter 41)

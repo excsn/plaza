@@ -12,6 +12,7 @@ Writing a transport is a socket pump plus calls into `ConnectionManager`, and th
 - **The measurement plane.** Answering probes, timing round trips, recording samples: assembled in `LinkDriver`, or usable piecemeal from the control module if your loop's shape disagrees with the driver's.
 - **The conditioner.** [Chapter 31](31-faking-a-bad-network.md)'s impairment, per connection, both directions, so a custom transport is testable under the same fake weather as the shipped ones.
 - **The order channel.** `take_orders` hands your loop the stream that `close_connection`, `set_deadline`, and the drain speak through, so governance ([chapter 40](40-the-right-to-say-no.md)) works on your transport the day it boots. It must be its own `select!` arm; the session docs explain the trap that rule exists to avoid.
+- **The inbound gate.** If the session sets a `Rate`, `record_inbound_activity` returns a verdict rather than nothing, and a frame it refuses must not be forwarded. `LinkDriver::inbound` and `control::handle_inbound` return it for you as `Inbound::Shed` (drop it, keep the connection) and `Inbound::Eject` (close it); a frame that came out of the impairment queue instead reports through `LinkDriver::ejected()`, because `due()` returns what the socket is owed and a close is not a frame. What a close *looks* like is yours: the WebSocket transport spends `1008 Policy Violation` on it and TCP has no code to spend.
 
 The session API_REFERENCE has a literal numbered recipe under "Writing Another Transport"; this chapter is the why behind its steps.
 

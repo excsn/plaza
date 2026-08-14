@@ -19,7 +19,7 @@ use parking_lot::Mutex;
 use plaza::common::closure::{ClosureLog, Departed};
 use plaza_session::manager::ConnectionManager;
 
-use crate::types::{op_frame, Parting, PartyOp, Seat, FLOOD_OPS, FLOOD_WINDOW_MS};
+use crate::types::{op_frame, Parting, PartyOp, Seat, FLOOD_TOLERANCE, FLOOD_WINDOW_MS};
 
 /// How long a dropped guest's seat stays warm.
 pub const GRACE: std::time::Duration = std::time::Duration::from_secs(10);
@@ -202,22 +202,22 @@ impl Host {
     }
   }
 
-  /// Whether a guest's inbound rate has crossed the flood line, advancing its
-  /// window. The counters are the manager's; the window and the number are
-  /// this host's.
+  /// Whether a guest has been refused often enough to be removed rather than
+  /// merely trimmed.
+  ///
+  /// **The host no longer measures the rate.** The session does, at the door,
+  /// and a guest over it is already costing itself its own frames and nobody
+  /// else theirs; what is left here is the escalation, which is policy and
+  /// belongs to the party. That division is the whole change: this used to be a
+  /// window the host advanced by hand, and the first frame over it removed a
+  /// guest, because removal was the only verdict available.
   pub fn over_rate(&self, key: u64) -> bool {
-    let volume = self.manager.agent_inbound(&key);
-    let now = tokio::time::Instant::now();
-    let mut watches = self.watches.lock();
-    let Some(watch) = watches.get_mut(&key) else {
-      return false;
-    };
-    if now.duration_since(watch.window_started).as_millis() as u64 >= FLOOD_WINDOW_MS {
-      watch.window_started = now;
-      watch.frames_at_window_start = volume.frames;
-      return false;
-    }
-    volume.frames.saturating_sub(watch.frames_at_window_start) > FLOOD_OPS
+    self.shed(key) > FLOOD_TOLERANCE
+  }
+
+  /// Frames the session refused this guest.
+  pub fn shed(&self, key: u64) -> u64 {
+    self.manager.agent_inbound(&key).shed
   }
 
   pub fn quiet_for_ms(&self, key: u64) -> u64 {
@@ -228,14 +228,22 @@ impl Host {
       .unwrap_or(0)
   }
 
+  /// Frames this guest sent in the current window, for the panel.
+  ///
+  /// Advances the window itself: what used to do that was `over_rate`, and the
+  /// rate is the session's business now.
   pub fn ops_this_window(&self, key: u64) -> u64 {
     let volume = self.manager.agent_inbound(&key);
-    self
-      .watches
-      .lock()
-      .get(&key)
-      .map(|w| volume.frames.saturating_sub(w.frames_at_window_start))
-      .unwrap_or(0)
+    let now = tokio::time::Instant::now();
+    let mut watches = self.watches.lock();
+    let Some(watch) = watches.get_mut(&key) else {
+      return 0;
+    };
+    if now.duration_since(watch.window_started).as_millis() as u64 >= FLOOD_WINDOW_MS {
+      watch.window_started = now;
+      watch.frames_at_window_start = volume.frames;
+    }
+    volume.frames.saturating_sub(watch.frames_at_window_start)
   }
 
   pub fn is_griefer(&self, key: u64) -> bool {

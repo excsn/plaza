@@ -71,6 +71,7 @@ pub struct LinkDriver<ID: AgentId, C: WireCodec> {
   probe: ProbeState,
   next_probe: Option<Instant>,
   pending_inbound: Vec<Frame>,
+  ejected: bool,
 }
 
 impl<ID: AgentId, C: WireCodec> LinkDriver<ID, C> {
@@ -93,6 +94,7 @@ impl<ID: AgentId, C: WireCodec> LinkDriver<ID, C> {
       next_probe: probe.first_due(Instant::now()),
       probe,
       pending_inbound: Vec::new(),
+      ejected: false,
     })
   }
 
@@ -156,7 +158,8 @@ impl<ID: AgentId, C: WireCodec> LinkDriver<ID, C> {
       match self.route(frame) {
         Inbound::Reply(reply) => owed.push(reply),
         Inbound::Forward(frame) => self.pending_inbound.push(frame),
-        Inbound::Consumed => {}
+        Inbound::Consumed | Inbound::Shed => {}
+        Inbound::Eject => self.ejected = true,
       }
     }
 
@@ -166,6 +169,18 @@ impl<ID: AgentId, C: WireCodec> LinkDriver<ID, C> {
     }
 
     owed
+  }
+
+  /// Whether a frame released by the upstream queue exceeded a rate that ends
+  /// connections, and this one should be closed.
+  ///
+  /// A held frame is judged when the link releases it rather than when it
+  /// arrived, so this is what [`due`](Self::due) has no way to return: it hands
+  /// back what the socket is owed, and a close is not a frame. The direct path
+  /// needs no flag, since [`inbound`](Self::inbound) returns
+  /// [`Eject`](Inbound::Eject) to its caller.
+  pub fn ejected(&self) -> bool {
+    self.ejected
   }
 
   /// Frames that came out of the upstream queue and belong to the application.

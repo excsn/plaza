@@ -28,6 +28,8 @@ The playgrounds' role flags are the pattern worth copying for dev ergonomics: on
 
 The session's queues and limits are all configurable through `SessionOptions`, with defaults that suit a small room and an honest note in the docs that a 16-player room and a 4000-connection relay are not the same number. What a full queue does is policy you choose (drop, backpressure, disconnect the laggard), and the stats from [chapter 31](31-faking-a-bad-network.md) tell you which is happening. The workload presets derive coherent numbers from a description of your traffic when you would rather not pick five depths by hand.
 
+One limit is not derived and will not be applied for you: `rate_limit_inbound` caps how fast a single connection may send, which is [chapter 40](40-the-right-to-say-no.md)'s business rather than a sizing question. `Rate::for_workload` does the arithmetic from the same description your queue depths came from, and enforcing it stays a line you write, because every other derivation here sizes a buffer and being wrong costs memory, while this one refuses traffic and being wrong costs a player their move.
+
 ## Ripping it apart
 
 The actix host is a convenience for the common same-origin story; any HTTP server that can serve files and upgrade a WebSocket can stand in front of an `ActixWsPlazaSession`... at which point you are most of the way to [chapter 33](33-bring-your-own-socket.md), where the transport itself becomes yours.

@@ -148,7 +148,8 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
             }
           }
           Inbound::Forward(frame) => manager.forward_incoming(agent.clone(), frame).await,
-          Inbound::Consumed => {}
+          Inbound::Consumed | Inbound::Shed => {}
+          Inbound::Eject => break,
         }
       }
 
@@ -173,7 +174,7 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
         for frame in driver.take_forwarded() {
           manager.forward_incoming(agent.clone(), frame).await;
         }
-        if dead {
+        if dead || driver.ejected() {
           break;
         }
       }

@@ -11,6 +11,7 @@
 pub mod codec;
 pub mod conditioner;
 pub mod error;
+pub mod gate;
 pub mod host;
 pub mod manager;
 pub mod stats;
@@ -36,7 +37,8 @@ pub use codec::MsgPackCodec;
 pub use conditioner::{Delivery, DirectionProfile, LinkProfile, LinkPublisher, LinkSink, RETRANSMIT_PENALTY};
 pub use driver::LinkDriver;
 pub use error::SessionLayerError;
-pub use workload::{Priority, Workload, DEFAULT_SOCKET_BUFFER_BYTES};
+pub use gate::{Over, Rate, Verdict};
+pub use workload::{Priority, Workload, DEFAULT_SOCKET_BUFFER_BYTES, MIN_INBOUND_RATE, RATE_HEADROOM};
 pub use manager::{
   ConnectionManager, ConnectionOrder, Frame, InboundOverflow, InboundVolume, Limits, OutboundOverflow, OutboundVolume, Overflow, PresenceOverflow,
   Probes, Queues, SessionClock, SessionOptions, TransportSession,

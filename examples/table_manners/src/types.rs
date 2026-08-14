@@ -7,8 +7,21 @@ pub const SEATS: usize = 4;
 /// Silence after which the table assumes you have wandered off.
 pub const AFK_SECS: u64 = 3;
 /// Inbound ops per window before the table stops being polite about it.
+///
+/// The session enforces this as a `Rate`, so a guest over it costs itself its
+/// own frames and nobody else theirs. The window is also what the panel counts
+/// over.
 pub const FLOOD_OPS: u64 = 40;
 pub const FLOOD_WINDOW_MS: u64 = 1000;
+
+/// Frames the gate may refuse before the host stops reading it as a clumsy
+/// client and starts reading it as a decision.
+///
+/// The number the shed count buys: a guest whose packets arrived in a clump
+/// loses a handful of frames and stays, and one that keeps pushing after that
+/// has answered the question. Nothing like it was expressible while the only
+/// verdict was removal.
+pub const FLOOD_TOLERANCE: u64 = 20;
 
 /// Why a seat was vacated. The distinction the whole example turns on: a drop
 /// keeps your seat warm, and a kick does not.
@@ -85,6 +98,8 @@ pub struct Guest {
   pub said: u32,
   pub quiet_for_ms: u64,
   pub ops_this_window: u64,
+  /// Frames the session refused this guest, over its whole visit.
+  pub shed: u64,
   pub griefer: bool,
 }
 

@@ -34,9 +34,10 @@ use plaza::agent::AgentId;
 use plaza::session::ConnectionId;
 use plaza_wire::frame;
 use tokio::time::Instant;
-use tracing::trace;
+use tracing::{debug, trace};
 
 use crate::codec::WireCodec;
+use crate::gate::Verdict;
 use crate::manager::{ConnectionManager, Frame, Probes, SessionClock};
 
 
@@ -125,6 +126,11 @@ pub enum Inbound {
   Reply(Frame),
   /// Ours, and finished with.
   Consumed,
+  /// Theirs, and over the rate this session allows: dropped here, before the
+  /// queue every connection shares. The connection stays.
+  Shed,
+  /// The same, on a rate whose [`Over`](crate::gate::Over) ends connections.
+  Eject,
 }
 
 /// Builds this connection's next probe.
@@ -160,8 +166,7 @@ pub fn handle_inbound<ID: AgentId, C: WireCodec>(
   // An empty frame is malformed rather than unknown, and the bridge already
   // reports it; forwarding keeps that one voice.
   let Some((tag, body)) = frame::split(&frame_bytes) else {
-    manager.record_inbound_activity(conn_id, frame_bytes.len());
-    return Inbound::Forward(frame_bytes);
+    return gated(frame_bytes, conn_id, manager);
   };
 
   match frame::Kind::from_byte(tag) {
@@ -187,18 +192,39 @@ pub fn handle_inbound<ID: AgentId, C: WireCodec>(
       }
       Inbound::Consumed
     }
-    _ => {
-      manager.record_inbound_activity(conn_id, frame_bytes.len());
-      Inbound::Forward(frame_bytes)
-    }
+    _ => gated(frame_bytes, conn_id, manager),
   }
 }
 
-/// Handles an inbound frame and delivers it wherever it belongs, returning the
-/// reply the peer is owed, if any.
+/// Counts a data frame and returns what the session's rate says to do with it.
 ///
-/// The caller decides how that reply reaches the socket, because that is the
-/// one part the two transports do differently.
+/// A probe never arrives here, which is what keeps a busy link's own upkeep
+/// from spending a client's budget.
+fn gated<ID: AgentId>(frame_bytes: Frame, conn_id: ConnectionId, manager: &ConnectionManager<ID>) -> Inbound {
+  match manager.record_inbound_activity(conn_id, frame_bytes.len()) {
+    Verdict::Admit => Inbound::Forward(frame_bytes),
+    Verdict::Shed => Inbound::Shed,
+    Verdict::Close => Inbound::Eject,
+  }
+}
+
+/// What a routed frame leaves the connection task to do.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub enum Routed {
+  /// Delivered, answered internally, or shed. Carry on reading.
+  #[default]
+  Nothing,
+  /// Write this back to the peer.
+  Reply(Frame),
+  /// Close this connection: it exceeded a rate that ends connections.
+  Eject,
+}
+
+/// Handles an inbound frame and delivers it wherever it belongs, returning what
+/// the peer is owed.
+///
+/// The caller decides how a reply reaches the socket and how a connection ends,
+/// because those are the two parts the transports do differently.
 pub async fn route_inbound<ID: AgentId, C: WireCodec>(
   frame_bytes: Frame,
   codec: &C,
@@ -207,14 +233,18 @@ pub async fn route_inbound<ID: AgentId, C: WireCodec>(
   conn_id: ConnectionId,
   manager: &ConnectionManager<ID>,
   agent: &plaza::agent::Agent<ID>,
-) -> Option<Frame> {
+) -> Routed {
   match handle_inbound(frame_bytes, codec, clock, probe, conn_id, manager) {
     Inbound::Forward(frame_bytes) => {
       manager.forward_incoming(agent.clone(), frame_bytes).await;
-      None
+      Routed::Nothing
     }
-    Inbound::Reply(reply) => Some(reply),
-    Inbound::Consumed => None,
+    Inbound::Reply(reply) => Routed::Reply(reply),
+    Inbound::Consumed | Inbound::Shed => Routed::Nothing,
+    Inbound::Eject => {
+      debug!(conn_id, "Closing a connection that exceeded its inbound rate.");
+      Routed::Eject
+    }
   }
 }
 
