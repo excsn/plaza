@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 
 use plaza_client_utils::FixedTimestep;
-use plaza_server_utils::Roster;
+use plaza_server_utils::{Crew, Roster};
 
 use crate::bots::Bots;
 use crate::controls::Relevance;
@@ -27,6 +27,8 @@ pub const CATCH_UP: u32 = 3;
 pub struct SkapeState {
   pub zone: Zone,
   pub roster: Roster<PlayerId>,
+  /// The seats the bots hold, admitted through the same roster as anybody.
+  pub crew: Crew<PlayerId>,
   pub agents: HashMap<PlayerId, plaza::agent::Agent<PlayerId>>,
   pub bots: Bots,
   pub populated: bool,
@@ -74,6 +76,7 @@ impl SkapeState {
     Self {
       zone: Zone::new(),
       roster: Roster::new(MAX_ACTORS),
+      crew: Crew::new(),
       agents: HashMap::new(),
       bots: Bots::default(),
       populated: false,
