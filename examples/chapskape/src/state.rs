@@ -10,12 +10,19 @@
 
 use std::collections::HashMap;
 
+use plaza_client_utils::FixedTimestep;
 use plaza_server_utils::Roster;
 
 use crate::bots::Bots;
 use crate::controls::Relevance;
 use crate::protocol::{ObjectState, PlayerId, Seat, TICK_MS};
 use crate::zone::{Zone, MAX_ACTORS};
+
+/// The most game ticks one wake-up may run.
+///
+/// A host that stalled and came back owing two seconds must not spend them all
+/// in one frame: the world would jump and every client would watch it happen.
+pub const CATCH_UP: u32 = 3;
 
 pub struct SkapeState {
   pub zone: Zone,
@@ -25,12 +32,12 @@ pub struct SkapeState {
   pub populated: bool,
   pub mode: Relevance,
   pub tick_ms: u64,
-  /// Milliseconds owed to the game clock but not yet spent on a tick.
+  /// The game clock's budget, drawn down in whole ticks.
   ///
   /// The host wakes far more often than the world moves, so a game tick is a
-  /// budget being drawn down rather than a wake-up being answered. It is also
-  /// what lets the tick length be a dial instead of a constant.
-  pub owed_ms: u64,
+  /// budget being drawn down rather than a wake-up being answered, and the
+  /// tick length stays a dial because the catch-up cap is counted in ticks.
+  pub ticker: FixedTimestep,
   pub now_ms: u64,
   /// What each viewer has been told about the props, by id against the tick
   /// they come back on.
@@ -72,7 +79,7 @@ impl SkapeState {
       populated: false,
       mode: Relevance::default(),
       tick_ms: TICK_MS,
-      owed_ms: 0,
+      ticker: FixedTimestep::from_step_ms(TICK_MS).with_max_steps(CATCH_UP).with_max_frame_ms(3_600_000),
       now_ms: 0,
       told: HashMap::new(),
       object_entries: 0,
