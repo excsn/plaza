@@ -43,6 +43,7 @@ pub mod relevance;
 pub mod render_error;
 pub mod rest;
 pub mod subscription;
+pub mod told;
 pub mod seats;
 
 pub use aggregate::{AggregateTree, Summary, WeightedPoint};
@@ -50,6 +51,7 @@ pub use delta::{DeltaBaseline, DeltaPlan, RecoveryPolicy};
 pub use history::{HistoricalStateBuffer, TimedState};
 pub use input_schedule::{InputSchedule, InputWindow, Submission};
 pub use plaza_client_utils::meter::RateMeter;
+pub use told::Told;
 pub use priority::PriorityAccumulator;
 pub use relevance::{GridQuantizer, SetDigest, SpatialGrid, TierBoundary, VisibilitySet};
 pub use render_error::{RenderError, render_error_at};
