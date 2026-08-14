@@ -8,9 +8,8 @@
 //! told about that one" without treating it as a ship that stopped moving.
 
 use std::collections::HashMap;
-use std::collections::VecDeque;
 
-use plaza_client_utils::FixedTimestep;
+use plaza_client_utils::{FixedTimestep, RateMeter};
 use plaza_wire::{MsgPackCodec, WireCodec};
 use plaza_ws::pump::{mismatch_message, Arrival, FramePump};
 use plaza_ws::{Event, State};
@@ -19,9 +18,6 @@ use crate::protocol::{BoltState, Fly, Kill, ShipState, SpaceOp, PROTOCOL};
 use crate::sim::{advance, quaternion, Ship};
 
 const WIRE: MsgPackCodec = MsgPackCodec;
-
-/// Bandwidth is averaged over this window, so the panel reads as a rate.
-const WINDOW_MS: u64 = 1000;
 
 /// Ticks a ship is kept after it stops being mentioned.
 ///
@@ -61,59 +57,6 @@ pub enum Status {
   Gone(String),
 }
 
-/// Bytes over a rolling window, reported in the same unit horde_playground and
-/// cube_yard use so the three can be read against each other.
-#[derive(Default)]
-pub struct Meter {
-  recent: VecDeque<(u64, usize)>,
-  pub total_bytes: u64,
-  pub frames: u64,
-  since_ms: Option<u64>,
-}
-
-impl Meter {
-  pub fn record(&mut self, now_ms: u64, bytes: usize) {
-    self.recent.push_back((now_ms, bytes));
-    self.total_bytes += bytes as u64;
-    self.frames += 1;
-    self.since_ms.get_or_insert(now_ms);
-    while let Some((at, _)) = self.recent.front() {
-      if now_ms.saturating_sub(*at) > WINDOW_MS {
-        self.recent.pop_front();
-      } else {
-        break;
-      }
-    }
-  }
-
-  /// Divided by the whole window rather than by the span still in it, so a link
-  /// that has gone quiet falls to zero instead of quoting the rate it had when
-  /// the last packet landed.
-  pub fn kib_per_sec(&self, now_ms: u64) -> f32 {
-    let bytes: usize = self
-      .recent
-      .iter()
-      .filter(|(at, _)| now_ms.saturating_sub(*at) <= WINDOW_MS)
-      .map(|(_, b)| b)
-      .sum();
-    bytes as f32 * 1000.0 / WINDOW_MS as f32 / 1024.0
-  }
-
-  pub fn session_kib_per_sec(&self, now_ms: u64) -> f32 {
-    let Some(since) = self.since_ms else {
-      return 0.0;
-    };
-    let elapsed = now_ms.saturating_sub(since).max(1) as f32 / 1000.0;
-    self.total_bytes as f32 / elapsed / 1024.0
-  }
-
-  pub fn bytes_per_frame(&self) -> f32 {
-    if self.frames == 0 {
-      return 0.0;
-    }
-    self.total_bytes as f32 / self.frames as f32
-  }
-}
 
 /// Drops shots the server has stopped sending, and reports how many went.
 ///
@@ -206,11 +149,11 @@ pub struct NetClient {
   pub ships: HashMap<u16, Known>,
   pub frame: u64,
   pub stamp: u64,
-  pub meter: Meter,
+  pub meter: RateMeter,
   /// What this client *sends*, which was free while input was a keyed level
   /// that changed twice a turn and is not free now that a mouse sets it every
   /// frame. Every other measurement in this example is downstream.
-  pub up: Meter,
+  pub up: RateMeter,
   /// How many ships the last frame carried, which is the number the panel
   /// should show rather than the volume's population.
   pub carried: usize,
@@ -302,8 +245,8 @@ impl NetClient {
       ships: HashMap::new(),
       frame: 0,
       stamp: 0,
-      meter: Meter::default(),
-      up: Meter::default(),
+      meter: RateMeter::new(),
+      up: RateMeter::new(),
       carried: 0,
       bolts: HashMap::new(),
       bolts_carried: 0,
@@ -344,6 +287,8 @@ impl NetClient {
 
   pub fn poll(&mut self, now_ms: u64) {
     self.now_ms = now_ms;
+    self.meter.elapsed(now_ms);
+    self.up.elapsed(now_ms);
     let mut events = std::mem::take(&mut self.events);
     self.pump.drain(now_ms, &mut events);
     let mut arrivals = std::mem::take(&mut self.arrivals);
@@ -360,7 +305,7 @@ impl NetClient {
         Arrival::Ops(frame) => {
           // Measured as it lands, before decoding: the bytes the link carried
           // are the bytes relevance has to reduce.
-          self.meter.record(now_ms, frame.body().len());
+          self.meter.add(frame.body().len() as u64);
           self.on_ops(frame.body());
         }
         Arrival::Mismatch { ours, theirs } => self.status = Status::Gone(mismatch_message(ours, theirs)),
@@ -488,7 +433,7 @@ impl NetClient {
     // number the example quotes has to be the bytes that actually cross, not a
     // count of fields multiplied by a guess.
     if let Ok(bytes) = WIRE.encode(&vec![op.clone()]) {
-      self.up.record(self.now_ms, bytes.len());
+      self.up.add(bytes.len() as u64);
     }
     self.pump.send_op(&op);
   }
@@ -813,9 +758,9 @@ mod tests {
 
   #[test]
   fn a_frame_clock_that_truncates_reports_a_rate_that_is_too_high() {
-    fn rate(fps: usize, keep_remainder: bool) -> f32 {
+    fn rate(fps: usize, keep_remainder: bool) -> f64 {
       let dt = 1.0 / fps as f32;
-      let mut meter = Meter::default();
+      let mut meter = RateMeter::new();
       let (mut clock, mut owed) = (0u64, 0.0f32);
       // Two seconds of wall clock, a fixed 100 bytes every frame, so the true
       // rate is exactly 100 * fps bytes a second.
@@ -828,9 +773,10 @@ mod tests {
         } else {
           clock += (dt * 1000.0) as u64;
         }
-        meter.record(clock, 100);
+        meter.elapsed(clock);
+        meter.add(100);
       }
-      meter.kib_per_sec(clock)
+      meter.per_sec() / 1024.0
     }
 
     let truth = 100.0 * 144.0 / 1024.0;
@@ -850,16 +796,18 @@ mod tests {
 
   #[test]
   fn a_quiet_link_reads_as_zero_rather_than_its_last_rate() {
-    let mut meter = Meter::default();
+    let mut meter = RateMeter::new();
     for tick in 0..60 {
-      meter.record(tick * 16, 500);
+      meter.elapsed(tick * 16);
+      meter.add(500);
     }
-    let busy = meter.kib_per_sec(960);
+    let busy = meter.per_sec() / 1024.0;
     assert!(busy > 20.0, "a busy link should read high: {busy}");
 
-    // Nothing for two seconds. The window is empty, so the rate is zero, not
-    // whatever it was when the last packet landed.
-    assert_eq!(meter.kib_per_sec(3000), 0.0);
-    assert!(meter.session_kib_per_sec(3000) > 0.0, "but the session total stands");
+    // Silence longer than the whole rolling window. It has all decayed out, so
+    // the rate is zero, not whatever it was when the last packet landed.
+    meter.elapsed(60_000);
+    assert_eq!(meter.per_sec(), 0.0);
+    assert!(meter.lifetime_per_sec() > 0.0, "but the session total stands");
   }
 }
