@@ -118,6 +118,22 @@ pub enum Delivery {
   Cells,
 }
 
+impl Delivery {
+  pub fn label(self) -> &'static str {
+    match self {
+      Delivery::Joined => "joined",
+      Delivery::Cells => "per cell",
+    }
+  }
+
+  pub fn other(self) -> Self {
+    match self {
+      Delivery::Joined => Delivery::Cells,
+      Delivery::Cells => Delivery::Joined,
+    }
+  }
+}
+
 /// How a position inside a cell payload is written.
 ///
 /// Orthogonal to [`Delivery`]: it changes what a payload *contains* rather
@@ -142,6 +158,25 @@ pub enum Precision {
   /// its own distance to that cell earns. Publishing costs twice; publishing
   /// was never the expensive part.
   Graded,
+}
+
+impl Precision {
+  pub fn label(self) -> &'static str {
+    match self {
+      Precision::Absolute => "absolute",
+      Precision::CellRelative => "cell-relative",
+      Precision::Graded => "graded",
+    }
+  }
+
+  /// Cycles, because there are three of them and a panel has one button.
+  pub fn next(self) -> Self {
+    match self {
+      Precision::Absolute => Precision::CellRelative,
+      Precision::CellRelative => Precision::Graded,
+      Precision::Graded => Precision::Absolute,
+    }
+  }
 }
 
 /// What a character is.

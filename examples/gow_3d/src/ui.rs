@@ -380,6 +380,26 @@ pub fn draw_panel(client: &mut NetClient, url: &str, dials: &Dials) {
       } else {
         ui.label("(the host owns this dial)");
       }
+
+      ui.separator();
+
+      // The other two dials, and the reason they are dials rather than a
+      // decision: which one wins is a property of the world. Delivery is the
+      // CPU axis and precision is the bytes axis, and both pay most where the
+      // zone is most crowded. Read off the wire, so what is shown is what the
+      // server did rather than what it was last asked for.
+      ui.label(format!("delivery      {}", client.delivery.label()));
+      ui.label(format!("precision     {}", client.precision.label()));
+      if let Some(dial) = dials {
+        let delivery = dial.lock().delivery;
+        if ui.button(format!("deliver {}", delivery.other().label())).clicked() {
+          dial.lock().delivery = delivery.other();
+        }
+        let precision = dial.lock().precision;
+        if ui.button(format!("pack {}", precision.next().label())).clicked() {
+          dial.lock().precision = precision.next();
+        }
+      }
     });
   });
 }
