@@ -190,31 +190,7 @@ impl Actor {
   }
 }
 
-/// A deterministic stream, so a tick replayed is a tick repeated.
-#[derive(Clone, Copy, Debug)]
-pub struct XorShift(u64);
-
-impl XorShift {
-  pub fn new(seed: u64) -> Self {
-    Self(seed | 1)
-  }
-
-  pub fn next(&mut self) -> u64 {
-    let mut x = self.0;
-    x ^= x << 13;
-    x ^= x >> 7;
-    x ^= x << 17;
-    self.0 = x;
-    x
-  }
-
-  pub fn below(&mut self, bound: u32) -> u32 {
-    if bound == 0 {
-      return 0;
-    }
-    (self.next() % bound as u64) as u32
-  }
-}
+pub use plaza_client_utils::determinism::XorShift;
 
 pub struct Zone {
   pub tick: u64,

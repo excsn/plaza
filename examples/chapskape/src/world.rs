@@ -15,6 +15,8 @@
 //! serialized, so moving a lake must not move the protocol version and
 //! disconnect everybody over a shoreline.
 
+use plaza_client_utils::determinism::ValueNoise;
+
 use crate::protocol::{Doing, Item, Tile};
 use crate::skills::Skill;
 
@@ -30,39 +32,9 @@ const RELIEF: f32 = 16.0;
 /// What the whole map is derived from. Changing it is a new world.
 const SEED: u32 = 0x0CEA_11CE;
 
-/// A hash rather than a table, so there is no state to initialise and no order
-/// two builds could disagree about.
-fn corner(xi: i32, zi: i32, octave: u32) -> f32 {
-  let mut h = SEED ^ octave.wrapping_mul(0x9E37_79B9);
-  h ^= (xi as u32).wrapping_mul(0x85EB_CA6B);
-  h = h.rotate_left(13);
-  h ^= (zi as u32).wrapping_mul(0xC2B2_AE35);
-  h = h.rotate_left(17);
-  h ^= h >> 15;
-  h = h.wrapping_mul(0x2545_F491);
-  h ^= h >> 13;
-  (h >> 8) as f32 / (1u32 << 24) as f32
-}
-
-fn ease(t: f32) -> f32 {
-  t * t * (3.0 - 2.0 * t)
-}
-
-fn octave_at(x: f32, z: f32, scale: f32, octave: u32) -> f32 {
-  let (gx, gz) = (x / scale, z / scale);
-  let (xi, zi) = (gx.floor(), gz.floor());
-  let (fx, fz) = (ease(gx - xi), ease(gz - zi));
-  let (xi, zi) = (xi as i32, zi as i32);
-
-  let a = corner(xi, zi, octave);
-  let b = corner(xi + 1, zi, octave);
-  let c = corner(xi, zi + 1, octave);
-  let d = corner(xi + 1, zi + 1, octave);
-
-  let top = a + (b - a) * fx;
-  let bottom = c + (d - c) * fx;
-  top + (bottom - top) * fz
-}
+/// The whole landscape follows from this and `SEED`; the tuning below is what
+/// the numbers mean, and the noise itself is the shared block's.
+const NOISE: ValueNoise = ValueNoise::new(SEED);
 
 /// The height of the ground anywhere, including between squares.
 ///
@@ -70,9 +42,9 @@ fn octave_at(x: f32, z: f32, scale: f32, octave: u32) -> f32 {
 /// square, and deriving both from one function is what stops the picture and
 /// the rules from disagreeing about where a cliff is.
 pub fn height_at(x: f32, z: f32) -> f32 {
-  let broad = octave_at(x, z, LATTICE, 0);
-  let hills = octave_at(x, z, LATTICE / 2.6, 1) * 0.45;
-  let detail = octave_at(x, z, LATTICE / 6.1, 2) * 0.15;
+  let broad = NOISE.octave(x, z, LATTICE, 0);
+  let hills = NOISE.octave(x, z, LATTICE / 2.6, 1) * 0.45;
+  let detail = NOISE.octave(x, z, LATTICE / 6.1, 2) * 0.15;
   let raw = (broad + hills + detail) / 1.6;
   raw * RELIEF - RELIEF * 0.22
 }
