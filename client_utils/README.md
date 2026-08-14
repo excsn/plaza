@@ -39,6 +39,7 @@ You do not need a Plaza server to use it. Anything speaking a sequence-numbered-
 | A claim about bandwidth should be a number on screen, not an assertion | `meter::RateMeter` (windowed rate, session rate, mean per sample) |
 | A shared rule needs draws, noise or a world both ends derive identically | `determinism` (`mix64`, `XorShift`, `ValueNoise`), values pinned by test |
 | Telling two ends' worlds apart before the divergence reaches the screen | `digest::StateDigest` (order-dependent FNV-1a over the state's words) |
+| A relevance stream has no despawn packet; absence is the message | `absence::Silence` (grace windows over "last mentioned", with exemptions) |
 | Measuring round-trip latency to the other end | `Timeline` (a probe's bookkeeping), over a `plaza_wire` `Kind::Ping` frame |
 | Estimating server time when the clock fit is cold or trailing the stream | `Timeline::server_time_ms`, floored by the newest server stamp (`note_stamp`) carried forward at wall rate |
 | Arithmetic that must agree to the bit across builds, because the wire carries causes rather than state | `fixed` (`Fx`, `P`), feature `fixed` |

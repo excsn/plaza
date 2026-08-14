@@ -59,17 +59,19 @@
   - [Struct `PlayoutBuffer<T>`](#struct-playoutbuffert)
 - [16. Module `arrival`: measuring how a stream actually arrives](#16-module-arrival-measuring-how-a-stream-actually-arrives)
   - [Struct `ArrivalMonitor`](#struct-arrivalmonitor)
-- [17. Rates (module `meter`)](#17-rates-module-meter)
+- [17. Module `absence`: acting on silence](#17-module-absence-acting-on-silence)
+  - [Struct `Silence`](#struct-silence)
+- [18. Rates (module `meter`)](#18-rates-module-meter)
   - [Struct `RateMeter`](#struct-ratemeter)
-- [18. Module `determinism`](#18-module-determinism)
+- [19. Module `determinism`](#19-module-determinism)
   - [Function `mix64`, struct `XorShift`, struct `ValueNoise`](#function-mix64-struct-xorshift-struct-valuenoise)
-- [19. Module `math`](#19-module-math)
-- [20. Module `net_sim` (feature `net-sim`)](#20-module-netsim-feature-net-sim)
+- [20. Module `math`](#20-module-math)
+- [21. Module `net_sim` (feature `net-sim`)](#21-module-netsim-feature-net-sim)
   - [Struct `LatencyLink<T>`](#struct-latencylinkt)
   - [Struct `Rng`](#struct-rng)
-- [21. Module `fixed` (feature `fixed`)](#21-module-fixed-feature-fixed)
+- [22. Module `fixed` (feature `fixed`)](#22-module-fixed-feature-fixed)
   - [Struct `Fx` and struct `P`](#struct-fx-and-struct-p)
-- [22. Error Handling](#22-error-handling)
+- [23. Error Handling](#23-error-handling)
   - [Enum `ClientUtilError`](#enum-clientutilerror)
 
 ## 1. Core Types
@@ -486,7 +488,19 @@ Keep one per interpolated stream.
 *   **`needed_delay_ms() -> f32`**: lateness plus jitter plus one interval.
 *   **`warmed_up() -> bool`**: whether two forward stamps have been seen, so an interval exists.
 
-## 17. Rates (module `meter`)
+## 17. Module `absence`: acting on silence
+
+### Struct `Silence`
+
+Relevance filtering has no despawn packet: a server that stops mentioning an entity has said "you cannot see this any more", and nothing else will ever say it. This is the policy for hearing that.
+
+*   **`Silence::new(grace)`** (const; **panics at zero**, which would forget the world on the first sweep). `grace` is in whatever unit the stamps are in, usually frames.
+*   **`keeps(&self, seen, now) -> bool`**: whether an entity last mentioned at `seen` is still present.
+*   **`sweep(&self, entities: &mut HashMap<K, V>, now, seen_of) -> usize`**: drops everything whose silence exceeded the grace and says how many. `seen_of` answers when the entity was last mentioned, or `None` for one silence must never claim: the client's own, or an entity sent once by design whose silence is its whole protocol.
+
+The grace is a real decision. A frame is a *set*, and an entity at the edge of the view radius flickers in and out of it as both ends drift: dropping on the first silent frame makes the edge of the world strobe, a short grace makes it a fade. An entity streamed every frame it exists earns a short one, because its silence means it is over rather than out of budget.
+
+## 18. Rates (module `meter`)
 
 ### Struct `RateMeter`
 
@@ -502,7 +516,7 @@ A running total, a sample count, an elapsed clock, and the three questions over 
 
 Trivial arithmetic, and every hand-rolled copy had to remember the same divide-by-zero guard, whose absence renders as `NaN` on the first frame and looks like the thing being measured is broken. `share_of` is here because **measuring a stream's share of the packet before optimising its encoding** is the check that would have saved three separate rounds of optimising the wrong thing: despawn ids were 1.2% of horde's traffic while position samples were 86.1%.
 
-## 18. Module `determinism`
+## 19. Module `determinism`
 
 ### Function `mix64`, struct `XorShift`, struct `ValueNoise`
 
@@ -514,7 +528,7 @@ The same number from the same inputs, on both ends and in every build. All integ
 
 **Iteration order is an input.** The hazard this module's docs name: a `HashMap` walked while feeding a shared random stream hands each entity a different draw on each run, so the same tick run twice stops being the same tick, with no float, no clock and no wire involved. Sort the keys before drawing, or key the draw on the entity with `mix64` so order stops mattering at all.
 
-## 19. Module `math`
+## 20. Module `math`
 
 Small vector and quaternion types, so this crate is usable without a math library. They implement `Interpolatable` and `Extrapolatable`.
 
@@ -522,7 +536,7 @@ Small vector and quaternion types, so this crate is usable without a math librar
 *   **`Vec3`**: the same surface in three dimensions.
 *   **`Quat`**: `new`, `IDENTITY`, `normalize`, `dot`, `multiply` (Hamilton product), `slerp`.
 
-## 20. Module `net_sim` (feature `net-sim`)
+## 21. Module `net_sim` (feature `net-sim`)
 
 A deterministic latency / jitter / loss queue. Opt-in.
 
@@ -537,7 +551,7 @@ A deterministic latency / jitter / loss queue. Opt-in.
 
 A seeded, reproducible generator: **`new(seed)`**, **`unit() -> f32`**, **`up_to(n) -> u64`**. Deliberately not a "deterministic shared stream" block: identical seeds fed divergent inputs still diverge.
 
-## 21. Module `fixed` (feature `fixed`)
+## 22. Module `fixed` (feature `fixed`)
 
 Fixed-point arithmetic, for a wire that carries causes instead of state.
 
@@ -553,7 +567,7 @@ Fixed-point arithmetic, for a wire that carries causes instead of state.
 
 **`P { x: Fx, y: Fx }`**: **`new`**, **`from_ints`**, **`dist_sq`**, **`dist`**.
 
-## 22. Error Handling
+## 23. Error Handling
 
 ### Enum `ClientUtilError`
 

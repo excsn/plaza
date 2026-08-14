@@ -159,6 +159,7 @@ pub mod fixed;
 pub mod filter;
 pub mod held_input;
 pub mod input_buffer;
+pub mod absence;
 pub mod determinism;
 pub mod meter;
 pub mod mirror;
@@ -182,6 +183,7 @@ pub mod math;
 #[cfg(feature = "net-sim")]
 pub mod net_sim;
 
+pub use absence::Silence;
 pub use ack::AckWindow;
 pub use arrival::ArrivalMonitor;
 pub use clock_sync::ClockSyncEstimator;
