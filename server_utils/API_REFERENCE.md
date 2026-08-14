@@ -39,21 +39,23 @@
   - [Enum `RecoveryPolicy`](#enum-recoverypolicy)
   - [Struct `DeltaPlan`](#struct-deltaplan)
   - [Struct `DeltaBaseline`](#struct-deltabaseline)
-- [9. Input scheduling (module `input_schedule`)](#9-input-scheduling-module-inputschedule)
+- [9. What each viewer was told (module `told`)](#9-what-each-viewer-was-told-module-told)
+  - [Struct `Told<Viewer, K, V>`](#struct-toldviewer-k-v)
+- [10. Input scheduling (module `input_schedule`)](#10-input-scheduling-module-inputschedule)
   - [Struct `InputWindow`](#struct-inputwindow)
   - [Enum `Submission`](#enum-submission)
   - [Struct `InputSchedule<Input>`](#struct-inputscheduleinput)
-- [10. Seats (module `seats`)](#10-seats-module-seats)
+- [11. Seats (module `seats`)](#11-seats-module-seats)
   - [Enum `Seating`](#enum-seating)
   - [Struct `SeatTable<Key>`](#struct-seattablekey)
   - [Struct `SeatSlots<Key>`](#struct-seatslotskey)
   - [Struct `RankedQueue<Key>`](#struct-rankedqueuekey)
   - [Struct `Roster<Key>`](#struct-rosterkey)
   - [Struct `Crew<Key>`](#struct-crewkey)
-- [11. Rates (module `meter`)](#11-rates-module-meter)
-- [12. One-shot ops (module `oneshot`)](#12-one-shot-ops-module-oneshot)
+- [12. Rates (module `meter`)](#12-rates-module-meter)
+- [13. One-shot ops (module `oneshot`)](#13-one-shot-ops-module-oneshot)
   - [Struct `Pending<K, Op>`](#struct-pendingk-op)
-- [13. Error Handling](#13-error-handling)
+- [14. Error Handling](#14-error-handling)
 
 ## 1. Core API
 
@@ -324,7 +326,18 @@ What to send this round. `full_baseline: bool` (the subscriber must clear its mi
 
 **A phantom count alone cannot verify any of this**, which is why the `missing` column is there. A starved mirror agrees with everything: zero corpses, digest agreement, and a flattering render error, because error only averages over entities both sides have. Every metric of the form "wrong things present" needs its "right things absent" twin, or a change is free to satisfy one by breaking the other. `missing` never reaches zero, because entities that just became relevant are still in flight; the number to watch is whether it stays at that floor.
 
-## 9. Input scheduling (module `input_schedule`)
+## 9. What each viewer was told (module `told`)
+
+### Struct `Told<Viewer, K, V>`
+
+The state half of a change-only stream: a per-viewer memory of what was last said, diffed against what is now in their view, so a still world costs nothing to keep describing. `V = ()` is announce-once (a spawn said the tick it appears and never again until it leaves and returns).
+
+*   **`new()`**, **`diff(viewer, current, say)`**: diffs `current` (the `(key, value)` pairs now true in this viewer's view) against the record, updates it, and calls `say(key, Some(&value))` for anything new or changed and `say(key, None)` for anything they hold that is gone from `current`. Whether a `None` goes on the wire is the caller's question, because "no longer true" and "no longer visible" arrive as the same absence and only the application knows which: a prop that reverted while still in view must be said, one that fell out of view is forgotten silently. Forgotten either way, so a return is a fresh introduction, which is also what lets a reused slot re-announce. The `None` keys arrive sorted, so a run produces the same wire twice.
+*   **`forget(&viewer)`** (departure, or switching them to a repeat-everything stream), **`holdings(&viewer)`**, **`viewers()`**, **`clear()`**.
+
+The prerequisite is a **stable state to diff against**: a value that jitters is said every tick and the saving evaporates. This is the state half of a private channel; the transcript half ("what just happened, said once to its one audience") is deliberately not a block, being a `Vec` drained into the frame, but a channel needs both, or "who is this for" becomes a field somebody forgets.
+
+## 10. Input scheduling (module `input_schedule`)
 
 Tick-addressed input buffering: the server side of "two players who pressed together execute together, whatever their ping". A client does not send "move now". It names **the server's own tick** its input is meant for, computed from its clock estimate plus the playout depth the server advertised, and the server buffers the input until that tick runs. Applied on arrival instead, the nearer player gets its ping difference as free head start, and anything decided by who-was-where-first is decided by the network.
 
@@ -366,7 +379,7 @@ One seat's buffered inputs and the counters that judge the window. Keep one per 
 
 **Why the split and the margin are worth keeping.** A single `rejected` total says a client cannot act and nothing about why, and the two sides have opposite causes: a steady negative margin means everything feeding that client's aim (its clock estimate, and the newest server stamp it has actually received) trails the simulation, which points at its downstream; a positive one means its clock runs fast. Diagnosing this from the client alone is not possible, because a rejected input is still acknowledged on arrival, so the client sees a healthy acknowledgement stream while nothing it does takes effect.
 
-## 10. Seats (module `seats`)
+## 11. Seats (module `seats`)
 
 ### Enum `Seating`
 
@@ -412,11 +425,11 @@ Bots in the roster: real seats, no connection. A bot must occupy a seat through 
 *   **`holds(seat)`**, **`seats()`** (ascending, because bot thinking usually draws from one shared random stream and hash-map order would decide who draws what), **`len()`**, **`is_empty()`**, **`vacate(&mut roster, seat)`**.
 *   **`prune(&mut roster) -> Vec<usize>`**: drops every bot the roster no longer seats, and withdraws their keys, because a displaced key is requeued and would otherwise re-seat itself as a stranger the moment a seat opened. Call after admissions when bots are ranked worse than people, and stand the pruned bots down in the simulation.
 
-## 11. Rates (module `meter`)
+## 12. Rates (module `meter`)
 
 A re-export of `plaza_client_utils::meter` (`RateMeter`), documented there. It lives in the client crate because a client panel needs it as much as a server does and a wasm bundle must not inherit the server crate to read its own bandwidth; the `plaza_server_utils::meter::RateMeter` path is unchanged.
 
-## 12. One-shot ops (module `oneshot`)
+## 13. One-shot ops (module `oneshot`)
 
 ### Struct `Pending<K, Op>`
 
@@ -428,6 +441,6 @@ Saying a one-shot thing until the other end proves it heard. Every server has a 
 *   **`confirm(&key)`**: the peer said something, which proves it heard. Call it from the op path; no ack op has to exist, because a client that is talking has plainly received whatever let it talk.
 *   **`is_empty()`**.
 
-## 13. Error Handling
+## 14. Error Handling
 
 This crate defines no error type. `HistoricalStateBuffer::get_state_at_or_before` returns `Option`, `None` meaning the entity has no recorded history.
