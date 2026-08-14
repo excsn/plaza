@@ -18,6 +18,7 @@
   - [Struct `TierBoundary`](#struct-tierboundary)
   - [Struct `VisibilitySet`](#struct-visibilityset)
   - [Struct `SetDigest` (re-exported)](#struct-setdigest-re-exported)
+  - [Module `field`: `Field`, `Strategy`, `Query`](#module-field-field-strategy-query)
 - [4. Priority (module `priority`)](#4-priority-module-priority)
   - [Struct `PriorityAccumulator`](#struct-priorityaccumulator)
 - [5. At rest (module `rest`)](#5-at-rest-module-rest)
@@ -158,6 +159,16 @@ An order-independent checksum of a set of `u64` keys, for giving a delta-relevan
 **An integrity check that only detects is half a tool.** A digest says *that* a mirror is wrong and never *how*, and one horde bug it caught still took days, because the counter was unactionable. Pair it with an opt-in mode that ships the ground truth it is a checksum of (`DeltaMirror::divergence_from` is the consumer side); the cost is a switch and some bandwidth while it is on. In that case the diagnosis was immediate: every missing key was generation zero and spread evenly across the whole slot range, which is the signature of a client that joined an arena already in progress, not of a drift.
 
 Attach the comparison to the **report**, not to the state change. Running it only when an acknowledgement advances the frontier skips the one case it is for: a client re-acknowledging the same sequence still tells you what it holds, and a mirror that loses something *without* losing a packet reports it exactly then.
+
+### Module `field`: `Field`, `Strategy`, `Query`
+
+The third axis, priced instead of assumed. A flat grid indexed on `(x, z)` returns the **disc** containing the sphere it was asked for, so nothing is missed and altitude is paid for in false positives: bandwidth quietly spent telling stacked strangers about each other. `Field` is one uniform grid with a `Strategy` mode (**`Flat`**, **`FlatBand`** which filters the flat answer on `|dy|`, **`Volume`**), so a measurement changes one enum and nothing else.
+
+*   **`Field::new(cell, strategy)`**, **`insert(id, at: Vec3)`**, **`rebuild(&[Vec3])`**, **`clear`**, **`strategy()`**, **`cell()`**.
+*   **`query(&self, at, radius, out, truth) -> Query`**: everyone within `radius`, by the strategy. `truth` is the brute-force answer (from **`field::truth`**) so one sphere test scores every strategy; serving paths pass `&[]`.
+*   **`Query`**: what the query *did*: `returned`, `examined` (the candidates pulled from cells and tested, which a result set cannot show), `cells`, `false_positives`, `missed` (any value above zero is a bug rather than a trade).
+
+Measured both ways in the examples it came from: spacemo's open volume had the flat disc funding 7.1x the bandwidth of the same query with the band filter, and gow_3d's stacked fliers had the band examining 2.7x what a volume grid did. Filter on height when things are spread out; index the third axis when they stack.
 
 ## 4. Priority (module `priority`)
 

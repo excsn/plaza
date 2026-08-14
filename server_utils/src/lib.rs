@@ -38,6 +38,7 @@ pub mod input_schedule;
 pub use plaza_client_utils::meter;
 pub mod oneshot;
 pub mod priority;
+pub mod field;
 pub mod relevance;
 pub mod render_error;
 pub mod rest;
