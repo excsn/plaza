@@ -161,12 +161,19 @@ fn step_once(state: &mut SpaceState, ctx: &mut Ctx) {
       })
       .collect();
 
-    let told = state.told.entry(player).or_default();
-    // Anything no longer in flight is forgotten, which is also what lets a
-    // reused slot be announced again rather than mistaken for the shot that
-    // vacated it.
-    let live: std::collections::HashSet<u32> = visible.iter().map(|b| b.id).collect();
-    told.retain(|id| live.contains(id));
+    // Anything no longer in flight is forgotten by the diff, which is also
+    // what lets a reused slot be announced again rather than mistaken for the
+    // shot that vacated it.
+    let mut announced = std::collections::HashSet::new();
+    state.told.diff(
+      player,
+      visible.iter().filter(|bolt| !bolt.homing).map(|bolt| (bolt.id, ())),
+      |id, fresh| {
+        if fresh.is_some() {
+          announced.insert(id);
+        }
+      },
+    );
 
     let bolts: Vec<BoltState> = visible
       .into_iter()
@@ -174,7 +181,7 @@ fn step_once(state: &mut SpaceState, ctx: &mut Ctx) {
         // A homing shot is sent every frame because its path depends on where
         // its target goes next, and nobody knows that in advance. A straight
         // one is sent once, and the client carries it forward itself.
-        stream || bolt.homing || told.insert(bolt.id)
+        stream || bolt.homing || announced.contains(&bolt.id)
       })
       .collect();
     let (ships, bolts) = if state.packed {

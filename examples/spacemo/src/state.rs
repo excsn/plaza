@@ -71,9 +71,9 @@ pub struct SpaceState {
   pub sticky_locks: bool,
   pub stream_bolts: bool,
   /// Which shots each client has already been told about, so a spawn is sent
-  /// once. Pruned against the live set every tick, which is also what lets a
-  /// reused slot be announced again.
-  pub told: HashMap<PlayerId, std::collections::HashSet<u32>>,
+  /// once. The block forgets what leaves the live set, which is also what lets
+  /// a reused slot be announced again.
+  pub told: plaza_server_utils::Told<PlayerId, u32, ()>,
 }
 
 impl std::fmt::Debug for SpaceState {
@@ -118,7 +118,7 @@ impl SpaceState {
       lock_added: 0,
       sticky_locks: true,
       stream_bolts: true,
-      told: HashMap::new(),
+      told: plaza_server_utils::Told::new(),
     }
   }
 
