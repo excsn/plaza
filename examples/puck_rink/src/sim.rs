@@ -260,27 +260,21 @@ fn serve(world: &mut World, toward_x: i32) {
   world.puck_vel = V2::ints(2 * toward_x, 1);
 }
 
-/// FNV-1a over the world's raw fixed-point words. Order-dependent on purpose:
-/// this summarises one world, not a set.
+/// The world's raw fixed-point words through a `StateDigest`. Order-dependent
+/// on purpose: this summarises one world, not a set.
 pub fn digest(world: &World) -> u64 {
-  let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-  let mut eat = |v: i32| {
-    for b in v.to_le_bytes() {
-      h ^= b as u64;
-      h = h.wrapping_mul(0x100_0000_01b3);
-    }
-  };
+  let mut digest = plaza_client_utils::StateDigest::new();
   for p in &world.paddles {
-    eat(p.x.0);
-    eat(p.y.0);
+    digest.write_i32(p.x.0);
+    digest.write_i32(p.y.0);
   }
-  eat(world.puck.x.0);
-  eat(world.puck.y.0);
-  eat(world.puck_vel.x.0);
-  eat(world.puck_vel.y.0);
-  eat(world.scores[0] as i32);
-  eat(world.scores[1] as i32);
-  h
+  digest.write_i32(world.puck.x.0);
+  digest.write_i32(world.puck.y.0);
+  digest.write_i32(world.puck_vel.x.0);
+  digest.write_i32(world.puck_vel.y.0);
+  digest.write_i32(world.scores[0] as i32);
+  digest.write_i32(world.scores[1] as i32);
+  digest.finish()
 }
 
 /// How far behind the puck (along its line to the enemy mouth) the bot aims:
