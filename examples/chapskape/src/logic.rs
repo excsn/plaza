@@ -93,12 +93,13 @@ impl SkapeLogic {
     }
     state.populated = true;
 
-    let mut crew = std::mem::take(&mut state.bots);
-    for index in 0..self.bots {
-      let id = PlayerId::MAX - index as PlayerId;
-      let Admission::Seated { seat, .. } = state.roster.admit(id) else {
-        break;
-      };
+    let mut jobs = std::mem::take(&mut state.bots);
+    let mut crew = std::mem::take(&mut state.crew);
+    for (index, seat) in crew
+      .fill(&mut state.roster, self.bots, 0, |i| PlayerId::MAX - i as PlayerId)
+      .into_iter()
+      .enumerate()
+    {
       let seat = seat as Seat;
       let angle = index as f32 * 2.399_963_2;
       // Tighter than a plain spiral would be. A world this wide spreads a
@@ -111,18 +112,16 @@ impl SkapeLogic {
         world::SIZE / 2 + (angle.sin() * radius) as i16,
       );
       state.zone.admit(seat, world::footing_near(hint), crate::protocol::Look::Person);
-      crew.take_seat(seat, index);
+      jobs.take_seat(seat, index);
     }
-    state.bots = crew;
+    state.bots = jobs;
 
-    let mut foes = Vec::new();
-    for index in 0..self.foes {
-      let id = PlayerId::MAX - (1000 + index) as PlayerId;
-      let Admission::Seated { seat, .. } = state.roster.admit(id) else {
-        break;
-      };
-      foes.push(seat as Seat);
-    }
+    let foes: Vec<Seat> = crew
+      .fill(&mut state.roster, self.foes, 0, |i| PlayerId::MAX - (1000 + i) as PlayerId)
+      .into_iter()
+      .map(|seat| seat as Seat)
+      .collect();
+    state.crew = crew;
     crate::bots::stock(&mut state.zone, foes.into_iter(), HENS.min(self.foes));
   }
 }
