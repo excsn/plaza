@@ -36,6 +36,10 @@
 //! - **`meter::RateMeter`**: what the wire cost, as a windowed rate rather than a
 //!   session average that creeps for ever toward a level it never reaches.
 //!   `plaza_server_utils` re-exports it, so both ends quote the same arithmetic.
+//! - **`determinism`**: the draws, noise and hashes a shared rule derives its
+//!   world from, identical on wasm and native and pinned by test, plus
+//!   **`digest::StateDigest`** for hearing about a divergence before the screen
+//!   shows it.
 //! - **`rollback`**: the other netcode family, peer-to-peer deterministic lockstep.
 //!   `StateHistory`, `InputTimeline`, and the `RollbackSession` bundle predict a
 //!   missing remote input and roll back to re-simulate when the guess is disproved.
@@ -155,6 +159,7 @@ pub mod fixed;
 pub mod filter;
 pub mod held_input;
 pub mod input_buffer;
+pub mod determinism;
 pub mod meter;
 pub mod mirror;
 pub mod playout;
@@ -182,7 +187,8 @@ pub use arrival::ArrivalMonitor;
 pub use clock_sync::ClockSyncEstimator;
 pub use coalesce::InputCoalescer;
 pub use correction::{Correction, CorrectionMonitor};
-pub use digest::SetDigest;
+pub use determinism::{mix64, ValueNoise, XorShift};
+pub use digest::{SetDigest, StateDigest};
 pub use error::ClientUtilError;
 pub use held_input::{HeldInputConfig, HeldInputPredictor};
 pub use hermite::{hermite_scalar, HermiteInterpolatable, HermiteView};

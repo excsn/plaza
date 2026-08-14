@@ -51,6 +51,7 @@
   - [Struct `SlotKey`](#struct-slotkey)
   - [Struct `SlotAllocator`](#struct-slotallocator)
   - [Struct `SetDigest`](#struct-setdigest)
+  - [Struct `StateDigest`](#struct-statedigest)
 - [14. Module `coalesce`](#14-module-coalesce)
   - [Struct `InputCoalescer<Input>`](#struct-inputcoalescerinput)
 - [15. Module `playout`: the playout queue and the resume verdict](#15-module-playout-the-playout-queue-and-the-resume-verdict)
@@ -60,13 +61,15 @@
   - [Struct `ArrivalMonitor`](#struct-arrivalmonitor)
 - [17. Rates (module `meter`)](#17-rates-module-meter)
   - [Struct `RateMeter`](#struct-ratemeter)
-- [18. Module `math`](#18-module-math)
-- [19. Module `net_sim` (feature `net-sim`)](#19-module-netsim-feature-net-sim)
+- [18. Module `determinism`](#18-module-determinism)
+  - [Function `mix64`, struct `XorShift`, struct `ValueNoise`](#function-mix64-struct-xorshift-struct-valuenoise)
+- [19. Module `math`](#19-module-math)
+- [20. Module `net_sim` (feature `net-sim`)](#20-module-netsim-feature-net-sim)
   - [Struct `LatencyLink<T>`](#struct-latencylinkt)
   - [Struct `Rng`](#struct-rng)
-- [20. Module `fixed` (feature `fixed`)](#20-module-fixed-feature-fixed)
+- [21. Module `fixed` (feature `fixed`)](#21-module-fixed-feature-fixed)
   - [Struct `Fx` and struct `P`](#struct-fx-and-struct-p)
-- [21. Error Handling](#21-error-handling)
+- [22. Error Handling](#22-error-handling)
   - [Enum `ClientUtilError`](#enum-clientutilerror)
 
 ## 1. Core Types
@@ -440,6 +443,12 @@ The combine is addition, so a key can be added or removed in O(1) and duplicates
 
 `VisibilitySet::digest()` computes the same value over a bitset's membership.
 
+### Struct `StateDigest`
+
+An order-dependent digest of one simulation state, for catching two ends whose worlds have quietly diverged. `SetDigest` answers "do we hold the same set"; this answers "is this the same world". **`new`**, **`write(&[u8])`**, **`write_u32`** / **`write_i32`** / **`write_u64`** / **`write_f32`** (the bit pattern, so `-0.0` and `0.0` disagree and a low bit is enough), **`finish() -> u64`**.
+
+FNV-1a over little-endian bytes, pinned by test, because the value crosses the wire and is compared across builds: a rollback or lockstep simulation folds its words in canonical field order each frame and compares against the other end's.
+
 ## 14. Module `coalesce`
 
 ### Struct `InputCoalescer<Input>`
@@ -493,7 +502,19 @@ A running total, a sample count, an elapsed clock, and the three questions over 
 
 Trivial arithmetic, and every hand-rolled copy had to remember the same divide-by-zero guard, whose absence renders as `NaN` on the first frame and looks like the thing being measured is broken. `share_of` is here because **measuring a stream's share of the packet before optimising its encoding** is the check that would have saved three separate rounds of optimising the wrong thing: despawn ids were 1.2% of horde's traffic while position samples were 86.1%.
 
-## 18. Module `math`
+## 18. Module `determinism`
+
+### Function `mix64`, struct `XorShift`, struct `ValueNoise`
+
+The same number from the same inputs, on both ends and in every build. All integer arithmetic, dependency-free, identical on wasm and native, and pinned by tests, because two builds agreeing is the entire point.
+
+*   **`mix64(u64) -> u64`**: the murmur3 finalizer, for turning coordinates, ids and salts into independent draws. Stateless is the reason to reach for it over `XorShift`: a value keyed on `(seed, x, y)` needs no generator to carry and no order two ends could disagree about.
+*   **`XorShift`**: a deterministic stream, so a tick replayed is a tick repeated. **`new(seed)`** (const; forces the low bit on, since all-zero is the one state a xorshift never leaves), **`next() -> u64`**, **`below(bound) -> u32`**, **`unit() -> f32`** (`0.0..1.0` from the top 24 bits). One stream serves one simulation; seed parallel consumers apart with `mix64`.
+*   **`ValueNoise`**: value noise from a seed, a hash rather than a table. **`new(seed)`** (const), **`corner(xi, zi, octave) -> f32`** (the lattice value, `0.0..1.0`), **`octave(x, z, scale, octave) -> f32`** (one octave sampled at a point, eased with smoothstep so the lattice does not show as creases). Octave weights and scales are the caller's tuning; this owns only the part every terrain copied verbatim.
+
+**Iteration order is an input.** The hazard this module's docs name: a `HashMap` walked while feeding a shared random stream hands each entity a different draw on each run, so the same tick run twice stops being the same tick, with no float, no clock and no wire involved. Sort the keys before drawing, or key the draw on the entity with `mix64` so order stops mattering at all.
+
+## 19. Module `math`
 
 Small vector and quaternion types, so this crate is usable without a math library. They implement `Interpolatable` and `Extrapolatable`.
 
@@ -501,7 +522,7 @@ Small vector and quaternion types, so this crate is usable without a math librar
 *   **`Vec3`**: the same surface in three dimensions.
 *   **`Quat`**: `new`, `IDENTITY`, `normalize`, `dot`, `multiply` (Hamilton product), `slerp`.
 
-## 19. Module `net_sim` (feature `net-sim`)
+## 20. Module `net_sim` (feature `net-sim`)
 
 A deterministic latency / jitter / loss queue. Opt-in.
 
@@ -516,7 +537,7 @@ A deterministic latency / jitter / loss queue. Opt-in.
 
 A seeded, reproducible generator: **`new(seed)`**, **`unit() -> f32`**, **`up_to(n) -> u64`**. Deliberately not a "deterministic shared stream" block: identical seeds fed divergent inputs still diverge.
 
-## 20. Module `fixed` (feature `fixed`)
+## 21. Module `fixed` (feature `fixed`)
 
 Fixed-point arithmetic, for a wire that carries causes instead of state.
 
@@ -532,7 +553,7 @@ Fixed-point arithmetic, for a wire that carries causes instead of state.
 
 **`P { x: Fx, y: Fx }`**: **`new`**, **`from_ints`**, **`dist_sq`**, **`dist`**.
 
-## 21. Error Handling
+## 22. Error Handling
 
 ### Enum `ClientUtilError`
 
