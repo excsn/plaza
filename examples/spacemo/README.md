@@ -119,7 +119,7 @@ worst position error, ships within an 80-unit view:
       400000       12.2075u        0.0254u
 ```
 
-Flat, at 110 bits a ship against 119. At the smallest world absolute is still better, so it is a trade rather than a free win, but it stops being one from about 4000 units up.
+Flat, at 126 bits a ship against 128. At the smallest world absolute is still better, so it is a trade rather than a free win, but it stops being one from about 4000 units up.
 
 **The first version of this did not work, and is worth keeping in the record.** Quantising the anchor over the world put the world's size straight back into the error, and relative came out very slightly *worse* than absolute at every size. The test passed anyway, because it compared growth **ratios**: relative started higher and grew more slowly, so a ratio comparison went green while the scheme was strictly worse. A ratio hides which curve is higher. The assertion now demands the error be *identical* at 400 and at 400000, and the anchor is sent at full width, where 96 bits once a frame amortises to nothing.
 
@@ -136,6 +136,8 @@ Two things were wrong, and the smaller one was the visible one.
 **A held lock is then a subscription**, and `plaza_server_utils::subscription` is the block for it. `Audience::of` unions it with the radius answer, so the locked ship is in the frame wherever it is.
 
 This is the same shape `gow_3d` uses for a party, at the opposite extreme: **one entry, held for seconds rather than a handful held for hours.** That is the point of doing it here rather than only there. The cost is `added`, reported on the panel, and it is at most one ship per client however large the volume gets.
+
+**The hold then broke a premise the wire was sized to.** `REL` bounds an offset by the view radius because a frame only carried what the radius reached, and the subscription is a second way in: a locked ship can be anywhere in the volume, so its offset clamped at the bound and the relative dial drew it over a hundred units from where it flew. The mirror test that checks the client lands where the server is caught it; nothing else could, because encode and decode agreed with each other perfectly. One bit per ship now says which arm carried it, an offset inside the radius or the absolute bounds past it, at one bit per in-radius ship and three extra for the held one.
 
 The panel switch turns the hold off, which restores the old behaviour and the old defect together: the cone is re-read every tick and the locked ship is only in your frame when the radius happened to reach it anyway.
 
