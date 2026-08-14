@@ -8,6 +8,7 @@
   - [Type Aliases](#type-aliases)
 - [2. Drop-in entities](#2-drop-in-entities)
   - [Struct `PredictedPlayer<State, Input, Ctx>`](#struct-predictedplayerstate-input-ctx)
+  - [Struct `RoutePredictor<P>` (module `route`)](#struct-routepredictorp-module-route)
   - [Struct `HeldInputPredictor<State, Input, Ctx>`](#struct-heldinputpredictorstate-input-ctx)
   - [Struct `RemoteView<State, Velocity>`](#struct-remoteviewstate-velocity)
   - [Struct `HermiteView<State, Velocity>`](#struct-hermiteviewstate-velocity)
@@ -83,7 +84,7 @@
 
 ## 2. Drop-in entities
 
-Three types bundling the primitives, which stay public.
+Four types bundling the primitives, which stay public.
 
 ### Struct `PredictedPlayer<State, Input, Ctx>`
 
@@ -100,6 +101,18 @@ For a server that consumes **one input per simulation step**: `PredictedEntity` 
 **`PlayerConfig`**: `input_buffer: usize`, `smoothing_secs: f32` (`0.0` disables smoothing), `easing: fn(f32) -> f32` (default `linear`). `Default` is 256 / 0.1s / linear.
 
 Keep `smoothing_secs` shorter than the send interval.
+
+### Struct `RoutePredictor<P>` (module `route`)
+
+Prediction by **shared rule**, for the games where re-running inputs against samples is the wrong shape: the client runs the same deterministic rule the server runs (a pathfinder over a derived map), so a click's whole journey is known on both ends the moment it happens and one op covers a walk longer than any round trip. What is left to prediction is presentation: a body that sets off now, crosses squares on the local clock, and never jumps. `P` is a square; `point: fn(&P) -> [f32; 2]` maps it to the drawn plane.
+
+*   **`new(initial, point, step_ms)`**, **`set_step_ms`** (a live value; chase the frame's tick length with it), **`jump_to(at, now_ms)`** (seat, respawn, teleport: the one move allowed to jump), **`is_seeded()`**.
+*   **`set_out(route, checkable, now_ms)`**: takes a route the shared rule produced and touches nothing about where the body *is*. `checkable` marks a journey whose server twin expands from the same square: at rest, nothing owed, confirmed and predicted agreeing; a mid-walk click fails that and simply is not checked, and a chase of something moving should pass `false` outright. No free step is granted, or spam outruns the server and is pulled back at rest.
+*   **`advance(now_ms, steps_per_tick)`** (two is a run), **`drawn(now_ms) -> [f32; 2]`**, **`walking(now_ms)`**, **`crossing(now_ms)`**, **`heading(now_ms)`** (for facing), **`plan()`** / **`plan_is_empty()`**.
+*   **`confirm(at, slack) -> Heard`**: checks the server's square against the **route** this client drew, never its current square, because the two are a tick out of phase by design. `slack` is the server's steps per tick, since a run's first square is one nothing ever reports. `Heard::{OnRoute, Diverged, Unchecked}`; a divergence means the rule stopped being one rule, and is counted in `diverged`.
+*   **`abandon(at, now_ms)`** (a refused route, drawn position preserved), **`settle(now_ms) -> bool`**: takes the server's square once the body has stopped, which is the whole of reconciliation, and deliberately not a per-tick correction: both ends are walking to the same place from different starts and will arrive together, so the usual case is a no-op.
+
+The prerequisite is the first principle at full strength: the rule must be shared code over shared **state**, deterministic on both ends (see [`determinism`](#19-module-determinism)), or every journey diverges.
 
 ### Struct `HeldInputPredictor<State, Input, Ctx>`
 
