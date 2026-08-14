@@ -49,7 +49,6 @@
   - [Struct `RankedQueue<Key>`](#struct-rankedqueuekey)
   - [Struct `Roster<Key>`](#struct-rosterkey)
 - [11. Rates (module `meter`)](#11-rates-module-meter)
-  - [Struct `RateMeter`](#struct-ratemeter)
 - [12. One-shot ops (module `oneshot`)](#12-one-shot-ops-module-oneshot)
   - [Struct `Pending<K, Op>`](#struct-pendingk-op)
 - [13. Error Handling](#13-error-handling)
@@ -395,19 +394,7 @@ Three rules run through it. **Promotion happens on the tick**: `admit` and `depa
 
 ## 11. Rates (module `meter`)
 
-### Struct `RateMeter`
-
-A running total, a sample count, an elapsed clock, and the three questions over them. The clock is supplied rather than read, so a simulation that runs on its own time (or faster than real time in a test) measures itself honestly.
-
-*   **`new()`**, **`add(amount)`**, **`add_empty()`** (a sample carrying nothing, which still counts toward the mean), **`reset()`** (forgets everything, for a world that has been rebuilt: a rate is over the current world, not every world since launch).
-*   **`elapsed(&mut self, elapsed_ms: u64)`**: sets how long this has been accruing over, and rolls the window forward. Idempotent within a bucket, so call it every tick with the simulation clock. The first call after construction or a reset also marks when the meter started. Debug-asserts the clock never goes backwards.
-*   **`total()`**, **`samples()`**, **`elapsed_ms()`**, **`per_sec()`**, **`mean()`**, **`lifetime_per_sec()`**, **`share_of(&other) -> f64`**, **`running_ms()`**.
-
-**`per_sec` and `mean` are over a rolling window** (sixteen buckets of 500 ms, so eight seconds), not over the meter's whole life; `total`, `samples` and `lifetime_per_sec` are the lifetime figures. The distinction is load bearing rather than a nicety. A lifetime average chasing a steady state that has risen converges to it asymptotically, so it climbs by less and less but never stops climbing, and on a live readout that reads as a quantity slowly increasing for ever with nothing wrong. It also makes such a readout unusable for its usual purpose, because a setting you just changed is one second of evidence against the whole session. Call `elapsed` with your clock each tick to roll the window; `per_sec` divides recent traffic by the span the retained buckets actually cover, so a part-filled newest bucket does not understate it, and a full window of silence decays the rate to zero. `lifetime_per_sec` is the right answer for a summary over a fixed run, and the wrong one for a number somebody watches.
-
-**A reset meter measures only what it saw.** The clock a meter is given is usually the simulation's, and that does not restart when the meter does. `lifetime_per_sec` is therefore measured from when *this meter* started, not from zero on the caller's clock: without that, a meter reset twenty minutes into a session divides its fresh total by the whole twenty minutes, reads a fraction of the truth, and then creeps up toward it for hours. **`running_ms()`** is how long the meter has been running, which is not the same as the clock it is given once it has been reset.
-
-Trivial arithmetic, and every hand-rolled copy had to remember the same divide-by-zero guard, whose absence renders as `NaN` on the first frame and looks like the thing being measured is broken. `share_of` is here because **measuring a stream's share of the packet before optimising its encoding** is the check that would have saved three separate rounds of optimising the wrong thing: despawn ids were 1.2% of horde's traffic while position samples were 86.1%.
+A re-export of `plaza_client_utils::meter` (`RateMeter`), documented there. It lives in the client crate because a client panel needs it as much as a server does and a wasm bundle must not inherit the server crate to read its own bandwidth; the `plaza_server_utils::meter::RateMeter` path is unchanged.
 
 ## 12. One-shot ops (module `oneshot`)
 

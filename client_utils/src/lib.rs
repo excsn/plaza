@@ -33,6 +33,9 @@
 //!   simulations running the same rule at different step sizes are not the same
 //!   simulation, and the drift reads as network jitter, so both sides taking the
 //!   step from here is what keeps them equal.
+//! - **`meter::RateMeter`**: what the wire cost, as a windowed rate rather than a
+//!   session average that creeps for ever toward a level it never reaches.
+//!   `plaza_server_utils` re-exports it, so both ends quote the same arithmetic.
 //! - **`rollback`**: the other netcode family, peer-to-peer deterministic lockstep.
 //!   `StateHistory`, `InputTimeline`, and the `RollbackSession` bundle predict a
 //!   missing remote input and roll back to re-simulate when the guess is disproved.
@@ -152,6 +155,7 @@ pub mod fixed;
 pub mod filter;
 pub mod held_input;
 pub mod input_buffer;
+pub mod meter;
 pub mod mirror;
 pub mod playout;
 pub mod prediction;
@@ -184,6 +188,7 @@ pub use held_input::{HeldInputConfig, HeldInputPredictor};
 pub use hermite::{hermite_scalar, HermiteInterpolatable, HermiteView};
 pub use filter::ScalarKalman;
 pub use input_buffer::{BufferedInput, ClientInputBuffer};
+pub use meter::RateMeter;
 pub use mirror::{Agreement, DeltaMirror, Divergence};
 pub use interpolation::{InterpolationClock, SnapshotBuffer};
 pub use playout::{Admission, PlayoutBuffer};

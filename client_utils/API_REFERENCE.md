@@ -58,13 +58,15 @@
   - [Struct `PlayoutBuffer<T>`](#struct-playoutbuffert)
 - [16. Module `arrival`: measuring how a stream actually arrives](#16-module-arrival-measuring-how-a-stream-actually-arrives)
   - [Struct `ArrivalMonitor`](#struct-arrivalmonitor)
-- [17. Module `math`](#17-module-math)
-- [18. Module `net_sim` (feature `net-sim`)](#18-module-netsim-feature-net-sim)
+- [17. Rates (module `meter`)](#17-rates-module-meter)
+  - [Struct `RateMeter`](#struct-ratemeter)
+- [18. Module `math`](#18-module-math)
+- [19. Module `net_sim` (feature `net-sim`)](#19-module-netsim-feature-net-sim)
   - [Struct `LatencyLink<T>`](#struct-latencylinkt)
   - [Struct `Rng`](#struct-rng)
-- [19. Module `fixed` (feature `fixed`)](#19-module-fixed-feature-fixed)
+- [20. Module `fixed` (feature `fixed`)](#20-module-fixed-feature-fixed)
   - [Struct `Fx` and struct `P`](#struct-fx-and-struct-p)
-- [20. Error Handling](#20-error-handling)
+- [21. Error Handling](#21-error-handling)
   - [Enum `ClientUtilError`](#enum-clientutilerror)
 
 ## 1. Core Types
@@ -475,7 +477,23 @@ Keep one per interpolated stream.
 *   **`needed_delay_ms() -> f32`**: lateness plus jitter plus one interval.
 *   **`warmed_up() -> bool`**: whether two forward stamps have been seen, so an interval exists.
 
-## 17. Module `math`
+## 17. Rates (module `meter`)
+
+### Struct `RateMeter`
+
+A running total, a sample count, an elapsed clock, and the three questions over them. The clock is supplied rather than read, so a simulation that runs on its own time (or faster than real time in a test) measures itself honestly. `plaza_server_utils` re-exports it, because a claim about bandwidth is worth a number on either end of the wire and a wasm bundle must not inherit the server crate to read its own.
+
+*   **`new()`**, **`add(amount)`**, **`add_empty()`** (a sample carrying nothing, which still counts toward the mean), **`reset()`** (forgets everything, for a world that has been rebuilt: a rate is over the current world, not every world since launch).
+*   **`elapsed(&mut self, elapsed_ms: u64)`**: sets how long this has been accruing over, and rolls the window forward. Idempotent within a bucket, so call it every tick with the simulation clock. The first call after construction or a reset also marks when the meter started. Debug-asserts the clock never goes backwards.
+*   **`total()`**, **`samples()`**, **`elapsed_ms()`**, **`per_sec()`**, **`mean()`**, **`lifetime_per_sec()`**, **`share_of(&other) -> f64`**, **`running_ms()`**.
+
+**`per_sec` and `mean` are over a rolling window** (sixteen buckets of 500 ms, so eight seconds), not over the meter's whole life; `total`, `samples` and `lifetime_per_sec` are the lifetime figures. The distinction is load bearing rather than a nicety. A lifetime average chasing a steady state that has risen converges to it asymptotically, so it climbs by less and less but never stops climbing, and on a live readout that reads as a quantity slowly increasing for ever with nothing wrong. It also makes such a readout unusable for its usual purpose, because a setting you just changed is one second of evidence against the whole session. Call `elapsed` with your clock each tick to roll the window; `per_sec` divides recent traffic by the span the retained buckets actually cover, so a part-filled newest bucket does not understate it, and a full window of silence decays the rate to zero. `lifetime_per_sec` is the right answer for a summary over a fixed run, and the wrong one for a number somebody watches.
+
+**A reset meter measures only what it saw.** The clock a meter is given is usually the simulation's, and that does not restart when the meter does. `lifetime_per_sec` is therefore measured from when *this meter* started, not from zero on the caller's clock: without that, a meter reset twenty minutes into a session divides its fresh total by the whole twenty minutes, reads a fraction of the truth, and then creeps up toward it for hours. **`running_ms()`** is how long the meter has been running, which is not the same as the clock it is given once it has been reset.
+
+Trivial arithmetic, and every hand-rolled copy had to remember the same divide-by-zero guard, whose absence renders as `NaN` on the first frame and looks like the thing being measured is broken. `share_of` is here because **measuring a stream's share of the packet before optimising its encoding** is the check that would have saved three separate rounds of optimising the wrong thing: despawn ids were 1.2% of horde's traffic while position samples were 86.1%.
+
+## 18. Module `math`
 
 Small vector and quaternion types, so this crate is usable without a math library. They implement `Interpolatable` and `Extrapolatable`.
 
@@ -483,7 +501,7 @@ Small vector and quaternion types, so this crate is usable without a math librar
 *   **`Vec3`**: the same surface in three dimensions.
 *   **`Quat`**: `new`, `IDENTITY`, `normalize`, `dot`, `multiply` (Hamilton product), `slerp`.
 
-## 18. Module `net_sim` (feature `net-sim`)
+## 19. Module `net_sim` (feature `net-sim`)
 
 A deterministic latency / jitter / loss queue. Opt-in.
 
@@ -498,7 +516,7 @@ A deterministic latency / jitter / loss queue. Opt-in.
 
 A seeded, reproducible generator: **`new(seed)`**, **`unit() -> f32`**, **`up_to(n) -> u64`**. Deliberately not a "deterministic shared stream" block: identical seeds fed divergent inputs still diverge.
 
-## 19. Module `fixed` (feature `fixed`)
+## 20. Module `fixed` (feature `fixed`)
 
 Fixed-point arithmetic, for a wire that carries causes instead of state.
 
@@ -514,7 +532,7 @@ Fixed-point arithmetic, for a wire that carries causes instead of state.
 
 **`P { x: Fx, y: Fx }`**: **`new`**, **`from_ints`**, **`dist_sq`**, **`dist`**.
 
-## 20. Error Handling
+## 21. Error Handling
 
 ### Enum `ClientUtilError`
 
