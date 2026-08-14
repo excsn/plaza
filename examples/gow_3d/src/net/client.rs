@@ -185,6 +185,11 @@ pub struct NetClient {
   /// derived once. A client that ran the same placement itself would be a
   /// second derivation of one fact, and those drift.
   pub seeded: bool,
+  /// How the last frame reached this client, and how its positions were
+  /// written. Read off the wire rather than off the dial, so the panel shows
+  /// what the server is doing rather than what it was last asked to do.
+  pub delivery: crate::protocol::Delivery,
+  pub precision: crate::protocol::Precision,
   /// Cell payloads received this tick under [`Delivery::Cells`](crate::protocol::Delivery::Cells),
   /// drained when the frame that terminates the tick arrives.
   cells: Vec<crate::protocol::Packed>,
@@ -264,6 +269,8 @@ impl NetClient {
       seat: None,
       at: (0.0, 0.0, 0.0),
       seeded: false,
+      delivery: crate::protocol::Delivery::default(),
+      precision: crate::protocol::Precision::default(),
       cells: Vec::new(),
       others: HashMap::new(),
       you: None,
@@ -399,6 +406,8 @@ impl NetClient {
     let bodies = frame.seen_with(&cells);
     self.landed = frame.landed;
     self.authority = frame.authority;
+    self.delivery = frame.delivery;
+    self.precision = frame.precision;
     for hit in &self.landed {
       self.flashes.insert(hit.seat, self.now_ms);
       self.effects.push(Effect {
