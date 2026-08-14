@@ -45,12 +45,6 @@ pub const HENS: usize = 60;
 /// Brutes, which are the reason a level matters.
 pub const BRUTES: usize = 46;
 
-/// The most game ticks one wake-up may run.
-///
-/// A host that stalled and came back owing two seconds must not spend them all
-/// in one frame: the world would jump and every client would watch it happen.
-const CATCH_UP: usize = 3;
-
 #[derive(Default)]
 pub struct SkapeLogic {
   clock: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
@@ -169,17 +163,9 @@ impl StateLogic<SkapeOp, PlayerId, SkapeState> for SkapeLogic {
 
         let elapsed = delta_time.as_millis().max(1) as u64;
         state.now_ms += elapsed;
-        state.owed_ms += elapsed;
-        let mut ran = 0;
-        while state.owed_ms >= state.tick_ms && ran < CATCH_UP {
-          state.owed_ms -= state.tick_ms;
+        state.ticker.set_step_ms(state.tick_ms);
+        for _ in state.ticker.advance(elapsed) {
           step_once(state, &mut ctx);
-          ran += 1;
-        }
-        if ran == CATCH_UP {
-          // Whatever is still owed after a catch-up is time the world will
-          // never have. Keeping it would make the next wake worse.
-          state.owed_ms = 0;
         }
       }
     }
@@ -628,8 +614,8 @@ mod tests {
       })
       .await
       .unwrap();
-    assert_eq!(state.zone.tick, CATCH_UP as u64, "the world jumped {} ticks", state.zone.tick);
-    assert_eq!(state.owed_ms, 0, "and it is still owed time it will never have");
+    assert_eq!(state.zone.tick, crate::state::CATCH_UP as u64, "the world jumped {} ticks", state.zone.tick);
+    assert_eq!(state.ticker.pending_ms(), 0, "and it is still owed time it will never have");
   }
 
   #[tokio::test]
