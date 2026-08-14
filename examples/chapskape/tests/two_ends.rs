@@ -137,11 +137,11 @@ async fn the_client_walks_the_route_the_server_walks() {
   // square against the route it already drew. Zero divergence is not an
   // aspiration here, it is what a shared rule means.
   let (logic, mut state, mut client, socket) = both_sides(Relevance::OnChange).await;
-  let from = client.predicted;
+  let from = client.route.predicted;
   let to = world::footing_near(Tile::new(from.x + 18, from.y + 11));
 
   client.walk_to(to);
-  let drawn: Vec<Tile> = client.plan.iter().copied().collect();
+  let drawn: Vec<Tile> = client.route.plan().copied().collect();
   assert!(drawn.len() >= 12, "one click bought only {} squares", drawn.len());
   assert_eq!(client.ops_sent, 1, "one journey, one op");
 
@@ -160,19 +160,19 @@ async fn the_client_walks_the_route_the_server_walks() {
   }
 
   assert_eq!(state.zone.actors[&0].tile, to, "the server never finished the walk");
-  assert_eq!(client.predicted, to, "the client never finished it either");
-  assert_eq!(client.diverged, 0, "the route came apart");
+  assert_eq!(client.route.predicted, to, "the client never finished it either");
+  assert_eq!(client.route.diverged, 0, "the route came apart");
   assert!(
-    client.confirmations >= drawn.len() as u64,
+    client.route.confirmations >= drawn.len() as u64,
     "only {} squares were ever confirmed of {}",
-    client.confirmations,
+    client.route.confirmations,
     drawn.len()
   );
   println!(
     "\n  {} squares walked for one op, {} confirmed, {} diverged\n",
     drawn.len(),
-    client.confirmations,
-    client.diverged
+    client.route.confirmations,
+    client.route.diverged
   );
 }
 
@@ -181,11 +181,11 @@ async fn one_op_covers_a_walk_longer_than_any_round_trip() {
   // The latency claim, as a duration rather than as prose. Whatever the network
   // costs, it is spent inside a walk the player has already committed to.
   let (logic, mut state, mut client, socket) = both_sides(Relevance::OnChange).await;
-  let from = client.predicted;
+  let from = client.route.predicted;
   let tree = a_prop_near(Tile::new(from.x + 14, from.y + 14), Prop::Tree);
 
   client.interact(world::prop_id(tree));
-  let squares = client.plan.len();
+  let squares = client.route.plan().count();
   send(&logic, &mut state, 1, SkapeOp::Interact {
     object: world::prop_id(tree),
   })
@@ -215,7 +215,7 @@ async fn one_op_covers_a_walk_longer_than_any_round_trip() {
     "the walk was only {walk_ms} ms, which is not longer than a bad round trip"
   );
   assert_eq!(client.ops_sent, 1);
-  assert_eq!(client.diverged, 0);
+  assert_eq!(client.route.diverged, 0);
 }
 
 #[tokio::test]
@@ -225,7 +225,7 @@ async fn a_prop_that_comes_back_is_said_out_loud_in_either_mode() {
   // is standing; under the other it means nothing happened at all.
   for mode in [Relevance::EveryTick, Relevance::OnChange] {
     let (logic, mut state, mut client, socket) = both_sides(mode).await;
-    let middle = client.predicted;
+    let middle = client.route.predicted;
     let tree = a_prop_near(middle, Prop::Tree);
     let id = world::prop_id(tree);
 
@@ -259,7 +259,7 @@ async fn the_still_world_costs_nothing_while_nothing_happens() {
   let mut totals = Vec::new();
   for mode in [Relevance::EveryTick, Relevance::OnChange] {
     let (logic, mut state, mut client, socket) = both_sides(mode).await;
-    let middle = client.predicted;
+    let middle = client.route.predicted;
     // A handful out, so there is something to repeat or not repeat. Distinct
     // squares, walked once each: a ring scan that revisits its own middle
     // counts the same tree eight times and then measures nothing.
@@ -390,7 +390,7 @@ async fn a_chase_is_not_a_divergence() {
   // bury the one reading the panel exists for under the commonest thing in the
   // game.
   let (logic, mut state, mut client, socket) = both_sides(Relevance::OnChange).await;
-  let me = client.predicted;
+  let me = client.route.predicted;
   let patch = world::footing_near(Tile::new(me.x + 6, me.y + 4));
   state.zone.admit(9, patch, chapskape::protocol::Look::Brute);
   state.zone.actors.get_mut(&9).unwrap().max_health = 4000;
@@ -420,29 +420,29 @@ async fn a_chase_is_not_a_divergence() {
     client.poll(now);
   }
 
-  assert_eq!(client.diverged, 0, "a chase was counted as a route coming apart");
+  assert_eq!(client.route.diverged, 0, "a chase was counted as a route coming apart");
   assert_eq!(
-    client.predicted, state.zone.actors[&0].tile,
+    client.route.predicted, state.zone.actors[&0].tile,
     "the client lost the body it was drawing"
   );
 
   // And an ordinary walk afterwards is checked again, because the counter has
   // to come back on once the client is answering its own question.
-  let from = client.predicted;
+  let from = client.route.predicted;
   let to = world::footing_near(Tile::new(from.x - 9, from.y - 6));
   client.walk_to(to);
-  let drawn = client.plan.len();
+  let drawn = client.route.plan().count();
   send(&logic, &mut state, 1, SkapeOp::WalkTo { tile: to }).await;
-  let before = client.confirmations;
+  let before = client.route.confirmations;
   for _ in 0..(drawn + 3) {
     let out = tick(&logic, &mut state).await;
     now += TICK_MS;
     deliver(&socket, &ops_for(&out, 0));
     client.poll(now);
   }
-  assert!(client.confirmations > before, "the check never came back on");
-  assert_eq!(client.diverged, 0);
-  assert_eq!(client.predicted, to);
+  assert!(client.route.confirmations > before, "the check never came back on");
+  assert_eq!(client.route.diverged, 0);
+  assert_eq!(client.route.predicted, to);
 }
 
 #[tokio::test]
@@ -452,11 +452,11 @@ async fn a_body_stops_walking_when_it_gets_there() {
   // takes a step, so an arrived body holds two different ones for ever and
   // walks on the spot until the next click. The clock is what ends the walk.
   let (logic, mut state, mut client, socket) = both_sides(Relevance::OnChange).await;
-  let from = client.predicted;
+  let from = client.route.predicted;
   let to = world::footing_near(Tile::new(from.x + 8, from.y + 5));
 
   client.walk_to(to);
-  let squares = client.plan.len();
+  let squares = client.route.plan().count();
   send(&logic, &mut state, 1, SkapeOp::WalkTo { tile: to }).await;
 
   let mut now = 0;
@@ -466,7 +466,7 @@ async fn a_body_stops_walking_when_it_gets_there() {
     deliver(&socket, &ops_for(&out, 0));
     client.poll(now);
   }
-  assert_eq!(client.predicted, to, "never arrived");
+  assert_eq!(client.route.predicted, to, "never arrived");
   assert!(client.walking(now), "the last square is still being crossed");
 
   // One tick later the crossing is over and so is the walk cycle, whether or
@@ -502,7 +502,7 @@ async fn clicking_again_mid_walk_does_not_snap_the_body_back() {
   // snapping to the server's square is a correction for something that was
   // never wrong, and it is what a player sees as the world undoing their input.
   let (logic, mut state, mut client, socket) = both_sides(Relevance::OnChange).await;
-  let start = client.predicted;
+  let start = client.route.predicted;
   let first = world::footing_near(Tile::new(start.x + 20, start.y + 14));
 
   client.walk_to(first);
@@ -518,16 +518,16 @@ async fn clicking_again_mid_walk_does_not_snap_the_body_back() {
 
   // Somewhere else, decided while walking, and clicked several more times the
   // way anybody actually plays.
-  let mut was = client.predicted;
+  let mut was = client.route.predicted;
   for step in 1..=4i16 {
     let next = world::footing_near(Tile::new(start.x - step * 4, start.y + step * 3));
     client.walk_to(next);
     assert!(
-      client.predicted.steps_to(was) <= 2,
+      client.route.predicted.steps_to(was) <= 2,
       "the body jumped from {was:?} to {:?} on a re-click",
-      client.predicted
+      client.route.predicted
     );
-    was = client.predicted;
+    was = client.route.predicted;
     send(&logic, &mut state, 1, SkapeOp::WalkTo { tile: next }).await;
     for _ in 0..3 {
       let out = tick(&logic, &mut state).await;
@@ -535,15 +535,15 @@ async fn clicking_again_mid_walk_does_not_snap_the_body_back() {
       deliver(&socket, &ops_for(&out, 0));
       client.poll(now);
       assert!(
-        client.predicted.steps_to(was) <= 2,
+        client.route.predicted.steps_to(was) <= 2,
         "the body jumped from {was:?} to {:?} while walking",
-        client.predicted
+        client.route.predicted
       );
-      was = client.predicted;
+      was = client.route.predicted;
     }
   }
 
-  assert_eq!(client.diverged, 0, "a re-click was counted as a route coming apart");
+  assert_eq!(client.route.diverged, 0, "a re-click was counted as a route coming apart");
   assert!(
     client.notices.iter().all(|notice| !notice.text.contains("different way")),
     "the player was told the world disagreed with them"
@@ -560,8 +560,8 @@ async fn clicking_again_mid_walk_does_not_snap_the_body_back() {
     deliver(&socket, &ops_for(&out, 0));
     client.poll(now);
   }
-  assert_eq!(client.predicted, state.zone.actors[&0].tile, "they never converged");
-  assert_eq!(client.predicted, last);
+  assert_eq!(client.route.predicted, state.zone.actors[&0].tile, "they never converged");
+  assert_eq!(client.route.predicted, last);
 }
 
 #[tokio::test]
@@ -572,7 +572,7 @@ async fn the_drawn_body_never_jumps_however_fast_the_clicks_come() {
   // never where it is, so the drawn point moves at walking speed and nothing
   // else, whatever the route, the server, or the click rate are doing.
   let (logic, mut state, mut client, socket) = both_sides(Relevance::OnChange).await;
-  let start = client.predicted;
+  let start = client.route.predicted;
 
   let mut now = 0u64;
   let mut last = client.drawn_at(now);
@@ -606,7 +606,7 @@ async fn the_drawn_body_never_jumps_however_fast_the_clicks_come() {
   // that. Half a square in one frame is a teleport whatever caused it.
   println!("\n  worst movement between 50ms frames: {worst:.3} squares\n");
   assert!(worst < 0.5, "the body jumped {worst} squares between frames");
-  assert_eq!(client.diverged, 0);
+  assert_eq!(client.route.diverged, 0);
 }
 
 #[tokio::test]
