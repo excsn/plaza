@@ -233,7 +233,7 @@ async fn frame_loop(options: role::Options, bots: usize) {
         clock,
       );
       scene.draw_route(
-        client.plan.iter().copied(),
+        client.route.plan().copied(),
         marker
           .filter(|(_, at)| clock_ms.saturating_sub(*at) < MARKER_MS)
           .map(|(tile, at)| {

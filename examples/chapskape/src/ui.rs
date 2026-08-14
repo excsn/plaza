@@ -321,8 +321,8 @@ pub fn draw_panel(client: &mut NetClient, url: &str, dials: &Dials) -> bool {
       // Zero is the expected reading, which is exactly what makes it worth a
       // row: a route both ends derive from one rule has nothing to disagree
       // about, and a number climbing here means the rule stopped being one.
-      ui.label(format!("squares confirmed {}", client.confirmations));
-      ui.label(format!("route diverged    {}", client.diverged));
+      ui.label(format!("squares confirmed {}", client.route.confirmations));
+      ui.label(format!("route diverged    {}", client.route.diverged));
       ui.separator();
 
       ui.label(format!("props out nearby  {}", client.objects.len()));

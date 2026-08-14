@@ -22,6 +22,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
+use plaza_client_utils::{Heard, RoutePredictor};
 use plaza_wire::{MsgPackCodec, WireCodec};
 use plaza_ws::pump::{mismatch_message, Arrival, FramePump};
 use plaza_ws::{Event, State};
@@ -153,51 +154,25 @@ impl Notice {
   pub const LIFE_MS: u64 = 2600;
 }
 
+fn tile_point(tile: &Tile) -> [f32; 2] {
+  [tile.x as f32, tile.y as f32]
+}
+
 pub struct NetClient {
   pump: FramePump<MsgPackCodec>,
   pub status: Status,
   pub seat: Option<Seat>,
 
-  /// Where this client believes it is, having walked there itself.
-  pub predicted: Tile,
-  /// Where the server last said it was.
-  pub confirmed: Tile,
-  /// Squares left of the route the client is walking on its own clock.
-  pub plan: VecDeque<Tile>,
-  /// The same squares again, spent against what the server confirms.
-  expect: VecDeque<Tile>,
-  /// Whether the current journey is one both ends expanded from the same
-  /// square, and therefore one the shared rule actually promises to agree on.
-  ///
-  /// **A shared rule only buys a free prediction when both ends start from the
-  /// same state**, and that is narrower than it first looks. A click taken
-  /// while standing still is that moment: the server has confirmed the square
-  /// the client is on and nothing is outstanding, so both expand the
-  /// destination from it and get the same route.
-  ///
-  /// A click taken mid-walk is not, and no amount of shared rule fixes it. By
-  /// the time the op lands the server is a square or two behind, it re-routes
-  /// from where it is, and the two walk different lines to the same place. A
-  /// chase is not either, because the target keeps moving. Neither is a
-  /// disagreement about the rule, so neither is counted, and neither snaps the
-  /// body back.
-  checking: bool,
+  /// The body: predicted and confirmed squares, the route being walked on the
+  /// local clock, and the check against the server. The invariants this
+  /// example play-tested its way to (check routes not positions, only check
+  /// journeys both ends started together, a click changes where the body is
+  /// going and never where it is, reconcile only at rest) live in the block's
+  /// docs now.
+  pub route: RoutePredictor<Tile>,
   /// Where the whole journey ends, for redrawing the route after a surprise.
   goal: Option<Goal>,
   finder: Pathfinder,
-  /// When the client next moves itself along its plan.
-  next_step_ms: u64,
-  /// When the last local step happened, for drawing between squares.
-  stepped_ms: u64,
-  /// The point the current crossing started from, in squares.
-  ///
-  /// A point rather than a square, because a click can land mid-crossing and a
-  /// click changes where the body is going, never where it is. Rebasing this to
-  /// a square's centre on a click was a visible jump of most of a square, which
-  /// read as a server correction and had nothing to do with the server.
-  from: (f32, f32),
-
-  pub seeded: bool,
   pub others: HashMap<Seat, Other>,
   pub you: Option<You>,
   pub pack: Vec<Option<Item>>,
@@ -215,14 +190,11 @@ pub struct NetClient {
   pub mode: Relevance,
   pub meter: Meter,
 
-  /// Frames whose confirmed square was not the next square the client drew.
-  ///
-  /// Zero is the expected reading, which is exactly what makes it worth
-  /// showing: a route both ends derive from one rule has nothing to disagree
-  /// about, and a number climbing here means the rule stopped being one rule.
-  pub diverged: u64,
-  pub confirmations: u64,
   /// Ops this client has sent, for the comparison with a held direction.
+  ///
+  /// The route's own counters live on it: `route.diverged` should read zero,
+  /// which is exactly what makes it worth showing, because a route both ends
+  /// derive from one rule has nothing to disagree about.
   pub ops_sent: u64,
   pub since_first_op_ms: Option<u64>,
 
@@ -253,17 +225,9 @@ impl NetClient {
       pump,
       status: Status::Connecting,
       seat: None,
-      predicted: Tile::default(),
-      confirmed: Tile::default(),
-      plan: VecDeque::new(),
-      expect: VecDeque::new(),
-      checking: false,
+      route: RoutePredictor::new(Tile::default(), tile_point, TICK_MS),
       goal: None,
       finder: Pathfinder::new(),
-      next_step_ms: 0,
-      stepped_ms: 0,
-      from: (0.0, 0.0),
-      seeded: false,
       others: HashMap::new(),
       you: None,
       pack: vec![None; crate::pack::SLOTS],
@@ -276,8 +240,6 @@ impl NetClient {
       tick_ms: TICK_MS,
       mode: Relevance::default(),
       meter: Meter::default(),
-      diverged: 0,
-      confirmations: 0,
       ops_sent: 0,
       since_first_op_ms: None,
       splats: Vec::new(),
@@ -299,7 +261,7 @@ impl NetClient {
   }
 
   pub fn ready(&self) -> bool {
-    self.seat.is_some() && self.seeded
+    self.seat.is_some() && self.route.is_seeded()
   }
 
   /// Ops a minute, which is the number this whole example is about.
@@ -341,74 +303,29 @@ impl NetClient {
     if self.pump.state() == State::Closed && !matches!(self.status, Status::Gone(_)) {
       self.status = Status::Gone("connection lost".to_owned());
     }
-    self.walk_myself(now_ms);
-    self.settle(now_ms);
-    self.forget_what_is_over(now_ms);
-  }
-
-  /// Moves the local body along its own plan, on its own clock.
-  ///
-  /// This is the whole of what prediction means here. There is no simulation to
-  /// re-run and no correction to blend: the route was never in doubt, only its
-  /// timing was, and the timing is a tick and a round trip that nobody can see
-  /// because the walk is seconds long.
-  fn walk_myself(&mut self, now_ms: u64) {
-    if !self.ready() || self.plan.is_empty() {
-      return;
-    }
     let steps = if self.you.as_ref().is_some_and(|you| you.running) { 2 } else { 1 };
-    while now_ms >= self.next_step_ms && !self.plan.is_empty() {
-      // The next crossing starts wherever the body is drawn right now, which
-      // is what keeps the picture continuous whatever the route has been doing.
-      self.from = self.drawn_at(now_ms);
-      for _ in 0..steps {
-        if let Some(next) = self.plan.pop_front() {
-          self.predicted = next;
-        }
-      }
-      self.stepped_ms = now_ms;
-      self.next_step_ms = now_ms + self.tick_ms;
-    }
+    self.route.advance(now_ms, steps);
+    self.route.settle(now_ms);
+    self.forget_what_is_over(now_ms);
   }
 
   /// Where the local body is drawn, in squares, between one point and the next.
   pub fn drawn_at(&self, now_ms: u64) -> (f32, f32) {
-    let t = (now_ms.saturating_sub(self.stepped_ms) as f32 / self.tick_ms.max(1) as f32)
-      .clamp(0.0, 1.0);
-    (
-      self.from.0 + (self.predicted.x as f32 - self.from.0) * t,
-      self.from.1 + (self.predicted.y as f32 - self.from.1) * t,
-    )
+    let [x, y] = self.route.drawn(now_ms);
+    (x, y)
   }
 
   /// Whether the local body has squares left or is still crossing the last one.
-  ///
-  /// The clock is the half that is easy to leave out, and leaving it out is a
-  /// walk cycle that never stops: `from` is only rewritten when a step is
-  /// taken, so an arrived body holds a stale start point for ever and keeps
-  /// walking on the spot until the next click.
   pub fn walking(&self, now_ms: u64) -> bool {
-    !self.plan.is_empty() || self.crossing(now_ms)
-  }
-
-  fn crossing(&self, now_ms: u64) -> bool {
-    let (dx, dy) = (
-      self.predicted.x as f32 - self.from.0,
-      self.predicted.y as f32 - self.from.1,
-    );
-    dx * dx + dy * dy > 1e-4 && now_ms.saturating_sub(self.stepped_ms) < self.tick_ms
+    self.route.walking(now_ms)
   }
 
   /// Which way the body is turned: the way it is going while it is going
   /// somewhere, and whatever the server says once it has arrived.
   pub fn facing(&self, now_ms: u64) -> u8 {
-    if !self.crossing(now_ms) {
+    let Some([dx, dy]) = self.route.heading(now_ms) else {
       return self.you.as_ref().map(|you| you.facing).unwrap_or(4);
-    }
-    let (dx, dy) = (
-      self.predicted.x as f32 - self.from.0,
-      self.predicted.y as f32 - self.from.1,
-    );
+    };
     let sx = if dx > 0.35 { 1i16 } else if dx < -0.35 { -1 } else { 0 };
     let sy = if dy > 0.35 { 1i16 } else if dy < -0.35 { -1 } else { 0 };
     match crate::zone::FACINGS.iter().position(|step| *step == (sx, sy)) {
@@ -426,7 +343,6 @@ impl NetClient {
         SkapeOp::Seated { seat, tile } => {
           self.seat = Some(seat);
           self.jump_to(tile);
-          self.seeded = true;
         }
         SkapeOp::World(frame) => self.on_frame(*frame),
         SkapeOp::WalkTo { .. }
@@ -442,19 +358,14 @@ impl NetClient {
   }
 
   fn jump_to(&mut self, tile: Tile) {
-    self.predicted = tile;
-    self.confirmed = tile;
-    self.from = (tile.x as f32, tile.y as f32);
-    self.plan.clear();
-    self.expect.clear();
+    self.route.jump_to(tile, self.now_ms);
     self.goal = None;
-    self.stepped_ms = self.now_ms;
-    self.next_step_ms = self.now_ms + self.tick_ms;
   }
 
   fn on_frame(&mut self, frame: Frame) {
     self.tick = frame.tick;
     self.tick_ms = frame.tick_ms.max(1) as u64;
+    self.route.set_step_ms(self.tick_ms);
     self.mode = frame.mode;
     let now = self.now_ms;
 
@@ -563,13 +474,8 @@ impl NetClient {
         loud: false,
       });
       if refusal == Refusal::NoRoute {
-        self.plan.clear();
-        self.expect.clear();
-        self.checking = false;
+        self.route.abandon(you.tile, now);
         self.goal = None;
-        self.from = self.drawn_at(now);
-        self.predicted = you.tile;
-        self.stepped_ms = now;
       }
     }
 
@@ -584,64 +490,17 @@ impl NetClient {
     self.you = Some(you);
   }
 
-  /// Checks the server against the route this client drew.
-  ///
-  /// Not against the client's current square: the two are a tick out of phase
-  /// by design, and counting that as an error would bury the thing this is for.
+  /// Checks the server against the route this client drew. Two squares of
+  /// slack, because running covers two a tick and the first of them is a
+  /// square nothing ever reports.
   fn confirm(&mut self, tile: Tile) {
-    if tile == self.confirmed {
-      return;
+    if self.route.confirm(tile, 2) == Heard::Diverged {
+      self.notices.push(Notice {
+        text: "the world walked a different way".to_owned(),
+        since_ms: self.now_ms,
+        loud: true,
+      });
     }
-    self.confirmed = tile;
-    if !self.checking {
-      // Nothing to check against, and nothing to correct either: the body
-      // keeps walking the route it drew and [`settle`] takes the server's
-      // square once it has stopped.
-      return;
-    }
-    self.confirmations += 1;
-    // Two, because running covers two squares in a tick and the first of them
-    // is a square nothing ever reports.
-    for _ in 0..2 {
-      match self.expect.pop_front() {
-        Some(next) if next == tile => return,
-        Some(_) => continue,
-        None => {
-          self.checking = false;
-          return;
-        }
-      }
-    }
-    self.diverged += 1;
-    self.notices.push(Notice {
-      text: "the world walked a different way".to_owned(),
-      since_ms: self.now_ms,
-      loud: true,
-    });
-    self.checking = false;
-  }
-
-  /// Takes the server's square, once the body has stopped and has nothing left
-  /// to walk.
-  ///
-  /// The whole of the reconciliation in this client, and it is deliberately not
-  /// a per-tick correction. Snapping a walking body to a square the server
-  /// happens to be on reads as a rollback and is wrong besides: the two ends
-  /// are walking to the same place from different starts and will arrive
-  /// together. Waiting until the walking is over means the usual case is a
-  /// no-op, because by then they agree.
-  fn settle(&mut self, now_ms: u64) {
-    if self.walking(now_ms) || self.confirmed == self.predicted || !self.seeded {
-      return;
-    }
-    // Eased across a tick like any other step, because even the rare
-    // reconciliation must not look like one.
-    self.from = self.drawn_at(now_ms);
-    self.predicted = self.confirmed;
-    self.plan.clear();
-    self.expect.clear();
-    self.stepped_ms = now_ms;
-    self.next_step_ms = now_ms + self.tick_ms;
   }
 
   fn on_happened(&mut self, happened: Happened) {
@@ -653,7 +512,7 @@ impl NetClient {
           .others
           .get(&on)
           .map(|other| other.tile)
-          .unwrap_or(self.predicted);
+          .unwrap_or(self.route.predicted);
         self.splats.push(Splat {
           at,
           amount: damage as i32,
@@ -718,29 +577,9 @@ impl NetClient {
   /// In that order, and the order is the point: the body is already walking
   /// before the op has left the machine.
   fn set_out(&mut self, goal: Goal, checkable: bool) {
-    // Asked before the old journey is thrown away, because what makes this one
-    // checkable is that there was no old journey: the server has confirmed the
-    // square the body is standing on and nothing is outstanding, so both ends
-    // are about to expand the same destination from the same place.
-    let was_walking = !self.plan.is_empty() || self.crossing(self.now_ms);
-    self.checking = checkable
-      && self.plan.is_empty()
-      && self.expect.is_empty()
-      && self.confirmed == self.predicted;
-    let route = self.finder.route(self.predicted, goal);
+    let route = self.finder.route(self.route.predicted, goal);
     self.goal = Some(goal);
-    self.plan = route.iter().copied().collect();
-    self.expect = route.into_iter().collect();
-    // A click changes where the body is going and nothing else. `from`,
-    // `predicted` and the step clock all describe where it *is*, and rewriting
-    // any of them here is a jump: mid-crossing, `from = predicted` teleported
-    // the rest of a square, and an immediate free step let fast clicking
-    // outrun the server and be pulled back at rest, which read exactly like a
-    // correction. A body at rest sets off now; a walking one keeps its cadence
-    // and turns at the next square.
-    if !was_walking {
-      self.next_step_ms = self.now_ms;
-    }
+    self.route.set_out(route, checkable, self.now_ms);
   }
 
   fn count_op(&mut self) {
@@ -809,9 +648,8 @@ impl NetClient {
   }
 
   pub fn cancel(&mut self) {
-    self.plan.clear();
-    self.expect.clear();
-    self.checking = false;
+    // A route to nowhere: the crossing in progress finishes and nothing else.
+    self.route.set_out(std::iter::empty(), false, self.now_ms);
     self.goal = None;
     self.count_op();
     self.pump.send_op(&SkapeOp::Cancel);
