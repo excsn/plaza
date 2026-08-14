@@ -214,70 +214,64 @@ One frame cannot be built and broadcast: two characters in different corners of 
 
 The example is played at 64 characters, which says nothing about whether the shape survives an MMO's population. This sweep answers that in bytes **and** in tick time, because those have different curves and only one of them is a wall. Every character is a connected client, which is the worst case: a zone of bots costs nothing per bot, since a frame is built for the agents holding sockets and a bot has none. `MAX_CHARACTERS` is a default now rather than a cap; `GowState::with_capacity` takes any.
 
-Both delivery modes, through `process_input`, because `Cells` does its addressing inside the tick and an arm calling the assembly directly would measure only the mode that does not. `encode` charges one pass per `TargetedOp`, which is what the session layer spends; `B/client` counts what crosses the wire, so a shared payload is charged to every recipient.
+Both delivery modes, through `process_input`, because `Cells` does its addressing inside the tick and an arm calling the assembly directly would measure only the mode that does not. `encode` charges one pass per `TargetedOp`, which is what the session layer spends; `B/client` counts what crosses the wire, so a shared payload is charged to every recipient. Two more dials, `Precision::{CellRelative, Graded}`, move bytes rather than time and are covered below.
 
 ```
-  in zone   in view  delivery   B/client       build      encode        tick  of budget
-        8         8    joined        167       15.5µs       17.1µs       32.6µs       0.1%
-        8         8     cells        220       10.9µs        5.5µs       16.4µs       0.0%
-       64        44    joined        616      111.7µs       40.4µs      152.1µs       0.5%
-       64        44     cells        862       65.1µs       32.1µs       97.2µs       0.3%
-      256        44    joined        831      394.5µs      129.9µs      524.4µs       1.6%
-      256        44     cells       1174      185.6µs       90.8µs      276.4µs       0.8%
-     1024        44    joined        944     1164.8µs      345.4µs     1510.3µs       4.5%
-     1024        44     cells       1333      508.8µs      249.9µs      758.7µs       2.3%
-     4096        44    joined       1000     3969.8µs     1095.4µs     5065.2µs      15.2%
-     4096        44     cells       1414     1976.0µs      921.3µs     2897.3µs       8.7%
+  in zone   in view    scheme   B/client       build      encode        tick  of budget
+       64        44 joined            630       74.9µs       34.6µs      109.6µs       0.3%
+       64        44 cells             876       45.3µs       27.2µs       72.5µs       0.2%
+      256        44 joined            845      250.5µs      110.4µs      360.9µs       1.1%
+      256        44 cells            1188      136.9µs       80.5µs      217.4µs       0.7%
+     1024        44 joined            958      796.8µs      318.0µs     1114.8µs       3.3%
+     1024        44 cells            1347      455.7µs      268.8µs      724.5µs       2.2%
+     4096        44 joined           1014     3469.9µs     1261.5µs     4731.4µs      14.2%
+     4096        44 cells            1428     1824.2µs     1056.9µs     2881.1µs       8.6%
 ```
 
-**One zone holds 4096 connected clients in 15% of a 30Hz tick joined, or 9% fanned out, on one core.** The view saturates at 44 and never moves again, so cost per client is flat and the tick is simply linear in clients. Population is not this genre's netcode problem.
+**One zone holds 4096 connected clients in 14% of a 30Hz tick, or 9% fanned out, on one core.** The view saturates at 44 and never moves again, so cost per client is flat and the tick is linear in clients. Population is not this genre's netcode problem.
 
 Crowding was, and it is the separate axis. The same 256 people, packed until everyone can see everyone:
 
 ```
-  spacing   in view  delivery   B/client       build      encode        tick  of budget
-      7.0        44    joined        831      237.3µs       69.2µs      306.5µs       0.9%
-      7.0        44     cells       1174      116.7µs       56.8µs      173.5µs       0.5%
-      3.5       171    joined       2156      201.7µs       79.4µs      281.1µs       0.8%
-      3.5       171     cells       2430      103.9µs       47.2µs      151.0µs       0.5%
-      1.5       256    joined       3312      195.7µs       85.2µs      280.9µs       0.8%
-      1.5       256     cells       3442      100.7µs       44.5µs      145.1µs       0.4%
-      0.5       256    joined       3300      144.0µs       82.6µs      226.6µs       0.7%
-      0.5       256     cells       3337       98.0µs       44.3µs      142.3µs       0.4%
+  spacing   in view    scheme   B/client       build      encode        tick  of budget
+      7.0        44 joined            845      169.4µs       76.8µs      246.2µs       0.7%
+      7.0        44 cells            1188      113.5µs       67.5µs      181.0µs       0.5%
+      3.5       171 joined           2170      100.0µs       88.5µs      188.5µs       0.6%
+      3.5       171 cells            2444       87.5µs       57.8µs      145.3µs       0.4%
+      1.5       256 joined           3326       82.2µs       89.1µs      171.2µs       0.5%
+      1.5       256 cells            3456       77.3µs       55.0µs      132.3µs       0.4%
+      0.5       256 joined           3314       73.1µs       90.1µs      163.2µs       0.5%
+      0.5       256 cells            3351       71.6µs       52.5µs      124.2µs       0.4%
 ```
 
-**Read the tick column downward: it is flat, and slightly falling.** Under a per-client frame this table was the example's one real wall, going 675µs to 3504µs over the same spacings, five times the cost for the same population in a smaller field with no amount of population headroom helping. It now runs 307µs to 227µs joined, or 174µs to 142µs fanned out, **up to 24x better at the packed end**, and a 6x change in how many people are in view moves the tick less than 30%. A tighter crowd is fewer occupied cells, and a cell is packed once however many people are looking at it, so the case that used to be worst is now the case the shape is best at.
+**Read the tick column downward: it falls as the crowd tightens.** Under a per-client frame this table was the example's one real wall, running 675µs to 3504µs over the same spacings, and no amount of population headroom helped because it is the same people in a smaller field. It now runs 246µs to 163µs joined, or 181µs to 124µs fanned out: **up to 28x better at the packed end**, and a 6x change in how many people are in view moves the tick *down* by a third. A tighter crowd is fewer occupied cells, a cell is packed once however many people look at it, and every viewer in a cell shares one assembled blob. The case that used to be worst is the one the shape is best at.
 
-**Which delivery to pick is a bandwidth question, not a CPU one, and that is the surprise.** The fan-out is faster everywhere by a fairly steady **1.6x to 1.75x**, but what it costs in bytes swings enormously with density: **41% more per client on a spread zone** (1000 to 1414) and **1% more when packed** (3300 to 3337). The reason is the same one that makes the whole shape work. Spread out, a client's 49 cells hold about one body each, so 49 separate op envelopes are nearly all framing; packed, the same envelopes carry a crowd apiece and the framing disappears into the payload. So `Joined` is the better default for a thin world, `Cells` for a dense one, and the dial exists because a zone is both at different hours.
+**Which delivery to pick is a bandwidth question, not a CPU one.** The fan-out is faster everywhere by a fairly flat margin, but what it costs in bytes swings with density: **41% more per client on a spread zone** (1014 to 1428) and **1% more when packed** (3314 to 3351). Spread out, a client's 49 cells hold about one body each, so 49 op envelopes are nearly all framing; packed, the same envelopes carry a crowd apiece and framing disappears into payload. `Joined` suits a thin world and `Cells` a dense one, which is why both are on the panel.
 
-**The harness that argued for this overstated it, and the gap is instructive.** `publish_costs` measured the fan-out at 2.73x the joined path; live it is 1.75x. Nothing was wrong with either number: the harness timed the *delivery step*, and a real tick also runs the simulation, `you_of`, the party's extras and the landing filter for every client, none of which either mode can share. **A ratio measured on one stage of a pipeline is an upper bound on what it does to the pipeline**, and the shared remainder is what separates the two figures.
+### How it got here, and the times the number was wrong
 
-The standard answers were all measured before one was adopted. `examples/crowd_lod.rs` prices level of detail in screen pixels at the camera this example actually builds, and the aggregation tree from the horde work turns out to be the wrong tool at this radius (394 pixels of worst-case error, on bodies still 57 pixels tall at the view edge), while grading precision by distance is the same picture for fewer bits. `examples/crowd_techniques.rs` prices what MMOs actually do about a crowd; cell publication won and is what ships.
-
-**The prediction and the live example agree to three figures**, which is the strongest evidence in the whole exercise. `crowd_techniques` said the cell window's byte overhead runs 1.79x on a spread zone and collapses to 1.01x on a packed one. The played example independently reproduced 1.79x at spacing 7.0 and 1.00x at spacing 1.5, from a different harness on a different code path.
-
-**The first version of this sweep measured a pile and called it a wall.** The spawn spiral leaves the 232-unit map at 256 characters, and `footing_near` falls back to the origin when it finds nowhere to stand, so 1024 and 4096 stacked on one spot: 3607 in view and a tick 27x over budget. Growing a population without growing the world is a crowding sweep wearing the wrong label. The tell was in the data, since the in-view column stopped saturating and nothing in the netcode could have caused that.
-
-**And the second version measured a different pile at a different boundary, which is why this paragraph is now two paragraphs.** Placing characters straight onto the spiral fixed the terrain fallback but left the *index* sized to `terrain::EDGE`, and at constant density the spiral reaches `7·√n`, so it passes 120 units between 256 and 1024. `GridQuantizer` clamps everything past its origin into the boundary cells: at 4096 that was **56% of the population in the border, and one cell holding 490 bodies against about three in an honest one**. The tell was the same shape as last time, a column that could not move doing so anyway, bytes per client growing 6x while the in-view count sat pinned at 44. The fix is `Zone::spanning`, and the sweep now sizes its index to the spiral it builds.
-
-That second pile exposed a real property of the new shape rather than just a harness bug. **A shared payload has no per-viewer backstop: the cell window is a promise the index must keep alone.** The per-client build re-checked every candidate with `distance(...) <= VIEW`, and a filter of that shape cannot exist on bytes shared between viewers, since the payload is fixed before anyone's position is consulted. That check had been silently absorbing the quantizer's clamping the whole time, charging it to the waste counter. With an honest index the missing backstop costs only the bounded cell-granular superset priced above; under an index that lies, whatever it clamped into the border cells goes on the wire. An undersized index used to make a zone slow, and now makes it wrong. `a_body_past_the_index_rides_a_border_cell_into_a_frame` pins both halves.
-
-Three changes took the tick from 79.6% of budget to 41.7% at 4096, with every test still passing:
+The route matters more than the endpoint, because every wrong turn was a measurement that looked convincing at the time.
 
 | change | what it was | at 4096 |
 |---|---|---|
 | allocations | a `Vec` per grid query, a `HashSet` per client, a cloned `landed`, a party walked twice | 79.6% to 73.1% |
 | dense seats | `HashMap<Seat, Character>` hashing a dense index, behind a map-shaped surface so no call site moved | 73.1% to 43.6% |
-| packed audience | written straight into bits, no `Vec<Seen>` in between | 43.6% to **41.7%**, and 3.2x fewer bytes |
-| published per cell | each occupied cell packed once, joined into one byte string per client, keyed by a flat `CellSpace` | 41.7% to **14.6%**, and crowding 10.5% to **0.7%** |
+| packed audience | written straight into bits, no `Vec<Seen>` in between | 43.6% to 41.7%, and 3.2x fewer bytes |
+| published per cell | each occupied cell packed once instead of each client's view | 41.7% to 39.6% — a **wash** |
+| joined and flat-keyed | one self-delimiting byte string per client, payloads in a `Vec` rather than hashed | 39.6% to 14.6% |
+| re-keyed by viewer-cell | one blob per occupied viewer-cell, refcounted; addressing by cell pair | 14.6% to **14.2%**, and 8.6% fanned out |
 
-**The packing is a bandwidth win and not a CPU win**, which was not the prediction. Encode fell 5.2x and bytes 3.2x, and the *total* went up, because quantising three positions and two varints costs more arithmetic than MessagePack spends writing them raw: the cost moved from the codec into the packer rather than disappearing. Removing the intermediate `Vec<Seen>` is what made it a net win. Watch the total, not the column being optimised.
+**The packing was a bandwidth win and not a CPU win**, which was not the prediction. Encode fell 5.2x and bytes 3.2x and the *total* went up, because quantising three positions and two varints costs more arithmetic than MessagePack spends writing them raw: the cost moved from the codec into the packer rather than disappearing. Removing the intermediate `Vec<Seen>` is what made it a net win.
 
-**The fourth change is the one the sweep argued for: the spatial channel is published per cell.** `Zone::publish` packs each occupied grid cell once and `frame_for` assembles each client's frame from the payloads its view touches, on `SpatialGrid::occupied` and `GridQuantizer::keys_in_radius` from `plaza_server_utils`. `crowd_techniques` priced the alternatives against a moving zone before this was adopted: rest detection loses here because nobody in a zone is at rest (2x the build for 0.2% of the bytes), grading the refresh rate by distance is lossy in time, and cell publication won. What it trades is cell-granular relevance, the byte cost measured above, and the per-entry relevance tag, which moved off the wire because a shared payload cannot carry a per-viewer answer.
+**Publishing per cell was a wash for the same reason, one row later.** `build` fell 1.56x while `encode` rose 4.3x and handed the whole gain back, because a frame carried up to 49 byte strings where it had carried one and each paid its own framing. Joining them and keying the lookups flat is what collected it. **Watch the total, not the column being optimised** — this table teaches that twice because the codebase had to learn it twice.
 
-**On the population axis it was at first a wash, and the reason was worth more than the win would have been.** At 4096 the tick moved 13912µs to 13201µs, five percent. `build` fell 12740µs to 8191µs (1.56x) while `encode` rose 1160µs to 5001µs (4.3x), so almost the whole gain was handed straight back one column to the right, because a frame carried up to 49 separate byte strings where it had carried one and each paid its own MessagePack framing. That is the same lesson the packing row taught, arriving by a different route: **watch the total, not the column being optimised.**
+**The last row is four costs that turned out to be one mistake.** The window walk, the assembly copy, the audience push and the graded width test were all O(viewers) work on information that varies only per cell: two viewers in one cell touch the same cells and are owed identical bytes. Re-keying the layer by the viewer's cell fixed them together, and the gain tracks clients-per-cell because clients-per-cell *is* the redundancy factor.
 
-**Two changes since then took it the rest of the way, and both came out of `publish_costs`.** The cell payloads a client's view touches are **concatenated into one self-delimiting byte string** rather than sent as one field each, which is what `Delivery::Joined` means and which kills 48 of 49 envelope framings. And the publication is keyed by [`CellSpace`](../../server_utils/API_REFERENCE.md) in a flat `Vec` rather than hashed by Morton code, which matters because the assembly does ~49 lookups per client per tick and there are 200k of them at 4096 clients. Together, at 4096: **13201µs to 4880µs, 2.70x**, against a harness that predicted 2.73x. `encode` fell 5001µs to 1308µs and `build` 8191µs to 3561µs, so this time neither column paid for the other.
+What that row does **not** include is the alternatives priced and declined before it: rest detection loses here because nobody in a zone is at rest (2x the build for 0.2% of the bytes), and the aggregation tree is the wrong tool at this radius. Those are in [`crowd_techniques`](examples/crowd_techniques.rs) and [`crowd_lod`](examples/crowd_lod.rs).
+
+**Two piles, both measured before they were caught.** The first sweep grew a population without growing the world, so `footing_near` stacked 1024 and 4096 characters on one spot and the "scaling wall" was a crowd. The second placed them honestly but left the *index* sized to `terrain::EDGE`, and at constant density the spiral passes 120 units between 256 and 1024, so at 4096 **56% of the population sat in the border cells with one holding 490 bodies**. Both had the same tell: a column that cannot move doing so anyway. `Zone::spanning` fixes the second and `a_body_past_the_index_rides_a_border_cell_into_a_frame` pins it.
+
+**Two harness overpromises, same root.** [`publish_costs`](examples/publish_costs.rs) priced the fan-out at 2.73x and the tick moved 1.75x, because it timed the *delivery stage* and a tick also runs the simulation, `you_of`, the extras and the landing filter for every client. It priced cell-relative packing at 10-12% and the wire gave 0-9%, because it never wrote down the cell index a reader needs. **A ratio measured on one stage is an upper bound on the pipeline**, and a packing arm that never reads back what it wrote will omit whatever the decoder needed. Both arms now round-trip through the shipped reader.
 
 ## What is left on the table, priced
 
