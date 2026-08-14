@@ -321,7 +321,7 @@ Available without the `serde` feature: it is bytes and bits, not a codec.
 
 ### Struct `BitReader<'a>`
 
-**`new(&[u8])`**, **`bits_left()`**, and `bits` / `bool` / `varint` / `signed_varint` / `quantized` / `smallest_three` mirroring the writer. Reads past the end return `BitError::Underrun` rather than panicking. The final byte is zero-padded, so up to seven padding bits read back as zeroes before the error.
+**`new(&[u8])`**, **`bits_left()`**, **`align_to_byte()`** (skip to the next byte boundary; `BitWriter::finish` pads, so concatenated payloads are byte-aligned and a reader running through them is not), **`is_aligned()`**, and `bits` / `bool` / `varint` / `signed_varint` / `quantized` / `smallest_three` mirroring the writer. Reads past the end return `BitError::Underrun` rather than panicking. The final byte is zero-padded, so up to seven padding bits read back as zeroes before the error.
 
 ### Bit Functions
 

@@ -245,6 +245,22 @@ impl<'a> BitReader<'a> {
     (self.bytes.len() * 8).saturating_sub(self.cursor) as u32
   }
 
+  /// Skips to the next byte boundary, or stays put if already on one.
+  ///
+  /// [`BitWriter::finish`] pads its last byte, so **concatenated payloads are
+  /// byte-aligned and a reader running through them is not**: after the last
+  /// record of one payload the cursor sits inside that padding, and the next
+  /// payload's first field would be read from the wrong offset. Call this
+  /// between payloads. Reading a single payload never needs it.
+  pub fn align_to_byte(&mut self) {
+    self.cursor = self.cursor.next_multiple_of(8).min(self.bytes.len() * 8);
+  }
+
+  /// Whether the cursor sits on a byte boundary.
+  pub fn is_aligned(&self) -> bool {
+    self.cursor.is_multiple_of(8)
+  }
+
   pub fn bits(&mut self, bits: u32) -> Result<u64> {
     check_width(bits)?;
     let left = self.bits_left();
@@ -319,6 +335,46 @@ impl<'a> BitReader<'a> {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn concatenated_payloads_need_realigning_between_them() {
+    // The defect this exists for: two independently finished payloads
+    // concatenate byte-aligned, but a reader running straight through lands
+    // inside the first one's padding and reads the second one's fields from
+    // the wrong offset. It does not error, it returns plausible rubbish.
+    let mut a = BitWriter::new();
+    a.bits(0b101, 3);
+    let mut bytes = a.finish();
+    assert_eq!(bytes.len(), 1, "three bits pad out to a byte");
+
+    let mut b = BitWriter::new();
+    b.bits(0b110, 3);
+    bytes.extend_from_slice(&b.finish());
+
+    let mut r = BitReader::new(&bytes);
+    assert_eq!(r.bits(3).unwrap(), 0b101);
+    assert!(!r.is_aligned(), "the first payload ended mid-byte");
+    r.align_to_byte();
+    assert!(r.is_aligned());
+    assert_eq!(r.bits(3).unwrap(), 0b110, "the second payload starts on the boundary");
+  }
+
+  #[test]
+  fn aligning_an_aligned_reader_moves_nothing() {
+    let mut w = BitWriter::new();
+    w.bits(0xAB, 8);
+    w.bits(0xCD, 8);
+    let bytes = w.finish();
+
+    let mut r = BitReader::new(&bytes);
+    assert!(r.is_aligned());
+    r.align_to_byte();
+    assert_eq!(r.bits(8).unwrap(), 0xAB, "alignment skipped a whole byte");
+    r.align_to_byte();
+    assert_eq!(r.bits(8).unwrap(), 0xCD);
+    r.align_to_byte();
+    assert_eq!(r.bits_left(), 0, "aligning at the end does not run off it");
+  }
 
   #[test]
   fn fields_come_back_in_order_and_width() {
