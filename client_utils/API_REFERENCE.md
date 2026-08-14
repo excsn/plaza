@@ -368,7 +368,7 @@ Second-order dead reckoning for one scalar: keeps the last three samples, takes 
 
 The same accumulator, consumed as "is it time yet" rather than "how many steps". Subtracts the interval rather than zeroing the accumulator.
 
-*   **`new(interval_ms)`** / **`from_hz(hz)`**, **`set_interval_ms`**, **`interval_ms()`**, **`remaining_ms()`**, **`reset()`**.
+*   **`new(interval_ms)`** / **`from_interval(Duration)`** / **`from_hz(hz)`** (exact, the same expression as `FixedTimestep::from_hz`), **`set_interval(Duration)`** / **`set_interval_ms`**, **`interval()`**, **`remaining_ms()`**, **`reset()`**.
 *   **`due(&mut self, elapsed_ms) -> bool`**: fires at most once per advance.
 *   **`advance(&mut self, elapsed_ms) -> u32`**: every occurrence.
 
