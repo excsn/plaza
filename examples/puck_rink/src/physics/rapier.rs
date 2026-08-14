@@ -118,24 +118,18 @@ impl Simulate for RapierWorld {
   }
 
   fn digest(&self) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    let mut eat = |v: f32| {
-      for b in v.to_bits().to_le_bytes() {
-        hash ^= b as u64;
-        hash = hash.wrapping_mul(0x100_0000_01b3);
-      }
-    };
+    let mut digest = plaza_client_utils::StateDigest::new();
     for handle in self.paddles.iter().copied().chain([self.puck]) {
       let body = &self.bodies[handle];
-      eat(body.translation().x);
-      eat(body.translation().y);
-      eat(body.linvel().x);
-      eat(body.linvel().y);
+      digest.write_f32(body.translation().x);
+      digest.write_f32(body.translation().y);
+      digest.write_f32(body.linvel().x);
+      digest.write_f32(body.linvel().y);
     }
     for score in self.scores {
-      eat(score as f32);
+      digest.write_f32(score as f32);
     }
-    hash
+    digest.finish()
   }
 
   fn seed(view: &World) -> Self {
