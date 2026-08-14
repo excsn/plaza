@@ -101,6 +101,9 @@ pub struct Other {
   pub health: u16,
   pub max_health: u16,
   pub facing: u8,
+  /// The last relocation counter acted on, so a body that was **put** somewhere
+  /// arrives there instead of walking to it.
+  pub spawn: u32,
   pub since_ms: u64,
 }
 
@@ -378,7 +381,16 @@ impl NetClient {
         .others
         .entry(seen.seat)
         .and_modify(|other| {
-          if other.tile != seen.tile {
+          // A relocation is not a step. Leaving `was` at the old square would
+          // interpolate a revived foe from its corpse to its den, so the body
+          // is placed rather than eased and the counter is taken exactly once
+          // however many frames repeat it.
+          let put = seen.spawn != other.spawn;
+          other.spawn = seen.spawn;
+          if put {
+            other.was = seen.tile;
+            other.since_ms = now;
+          } else if other.tile != seen.tile {
             other.was = other.tile;
             other.since_ms = now;
           }
@@ -398,6 +410,7 @@ impl NetClient {
           health: seen.health,
           max_health: seen.max_health,
           facing: seen.facing,
+          spawn: seen.spawn,
           since_ms: now,
         });
     }

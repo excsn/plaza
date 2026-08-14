@@ -321,6 +321,7 @@ fn frame_for(state: &mut SkapeState, seat: Seat) -> Frame {
       health: them.health,
       max_health: them.max_health,
       facing: them.facing,
+      spawn: them.spawns,
     })
     .collect();
   actors.sort_unstable_by_key(|seen| seen.seat);
