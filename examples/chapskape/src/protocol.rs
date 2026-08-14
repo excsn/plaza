@@ -135,6 +135,14 @@ pub struct Seen {
   /// Which of the eight ways they are turned. A byte, because a body that
   /// faces nowhere reads as a box being dragged around.
   pub facing: u8,
+  /// How many times this body has been put somewhere it did not walk to.
+  ///
+  /// The same counter `You` carries, for the same reason and one bug later: a
+  /// relocation and a step look identical on the wire, so a client with only
+  /// the new tile interpolates between them. A foe revives at its **home**
+  /// rather than where it fell, so without this it glides from its corpse
+  /// across the map to its den, playing a walk animation the whole way.
+  pub spawn: u32,
 }
 
 /// A tree, rock or fishing spot that is out.

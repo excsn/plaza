@@ -688,3 +688,68 @@ async fn one_bodys_experience_is_nobody_elses_news() {
     "the bystander was told: {bystander_said:?}"
   );
 }
+
+#[tokio::test]
+async fn a_revived_brute_appears_at_its_den_rather_than_walking_there_from_its_corpse() {
+  // A foe revives at its **home**, not where it fell, and on the wire that
+  // relocation was indistinguishable from a step: the client saw only a new
+  // tile, moved `was` to the corpse, and eased the body across the map playing
+  // a walk animation. `Seen::spawn` is what tells the two apart, and it is the
+  // same counter `You` already carried for the local player.
+  use chapskape::protocol::{Doing, Look};
+
+  let (logic, mut state, mut client, socket) = both_sides(Relevance::OnChange).await;
+
+  // A brute standing next to the player, whose den is a long way off.
+  let me = state.zone.actors[&0].tile;
+  let beside = Tile::new(me.x + 1, me.y);
+  // Inside the view radius, or the brute simply leaves the frame and the test
+  // proves nothing. Far enough that a glide is unmistakable.
+  let den = Tile::new(me.x + 10, me.y + 10);
+  let brute: u16 = 9;
+  state.zone.admit(brute, beside, Look::Brute);
+  state.zone.actors.get_mut(&brute).unwrap().home = den;
+
+  let mut now = 0;
+  let out = tick(&logic, &mut state).await;
+  now += 600;
+  deliver(&socket, &ops_for(&out, 0));
+  client.poll(now);
+  assert_eq!(
+    client.others.get(&brute).map(|o| o.tile),
+    Some(beside),
+    "the brute has to be visible beside us before it can be killed"
+  );
+
+  // Killed outright, then left to sit as a carcass until it revives.
+  {
+    let actor = state.zone.actors.get_mut(&brute).unwrap();
+    actor.health = 0;
+    actor.doing = Doing::Dead;
+    actor.up_at = state.zone.tick + 1;
+  }
+
+  // Two ticks: the carcass, then the revival at the den.
+  for _ in 0..2 {
+    let out = tick(&logic, &mut state).await;
+    now += 600;
+    deliver(&socket, &ops_for(&out, 0));
+    client.poll(now);
+  }
+
+  let other = client
+    .others
+    .get(&brute)
+    .copied()
+    .expect("the den is inside the view radius, so the revived brute is still described");
+  assert_eq!(other.tile, den, "the server put it at its den");
+  assert_eq!(
+    other.was, den,
+    "a relocated body must arrive, not travel: it would be drawn between {:?} and {:?}",
+    other.was, other.tile
+  );
+  assert!(
+    !other.moving(now, 600),
+    "and it must not play a walk animation crossing the map"
+  );
+}
