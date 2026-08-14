@@ -105,18 +105,17 @@ pub fn draw_panel(client: &NetClient, url: &str, dials: &Dials) {
         ui.label(format!("{} kills, {} deaths", client.kills, client.deaths));
         ui.separator();
 
-        let now = client.now_ms();
         ui.label("what the wire cost:");
         ui.label(format!(
           "  {:.1} KiB/s session, {:.1} KiB/s recent",
-          client.meter.session_kib_per_sec(now),
-          client.meter.kib_per_sec(now)
+          client.meter.lifetime_per_sec() / 1024.0,
+          client.meter.per_sec() / 1024.0
         ));
-        ui.label(format!("  {:.0} bytes per frame", client.meter.bytes_per_frame()));
+        ui.label(format!("  {:.0} bytes per frame", client.meter.mean()));
         ui.label(format!(
           "  upstream {:.2} KiB/s recent, {:.0} b/msg",
-          client.up.kib_per_sec(now),
-          client.up.bytes_per_frame()
+          client.up.per_sec() / 1024.0,
+          client.up.mean()
         ));
         ui.label(format!(
           "worst correction {:.3}u, {} wraps",
