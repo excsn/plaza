@@ -34,6 +34,7 @@ pub struct TransportStats {
   inbound: AtomicU64,
   inbound_dropped: AtomicU64,
   outbound: AtomicU64,
+  outbound_bytes: AtomicU64,
   outbound_dropped: AtomicU64,
   presence_dropped: AtomicU64,
   refused: AtomicU64,
@@ -61,6 +62,15 @@ impl TransportStats {
   /// Frames handed to a client's outbound queue.
   pub fn outbound(&self) -> u64 {
     self.outbound.load(Ordering::Relaxed)
+  }
+
+  /// Bytes handed to clients' outbound queues, across the session.
+  ///
+  /// A fan-out counts the frame once per recipient, because that is what the
+  /// sockets will carry. Feed this to a `RateMeter` for a live rate; per-agent
+  /// figures come from `ConnectionManager::agent_outbound`.
+  pub fn outbound_bytes(&self) -> u64 {
+    self.outbound_bytes.load(Ordering::Relaxed)
   }
 
   /// Frames dropped because a client had stopped reading.
@@ -100,8 +110,9 @@ impl TransportStats {
     }
   }
 
-  pub(crate) fn record_outbound(&self, sent: u64, dropped: u64) {
+  pub(crate) fn record_outbound(&self, sent: u64, dropped: u64, bytes: u64) {
     self.outbound.fetch_add(sent, Ordering::Relaxed);
+    self.outbound_bytes.fetch_add(bytes, Ordering::Relaxed);
     self.outbound_dropped.fetch_add(dropped, Ordering::Relaxed);
   }
 
@@ -133,10 +144,11 @@ mod tests {
     // it will never hear of again. Collapsing them into one health number is how
     // a correctness failure hides behind an acceptable-looking rate.
     let stats = TransportStats::new();
-    stats.record_outbound(100, 40);
+    stats.record_outbound(100, 40, 6_400);
     stats.record_presence_dropped();
 
     assert_eq!(stats.outbound_dropped(), 40);
+    assert_eq!(stats.outbound_bytes(), 6_400);
     assert_eq!(stats.presence_dropped(), 1);
   }
 }
