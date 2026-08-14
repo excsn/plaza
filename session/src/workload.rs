@@ -11,6 +11,7 @@
 
 use std::time::Duration;
 
+use crate::gate::Rate;
 use crate::manager::{
   InboundOverflow, Limits, OutboundOverflow, Overflow, PresenceOverflow, Queues, DEFAULT_CONDITIONER_CAPACITY,
 };
@@ -293,6 +294,54 @@ impl Overflow {
   }
 }
 
+/// Multiple of what a workload claims one client sends, before the inbound gate
+/// refuses anything.
+///
+/// **Not measured, and deliberately generous.**
+/// [`ops_per_player_per_tick`](Workload::ops_per_player_per_tick) is a claim
+/// about intent rather than a guarantee, and the two errors are not
+/// symmetrical: a cap set too high still bounds a flood to a small multiple of
+/// honest traffic, while one set too low silently discards ops a client
+/// believes arrived. Four is large enough that a client sending on the cadence
+/// its own build was described with cannot reach it by clumping.
+pub const RATE_HEADROOM: f64 = 4.0;
+
+/// Floor under a derived inbound rate.
+///
+/// **Not measured.** A workload claiming `ops_per_player_per_tick: 0` is
+/// describing an audience, not promising silence: a spectator still says hello,
+/// asks for a resync, and leaves. Deriving zero from that would refuse the
+/// first thing it ever said.
+pub const MIN_INBOUND_RATE: f64 = 5.0;
+
+impl Rate {
+  /// A per-connection inbound ceiling for a workload.
+  ///
+  /// The claim is [`tick_rate`](Workload::tick_rate) times
+  /// [`ops_per_player_per_tick`](Workload::ops_per_player_per_tick), which is
+  /// what one client's frames per second come to if it does what the workload
+  /// says; the ceiling is that times [`RATE_HEADROOM`], floored at
+  /// [`MIN_INBOUND_RATE`], with a burst of one second's worth.
+  ///
+  /// **Not applied by [`SessionOptions::workload`], on purpose**, unlike every
+  /// other derivation in this file. Those size a queue, where being wrong costs
+  /// memory; this one refuses traffic, where being wrong costs a player their
+  /// move. So the arithmetic is here to be asked for and the decision to enforce
+  /// it stays a line the application writes:
+  ///
+  /// ```rust,ignore
+  /// SessionOptions::with_protocol(ProtocolVersion(PROTOCOL))
+  ///   .workload(&workload)
+  ///   .rate_limit_inbound(Rate::for_workload(&workload))
+  /// ```
+  ///
+  /// [`SessionOptions::workload`]: crate::manager::SessionOptions::workload
+  pub fn for_workload(workload: &Workload) -> Self {
+    let claimed = f64::from(workload.tick_rate) * f64::from(workload.ops_per_player_per_tick);
+    Self::per_second((claimed * RATE_HEADROOM).max(MIN_INBOUND_RATE))
+  }
+}
+
 impl Limits {
   /// Caps for a workload.
   ///
@@ -304,11 +353,16 @@ impl Limits {
   /// The probe schedule is not derived here. It follows from the round trip and
   /// what a caller wants to learn, not from anything a workload says; see
   /// [`Probes`](crate::manager::Probes).
+  ///
+  /// Neither is the inbound rate, which stays `None`: see
+  /// [`Rate::for_workload`] for the arithmetic and why applying it is the
+  /// application's call rather than a derivation's.
   pub fn for_workload(workload: &Workload) -> Self {
     let cap = workload.max_payload.saturating_mul(2).max(64 * 1024);
     Self {
       max_frame_bytes: cap,
       max_message_bytes: cap,
+      inbound_rate: None,
     }
   }
 }

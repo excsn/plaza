@@ -14,12 +14,12 @@ use plaza::controller::StateControllerBuilder;
 use plaza::tick_driver::TickDriver;
 use plaza_session::codec::JsonCodec;
 use plaza_session::tcp::{AgentFactory, TcpPlazaSession};
-use plaza_session::SessionOptions;
+use plaza_session::{Rate, SessionOptions};
 
 use crate::logic::{PartyLogic, PartyState};
 use crate::moderation::{steward, Host};
 use crate::snapshot::TableSnapshotter;
-use crate::types::PartyOp;
+use crate::types::{PartyOp, FLOOD_OPS, FLOOD_WINDOW_MS};
 
 pub type Party = TcpPlazaSession<PartyOp, u64>;
 
@@ -33,9 +33,16 @@ pub async fn party(afk: Duration) -> (Arc<Party>, Arc<Host>) {
     ))
   });
 
-  let session = Party::bind_with_options("127.0.0.1:0", factory, JsonCodec, SessionOptions::default())
-    .await
-    .expect("bind");
+  let session = Party::bind_with_options(
+    "127.0.0.1:0",
+    factory,
+    JsonCodec,
+    SessionOptions::default().rate_limit_inbound(
+      Rate::per_second(FLOOD_OPS as f64 * 1000.0 / FLOOD_WINDOW_MS as f64).burst(FLOOD_OPS as u32),
+    ),
+  )
+  .await
+  .expect("bind");
   let host = Host::new(session.manager().clone());
 
   let (tx, controller) = StateControllerBuilder::new(

@@ -135,6 +135,7 @@ impl PartyState {
         said: p.said,
         quiet_for_ms: host.quiet_for_ms(*key),
         ops_this_window: host.ops_this_window(*key),
+        shed: host.shed(*key),
         griefer: host.is_griefer(*key),
       })
       .collect();

@@ -8,7 +8,7 @@ cargo test -p plaza_example_table_manners
 
 A four-seat party with host tools. Every claim is a count, and the counts are asserted rather than printed, because each one is a property that has to hold every time rather than a number to admire.
 
-This example originally shipped a 252-line hand-written TCP transport, because AFK, flood attribution, the kick and the drain were impossible on the shipped one. Those became library primitives, and the rewrite deleted the transport. What follows is the recipe.
+This example originally shipped a 252-line hand-written TCP transport, because AFK, flood attribution, the kick and the drain were impossible on the shipped one. Those became library primitives, and the rewrite deleted the transport. The last thing the transport could do that the library could not, shedding a flood without ejecting the sender, is `plaza_session::gate` now. What follows is the recipe.
 
 ## The blocks, and what each tool sits on
 
@@ -16,7 +16,8 @@ This example originally shipped a 252-line hand-written TCP transport, because A
 |---|---|---|
 | kick with a reason | `deregister_agent(&key, farewell)` | who may kick, and what the reason says |
 | AFK removal | `agent_idle_for(&key)` | the timeout, and the steward that applies it |
-| flood attribution | `agent_inbound(&key)` | the window, the threshold, the removal |
+| flood shedding | `rate_limit_inbound(Rate)` | how fast is too fast, and that too fast is not a removal |
+| flood attribution | `agent_inbound(&key)` | the window it displays, the tolerance, the removal |
 | drain | `disconnect_all(farewell)` | when the party ends |
 | seat fate | `Parting::keeps_the_seat()` on the `Left` | a drop holds the seat, everything else clears it |
 
@@ -41,9 +42,9 @@ The parting reason lives in the `Host`, not in any transport. The host initiated
 
 ## The griefer floods
 
-`agent_inbound` answers "who", which the session-wide `TransportStats` cannot; the window and the threshold are the host's. The flooder is removed with `flooding` as its farewell, the shared queue drops nothing, and a bystander keeps its seat and keeps receiving the table.
+**Two verdicts, and the party writes both numbers.** The session holds a `Rate` of `FLOOD_OPS` a second with a burst of the same, so a guest over it is refused *at the door*, on its own connection task, before the queue everybody shares. That costs the flooder its own frames and nobody else theirs, and it is what `agent_inbound(&key).shed` counts. The removal is the escalation: past `FLOOD_TOLERANCE` refused frames the steward reads the shedding as a decision rather than a clumsy client and removes the guest with `flooding` as its farewell. A bystander keeps its seat and keeps receiving the table throughout.
 
-**One honest downgrade from the first build.** The hand-written transport shed the flooder's excess before `forward_incoming`, surviving the flood without ejecting anyone; on the shipped transport the flood reaches the shared controller queue until the steward removes the sender. The isolation assertions still hold at this scale, but shedding-without-ejecting needs to stand between the socket and the controller, and there is still nowhere to stand. That is the observation-seam finding again, now with a second case: door_policy needs to *judge* there, this needs to *shed* there.
+**The downgrade this example carried is repaid.** The 252-line hand-written transport shed a flooder's excess before `forward_incoming` and survived a flood without ejecting anyone; the shipped transport had no seam to do that on, so the flood reached the shared controller queue until the steward removed the sender, and removal was the only verdict the party could express. `plaza_session::gate` is that seam, and the test that was impossible then is `a_clumsy_burst_costs_its_own_frames_and_keeps_its_seat`. The observation-seam finding is now one case rather than two: door_policy still needs to *judge* between socket and controller, and this no longer needs anything.
 
 ## Drain finishes the story
 

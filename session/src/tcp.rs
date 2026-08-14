@@ -25,7 +25,7 @@ use crate::codec::WireCodec;
 use crate::codec::JsonCodec;
 use plaza_wire::frame::ProtocolVersion;
 use crate::conditioner::{Conditioner, DirectionProfile};
-use crate::control::{self, earliest, far_future, route_inbound, ProbeState, DOWN_SEED_FLIP};
+use crate::control::{self, earliest, far_future, route_inbound, ProbeState, Routed, DOWN_SEED_FLIP};
 use crate::error::SessionLayerError;
 use crate::manager::{ConnectionManager, ConnectionOrder, OutboundFrame, SessionOptions, TransportSession};
 
@@ -368,12 +368,20 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
           break;
         }
         while let Some(frame) = up.pop_ready(now) {
-          if let Some(reply) = route_inbound(frame, &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent).await
-            && let Some(reply) = queue_down!(reply, now)
-              && framed.send(reply.into_bytes()).await.is_err() {
-                dead = true;
-                break;
-              }
+          match route_inbound(frame, &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent).await {
+            Routed::Reply(reply) => {
+              if let Some(reply) = queue_down!(reply, now)
+                && framed.send(reply.into_bytes()).await.is_err() {
+                  dead = true;
+                  break;
+                }
+            }
+            Routed::Eject => {
+              dead = true;
+              break;
+            }
+            Routed::Nothing => {}
+          }
         }
         if dead {
           break;
@@ -387,11 +395,16 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
             let now = Instant::now();
             let profile = if link.impaired() { link.read().up } else { DirectionProfile::default() };
             if profile.is_passthrough() && up.is_empty() {
-              if let Some(reply) = route_inbound(bytes.freeze().into(), &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent).await
-                && let Some(reply) = queue_down!(reply, now)
-                  && framed.send(reply.into_bytes()).await.is_err() {
-                    break;
-                  }
+              match route_inbound(bytes.freeze().into(), &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent).await {
+                Routed::Reply(reply) => {
+                  if let Some(reply) = queue_down!(reply, now)
+                    && framed.send(reply.into_bytes()).await.is_err() {
+                      break;
+                    }
+                }
+                Routed::Eject => break,
+                Routed::Nothing => {}
+              }
             } else if !up.push(bytes.freeze().into(), &profile, now) {
               manager.record_link_drop(conn_id);
             }

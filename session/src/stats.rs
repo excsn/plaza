@@ -33,6 +33,7 @@ use std::sync::Arc;
 pub struct TransportStats {
   inbound: AtomicU64,
   inbound_dropped: AtomicU64,
+  inbound_shed: AtomicU64,
   outbound: AtomicU64,
   outbound_bytes: AtomicU64,
   outbound_dropped: AtomicU64,
@@ -57,6 +58,18 @@ impl TransportStats {
   /// is lost player input rather than a stale frame.
   pub fn inbound_dropped(&self) -> u64 {
     self.inbound_dropped.load(Ordering::Relaxed)
+  }
+
+  /// Inbound frames refused by the [`gate`](crate::gate) before reaching the
+  /// shared queue.
+  ///
+  /// Distinct from [`inbound_dropped`](Self::inbound_dropped) in who is at
+  /// fault and who pays: a drop means the *controller* fell behind and names
+  /// nothing a client did, and it costs whoever happened to be sending. A shed
+  /// names one connection that exceeded a rate this session set, and costs only
+  /// that connection. A server seeing both should read this one first.
+  pub fn inbound_shed(&self) -> u64 {
+    self.inbound_shed.load(Ordering::Relaxed)
   }
 
   /// Frames handed to a client's outbound queue.
@@ -108,6 +121,10 @@ impl TransportStats {
     if dropped {
       self.inbound_dropped.fetch_add(1, Ordering::Relaxed);
     }
+  }
+
+  pub(crate) fn record_inbound_shed(&self) {
+    self.inbound_shed.fetch_add(1, Ordering::Relaxed);
   }
 
   pub(crate) fn record_outbound(&self, sent: u64, dropped: u64, bytes: u64) {

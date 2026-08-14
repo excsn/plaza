@@ -26,7 +26,7 @@ use crate::codec::WireCodec;
 use crate::codec::JsonCodec;
 use crate::conditioner::{Conditioner, LinkProfile};
 use crate::control::{
-  self, earliest, far_future, route_inbound, ProbeState, DOWN_SEED_FLIP,
+  self, earliest, far_future, route_inbound, ProbeState, Routed, DOWN_SEED_FLIP,
 };
 use crate::manager::{ConnectionManager, ConnectionOrder, OutboundFrame, SessionOptions, TransportSession};
 
@@ -429,6 +429,7 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
       _ = tokio::time::sleep_until(next_release.unwrap_or_else(far_future)), if next_release.is_some() => {
         let now = tokio::time::Instant::now();
         let mut dead = false;
+        let mut ejected = false;
         while let Some(frame) = down.pop_ready(now) {
           if !write_frame(&mut ws_session, frame, send_as_text).await {
             dead = true;
@@ -439,15 +440,26 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
           break None;
         }
         while let Some(frame) = up.pop_ready(now) {
-          if let Some(reply) = route_inbound(frame, &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent).await
-            && let Some(reply) = queue_down!(reply, now)
-              && !write_frame(&mut ws_session, reply, send_as_text).await {
-                dead = true;
-                break;
-              }
+          match route_inbound(frame, &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent).await {
+            Routed::Reply(reply) => {
+              if let Some(reply) = queue_down!(reply, now)
+                && !write_frame(&mut ws_session, reply, send_as_text).await {
+                  dead = true;
+                  break;
+                }
+            }
+            Routed::Eject => {
+              ejected = true;
+              break;
+            }
+            Routed::Nothing => {}
+          }
         }
         if dead {
           break None;
+        }
+        if ejected {
+          break Some(CloseReason::from(CloseCode::Policy));
         }
       }
 
@@ -483,11 +495,16 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
           let now = tokio::time::Instant::now();
           let profile: LinkProfile = if link.impaired() { link.read() } else { LinkProfile::default() };
           if profile.up.is_passthrough() && up.is_empty() {
-            if let Some(reply) = route_inbound(bytes.into(), &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent).await
-              && let Some(reply) = queue_down!(reply, now)
-                && !write_frame(&mut ws_session, reply, send_as_text).await {
-                  break None;
-                }
+            match route_inbound(bytes.into(), &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent).await {
+              Routed::Reply(reply) => {
+                if let Some(reply) = queue_down!(reply, now)
+                  && !write_frame(&mut ws_session, reply, send_as_text).await {
+                    break None;
+                  }
+              }
+              Routed::Eject => break Some(CloseReason::from(CloseCode::Policy)),
+              Routed::Nothing => {}
+            }
           } else if !up.push(bytes.into(), &profile.up, now) {
             manager.record_link_drop(conn_id);
           }

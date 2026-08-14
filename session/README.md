@@ -41,6 +41,7 @@ Turning off `json` drops `serde_json` from the build, which is why the transport
 | Ending a session with a reason in your own vocabulary | `close_connection`, `deregister_agent`, `disconnect_all` |
 | Bounding a session that must expire | `set_deadline` |
 | Knowing who is idle, and who is flooding | `agent_idle_for`, `agent_inbound` |
+| Making a flood cost the client that sent it, and nobody else | `SessionOptions::rate_limit_inbound` with a `Rate` (see `gate`) |
 | Telling a stale client it is stale | `ProtocolVersion` in a `Hello`, read back with `protocol` |
 | Serving a wasm bundle from the same origin as the socket | `host::Host` (feature `actix_host`) |
 | The whole simulation stack behind that | `host::SimHost` |

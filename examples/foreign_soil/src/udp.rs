@@ -230,7 +230,8 @@ async fn peer_task<ID: AgentId, C: WireCodec>(
         match control::handle_inbound(frame, &codec, clock.as_ref(), &mut probe, conn_id, &manager) {
           Inbound::Reply(reply) => { let _ = socket.send_to(&reply, peer).await; }
           Inbound::Forward(frame) => manager.forward_incoming(agent.clone(), frame).await,
-          Inbound::Consumed => {}
+          Inbound::Consumed | Inbound::Shed => {}
+          Inbound::Eject => break,
         }
       }
 

@@ -41,7 +41,8 @@
   - [Struct `LinkHandle`](#struct-linkhandle)
   - [Struct `ProbeState` and function `make_probe`](#struct-probestate-and-function-makeprobe)
   - [Function `earliest` and constant `DOWN_SEED_FLIP`](#function-earliest-and-constant-downseedflip)
-- [10. Error Handling](#10-error-handling)
+- [10. Module `gate`](#10-module-gate)
+- [11. Error Handling](#11-error-handling)
   - [Enum `SessionLayerError`](#enum-sessionlayererror)
 
 ## Feature Flags
@@ -54,7 +55,7 @@
 | `json` | yes | `JsonCodec`, and the codec a session type falls back to when it names none. Enables `plaza_wire/json`, which is what pulls in `serde_json`. |
 | `msgpack` | no | `MsgPackCodec` (compact) and `MsgPackNamedCodec` (struct field names kept, for a peer that decodes by name). Enables `plaza_wire/msgpack`. |
 
-[`manager`](#2-module-manager), [`codec`](#1-module-codec), and [`error`](#10-error-handling) compile unconditionally.
+[`manager`](#2-module-manager), [`codec`](#1-module-codec), and [`error`](#11-error-handling) compile unconditionally.
 
 **Dropping `serde_json`.** Turn off `json` and the crate no longer builds it: `plaza_session = { version = "0.7", default-features = false, features = ["tcp", "msgpack"] }`. Nothing else has to change, because `plaza` and `plaza_wire` are depended on with `default-features = false` here and neither `plaza` nor `plaza_lobby` names a codec at all, so no internal dependency forces the choice back on. Bring your own codec and you can drop `msgpack` too, leaving no built-in format compiled.
 
@@ -96,9 +97,9 @@ The connection registry plus the notification channels a `StateController` consu
 *   **`connections_of(&self, id: &ID) -> Vec<ConnectionId>`**: the live connections an agent holds. The bridge between "I know who" and "I can act": a decoded op names an agent, and a close, a deadline, or a per-connection reader needs a connection. `PresenceEvent` carries the same id at join and leave.
 *   **`close_connection(&self, conn_id: ConnectionId, farewell: Option<OutboundFrame>) -> bool`**: orders the connection's task to flush what is queued, write the farewell if any, and close the socket. Sync (`try_send` under the registry's read guard), so it is callable from inside `StateLogic`. Returns whether a live connection took the order. The departure then arrives as an ordinary `Left`: a forced disconnect and a cable pull look the same to the controller, on purpose. The farewell is bytes the application already encoded (see `encode_message`); which reason it spells is nobody's business but the application's.
 *   **`idle_for(&self, conn_id) -> Option<Duration>`** / **`agent_idle_for(&self, id: &ID) -> Option<Duration>`**: how long a connection has been silent, counted from its last data frame or from `register` if it never sent one. **Probes do not count**, and that is only implementable here: the control plane answers a `Ping` invisibly, so an AFK rule written against decoded ops is right by accident and one written against frames would never fire. The agent form takes the shortest across its connections. No timers and no timeout policy live here; read it from your own tick and apply your own number.
-*   **`connection_inbound(&self, conn_id) -> Option<InboundVolume>`** / **`agent_inbound(&self, id: &ID) -> InboundVolume`**: monotonic per-connection inbound counters (`frames`, `bytes`), counting what the connection sent rather than what survived the queues. [`TransportStats`](#struct-transportstats) counts the session; this answers "who", which the session-wide numbers cannot. Windowing and thresholds are the application's: keep the last reading and diff, or feed a `plaza_client_utils::RateMeter`.
+*   **`connection_inbound(&self, conn_id) -> Option<InboundVolume>`** / **`agent_inbound(&self, id: &ID) -> InboundVolume`**: monotonic per-connection inbound counters (`frames`, `bytes`, `shed`), counting what the connection sent rather than what survived the queues. [`TransportStats`](#struct-transportstats) counts the session; this answers "who", which the session-wide numbers cannot. Windowing and thresholds are the application's: keep the last reading and diff, or feed a `plaza_client_utils::RateMeter`.
 *   **`connection_outbound(&self, conn_id) -> Option<OutboundVolume>`** / **`agent_outbound(&self, id: &ID) -> OutboundVolume`**: the same shape pointing the other way (`frames`, `bytes`), counting what `broadcast` handed to the connection's queue rather than what the socket managed to write. A frame the fan-out dropped was never that connection's traffic and is not counted.
-*   **`record_inbound_activity(&self, conn_id, bytes: usize)`**: what the control plane calls for each inbound data frame; a custom transport that bypasses `handle_inbound` calls it itself.
+*   **`record_inbound_activity(&self, conn_id, bytes: usize) -> Verdict`**: what the control plane calls for each inbound data frame; a custom transport that bypasses `handle_inbound` calls it itself. It both counts the frame and judges it against [`Limits::inbound_rate`](#10-module-gate), and the return is `#[must_use]`: a frame it refuses must not be forwarded. Without a rate configured, always `Verdict::Admit`.
 *   **`set_deadline(&self, conn_id, after: Option<Duration>, farewell: Option<OutboundFrame>) -> bool`**: arms, moves, or with `None` clears a deadline the connection task enforces; expiry goes through the same flush-then-farewell close. Setting again replaces the deadline, which is how a renewal extends a session (an arcade credit, an auth token's expiry). No timer exists outside the connection task's own loop; what stamps, renews, or revokes it is the application's.
 *   **`deregister_agent(&self, id: &ID, farewell: Option<OutboundFrame>) -> usize`**: `connections_of` then `close_connection` on each; how many took the order.
 *   **`disconnect_all(&self, farewell: Option<OutboundFrame>) -> usize`**: the same close for every live connection, everyone told then closed, so a drain differs from a kick only in who it names.
@@ -167,6 +168,7 @@ SessionOptions::with_protocol(ProtocolVersion(PROTOCOL))
 *   **`queues(Queues)`**, **`limits(Limits)`**: replace a whole group.
 *   **`inbound_capacity`**, **`decoded_capacity`**, **`presence_capacity`**, **`outbound_capacity`**, **`conditioner_capacity`**: one queue depth each.
 *   **`max_frame_bytes`**, **`max_message_bytes`**: one limit each.
+*   **`rate_limit_inbound(Rate)`**: caps how fast one connection may send. See [module `gate`](#10-module-gate).
 *   **`probes`**, **`without_probes`**, **`probe_schedule`**, **`probe_slots`**: the link plane, or none of it.
 
 The clock is read when answering a latency probe and its reading becomes `Pong.responder`. It is called on a connection task, so an authoritative clock living on the simulation loop is **published** rather than borrowed: store the tick into an `AtomicU64` and close over it. **The unit is the application's**; nothing here reads the value as a quantity, converts it, or has a default for it. Without a clock, `Pong.responder` is `None`, and a client can still measure a round trip but cannot estimate the offset between the two clocks.
@@ -247,8 +249,9 @@ pub struct Queues {
 }
 
 pub struct Limits {
-  pub max_frame_bytes: usize,    // largest inbound length-delimited frame, TCP only
-  pub max_message_bytes: usize,  // largest inbound message once continuations are joined, WebSocket only
+  pub max_frame_bytes: usize,       // largest inbound length-delimited frame, TCP only
+  pub max_message_bytes: usize,     // largest inbound message once continuations are joined, WebSocket only
+  pub inbound_rate: Option<Rate>,   // how fast one connection may send; None admits whatever arrives
 }
 
 pub struct Probes {
@@ -264,7 +267,7 @@ pub struct Probes {
 
 Both are plain structs with `Default`, reachable through [`SessionOptions`](#type-sessionclock-and-struct-sessionoptions) and readable off a manager with `ConnectionManager::queues()` / `limits()`, which is where a transport adapter picks them up. `Queues::for_workload` and `Limits::for_workload` derive them from a [`Workload`](#4-module-workload).
 
-The two byte caps are separate because they bound different mechanisms, and each defaults to what its transport enforced before it was nameable. A build serving both transports that wants one number sets both.
+The two byte caps are separate because they bound different mechanisms, and each defaults to what its transport enforced before it was nameable. A build serving both transports that wants one number sets both. They bound one frame; `inbound_rate` bounds the stream of them, and together they are a byte ceiling, which is why the [`gate`](#10-module-gate) counts frames and not bytes. `Limits::for_workload` leaves `inbound_rate` at `None` while deriving both caps: a cap sized wrong costs memory, and a rate sized wrong costs a player their move, so applying [`Rate::for_workload`](#4-module-workload) stays a line the application writes.
 
 ### Struct `Overflow`
 
@@ -326,6 +329,10 @@ Three constants are judgement rather than measurement, and say so in their own d
 `Priority::headroom` doubles derived depths under `LossFree`: an under-provisioned queue costs correctness there and one superseded frame otherwise.
 
 `conditioner` and `probe_slots` are not derived. What the conditioner holds follows from the `LinkProfile` set at runtime, and the probe table from the round trip and the probe schedule; neither is something a workload describes.
+
+**`Rate::for_workload(&w)`** derives a per-connection inbound ceiling from the same numbers: `tick_rate * ops_per_player_per_tick` is what one client's frames per second come to if it does what the workload says, times `RATE_HEADROOM: f64 = 4.0`, floored at `MIN_INBOUND_RATE: f64 = 5.0`, with a burst of one second's worth. Both constants are judgement rather than measurement. The headroom is deliberately large because the input is a claim about intent and the errors are not symmetrical: too high still bounds a flood to a small multiple of honest traffic, too low silently discards ops a client believes arrived. The floor exists because `ops_per_player_per_tick: 0` describes an audience rather than promising silence, and a spectator still says hello and asks for a resync.
+
+**`SessionOptions::workload` does not apply it**, unlike every other derivation here. Enforcing a rate is the one that refuses traffic, so it stays a line the application writes: `.rate_limit_inbound(Rate::for_workload(&w))`.
 
 ## 5. Module `actix_ws` (feature `actix_ws`)
 
@@ -445,7 +452,8 @@ Turns on a console subscriber, once. `plaza` and `plaza_session` are instrumente
 
 Live counters for one transport, from `ActixWsPlazaSession::stats` or `ConnectionManager::stats`.
 
-*   **`inbound()`** / **`inbound_dropped()`**, **`outbound()`** / **`outbound_bytes()`** / **`outbound_dropped()`**, **`presence_dropped()`**, **`refused()`**.
+*   **`inbound()`** / **`inbound_dropped()`** / **`inbound_shed()`**, **`outbound()`** / **`outbound_bytes()`** / **`outbound_dropped()`**, **`presence_dropped()`**, **`refused()`**.
+*   `inbound_dropped` and `inbound_shed` differ in who is at fault and who pays. A drop means the controller fell behind, names nothing a client did, and costs whoever happened to be sending; a shed names one connection that exceeded its [rate](#10-module-gate) and costs only that connection. A server seeing both should read the shed first.
 *   `outbound_bytes` counts the frame once per recipient it was queued for, because that is what the sockets will carry; per-connection figures are `ConnectionManager::connection_outbound` / `agent_outbound`.
 *   **`record_refused()`**: what a transport calls when it turns a socket away before `register`. Nothing else here can see such a socket.
 
@@ -469,10 +477,13 @@ One connection's link plane: impairment both ways, probes, and their deadlines. 
 *   **`deadline() -> Option<Instant>`**: the earliest of the next probe and the two conditioners' heads, which is what the connection task sleeps until.
 *   **`due(now) -> Vec<Frame>`**: everything owed to the socket now, in order: released downstream frames, replies to probes that came out of the upstream queue, and a fresh probe if one fell due.
 *   **`take_forwarded() -> Vec<Frame>`**: inbound frames whose delay has expired, for `forward_incoming`. Separate from `due`'s return because these go to the application rather than the socket, and that call is `async` while `due` is not.
+*   **`ejected() -> bool`**: whether a frame the upstream queue released exceeded a rate that ends connections. A held frame is judged when the link releases it, and `due` hands back what the socket is owed, so a close cannot travel that way. The direct path needs no flag: `inbound` returns `Inbound::Eject` to its caller.
 
 ### Enum `Inbound`
 
-What `LinkDriver::inbound` decided: **`Forward(Frame)`** (not ours, hand it to the application), **`Reply(Frame)`** (ours, and it wants an answer written back to the peer), **`Consumed`** (ours, and finished with).
+What `LinkDriver::inbound` decided: **`Forward(Frame)`** (not ours, hand it to the application), **`Reply(Frame)`** (ours, and it wants an answer written back to the peer), **`Consumed`** (ours, and finished with), **`Shed`** (theirs, over the [rate](#10-module-gate), dropped before the shared queue), **`Eject`** (the same, on a rate that ends connections).
+
+`control::route_inbound` folds the same decision into **`Routed::{Nothing, Reply(Frame), Eject}`** for a transport that wants delivery done for it: `Nothing` covers delivered, answered internally, and shed alike, because all three leave the socket with nothing to write.
 
 ### Struct `LinkHandle`
 
@@ -498,7 +509,35 @@ The probe table and its schedule, one per connection.
 
 **`DOWN_SEED_FLIP: u64`**: xor a connection id with this to seed the downstream conditioner. Seeding both directions from the connection id is what makes an impaired session re-run identically; the flip is what keeps the two directions from drawing the same jitter sequence.
 
-## 10. Error Handling
+## 10. Module `gate`
+
+How fast one connection may speak, judged on the connection task before the queue every connection shares.
+
+```rust
+pub struct Rate {
+  pub per_sec: f64,   // sustained frames per second
+  pub burst: u32,     // frames admissible at once from a full bucket
+  pub over: Over,     // Shed | Close
+}
+
+pub enum Verdict { Admit, Shed, Close }
+```
+
+A token bucket, reached through [`SessionOptions::rate_limit_inbound`](#type-sessionclock-and-struct-sessionoptions) or by setting [`Limits::inbound_rate`](#structs-queues-and-limits). Both numbers matter: a sustained rate alone punishes an honest client whose packets arrived in a clump after a hiccup, and a burst alone is a flood budget that refills the moment it is spent. A bucket starts full and never banks more than `burst`, so silence buys nothing.
+
+*   **`Rate::per_second(f64)`**: a sustained rate with a burst of one second's worth, shedding what it cannot pay for. **`burst(u32)`** and **`disconnecting()`** adjust it. **`Rate::for_workload`** is in [module `workload`](#4-module-workload).
+*   **`Over::Shed`** discards the frame and keeps the connection, which is right where the traffic is an eager client rather than an attack. **These are ops the client believes arrived**, so a stream where each op matters exactly once wants `Close` or a rate it will not hit.
+*   **`Over::Close`** ends the connection, for a rate no honest client of the build can reach. The WebSocket transport closes with `1008 Policy Violation`; TCP has no code and drops the connection.
+
+**Where it stands is the whole design.** A flood dropped at the shared inbound queue has already cost every other client the frames behind it, so the judgement is one step earlier, per connection, before anything shared is touched. **It reads no content**: at that point a frame is still encoded bytes, and opening them would put a decode on the path a flood is trying to saturate.
+
+**What is counted is frames, not bytes**, because a frame's size is already bounded by `max_frame_bytes` / `max_message_bytes`: frames per second times the largest one is a byte ceiling without a second number to keep.
+
+**There is no default.** A session with no rate admits everything, exactly as it did before this module existed. How fast is too fast, and whether too fast is worth ending a connection over, are answers only the application has, the same division [`Overflow`](#struct-overflow) and the AFK rule already draw.
+
+Shed frames are counted in three places: `TransportStats::inbound_shed` for the session, and `InboundVolume::shed` per connection and per agent, which is what an application escalates on. A shed frame still counts as a frame and still stamps activity, since it did arrive and a flooder is the opposite of idle.
+
+## 11. Error Handling
 
 ### Enum `SessionLayerError`
 

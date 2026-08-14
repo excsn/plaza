@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use plaza_example_table_manners::client::Guest;
 use plaza_example_table_manners::party;
-use plaza_example_table_manners::types::{Parting, PartyOp, AFK_SECS, FLOOD_OPS};
+use plaza_example_table_manners::types::{Parting, PartyOp, AFK_SECS, FLOOD_OPS, FLOOD_TOLERANCE};
 
 async fn settle() {
   tokio::time::sleep(Duration::from_millis(300)).await;
@@ -147,6 +147,36 @@ async fn a_flood_gets_the_flooder_removed_and_nobody_else() {
 
   bystander.leave();
   griefer.leave();
+}
+
+#[tokio::test]
+async fn a_clumsy_burst_costs_its_own_frames_and_keeps_its_seat() {
+  // The verdict the party could not express while removal was the only one it
+  // had. A guest whose packets arrive in a clump is over the rate and is not a
+  // griefer, and the difference is worth a seat.
+  let (session, host) = party(patient()).await;
+  let addr = session.local_addr().to_string();
+  let clumsy = Guest::arrive(&addr, Some(0)).await.expect("connect");
+  settle().await;
+
+  for _ in 0..(FLOOD_OPS + FLOOD_TOLERANCE / 2) {
+    let _ = clumsy.say(&[PartyOp::Say("sorry".into())]).await;
+  }
+  settle().await;
+
+  assert!(
+    session.manager().stats().inbound_shed() > 0,
+    "a burst past the rate should have been trimmed at the door"
+  );
+  assert_eq!(clumsy.farewell(), None, "a clumsy guest was removed for clumsiness");
+  assert_eq!(host.meters.flood_removals.load(Ordering::Relaxed), 0);
+
+  // And the seat still works, once the bucket has refilled.
+  tokio::time::sleep(Duration::from_secs(1)).await;
+  clumsy.say(&[PartyOp::Say("hello".into())]).await.expect("say");
+  settle().await;
+  assert!(clumsy.table().is_some(), "the clumsy guest stopped being told anything");
+  clumsy.leave();
 }
 
 #[tokio::test]
