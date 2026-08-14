@@ -31,8 +31,12 @@
 //! promised 10-12% and the wire delivered 0-9%. An arm that must decode its
 //! own output cannot omit what the decoder needs.
 //!
-//! - `frame now`: what ships. A hashed lookup per touched cell, a byte string
-//!   per cell in the frame, the whole frame encoded per client.
+//! - `per viewer`: what shipped when this file was written, and the baseline
+//!   every ratio below is against. A hashed lookup per touched cell, a byte
+//!   string per cell in the frame, the whole frame assembled and encoded per
+//!   client. **It is no longer what ships**, and the arms are kept because
+//!   they are the evidence for choices already made rather than a description
+//!   of the current code.
 //! - `joined`: the touched payloads concatenated into one byte string before
 //!   encoding. Each is self-delimiting (its own count opens it), so a reader
 //!   loops until the buffer runs out. Kills 48 of 49 envelope framings.
@@ -54,6 +58,14 @@
 //! written relative to the cell rather than to the world: 15 units of range
 //! instead of 1024, which buys back six bits an axis at the same step. That is
 //! a saving only the published-per-cell shape can have.
+//!
+//! **What ships now is none of these arms.** The zone re-keyed this whole layer
+//! by the viewer's *cell* rather than the viewer: `Packed` is refcounted, the
+//! body blob is assembled once per occupied viewer-cell, and addressing walks
+//! cell pairs against a fixed offset mask. Every arm here is per-viewer, so
+//! every ratio is measured against a shape that no longer exists and the
+//! current cost of a tick lives in `zone_scale`, which runs the real path.
+//! Read this file as the argument for the changes, not as their result.
 //!
 //! Run with `cargo run -p gow_3d --release --example publish_costs`.
 
@@ -389,7 +401,7 @@ fn main() {
         .map(|s| state.zone.characters.get(&s).map(|c| c.tracked.at))
         .collect();
 
-      // ---- frame now: hashed lookup per touched cell, a byte string each.
+      // ---- per viewer: hashed lookup per touched cell, a byte string each.
       let started = Instant::now();
       let mut window = Vec::with_capacity(64);
       let mut frames = Vec::with_capacity(count);
@@ -636,7 +648,7 @@ fn main() {
     let base = now.total_us();
     let share = count as f64 / occupied.max(1) as f64;
     for (name, t) in [
-      ("frame now", now),
+      ("per viewer", now),
       ("joined", joined),
       ("joined + flat", joined_flat),
       ("joined + flat + held", held),
@@ -695,8 +707,9 @@ fn main() {
     println!();
   }
 
-  println!("  `per-cell ops` is what MessageTarget::Agents would buy; its wire bytes are");
-  println!("  unchanged, since a client still receives the same payloads. Read it against");
-  println!("  `joined` rather than against `frame now`: the question is what the protocol");
-  println!("  change adds over the shape with no protocol change in it.\n");
+  println!("  Every arm here assembles per viewer, which is what shipped when this file");
+  println!("  was written and is not what ships now: the layer is keyed by the viewer's");
+  println!("  cell, so a blob is built once per occupied viewer-cell and handed out by");
+  println!("  refcount. These ratios are the argument that produced that change, not a");
+  println!("  measurement of it. `zone_scale` runs the real path.\n");
 }
