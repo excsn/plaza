@@ -185,6 +185,9 @@ pub struct NetClient {
   /// derived once. A client that ran the same placement itself would be a
   /// second derivation of one fact, and those drift.
   pub seeded: bool,
+  /// Cell payloads received this tick under [`Delivery::Cells`](crate::protocol::Delivery::Cells),
+  /// drained when the frame that terminates the tick arrives.
+  cells: Vec<crate::protocol::Packed>,
   pub others: HashMap<Seat, Other>,
   /// Everything the server says about you, which is where the local interface
   /// reads health, mana, the cast bar and the cooldown from. Nothing here is
@@ -261,6 +264,7 @@ impl NetClient {
       seat: None,
       at: (0.0, 0.0, 0.0),
       seeded: false,
+      cells: Vec::new(),
       others: HashMap::new(),
       you: None,
       spawn_seen: 0,
@@ -351,6 +355,10 @@ impl NetClient {
     for op in ops {
       match op {
         GowOp::Seated { seat } => self.seat = Some(seat),
+        // Held until the tick's frame arrives, which is what says the cells
+        // are all in. Applying them as they land would draw a half-assembled
+        // world on any tick whose ops were split across reads.
+        GowOp::Cell(payload) => self.cells.push(payload),
         GowOp::World(frame) => self.on_frame(*frame),
         GowOp::Refused { at } => {
           // No easing, on purpose. An honest client never gets here, so a
@@ -383,6 +391,12 @@ impl NetClient {
         self.last_sent_at = None;
       }
     }
+    // Unpacked once. The bodies are shared cell payloads plus per-client
+    // extras, labelled at decode; see `crate::pack`. Under `Delivery::Cells`
+    // they arrived as their own ops and are drained here, so the two modes
+    // converge on one list before anything reads it.
+    let cells = std::mem::take(&mut self.cells);
+    let bodies = frame.seen_with(&cells);
     self.landed = frame.landed;
     self.authority = frame.authority;
     for hit in &self.landed {
@@ -397,27 +411,35 @@ impl NetClient {
     let now = self.now_ms;
     let mine = self.seat;
 
+    // Your own body comes from `you`, not from the audience.
+    //
+    // Not a tidy-up: the audience is quantised, and this is the one position in
+    // the frame whose exactness is a claim the example makes. A 2mm rounding
+    // here would put a floor under "client authority cannot disagree with
+    // itself" and the number that says so would never read zero again.
+    if let Some(you) = frame.you {
+      if !self.seeded {
+        // Taken once, to learn where the zone put us.
+        self.at = you.at;
+        self.seeded = true;
+      } else if self.authority == Authority::Server {
+        // The server owns it, so this is not an echo, it is the answer. No
+        // prediction and no reconciliation: the character is drawn where the
+        // server last said, which is what makes the round trip visible
+        // rather than hidden, and visible is the point of the comparison.
+        self.gap = crate::movement::distance(self.at, you.at);
+        self.at = you.at;
+      } else {
+        // Under client authority it *is* an echo of what we already said, so
+        // the distance to it is the round trip's worth of travel and nothing
+        // is applied.
+        self.gap = crate::movement::distance(self.at, you.at);
+      }
+      self.worst_gap = self.worst_gap.max(self.gap);
+    }
 
-    for seen in &frame.characters {
+    for seen in &bodies {
       if Some(seen.seat) == mine {
-        if !self.seeded {
-          // Taken once, to learn where the zone put us.
-          self.at = seen.at;
-          self.seeded = true;
-        } else if self.authority == Authority::Server {
-          // The server owns it, so this is not an echo, it is the answer. No
-          // prediction and no reconciliation: the character is drawn where the
-          // server last said, which is what makes the round trip visible
-          // rather than hidden, and visible is the point of the comparison.
-          self.gap = crate::movement::distance(self.at, seen.at);
-          self.at = seen.at;
-        } else {
-          // Under client authority it *is* an echo of what we already said, so
-          // the distance to it is the round trip's worth of travel and nothing
-          // is applied.
-          self.gap = crate::movement::distance(self.at, seen.at);
-        }
-        self.worst_gap = self.worst_gap.max(self.gap);
         continue;
       }
       self
@@ -435,7 +457,7 @@ impl NetClient {
         });
     }
 
-    for seen in &frame.characters {
+    for seen in &bodies {
       if let Some(before) = self.health_was.insert(seen.seat, seen.health)
         && before != seen.health
       {
@@ -462,7 +484,7 @@ impl NetClient {
     // A frame is the whole audience, not a delta, so absence means out of it.
     // Safe here in a way it is not over an unreliable transport: a lost frame
     // would otherwise despawn everybody at once.
-    let present: std::collections::HashSet<Seat> = frame.characters.iter().map(|s| s.seat).collect();
+    let present: std::collections::HashSet<Seat> = bodies.iter().map(|s| s.seat).collect();
     self.others.retain(|seat, _| present.contains(seat));
   }
 

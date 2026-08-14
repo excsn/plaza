@@ -8,10 +8,10 @@ default-run = "gow_3d"
 [features]
 default = ["native", "client", "server", "websocket"]
 client = []
-server = ["dep:plaza_session", "dep:plaza_wire", "dep:actix-web", "dep:tokio", "dep:async-trait", "dep:tracing"]
+server = ["dep:plaza_session", "dep:actix-web", "dep:tokio", "dep:async-trait", "dep:tracing"]
 native = ["plaza_ws/native"]
 web = ["client", "websocket", "plaza_ws/miniquad"]
-websocket = ["dep:plaza_ws", "dep:plaza_wire"]
+websocket = ["dep:plaza_ws"]
 
 [dependencies]
 parking_lot = "0.12"
@@ -21,7 +21,9 @@ playground_common = { workspace = true }
 serde = { workspace = true }
 
 plaza_ws = { workspace = true, optional = true, features = ["pump"] }
-plaza_wire = { workspace = true, optional = true, features = ["default", "msgpack"] }
+# Not optional: `pack` is how the zone's hot array reaches the wire, and both
+# ends of this example read it, so every build has it whatever else is on.
+plaza_wire = { workspace = true, features = ["default", "msgpack"] }
 plaza_session = { workspace = true, features = ["default", "actix_host"], optional = true }
 # Not optional and not server-only: the zone's spatial index is the relevance
 # this example is about, and the crate is pure logic that compiles to wasm, as
