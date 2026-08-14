@@ -143,13 +143,265 @@ impl GridQuantizer {
     morton::encode_2d(cx, cy)
   }
 
+  /// The world-space minimum corner of a cell.
+  ///
+  /// What makes a coordinate expressible *relative to its cell*: a payload
+  /// that knows which cell it describes can quantise over one cell's width
+  /// instead of the world's, which is several bits an axis at the same step.
+  pub fn corner(&self, cx: u32, cy: u32) -> (f32, f32) {
+    (
+      self.origin_x + cx as f32 * self.cell_size,
+      self.origin_y + cy as f32 * self.cell_size,
+    )
+  }
+
   /// How many cells a radius spans, for sizing a query's cell window.
   pub fn cells_for_radius(&self, radius: f32) -> u32 {
     (radius / self.cell_size).ceil().max(0.0) as u32
   }
 
+  /// The Morton keys of every cell overlapping the square of half-width
+  /// `radius` around `(x, y)`, row by row. Cell-granular like
+  /// [`SpatialGrid::query_radius`]: the corner cells reach past the radius.
+  ///
+  /// This is the region walk itself, for anything keyed by cell rather than by
+  /// entity: publishing one payload per occupied cell, subscribing a viewer to
+  /// the cells its view touches, diffing that set as the viewer moves.
+  pub fn keys_in_radius(&self, x: f32, y: f32, radius: f32) -> impl Iterator<Item = u64> + use<> {
+    self.cells_in_radius(x, y, radius).map(|(gx, gy)| morton::encode_2d(gx, gy))
+  }
+
+  /// The same walk as [`keys_in_radius`](Self::keys_in_radius), yielding cell
+  /// coordinates rather than Morton codes.
+  ///
+  /// A Morton key is the right identifier for a sparse map; a world with known
+  /// bounds can index a flat `Vec` by `(cx, cy)` instead, which costs an
+  /// array index where the key costs a hash. Both are here because which one
+  /// is right is a property of the world rather than of the grid.
+  pub fn cells_in_radius(&self, x: f32, y: f32, radius: f32) -> impl Iterator<Item = (u32, u32)> + use<> {
+    let (cx, cy) = self.cell(x, y);
+    let r = self.cells_for_radius(radius);
+    let (x0, x1) = (cx.saturating_sub(r), cx.saturating_add(r));
+    let (y0, y1) = (cy.saturating_sub(r), cy.saturating_add(r));
+    (y0..=y1).flat_map(move |gy| (x0..=x1).map(move |gx| (gx, gy)))
+  }
+
   pub fn cell_size(&self) -> f32 {
     self.cell_size
+  }
+}
+
+/// A [`GridQuantizer`] over a world with **known bounds**, so every cell has a
+/// dense integer index and anything keyed by cell can live in a flat `Vec`.
+///
+/// The quantizer alone answers "which cell", and a Morton key is the right
+/// identifier when the world is unbounded or sparse, because a hash map is the
+/// only thing that can hold it. A bounded world can do better: an array index
+/// where the key costs a hash. That is not a micro-optimisation at the scale
+/// this exists for. Publishing one payload per cell and handing each viewer the
+/// cells its view touches does roughly `viewers x cells-per-view` lookups a
+/// tick, and moving those off a hash was measured at 1.39x of a whole tick in
+/// one consumer, and 8x on the path that also builds a per-cell recipient list.
+///
+/// It is deliberately not a container. It is the *addressing scheme*, and the
+/// containers are whatever the caller needs keyed by place:
+///
+/// - `CellTable<Vec<Id>>` is a dense spatial grid.
+/// - `CellTable<Bytes>` is one published payload per cell.
+/// - `CellTable<Vec<ClientId>>` is the inverse index that says who is listening
+///   to each cell, which is what addressing a per-cell payload needs.
+///
+/// All three appear in a single consumer, which is why this is a primitive
+/// rather than any one of them.
+#[derive(Debug, Clone, Copy)]
+pub struct CellSpace {
+  quantizer: GridQuantizer,
+  side: u32,
+}
+
+impl CellSpace {
+  /// A space covering `[origin, origin + extent]` on both axes.
+  ///
+  /// # Panics
+  /// Panics if `extent` is not positive.
+  pub fn new(quantizer: GridQuantizer, extent: f32) -> Self {
+    if !(extent > 0.0) {
+      panic!("CellSpace extent must be positive");
+    }
+    let side = (extent / quantizer.cell_size()).ceil() as u32 + 1;
+    Self { quantizer, side }
+  }
+
+  /// Cells along one axis.
+  pub fn side(&self) -> u32 {
+    self.side
+  }
+
+  /// How many cells the space holds, which is the length a keyed `Vec` needs.
+  pub fn len(&self) -> usize {
+    self.side as usize * self.side as usize
+  }
+
+  pub fn is_empty(&self) -> bool {
+    self.side == 0
+  }
+
+  pub fn quantizer(&self) -> &GridQuantizer {
+    &self.quantizer
+  }
+
+  /// The dense index of a cell, clamped into the space.
+  ///
+  /// Clamping matches [`GridQuantizer::cell`], which floors anything below the
+  /// origin into cell 0. **A point outside the bounds is therefore filed at the
+  /// edge rather than rejected**, so a space smaller than its world piles the
+  /// outside into its border cells. Size it to the world.
+  pub fn index_at(&self, cx: u32, cy: u32) -> usize {
+    let last = self.side.saturating_sub(1);
+    cy.min(last) as usize * self.side as usize + cx.min(last) as usize
+  }
+
+  /// The dense index of the cell a world point falls in.
+  pub fn index_of(&self, x: f32, y: f32) -> usize {
+    let (cx, cy) = self.quantizer.cell(x, y);
+    self.index_at(cx, cy)
+  }
+
+  /// The cell coordinates an index names.
+  pub fn cell_at(&self, index: usize) -> (u32, u32) {
+    let side = self.side as usize;
+    ((index % side) as u32, (index / side) as u32)
+  }
+
+  /// The world-space minimum corner of the cell an index names, for writing
+  /// coordinates relative to their cell.
+  pub fn corner(&self, index: usize) -> (f32, f32) {
+    let (cx, cy) = self.cell_at(index);
+    self.quantizer.corner(cx, cy)
+  }
+
+  /// The dense indices of every cell overlapping the square of half-width
+  /// `radius` around `(x, y)`, deduplicated at the bounds.
+  ///
+  /// Cell-granular like every query here, so it reaches past the radius at the
+  /// corners.
+  pub fn indices_in_radius(&self, x: f32, y: f32, radius: f32) -> impl Iterator<Item = usize> + use<> {
+    let (cx, cy) = self.quantizer.cell(x, y);
+    let r = self.quantizer.cells_for_radius(radius);
+    let last = self.side.saturating_sub(1);
+    let (x0, x1) = (cx.saturating_sub(r).min(last), cx.saturating_add(r).min(last));
+    let (y0, y1) = (cy.saturating_sub(r).min(last), cy.saturating_add(r).min(last));
+    let side = self.side as usize;
+    (y0..=y1).flat_map(move |gy| (x0..=x1).map(move |gx| gy as usize * side + gx as usize))
+  }
+}
+
+/// A `Vec` keyed by [`CellSpace`], holding one `T` per cell.
+///
+/// The container half of the pair: `CellSpace` says which cell, this holds what
+/// is in it. Reused rather than reallocated, so a table rebuilt every tick does
+/// not churn the heap.
+#[derive(Debug, Clone)]
+pub struct CellTable<T> {
+  space: CellSpace,
+  slots: Vec<T>,
+}
+
+impl<T: Default> CellTable<T> {
+  pub fn new(space: CellSpace) -> Self {
+    let mut slots = Vec::new();
+    slots.resize_with(space.len(), T::default);
+    Self { space, slots }
+  }
+
+  /// Resets every cell to `T::default()`, keeping the allocation.
+  ///
+  /// For `T = Vec<_>` this drops the contents and keeps each cell's capacity
+  /// only if the caller clears rather than replaces; see
+  /// [`clear_each`](Self::clear_each).
+  pub fn reset(&mut self) {
+    for slot in self.slots.iter_mut() {
+      *slot = T::default();
+    }
+  }
+}
+
+impl<T> CellTable<T> {
+  pub fn space(&self) -> &CellSpace {
+    &self.space
+  }
+
+  pub fn get(&self, index: usize) -> Option<&T> {
+    self.slots.get(index)
+  }
+
+  pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
+    self.slots.get_mut(index)
+  }
+
+  pub fn at(&self, x: f32, y: f32) -> Option<&T> {
+    self.slots.get(self.space.index_of(x, y))
+  }
+
+  pub fn at_mut(&mut self, x: f32, y: f32) -> Option<&mut T> {
+    let index = self.space.index_of(x, y);
+    self.slots.get_mut(index)
+  }
+
+  pub fn iter(&self) -> impl Iterator<Item = (usize, &T)> {
+    self.slots.iter().enumerate()
+  }
+
+  pub fn iter_mut(&mut self) -> impl Iterator<Item = (usize, &mut T)> {
+    self.slots.iter_mut().enumerate()
+  }
+
+  pub fn len(&self) -> usize {
+    self.slots.len()
+  }
+
+  pub fn is_empty(&self) -> bool {
+    self.slots.is_empty()
+  }
+}
+
+impl<T: Clearable> CellTable<T> {
+  /// Empties every cell while keeping each one's own allocation, which is what
+  /// a per-tick rebuild of `Vec`-valued cells wants.
+  pub fn clear_each(&mut self) {
+    for slot in self.slots.iter_mut() {
+      slot.clear_in_place();
+    }
+  }
+
+  /// Every cell that is not empty, paired with its index.
+  pub fn occupied(&self) -> impl Iterator<Item = (usize, &T)> {
+    self.slots.iter().enumerate().filter(|(_, slot)| !slot.is_empty_slot())
+  }
+}
+
+/// Emptied in place rather than replaced, so a per-tick rebuild keeps its
+/// allocations. Implemented for the cell payload types that occur in practice.
+pub trait Clearable {
+  fn clear_in_place(&mut self);
+  fn is_empty_slot(&self) -> bool;
+}
+
+impl<T> Clearable for Vec<T> {
+  fn clear_in_place(&mut self) {
+    self.clear();
+  }
+  fn is_empty_slot(&self) -> bool {
+    self.is_empty()
+  }
+}
+
+impl<T> Clearable for Option<T> {
+  fn clear_in_place(&mut self) {
+    *self = None;
+  }
+  fn is_empty_slot(&self) -> bool {
+    self.is_none()
   }
 }
 
@@ -197,17 +449,28 @@ impl<Id: Copy> SpatialGrid<Id> {
   /// so a caller can gather several regions, and reusing one `Vec` avoids
   /// allocating per query.
   pub fn query_radius(&self, x: f32, y: f32, radius: f32, out: &mut Vec<Id>) {
-    let (cx, cy) = self.quantizer.cell(x, y);
-    let r = self.quantizer.cells_for_radius(radius);
-    let (x0, x1) = (cx.saturating_sub(r), cx.saturating_add(r));
-    let (y0, y1) = (cy.saturating_sub(r), cy.saturating_add(r));
-    for gy in y0..=y1 {
-      for gx in x0..=x1 {
-        if let Some(bucket) = self.cells.get(&morton::encode_2d(gx, gy)) {
-          out.extend_from_slice(bucket);
-        }
-      }
+    for key in self.quantizer.keys_in_radius(x, y, radius) {
+      out.extend_from_slice(self.members(key));
     }
+  }
+
+  /// The ids in one cell, by its Morton key. Empty for a cell nothing occupies.
+  pub fn members(&self, key: u64) -> &[Id] {
+    self.cells.get(&key).map_or(&[], Vec::as_slice)
+  }
+
+  /// Every occupied cell and its ids, in no particular order.
+  ///
+  /// This is the grid seen cell-first instead of viewer-first: build one
+  /// payload per occupied cell here, then hand each viewer the payloads for
+  /// [`GridQuantizer::keys_in_radius`] of its position. Cells emptied by
+  /// [`clear`](Self::clear) but not refilled are skipped.
+  pub fn occupied(&self) -> impl Iterator<Item = (u64, &[Id])> {
+    self
+      .cells
+      .iter()
+      .filter(|(_, bucket)| !bucket.is_empty())
+      .map(|(key, bucket)| (*key, bucket.as_slice()))
   }
 
   /// The quantizer this grid uses, for computing keys or cell spans directly.
@@ -469,6 +732,142 @@ mod tests {
     let mut out = Vec::new();
     grid.query_radius(5.0, 5.0, 10.0, &mut out);
     assert!(out.is_empty(), "cleared grid returns nothing");
+  }
+
+  #[test]
+  fn keys_in_radius_walks_the_window_query_radius_reads() {
+    let q = GridQuantizer::new((0.0, 0.0), 10.0);
+    let keys: Vec<u64> = q.keys_in_radius(25.0, 25.0, 10.0).collect();
+    assert_eq!(keys.len(), 9, "one cell of slack each way around (2,2): {keys:?}");
+    for gx in 1..=3u32 {
+      for gy in 1..=3u32 {
+        assert!(keys.contains(&morton::encode_2d(gx, gy)), "missing cell ({gx},{gy})");
+      }
+    }
+    let clamped: Vec<u64> = q.keys_in_radius(5.0, 5.0, 10.0).collect();
+    assert_eq!(clamped.len(), 4, "the window clamps at the origin: {clamped:?}");
+  }
+
+  #[test]
+  fn a_cell_first_pass_reaches_everyone_a_viewer_first_pass_does() {
+    let q = GridQuantizer::new((0.0, 0.0), 10.0);
+    let mut grid = SpatialGrid::new(q);
+    for (id, x, y) in [(1u32, 5.0, 5.0), (2, 12.0, 5.0), (3, 500.0, 500.0)] {
+      grid.insert(id, x, y);
+    }
+
+    let placed: usize = grid.occupied().map(|(_, ids)| ids.len()).count();
+    assert_eq!(placed, 3, "three ids in three cells");
+    assert_eq!(grid.members(q.key(12.0, 5.0)), &[2]);
+    assert!(grid.members(q.key(50.0, 50.0)).is_empty(), "a vacant cell is empty, not an error");
+
+    let mut viewer_first = Vec::new();
+    grid.query_radius(5.0, 5.0, 10.0, &mut viewer_first);
+    let mut cell_first: Vec<u32> = q
+      .keys_in_radius(5.0, 5.0, 10.0)
+      .flat_map(|key| grid.members(key).iter().copied())
+      .collect();
+    viewer_first.sort_unstable();
+    cell_first.sort_unstable();
+    assert_eq!(viewer_first, cell_first);
+  }
+
+  #[test]
+  fn a_cell_space_indexes_the_same_cells_the_quantizer_names() {
+    let q = GridQuantizer::new((-100.0, -100.0), 10.0);
+    let space = CellSpace::new(q, 200.0);
+    assert_eq!(space.side(), 21);
+    assert_eq!(space.len(), 441);
+
+    let index = space.index_of(-95.0, -95.0);
+    assert_eq!(space.cell_at(index), q.cell(-95.0, -95.0));
+    assert_eq!(space.corner(index), (-100.0, -100.0));
+
+    // Out of bounds files at the edge rather than out of range, matching the
+    // quantizer's own clamp, which is why a space must be sized to its world.
+    let far = space.index_of(9000.0, 9000.0);
+    assert!(far < space.len());
+    assert_eq!(space.cell_at(far), (20, 20));
+  }
+
+  #[test]
+  fn a_dense_window_agrees_with_the_morton_one() {
+    let q = GridQuantizer::new((-100.0, -100.0), 10.0);
+    let space = CellSpace::new(q, 200.0);
+
+    let dense: Vec<(u32, u32)> = space.indices_in_radius(0.0, 0.0, 10.0).map(|i| space.cell_at(i)).collect();
+    let sparse: Vec<(u32, u32)> = q.cells_in_radius(0.0, 0.0, 10.0).collect();
+    assert_eq!(dense, sparse, "the two addressing schemes walk the same cells");
+    assert_eq!(dense.len(), 9);
+  }
+
+  #[test]
+  fn one_cell_space_keys_the_three_tables_a_publisher_needs() {
+    // The reason this is a primitive rather than any one container: publishing
+    // per cell needs entities by cell, a payload by cell, and the inverse index
+    // of who is listening to each cell, and all three are the same addressing.
+    let q = GridQuantizer::new((0.0, 0.0), 10.0);
+    let space = CellSpace::new(q, 100.0);
+
+    let mut bodies: CellTable<Vec<u32>> = CellTable::new(space);
+    let mut payloads: CellTable<Option<Vec<u8>>> = CellTable::new(space);
+    let mut audience: CellTable<Vec<u16>> = CellTable::new(space);
+
+    bodies.clear_each();
+    for (id, x, y) in [(1u32, 5.0, 5.0), (2, 7.0, 5.0), (3, 55.0, 55.0)] {
+      bodies.at_mut(x, y).unwrap().push(id);
+    }
+    assert_eq!(bodies.occupied().count(), 2, "two cells hold anything");
+
+    payloads.clear_each();
+    for (index, ids) in bodies.occupied() {
+      payloads.get_mut(index).unwrap().replace(ids.iter().map(|i| *i as u8).collect());
+    }
+    assert_eq!(payloads.occupied().count(), 2);
+
+    audience.clear_each();
+    for (viewer, x, y) in [(10u16, 5.0, 5.0), (11, 55.0, 55.0)] {
+      for index in space.indices_in_radius(x, y, 10.0) {
+        if payloads.get(index).is_some_and(|p| p.is_some()) {
+          audience.get_mut(index).unwrap().push(viewer);
+        }
+      }
+    }
+    let listeners: usize = audience.occupied().map(|(_, v)| v.len()).sum();
+    assert_eq!(listeners, 2, "each viewer hears the one occupied cell it stands in");
+    assert_eq!(audience.at(5.0, 5.0).unwrap(), &[10]);
+  }
+
+  #[test]
+  fn clearing_a_table_keeps_each_cell_s_allocation() {
+    let q = GridQuantizer::new((0.0, 0.0), 10.0);
+    let mut table: CellTable<Vec<u32>> = CellTable::new(CellSpace::new(q, 100.0));
+    let index = table.space().index_of(5.0, 5.0);
+    table.get_mut(index).unwrap().extend([1, 2, 3, 4]);
+    let capacity = table.get(index).unwrap().capacity();
+
+    table.clear_each();
+    assert!(table.get(index).unwrap().is_empty());
+    assert_eq!(table.get(index).unwrap().capacity(), capacity, "a rebuild must not churn the heap");
+    assert_eq!(table.occupied().count(), 0);
+  }
+
+  #[test]
+  #[should_panic(expected = "extent must be positive")]
+  fn a_cell_space_needs_an_extent() {
+    CellSpace::new(GridQuantizer::new((0.0, 0.0), 10.0), 0.0);
+  }
+
+  #[test]
+  fn occupied_skips_buckets_a_clear_emptied() {
+    let q = GridQuantizer::new((0.0, 0.0), 10.0);
+    let mut grid = SpatialGrid::new(q);
+    grid.insert(1u32, 5.0, 5.0);
+    grid.insert(2, 25.0, 25.0);
+    grid.clear();
+    grid.insert(3u32, 25.0, 25.0);
+    let cells: Vec<(u64, Vec<u32>)> = grid.occupied().map(|(k, ids)| (k, ids.to_vec())).collect();
+    assert_eq!(cells, vec![(q.key(25.0, 25.0), vec![3])]);
   }
 
   #[test]

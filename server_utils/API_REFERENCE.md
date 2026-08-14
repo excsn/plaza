@@ -14,6 +14,9 @@
 - [3. Relevance (module `relevance`)](#3-relevance-module-relevance)
   - [Module `relevance::morton`](#module-relevancemorton)
   - [Struct `GridQuantizer`](#struct-gridquantizer)
+  - [Struct `CellSpace`](#struct-cellspace)
+  - [Struct `CellTable<T>`](#struct-celltablet)
+  - [Trait `Clearable`](#trait-clearable)
   - [Struct `SpatialGrid<Id: Copy>`](#struct-spatialgridid-copy)
   - [Struct `TierBoundary`](#struct-tierboundary)
   - [Struct `VisibilitySet`](#struct-visibilityset)
@@ -121,13 +124,42 @@ Maps continuous world coordinates onto a uniform integer grid.
 
 *   **`new(origin: (f32, f32), cell_size: f32)`**: `origin` is the world's minimum corner (points at or below it clamp to cell 0); `cell_size` near a viewer's relevance radius keeps a view a few cells wide. **Panics if `cell_size` is not positive.**
 *   **`cell(x, y) -> (u32, u32)`**, **`key(x, y) -> u64`** (Morton key of the cell), **`cells_for_radius(radius) -> u32`**, **`cell_size() -> f32`**.
+*   **`corner(&self, cx, cy) -> (f32, f32)`**: the world-space minimum corner of a cell. What lets a payload that knows which cell it describes quantise over one cell's width instead of the world's, several bits an axis at the same step.
+*   **`cells_in_radius(&self, x, y, radius) -> impl Iterator<Item = (u32, u32)>`**: the region walk yielding cell coordinates rather than Morton codes, for a bounded world indexing a flat `Vec`.
+*   **`keys_in_radius(&self, x, y, radius) -> impl Iterator<Item = u64>`**: the Morton keys of every cell overlapping the square of half-width `radius`, row by row. The region walk itself, for anything keyed by cell rather than by entity: one payload per occupied cell, a viewer's cell subscription set, diffing that set as the viewer moves.
+
+### Struct `CellSpace`
+
+A `GridQuantizer` over a world with **known bounds**, so every cell has a dense integer index and anything keyed by cell can live in a flat `Vec`. A Morton key is right for an unbounded or sparse world, because only a hash map can hold it; a bounded world pays an array index instead of a hash. Publishing one payload per cell and handing each viewer the cells its view touches does roughly `viewers x cells-per-view` lookups a tick, measured at 1.39x of a whole tick in one consumer and 8x on the path that also builds a per-cell recipient list.
+
+Deliberately not a container: it is the *addressing scheme*, and the containers are whatever the caller keys by place. `CellTable<Vec<Id>>` is a dense spatial grid, `CellTable<Option<Bytes>>` is one published payload per cell, `CellTable<Vec<ClientId>>` is the inverse index naming who listens to each cell. All three occur in one consumer, which is why this is the primitive rather than any of them.
+
+*   **`new(GridQuantizer, extent: f32)`**: a space covering `[origin, origin + extent]` on both axes. Panics if `extent` is not positive.
+*   **`side() -> u32`**, **`len() -> usize`** (cells in the space, the length a keyed `Vec` needs), **`is_empty()`**, **`quantizer() -> &GridQuantizer`**.
+*   **`index_at(cx, cy) -> usize`**, **`index_of(x, y) -> usize`**: the dense index of a cell. **Clamped**, matching `GridQuantizer::cell`, so a point outside the bounds is filed at the edge rather than rejected: a space smaller than its world piles the outside into its border cells. Size it to the world.
+*   **`cell_at(index) -> (u32, u32)`**, **`corner(index) -> (f32, f32)`**.
+*   **`indices_in_radius(&self, x, y, radius) -> impl Iterator<Item = usize>`**: the dense indices of every cell overlapping the region, clamped at the bounds. Cell-granular, so it reaches past the radius at the corners.
+
+### Struct `CellTable<T>`
+
+A `Vec` keyed by `CellSpace`, holding one `T` per cell. The container half of the pair; reused rather than reallocated so a per-tick rebuild does not churn the heap.
+
+*   **`new(CellSpace)`** (requires `T: Default`), **`reset()`** (every cell back to `T::default()`).
+*   **`get(index)`**, **`get_mut(index)`**, **`at(x, y)`**, **`at_mut(x, y)`**, **`iter()`**, **`iter_mut()`**, **`len()`**, **`is_empty()`**, **`space() -> &CellSpace`**.
+*   With `T: Clearable`: **`clear_each()`** empties every cell while keeping each one's own allocation, and **`occupied() -> impl Iterator<Item = (usize, &T)>`** yields only the non-empty ones.
+
+### Trait `Clearable`
+
+Emptied in place rather than replaced, so a per-tick rebuild keeps its allocations. **`clear_in_place()`**, **`is_empty_slot()`**. Implemented for `Vec<T>` and `Option<T>`.
 
 ### Struct `SpatialGrid<Id: Copy>`
 
 Buckets entity ids into cells for range queries. Rebuild each tick.
 
 *   **`new(GridQuantizer)`**, **`clear(&mut self)`** (empties buckets, keeps capacity), **`insert(&mut self, id, x, y)`**.
-*   **`query_radius(&self, x, y, radius, out: &mut Vec<Id>)`**: appends every id in the cells overlapping the square of half-width `radius`, a cell-granular *superset*, so apply an exact distance test after. `out` is not cleared, so reuse one `Vec` to avoid per-query allocation.
+*   **`query_radius(&self, x, y, radius, out: &mut Vec<Id>)`**: appends every id in the cells overlapping the square of half-width `radius`, a cell-granular *superset*, so apply an exact distance test after. `out` is not cleared, so reuse one `Vec` to avoid per-query allocation. Equivalent to `keys_in_radius` followed by `members` per key.
+*   **`members(&self, key: u64) -> &[Id]`**: the ids in one cell; empty for a cell nothing occupies.
+*   **`occupied(&self) -> impl Iterator<Item = (u64, &[Id])>`**: every occupied cell and its ids, in no particular order. The grid seen cell-first instead of viewer-first: build one payload per occupied cell, then hand each viewer the payloads for `keys_in_radius` of its position.
 *   **`quantizer(&self) -> &GridQuantizer`**.
 
 **Two axes, and in three dimensions that over-returns rather than missing.** The exact distance test the previous point asks for is what makes it correct on a plane; in open volume a query on `(x, z)` answers with a disc where a sphere was wanted, so nobody is missed and a great deal is sent that should not have been. `spacemo` prices that at 7.1x the bandwidth per client, with the game looking entirely right. Filter the returned set on `|dy|` as well: exact, at the same query cost, since it touches the same cells and examines the same candidates. Most 3D games never need more, because a landscape is locally 2.5D; a genuinely volumetric grid sends exactly what the filter sends and has to earn its place on query cost alone.

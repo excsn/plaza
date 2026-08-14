@@ -53,7 +53,10 @@ pub use input_schedule::{InputSchedule, InputWindow, Submission};
 pub use plaza_client_utils::meter::RateMeter;
 pub use told::Told;
 pub use priority::PriorityAccumulator;
-pub use relevance::{GridQuantizer, SetDigest, SpatialGrid, TierBoundary, VisibilitySet};
+pub use relevance::{
+  CellSpace, CellTable, Clearable, GridQuantizer, SetDigest, SpatialGrid, TierBoundary,
+  VisibilitySet,
+};
 pub use render_error::{RenderError, render_error_at};
 pub use rest::RestDetector;
 pub use subscription::{Audience, Because, Subscriptions};
