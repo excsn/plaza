@@ -538,11 +538,17 @@ impl Zone {
     self.work();
   }
 
+  /// A body that has served its time comes back whole, at its home rather than
+  /// where it fell.
+  ///
+  /// The relocation is announced by `spawns` on the frame rather than by an
+  /// event. An event is said once and a client that misses that tick eases the
+  /// body across the map for ever; a counter is state, so the next frame
+  /// carries the answer however many were dropped.
   fn revive(&mut self) {
     let now = self.tick;
     let green = world::the_green();
-    let mut moved: Vec<(Seat, Tile)> = Vec::new();
-    for (seat, actor) in self.actors.iter_mut() {
+    for actor in self.actors.values_mut() {
       if actor.alive() || actor.up_at > now {
         continue;
       }
@@ -551,12 +557,9 @@ impl Zone {
       actor.route.clear();
       actor.queued = None;
       actor.effort = 0;
-      let back = if actor.is_person() { green } else { actor.home };
-      actor.tile = back;
+      actor.tile = if actor.is_person() { green } else { actor.home };
       actor.spawns += 1;
-      moved.push((*seat, back));
     }
-    let _ = moved;
   }
 
   /// Hens wander and brutes look for somebody.
