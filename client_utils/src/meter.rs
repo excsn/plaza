@@ -1,5 +1,5 @@
-//! Counting what a server sends, so a claim about bandwidth is a number rather
-//! than an assertion.
+//! Counting what crosses the wire, so a claim about bandwidth is a number
+//! rather than an assertion.
 //!
 //! An example that says relevance streaming is cheaper than sending everything
 //! is only interesting if it can show the two figures side by side, and a
@@ -7,6 +7,10 @@
 //! amount of arithmetic that turns running totals into rates, in one place,
 //! including the divide-by-zero guard that is the whole reason a hand-rolled
 //! version is worth replacing.
+//!
+//! It lives in the client crate and `plaza_server_utils` re-exports it, because
+//! a client panel needs it as much as a server does and a wasm bundle must not
+//! inherit the server crate to read its own bandwidth.
 
 /// How many buckets the rolling window is divided into, and how long each is.
 /// Together they set the window: long enough to be steady, short enough that a
