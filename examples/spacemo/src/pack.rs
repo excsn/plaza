@@ -140,14 +140,24 @@ const REL: (f32, f32) = (-(crate::max_view() + 24.0), crate::max_view() + 24.0);
 const REL_BITS: u32 = 15;
 
 /// What a ship costs when its position is an offset rather than a place.
+///
+/// The common arm. A ship carried absolutely (see [`pack_relative`]) costs
+/// `POS_BITS - REL_BITS` more per axis.
 pub const fn ship_bits_relative() -> usize {
-  (SEAT_BITS + HEALTH_BITS + REL_BITS * 3 + plaza_wire::bits::SMALLEST_THREE_INDEX_BITS + ROT_BITS * 3 + VEL_BITS * 3) as usize
+  (SEAT_BITS + HEALTH_BITS + 1 + REL_BITS * 3 + plaza_wire::bits::SMALLEST_THREE_INDEX_BITS + ROT_BITS * 3 + VEL_BITS * 3) as usize
 }
 
 /// Writes ships as offsets from `observer`, which is carried absolutely once.
 ///
 /// One absolute anchor plus N offsets, rather than N absolutes. The anchor is
 /// the observer's own ship, which the client is guaranteed to be sent.
+///
+/// One bit per ship says which arm carried it. `REL` is sized to the view
+/// radius, and the radius is no longer the only way into a frame: a held lock
+/// keeps its ship in frame from anywhere in the volume, and an offset past the
+/// bound would clamp, landing the ship up to the width of the world away. Such
+/// a ship crosses absolutely instead, in the same bounds the absolute path
+/// uses, which the volume assert on `POS` already covers.
 pub fn pack_relative(ships: &[ShipState], observer: [f32; 3]) -> Vec<u8> {
   let mut w = BitWriter::with_capacity(ships.len() * ship_bits_relative() / 8 + 16);
   // **The anchor is not quantised.** Quantising it over the world puts the
@@ -163,8 +173,21 @@ pub fn pack_relative(ships: &[ShipState], observer: [f32; 3]) -> Vec<u8> {
   for ship in ships {
     w.bits(ship.seat as u64, SEAT_BITS);
     w.bits(ship.health.min(crate::sim::MAX_HEALTH) as u64, HEALTH_BITS);
-    for (axis, anchor) in observer.iter().enumerate() {
-      w.quantized(ship.pos[axis] - anchor, REL.0, REL.1, REL_BITS);
+    let offset = [
+      ship.pos[0] - observer[0],
+      ship.pos[1] - observer[1],
+      ship.pos[2] - observer[2],
+    ];
+    let beyond = offset.iter().any(|axis| *axis < REL.0 || *axis > REL.1);
+    w.bits(beyond as u64, 1);
+    if beyond {
+      for axis in 0..3 {
+        w.quantized(ship.pos[axis], POS.0, POS.1, POS_BITS);
+      }
+    } else {
+      for axis in offset {
+        w.quantized(axis, REL.0, REL.1, REL_BITS);
+      }
     }
     w.smallest_three(ship.rot, ROT_BITS);
     for axis in 0..3 {
@@ -185,9 +208,14 @@ pub fn unpack_relative(bytes: &[u8]) -> Option<Vec<ShipState>> {
   for _ in 0..count {
     let seat = r.bits(SEAT_BITS).ok()? as u16;
     let health = r.bits(HEALTH_BITS).ok()? as u8;
+    let beyond = r.bits(1).ok()? == 1;
     let mut pos = [0.0f32; 3];
     for (axis, place) in pos.iter_mut().enumerate() {
-      *place = observer[axis] + r.quantized(REL.0, REL.1, REL_BITS).ok()?;
+      *place = if beyond {
+        r.quantized(POS.0, POS.1, POS_BITS).ok()?
+      } else {
+        observer[axis] + r.quantized(REL.0, REL.1, REL_BITS).ok()?
+      };
     }
     let rot = r.smallest_three(ROT_BITS).ok()?;
     let mut vel = [0.0f32; 3];
@@ -444,6 +472,41 @@ mod tests {
       .map(|(a, b)| (a.pos[0] - b.pos[0]).abs())
       .fold(0.0f32, f32::max);
     assert!(worst > 1000.0, "absolute should clamp badly out here, not {worst}");
+  }
+
+  #[test]
+  fn a_ship_a_lock_holds_past_the_radius_still_lands() {
+    // The radius is not the only way into a frame: a held lock keeps its ship
+    // in it from anywhere in the volume, and the offset arm's bounds are sized
+    // to the radius. The flag is per ship, so the neighbour stays an offset.
+    let observer = [-350.0f32, 300.0, -320.0];
+    let near = ShipState {
+      seat: 1,
+      health: 3,
+      pos: [observer[0] + 40.0, observer[1] - 25.0, observer[2] + 60.0],
+      rot: [0.0, 0.0, 0.0, 1.0],
+      vel: [1.0, 0.0, -2.0],
+    };
+    let locked = ShipState {
+      seat: 2,
+      health: 2,
+      pos: [390.0, -380.0, 350.0],
+      rot: [0.0, 0.0, 0.0, 1.0],
+      vel: [-3.0, 1.0, 0.0],
+    };
+    let back = unpack_relative(&pack_relative(&[near.clone(), locked.clone()], observer)).expect("it should decode");
+    assert_eq!(back.len(), 2);
+    for (sent, tolerance) in [(&near, relative_error()), (&locked, position_error())] {
+      let got = back.iter().find(|s| s.seat == sent.seat).expect("both ships decode");
+      for axis in 0..3 {
+        assert!(
+          (sent.pos[axis] - got.pos[axis]).abs() <= tolerance,
+          "seat {} axis {axis} moved {} past {tolerance}",
+          sent.seat,
+          (sent.pos[axis] - got.pos[axis]).abs()
+        );
+      }
+    }
   }
 
   #[test]
