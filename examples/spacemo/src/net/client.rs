@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use plaza_client_utils::{FixedTimestep, RateMeter};
+use plaza_client_utils::{FixedTimestep, RateMeter, Silence};
 use plaza_wire::{MsgPackCodec, WireCodec};
 use plaza_ws::pump::{mismatch_message, Arrival, FramePump};
 use plaza_ws::{Event, State};
@@ -68,9 +68,10 @@ pub enum Status {
 ///
 /// Free-standing so it can be tested without a socket.
 pub fn forget_quiet_bolts(bolts: &mut HashMap<u32, Shot>, frame: u64) -> usize {
-  let before = bolts.len();
-  bolts.retain(|_, bolt| !bolt.streamed || frame.saturating_sub(bolt.seen) < BOLT_SILENCE);
-  before - bolts.len()
+  // A spawn-only bolt is never mentioned again by design, so silence must not
+  // claim it: only the streamed ones answer with a stamp.
+  const SILENCE: Silence = Silence::new(BOLT_SILENCE);
+  SILENCE.sweep(bolts, frame, |_, bolt| bolt.streamed.then_some(bolt.seen))
 }
 
 /// Whether a correction is the world moving a ship rather than the prediction
@@ -106,9 +107,8 @@ pub fn name(seat: u16) -> String {
 /// Free-standing so it can be tested without a socket, which is most of why it
 /// is not inline.
 pub fn forget_the_quiet(ships: &mut HashMap<u16, Known>, frame: u64, mine: Option<u16>) -> usize {
-  let before = ships.len();
-  ships.retain(|seat, known| Some(*seat) == mine || frame.saturating_sub(known.seen) < FORGET_AFTER);
-  before - ships.len()
+  const GRACE: Silence = Silence::new(FORGET_AFTER);
+  GRACE.sweep(ships, frame, |seat, known| (Some(*seat) != mine).then_some(known.seen))
 }
 
 /// A ship this client currently knows about.
