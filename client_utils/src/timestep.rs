@@ -278,23 +278,35 @@ impl ExactSizeIterator for Steps {}
 /// needs each one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Periodic {
-  interval_ms: u64,
-  accumulated_ms: u64,
+  interval_nanos: u64,
+  accumulated_nanos: u64,
 }
 
 impl Periodic {
   /// # Panics
   /// Panics if `interval_ms` is zero.
   pub fn new(interval_ms: u64) -> Self {
-    assert!(interval_ms > 0, "a period must be greater than zero");
-    Self { interval_ms, accumulated_ms: 0 }
+    Self::from_interval(Duration::from_millis(interval_ms))
   }
 
   /// # Panics
-  /// Panics if `hz` is zero or above 1000.
+  /// Panics if `interval` is zero.
+  pub fn from_interval(interval: Duration) -> Self {
+    assert!(!interval.is_zero(), "a period must be greater than zero");
+    Self {
+      interval_nanos: whole_nanos(interval),
+      accumulated_nanos: 0,
+    }
+  }
+
+  /// A period of exactly `1.0 / hz` seconds, the same expression as
+  /// [`FixedTimestep::from_hz`].
+  ///
+  /// # Panics
+  /// Panics if `hz` is zero.
   pub fn from_hz(hz: u32) -> Self {
-    assert!(hz > 0 && hz <= 1000, "a period rate must be between 1 and 1000 Hz, got {hz}");
-    Self::new((1000 / hz) as u64)
+    assert!(hz > 0, "a period rate must be greater than zero Hz");
+    Self::from_interval(Duration::from_secs_f64(1.0 / f64::from(hz)))
   }
 
   /// Changes the period, keeping whatever has accumulated.
@@ -307,12 +319,20 @@ impl Periodic {
   /// # Panics
   /// Panics if `interval_ms` is zero.
   pub fn set_interval_ms(&mut self, interval_ms: u64) {
-    assert!(interval_ms > 0, "a period must be greater than zero");
-    self.interval_ms = interval_ms;
+    self.set_interval(Duration::from_millis(interval_ms));
   }
 
-  pub fn interval_ms(&self) -> u64 {
-    self.interval_ms
+  /// See [`set_interval_ms`](Self::set_interval_ms).
+  ///
+  /// # Panics
+  /// Panics if `interval` is zero.
+  pub fn set_interval(&mut self, interval: Duration) {
+    assert!(!interval.is_zero(), "a period must be greater than zero");
+    self.interval_nanos = whole_nanos(interval);
+  }
+
+  pub fn interval(&self) -> Duration {
+    Duration::from_nanos(self.interval_nanos)
   }
 
   /// Adds elapsed time and says whether the period elapsed, at most once.
@@ -321,9 +341,9 @@ impl Periodic {
   /// interval is *kept*, not discarded, so a long frame is repaid on the
   /// following ones rather than resetting the phase.
   pub fn due(&mut self, elapsed_ms: u64) -> bool {
-    self.accumulated_ms += elapsed_ms;
-    if self.accumulated_ms >= self.interval_ms {
-      self.accumulated_ms -= self.interval_ms;
+    self.accumulated_nanos += elapsed_ms.saturating_mul(1_000_000);
+    if self.accumulated_nanos >= self.interval_nanos {
+      self.accumulated_nanos -= self.interval_nanos;
       return true;
     }
     false
@@ -334,20 +354,20 @@ impl Periodic {
   /// For work where each occurrence matters (spawning a wave, firing a weapon),
   /// as opposed to work that is idempotent within a frame.
   pub fn advance(&mut self, elapsed_ms: u64) -> u32 {
-    self.accumulated_ms += elapsed_ms;
-    let count = self.accumulated_ms / self.interval_ms;
-    self.accumulated_ms -= count * self.interval_ms;
+    self.accumulated_nanos += elapsed_ms.saturating_mul(1_000_000);
+    let count = self.accumulated_nanos / self.interval_nanos;
+    self.accumulated_nanos -= count * self.interval_nanos;
     count as u32
   }
 
-  /// How long until the period next elapses.
+  /// How long until the period next elapses, in whole milliseconds.
   pub fn remaining_ms(&self) -> u64 {
-    self.interval_ms.saturating_sub(self.accumulated_ms)
+    self.interval_nanos.saturating_sub(self.accumulated_nanos) / 1_000_000
   }
 
   /// Restarts the period from now.
   pub fn reset(&mut self) {
-    self.accumulated_ms = 0;
+    self.accumulated_nanos = 0;
   }
 }
 
@@ -372,6 +392,14 @@ mod rate_tests {
     assert_eq!(steps, 59, "a second of elapsed time is {steps} steps of 16.666667ms");
     let steps: usize = (0..9_900).map(|_| clock.advance(10).len()).sum();
     assert_eq!(steps + 59, 5_999, "a hundred seconds stays within one step of 60Hz");
+  }
+
+  #[test]
+  fn a_period_rate_is_as_exact_as_a_step_rate() {
+    assert_eq!(Periodic::from_hz(60).interval(), Duration::from_secs_f64(1.0 / 60.0));
+    let mut p = Periodic::from_hz(60);
+    let fired: u32 = (0..100).map(|_| p.advance(10)).sum();
+    assert_eq!(fired, 59, "a second is {fired} periods of 16.666667ms, not 62");
   }
 
   #[test]
@@ -536,7 +564,7 @@ mod tests {
     p.due(90);
     p.set_interval_ms(50);
     assert!(p.due(0), "already past the new interval, so it is due immediately");
-    assert_eq!(p.interval_ms(), 50);
+    assert_eq!(p.interval(), Duration::from_millis(50));
   }
 
   #[test]
