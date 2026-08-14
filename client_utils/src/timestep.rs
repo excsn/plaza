@@ -74,6 +74,7 @@ pub struct FixedTimestep {
   step_nanos: u64,
   accumulated_nanos: u64,
   max_frame_nanos: u64,
+  max_steps: Option<u32>,
   dropped_nanos: u64,
 }
 
@@ -92,6 +93,7 @@ impl FixedTimestep {
       step_nanos: whole_nanos(step),
       accumulated_nanos: 0,
       max_frame_nanos: whole_nanos(DEFAULT_MAX_FRAME),
+      max_steps: None,
       dropped_nanos: 0,
     }
   }
@@ -130,6 +132,24 @@ impl FixedTimestep {
     self
   }
 
+  /// Caps catch-up in whole steps rather than elapsed time.
+  ///
+  /// The cap `TickDriver` speaks (`MAX_STEPS_PER_WAKE`), and the right one for
+  /// a **slow tick over a fast driver**, a 600ms game tick fed by a 50ms wake,
+  /// because a cap in steps follows the step length when the step length is a
+  /// live dial and a cap in milliseconds does not. When it fires, everything
+  /// still owed is dropped and counted in [`dropped_ms`](Self::dropped_ms):
+  /// time the world will never have, and keeping it would make the next wake
+  /// worse. An advance that lands exactly on the cap keeps its sub-step
+  /// remainder, so an ordinary full catch-up stays exact.
+  ///
+  /// Composes with [`with_max_frame_ms`](Self::with_max_frame_ms), which caps
+  /// what one advance may be *handed* rather than what it may run.
+  pub fn with_max_steps(mut self, max_steps: u32) -> Self {
+    self.max_steps = Some(max_steps);
+    self
+  }
+
   /// Adds elapsed time and returns the steps it pays for.
   ///
   /// The accumulator is drained here rather than as the iterator is consumed, so
@@ -143,8 +163,15 @@ impl FixedTimestep {
       self.dropped_nanos += elapsed_nanos - self.max_frame_nanos;
     }
     self.accumulated_nanos += elapsed_nanos.min(self.max_frame_nanos);
-    let count = self.accumulated_nanos / self.step_nanos;
+    let mut count = self.accumulated_nanos / self.step_nanos;
     self.accumulated_nanos -= count * self.step_nanos;
+    if let Some(cap) = self.max_steps {
+      if count > cap as u64 {
+        self.dropped_nanos += (count - cap as u64) * self.step_nanos + self.accumulated_nanos;
+        self.accumulated_nanos = 0;
+        count = cap as u64;
+      }
+    }
     Steps {
       remaining: count as u32,
       step: Duration::from_nanos(self.step_nanos),
@@ -524,6 +551,36 @@ mod tests {
       simulated += t.advance(dt).sum::<Duration>();
     }
     assert!(wall - simulated < Duration::from_millis(16), "simulated {simulated:?} against wall {wall:?}");
+    assert_eq!(t.dropped_ms(), 0);
+  }
+
+  #[test]
+  fn a_slow_tick_over_a_fast_driver_caps_in_ticks_and_abandons_the_rest() {
+    // The listen-server shape: a 600ms game tick fed by 50ms wakes, whose
+    // stall recovery must be counted in ticks because the tick length is a
+    // dial. A two-minute stall must not be replayed as two hundred ticks.
+    let mut t = FixedTimestep::from_step_ms(600).with_max_steps(3).with_max_frame_ms(u64::MAX / 2_000_000);
+    assert_eq!(t.advance(1_250).len(), 2, "an ordinary wake is not capped");
+    assert_eq!(t.pending_ms(), 50, "and carries its remainder");
+
+    let steps = t.advance(120_000).len();
+    assert_eq!(steps, 3, "a stall runs the cap");
+    assert_eq!(t.pending_ms(), 0, "what was still owed is abandoned");
+    assert!(t.dropped_ms() > 100_000, "and counted rather than silent: {}", t.dropped_ms());
+
+    // A live tick dial: the cap follows the step length by construction.
+    t.set_step_ms(50);
+    assert_eq!(t.advance(200).len(), 3, "three 50ms ticks under the same cap");
+  }
+
+  #[test]
+  fn landing_exactly_on_the_cap_keeps_the_remainder() {
+    // The cap is for a world that fell behind, not a tax on a full catch-up:
+    // dropping the sub-step remainder here would bleed time on every busy
+    // frame and the average rate would quietly run slow.
+    let mut t = FixedTimestep::from_step_ms(100).with_max_steps(3).with_max_frame_ms(1000);
+    assert_eq!(t.advance(320).len(), 3);
+    assert_eq!(t.pending_ms(), 20, "exactly at the cap is not over it");
     assert_eq!(t.dropped_ms(), 0);
   }
 

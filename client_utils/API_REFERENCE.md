@@ -365,7 +365,8 @@ Second-order dead reckoning for one scalar: keeps the last three samples, takes 
 ### Struct `FixedTimestep`
 
 *   **`from_step(Duration)`** / **`from_step_ms(step_ms)`** / **`from_hz(hz)`**: **panics on zero.** `from_hz` is exact to the nanosecond, the same expression as `plaza::TickDriver::from_hz` (`Duration::from_secs_f64(1.0 / hz)`), and a test in `plaza` pins the two to each other: 60 Hz is a 16.666667 ms step on both sides. Internals are integer nanoseconds, so no float error accumulates.
-*   **`with_max_frame_ms(ms)`**: cap how much elapsed time one `advance` may pay for. Default `DEFAULT_MAX_FRAME`, 250 ms. This cap is elapsed *time*; `TickDriver` caps a stall at `MAX_STEPS_PER_WAKE` whole steps, a benign difference for a predicted client since corrections flow from the server.
+*   **`with_max_frame_ms(ms)`**: cap how much elapsed time one `advance` may pay for. Default `DEFAULT_MAX_FRAME`, 250 ms.
+*   **`with_max_steps(n)`**: cap catch-up in whole steps instead, the cap `TickDriver` speaks (`MAX_STEPS_PER_WAKE`) and the right one for a **slow tick over a fast driver** (a 600ms game tick fed by 50ms wakes), because a cap in steps follows the step length when the step length is a live dial. When it fires, everything still owed is dropped into `dropped_ms`; landing exactly on the cap keeps its sub-step remainder, so an ordinary full catch-up stays exact. Composes with `with_max_frame_ms`, which caps what an advance is handed rather than what it may run; raise that one when the steps cap is the policy.
 *   **`advance(&mut self, elapsed_ms) -> Steps`**: an `ExactSizeIterator` yielding the step as a `Duration`, once per step this frame paid for. The step is *yielded* so a caller cannot integrate by the frame delta instead.
 *   **`step()`**, **`step_secs()`**, **`set_step(Duration)`** / **`set_step_ms(ms)`**, **`pending_ms()`**, **`alpha()`** (the fraction of a step accumulated), **`dropped_ms()`**, **`reset()`**.
 
