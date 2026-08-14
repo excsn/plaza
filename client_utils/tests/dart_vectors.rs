@@ -303,18 +303,24 @@ fn timing_vectors() {
     .map(|&elapsed| {
       let steps = timestep.advance(elapsed);
       let count = steps.len();
-      // The fixture speaks whole milliseconds, which a 16ms step round-trips
-      // exactly; the Dart mirror has not moved to sub-millisecond steps.
-      let step_values: Vec<u64> = steps.map(|step| step.as_millis() as u64).collect();
+      let step_nanos: Vec<u64> = steps.map(|step| step.as_nanos() as u64).collect();
       json!({
         "elapsed_ms": elapsed,
         "steps": count,
-        "step_values": step_values,
+        "step_nanos": step_nanos,
         "pending_ms": timestep.pending_ms(),
         "alpha": f(timestep.alpha()),
         "dropped_ms": timestep.dropped_ms(),
       })
     })
+    .collect();
+
+  // A rate that does not divide a round number, which is where a millisecond
+  // step ran 4.2% fast against the exact driver. The counts walk 5,6,6,... to
+  // 59 over the second, which only a sub-millisecond step produces.
+  let mut sixty = FixedTimestep::from_hz(60);
+  let sixty_steps: Vec<Value> = std::iter::repeat_n(100u64, 10)
+    .map(|elapsed| json!({ "elapsed_ms": elapsed, "steps": sixty.advance(elapsed).len() }))
     .collect();
 
   let mut periodic = Periodic::new(50);
@@ -324,6 +330,11 @@ fn timing_vectors() {
       let fired = periodic.advance(elapsed);
       json!({ "elapsed_ms": elapsed, "fired": fired })
     })
+    .collect();
+
+  let mut periodic_sixty = Periodic::from_hz(60);
+  let periodic_sixty_steps: Vec<Value> = std::iter::repeat_n(100u64, 10)
+    .map(|elapsed| json!({ "elapsed_ms": elapsed, "fired": periodic_sixty.advance(elapsed) }))
     .collect();
 
   // Play-out admission. A gap wider than `lost_ahead` is a discontinuity and not
@@ -411,7 +422,17 @@ fn timing_vectors() {
       },
       "trajectory": { "damping": 0.5, "max_horizon_ms": 500, "steps": trajectory_steps },
       "fixed_timestep": { "step_ms": 16, "max_frame_ms": 100, "steps": timestep_steps },
+      "fixed_timestep_hz": {
+        "hz": 60,
+        "step_nanos": FixedTimestep::from_hz(60).step().as_nanos() as u64,
+        "steps": sixty_steps,
+      },
       "periodic": { "interval_ms": 50, "steps": periodic_steps },
+      "periodic_hz": {
+        "hz": 60,
+        "interval_nanos": Periodic::from_hz(60).interval().as_nanos() as u64,
+        "steps": periodic_sixty_steps,
+      },
       "playout": { "max_queued": 4, "lost_ahead": 500, "arrivals": playout_steps, "pops": playout_pops },
       "easing": { "inputs": ts.iter().map(|&t| f(t)).collect::<Vec<_>>(), "curves": curves },
       "error_smoother": { "duration_secs": 0.2, "easing": "smoothstep", "begin_from": 10.0, "steps": smoother_steps },

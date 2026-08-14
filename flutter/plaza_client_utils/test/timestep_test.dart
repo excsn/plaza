@@ -6,15 +6,21 @@ void main() {
     test('a zero step is refused', () {
       expect(() => FixedTimestep.fromStepMs(0), throwsArgumentError);
       expect(() => FixedTimestep.fromHz(0), throwsArgumentError);
-      expect(() => FixedTimestep.fromHz(1001), throwsArgumentError);
     });
 
-    /// Integer division, deliberately: both sides of a wire agree exactly as
-    /// long as they agree on the rate.
-    test('a rate truncates to whole milliseconds', () {
-      expect(FixedTimestep.fromHz(60).stepMs, 16);
-      expect(FixedTimestep.fromHz(50).stepMs, 20);
-      expect(FixedTimestep.fromHz(1000).stepMs, 1);
+    /// The same nanosecond value the Rust side computes, so both ends of a wire
+    /// mean the same thing by a rate whether or not it divides a round number.
+    test('a rate that does not divide a thousand is exact anyway', () {
+      expect(FixedTimestep.fromHz(60).stepNanos, 16666667);
+      expect(FixedTimestep.fromHz(50).stepNanos, 20000000);
+      expect(FixedTimestep.fromHz(1000).stepNanos, 1000000);
+
+      final t = FixedTimestep.fromHz(60);
+      var steps = 0;
+      for (var i = 0; i < 100; i++) {
+        steps += t.advance(10).length;
+      }
+      expect(steps, 59, reason: 'a second is 59 whole 16.666667ms steps, not 62');
     });
 
     test('elapsed time pays for whole steps and carries the remainder', () {
@@ -27,7 +33,7 @@ void main() {
 
     test('each step reports the step duration, not the frame delta', () {
       final t = FixedTimestep.fromStepMs(20);
-      expect(t.advance(65).toList(), [20, 20, 20]);
+      expect(t.advance(65).toList(), [20000000, 20000000, 20000000]);
     });
 
     test('too little time pays for nothing', () {
@@ -81,6 +87,16 @@ void main() {
     test('a zero interval is refused', () {
       expect(() => Periodic(0), throwsArgumentError);
       expect(() => Periodic.fromHz(0), throwsArgumentError);
+    });
+
+    test('a period rate is as exact as a step rate', () {
+      final p = Periodic.fromHz(60);
+      expect(p.intervalNanos, 16666667);
+      var fired = 0;
+      for (var i = 0; i < 100; i++) {
+        fired += p.advance(10);
+      }
+      expect(fired, 59);
     });
 
     test('due fires at most once per advance', () {

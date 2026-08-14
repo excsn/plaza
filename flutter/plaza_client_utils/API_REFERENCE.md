@@ -815,14 +815,14 @@ const int defaultMaxFrameMs = 250;
 
 Turns real elapsed time into a whole number of fixed simulation steps. Engine-agnostic on purpose: some Dart engines provide a fixed step and some do not.
 
-`fromHz` uses integer division, so rates that do not divide 1000 evenly truncate: 60Hz is 16ms rather than 16.667. Deliberate at millisecond resolution, and it means both sides of a wire agree exactly as long as they agree on the rate.
+`fromHz` is exact to the nanosecond, the same value the Rust side's `FixedTimestep::from_hz` and `plaza::TickDriver::from_hz` compute: 60Hz is a step of 16666667ns on every side, pinned across the languages by the `fixed_timestep_hz` golden vector. Internals are integer nanoseconds, so no float error accumulates.
 
 `defaultMaxFrameMs` is a quarter of a second, or fifteen steps at 60Hz: enough that an ordinary hitch is caught up smoothly, small enough that a resumed tab skips ahead instead of grinding through the minutes it was asleep.
 
 | Member | Notes |
 |---|---|
 | `Steps advance(int elapsedMs)` | The accumulator is drained **here** rather than as the steps are consumed, so the time is spent whether or not the caller runs every step. |
-| `int stepMs` (get/set) | Changing the step of a *simulation* is not free the way changing a send rate is: the step size is part of the rule, so two peers integrating at different steps diverge even running identical code. |
+| `int stepNanos` (get/set), `set stepMs` | Changing the step of a *simulation* is not free the way changing a send rate is: the step size is part of the rule, so two peers integrating at different steps diverge even running identical code. |
 | `double get stepSecs`, `int get pendingMs` | |
 | `double get alpha` | How far between the last step and the next, 0 to 1. For rendering between fixed steps: interpolating the drawn state by this removes the stutter a fixed step shows when the step rate and the refresh rate disagree. Worth knowing it exists, because the usual first diagnosis of that stutter is that the step rate is too low. |
 | `int get droppedMs` | Elapsed time the catch-up cap refused, in total. Real time the simulation never ran. Non-zero after a backgrounded tab or a sleeping machine, and worth surfacing: a world quietly behind wall time explains a whole class of "it desynced and I do not know when". |
@@ -832,10 +832,10 @@ Turns real elapsed time into a whole number of fixed simulation steps. Engine-ag
 ### Class `Steps`
 
 ```dart
-class Steps extends Iterable<int> { final int stepMs; }
+class Steps extends Iterable<int> { final int stepNanos; }
 ```
 
-The steps one `advance` paid for. Each item is the step duration in milliseconds, which is the value the simulation must advance by. **Taking it from here rather than from the frame delta is what stops a caller stepping by the wrong amount.**
+The steps one `advance` paid for. Each item is the step duration in nanoseconds, which is the value the simulation must advance by (`stepSecs` is the seconds form). **Taking it from here rather than from the frame delta is what stops a caller stepping by the wrong amount.**
 
 ### Class `Periodic`
 
@@ -852,7 +852,7 @@ Something that should happen every interval. The same accumulator as [`FixedTime
 |---|---|
 | `bool due(int elapsedMs)` | Says whether the period elapsed, **at most once**. The remainder carries, so the average rate stays exact, and time beyond a single interval is kept rather than discarded, so a long frame is repaid on the following ones rather than resetting the phase. |
 | `int advance(int elapsedMs)` | How many whole periods the elapsed time covers. For work where each occurrence matters (spawning a wave, firing a weapon). |
-| `int intervalMs` (get/set), `int get remainingMs`, `void reset()` | Setting keeps whatever has accumulated, so a change takes effect from now rather than restarting the period. |
+| `int intervalNanos` (get/set), `set intervalMs`, `int get remainingMs`, `void reset()` | `fromHz` is exact like `FixedTimestep.fromHz`. Setting keeps whatever has accumulated, so a change takes effect from now rather than restarting the period. |
 
 ## 12. Rollback
 
