@@ -22,6 +22,8 @@ Its only dependency is `plaza_client_utils`, for the shared `Interpolatable` and
 | A client aims at where a target *was* (it renders remotes in the past), so hits must be judged then, not now | `HistoricalStateBuffer` |
 | A world has more entities than fit on the wire, and players in different places, so each client needs only what is near it | `relevance` (`SpatialGrid`, `VisibilitySet`, Morton keys) |
 | Building each client's view separately costs the client count; in a dense crowd the same work can be done once per *place* | `relevance` (`SpatialGrid::occupied`, `GridQuantizer::keys_in_radius`: pack each occupied cell once, hand each viewer the cells its view touches) |
+| A world with known bounds pays a hash on every cell lookup, and a publisher does `viewers x cells-per-view` of them a tick | `relevance` (`CellSpace`: dense indices, `indices_in_radius`, `corner`) |
+| Anything keyed by place needs the same addressing: entities by cell, one payload per cell, and who is listening to each cell | `relevance` (`CellTable<T>`, one `T` per cell, `clear_each` to rebuild without churning the heap) |
 | The world has a third axis, and whether it deserves an index is a measurement | `field` (`Field` with `Flat` / `FlatBand` / `Volume`, `Query` instrumentation) |
 | Bots should hold real seats, off the send path, and yield them to people | `seats::Crew` (fill through the roster, prune after displacement) |
 | A client also cares about entities *no distance query will ever return*: a party across the zone, a followed player, a guild roster | `subscription` (`Subscriptions`, `Audience`) |
