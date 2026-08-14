@@ -30,6 +30,7 @@ You do not need a Plaza server to use it. Anything speaking a sequence-numbered-
 | Problem | Piece |
 |---|---|
 | Local input should feel instant, but the server decides | `PredictedEntity` + `ClientInputBuffer` |
+| The click's whole journey is knowable on both ends, because the rule is shared | `route::RoutePredictor` (walk it yourself, check the route, settle at rest) |
 | Other players' updates arrive discretely and jittery | `SnapshotBuffer` (+ `InterpolationClock` for the render target) |
 | Updates stop arriving for a moment | `ExtrapolationBase` |
 | A correction snaps the local entity to a new spot | `ErrorSmoother` |
