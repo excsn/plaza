@@ -148,7 +148,7 @@
         "dropped_ms": 0,
         "elapsed_ms": 4,
         "pending_ms": 4,
-        "step_values": [],
+        "step_nanos": [],
         "steps": 0
       },
       {
@@ -156,7 +156,7 @@
         "dropped_ms": 0,
         "elapsed_ms": 10,
         "pending_ms": 14,
-        "step_values": [],
+        "step_nanos": [],
         "steps": 0
       },
       {
@@ -164,9 +164,9 @@
         "dropped_ms": 0,
         "elapsed_ms": 20,
         "pending_ms": 2,
-        "step_values": [
-          16,
-          16
+        "step_nanos": [
+          16000000,
+          16000000
         ],
         "steps": 2
       },
@@ -175,9 +175,9 @@
         "dropped_ms": 0,
         "elapsed_ms": 33,
         "pending_ms": 3,
-        "step_values": [
-          16,
-          16
+        "step_nanos": [
+          16000000,
+          16000000
         ],
         "steps": 2
       },
@@ -186,13 +186,13 @@
         "dropped_ms": 900,
         "elapsed_ms": 1000,
         "pending_ms": 7,
-        "step_values": [
-          16,
-          16,
-          16,
-          16,
-          16,
-          16
+        "step_nanos": [
+          16000000,
+          16000000,
+          16000000,
+          16000000,
+          16000000,
+          16000000
         ],
         "steps": 6
       },
@@ -201,10 +201,56 @@
         "dropped_ms": 900,
         "elapsed_ms": 16,
         "pending_ms": 7,
-        "step_values": [
-          16
+        "step_nanos": [
+          16000000
         ],
         "steps": 1
+      }
+    ]
+  },
+  "fixed_timestep_hz": {
+    "hz": 60,
+    "step_nanos": 16666667,
+    "steps": [
+      {
+        "elapsed_ms": 100,
+        "steps": 5
+      },
+      {
+        "elapsed_ms": 100,
+        "steps": 6
+      },
+      {
+        "elapsed_ms": 100,
+        "steps": 6
+      },
+      {
+        "elapsed_ms": 100,
+        "steps": 6
+      },
+      {
+        "elapsed_ms": 100,
+        "steps": 6
+      },
+      {
+        "elapsed_ms": 100,
+        "steps": 6
+      },
+      {
+        "elapsed_ms": 100,
+        "steps": 6
+      },
+      {
+        "elapsed_ms": 100,
+        "steps": 6
+      },
+      {
+        "elapsed_ms": 100,
+        "steps": 6
+      },
+      {
+        "elapsed_ms": 100,
+        "steps": 6
       }
     ]
   },
@@ -278,6 +324,52 @@
       {
         "elapsed_ms": 200,
         "fired": 4
+      }
+    ]
+  },
+  "periodic_hz": {
+    "hz": 60,
+    "interval_nanos": 16666667,
+    "steps": [
+      {
+        "elapsed_ms": 100,
+        "fired": 5
+      },
+      {
+        "elapsed_ms": 100,
+        "fired": 6
+      },
+      {
+        "elapsed_ms": 100,
+        "fired": 6
+      },
+      {
+        "elapsed_ms": 100,
+        "fired": 6
+      },
+      {
+        "elapsed_ms": 100,
+        "fired": 6
+      },
+      {
+        "elapsed_ms": 100,
+        "fired": 6
+      },
+      {
+        "elapsed_ms": 100,
+        "fired": 6
+      },
+      {
+        "elapsed_ms": 100,
+        "fired": 6
+      },
+      {
+        "elapsed_ms": 100,
+        "fired": 6
+      },
+      {
+        "elapsed_ms": 100,
+        "fired": 6
       }
     ]
   },

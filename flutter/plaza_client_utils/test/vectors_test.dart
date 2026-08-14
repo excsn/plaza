@@ -283,16 +283,42 @@ void main() {
         final steps = timestep.advance(i(s['elapsed_ms']));
         final at = 'after ${s['elapsed_ms']}ms';
         expect(steps.length, i(s['steps']), reason: 'count $at');
-        expect(steps.toList(), list(s['step_values']).map(i).toList(), reason: 'values $at');
+        expect(steps.toList(), list(s['step_nanos']).map(i).toList(), reason: 'values $at');
         expect(timestep.pendingMs, i(s['pending_ms']), reason: 'pending $at');
         expect(timestep.alpha, near(s['alpha'], tol), reason: 'alpha $at');
         expect(timestep.droppedMs, i(s['dropped_ms']), reason: 'dropped $at');
       }
     });
 
+    /// The cross-language pin for a rate that does not divide a round number:
+    /// the step in nanoseconds must be the one Rust computes, and the counts
+    /// walk 5,6,6,... to 59 over the second, which only a sub-millisecond step
+    /// produces.
+    test('FixedTimestep.fromHz means the same rate as the Rust driver', () {
+      final section = map(v['fixed_timestep_hz']);
+      final timestep = FixedTimestep.fromHz(i(section['hz']));
+      expect(timestep.stepNanos, i(section['step_nanos']));
+      for (final step in list(section['steps'])) {
+        final s = map(step);
+        expect(timestep.advance(i(s['elapsed_ms'])).length, i(s['steps']),
+            reason: 'after ${s['elapsed_ms']}ms');
+      }
+    });
+
     test('Periodic fires the same number of times', () {
       final section = map(v['periodic']);
       final periodic = Periodic(i(section['interval_ms']));
+      for (final step in list(section['steps'])) {
+        final s = map(step);
+        expect(periodic.advance(i(s['elapsed_ms'])), i(s['fired']),
+            reason: 'after ${s['elapsed_ms']}ms');
+      }
+    });
+
+    test('Periodic.fromHz means the same rate as the Rust side', () {
+      final section = map(v['periodic_hz']);
+      final periodic = Periodic.fromHz(i(section['hz']));
+      expect(periodic.intervalNanos, i(section['interval_nanos']));
       for (final step in list(section['steps'])) {
         final s = map(step);
         expect(periodic.advance(i(s['elapsed_ms'])), i(s['fired']),
