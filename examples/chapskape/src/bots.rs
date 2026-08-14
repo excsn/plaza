@@ -35,15 +35,17 @@ const ENOUGH_LOGS: usize = 6;
 /// Fish before a fisher goes looking for a fire.
 const ENOUGH_FISH: usize = 4;
 
-#[derive(Default)]
 pub struct Bots {
   jobs: HashMap<Seat, Job>,
   rng: XorShift,
 }
 
-impl Default for XorShift {
+impl Default for Bots {
   fn default() -> Self {
-    XorShift::new(0xC0FF_EE00_1234_5678)
+    Self {
+      jobs: HashMap::new(),
+      rng: XorShift::new(0xC0FF_EE00_1234_5678),
+    }
   }
 }
 
