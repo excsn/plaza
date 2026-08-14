@@ -49,6 +49,7 @@
   - [Struct `SeatSlots<Key>`](#struct-seatslotskey)
   - [Struct `RankedQueue<Key>`](#struct-rankedqueuekey)
   - [Struct `Roster<Key>`](#struct-rosterkey)
+  - [Struct `Crew<Key>`](#struct-crewkey)
 - [11. Rates (module `meter`)](#11-rates-module-meter)
 - [12. One-shot ops (module `oneshot`)](#12-one-shot-ops-module-oneshot)
   - [Struct `Pending<K, Op>`](#struct-pendingk-op)
@@ -402,6 +403,14 @@ Three rules run through it. **Promotion happens on the tick**: `admit` and `depa
 *   **`depart(&key) -> Departure`**: **`Freed { seat }`**, **`Held { seat }`** (start their clock), **`Unwaitlisted`**, or **`NotPresent`**. Idempotent, because a disconnect can be reported more than once; a repeat report of a held key reports the hold again rather than breaking it.
 *   **`expire(&key) -> Option<usize>`**: releases a held seat whose grace ran out. **`resolve() -> Vec<Shuffle<Key>>`**: seats the waitlist into open seats in queue order, then settles rank displacement; a no-op while locked. `Shuffle` is **`Promoted { key, seat }`** (the seat is fresh) or **`Displaced { key, seat }`** (requeued at the tail of their own rank band).
 *   **`seat_of(&key)`**, **`seat_state(seat) -> SeatState`** (`Human(&Key)` / `Held(&Key)` / `Open`), **`seats()`**, **`waiting()`**, **`capacity()`**, **`occupied_count()`** (held seats count: a held seat is not free), **`is_full()`**.
+
+### Struct `Crew<Key>`
+
+Bots in the roster: real seats, no connection. A bot must occupy a seat through the same admission as a person, so capacity, numbering and displacement stay one system, and must hold no agent, so it lives on the simulation path and never the send path. The keys are the caller's, usually carved from the top of the id space so a person's id can never collide.
+
+*   **`new()`**, **`fill(&mut roster, count, rank, key_of) -> Vec<usize>`**: admits up to `count` bots (`key_of` names bot `0..count` and owns uniqueness) and says which seats they took; stops at the first non-seat, because a full roster stays full for every later bot.
+*   **`holds(seat)`**, **`seats()`** (ascending, because bot thinking usually draws from one shared random stream and hash-map order would decide who draws what), **`len()`**, **`is_empty()`**, **`vacate(&mut roster, seat)`**.
+*   **`prune(&mut roster) -> Vec<usize>`**: drops every bot the roster no longer seats, and withdraws their keys, because a displaced key is requeued and would otherwise re-seat itself as a stranger the moment a seat opened. Call after admissions when bots are ranked worse than people, and stand the pruned bots down in the simulation.
 
 ## 11. Rates (module `meter`)
 

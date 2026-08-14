@@ -60,7 +60,7 @@ pub use subscription::{Audience, Because, Subscriptions};
 // them and must not inherit a server to get them.
 pub use plaza_client_utils::mirror::{Agreement, DeltaMirror, Divergence};
 pub use plaza_client_utils::slot::{ReusePolicy, SlotAllocator, SlotKey};
-pub use seats::{Admission, Departure, RankedQueue, Roster, SeatSlots, SeatState, SeatTable, Seating, Shuffle, Turnaway};
+pub use seats::{Admission, Crew, Departure, RankedQueue, Roster, SeatSlots, SeatState, SeatTable, Seating, Shuffle, Turnaway};
 
 // The interpolation vocabulary is shared with the client crate; re-exported so
 // server code can name it without depending on `plaza_client_utils` directly.
