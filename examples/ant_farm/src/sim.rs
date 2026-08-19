@@ -3,7 +3,7 @@
 
 use plaza_server_utils::relevance::{CellSpace, CellTable, GridQuantizer};
 
-use crate::protocol::{CELL, EXTENT};
+use crate::protocol::CELL;
 
 /// How far an ant walks in world units per second.
 pub const SPEED: f32 = 24.0;
@@ -206,6 +206,7 @@ fn next_f32(rng: &mut u32) -> f32 {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::protocol::EXTENT;
 
   #[test]
   fn ants_stay_on_the_board() {
