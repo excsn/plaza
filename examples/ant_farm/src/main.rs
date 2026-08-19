@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use plaza::agent::Agent;
+use plaza::stats::ControllerStats;
 use plaza::{NoSnapshots, StateControllerBuilder, TickDriver};
 use plaza_session::SessionOptions;
 use plaza_wire::{frame, MsgPackCodec, WireCodec};
@@ -67,8 +68,9 @@ async fn serve(args: &[String]) -> std::io::Result<()> {
   )
   .await?;
 
+  let stats = ControllerStats::new();
   let colony = Colony::new(ants, EXTENT, sites, seed);
-  let state = FarmState::new(colony, wire);
+  let state = FarmState::new(colony, wire, stats.clone());
   let logic = AntLogic::new(session.clone());
   let (commands, controller) = StateControllerBuilder::new(
     Arc::new(logic),
@@ -78,6 +80,7 @@ async fn serve(args: &[String]) -> std::io::Result<()> {
   )
   .snapshot_context_on_join(None)
   .command_buffer(256)
+  .with_stats(stats)
   .build();
 
   tokio::spawn(async move {

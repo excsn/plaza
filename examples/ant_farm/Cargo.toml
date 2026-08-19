@@ -10,7 +10,7 @@ publish = false
 # the feature enables nothing and the plain UDP body is the only send path.
 [features]
 xdp = ["dep:xdpilone"]
-view = ["dep:macroquad"]
+view = ["dep:macroquad", "dep:egui-macroquad"]
 
 [dependencies]
 plaza = { workspace = true }
@@ -20,6 +20,7 @@ plaza_server_utils = { workspace = true }
 
 async-trait = { workspace = true }
 macroquad = { version = "=0.4.15", optional = true }
+egui-macroquad = { version = "=0.17.3", optional = true }
 parking_lot = "0.12"
 serde = { workspace = true }
 tokio = { workspace = true }

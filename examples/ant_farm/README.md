@@ -2,25 +2,28 @@
 
 A colony too big to send, watched through panes that are not. Every client asks for a window onto the board and receives only the cells that window touches, packed once per cell however many watchers share them. The name is the claim: an ant farm is a narrow pane over a colony that does not fit in it.
 
-```
-cargo run --release -p plaza_example_ant_farm -- --ants 1000000
-cargo run --release -p plaza_example_ant_farm -- probe --watchers 8 --draw
-cargo run --release -p plaza_example_ant_farm --features view --bin ant_farm_view
+## Running it
+
+```sh
+./run-native.sh                       # stand the colony up and open the observer window on it
+./run-native.sh --ants 1000000        # the headline population
+./run-native.sh --connect <host:port> # watch a server already running elsewhere
+./run-probe.sh --watchers 8           # the traffic fleet, no window
 ```
 
-`serve` (the default) runs the colony on UDP at `0.0.0.0:4747`; `probe` runs a fleet of watchers against it and `--draw` renders watcher zero's pane as ASCII density once a second. `--ants`, `--sites`, `--seed`, `--bind`, `--connect`, `--watchers`, `--half`, `--drift` and `--secs` do what they say.
+The observer window pans by drag or WASD and zooms on the wheel, drawing exactly what the wire carried and nothing else. It is a client like any probe, so panning is just a `Window` op and the server packs whatever the new pane touches. Its panel carries the server's phase timings, the controller's own tick accounting, the wire numbers and a live **ants** slider that resizes the colony while you watch; the numbers arrive as a `Stats` op once a second, so the readouts are the server's accounting rather than a model of it.
 
-`ant_farm_view` is the pane as pixels: a macroquad window that pans by drag or WASD and zooms on the wheel, drawing exactly what the wire carried and nothing else. It is a client like any probe, so panning is just a `Window` op and the server packs whatever the new pane touches. The `view` feature keeps macroquad out of the server binary, which matters for a headless Linux box that has no GL to link.
+The deployable is the server alone, `cargo run --release -p plaza_example_ant_farm`, which is what `--connect` watches; it runs the colony on UDP at `0.0.0.0:4747` and takes `--ants`, `--sites`, `--seed` and `--bind`. The probe takes `--connect`, `--watchers`, `--half`, `--drift`, `--secs` and `--draw`, which renders watcher zero's pane as ASCII density. The `view` feature keeps macroquad out of the server binary, which matters for a headless Linux box that has no GL to link.
 
 ## The panel
 
-The server prints one line a second: mean and worst microseconds for each phase of the tick, because which phase owns the frame is the finding this example exists to produce.
+Headless, the server prints the same snapshot it broadcasts, one line a second: mean and worst milliseconds for each phase of the tick, because which phase owns the frame is the finding this example exists to produce.
 
 ```
-ants 100000 | watchers 8 | step 9.3ms w9.6 | rebuild 3.5ms w3.7 | publish 2.3ms w2.4 (2004 cells) | assemble 0.30ms w0.32 | udp 2732 pkt/s 2.83 MB/s busy 120.8ms/s
+ants 50000 | watchers 1 | step 0.5ms w0.7 | rebuild 0.2ms w0.3 | publish 0.13ms w0.18 (286 cells) | assemble 0.02ms w0.03 | tick 0.8ms w2.4 | udp 245 pkt/s 0.25 MB/s busy 6.6ms/s
 ```
 
-`step` moves every ant, `rebuild` buckets them by cell, `publish` packs each occupied cell at least one pane wants, `assemble` deals payloads out per watcher, and the wire block is the send path's own accounting: packets, bytes and how long the process spent inside send calls. The probe prints the receiving side: packets, ants and cells per second, plus the worst tick gap it saw, which is what loss costs here.
+`step` moves every ant, `rebuild` buckets them by cell, `publish` packs each occupied cell at least one pane wants, `assemble` deals payloads out per watcher, `tick` is `ControllerStats`'s own mean and lifetime worst across every input (the reference the phase timings answer to), and the wire block is the send path's accounting: packets, bytes and how long the process spent inside send calls. The probe prints the receiving side: packets, ants and cells per second, plus the worst tick gap it saw, which is what loss costs here.
 
 ## The wire
 
@@ -33,7 +36,7 @@ The transport is the seam `foreign_soil` proved: an adapter over `TransportSessi
 
 ## Two shapes of visibility
 
-Delivery here needs no per-entity tracking at all, which is itself the point: resending whole cells makes "who entered, who left" a client-side question. But games that stream entities need the answer server-side, and there are two shapes: `VisibilitySet`, a dense bitset diffed word at a time, O(population) per watcher per tick however small the pane; and a sparse sorted set diffed against only what the grid query returned, O(visible). The crossing between them is a number, not an opinion:
+Delivery here needs no per-entity tracking at all, which is itself the point: resending whole cells makes "who entered, who left" a client-side question. But games that stream entities need the answer server-side, and there are two shapes: `VisibilitySet`, a dense bitset diffed word at a time, O(population) per watcher per tick however small the pane; and a sparse sorted set diffed against only what the grid query returned, O(visible). The crossing between them is a number, not an opinion: the harness
 
 ```
 cargo run --release -p plaza_example_ant_farm --example vis_scale

@@ -10,9 +10,10 @@ use plaza::agent::Agent;
 use plaza::error::StateLogicError;
 use plaza::session::{MessageTarget, Session, SessionMessage, TargetedOp};
 use plaza::state_logic::{LogicInput, LogicOutput, StateLogic};
+use plaza::stats::ControllerStats;
 use plaza_server_utils::oneshot::Pending;
 
-use crate::panel::{Panel, WireStats};
+use crate::panel::{print_line, Panel, WireStats};
 use crate::protocol::{AntOp, Packed, WatcherId, CELL, TICK_HZ};
 use crate::publish::{assemble, pane_cells, Buckets, Publication, Wanted};
 use crate::sim::Colony;
@@ -33,6 +34,7 @@ pub struct FarmState {
   pending: Pending<WatcherId, AntOp>,
   panel: Panel,
   wire: Arc<WireStats>,
+  controller: Arc<ControllerStats>,
   pub tick: u32,
 }
 
@@ -47,7 +49,7 @@ impl std::fmt::Debug for FarmState {
 }
 
 impl FarmState {
-  pub fn new(colony: Colony, wire: Arc<WireStats>) -> Self {
+  pub fn new(colony: Colony, wire: Arc<WireStats>, controller: Arc<ControllerStats>) -> Self {
     let space = colony.space().clone();
     Self {
       buckets: Buckets::new(space.clone()),
@@ -57,6 +59,7 @@ impl FarmState {
       pending: Pending::new(),
       panel: Panel::new(),
       wire,
+      controller,
       tick: 0,
       colony,
     }
@@ -127,6 +130,11 @@ impl StateLogic<AntOp, WatcherId, FarmState> for AntLogic {
               state.watchers.insert(id, Watcher { cells });
             }
             AntOp::WelcomeSeen => state.pending.confirm(&id),
+            AntOp::Dial { ants } => {
+              if ants > 0 {
+                state.colony.resize(ants as usize);
+              }
+            }
             _ => {}
           }
         }
@@ -179,13 +187,16 @@ impl StateLogic<AntOp, WatcherId, FarmState> for AntLogic {
           }
         }
 
-        state.panel.tick(
-          dt as f64 * 1000.0,
-          &state.wire,
-          state.colony.len(),
-          state.watchers.len(),
-          state.publication.packed_cells,
-        );
+        if let Some(mut snapshot) = state.panel.tick(dt as f64 * 1000.0, &state.wire) {
+          snapshot.ants = state.colony.len() as u32;
+          snapshot.watchers = state.watchers.len() as u32;
+          snapshot.packed_cells = state.publication.packed_cells as u32;
+          snapshot.delivered = state.colony.delivered;
+          snapshot.tick_mean_ms = state.controller.mean_tick().as_secs_f32() * 1000.0;
+          snapshot.tick_worst_ms = state.controller.worst_tick().as_secs_f32() * 1000.0;
+          print_line(&snapshot);
+          ops.push(TargetedOp::new_system_all(vec![AntOp::Stats(snapshot)]));
+        }
 
         Ok(ops.into())
       }
