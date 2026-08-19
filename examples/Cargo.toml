@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "ant_farm",
   "foreign_soil",
   "ability_cooldowns",
   "auction_floor",
@@ -41,6 +42,7 @@ members = [
   "whack_a_mole",
 ]
 default-members = [
+  "ant_farm",
   "ability_cooldowns",
   "grace_run",
   "map_forge",
