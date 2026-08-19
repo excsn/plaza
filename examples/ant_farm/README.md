@@ -5,9 +5,12 @@ A colony too big to send, watched through panes that are not. Every client asks 
 ```
 cargo run --release -p plaza_example_ant_farm -- --ants 1000000
 cargo run --release -p plaza_example_ant_farm -- probe --watchers 8 --draw
+cargo run --release -p plaza_example_ant_farm --features view --bin ant_farm_view
 ```
 
 `serve` (the default) runs the colony on UDP at `0.0.0.0:4747`; `probe` runs a fleet of watchers against it and `--draw` renders watcher zero's pane as ASCII density once a second. `--ants`, `--sites`, `--seed`, `--bind`, `--connect`, `--watchers`, `--half`, `--drift` and `--secs` do what they say.
+
+`ant_farm_view` is the pane as pixels: a macroquad window that pans by drag or WASD and zooms on the wheel, drawing exactly what the wire carried and nothing else. It is a client like any probe, so panning is just a `Window` op and the server packs whatever the new pane touches. The `view` feature keeps macroquad out of the server binary, which matters for a headless Linux box that has no GL to link.
 
 ## The panel
 
