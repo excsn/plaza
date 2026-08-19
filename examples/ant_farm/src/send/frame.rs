@@ -55,6 +55,16 @@ pub fn write_udp_frame(buf: &mut [u8], lane: &Lane, dst_ip: [u8; 4], dst_port: u
   total
 }
 
+/// Parses `aa:bb:cc:dd:ee:ff`.
+pub fn parse_mac(text: &str) -> Option<[u8; 6]> {
+  let mut mac = [0u8; 6];
+  let mut parts = text.split(':');
+  for byte in &mut mac {
+    *byte = u8::from_str_radix(parts.next()?, 16).ok()?;
+  }
+  parts.next().is_none().then_some(mac)
+}
+
 fn ipv4_checksum(header: &[u8]) -> u16 {
   let mut sum = 0u32;
   for pair in header.chunks_exact(2) {
@@ -77,6 +87,14 @@ mod tests {
       src_ip: [192, 168, 1, 10],
       src_port: 4747,
     }
+  }
+
+  #[test]
+  fn a_mac_parses_and_junk_does_not() {
+    assert_eq!(parse_mac("02:00:00:00:00:2a"), Some([2, 0, 0, 0, 0, 0x2a]));
+    assert_eq!(parse_mac("02:00:00:00:00"), None);
+    assert_eq!(parse_mac("02:00:00:00:00:2a:00"), None);
+    assert_eq!(parse_mac("zz:00:00:00:00:2a"), None);
   }
 
   #[test]
