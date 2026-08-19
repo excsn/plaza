@@ -1,8 +1,10 @@
-//! The pane, as pixels: a macroquad window onto the colony.
+//! The observer: a macroquad window onto the colony, with the panel.
 //!
 //! Drag or use WASD to pan, scroll to zoom. The window is a plaza client like
 //! any probe: it asks for a pane, receives whole cells and draws what the
-//! last datagrams said, so what you see is exactly what the wire carried.
+//! last datagrams said, so what you see is exactly what the wire carried. The
+//! panel's server numbers arrive the same way, as a `Stats` op once a second,
+//! so the readouts are the server's own accounting rather than a model of it.
 //!
 //! macroquad owns the main thread, so the socket lives on a plain std thread
 //! beside it and the two share the pane and the world under a mutex.
@@ -13,12 +15,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use egui_macroquad::egui;
 use macroquad::prelude::*;
 use parking_lot::Mutex;
 use plaza_wire::{frame, MsgPackCodec, WireCodec};
 
 use plaza_example_ant_farm::pack;
-use plaza_example_ant_farm::protocol::{AntOp, EXTENT, MTU};
+use plaza_example_ant_farm::protocol::{AntOp, StatsSnapshot, EXTENT, MTU};
 use plaza_example_ant_farm::sim::board;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -36,6 +39,7 @@ struct World {
   nest: (f32, f32),
   sites: Vec<(f32, f32)>,
   welcomed: bool,
+  stats: Option<StatsSnapshot>,
 }
 
 #[derive(Default)]
@@ -60,7 +64,13 @@ fn ops_frame(ops: &Vec<AntOp>) -> Vec<u8> {
   buf
 }
 
-fn net_thread(connect: String, pane: Arc<Mutex<Pane>>, world: Arc<Mutex<World>>, counters: Arc<Counters>) {
+fn net_thread(
+  connect: String,
+  pane: Arc<Mutex<Pane>>,
+  world: Arc<Mutex<World>>,
+  counters: Arc<Counters>,
+  dial: Arc<Mutex<Option<u32>>>,
+) {
   let socket = UdpSocket::bind("0.0.0.0:0").expect("bind");
   socket.connect(&connect).expect("connect");
   socket
@@ -84,6 +94,9 @@ fn net_thread(connect: String, pane: Arc<Mutex<Pane>>, world: Arc<Mutex<World>>,
       let _ = socket.send(&ops_frame(&vec![window(wanted)]));
       told = wanted;
       last_send = Instant::now();
+    }
+    if let Some(ants) = dial.lock().take() {
+      let _ = socket.send(&ops_frame(&vec![AntOp::Dial { ants }]));
     }
 
     let len = match socket.recv(&mut buf) {
@@ -130,6 +143,9 @@ fn net_thread(connect: String, pane: Arc<Mutex<Pane>>, world: Arc<Mutex<World>>,
                 world.cells.insert(record.cell, (tick, ants));
               }
             }
+            AntOp::Stats(snapshot) => {
+              world.lock().stats = Some(snapshot);
+            }
             _ => {}
           }
         }
@@ -137,6 +153,12 @@ fn net_thread(connect: String, pane: Arc<Mutex<Pane>>, world: Arc<Mutex<World>>,
       _ => {}
     }
   }
+}
+
+fn section<R>(ui: &mut egui::Ui, title: &str, default_open: bool, add: impl FnOnce(&mut egui::Ui) -> R) {
+  egui::CollapsingHeader::new(egui::RichText::new(title).strong())
+    .default_open(default_open)
+    .show(ui, add);
 }
 
 #[macroquad::main("ant farm")]
@@ -155,15 +177,18 @@ async fn main() {
     ..World::default()
   }));
   let counters = Arc::new(Counters::default());
+  let dial = Arc::new(Mutex::new(None::<u32>));
 
   {
-    let (pane, world, counters) = (pane.clone(), world.clone(), counters.clone());
+    let (pane, world, counters, dial) = (pane.clone(), world.clone(), counters.clone(), dial.clone());
     let connect = connect.clone();
-    std::thread::spawn(move || net_thread(connect, pane, world, counters));
+    std::thread::spawn(move || net_thread(connect, pane, world, counters, dial));
   }
 
   let mut dragging: Option<Vec2> = None;
   let mut window_stat = (Instant::now(), 0u64, 0u64, 0f64, 0f64);
+  let mut dial_ants: u32 = 0;
+  let mut ui_wants_pointer = false;
 
   loop {
     let dt = get_frame_time();
@@ -189,24 +214,28 @@ async fn main() {
         pane.y += step;
       }
 
-      let wheel = mouse_wheel().1;
-      if wheel != 0.0 {
-        let factor = if wheel > 0.0 { 1.0 / 1.15 } else { 1.15 };
-        pane.half = (pane.half * factor).clamp(16.0, extent * 0.5);
-      }
+      if !ui_wants_pointer {
+        let wheel = mouse_wheel().1;
+        if wheel != 0.0 {
+          let factor = if wheel > 0.0 { 1.0 / 1.15 } else { 1.15 };
+          pane.half = (pane.half * factor).clamp(16.0, extent * 0.5);
+        }
 
-      let at: Vec2 = mouse_position().into();
-      if is_mouse_button_pressed(MouseButton::Left) {
-        dragging = Some(at);
-      }
-      if is_mouse_button_released(MouseButton::Left) {
+        let at: Vec2 = mouse_position().into();
+        if is_mouse_button_pressed(MouseButton::Left) {
+          dragging = Some(at);
+        }
+        if is_mouse_button_released(MouseButton::Left) {
+          dragging = None;
+        }
+        if let Some(was) = dragging {
+          let scale = (pane.half * 2.0) / side;
+          pane.x -= (at.x - was.x) * scale;
+          pane.y -= (at.y - was.y) * scale;
+          dragging = Some(at);
+        }
+      } else {
         dragging = None;
-      }
-      if let Some(was) = dragging {
-        let scale = (pane.half * 2.0) / side;
-        pane.x -= (at.x - was.x) * scale;
-        pane.y -= (at.y - was.y) * scale;
-        dragging = Some(at);
       }
 
       pane.x = pane.x.clamp(0.0, extent);
@@ -262,20 +291,69 @@ async fn main() {
       window_stat = (Instant::now(), datagrams, bytes, window_stat.3, window_stat.4);
     }
 
-    let hud = format!(
-      "tick {tick} | ants shown {shown} | {:.0} pkt/s {:.2} MB/s | pane ({:.0},{:.0}) half {:.0} | drag pans, wheel zooms",
-      window_stat.3, window_stat.4, view.x, view.y, view.half,
-    );
-    draw_text(&hud, 12.0, 22.0, 22.0, Color::from_rgba(230, 225, 210, 255));
-    if !world.lock().welcomed {
-      draw_text(
-        &format!("waiting for {connect}..."),
-        12.0,
-        46.0,
-        22.0,
-        Color::from_rgba(200, 120, 90, 255),
-      );
-    }
+    let (welcomed, stats) = {
+      let world = world.lock();
+      (world.welcomed, world.stats.clone())
+    };
+
+    egui_macroquad::ui(|ctx| {
+      ui_wants_pointer = ctx.wants_pointer_input();
+      egui::Window::new("ant farm").default_pos((16.0, 16.0)).show(ctx, |ui| {
+        if !welcomed {
+          ui.colored_label(egui::Color32::from_rgb(220, 140, 90), format!("waiting for {connect}..."));
+        }
+
+        section(ui, "colony", true, |ui| {
+          if let Some(s) = &stats {
+            if dial_ants == 0 {
+              dial_ants = s.ants;
+            }
+            ui.label(format!("ants {} | watchers {} | delivered {}", s.ants, s.watchers, s.delivered));
+          }
+          ui.horizontal(|ui| {
+            ui.add(
+              egui::Slider::new(&mut dial_ants, 10_000..=2_000_000)
+                .logarithmic(true)
+                .text("ants"),
+            );
+            if ui.button("apply").clicked() && dial_ants > 0 {
+              *dial.lock() = Some(dial_ants);
+            }
+          });
+        });
+
+        section(ui, "tick phases (server)", true, |ui| {
+          if let Some(s) = &stats {
+            ui.label(format!("step      {:>7.2} ms   worst {:>7.2}", s.step_ms, s.step_worst_ms));
+            ui.label(format!("rebuild   {:>7.2} ms   worst {:>7.2}", s.rebuild_ms, s.rebuild_worst_ms));
+            ui.label(format!("publish   {:>7.2} ms   worst {:>7.2}   ({} cells)", s.publish_ms, s.publish_worst_ms, s.packed_cells));
+            ui.label(format!("assemble  {:>7.2} ms   worst {:>7.2}", s.assemble_ms, s.assemble_worst_ms));
+            ui.separator();
+            ui.label(format!("controller tick {:.2} ms mean, {:.2} ms worst (lifetime)", s.tick_mean_ms, s.tick_worst_ms))
+              .on_hover_text("The controller's own accounting across every input, the reference the phase timings answer to. Worst is since the server started.");
+          } else {
+            ui.weak("waiting for the first Stats op");
+          }
+        });
+
+        section(ui, "wire (server)", true, |ui| {
+          if let Some(s) = &stats {
+            ui.label(format!("{}  {:.0} pkt/s  {:.2} MB/s  send busy {:.1} ms/s", s.body, s.pps, s.mbps, s.send_busy_ms));
+            if s.dropped > 0 {
+              ui.colored_label(egui::Color32::from_rgb(220, 140, 90), format!("dropped {} (session)", s.dropped));
+            }
+          }
+        });
+
+        section(ui, "this observer", true, |ui| {
+          ui.label(format!("tick {tick} | ants shown {shown}"));
+          ui.label(format!("{:.0} pkt/s  {:.2} MB/s", window_stat.3, window_stat.4));
+          ui.label(format!("pane ({:.0},{:.0}) half {:.0}", view.x, view.y, view.half));
+          ui.weak("drag pans, wheel zooms, WASD nudges");
+        });
+      });
+    });
+    egui_macroquad::draw();
 
     next_frame().await
   }

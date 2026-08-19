@@ -96,6 +96,34 @@ impl Colony {
     self.extent
   }
 
+  /// Grows or shrinks the colony in place. New ants hatch at the nest the
+  /// same way the founding ones did.
+  pub fn resize(&mut self, target: usize) {
+    let target = target.clamp(1_000, 2_000_000);
+    if target <= self.len() {
+      self.x.truncate(target);
+      self.y.truncate(target);
+      self.hx.truncate(target);
+      self.hy.truncate(target);
+      self.carrying.truncate(target);
+      self.site.truncate(target);
+      return;
+    }
+    let nest = self.nest;
+    let extent = self.extent;
+    for _ in self.len()..target {
+      let a = next_f32(&mut self.rng) * std::f32::consts::TAU;
+      let r = next_f32(&mut self.rng).sqrt() * extent * 0.05;
+      self.x.push(margin_clamp(nest.0 + a.cos() * r, extent));
+      self.y.push(margin_clamp(nest.1 + a.sin() * r, extent));
+      self.hx.push(a.cos());
+      self.hy.push(a.sin());
+      self.carrying.push(false);
+      let pick = (next_u32(&mut self.rng) as usize) % self.sites.len();
+      self.site.push(pick as u16);
+    }
+  }
+
   /// One tick for every ant: steer, walk, pick up, deliver.
   pub fn step(&mut self, dt: f32) {
     let stride = SPEED * dt;
@@ -230,6 +258,20 @@ mod tests {
       colony.delivered > 0,
       "a colony this dense should have delivered something in forty seconds"
     );
+  }
+
+  #[test]
+  fn a_resized_colony_keeps_walking() {
+    let mut colony = Colony::new(5000, EXTENT, 8, 3);
+    colony.resize(12_000);
+    assert_eq!(colony.len(), 12_000);
+    colony.step(1.0 / 30.0);
+    colony.resize(2_000);
+    assert_eq!(colony.len(), 2_000);
+    colony.step(1.0 / 30.0);
+    for i in 0..colony.len() {
+      assert!(colony.x[i] >= 0.0 && colony.x[i] <= EXTENT);
+    }
   }
 
   #[test]

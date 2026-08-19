@@ -41,6 +41,35 @@ pub enum AntOp {
   /// only, complete state each time. A lost datagram costs freshness, never
   /// correctness.
   Cells { tick: u32, bytes: Packed },
+  /// Server to everyone, once a second: the panel numbers, so an observer
+  /// window shows the server's own accounting rather than modelling it.
+  Stats(StatsSnapshot),
+  /// Client to server: a live setting. Zero leaves a value as it is.
+  Dial { ants: u32 },
+}
+
+/// One second of the server's tick, phase by phase. Milliseconds throughout.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct StatsSnapshot {
+  pub ants: u32,
+  pub watchers: u32,
+  pub packed_cells: u32,
+  pub delivered: u64,
+  pub step_ms: f32,
+  pub step_worst_ms: f32,
+  pub rebuild_ms: f32,
+  pub rebuild_worst_ms: f32,
+  pub publish_ms: f32,
+  pub publish_worst_ms: f32,
+  pub assemble_ms: f32,
+  pub assemble_worst_ms: f32,
+  pub tick_mean_ms: f32,
+  pub tick_worst_ms: f32,
+  pub pps: f32,
+  pub mbps: f32,
+  pub send_busy_ms: f32,
+  pub dropped: u64,
+  pub body: String,
 }
 
 /// Cell payload bytes, packed once and refcounted into every datagram that
