@@ -73,6 +73,9 @@ fn net_thread(
   counters: Arc<Counters>,
   dial: Arc<Mutex<Option<u32>>>,
 ) {
+  let trace = std::env::var_os("ANT_FARM_TRACE").is_some();
+  let mut arrived_max_x = f32::MIN;
+  let mut last_report = Instant::now();
   let socket = UdpSocket::bind("0.0.0.0:0").expect("bind");
   socket.connect(&connect).expect("connect");
   socket
@@ -97,7 +100,7 @@ fn net_thread(
     let wanted = *pane.lock();
     let since = last_send.elapsed();
     if (wanted != told && since > Duration::from_millis(100)) || since > Duration::from_millis(500) {
-      if std::env::var_os("ANT_FARM_TRACE").is_some() {
+      if trace {
         eprintln!("window: ({:.0},{:.0}) half {:.0} coarse {}", wanted.x, wanted.y, wanted.half, wanted.coarse);
       }
       let _ = socket.send(&ops_frame(&vec![window(wanted)]));
@@ -108,6 +111,18 @@ fn net_thread(
       let _ = socket.send(&ops_frame(&vec![AntOp::Dial { ants }]));
     }
 
+    if trace && last_report.elapsed() > Duration::from_secs(1) {
+      let world = world.lock();
+      eprintln!(
+        "arrived: max cell x {:.0} | cells {} counts {}",
+        arrived_max_x,
+        world.cells.len(),
+        world.counts.len()
+      );
+      drop(world);
+      arrived_max_x = f32::MIN;
+      last_report = Instant::now();
+    }
     let len = match socket.recv(&mut buf) {
       Ok(len) => len,
       Err(_) => continue,
@@ -148,14 +163,17 @@ fn net_thread(
               world.tick = world.tick.max(tick);
               for record in pack::records(bytes.as_slice()).flatten() {
                 let corner = space.corner(record.cell as usize);
+                arrived_max_x = arrived_max_x.max(corner.0);
                 let ants: Vec<(f32, f32)> = record.positions(corner).collect();
                 world.cells.insert(record.cell, (tick, ants));
               }
             }
             AntOp::Counts { tick, bytes } => {
+              let space = board(world.lock().extent.max(1.0));
               let mut world = world.lock();
               world.tick = world.tick.max(tick);
               for pair in pack::counts(bytes.as_slice()).flatten() {
+                arrived_max_x = arrived_max_x.max(space.corner(pair.0 as usize).0);
                 world.counts.insert(pair.0, (tick, pair.1));
               }
             }
@@ -202,6 +220,13 @@ async fn main() {
     std::thread::spawn(move || net_thread(connect, pane, world, counters, dial));
   }
 
+  let glide = std::env::var("ANT_FARM_GLIDE")
+    .ok()
+    .and_then(|v| v.parse::<f32>().ok())
+    .unwrap_or(0.0);
+  let shot = std::env::var("ANT_FARM_SHOT").ok();
+  let mut last_shot = Instant::now();
+  let mut shots = 0u32;
   let mut dragging: Option<Vec2> = None;
   let mut window_stat = (Instant::now(), 0u64, 0u64, 0f64, 0f64);
   let mut dial_ants: u32 = 0;
@@ -223,6 +248,9 @@ async fn main() {
 
     {
       let step = cam.half * dt * 1.5;
+      if glide != 0.0 && cam.x > 640.0 {
+        cam.x -= cam.half * dt.min(0.05) * glide;
+      }
       if is_key_down(KeyCode::A) || is_key_down(KeyCode::Left) {
         cam.x -= step;
       }
@@ -423,6 +451,14 @@ async fn main() {
       });
     });
     egui_macroquad::draw();
+
+    if let Some(dir) = &shot {
+      if last_shot.elapsed() > Duration::from_secs(3) {
+        last_shot = Instant::now();
+        shots += 1;
+        get_screen_data().export_png(&format!("{dir}/frame{shots:02}.png"));
+      }
+    }
 
     next_frame().await
   }
