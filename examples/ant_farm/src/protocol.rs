@@ -25,7 +25,9 @@ pub const EXTENT: f32 = 2040.0;
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum AntOp {
   /// Client to server: where the pane is. Repeating it is the keepalive.
-  Window { x: f32, y: f32, half: f32 },
+  /// `coarse` asks for counts instead of positions, which is all a pane
+  /// zoomed past ant-sized pixels can draw anyway.
+  Window { x: f32, y: f32, half: f32, coarse: bool },
   /// Client to server: the `Welcome` landed, stop resending it.
   WelcomeSeen,
   /// Server to client, resent until seen: what the board is.
@@ -41,6 +43,9 @@ pub enum AntOp {
   /// only, complete state each time. A lost datagram costs freshness, never
   /// correctness.
   Cells { tick: u32, bytes: Packed },
+  /// Server to a coarse pane: `[cell u16][count u16]` pairs, a crowd per
+  /// cell instead of every ant in it.
+  Counts { tick: u32, bytes: Packed },
   /// Server to everyone, once a second: the panel numbers, so an observer
   /// window shows the server's own accounting rather than modelling it.
   Stats(StatsSnapshot),

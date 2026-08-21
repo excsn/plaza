@@ -21,7 +21,7 @@ use parking_lot::Mutex;
 use plaza_wire::{frame, MsgPackCodec, WireCodec};
 
 use plaza_example_ant_farm::pack;
-use plaza_example_ant_farm::protocol::{AntOp, StatsSnapshot, EXTENT, MTU};
+use plaza_example_ant_farm::protocol::{AntOp, StatsSnapshot, CELL, EXTENT, MTU};
 use plaza_example_ant_farm::sim::board;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -29,11 +29,13 @@ struct Pane {
   x: f32,
   y: f32,
   half: f32,
+  coarse: bool,
 }
 
 #[derive(Default)]
 struct World {
   cells: HashMap<u16, (u32, Vec<(f32, f32)>)>,
+  counts: HashMap<u16, (u32, u16)>,
   tick: u32,
   extent: f32,
   nest: (f32, f32),
@@ -81,6 +83,7 @@ fn net_thread(
     x: p.x,
     y: p.y,
     half: p.half,
+    coarse: p.coarse,
   };
 
   let mut told = *pane.lock();
@@ -89,8 +92,14 @@ fn net_thread(
   let mut buf = vec![0u8; MTU * 2];
 
   loop {
+    // At most ten pane updates a second while dragging: every update makes
+    // the server rebuild the pane's cell list, and a drag emits hundreds.
     let wanted = *pane.lock();
-    if wanted != told || last_send.elapsed() > Duration::from_millis(500) {
+    let since = last_send.elapsed();
+    if (wanted != told && since > Duration::from_millis(100)) || since > Duration::from_millis(500) {
+      if std::env::var_os("ANT_FARM_TRACE").is_some() {
+        eprintln!("window: ({:.0},{:.0}) half {:.0} coarse {}", wanted.x, wanted.y, wanted.half, wanted.coarse);
+      }
       let _ = socket.send(&ops_frame(&vec![window(wanted)]));
       told = wanted;
       last_send = Instant::now();
@@ -143,6 +152,13 @@ fn net_thread(
                 world.cells.insert(record.cell, (tick, ants));
               }
             }
+            AntOp::Counts { tick, bytes } => {
+              let mut world = world.lock();
+              world.tick = world.tick.max(tick);
+              for pair in pack::counts(bytes.as_slice()).flatten() {
+                world.counts.insert(pair.0, (tick, pair.1));
+              }
+            }
             AntOp::Stats(snapshot) => {
               world.lock().stats = Some(snapshot);
             }
@@ -171,6 +187,7 @@ async fn main() {
     x: EXTENT * 0.5,
     y: EXTENT * 0.5,
     half,
+    coarse: false,
   }));
   let world = Arc::new(Mutex::new(World {
     extent: EXTENT,
@@ -189,6 +206,12 @@ async fn main() {
   let mut window_stat = (Instant::now(), 0u64, 0u64, 0f64, 0f64);
   let mut dial_ants: u32 = 0;
   let mut ui_wants_pointer = false;
+  let mut cam = Pane {
+    x: EXTENT * 0.5,
+    y: EXTENT * 0.5,
+    half,
+    coarse: false,
+  };
 
   loop {
     let dt = get_frame_time();
@@ -199,26 +222,25 @@ async fn main() {
     };
 
     {
-      let mut pane = pane.lock();
-      let step = pane.half * dt * 1.5;
+      let step = cam.half * dt * 1.5;
       if is_key_down(KeyCode::A) || is_key_down(KeyCode::Left) {
-        pane.x -= step;
+        cam.x -= step;
       }
       if is_key_down(KeyCode::D) || is_key_down(KeyCode::Right) {
-        pane.x += step;
+        cam.x += step;
       }
       if is_key_down(KeyCode::W) || is_key_down(KeyCode::Up) {
-        pane.y -= step;
+        cam.y -= step;
       }
       if is_key_down(KeyCode::S) || is_key_down(KeyCode::Down) {
-        pane.y += step;
+        cam.y += step;
       }
 
       if !ui_wants_pointer {
         let wheel = mouse_wheel().1;
         if wheel != 0.0 {
           let factor = if wheel > 0.0 { 1.0 / 1.15 } else { 1.15 };
-          pane.half = (pane.half * factor).clamp(16.0, extent * 0.5);
+          cam.half = (cam.half * factor).clamp(16.0, extent * 0.5);
         }
 
         let at: Vec2 = mouse_position().into();
@@ -229,19 +251,35 @@ async fn main() {
           dragging = None;
         }
         if let Some(was) = dragging {
-          let scale = (pane.half * 2.0) / side;
-          pane.x -= (at.x - was.x) * scale;
-          pane.y -= (at.y - was.y) * scale;
+          let scale = (cam.half * 2.0) / side;
+          cam.x -= (at.x - was.x) * scale;
+          cam.y -= (at.y - was.y) * scale;
           dragging = Some(at);
         }
       } else {
         dragging = None;
       }
 
-      pane.x = pane.x.clamp(0.0, extent);
-      pane.y = pane.y.clamp(0.0, extent);
+      cam.x = cam.x.clamp(0.0, extent);
+      cam.y = cam.y.clamp(0.0, extent);
     }
-    let view = *pane.lock();
+
+    // Zoom means the short axis, but the request must cover the whole
+    // window: a square pane on a widescreen leaves the margins showing cells
+    // the server was never asked for, frozen at whatever they last held.
+    // The first frames run before the window has a real size; asking for a
+    // pane with that aspect requests half the board by mistake.
+    if side > 64.0 {
+      let aspect = screen_width().max(screen_height()) / side;
+      let coarse = CELL * (side / (cam.half * 2.0)) < 6.0;
+      *pane.lock() = Pane {
+        x: cam.x,
+        y: cam.y,
+        half: (cam.half * aspect).min(extent * 0.5),
+        coarse,
+      };
+    }
+    let view = cam;
 
     clear_background(Color::from_rgba(12, 10, 8, 255));
 
@@ -260,8 +298,12 @@ async fn main() {
     let mut shown = 0usize;
     {
       let mut world = world.lock();
-      let stale = tick.saturating_sub(90);
+      // Emptied cells are never mentioned again (only occupied cells are
+      // packed), so absence over a few ticks IS the empty signal. Five ticks
+      // rides out a lost datagram or two without leaving frozen ants behind.
+      let stale = tick.saturating_sub(5);
       world.cells.retain(|_, (seen, _)| *seen > stale);
+      world.counts.retain(|_, (seen, _)| *seen > stale);
 
       for (site_x, site_y) in &world.sites {
         let (sx, sy) = to_screen(*site_x, *site_y);
@@ -270,13 +312,40 @@ async fn main() {
       let (nx, ny) = to_screen(world.nest.0, world.nest.1);
       draw_circle(nx, ny, (6.0 * scale * 0.5).max(4.0), Color::from_rgba(150, 90, 30, 255));
 
-      let dot = (scale * 0.6).clamp(1.0, 3.0);
-      for (_, (_, ants)) in world.cells.iter() {
-        for (ax, ay) in ants {
-          let (sx, sy) = to_screen(*ax, *ay);
-          if sx >= -2.0 && sx <= screen_width() + 2.0 && sy >= -2.0 && sy <= screen_height() + 2.0 {
-            draw_rectangle(sx, sy, dot, dot, Color::from_rgba(220, 200, 160, 255));
-            shown += 1;
+      let cell_px = CELL * scale;
+      if cell_px < 6.0 {
+        // Zoomed out an ant is subpixel and a million rects is a slideshow:
+        // draw each cell once, brightness by crowd. The counts map is the
+        // coarse feed; the cells map still paints during the handover.
+        let space = board(extent);
+        let px = cell_px.max(1.0);
+        let mut cell_square = |cell: u16, crowd: usize| {
+          let corner = space.corner(cell as usize);
+          let (sx, sy) = to_screen(corner.0, corner.1);
+          if sx < -px || sx > screen_width() || sy < -px || sy > screen_height() {
+            return;
+          }
+          let heat = (crowd as f32 / 24.0).min(1.0);
+          draw_rectangle(sx, sy, px, px, Color::new(0.86, 0.78, 0.63, 0.12 + 0.88 * heat));
+          shown += crowd;
+        };
+        for (cell, (_, count)) in world.counts.iter() {
+          cell_square(*cell, *count as usize);
+        }
+        for (cell, (_, ants)) in world.cells.iter() {
+          if !world.counts.contains_key(cell) {
+            cell_square(*cell, ants.len());
+          }
+        }
+      } else {
+        let dot = (scale * 0.6).clamp(1.0, 3.0);
+        for (_, (_, ants)) in world.cells.iter() {
+          for (ax, ay) in ants {
+            let (sx, sy) = to_screen(*ax, *ay);
+            if sx >= -2.0 && sx <= screen_width() + 2.0 && sy >= -2.0 && sy <= screen_height() + 2.0 {
+              draw_rectangle(sx, sy, dot, dot, Color::from_rgba(220, 200, 160, 255));
+              shown += 1;
+            }
           }
         }
       }

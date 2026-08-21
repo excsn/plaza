@@ -15,7 +15,7 @@ use plaza_server_utils::oneshot::Pending;
 
 use crate::panel::{print_line, Panel, WireStats};
 use crate::protocol::{AntOp, Packed, WatcherId, CELL, TICK_HZ};
-use crate::publish::{assemble, pane_cells, Buckets, Publication, Wanted};
+use crate::publish::{assemble, assemble_counts, pane_cells, Buckets, Publication, Wanted};
 use crate::sim::Colony;
 
 pub const STEP_MS: u64 = 1000 / TICK_HZ;
@@ -23,6 +23,7 @@ pub const STEP_MS: u64 = 1000 / TICK_HZ;
 /// A pane a watcher asked for, with its cell list cached until it moves.
 struct Watcher {
   cells: Vec<usize>,
+  coarse: bool,
 }
 
 pub struct FarmState {
@@ -107,7 +108,10 @@ impl StateLogic<AntOp, WatcherId, FarmState> for AntLogic {
         let Some(id) = agent.id_cloned() else {
           return Ok(LogicOutput::default());
         };
-        state.watchers.entry(id).or_insert(Watcher { cells: Vec::new() });
+        state.watchers.entry(id).or_insert(Watcher {
+          cells: Vec::new(),
+          coarse: false,
+        });
         let now = state.now_ms();
         let welcome = state.pending.declare(id, state.welcome(), now);
         Ok(vec![TargetedOp::new_system_to(id, vec![welcome])].into())
@@ -125,9 +129,9 @@ impl StateLogic<AntOp, WatcherId, FarmState> for AntLogic {
         };
         for op in ops {
           match op {
-            AntOp::Window { x, y, half } => {
+            AntOp::Window { x, y, half, coarse } => {
               let cells = pane_cells(state.colony.space(), x, y, half.clamp(CELL, state.colony.extent()));
-              state.watchers.insert(id, Watcher { cells });
+              state.watchers.insert(id, Watcher { cells, coarse });
             }
             AntOp::WelcomeSeen => state.pending.confirm(&id),
             AntOp::Dial { ants } => {
@@ -156,7 +160,9 @@ impl StateLogic<AntOp, WatcherId, FarmState> for AntLogic {
 
         state.wanted.reset();
         for watcher in state.watchers.values() {
-          state.wanted.mark(&watcher.cells);
+          if !watcher.coarse {
+            state.wanted.mark(&watcher.cells);
+          }
         }
         state.publication.publish(&state.colony, &state.buckets, &state.wanted);
         let published = Instant::now();
@@ -165,15 +171,21 @@ impl StateLogic<AntOp, WatcherId, FarmState> for AntLogic {
         let mut payloads = Vec::new();
         for (&id, watcher) in &state.watchers {
           payloads.clear();
-          assemble(&state.publication, &watcher.cells, &mut payloads);
+          if watcher.coarse {
+            assemble_counts(&state.buckets, &watcher.cells, &mut payloads);
+          } else {
+            assemble(&state.publication, &watcher.cells, &mut payloads);
+          }
           for payload in payloads.drain(..) {
-            let op = AntOp::Cells {
-              tick: state.tick,
-              bytes: Packed::new(payload),
+            let bytes = Packed::new(payload);
+            let op = if watcher.coarse {
+              AntOp::Counts { tick: state.tick, bytes }
+            } else {
+              AntOp::Cells { tick: state.tick, bytes }
             };
             let msg = SessionMessage::new(Agent::system(), vec![op]);
             if let Err(e) = self.session.send_message(MessageTarget::Agent(id), msg).await {
-              tracing::debug!(watcher = id, error = %e, "Cells payload not sent.");
+              tracing::debug!(watcher = id, error = %e, "pane payload not sent.");
             }
           }
         }
