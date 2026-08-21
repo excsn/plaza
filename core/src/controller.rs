@@ -440,54 +440,65 @@ where
     let session_presence_rx = self.session_presence_rx.take().expect("run called once");
     let session_incoming_ops_rx = self.session_incoming_rx.take().expect("run called once");
 
+    // Batch receives throughout, and not for throughput: `select!` cancels
+    // the losing branches every iteration, and fibre documents cancel-safety
+    // (a fulfilled-then-cancelled receive reinserts its item) for the batch
+    // receives alone. A loop that races receive futures forever must not
+    // race ones whose cancellation can cost an item.
     loop {
       tokio::select! {
 
-        Ok(command) = self.command_rx.recv() => {
-          debug!(?command, "Received command");
-          // Sampled here rather than continuously: this is what the loop saw when
-          // it took the command, which is the number that says whether a producer
-          // is outrunning it.
-          self.stats.record_queue_depth(self.command_rx.len());
-          let started = std::time::Instant::now();
-          let tick = matches!(command, ControllerCommand::ProcessTimeStep { .. });
-          let ops = match &command {
-            ControllerCommand::SubmitAgentOps { ops, .. } => ops.len(),
-            ControllerCommand::SubmitSystemOps { ops, .. } => ops.len(),
-            _ => 0,
-          };
-          let keep_running = self.handle_command(command).await;
-          let elapsed = started.elapsed();
-          self.stats.record_command(elapsed);
-          self.stats.record_ops(ops);
-          if tick {
-            self.stats.record_tick(elapsed);
-          }
-          if !keep_running {
-            self.drain_pending_commands().await;
-            info!("StateController stopped.");
-            return Ok(self.state_data);
+        Ok(commands) = self.command_rx.recv_batch(1) => {
+          for command in commands {
+            debug!(?command, "Received command");
+            // Sampled here rather than continuously: this is what the loop saw when
+            // it took the command, which is the number that says whether a producer
+            // is outrunning it.
+            self.stats.record_queue_depth(self.command_rx.len());
+            let started = std::time::Instant::now();
+            let tick = matches!(command, ControllerCommand::ProcessTimeStep { .. });
+            let ops = match &command {
+              ControllerCommand::SubmitAgentOps { ops, .. } => ops.len(),
+              ControllerCommand::SubmitSystemOps { ops, .. } => ops.len(),
+              _ => 0,
+            };
+            let keep_running = self.handle_command(command).await;
+            let elapsed = started.elapsed();
+            self.stats.record_command(elapsed);
+            self.stats.record_ops(ops);
+            if tick {
+              self.stats.record_tick(elapsed);
+            }
+            if !keep_running {
+              self.drain_pending_commands().await;
+              info!("StateController stopped.");
+              return Ok(self.state_data);
+            }
           }
         }
 
         // Arrivals and departures, in the order the session saw them.
-        Ok(presence) = session_presence_rx.recv() => {
-          match presence {
-            PresenceEvent::Joined { agent, conn_id } => {
-              debug!(agent = %agent, conn_id, "Agent joined session");
-              self.handle_agent_joined_event(&agent).await;
-            }
-            PresenceEvent::Left { agent_id, conn_id } => {
-              debug!(?agent_id, conn_id, "Agent left session");
-              self.handle_agent_left_event(&agent_id).await;
+        Ok(events) = session_presence_rx.recv_batch(8) => {
+          for presence in events {
+            match presence {
+              PresenceEvent::Joined { agent, conn_id } => {
+                debug!(agent = %agent, conn_id, "Agent joined session");
+                self.handle_agent_joined_event(&agent).await;
+              }
+              PresenceEvent::Left { agent_id, conn_id } => {
+                debug!(?agent_id, conn_id, "Agent left session");
+                self.handle_agent_left_event(&agent_id).await;
+              }
             }
           }
         }
 
-        Ok(session_msg) = session_incoming_ops_rx.recv() => {
-          debug!(?session_msg, "Received message from session subscription");
-          let SessionMessage { from, ops } = session_msg;
-          self.handle_logic_input(LogicInput::AgentOps { source: from, ops }).await;
+        Ok(messages) = session_incoming_ops_rx.recv_batch(8) => {
+          for session_msg in messages {
+            debug!(?session_msg, "Received message from session subscription");
+            let SessionMessage { from, ops } = session_msg;
+            self.handle_logic_input(LogicInput::AgentOps { source: from, ops }).await;
+          }
         }
         else => {
           info!("Controller's command or session event channel closed. Shutting down.");
