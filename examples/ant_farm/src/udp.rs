@@ -180,8 +180,21 @@ async fn peer_task<ID: AgentId, C: WireCodec>(
   let mut probe = ProbeState::new(manager.probes());
   let mut next_probe = probe.first_due(Instant::now());
   let clock = manager.clock().cloned();
+  let mut streak = 0u32;
 
   loop {
+    // The outbound arm can be ready without gaps for seconds at a time, and
+    // the channel's future does not take part in tokio's coop budget, so this
+    // loop must yield by hand or it never returns to the scheduler. A task
+    // woken from inside this poll (the deserialize bridge, via
+    // `forward_incoming`) lands in this worker's LIFO slot, and an unyielding
+    // poll strands it there: inbound ops stop applying exactly when the
+    // server is busiest.
+    streak += 1;
+    if streak >= 64 {
+      streak = 0;
+      tokio::task::yield_now().await;
+    }
     let deadline = next_probe.unwrap_or_else(far_future);
 
     tokio::select! {

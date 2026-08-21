@@ -34,3 +34,6 @@ xdpilone = { version = "1", optional = true }
 name = "ant_farm_view"
 path = "src/bin/view.rs"
 required-features = ["view"]
+
+[dev-dependencies]
+tracing-subscriber = { workspace = true }

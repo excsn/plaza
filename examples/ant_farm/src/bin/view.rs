@@ -99,7 +99,8 @@ fn net_thread(
     // the server rebuild the pane's cell list, and a drag emits hundreds.
     let wanted = *pane.lock();
     let since = last_send.elapsed();
-    if (wanted != told && since > Duration::from_millis(100)) || since > Duration::from_millis(500) {
+    let mode_flip = wanted.coarse != told.coarse;
+    if mode_flip || (wanted != told && since > Duration::from_millis(100)) || since > Duration::from_millis(500) {
       if trace {
         eprintln!("window: ({:.0},{:.0}) half {:.0} coarse {}", wanted.x, wanted.y, wanted.half, wanted.coarse);
       }

@@ -130,6 +130,7 @@ impl StateLogic<AntOp, WatcherId, FarmState> for AntLogic {
         for op in ops {
           match op {
             AntOp::Window { x, y, half, coarse } => {
+              tracing::debug!(watcher = id, x, y, half, coarse, "pane set");
               let cells = pane_cells(state.colony.space(), x, y, half.clamp(CELL, state.colony.extent()));
               state.watchers.insert(id, Watcher { cells, coarse });
             }

@@ -90,7 +90,10 @@ async fn serve(args: &[String]) -> std::io::Result<()> {
     state,
   )
   .snapshot_context_on_join(None)
-  .command_buffer(256)
+  // Shallow on purpose: at heavy populations one tick costs most of its
+  // budget, so a deep buffer is seconds of stale TimeSteps and a Window op
+  // landing behind all of them. Eight is a quarter second of backlog.
+  .command_buffer(8)
   .with_stats(stats)
   .build();
 

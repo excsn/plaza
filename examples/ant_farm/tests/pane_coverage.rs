@@ -44,7 +44,7 @@ async fn serve(ants: usize) -> std::net::SocketAddr {
   let logic = AntLogic::new(session.clone());
   let (commands, controller) = StateControllerBuilder::new(Arc::new(logic), session.clone(), Arc::new(NoSnapshots), state)
     .snapshot_context_on_join(None)
-    .command_buffer(256)
+    .command_buffer(8)
     .with_stats(stats)
     .build();
   tokio::spawn(async move {
@@ -230,5 +230,80 @@ async fn sliding_the_pane_moves_the_coverage_with_it() {
   assert!(
     max_x >= expected - 8.0,
     "after the slide, world is occupied to {world_max_x} but coverage stops at {max_x}"
+  );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pane_change_lands_within_ticks_even_mid_firehose() {
+  let _ = tracing_subscriber::fmt()
+    .with_env_filter(std::env::var("RUST_LOG").unwrap_or_default())
+    .try_init();
+  // Two million ants is where a tick outgrows its budget and the command
+  // queue becomes the wait; below saturation the buffer depth never shows.
+  let server = serve(2_000_000).await;
+  tokio::time::sleep(Duration::from_millis(300)).await;
+
+  let switched = tokio::task::spawn_blocking(move || {
+    let socket = StdUdpSocket::bind("127.0.0.1:0").unwrap();
+    socket.connect(server).unwrap();
+    socket.set_read_timeout(Some(Duration::from_millis(100))).unwrap();
+
+    let fine = AntOp::Window {
+      x: EXTENT * 0.5,
+      y: EXTENT * 0.5,
+      half: EXTENT * 0.5,
+      coarse: false,
+    };
+    socket.send(&ops_frame(&vec![fine.clone()])).unwrap();
+
+    let mut buf = vec![0u8; MTU * 2];
+    let mut last_keepalive = Instant::now();
+    let storm_until = Instant::now() + Duration::from_millis(2500);
+    while Instant::now() < storm_until {
+      if last_keepalive.elapsed() > Duration::from_millis(400) {
+        socket.send(&ops_frame(&vec![fine.clone()])).unwrap();
+        last_keepalive = Instant::now();
+      }
+      let _ = socket.recv(&mut buf);
+    }
+
+    let coarse = AntOp::Window {
+      x: EXTENT * 0.5,
+      y: EXTENT * 0.5,
+      half: EXTENT * 0.5,
+      coarse: true,
+    };
+    let asked = Instant::now();
+    socket.send(&ops_frame(&vec![coarse.clone()])).unwrap();
+    let mut last_keepalive = Instant::now();
+    let mut fine_after_switch = 0u64;
+    loop {
+      if asked.elapsed() > Duration::from_secs(6) {
+        eprintln!("no Counts within 6s; fine Cells ops still arriving after the switch: {fine_after_switch}");
+        return None;
+      }
+      if last_keepalive.elapsed() > Duration::from_millis(400) {
+        socket.send(&ops_frame(&vec![coarse.clone()])).unwrap();
+        last_keepalive = Instant::now();
+      }
+      let Ok(len) = socket.recv(&mut buf) else { continue };
+      let Some((tag, body)) = frame::split(&buf[..len]) else { continue };
+      if frame::Kind::from_byte(tag) != Some(frame::Kind::Ops) {
+        continue;
+      }
+      let Ok(ops) = MsgPackCodec.decode::<Vec<AntOp>>(body) else { continue };
+      fine_after_switch += ops.iter().filter(|op| matches!(op, AntOp::Cells { .. })).count() as u64;
+      if ops.iter().any(|op| matches!(op, AntOp::Counts { .. })) {
+        return Some(asked.elapsed());
+      }
+    }
+  })
+  .await
+  .unwrap();
+
+  let switched = switched.expect("the coarse pane never took effect at all");
+  assert!(
+    switched < Duration::from_millis(2500),
+    "a full command buffer held the pane change for {switched:?}"
   );
 }
