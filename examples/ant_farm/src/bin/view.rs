@@ -189,6 +189,22 @@ fn net_thread(
   }
 }
 
+/// The pane to request for a camera and a window: cover the whole window
+/// whatever its aspect, and never cap the half. A capped request cannot name
+/// the board's far side from an off-centre camera, which showed up as a hard
+/// vertical cut at exactly `cam.x + cap`; the server clips panes to the
+/// board, so a generous half costs only the cells that exist.
+fn request_for(cam: &Pane, w: f32, h: f32) -> Pane {
+  let side = w.min(h);
+  let aspect = w.max(h) / side;
+  Pane {
+    x: cam.x,
+    y: cam.y,
+    half: cam.half * aspect,
+    coarse: CELL * (side / (cam.half * 2.0)) < 6.0,
+  }
+}
+
 fn section<R>(ui: &mut egui::Ui, title: &str, default_open: bool, add: impl FnOnce(&mut egui::Ui) -> R) {
   egui::CollapsingHeader::new(egui::RichText::new(title).strong())
     .default_open(default_open)
@@ -298,14 +314,7 @@ async fn main() {
     // The first frames run before the window has a real size; asking for a
     // pane with that aspect requests half the board by mistake.
     if side > 64.0 {
-      let aspect = screen_width().max(screen_height()) / side;
-      let coarse = CELL * (side / (cam.half * 2.0)) < 6.0;
-      *pane.lock() = Pane {
-        x: cam.x,
-        y: cam.y,
-        half: (cam.half * aspect).min(extent * 0.5),
-        coarse,
-      };
+      *pane.lock() = request_for(&cam, screen_width(), screen_height());
     }
     let view = cam;
 
@@ -461,5 +470,43 @@ async fn main() {
     }
 
     next_frame().await
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn a_zoomed_out_pane_slid_to_a_corner_still_asks_for_the_far_edge() {
+    let cam = Pane {
+      x: 49.0,
+      y: 1020.0,
+      half: EXTENT * 0.5,
+      coarse: false,
+    };
+    let request = request_for(&cam, 1600.0, 900.0);
+    let visible_edge = cam.x + cam.half * (1600.0 / 900.0);
+    assert!(
+      request.x + request.half >= visible_edge,
+      "camera at the west edge, zoomed out: the visible world reaches {visible_edge}, the request only {}",
+      request.x + request.half
+    );
+    assert!(request.coarse, "a whole-board pane is far past the coarse threshold");
+  }
+
+  #[test]
+  fn the_request_covers_the_long_axis_of_either_orientation() {
+    let cam = Pane {
+      x: 1020.0,
+      y: 1020.0,
+      half: 300.0,
+      coarse: false,
+    };
+    for (w, h) in [(1600.0f32, 900.0f32), (900.0, 1600.0)] {
+      let request = request_for(&cam, w, h);
+      let visible_long = cam.half * (w.max(h) / w.min(h));
+      assert!(request.half >= visible_long, "{w}x{h}: request {} covers the visible {visible_long}", request.half);
+    }
   }
 }
