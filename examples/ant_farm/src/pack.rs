@@ -87,6 +87,26 @@ impl<'a> Iterator for Records<'a> {
   }
 }
 
+/// Appends one `[cell u16][count u16]` pair for a coarse pane.
+pub fn pack_count(out: &mut Vec<u8>, cell: u16, count: u16) {
+  out.extend_from_slice(&cell.to_le_bytes());
+  out.extend_from_slice(&count.to_le_bytes());
+}
+
+/// Walks a coarse payload. The trailing `Option` is `None` on a ragged tail.
+pub fn counts(bytes: &[u8]) -> impl Iterator<Item = Option<(u16, u16)>> + '_ {
+  let ragged = bytes.len() % 4 != 0;
+  bytes
+    .chunks_exact(4)
+    .map(|pair| {
+      Some((
+        u16::from_le_bytes([pair[0], pair[1]]),
+        u16::from_le_bytes([pair[2], pair[3]]),
+      ))
+    })
+    .chain(ragged.then_some(None))
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -140,6 +160,18 @@ mod tests {
     }
     assert_eq!(total, n);
     assert_eq!(record_count, 3);
+  }
+
+  #[test]
+  fn counts_round_trip_and_a_ragged_tail_reads_as_malformed() {
+    let mut bytes = Vec::new();
+    pack_count(&mut bytes, 7, 300);
+    pack_count(&mut bytes, 65000, 1);
+    let clean: Vec<_> = counts(&bytes).collect();
+    assert_eq!(clean, vec![Some((7, 300)), Some((65000, 1))]);
+
+    bytes.pop();
+    assert_eq!(counts(&bytes).last(), Some(None));
   }
 
   #[test]

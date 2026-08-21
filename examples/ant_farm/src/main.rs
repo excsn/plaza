@@ -8,6 +8,7 @@ use std::time::Duration;
 use plaza::agent::Agent;
 use plaza::stats::ControllerStats;
 use plaza::{NoSnapshots, StateControllerBuilder, TickDriver};
+use plaza_session::manager::Queues;
 use plaza_session::SessionOptions;
 use plaza_wire::{frame, MsgPackCodec, WireCodec};
 use tokio::net::UdpSocket;
@@ -59,12 +60,22 @@ async fn serve(args: &[String]) -> std::io::Result<()> {
 
   let next = Arc::new(AtomicU32::new(1));
   let factory: AgentFactory<WatcherId> = Arc::new(move |_| Agent::new_human(next.fetch_add(1, Ordering::Relaxed)));
+  // A whole pane leaves in one tick as hundreds of datagrams from one task,
+  // so the per-client queue must hold a tick's burst or the overflow policy
+  // (drop) eats the panel's Stats op along with the cells.
+  let options = SessionOptions {
+    queues: Queues {
+      outbound: 4096,
+      ..Queues::default()
+    },
+    ..SessionOptions::default()
+  };
   let session = UdpPlazaSession::<AntOp, WatcherId, MsgPackCodec>::attach(
     socket,
     send,
     factory,
     MsgPackCodec,
-    SessionOptions::default(),
+    options,
   )
   .await?;
 
@@ -209,6 +220,7 @@ async fn watch(
     x: at.0,
     y: at.1,
     half,
+    coarse: false,
   };
   let _ = socket.send(&ops_frame(&vec![window(at)])).await;
 

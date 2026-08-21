@@ -156,6 +156,25 @@ pub fn assemble(publication: &Publication, cells: &[usize], out: &mut Vec<Vec<u8
   }
 }
 
+/// Deals one coarse pane's occupied cells as `[cell][count]` pairs, in
+/// payloads no larger than the budget.
+pub fn assemble_counts(buckets: &Buckets, cells: &[usize], out: &mut Vec<Vec<u8>>) {
+  let mut chunk: Vec<u8> = Vec::with_capacity(PAYLOAD_BUDGET);
+  for &index in cells {
+    let members = buckets.members(index);
+    if members.is_empty() {
+      continue;
+    }
+    if chunk.len() + 4 > PAYLOAD_BUDGET {
+      out.push(std::mem::replace(&mut chunk, Vec::with_capacity(PAYLOAD_BUDGET)));
+    }
+    pack::pack_count(&mut chunk, index as u16, members.len().min(u16::MAX as usize) as u16);
+  }
+  if !chunk.is_empty() {
+    out.push(chunk);
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -200,6 +219,33 @@ mod tests {
     let outside = outside_occupied.expect("10k ants heading to 8 sites occupy cells outside one pane");
     assert!(publication.cell(outside).is_none());
     assert!(publication.packed_cells > 0);
+  }
+
+  #[test]
+  fn a_coarse_pane_carries_the_same_ants_as_a_fine_one_for_a_fraction_of_the_bytes() {
+    let (_, buckets) = farm(50_000);
+    let space = buckets.space().clone();
+    let pane = pane_cells(&space, 1020.0, 1020.0, 512.0);
+
+    let mut payloads = Vec::new();
+    assemble_counts(&buckets, &pane, &mut payloads);
+
+    let mut counted = 0usize;
+    let mut bytes = 0usize;
+    for payload in &payloads {
+      assert!(payload.len() <= crate::protocol::PAYLOAD_BUDGET);
+      bytes += payload.len();
+      for pair in crate::pack::counts(payload) {
+        counted += pair.expect("well formed").1 as usize;
+      }
+    }
+
+    let mut expected = 0usize;
+    for &cell in &pane {
+      expected += buckets.members(cell).len();
+    }
+    assert_eq!(counted, expected);
+    assert!(bytes * 10 < expected * 2, "counts must be far smaller than offsets would be");
   }
 
   #[test]
