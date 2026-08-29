@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use plaza::agent::Agent;
-use plaza::game_common::flow_control::{Phased, PhasedScheduler};
+use plaza::game_common::flow_control::{Mark, Phased, PhasedScheduler, Situation};
 
 use crate::protocol::{
   BattlePhase, Cell, FieldView, OfferView, Panel, PlayerId, SeenUnit, Stance, Unit, UnitId, BOT, SEATS, TICK_MS,
@@ -12,19 +12,19 @@ use crate::protocol::{
 use crate::sight;
 
 /// Work scheduled against one occupancy of a phase. Everything that can go
-/// stale carries `key`, the activation counter as it stood when scheduled: the
+/// stale carries a [`Mark`] of the situation it was scheduled in: the
 /// situation moving on is what invalidates a clock, not time.
 #[derive(Clone, Debug)]
 pub enum WatchEvent {
   /// A lone human has waited long enough; the bot takes the other side.
   BotSeats,
   /// The virtual commander's order for the activation it was scheduled in.
-  BotActs { key: u64 },
+  BotActs { mark: Mark },
   /// A human commander's activation clock ran out; the server orders for them.
-  ActTimesOut { key: u64 },
+  ActTimesOut { mark: Mark },
   /// The march's next step window closed: apply the standing offer, then walk
   /// or finish.
-  MarchStep { key: u64 },
+  MarchStep { mark: Mark },
   /// The victory screen has been up long enough.
   NextBattle,
 }
@@ -66,8 +66,8 @@ pub struct WatchState {
   pub marching: Option<Marching>,
   /// Units that fired this round: seen by everyone until the round ends.
   pub revealed: Vec<UnitId>,
-  /// Bumps whenever who-must-answer-what changes; stale clocks check it.
-  pub key: u64,
+  /// Advanced whenever who-must-answer-what changes; stale clocks check it.
+  pub key: Situation,
 
   pub panel: Panel,
 
@@ -95,7 +95,7 @@ impl WatchState {
       side_to_act: 0,
       marching: None,
       revealed: Vec::new(),
-      key: 0,
+      key: Situation::new(),
       panel: Panel::default(),
       tick: 0,
       tick_interval: Duration::from_millis(TICK_MS),

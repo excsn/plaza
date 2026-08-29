@@ -5,23 +5,23 @@ use std::collections::VecDeque;
 use std::time::Duration;
 
 use plaza::agent::Agent;
-use plaza::game_common::flow_control::{Phased, PhasedScheduler};
+use plaza::game_common::flow_control::{Mark, Phased, PhasedScheduler, Situation};
 
 use crate::cards::Card;
 use crate::protocol::{
   Panel, PlayerId, Seat, SeatView, Street, TablePhase, TableView, BIG_BLIND, BOT, SEATS, STARTING_STACK, TICK_MS,
 };
 
-/// Work scheduled against one occupancy of a phase. Clocks carry `key`, the
-/// ask counter as it stood when scheduled.
+/// Work scheduled against one occupancy of a phase. Clocks carry a [`Mark`]
+/// of the ask they were scheduled in.
 #[derive(Clone, Debug)]
 pub enum TableEvent {
   /// Empty chairs have waited long enough; the bots sit.
   BotsSit,
   /// The bot acts on the ask it holds.
-  BotActs { key: u64 },
+  BotActs { mark: Mark },
   /// The ask's clock ran out; the server checks or folds.
-  ActTimesOut { key: u64 },
+  ActTimesOut { mark: Mark },
   /// The payout has been face up long enough.
   NextHand,
 }
@@ -86,8 +86,8 @@ pub struct TableState {
   pub to_act: Option<Seat>,
   /// Showdown reveals of the current payout, kept for late views.
   pub reveals: Vec<(Seat, [Card; 2])>,
-  /// Bumps whenever the ask moves; stale clocks check it.
-  pub key: u64,
+  /// Advanced whenever the ask moves; stale clocks check it.
+  pub key: Situation,
 
   pub panel: Panel,
 
@@ -117,7 +117,7 @@ impl TableState {
       round: Round::default(),
       to_act: None,
       reveals: Vec::new(),
-      key: 0,
+      key: Situation::new(),
       panel: Panel::default(),
       tick: 0,
       tick_interval: Duration::from_millis(TICK_MS),

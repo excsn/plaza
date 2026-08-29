@@ -27,11 +27,7 @@ use crate::state::{WordEvent, WordState};
 type Ctx = OpsQueue<DuelOp, PlayerId>;
 
 fn rng(seed: u64) -> u64 {
-  let mut x = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
-  x ^= x >> 12;
-  x ^= x << 25;
-  x ^= x >> 27;
-  x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+  plaza_client_utils::determinism::mix64(seed)
 }
 
 #[derive(Debug, Default)]
@@ -207,7 +203,7 @@ fn start_turn(state: &mut WordState, ctx: &mut Ctx) {
 fn grant_priority(state: &mut WordState, seat: u8, ctx: &mut Ctx) {
   state.priority = seat;
   state.panel.windows += 1;
-  state.key += 1;
+  state.key.advance();
   to_all(vec![DuelOp::PriorityTo { seat }], ctx);
   schedule_clock(state);
 }
@@ -216,11 +212,11 @@ fn schedule_clock(state: &mut WordState) {
   if *state.phase.current() != DuelPhase::Dueling {
     return;
   }
-  let key = state.key;
+  let mark = state.key.mark();
   if state.commanders[state.priority as usize] == BOT {
     state
       .timeouts
-      .schedule_after(state.tick, ticks(BOT_THINK_MS), &state.phase, WordEvent::BotSpeaks { key });
+      .schedule_after(state.tick, ticks(BOT_THINK_MS), &state.phase, WordEvent::BotSpeaks { mark });
   } else {
     let window = if state.priority == state.active && state.stack.is_empty() {
       TURN_LIMIT_MS
@@ -229,7 +225,7 @@ fn schedule_clock(state: &mut WordState) {
     };
     state
       .timeouts
-      .schedule_after(state.tick, ticks(window), &state.phase, WordEvent::WindowLapses { key });
+      .schedule_after(state.tick, ticks(window), &state.phase, WordEvent::WindowLapses { mark });
   }
 }
 
@@ -362,8 +358,8 @@ fn run_due_events(state: &mut WordState, ctx: &mut Ctx) -> bool {
         }
       }
 
-      WordEvent::WindowLapses { key } => {
-        if key != state.key || *state.phase.current() != DuelPhase::Dueling {
+      WordEvent::WindowLapses { mark } => {
+        if !state.key.holds(mark) || *state.phase.current() != DuelPhase::Dueling {
           continue;
         }
         state.panel.timeouts += 1;
@@ -372,8 +368,8 @@ fn run_due_events(state: &mut WordState, ctx: &mut Ctx) -> bool {
         changed = true;
       }
 
-      WordEvent::BotSpeaks { key } => {
-        if key != state.key || *state.phase.current() != DuelPhase::Dueling {
+      WordEvent::BotSpeaks { mark } => {
+        if !state.key.holds(mark) || *state.phase.current() != DuelPhase::Dueling {
           continue;
         }
         let seat = state.priority;

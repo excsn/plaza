@@ -21,11 +21,7 @@ pub fn suit_name(card: Card) -> &'static str {
 }
 
 fn rng(seed: u64) -> u64 {
-  let mut x = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
-  x ^= x >> 12;
-  x ^= x << 25;
-  x ^= x >> 27;
-  x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+  plaza_client_utils::determinism::mix64(seed)
 }
 
 /// A full deck, Fisher-Yates over the hand's seed: the same hand deals the

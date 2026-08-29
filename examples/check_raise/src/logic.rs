@@ -28,11 +28,7 @@ use crate::state::{TableEvent, TableState};
 type Ctx = OpsQueue<PokerOp, PlayerId>;
 
 fn rng(seed: u64) -> u64 {
-  let mut x = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
-  x ^= x >> 12;
-  x ^= x << 25;
-  x ^= x >> 27;
-  x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+  plaza_client_utils::determinism::mix64(seed)
 }
 
 #[derive(Debug, Default)]
@@ -270,7 +266,7 @@ fn ask_next(state: &mut TableState, ctx: &mut Ctx) {
     return;
   };
   state.to_act = Some(seat);
-  state.key += 1;
+  state.key.advance();
   state.panel.offers += 1;
   to_all(
     vec![PokerOp::ToAct {
@@ -287,15 +283,15 @@ fn schedule_clock(state: &mut TableState) {
   if *state.phase.current() != TablePhase::Playing {
     return;
   }
-  let key = state.key;
+  let mark = state.key.mark();
   if state.chairs[seat as usize].player == BOT {
     state
       .timeouts
-      .schedule_after(state.tick, ticks(BOT_THINK_MS), &state.phase, TableEvent::BotActs { key });
+      .schedule_after(state.tick, ticks(BOT_THINK_MS), &state.phase, TableEvent::BotActs { mark });
   } else {
     state
       .timeouts
-      .schedule_after(state.tick, ticks(ACT_LIMIT_MS), &state.phase, TableEvent::ActTimesOut { key });
+      .schedule_after(state.tick, ticks(ACT_LIMIT_MS), &state.phase, TableEvent::ActTimesOut { mark });
   }
 }
 
@@ -516,7 +512,7 @@ pub fn settle(puts: &[u32], live: &[Seat], button: Seat, strength: impl Fn(Seat)
 fn end_hand(state: &mut TableState, ctx: &mut Ctx) {
   state.to_act = None;
   state.round = Default::default();
-  state.key += 1;
+  state.key.advance();
   state
     .phase
     .transition_with(TablePhase::Payout, ctx, PokerOp::PhaseChanged, None, None);
@@ -539,8 +535,8 @@ fn run_due_events(state: &mut TableState, ctx: &mut Ctx) -> bool {
         }
       }
 
-      TableEvent::BotActs { key } => {
-        if key != state.key || *state.phase.current() != TablePhase::Playing {
+      TableEvent::BotActs { mark } => {
+        if !state.key.holds(mark) || *state.phase.current() != TablePhase::Playing {
           continue;
         }
         let Some(seat) = state.to_act else { continue };
@@ -555,8 +551,8 @@ fn run_due_events(state: &mut TableState, ctx: &mut Ctx) -> bool {
         changed = true;
       }
 
-      TableEvent::ActTimesOut { key } => {
-        if key != state.key || *state.phase.current() != TablePhase::Playing {
+      TableEvent::ActTimesOut { mark } => {
+        if !state.key.holds(mark) || *state.phase.current() != TablePhase::Playing {
           continue;
         }
         let Some(seat) = state.to_act else { continue };
@@ -590,7 +586,7 @@ pub fn bot_action(state: &TableState, seat: Seat) -> Act {
   let owed = state.owed(seat);
   let size = state.street.bet_size();
   let can_raise = state.round.raises < RAISE_CAP && chair.stack >= owed + size;
-  let roll = rng(state.hand ^ (state.key << 8));
+  let roll = rng(state.hand ^ (state.panel.offers << 8));
 
   if state.street == Street::Preflop {
     let [a, b] = chair.holes;

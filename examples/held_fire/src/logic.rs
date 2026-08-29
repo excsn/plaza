@@ -27,13 +27,8 @@ use crate::state::{fresh_units, Marching, Offer, WatchEvent, WatchState};
 
 type Ctx = OpsQueue<WatchOp, PlayerId>;
 
-/// xorshift64*, for the bot's occasional choices.
 fn rng(seed: u64) -> u64 {
-  let mut x = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
-  x ^= x >> 12;
-  x ^= x << 25;
-  x ^= x >> 27;
-  x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+  plaza_client_utils::determinism::mix64(seed)
 }
 
 #[derive(Debug, Default)]
@@ -215,7 +210,7 @@ fn start_round(state: &mut WatchState, ctx: &mut Ctx) {
   }
   // The opener alternates by round, so neither side owns the tempo.
   state.side_to_act = ((state.round + 1) % 2) as u8;
-  state.key += 1;
+  state.key.advance();
   to_all(
     vec![
       WatchOp::RoundStarted { round: state.round },
@@ -230,17 +225,17 @@ fn schedule_clocks(state: &mut WatchState) {
   if *state.phase.current() != BattlePhase::Fighting || state.marching.is_some() {
     return;
   }
-  let key = state.key;
+  let mark = state.key.mark();
   if state.commanders[state.side_to_act as usize] == BOT {
     state
       .timeouts
-      .schedule_after(state.tick, ticks(BOT_THINK_MS), &state.phase, WatchEvent::BotActs { key });
+      .schedule_after(state.tick, ticks(BOT_THINK_MS), &state.phase, WatchEvent::BotActs { mark });
   } else {
     state.timeouts.schedule_after(
       state.tick,
       ticks(ACT_LIMIT_MS),
       &state.phase,
-      WatchEvent::ActTimesOut { key },
+      WatchEvent::ActTimesOut { mark },
     );
   }
 }
@@ -335,11 +330,11 @@ fn perform_order(state: &mut WatchState, order: Order, ctx: &mut Ctx) {
         step: 0,
         offer: None,
       });
-      state.key += 1;
-      let key = state.key;
+      state.key.advance();
+      let mark = state.key.mark();
       state
         .timeouts
-        .schedule_after(state.tick, ticks(STEP_MS), &state.phase, WatchEvent::MarchStep { key });
+        .schedule_after(state.tick, ticks(STEP_MS), &state.phase, WatchEvent::MarchStep { mark });
     }
   }
 }
@@ -389,7 +384,7 @@ fn march_step(state: &mut WatchState, ctx: &mut Ctx) -> bool {
           if let Some(u) = state.unit_mut(marching.unit) {
             u.acted = true;
           }
-          state.key += 1;
+          state.key.advance();
           if battle_over(state, ctx) {
             return true;
           }
@@ -417,7 +412,7 @@ fn march_step(state: &mut WatchState, ctx: &mut Ctx) -> bool {
       unit.side
     };
     debug!(unit = marching.unit, side = side_done, "march arrived");
-    state.key += 1;
+    state.key.advance();
     finish_activation(state, ctx);
     return true;
   }
@@ -487,10 +482,10 @@ fn march_step(state: &mut WatchState, ctx: &mut Ctx) -> bool {
     debug!(watcher, mover = marching.unit, ?cell, "offer opened");
   }
 
-  let key = state.key;
+  let mark = state.key.mark();
   state
     .timeouts
-    .schedule_after(state.tick, ticks(STEP_MS), &state.phase, WatchEvent::MarchStep { key });
+    .schedule_after(state.tick, ticks(STEP_MS), &state.phase, WatchEvent::MarchStep { mark });
   state.marching = Some(marching);
   true
 }
@@ -542,7 +537,7 @@ fn battle_over(state: &mut WatchState, ctx: &mut Ctx) -> bool {
     if !state.side_alive(side) {
       let winner = 1 - side;
       state.marching = None;
-      state.key += 1;
+      state.key.advance();
       state.phase.transition_with(
         BattlePhase::Over,
         ctx,
@@ -579,7 +574,7 @@ fn finish_activation(state: &mut WatchState, ctx: &mut Ctx) {
     start_round(state, ctx);
     return;
   }
-  state.key += 1;
+  state.key.advance();
   schedule_clocks(state);
 }
 
@@ -596,14 +591,14 @@ fn run_due_events(state: &mut WatchState, ctx: &mut Ctx) -> bool {
         }
       }
 
-      WatchEvent::MarchStep { key } => {
-        if key == state.key && *state.phase.current() == BattlePhase::Fighting {
+      WatchEvent::MarchStep { mark } => {
+        if state.key.holds(mark) && *state.phase.current() == BattlePhase::Fighting {
           changed |= march_step(state, ctx);
         }
       }
 
-      WatchEvent::BotActs { key } | WatchEvent::ActTimesOut { key } => {
-        if key != state.key || *state.phase.current() != BattlePhase::Fighting || state.marching.is_some() {
+      WatchEvent::BotActs { mark } | WatchEvent::ActTimesOut { mark } => {
+        if !state.key.holds(mark) || *state.phase.current() != BattlePhase::Fighting || state.marching.is_some() {
           continue;
         }
         if matches!(due, WatchEvent::ActTimesOut { .. }) {
@@ -761,7 +756,7 @@ mod tests {
     watcher.at = (8, 0);
     watcher.stance = if watching { Stance::Watching } else { Stance::Ready };
     state.side_to_act = 0;
-    state.key += 1;
+    state.key.advance();
   }
 
   #[tokio::test]
@@ -960,7 +955,7 @@ mod tests {
       unit.acted = false;
     }
     state.side_to_act = 1;
-    state.key += 1;
+    state.key.advance();
     send(&mut state, 2, WatchOp::Act(Order::March { unit: 3, to: (10, 0) })).await;
     assert_eq!(state.unit(3).unwrap().stance, Stance::Ready, "taking any order drops the watch");
   }

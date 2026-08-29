@@ -211,6 +211,7 @@ fn start_battle(state: &mut GaugeState, ctx: &mut Ctx) {
     Regime::Initiative => start_round(state, ctx),
     Regime::Ctb => {
       state.turn = 1;
+      state.ask.advance();
       state.current = order::ctb_next(&state.units);
       ctx
         .ops_q()
@@ -241,6 +242,7 @@ fn start_round(state: &mut GaugeState, ctx: &mut Ctx) {
   state.current = manager.current_turn_actor();
   state.turns = Some(manager);
   state.turn += 1;
+  state.ask.advance();
   debug!(round = state.round, order = ?state.order, "round order rolled");
   schedule_turn_clock(state);
 }
@@ -252,21 +254,15 @@ fn schedule_turn_clock(state: &mut GaugeState) {
   let Some(unit) = state.unit(current) else {
     return;
   };
-  let event_turn = state.turn;
+  let mark = state.ask.mark();
   if state.commanders[unit.team as usize] == BOT {
-    state.timeouts.schedule_after(
-      state.tick,
-      ticks(BOT_THINK_MS),
-      &state.phase,
-      GaugeEvent::BotActs { turn: event_turn },
-    );
+    state
+      .timeouts
+      .schedule_after(state.tick, ticks(BOT_THINK_MS), &state.phase, GaugeEvent::BotActs { mark });
   } else {
-    state.timeouts.schedule_after(
-      state.tick,
-      ticks(TURN_LIMIT_MS),
-      &state.phase,
-      GaugeEvent::TurnTimesOut { turn: event_turn },
-    );
+    state
+      .timeouts
+      .schedule_after(state.tick, ticks(TURN_LIMIT_MS), &state.phase, GaugeEvent::TurnTimesOut { mark });
   }
 }
 
@@ -394,6 +390,7 @@ fn advance_turn(state: &mut GaugeState, actor: UnitId, time: u64, before: &[u32]
         debug_assert!(!advanced.pass_closed(), "the boundary is taken before the wrap");
         state.current = Some(advanced.into_actor());
         state.turn += 1;
+        state.ask.advance();
         schedule_turn_clock(state);
       }
     }
@@ -403,6 +400,7 @@ fn advance_turn(state: &mut GaugeState, actor: UnitId, time: u64, before: &[u32]
       order::ctb_recharge(&mut state.units, actor, now, time, before);
       state.current = order::ctb_next(&state.units);
       state.turn += 1;
+      state.ask.advance();
       ctx
         .ops_q()
         .push(TargetedOp::new_system_all(vec![GaugeOp::TurnChanged(TurnChangedNoticePayload {
@@ -452,10 +450,10 @@ fn run_due_events(state: &mut GaugeState, ctx: &mut Ctx) -> bool {
         }
       }
 
-      GaugeEvent::BotActs { turn } | GaugeEvent::TurnTimesOut { turn } => {
+      GaugeEvent::BotActs { mark } | GaugeEvent::TurnTimesOut { mark } => {
         // The turn moved on while this was in flight; a stale clock acts for
         // nobody.
-        if turn != state.turn || *state.phase.current() != BattlePhase::Fighting {
+        if !state.ask.holds(mark) || *state.phase.current() != BattlePhase::Fighting {
           continue;
         }
         let Some(current) = state.current else { continue };

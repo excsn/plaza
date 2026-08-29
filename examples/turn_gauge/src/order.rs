@@ -12,14 +12,10 @@ use crate::protocol::{
   SPEED_MAX, SPEED_MIN, SPEED_STEP, TEAM_SIZE, UNITS,
 };
 
-/// xorshift64*: deterministic on purpose, so a battle's rolls replay
-/// identically on both ends and in the tests.
+/// The shared mixer, so a battle's rolls replay identically on both ends and
+/// in the tests.
 pub fn rng(seed: u64) -> u64 {
-  let mut x = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
-  x ^= x >> 12;
-  x ^= x << 25;
-  x ^= x >> 27;
-  x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+  plaza_client_utils::determinism::mix64(seed)
 }
 
 /// A fresh 3v3, gauges seeded for the delay regime whichever regime runs.

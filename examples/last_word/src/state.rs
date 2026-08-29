@@ -4,21 +4,21 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use plaza::agent::Agent;
-use plaza::game_common::flow_control::{Phased, PhasedScheduler};
+use plaza::game_common::flow_control::{Mark, Phased, PhasedScheduler, Situation};
 
 use crate::protocol::{CastSpell, DuelPhase, DuelView, Panel, PlayerId, BOT, LIFE, SEATS, TICK_MS};
 
-/// Work scheduled against one occupancy of a phase. Priority clocks carry
-/// `key`, the window counter as it stood when scheduled: the window moving on
-/// is what invalidates a clock.
+/// Work scheduled against one occupancy of a phase. Priority clocks carry a
+/// [`Mark`] of the window they were scheduled in: the window moving on is
+/// what invalidates a clock.
 #[derive(Clone, Debug)]
 pub enum WordEvent {
   /// A lone human has waited long enough; the bot takes the other seat.
   BotSeats,
   /// The bot speaks or passes on the window it holds.
-  BotSpeaks { key: u64 },
+  BotSpeaks { mark: Mark },
   /// The window's clock ran out; silence passes.
-  WindowLapses { key: u64 },
+  WindowLapses { mark: Mark },
   /// The victory screen has been up long enough.
   NextDuel,
 }
@@ -41,8 +41,8 @@ pub struct WordState {
   pub tempo: [u8; SEATS],
   pub life: [i32; SEATS],
   pub stack: Vec<CastSpell>,
-  /// Bumps on every priority grant; stale clocks check it.
-  pub key: u64,
+  /// Advanced on every priority grant; stale clocks check it.
+  pub key: Situation,
 
   pub panel: Panel,
 
@@ -72,7 +72,7 @@ impl WordState {
       tempo: [0; SEATS],
       life: [LIFE; SEATS],
       stack: Vec::new(),
-      key: 0,
+      key: Situation::new(),
       panel: Panel::default(),
       tick: 0,
       tick_interval: Duration::from_millis(TICK_MS),

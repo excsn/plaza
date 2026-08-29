@@ -16,6 +16,7 @@ websocket = ["dep:plaza_ws", "dep:plaza_wire"]
 [dependencies]
 plaza = { workspace = true }
 playground_common = { workspace = true }
+plaza_client_utils = { workspace = true }
 serde = { workspace = true }
 
 plaza_ws = { workspace = true, optional = true, features = ["pump"] }

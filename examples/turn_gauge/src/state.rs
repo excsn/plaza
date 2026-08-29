@@ -5,21 +5,21 @@ use std::time::Duration;
 
 use plaza::agent::Agent;
 use plaza::game_common::flow_control::turns::RoundRobinTurnManager;
-use plaza::game_common::flow_control::{Phased, PhasedScheduler};
+use plaza::game_common::flow_control::{Mark, Phased, PhasedScheduler, Situation};
 
 use crate::protocol::{BattlePhase, BattleView, GaugeOp, Panel, PlayerId, Regime, Unit, UnitId, BOT, SEATS, TICK_MS};
 
 /// Work scheduled against one occupancy of a phase. Turn-scoped events carry
-/// their turn and are discarded when it has moved on, the identity check the
-/// phase epoch cannot make for them.
+/// a [`Mark`] of the turn they were scheduled in and are discarded when it
+/// has moved on, the staleness check the phase epoch cannot make for them.
 #[derive(Clone, Debug)]
 pub enum GaugeEvent {
   /// A lone human has waited long enough; the bot takes the other side.
   BotSeats,
   /// The virtual commander's order for the turn it was scheduled in.
-  BotActs { turn: u32 },
+  BotActs { mark: Mark },
   /// A human commander's clock ran out; the server acts for them.
-  TurnTimesOut { turn: u32 },
+  TurnTimesOut { mark: Mark },
   /// The victory screen has been up long enough.
   NextBattle,
 }
@@ -42,6 +42,8 @@ pub struct GaugeState {
   pub units: Vec<Unit>,
   pub round: u32,
   pub turn: u32,
+  /// Advanced whenever whose-turn-it-is moves on; stale clocks check it.
+  pub ask: Situation,
   /// The initiative regime's walker, one per round; `None` under the delay
   /// regime, which is the point being demonstrated.
   pub turns: Option<RoundRobinTurnManager<GaugeOp, PlayerId, UnitId>>,
@@ -76,6 +78,7 @@ impl GaugeState {
       units: Vec::new(),
       round: 0,
       turn: 0,
+      ask: Situation::new(),
       turns: None,
       order: Vec::new(),
       current: None,
