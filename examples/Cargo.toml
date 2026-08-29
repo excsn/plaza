@@ -38,6 +38,7 @@ members = [
   "table_manners",
   "tag_arena",
   "timed_debuff",
+  "turn_gauge",
   "typing_indicator",
   "whack_a_mole",
 ]
@@ -69,6 +70,7 @@ default-members = [
   "table_manners",
   "tag_arena",
   "timed_debuff",
+  "turn_gauge",
   "typing_indicator",
   "whack_a_mole",
 ]
