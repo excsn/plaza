@@ -10,7 +10,7 @@ use plaza_wire::{MsgPackCodec, WireCodec};
 use plaza_ws::pump::{mismatch_message, Arrival, FramePump};
 use plaza_ws::{Event, State};
 
-use crate::protocol::{Cell, FieldView, OfferView, Order, UnitId, WatchOp, PROTOCOL};
+use crate::protocol::{BattlePhase, Cell, FieldView, OfferView, Order, UnitId, WatchOp, PROTOCOL};
 
 const WIRE: MsgPackCodec = MsgPackCodec;
 
@@ -80,7 +80,9 @@ impl NetClient {
   /// Whether this client owes the next activation.
   pub fn my_activation(&self) -> bool {
     match (&self.view, self.my_side) {
-      (Some(view), Some(side)) => view.side_to_act == side && view.marching.is_none(),
+      (Some(view), Some(side)) => {
+        view.phase == BattlePhase::Fighting && view.side_to_act == side && view.marching.is_none()
+      }
       _ => false,
     }
   }
