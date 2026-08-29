@@ -3,8 +3,9 @@
 //! costs, and which remote-drawing strategy is actually closest to the truth.
 
 use plaza_client_utils::net_sim::{LatencyLink, Rng};
+use plaza_client_utils::RateMeter;
 
-use plaza_server_utils::{RateMeter, RenderError, render_error_at};
+use plaza_server_utils::{RenderError, render_error_at};
 
 use crate::sim::client::Client;
 use crate::sim::server::Server;

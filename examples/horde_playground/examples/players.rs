@@ -163,7 +163,7 @@ fn drift(enemy_count: usize, players: usize, windows: usize, window_secs: f32) {
   let mut server = Server::new(enemy_count, players, controls.spread_players);
   let seats = vec![Seat::Bot; players];
   let mut clients: Vec<Client> = (0..players).map(|p| Client::new(p as u8, players)).collect();
-  let mut meter = plaza_server_utils::RateMeter::new();
+  let mut meter = plaza_client_utils::RateMeter::new();
   let mut clock = 0u64;
 
   println!("\ndrift at {enemy_count} enemies / {players} players, {window_secs:.0}s windows");

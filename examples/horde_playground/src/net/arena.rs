@@ -17,8 +17,9 @@ use async_trait::async_trait;
 use parking_lot::Mutex;
 use plaza::session::{MessageTarget, TargetedOp};
 use plaza::state_logic::{LogicInput, LogicOutput, StateLogic, StateLogicError};
+use plaza_client_utils::RateMeter;
 use plaza_server_utils::oneshot::Pending as OneShots;
-use plaza_server_utils::{RateMeter, SeatTable, Seating};
+use plaza_server_utils::{SeatTable, Seating};
 use plaza_session::{Delivery, DirectionProfile, LinkProfile, LinkPublisher};
 
 use crate::sim::protocol::{Op, ServerPolicy};

@@ -17,7 +17,7 @@
 //!   render instant. It was inferred from the death burst it causes once, and
 //!   the inference re-fired on every recovery repeat of the same announcements.
 
-use plaza_client_utils::{InputCoalescer, Timeline};
+use plaza_client_utils::{InputCoalescer, RateMeter, Timeline};
 use plaza_wire::{MsgPackCodec, WireCodec};
 use plaza_ws::pump::{mismatch_message, Arrival, FramePump};
 use plaza_ws::{Event, State};
@@ -89,18 +89,18 @@ pub struct NetClient {
   /// the host cannot give it. The host reports "all players", an aggregate for
   /// the whole arena; a joiner wants its own share, because that is what says
   /// whether *its* link is the problem.
-  traffic: plaza_server_utils::RateMeter,
+  traffic: RateMeter,
   /// The same traffic as the *server* counts it: what these packets would cost
   /// with compact ids and quantised positions, rather than what the MessagePack
   /// on the wire actually cost. Kept beside the real figure because the gap between
   /// them is the encoding's price, and it is the one number about wire cost
   /// this example never showed.
-  modelled: plaza_server_utils::RateMeter,
+  modelled: RateMeter,
   /// What this client *sends*. Bandwidth has two directions and every counter
   /// here measured one of them, which made "bandwidth" mean downstream by
   /// accident. Upstream is small but it is not nothing: an input every tick
   /// unless coalescing is on, plus an acknowledgement per applied frame.
-  sent: plaza_server_utils::RateMeter,
+  sent: RateMeter,
   /// The pump's cumulative counters as of the last poll, so the meters above
   /// can be fed the delta.
   seen_rx_bytes: u64,
@@ -113,7 +113,7 @@ pub struct NetClient {
   /// per-second average and is exactly what a player feels. This keeps the
   /// worst single frame so a stall has somewhere to show up.
   worst: FrameCost,
-  packets: plaza_server_utils::RateMeter,
+  packets: RateMeter,
   events: Vec<Event>,
   arrivals: Vec<Arrival>,
   /// The newest input seq the server has answered. Frozen while `input_seq`
@@ -248,14 +248,14 @@ impl NetClient {
       policy: None,
       input_seq: 0,
       send_policy: InputCoalescer::new(INPUT_KEEPALIVE_MS),
-      traffic: plaza_server_utils::RateMeter::new(),
-      modelled: plaza_server_utils::RateMeter::new(),
-      sent: plaza_server_utils::RateMeter::new(),
+      traffic: RateMeter::new(),
+      modelled: RateMeter::new(),
+      sent: RateMeter::new(),
       seen_rx_bytes: 0,
       seen_rx_msgs: 0,
       seen_tx_bytes: 0,
       worst: FrameCost::default(),
-      packets: plaza_server_utils::RateMeter::new(),
+      packets: RateMeter::new(),
       events: Vec::new(),
       arrivals: Vec::new(),
       last_input_ack: 0,
