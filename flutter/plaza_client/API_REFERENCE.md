@@ -200,12 +200,13 @@ Emitted after the `Hello` has been sent but before the server's has arrived, so 
 
 ```dart
 class Disconnected extends PlazaEvent {
-  const Disconnected(this.reason);
+  const Disconnected(this.reason, {this.closeCode});
   final String reason;
+  final int? closeCode;
 }
 ```
 
-`reason` is for logs and diagnostics, not for matching on.
+`reason` is for logs and diagnostics, not for matching on. `closeCode` is, and it is the field that separates a server refusing this client from a link that failed: a 4xxx is deliberate, `null` is a close with no code (a 1006-shaped drop) and is worth retrying unchanged. See [`PlazaSocket.closeCode`](#property-closecode).
 
 ### Class `Outdated`
 
@@ -255,6 +256,7 @@ abstract class PlazaSocket {
   void send(Object frame);
   SocketState get state;
   Future<void> get done;
+  int? get closeCode;
   Future<void> close();
 }
 ```
@@ -282,6 +284,14 @@ Sends one frame, already built by [`buildFrame`](../plaza_wire/API_REFERENCE.md#
 #### Property `done`
 
 `Future<void>`. Completes when the socket is finished, however it finished.
+
+#### Property `closeCode`
+
+`int?`. The WebSocket close code once the far side has sent one, `null` before that or when the link died without a close frame.
+
+This is how a rejection is told from a drop. RFC 6455 reserves 4000-4999 for the application, so a server refusing a credential closes with a 4xxx and means it, while 1006 is no close frame at all and is the transport failing rather than the server deciding. A client that cannot tell them apart either retries a token the server has already refused, or gives up on a connection that only needed reconnecting. Surfaced to applications on [`Disconnected`](#class-disconnected).
+
+An implementation with no notion of a close code returns `null` for ever, which reads correctly as "nothing was said".
 
 #### Method `close`
 
@@ -315,7 +325,7 @@ class LoopbackSocket implements PlazaSocket {
   final List<Object> sent;
   Object? get lastSent;
   void deliver(Object frame);
-  void dropFromServer();
+  void dropFromServer({int? code});
 }
 ```
 
@@ -342,10 +352,10 @@ Delivers a frame to the client as though the server had sent it. A no-op once cl
 #### Method `dropFromServer`
 
 ```dart
-void dropFromServer()
+void dropFromServer({int? code})
 ```
 
-Ends the connection from the far side, which is what a drop looks like to the client. This is how a test exercises the reconnect path.
+Ends the connection from the far side, which is what a drop looks like to the client. This is how a test exercises the reconnect path. `code` becomes [`closeCode`](#property-closecode), so a rejection and a link failure can both be staged: pass 4004 for the first, leave it out for the second.
 
 ## 6. Backoff and clocks
 

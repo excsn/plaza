@@ -23,8 +23,13 @@ class Connected extends PlazaEvent {
 }
 
 class Disconnected extends PlazaEvent {
-  const Disconnected(this.reason);
+  const Disconnected(this.reason, {this.closeCode});
   final String reason;
+
+  /// The close code the server sent, or `null` for a link that died without
+  /// one. A 4xxx is the server deciding, so retrying the same credential is
+  /// pointless where retrying a `null` is exactly right.
+  final int? closeCode;
 }
 
 /// The two ends were built from different wire definitions.
@@ -294,9 +299,11 @@ class PlazaClient {
   void _onClosed(String reason) {
     _sub?.cancel();
     _sub = null;
+    // Read before the socket goes: it is the only thing holding the code.
+    final code = _socket?.closeCode;
     _socket = null;
     if (_stopped) return;
-    _events.add(Disconnected(reason));
+    _events.add(Disconnected(reason, closeCode: code));
     _scheduleRetry(reason);
   }
 

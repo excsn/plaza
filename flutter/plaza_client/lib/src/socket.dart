@@ -29,6 +29,17 @@ abstract class PlazaSocket {
   /// Completes when the socket is finished, however it finished.
   Future<void> get done;
 
+  /// The WebSocket close code, once the far side has sent one, and `null`
+  /// before that or when the link died without a close frame.
+  ///
+  /// This is how a rejection is told from a drop. RFC 6455 reserves 4000-4999
+  /// for the application, so a server refusing a credential closes with a 4xxx
+  /// and means it; 1006 is no close frame at all, which is the transport
+  /// failing rather than the server deciding. A client that cannot tell them
+  /// apart either retries a token the server has already refused, or gives up
+  /// on a connection that only needed reconnecting.
+  int? get closeCode;
+
   Future<void> close();
 }
 
@@ -47,6 +58,7 @@ class LoopbackSocket implements PlazaSocket {
   final List<Object> sent = <Object>[];
   final Completer<void> _done = Completer<void>();
   SocketState _state = SocketState.open;
+  int? _closeCode;
 
   /// Frames the client has sent, as the other end would see them.
   Object? get lastSent => sent.isEmpty ? null : sent.last;
@@ -58,9 +70,13 @@ class LoopbackSocket implements PlazaSocket {
   }
 
   /// Ends the connection from the far side, which is what a drop looks like.
-  void dropFromServer() {
+  ///
+  /// [code] is the close code the server sent; leaving it out is a link that
+  /// died without one.
+  void dropFromServer({int? code}) {
     if (_state == SocketState.closed) return;
     _state = SocketState.closed;
+    _closeCode = code;
     _incoming.close();
     if (!_done.isCompleted) _done.complete();
   }
@@ -79,6 +95,9 @@ class LoopbackSocket implements PlazaSocket {
 
   @override
   Future<void> get done => _done.future;
+
+  @override
+  int? get closeCode => _closeCode;
 
   @override
   Future<void> close() async {

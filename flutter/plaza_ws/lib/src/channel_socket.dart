@@ -42,10 +42,12 @@ class ChannelSocket implements PlazaSocket {
   final Completer<void> _done = Completer<void>();
   StreamSubscription<dynamic>? _sub;
   SocketState _state = SocketState.open;
+  int? _closeCode;
 
   void _finish() {
     if (_state == SocketState.closed) return;
     _state = SocketState.closed;
+    _closeCode = _channel.closeCode;
     unawaited(_sub?.cancel());
     _sub = null;
     if (!_incoming.isClosed) _incoming.close();
@@ -66,6 +68,9 @@ class ChannelSocket implements PlazaSocket {
 
   @override
   Future<void> get done => _done.future;
+
+  @override
+  int? get closeCode => _closeCode;
 
   @override
   Future<void> close() async {

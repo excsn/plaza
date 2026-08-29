@@ -217,6 +217,27 @@ void main() {
       await client.stop();
     });
 
+    test('a rejection carries its close code and a dropped link does not', () async {
+      final server = FakeServer();
+      final client = makeClient(server);
+      final events = <PlazaEvent>[];
+      client.events.listen(events.add);
+      await client.start();
+
+      server.latest.dropFromServer(code: 4004);
+      await pump(const Duration(milliseconds: 60));
+      expect(events.whereType<Disconnected>().last.closeCode, 4004);
+
+      server.latest.dropFromServer();
+      await pump(const Duration(milliseconds: 60));
+      expect(
+        events.whereType<Disconnected>().last.closeCode,
+        isNull,
+        reason: 'no close frame is not a rejection',
+      );
+      await client.stop();
+    });
+
     test('a failing connect is retried', () async {
       final server = FakeServer()..failNext = 2;
       final client = makeClient(server);
