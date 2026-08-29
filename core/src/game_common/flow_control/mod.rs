@@ -21,9 +21,11 @@
 pub mod deferred;
 pub mod phases;
 pub mod rounds;
+pub mod situation;
 pub mod turns;
 
 pub use deferred::PhasedScheduler;
 pub use phases::{Epoch, Phased};
+pub use situation::{Mark, Situation};
 pub use rounds::{RoundManager, SequentialRoundManager};
 pub use turns::{Advanced, RoundRobinTurnManager, TurnManager};
