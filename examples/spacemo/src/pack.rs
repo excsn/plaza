@@ -88,17 +88,21 @@ pub fn pack(ships: &[ShipState]) -> Vec<u8> {
   let mut w = BitWriter::with_capacity(ships.len() * ship_bits() / 8 + 4);
   w.varint(ships.len() as u64);
   for ship in ships {
-    w.bits(ship.seat as u64, SEAT_BITS);
-    w.bits(ship.health.min(crate::sim::MAX_HEALTH) as u64, HEALTH_BITS);
-    for axis in 0..3 {
-      w.quantized(ship.pos[axis], POS.0, POS.1, POS_BITS);
-    }
-    w.smallest_three(ship.rot, ROT_BITS);
-    for axis in 0..3 {
-      w.quantized(ship.vel[axis], VEL.0, VEL.1, VEL_BITS);
-    }
+    write_ship(&mut w, ship);
   }
   w.finish()
+}
+
+fn write_ship(w: &mut BitWriter, ship: &ShipState) {
+  w.bits(ship.seat as u64, SEAT_BITS);
+  w.bits(ship.health.min(crate::sim::MAX_HEALTH) as u64, HEALTH_BITS);
+  for axis in 0..3 {
+    w.quantized(ship.pos[axis], POS.0, POS.1, POS_BITS);
+  }
+  w.smallest_three(ship.rot, ROT_BITS);
+  for axis in 0..3 {
+    w.quantized(ship.vel[axis], VEL.0, VEL.1, VEL_BITS);
+  }
 }
 
 pub fn unpack(bytes: &[u8]) -> Option<Vec<ShipState>> {
@@ -171,30 +175,34 @@ pub fn pack_relative(ships: &[ShipState], observer: [f32; 3]) -> Vec<u8> {
   }
   w.varint(ships.len() as u64);
   for ship in ships {
-    w.bits(ship.seat as u64, SEAT_BITS);
-    w.bits(ship.health.min(crate::sim::MAX_HEALTH) as u64, HEALTH_BITS);
-    let offset = [
-      ship.pos[0] - observer[0],
-      ship.pos[1] - observer[1],
-      ship.pos[2] - observer[2],
-    ];
-    let beyond = offset.iter().any(|axis| *axis < REL.0 || *axis > REL.1);
-    w.bits(beyond as u64, 1);
-    if beyond {
-      for axis in 0..3 {
-        w.quantized(ship.pos[axis], POS.0, POS.1, POS_BITS);
-      }
-    } else {
-      for axis in offset {
-        w.quantized(axis, REL.0, REL.1, REL_BITS);
-      }
-    }
-    w.smallest_three(ship.rot, ROT_BITS);
-    for axis in 0..3 {
-      w.quantized(ship.vel[axis], VEL.0, VEL.1, VEL_BITS);
-    }
+    write_ship_relative(&mut w, ship, observer);
   }
   w.finish()
+}
+
+fn write_ship_relative(w: &mut BitWriter, ship: &ShipState, observer: [f32; 3]) {
+  w.bits(ship.seat as u64, SEAT_BITS);
+  w.bits(ship.health.min(crate::sim::MAX_HEALTH) as u64, HEALTH_BITS);
+  let offset = [
+    ship.pos[0] - observer[0],
+    ship.pos[1] - observer[1],
+    ship.pos[2] - observer[2],
+  ];
+  let beyond = offset.iter().any(|axis| *axis < REL.0 || *axis > REL.1);
+  w.bits(beyond as u64, 1);
+  if beyond {
+    for axis in 0..3 {
+      w.quantized(ship.pos[axis], POS.0, POS.1, POS_BITS);
+    }
+  } else {
+    for axis in offset {
+      w.quantized(axis, REL.0, REL.1, REL_BITS);
+    }
+  }
+  w.smallest_three(ship.rot, ROT_BITS);
+  for axis in 0..3 {
+    w.quantized(ship.vel[axis], VEL.0, VEL.1, VEL_BITS);
+  }
 }
 
 pub fn unpack_relative(bytes: &[u8]) -> Option<Vec<ShipState>> {
@@ -540,5 +548,73 @@ mod tests {
     let packed = ship_bits();
     println!("\n  one ship: {full} bits full width, {packed} packed, {:.1}x\n", full as f32 / packed as f32);
     assert!(packed * 2 < full, "{packed} against {full} is not worth the reader");
+  }
+
+  /// The clamp this example shipped was invisible to every round-trip test,
+  /// because a synthetic scene stays where it is put. Only the real simulation
+  /// finds the positions the flight model actually reaches.
+  #[test]
+  fn a_real_flight_never_clamps() {
+    use crate::sim::{quaternion, Space, MAX_PLAYERS};
+
+    let mut space = Space::new();
+    for seat in 0..MAX_PLAYERS {
+      space.spawn(seat);
+    }
+    let mut flying = [crate::protocol::Fly::default(); MAX_PLAYERS];
+    for (seat, fly) in flying.iter_mut().enumerate() {
+      fly.thrust = 1;
+      fly.yaw = seat as f32 * 0.7;
+      fly.pitch = (seat as f32 * 0.4).sin();
+    }
+
+    for tick in 0..600 {
+      space.step(&flying);
+      let ships: Vec<ShipState> = space
+        .ships
+        .iter()
+        .enumerate()
+        .filter(|(_, ship)| ship.alive)
+        .map(|(seat, ship)| ShipState {
+          seat: seat as u16,
+          health: ship.health,
+          pos: [ship.at.x, ship.at.y, ship.at.z],
+          rot: quaternion(ship.yaw, ship.pitch),
+          vel: [ship.vel.x, ship.vel.y, ship.vel.z],
+        })
+        .collect();
+
+      let mut absolute = BitWriter::new();
+      for ship in &ships {
+        write_ship(&mut absolute, ship);
+      }
+      assert_eq!(
+        absolute.clamped(),
+        0,
+        "tick {tick}: first clamped write at bit {:?}",
+        absolute.first_clamped_bit()
+      );
+
+      // The anchor farthest from the crowd is the honest worst case for the
+      // relative arm: every offset is at its longest.
+      let anchor = ships
+        .iter()
+        .max_by(|a, b| {
+          let m = |s: &ShipState| s.pos.iter().map(|a| a * a).sum::<f32>();
+          m(a).total_cmp(&m(b))
+        })
+        .map(|s| s.pos)
+        .unwrap();
+      let mut relative = BitWriter::new();
+      for ship in &ships {
+        write_ship_relative(&mut relative, ship, anchor);
+      }
+      assert_eq!(
+        relative.clamped(),
+        0,
+        "tick {tick}: first clamped write at bit {:?}",
+        relative.first_clamped_bit()
+      );
+    }
   }
 }

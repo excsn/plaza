@@ -430,6 +430,40 @@ mod tests {
       assert_eq!(back[0].pos[0], snapped, "snapping should be a fixed point of the wire");
     }
   }
+
+  /// The clamp this example shipped was invisible to every round-trip test,
+  /// because a synthetic scene stays inside the bounds it was given. Only the
+  /// real solver finds the positions a ploughing player pushes cubes to.
+  #[test]
+  fn a_real_run_never_clamps() {
+    let mut yard = crate::sim::Yard::new();
+    let mut driving = [crate::protocol::Drive::default(); crate::sim::MAX_PLAYERS];
+    driving[0] = crate::protocol::Drive {
+      dx: -1,
+      dz: 0,
+      jump: false,
+      rolling: false,
+    };
+
+    let mut cubes = Vec::new();
+    for tick in 0..600 {
+      yard.step(&driving);
+      yard.snap_to_wire();
+      cubes.clear();
+      yard.snapshot(&mut cubes);
+
+      let mut w = BitWriter::new();
+      for cube in &cubes {
+        write_cube(&mut w, cube);
+      }
+      assert_eq!(
+        w.clamped(),
+        0,
+        "tick {tick}: first clamped write at bit {:?}",
+        w.first_clamped_bit()
+      );
+    }
+  }
 }
 
 /// A cube as the wire sees it: the quantised integers themselves.
