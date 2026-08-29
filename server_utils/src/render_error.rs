@@ -100,7 +100,11 @@ impl RenderError {
 ///
 /// Entities absent from the history are skipped rather than counted as zero
 /// error: a client drawing something the server never recorded is a different
-/// fault, and folding it in here would flatter the average.
+/// fault, and folding it in here would flatter the average. Entities whose
+/// samples have aged past the buffer's retention are skipped for the same
+/// reason: scoring against the oldest retained state charges the client for a
+/// position the server no longer knows, and the figure would be a guess wearing
+/// a number's face.
 ///
 /// [`Correction`]: plaza_client_utils::Correction
 pub fn render_error_at<Id, State, Time, D>(
@@ -117,7 +121,7 @@ where
 {
   let mut out = RenderError::new();
   for (id, drawn_state) in drawn {
-    let Some(truth) = history.get_state_at_or_before(&id, at) else { continue };
+    let Some(truth) = history.state_within(&id, at) else { continue };
     out.observe(distance(&drawn_state, &truth));
   }
   out
@@ -194,6 +198,21 @@ mod tests {
     let error = render_error_at(&history, 100, [(9u8, P(0.0))], distance);
     assert!(error.is_empty(), "an unknown entity was folded into the average");
     assert_eq!(error.mean(), 0.0);
+  }
+
+  #[test]
+  fn an_entity_whose_samples_aged_out_is_skipped_rather_than_scored() {
+    // Retention of 8 keeps ticks 32..40, so an instant at tick 20 is one the
+    // server no longer knows. Scoring it against the oldest retained state
+    // would charge this client ~192 units for drawing exactly the right thing.
+    let mut history = HistoricalStateBuffer::new(8);
+    for tick in 0..40u64 {
+      let t = tick * 16;
+      history.record_state(1, t, P(t as f32));
+    }
+    let at = 20 * 16;
+    let error = render_error_at(&history, at, [(1u8, P(at as f32))], distance);
+    assert!(error.is_empty(), "a clamped guess was folded into the average");
   }
 
   #[test]

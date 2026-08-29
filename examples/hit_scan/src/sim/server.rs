@@ -299,6 +299,19 @@ impl Server {
     &self.history
   }
 
+  /// How far back from `from_ms` the truth history can answer for every
+  /// player: the newest of the per-player oldest retained samples, so no
+  /// rewound query lands past what any of them has.
+  fn retained_ms(&self, from_ms: u64) -> u64 {
+    self
+      .players
+      .iter()
+      .filter_map(|p| self.history.oldest_time(&p.id))
+      .max()
+      .map(|oldest| from_ms.saturating_sub(oldest))
+      .unwrap_or(0)
+  }
+
   /// Positions as they were, which is what a shooter saw.
   pub fn snaps_at(&self, at_ms: u64) -> Vec<(PlayerId, PlayerSnap)> {
     self
@@ -467,12 +480,16 @@ impl Server {
         // input names a tick a playout depth ahead, and they were watching a
         // world a render delay behind. Both, because both are real.
         let honest = if compensate { controls.playout_delay_ms + controls.render_delay_ms } else { 0 };
-        let budget = controls.rewind_budget_ms();
+        let fired_ms = fired_tick * SIM_STEP_MS;
+        // The dial's ceiling, then the window the buffer can actually answer:
+        // early in a session retention is shorter than `HISTORY_MS` claims, and
+        // past its oldest sample the buffer clamps, resolving the shot against
+        // a position the server no longer knows.
+        let budget = controls.rewind_budget_ms().min(self.retained_ms(fired_ms));
         let rewind_ms = honest.min(budget);
         if honest > budget {
           self.stats.rewind_clamped += 1;
         }
-        let fired_ms = fired_tick * SIM_STEP_MS;
         let target_ms = fired_ms.saturating_sub(rewind_ms);
 
         // The shooter is in neither list. A ray starting at the centre of a
@@ -1048,11 +1065,16 @@ mod tests {
   fn a_rewind_never_reaches_past_the_history_it_can_read() {
     // `HistoricalStateBuffer` clamps to its oldest sample rather than refusing,
     // so an unbounded budget would resolve shots against a position the server
-    // no longer knows and report it as fact.
+    // no longer knows and report it as fact. The bound is the buffer's real
+    // window, not `HISTORY_MS`: this session is younger than the constant, and
+    // a budget of the constant would still reach past everything recorded.
     let controls = Controls { rewind: Rewind::Uncapped, playout_delay_ms: 4000, render_delay_ms: 4000, ..quiet() };
     let mut s = duel(&controls);
+    let oldest = s.history().oldest_time(&s.players[1].id).expect("the duel recorded history");
     let event = shoot_east(&mut s, &controls);
-    assert_eq!(event.rewind_ms, crate::sim::types::HISTORY_MS);
+    let fired_ms = event.fired_tick * SIM_STEP_MS;
+    assert_eq!(event.rewind_ms, fired_ms - oldest, "the whole retained window and not a step further");
+    assert!(event.rewind_ms < crate::sim::types::HISTORY_MS, "the constant would overreach this young session");
     assert!(s.stats.rewind_clamped > 0);
   }
 

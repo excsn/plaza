@@ -89,7 +89,7 @@ where D: Fn(&State, &State) -> f32
 
 How wrong a client's screen was, asked **at the instant it was drawing**. Reads truth from the history buffer, which is usually already present because it is the same one a rewind uses.
 
-`at` is a required argument, deliberately: comparing against the present charges a client for a render delay it is taking on purpose, so the honest form is the one that falls out of calling this and the dishonest one has to be typed. `distance` is supplied by the caller because this crate can assume no metric on a state type, the same reason `Correction` hands back two states rather than a scalar. Entities absent from the history are skipped rather than scored zero.
+`at` is a required argument, deliberately: comparing against the present charges a client for a render delay it is taking on purpose, so the honest form is the one that falls out of calling this and the dishonest one has to be typed. `distance` is supplied by the caller because this crate can assume no metric on a state type, the same reason `Correction` hands back two states rather than a scalar. Entities absent from the history are skipped rather than scored zero, and so are entities whose samples have aged past the buffer's retention: scoring against the oldest retained state would charge the client for a position the server no longer knows.
 
 This is a **host or harness** measurement and cannot be anything else: it needs truth, and a joiner never has truth.
 
