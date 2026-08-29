@@ -116,6 +116,8 @@ pub struct BitWriter {
   partial: u8,
   /// Always `0..8`: a full byte is pushed rather than held.
   pending: u32,
+  clamped: u64,
+  first_clamped_bit: Option<usize>,
 }
 
 impl BitWriter {
@@ -126,8 +128,7 @@ impl BitWriter {
   pub fn with_capacity(bytes: usize) -> Self {
     Self {
       bytes: Vec::with_capacity(bytes),
-      partial: 0,
-      pending: 0,
+      ..Self::default()
     }
   }
 
@@ -191,8 +192,36 @@ impl BitWriter {
   }
 
   /// A float mapped onto `bits` bits of `min..=max`; see [`quantize`].
+  ///
+  /// A value outside the range is written clamped, as `quantize` documents, and
+  /// counted: see [`clamped`](Self::clamped). NaN counts too, since it
+  /// quantizes to 0 and is a worse bug than a mere overshoot.
   pub fn quantized(&mut self, value: f32, min: f32, max: f32, bits: u32) {
+    if !(value >= min && value <= max) {
+      self.clamped += 1;
+      self.first_clamped_bit.get_or_insert(self.bit_len());
+    }
     self.bits(quantize(value, min, max, bits), bits);
+  }
+
+  /// How many quantized writes clamped, which is how many values the layout's
+  /// range failed to cover.
+  ///
+  /// A clamped write is a well-formed packet carrying a wrong position, so the
+  /// defect is invisible on the wire and on the reader: a clamped code is a
+  /// legal code an honest edge value also produces, which is why the reader has
+  /// no counterpart to this. A layout's test asserts zero over a run of the
+  /// real simulation; a live server reads the number instead of a bug report
+  /// saying the edge of the map looks frozen.
+  pub fn clamped(&self) -> u64 {
+    self.clamped
+  }
+
+  /// Where the first clamped write landed, as its [`bit_len`](Self::bit_len)
+  /// offset, so a nonzero [`clamped`](Self::clamped) names a field in the
+  /// layout rather than a packet to bisect.
+  pub fn first_clamped_bit(&self) -> Option<usize> {
+    self.first_clamped_bit
   }
 
   /// A unit quaternion as two bits of index plus its three smallest components.
@@ -440,6 +469,47 @@ mod tests {
     let (min, max, bits) = (0.0f32, 1.0f32, 10);
     assert_eq!(quantize(-5.0, min, max, bits), 0);
     assert_eq!(quantize(5.0, min, max, bits), (1u64 << bits) - 1);
+  }
+
+  #[test]
+  fn clamped_writes_are_counted_and_the_first_is_located() {
+    let mut w = BitWriter::new();
+    w.quantized(0.5, 0.0, 1.0, 10);
+    assert_eq!(w.clamped(), 0);
+    assert_eq!(w.first_clamped_bit(), None);
+
+    w.quantized(5.0, 0.0, 1.0, 10);
+    w.quantized(-5.0, 0.0, 1.0, 10);
+    assert_eq!(w.clamped(), 2);
+    assert_eq!(w.first_clamped_bit(), Some(10), "after the one in-range field");
+  }
+
+  #[test]
+  fn an_exact_range_edge_is_not_a_clamp() {
+    let mut w = BitWriter::new();
+    w.quantized(0.0, 0.0, 1.0, 10);
+    w.quantized(1.0, 0.0, 1.0, 10);
+    assert_eq!(w.clamped(), 0, "the world's boundary is inside the range");
+  }
+
+  #[test]
+  fn nan_counts_as_a_clamp() {
+    // NaN quantizes to 0, silently: a well-formed packet carrying garbage,
+    // which is exactly what the counter exists to surface.
+    let mut w = BitWriter::new();
+    w.quantized(f32::NAN, 0.0, 1.0, 10);
+    assert_eq!(w.clamped(), 1);
+  }
+
+  #[test]
+  fn a_non_unit_quaternion_shows_up_in_the_clamp_count() {
+    let mut w = BitWriter::new();
+    w.smallest_three([0.9, 0.9, 0.9, 0.9], 9);
+    assert!(w.clamped() > 0, "components past the smallest-three bound clamp");
+
+    let mut w = BitWriter::new();
+    w.smallest_three([0.5, 0.5, 0.5, 0.5], 9);
+    assert_eq!(w.clamped(), 0, "a unit quaternion never clamps");
   }
 
   #[test]

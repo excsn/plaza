@@ -314,8 +314,9 @@ Available without the `serde` feature: it is bytes and bits, not a codec.
 *   **`bool(&mut self, bool)`**: one bit.
 *   **`varint(&mut self, u64)`**: nibble varint, four data bits per group plus a continuation bit. `0..=15` costs five bits where MessagePack's smallest integer costs eight; a full `u64` costs 80 against MessagePack's 72, which is a good trade for values that are large only rarely.
 *   **`signed_varint(&mut self, i64)`**: zigzag then varint, so `-1` costs one group rather than sixteen.
-*   **`quantized(&mut self, value: f32, min: f32, max: f32, bits: u32)`**: maps a bounded float onto `bits` bits. Out-of-range clamps rather than wraps.
-*   **`smallest_three(&mut self, quat: [f32; 4], bits: u32)`**: an orientation as a 2-bit index plus its three smallest components, since the largest is recoverable from the unit constraint. At 9 bits that is 29 bits against 128.
+*   **`quantized(&mut self, value: f32, min: f32, max: f32, bits: u32)`**: maps a bounded float onto `bits` bits. Out-of-range clamps rather than wraps, and is counted; NaN counts too, quantizing to 0.
+*   **`smallest_three(&mut self, quat: [f32; 4], bits: u32)`**: an orientation as a 2-bit index plus its three smallest components, since the largest is recoverable from the unit constraint. At 9 bits that is 29 bits against 128. A non-unit quaternion's components overshoot the bound and land in the clamp count.
+*   **`clamped() -> u64`**, **`first_clamped_bit() -> Option<usize>`**: how many quantized writes clamped, and the `bit_len` offset of the first that did. A clamped write is a well-formed packet carrying a wrong position, invisible on the wire and on the reader (a clamped code is a legal code an honest edge value also produces, which is why the reader has no counterpart). A layout's test asserts zero over a run of the real simulation; the offset names the field rather than a packet to bisect. Read them before `finish`, which consumes the writer.
 
 **`MAX_BITS: u32 = 64`** is the widest a single read or write may carry, and what `bits` panics above. **`SMALLEST_THREE_INDEX_BITS: u32 = 2`** is the index half of an orientation's cost: one costs `SMALLEST_THREE_INDEX_BITS + 3 * bits`.
 
