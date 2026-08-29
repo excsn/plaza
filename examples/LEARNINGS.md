@@ -756,6 +756,10 @@ The resolver also caught something the hash was never the point of. gow_3d had *
 
 **The offline build refused to start.** The default role is host, which requires a server, and the teaching build deliberately compiles no networking at all. The role check now only runs in builds that have networking.
 
+### A per-recipient view behind a uniform request is silently omniscient (held_fire, check_raise)
+
+Both examples wrote a `SnapshotProvider` that cuts the view per target, poker's hole cards and a fog of war, and both requested snapshots with `SnapshotRequest::uniform`, which calls the provider **once with `target_agent: None`**. The provider's fallback for `None` was the spectator, so every client received the whole board: the fog example shipped without fog and the poker table dealt everyone's cards face up, while every unit test stayed green, because the tests exercised `view_for` directly and the request kind lives a layer above them. Found by a human looking at their own hand and seeing card backs. The per-recipient request is `SnapshotRequest::to`; the lesson is that a filtered view has **two** halves, the filter and the plumbing that routes a target into it, and a test that pins only the filter proves nothing about what a client receives. It is the same shape as pellet_maze's leak one level up: the secrecy property lives in the whole outbound path, and the op stream, the panel's arithmetic, the timing of a window and the snapshot request kind are all part of that path. held_fire closes the first three (audience-filtered steps, masked counters, the decision applied only at the window's close) and still shipped the fourth open.
+
 ## The diagnostic playbook
 
 What worked, repeatedly, after several rounds of confident wrong guesses:
