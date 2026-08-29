@@ -98,7 +98,9 @@ impl StateLogic<WatchOp, PlayerId, WatchState> for WatchLogic {
     let output = LogicOutput::ops(ctx.into_ops());
     if resnapshot {
       let everyone: Vec<Agent<PlayerId>> = state.agents.values().cloned().collect();
-      return Ok(output.and_snapshot(SnapshotRequest::uniform(everyone)));
+      // Per recipient, never uniform: the provider cuts a side's view, and a
+      // uniform request would hand every client the spectator's whole board.
+      return Ok(output.and_snapshot(SnapshotRequest::to(everyone)));
     }
     Ok(output)
   }
