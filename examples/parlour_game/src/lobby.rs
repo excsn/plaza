@@ -81,7 +81,7 @@ pub struct LobbyLogic {
   pub registry: Arc<TableRegistry>,
   pub wallets: Arc<WalletRegistry>,
   pub tickets: Arc<CachedTicketRegistry<PlayerId>>,
-  /// For `agent_rtt`. The controller holds the same `Arc`.
+  /// For the RTT planes. The controller holds the same `Arc`.
   pub session: Arc<LobbySession>,
   next_link: AtomicUsize,
   next_bot: AtomicU64,
@@ -115,15 +115,23 @@ impl LobbyLogic {
     ASSIGNED_LINKS_MS[n % ASSIGNED_LINKS_MS.len()]
   }
 
-  /// Absent for a connection barely a moment old: the transport pings eight
-  /// times at 125ms before settling. Reads as zero, so the client re-lists.
-  fn link_for(&self, player: PlayerId, extra_ms: u32) -> LinkQuality {
-    let measured = self
+  /// Socket ping first, the frame-path number when that plane has nothing:
+  /// matchmaking wants the link, not what plaza's own pipeline adds to it, and
+  /// the fallback is what a transport without ping frames would live on.
+  ///
+  /// `None` for a connection barely a moment old, before either plane has a
+  /// sample. `LinkQuality` renders that as zero and the client re-lists; the
+  /// admission payload sends the honest absence instead.
+  fn measured_rtt_ms(&self, player: PlayerId) -> Option<u32> {
+    self
       .session
       .agent_rtt(&player)
+      .or_else(|| self.session.agent_link_rtt(&player))
       .map(|(rtt, _samples)| rtt.as_millis() as u32)
-      .unwrap_or(0);
-    LinkQuality::new(measured, extra_ms)
+  }
+
+  fn link_for(&self, player: PlayerId, extra_ms: u32) -> LinkQuality {
+    LinkQuality::new(self.measured_rtt_ms(player).unwrap_or(0), extra_ms)
   }
 
   /// One pass, rather than every table reaching into the lobby's metadata.
@@ -393,11 +401,15 @@ impl StateLogic<LobbyOp, PlayerId, LobbyState> for LobbyLogic {
             LobbyOp::Join { room_id } => {
               self.refresh_seat_counts();
               let extra = state.links.get(&player).map(|l| l.assigned_extra_ms).unwrap_or(0);
-              let link = self.link_for(player, extra);
+              let measured = self.measured_rtt_ms(player);
+              let link = LinkQuality::new(measured.unwrap_or(0), extra);
               state.links.insert(player, link);
 
+              // An unmeasured link is not a perfect one: `None` here means the
+              // manager's schedule gate abstains, where a manufactured zero
+              // would sail through it.
               let payload = JoinRoomRequestPayload {
-                measured_one_way_ms: Some(link.one_way_ms),
+                measured_one_way_ms: measured.map(|_| link.one_way_ms),
                 room_id,
                 password_attempt: None,
               };

@@ -78,9 +78,21 @@ impl Floor {
   }
 }
 
+/// Frame-path first: a claim is an op, and ops pay encode, queue and impairment
+/// on top of the socket, so `agent_link_rtt` is the latency being bounded and
+/// the WebSocket's own ping understates it. The socket number is the fallback,
+/// and would be the only plane on a transport without ping frames.
+fn rtt_ms(session: &FloorSession, player: PlayerId) -> u32 {
+  session
+    .agent_link_rtt(&player)
+    .or_else(|| session.agent_rtt(&player))
+    .map(|(rtt, _)| rtt.as_millis() as u32)
+    .unwrap_or(0)
+}
+
 pub struct AuctionLogic {
-  /// Held for `agent_rtt`. The bound on a legal claim is a number this measured,
-  /// never one a client reported.
+  /// Held for the RTT planes. The bound on a legal claim is a number this
+  /// measured, never one a client reported.
   session: Arc<FloorSession>,
 }
 
@@ -90,11 +102,7 @@ impl AuctionLogic {
   }
 
   fn rtt_ms(&self, player: PlayerId) -> u32 {
-    self
-      .session
-      .agent_rtt(&player)
-      .map(|(rtt, _)| rtt.as_millis() as u32)
-      .unwrap_or(0)
+    rtt_ms(&self.session, player)
   }
 
   /// The earliest tick this connection could legally name for a drop.
@@ -321,7 +329,7 @@ impl SnapshotProvider<PlayerId, Floor, AuctionOp> for FloorSnapshotter {
     let viewer = target.and_then(|a| a.id());
     let (floor_ticks, rtt) = match viewer {
       Some(id) => {
-        let rtt = self.session.agent_rtt(id).map(|(r, _)| r.as_millis() as u32).unwrap_or(0);
+        let rtt = rtt_ms(&self.session, *id);
         (((rtt / 2) as u64 * TICK_HZ as u64) / 1000, rtt)
       }
       None => (0, 0),
