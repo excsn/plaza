@@ -131,6 +131,35 @@ impl<
     }
   }
 
+  /// The oldest time still retained for `entity_id`, or `None` if it has none.
+  pub fn oldest_time(&self, entity_id: &EntityId) -> Option<ServerTime> {
+    self.history.get(entity_id).and_then(|h| h.front()).map(|ts| ts.time)
+  }
+
+  /// The newest time recorded for `entity_id`, or `None` if it has none.
+  pub fn newest_time(&self, entity_id: &EntityId) -> Option<ServerTime> {
+    self.history.get(entity_id).and_then(|h| h.back()).map(|ts| ts.time)
+  }
+
+  /// The entity's state at `target_server_time`, or `None` when that time falls
+  /// outside the retained window at either end.
+  ///
+  /// The refusing counterpart to [`get_state_at_or_before`](Self::get_state_at_or_before),
+  /// whose clamped answer is indistinguishable from an exact one. A rewind
+  /// deeper than retention or a render delay past it resolves against a position
+  /// the buffer no longer knows, so a caller that must not score against a guess
+  /// asks with this instead.
+  pub fn state_within(&self, entity_id: &EntityId, target_server_time: ServerTime) -> Option<EntityStateSnapshot>
+  where
+    EntityStateSnapshot: Interpolatable<ServerTime>,
+  {
+    let entity_history = self.history.get(entity_id)?;
+    if target_server_time < entity_history.front()?.time || target_server_time > entity_history.back()?.time {
+      return None;
+    }
+    self.get_state_at_or_before(entity_id, target_server_time)
+  }
+
   pub fn remove_entity_history(&mut self, entity_id: &EntityId) {
     self.history.remove(entity_id);
   }
@@ -285,5 +314,57 @@ mod tests {
     // clamps to the oldest retained rather than panicking or returning nothing.
     let at = buffer.get_state_at_or_before(&1, 50).unwrap();
     assert_eq!(at.position, 3.0, "clamped to the oldest retained (t=300)");
+  }
+
+  /// The window edges, which the clamping query cannot report.
+  mod window {
+    use super::*;
+
+    #[test]
+    fn the_edges_track_eviction() {
+      let mut buffer = Buffer::new(3);
+      for t in [100, 200, 300, 400, 500] {
+        buffer.record_state(1, t, TestState { position: t as f32 / 100.0 });
+      }
+      assert_eq!(buffer.oldest_time(&1), Some(300), "100 and 200 were evicted");
+      assert_eq!(buffer.newest_time(&1), Some(500));
+    }
+
+    #[test]
+    fn an_unknown_entity_has_no_edges() {
+      let buffer = Buffer::new(3);
+      assert_eq!(buffer.oldest_time(&99), None);
+      assert_eq!(buffer.newest_time(&99), None);
+      assert_eq!(buffer.state_within(&99, 100), None);
+    }
+
+    #[test]
+    fn a_target_past_retention_refuses_where_the_clamping_query_guesses() {
+      let mut buffer = Buffer::new(3);
+      for t in [100, 200, 300, 400, 500] {
+        buffer.record_state(1, t, TestState { position: t as f32 / 100.0 });
+      }
+      assert_eq!(buffer.get_state_at_or_before(&1, 50).unwrap().position, 3.0);
+      assert_eq!(buffer.state_within(&1, 50), None, "50 is older than the retained 300");
+    }
+
+    #[test]
+    fn a_target_after_the_newest_refuses_too() {
+      let mut buffer = Buffer::new(3);
+      buffer.record_state(1, 100, TestState { position: 10.0 });
+      buffer.record_state(1, 200, TestState { position: 20.0 });
+      assert_eq!(buffer.get_state_at_or_before(&1, 250).unwrap().position, 20.0);
+      assert_eq!(buffer.state_within(&1, 250), None);
+    }
+
+    #[test]
+    fn inside_the_window_answers_exactly_as_the_clamping_query_does() {
+      let mut buffer = Buffer::new(5);
+      buffer.record_state(1, 100, TestState { position: 10.0 });
+      buffer.record_state(1, 200, TestState { position: 20.0 });
+      for at in [100, 150, 200] {
+        assert_eq!(buffer.state_within(&1, at), buffer.get_state_at_or_before(&1, at), "at {at}");
+      }
+    }
   }
 }

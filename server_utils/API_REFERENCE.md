@@ -71,6 +71,8 @@ Bounds: `EntityId: Eq + Hash + Clone + Debug`; `EntityStateSnapshot: Clone + Deb
 *   **`new(max_snapshots_per_entity: usize) -> Self`**: keeps at most this many states per entity. **Panics if 0.**
 *   **`record_state(&mut self, entity_id, server_time, state)`**: record one entity's state for a tick. A state not newer than the last recorded is ignored (with a `tracing` warning), so history stays strictly increasing.
 *   **`get_state_at_or_before(&self, entity_id, target_server_time) -> Option<EntityStateSnapshot>`**: the rewind. Interpolates between the two recorded states bracketing the target; clamps to the oldest or newest when the target is outside the retained range; `None` if the entity is unknown. Requires `EntityStateSnapshot: Interpolatable<ServerTime>`.
+*   **`state_within(&self, entity_id, target_server_time) -> Option<EntityStateSnapshot>`**: the refusing counterpart. Identical inside the retained window, `None` outside it at either end, where `get_state_at_or_before` returns a clamped answer indistinguishable from an exact one. Requires `EntityStateSnapshot: Interpolatable<ServerTime>`.
+*   **`oldest_time(&self, entity_id) -> Option<ServerTime>`**, **`newest_time(&self, entity_id) -> Option<ServerTime>`**: the edges of the retained window, so a rewind cap or render delay can be bounded by what the buffer holds rather than by a hand-converted sample count.
 *   **`remove_entity_history(&mut self, entity_id)`**, **`clear_all_history(&mut self)`**
 
 ### Function `render_error_at`
@@ -475,4 +477,4 @@ Saying a one-shot thing until the other end proves it heard. Every server has a 
 
 ## 14. Error Handling
 
-This crate defines no error type. `HistoricalStateBuffer::get_state_at_or_before` returns `Option`, `None` meaning the entity has no recorded history.
+This crate defines no error type. `HistoricalStateBuffer::get_state_at_or_before` returns `Option`, `None` meaning the entity has no recorded history. `state_within` returns `None` for that case and for a target outside the retained window, which are worth distinguishing with `oldest_time`/`newest_time` when the difference matters.
