@@ -11,10 +11,7 @@
 //! so the table below is the trade written out three times rather than a set of
 //! unrelated presets.
 
-use crate::sim::types::Controls;
-
-/// The step, in ms, for turning the late window into a time budget.
-const SIM_STEP_MS: u64 = (crate::sim::types::SIM_DT * 1000.0) as u64;
+use crate::sim::types::{Controls, SIM_STEP_MS};
 
 /// One arena's identity and what it can carry.
 #[derive(Clone, Copy, Debug)]

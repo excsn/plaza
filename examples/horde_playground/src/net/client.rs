@@ -29,10 +29,7 @@ const WIRE: MsgPackCodec = MsgPackCodec;
 
 use crate::sim::client::Client as SimClient;
 use crate::sim::protocol::{Op, ServerPolicy, PROTOCOL};
-use crate::sim::types::{Controls, PlayerId, Vec2, ARENA_H, ARENA_W, SIM_DT};
-
-/// The server's simulation step, which is the unit its ticks are counted in.
-const SIM_STEP_MS: u64 = (SIM_DT * 1000.0) as u64;
+use crate::sim::types::{Controls, PlayerId, Vec2, ARENA_H, ARENA_W, SIM_STEP_MS};
 
 /// What to tell the player about the connection.
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -25,7 +25,7 @@ use plaza_session::{Delivery, DirectionProfile, LinkProfile, LinkPublisher};
 use crate::sim::protocol::{Op, ServerPolicy};
 use crate::sim::server::{Seat, Server};
 use crate::sim::types::{
-  Coin, Controls, EnemyKind, Handle, PlayerId, Projectile, Vec2, Wallet, CROWD_BYTES, MAX_PLAYERS,
+  Coin, Controls, EnemyKind, Handle, PlayerId, Projectile, Vec2, Wallet, CROWD_BYTES, MAX_PLAYERS, SIM_STEP_MS,
 };
 
 /// How a connection is identified. Assigned by the server on accept, never
@@ -41,12 +41,6 @@ pub type PlayerKey = u64;
 fn requested_seats(controls: &Controls) -> usize {
   controls.player_count.clamp(1, MAX_PLAYERS)
 }
-
-/// How many round trips the transport must have measured before a decision.
-/// One sample on a jittery link decides nothing, and the transport probes fast
-/// at first, so this is about a second.
-/// The arena's step, in ms, for turning the late window into a time budget.
-const SIM_STEP_MS: u64 = (crate::sim::types::SIM_DT * 1000.0) as u64;
 
 /// How many round trips the transport must have measured before a decision.
 /// One sample on a jittery link decides nothing, and the transport probes fast

@@ -2,11 +2,7 @@
 //! makes into a number you can watch move.
 
 use egui_macroquad::egui;
-use horde_playground::sim::types::{MAX_PLAYERS, RENDER_DELAY_MAX_MS, SEND_RATE_MAX_HZ, SIM_DT};
-
-/// The simulation step in whole milliseconds, for turning a late window in
-/// ticks into the time budget it actually represents.
-const SIM_STEP_MS: u64 = (SIM_DT * 1000.0) as u64;
+use horde_playground::sim::types::{MAX_PLAYERS, RENDER_DELAY_MAX_MS, SEND_RATE_MAX_HZ, SIM_STEP_MS};
 use horde_playground::sim::{Controls, RemoteMode, World};
 
 /// What one client is actually receiving, next to what the server's own readout
