@@ -76,7 +76,7 @@ impl NetClient {
   /// Whether this client holds the window right now.
   pub fn my_window(&self) -> bool {
     match (&self.view, self.my_seat) {
-      (Some(view), Some(seat)) => view.priority == seat,
+      (Some(view), Some(seat)) => view.priority == Some(seat),
       _ => false,
     }
   }

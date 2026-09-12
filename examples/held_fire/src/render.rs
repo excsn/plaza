@@ -195,7 +195,10 @@ fn draw_status_line(client: &NetClient, view: &FieldView, hud: &Hud, w: f32, now
       ),
     }
   } else if client.my_side.is_some() {
-    format!("{} side is ordering", ["blue", "red"][view.side_to_act as usize % 2])
+    match view.side_to_act {
+      Some(side) => format!("{} side is ordering", ["blue", "red"][side as usize % 2]),
+      None => "no battle is on".to_owned(),
+    }
   } else {
     "you watch the whole board".to_owned()
   };

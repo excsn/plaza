@@ -62,7 +62,8 @@ pub struct WatchState {
   pub battle: u64,
   pub round: u32,
   pub units: Vec<Unit>,
-  pub side_to_act: u8,
+  /// `Some` exactly while the fighting phase holds.
+  pub side_to_act: Option<u8>,
   pub marching: Option<Marching>,
   /// Units that fired this round: seen by everyone until the round ends.
   pub revealed: Vec<UnitId>,
@@ -92,7 +93,7 @@ impl WatchState {
       battle: 0,
       round: 0,
       units: Vec::new(),
-      side_to_act: 0,
+      side_to_act: None,
       marching: None,
       revealed: Vec::new(),
       key: Situation::new(),

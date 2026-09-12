@@ -74,7 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
               .await;
           }
           WatchOp::Snapshot(view) => {
-            if view.side_to_act != 0 || view.marching.is_some() {
+            if view.side_to_act != Some(0) || view.marching.is_some() {
               continue;
             }
             let Some(me) = view.yours.iter().find(|u| u.alive && !u.acted) else {

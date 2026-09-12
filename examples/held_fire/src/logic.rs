@@ -171,6 +171,7 @@ fn depart(state: &mut WatchState, player: PlayerId, ctx: &mut Ctx) -> bool {
 
   if state.seats.is_empty() {
     state.marching = None;
+    state.side_to_act = None;
     state
       .phase
       .transition_with(BattlePhase::Waiting, ctx, WatchOp::PhaseChanged, None, None);
@@ -209,12 +210,13 @@ fn start_round(state: &mut WatchState, ctx: &mut Ctx) {
     unit.acted = !unit.alive;
   }
   // The opener alternates by round, so neither side owns the tempo.
-  state.side_to_act = ((state.round + 1) % 2) as u8;
+  let opener = ((state.round + 1) % 2) as u8;
+  state.side_to_act = Some(opener);
   state.key.advance();
   to_all(
     vec![
       WatchOp::RoundStarted { round: state.round },
-      WatchOp::SideToAct { side: state.side_to_act },
+      WatchOp::SideToAct { side: opener },
     ],
     ctx,
   );
@@ -225,8 +227,11 @@ fn schedule_clocks(state: &mut WatchState) {
   if *state.phase.current() != BattlePhase::Fighting || state.marching.is_some() {
     return;
   }
+  let Some(side) = state.side_to_act else {
+    return;
+  };
   let mark = state.key.mark();
-  if state.commanders[state.side_to_act as usize] == BOT {
+  if state.commanders[side as usize] == BOT {
     state
       .timeouts
       .schedule_after(state.tick, ticks(BOT_THINK_MS), &state.phase, WatchEvent::BotActs { mark });
@@ -256,13 +261,16 @@ fn act(state: &mut WatchState, player: PlayerId, order: Order, ctx: &mut Ctx) ->
   if state.marching.is_some() {
     return refuse("a march is underway", ctx);
   }
-  if state.side_of(player) != state.side_to_act {
+  let Some(side_to_act) = state.side_to_act else {
+    return refuse("no battle is on", ctx);
+  };
+  if state.side_of(player) != side_to_act {
     return refuse("not your activation", ctx);
   }
   let Some(unit) = state.unit(order.unit()) else {
     return refuse("no such unit", ctx);
   };
-  if unit.side != state.side_to_act || !unit.alive || unit.acted {
+  if unit.side != side_to_act || !unit.alive || unit.acted {
     return refuse("that unit has no activation to spend", ctx);
   }
   match order {
@@ -537,6 +545,7 @@ fn battle_over(state: &mut WatchState, ctx: &mut Ctx) -> bool {
     if !state.side_alive(side) {
       let winner = 1 - side;
       state.marching = None;
+      state.side_to_act = None;
       state.key.advance();
       state.phase.transition_with(
         BattlePhase::Over,
@@ -560,17 +569,20 @@ fn battle_over(state: &mut WatchState, ctx: &mut Ctx) -> bool {
 /// or close the round.
 fn finish_activation(state: &mut WatchState, ctx: &mut Ctx) {
   state.panel.activations += 1;
+  let Some(current) = state.side_to_act else {
+    return;
+  };
   let owed = |side: u8| {
     state
       .units
       .iter()
       .any(|u| u.side == side && u.alive && !u.acted)
   };
-  let enemy = 1 - state.side_to_act;
+  let enemy = 1 - current;
   if owed(enemy) {
-    state.side_to_act = enemy;
+    state.side_to_act = Some(enemy);
     to_all(vec![WatchOp::SideToAct { side: enemy }], ctx);
-  } else if !owed(state.side_to_act) {
+  } else if !owed(current) {
     start_round(state, ctx);
     return;
   }
@@ -601,11 +613,14 @@ fn run_due_events(state: &mut WatchState, ctx: &mut Ctx) -> bool {
         if !state.key.holds(mark) || *state.phase.current() != BattlePhase::Fighting || state.marching.is_some() {
           continue;
         }
+        let Some(side) = state.side_to_act else {
+          continue;
+        };
         if matches!(due, WatchEvent::ActTimesOut { .. }) {
           state.panel.timeouts += 1;
           info!("the commander's clock ran out; the server orders");
         }
-        let order = auto_order(state, state.side_to_act, rng(state.battle ^ (state.panel.activations << 8)));
+        let order = auto_order(state, side, rng(state.battle ^ (state.panel.activations << 8)));
         perform_order(state, order, ctx);
         changed = true;
       }
@@ -755,7 +770,7 @@ mod tests {
     let watcher = state.units.iter_mut().find(|u| u.id == 3).unwrap();
     watcher.at = (8, 0);
     watcher.stance = if watching { Stance::Watching } else { Stance::Ready };
-    state.side_to_act = 0;
+    state.side_to_act = Some(0);
     state.key.advance();
   }
 
@@ -764,7 +779,7 @@ mod tests {
     let state = camp().await;
     assert_eq!(*state.phase.current(), BattlePhase::Fighting);
     assert_eq!(state.round, 1);
-    assert_eq!(state.side_to_act, 0);
+    assert_eq!(state.side_to_act, Some(0));
     assert_eq!(state.view_for(0).unseen, 3, "the sides start out of sight");
   }
 
@@ -954,7 +969,7 @@ mod tests {
     for unit in state.units.iter_mut() {
       unit.acted = false;
     }
-    state.side_to_act = 1;
+    state.side_to_act = Some(1);
     state.key.advance();
     send(&mut state, 2, WatchOp::Act(Order::March { unit: 3, to: (10, 0) })).await;
     assert_eq!(state.unit(3).unwrap().stance, Stance::Ready, "taking any order drops the watch");

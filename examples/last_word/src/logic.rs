@@ -151,6 +151,7 @@ fn depart(state: &mut WordState, player: PlayerId, ctx: &mut Ctx) -> bool {
   // The hall stays open while anyone at all is watching; two bots will duel
   // for an audience of one.
   if state.agents.is_empty() {
+    state.priority = None;
     state
       .phase
       .transition_with(DuelPhase::Waiting, ctx, DuelOp::PhaseChanged, None, None);
@@ -201,7 +202,7 @@ fn start_turn(state: &mut WordState, ctx: &mut Ctx) {
 /// Every grant is a window: the counter the IDEAS entry asked to see beside
 /// casts and resolutions.
 fn grant_priority(state: &mut WordState, seat: u8, ctx: &mut Ctx) {
-  state.priority = seat;
+  state.priority = Some(seat);
   state.panel.windows += 1;
   state.key.advance();
   to_all(vec![DuelOp::PriorityTo { seat }], ctx);
@@ -212,13 +213,16 @@ fn schedule_clock(state: &mut WordState) {
   if *state.phase.current() != DuelPhase::Dueling {
     return;
   }
+  let Some(holder) = state.priority else {
+    return;
+  };
   let mark = state.key.mark();
-  if state.commanders[state.priority as usize] == BOT {
+  if state.commanders[holder as usize] == BOT {
     state
       .timeouts
       .schedule_after(state.tick, ticks(BOT_THINK_MS), &state.phase, WordEvent::BotSpeaks { mark });
   } else {
-    let window = if state.priority == state.active && state.stack.is_empty() {
+    let window = if holder == state.active && state.stack.is_empty() {
       TURN_LIMIT_MS
     } else {
       RESPOND_MS
@@ -240,7 +244,7 @@ fn cast(state: &mut WordState, player: PlayerId, spell: Spell, ctx: &mut Ctx) ->
   if *state.phase.current() != DuelPhase::Dueling {
     return refuse("no duel is on", ctx);
   }
-  if seat > 1 || state.priority != seat {
+  if seat > 1 || state.priority != Some(seat) {
     return refuse("the window is not yours", ctx);
   }
   if !spell.instant() && (seat != state.active || !state.stack.is_empty()) {
@@ -278,7 +282,7 @@ fn speak(state: &mut WordState, seat: u8, spell: Spell, ctx: &mut Ctx) {
 
 fn pass_op(state: &mut WordState, player: PlayerId, ctx: &mut Ctx) -> bool {
   let seat = state.seat_of(player);
-  if *state.phase.current() != DuelPhase::Dueling || seat > 1 || state.priority != seat {
+  if *state.phase.current() != DuelPhase::Dueling || seat > 1 || state.priority != Some(seat) {
     return false;
   }
   pass(state, seat, ctx);
@@ -329,6 +333,7 @@ fn pass(state: &mut WordState, seat: u8, ctx: &mut Ctx) {
   for seat in 0..SEATS {
     if state.life[seat] <= 0 {
       let winner = 1 - seat as u8;
+      state.priority = None;
       state
         .phase
         .transition_with(DuelPhase::Over, ctx, DuelOp::PhaseChanged, None, None);
@@ -362,9 +367,12 @@ fn run_due_events(state: &mut WordState, ctx: &mut Ctx) -> bool {
         if !state.key.holds(mark) || *state.phase.current() != DuelPhase::Dueling {
           continue;
         }
+        let Some(seat) = state.priority else {
+          continue;
+        };
         state.panel.timeouts += 1;
-        info!(seat = state.priority, "the window lapses; silence passes");
-        pass(state, state.priority, ctx);
+        info!(seat, "the window lapses; silence passes");
+        pass(state, seat, ctx);
         changed = true;
       }
 
@@ -372,7 +380,9 @@ fn run_due_events(state: &mut WordState, ctx: &mut Ctx) -> bool {
         if !state.key.holds(mark) || *state.phase.current() != DuelPhase::Dueling {
           continue;
         }
-        let seat = state.priority;
+        let Some(seat) = state.priority else {
+          continue;
+        };
         match bot_choice(state, seat) {
           Some(spell) => speak(state, seat, spell, ctx),
           None => pass(state, seat, ctx),
@@ -470,14 +480,14 @@ mod tests {
 
   /// The seat holding priority's commanding player.
   fn holder(state: &WordState) -> PlayerId {
-    state.commanders[state.priority as usize]
+    state.commanders[state.priority.expect("a duel is on") as usize]
   }
 
   #[tokio::test]
   async fn a_duel_opens_with_the_active_player_holding_the_window() {
     let state = table().await;
     assert_eq!(*state.phase.current(), DuelPhase::Dueling);
-    assert_eq!(state.priority, state.active);
+    assert_eq!(state.priority, Some(state.active));
     assert_eq!(state.panel.windows, 1);
   }
 
@@ -487,11 +497,11 @@ mod tests {
     let active = holder(&state);
     send(&mut state, active, DuelOp::Cast { spell: Spell::Bolt }).await;
     assert_eq!(state.stack.len(), 1);
-    assert_eq!(state.priority, 1 - state.active, "the opponent answers first");
+    assert_eq!(state.priority, Some(1 - state.active), "the opponent answers first");
 
     let responder = holder(&state);
     send(&mut state, responder, DuelOp::Pass).await;
-    assert_eq!(state.priority, state.active, "one pass is not a resolution");
+    assert_eq!(state.priority, Some(state.active), "one pass is not a resolution");
     assert_eq!(state.stack.len(), 1);
   }
 
@@ -517,7 +527,7 @@ mod tests {
     send(&mut state, p, DuelOp::Pass).await;
     assert_eq!(state.panel.resolutions, 1, "the jab resolves first: last in, first out");
     assert_eq!(state.life[(1 - state.active) as usize], LIFE - 2);
-    assert_eq!(state.priority, state.active, "resolution reopens at the turn's owner");
+    assert_eq!(state.priority, Some(state.active), "resolution reopens at the turn's owner");
   }
 
   #[tokio::test]
@@ -589,7 +599,7 @@ mod tests {
     let p = holder(&state);
     send(&mut state, p, DuelOp::Pass).await;
     assert_eq!(state.turn, turn + 1, "two passes over nothing is the turn ending");
-    assert_eq!(state.priority, state.active);
+    assert_eq!(state.priority, Some(state.active));
   }
 
   #[tokio::test]
@@ -601,7 +611,7 @@ mod tests {
       tick(&mut state).await;
     }
     assert_eq!(state.panel.timeouts, 1);
-    assert_eq!(state.priority, state.active, "silence handed the window back");
+    assert_eq!(state.priority, Some(state.active), "silence handed the window back");
   }
 
   #[tokio::test]

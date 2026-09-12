@@ -46,7 +46,7 @@ pub fn button_rects() -> Vec<Rect> {
 
 /// Mirrors the server's legality for graying alone; the server still rules.
 pub fn may_cast(view: &DuelView, seat: u8, spell: Spell) -> bool {
-  if view.phase != DuelPhase::Dueling || view.priority != seat {
+  if view.priority != Some(seat) {
     return false;
   }
   if !spell.instant() && (seat != view.active || !view.stack.is_empty()) {
@@ -93,7 +93,7 @@ impl Default for Hud {
 
 /// The window's clock length under the same rule the server schedules by.
 pub fn window_len(view: &DuelView) -> u64 {
-  if view.priority == view.active && view.stack.is_empty() {
+  if view.priority == Some(view.active) && view.stack.is_empty() {
     TURN_LIMIT_MS
   } else {
     RESPOND_MS
@@ -132,8 +132,8 @@ fn draw_totem(view: &DuelView, seat: u8, mine: bool, w: f32, h: f32) {
   let y = h * 0.24;
   let color = seat_color(seat);
   draw_rectangle(x, y, w * 0.16, h * 0.34, Color::new(0.12, 0.12, 0.16, 1.0));
-  let holder = if view.priority == seat { 3.0 } else { 1.0 };
-  draw_rectangle_lines(x, y, w * 0.16, h * 0.34, holder, if view.priority == seat { GOLD } else { color });
+  let holder = if view.priority == Some(seat) { 3.0 } else { 1.0 };
+  draw_rectangle_lines(x, y, w * 0.16, h * 0.34, holder, if view.priority == Some(seat) { GOLD } else { color });
 
   let name = ["blue", "red"][seat as usize % 2];
   let label = if mine { format!("{name} (you)") } else { name.to_owned() };
@@ -257,7 +257,7 @@ fn draw_buttons(view: &DuelView, seat: u8, now_ms: u64) {
   }
 
   let pass = rects[4];
-  let my_window = view.priority == seat && view.phase == DuelPhase::Dueling;
+  let my_window = view.priority == Some(seat);
   let hovered = pass.contains(vec2(mx, my));
   let fill = if !my_window {
     Color::new(0.10, 0.10, 0.12, 1.0)

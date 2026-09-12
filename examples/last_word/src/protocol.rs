@@ -125,8 +125,8 @@ pub struct DuelView {
   pub turn: u32,
   /// The turn's owner.
   pub active: u8,
-  /// Who may speak right now.
-  pub priority: u8,
+  /// Who may speak right now; `None` outside the duel.
+  pub priority: Option<u8>,
   /// Consecutive passes since the last cast; two resolves the top.
   pub passes: u8,
   pub tempo: [u8; SEATS],

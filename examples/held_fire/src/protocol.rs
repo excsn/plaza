@@ -172,8 +172,8 @@ pub struct FieldView {
   pub server_now_ms: u64,
   pub battle: u64,
   pub round: u32,
-  /// Which side owes the next activation.
-  pub side_to_act: u8,
+  /// Which side owes the next activation; `None` outside the fighting phase.
+  pub side_to_act: Option<u8>,
   pub seats: Vec<PlayerId>,
   pub commanders: [PlayerId; SEATS],
   /// The side this view was cut for; spectators get 255 and the whole board.

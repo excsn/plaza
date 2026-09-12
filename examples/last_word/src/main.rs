@@ -149,13 +149,13 @@ async fn frame_loop(options: role::Options) {
           client.cast(*spell);
         }
       }
-      if rects[4].contains(mouse) && view.priority == seat {
+      if rects[4].contains(mouse) && view.priority == Some(seat) {
         client.pass();
       }
     }
     if is_key_pressed(KeyCode::Space)
       && let (Some(view), Some(seat)) = (client.view.as_ref(), client.my_seat)
-      && view.priority == seat
+      && view.priority == Some(seat)
     {
       client.pass();
     }

@@ -56,7 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       for op in msg.ops {
         match op {
           DuelOp::Snapshot(view) => {
-            if view.priority != 0 || view.phase != last_word::protocol::DuelPhase::Dueling {
+            if view.priority != Some(0) {
               continue;
             }
             // Rebuild just enough state for the shared policy to read.

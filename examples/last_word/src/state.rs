@@ -35,7 +35,8 @@ pub struct WordState {
   pub duel: u64,
   pub turn: u32,
   pub active: u8,
-  pub priority: u8,
+  /// `Some` exactly while the duel phase holds.
+  pub priority: Option<u8>,
   /// Consecutive passes since the last cast; two resolves the top.
   pub passes: u8,
   pub tempo: [u8; SEATS],
@@ -67,7 +68,7 @@ impl WordState {
       duel: 0,
       turn: 0,
       active: 0,
-      priority: 0,
+      priority: None,
       passes: 0,
       tempo: [0; SEATS],
       life: [LIFE; SEATS],
