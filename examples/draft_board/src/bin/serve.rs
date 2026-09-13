@@ -1,10 +1,8 @@
-//! The draft over real WebSockets, so the reversal is something you sit through
-//! rather than read in a log.
+//! The draft over real WebSockets, so you can watch the reversal in a browser.
 //!
 //! Open http://127.0.0.1:8093 in three tabs: the board opens once three seats
-//! are filled. Watch the order run down the board, then come back up it, which
-//! is the one thing a round-robin manager cannot do and the reason this example
-//! exists.
+//! are filled. The order runs down the board and then back up it, which a
+//! round-robin manager cannot do.
 //!
 //! Sit on the clock and the board takes the best remaining prospect for you,
 //! through the same `Epoch`-guarded scheduler the scripted run in `main.rs`

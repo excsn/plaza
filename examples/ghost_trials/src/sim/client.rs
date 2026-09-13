@@ -1,32 +1,32 @@
-//! The client, which owns the whole of the feel and none of the verdict.
+//! The client, which does the driving. The server gives the verdict.
 //!
-//! A time trial has nothing to arbitrate between players, so this client is not
-//! predicting anything and is never corrected. It drives, it records, and when
-//! it is done it hands over the evidence. The server's answer arrives a round
-//! trip later and changes nothing about how the car handled.
+//! A time trial has nothing to arbitrate between players, so this client does
+//! not predict anything and is never corrected. It drives, records the inputs
+//! and sends the log when the run ends. The server's answer arrives a round
+//! trip later and does not change how the car handled.
 //!
-//! Two things here are worth more than the driving.
+//! Two other parts live here.
 //!
 //! **The ghosts are replays, advanced in lockstep with the local tick.** Each
-//! one is a racer stepped by the same rule from the same log, so a ghost is not
-//! an animation of a recorded path, it is the run happening again.
+//! one is a racer stepped by the same rule from the same log, so a ghost
+//! replays the run itself rather than animating a recorded path.
 //!
 //! **The self check compares the recording against the run.** When a trial
 //! ends, the finished log is replayed and the result compared to the racer that
-//! was actually driven. On one machine that should be impossible to fail, which
-//! is the point: it does not test the physics, it tests the *recorder*, and a
-//! recorder that is off by one tick at a span boundary produces a ghost that
-//! drifts away from the run it came from. Nothing else would notice.
+//! was actually driven. On one machine it should never fail. It tests the
+//! *recorder* rather than the physics: a recorder that is off by one tick at a
+//! span boundary produces a ghost that drifts away from the run it came from
+//! and nothing else would notice.
 
 use crate::sim::log::{self, InputLog, Recorder, Rejection};
 use crate::sim::protocol::Ghost;
 use crate::sim::types::*;
 
-/// A ghost being raced against: its log, and the world it is being replayed in.
+/// A ghost being raced against: its log and the world it is being replayed in.
 ///
-/// **Its own world, not yours.** A ghost is a recording, so it takes the
-/// pickups it took on the day and shoves nobody. Letting it interact with the
-/// live run would make a ghost change the race it is a record of, and then no
+/// The ghost runs in its own world rather than yours. It is a recording, so it
+/// takes the pickups it took when it was recorded and shoves nobody. If it
+/// interacted with the live run it would change the race it records and no
 /// two people watching it would see the same thing.
 #[derive(Clone, Debug)]
 pub struct GhostRun {
@@ -50,7 +50,7 @@ pub struct Client {
   /// How many cars are on the circuit, you included.
   pub field: usize,
 
-  /// The whole circuit: you at seat zero, and in a race the CPU field beside
+  /// The whole circuit: you at seat zero and, in a race, the CPU field beside
   /// you. A trial is this with one racer in it.
   pub world: crate::sim::rules::World,
   pub tick: u32,
@@ -65,7 +65,7 @@ pub struct Client {
   pub last_refusal: Option<Rejection>,
   pub submissions: u64,
   /// Times the finished log did not replay to the run that produced it. Should
-  /// be zero for ever; see the module note for why it is counted anyway.
+  /// always be zero; the module note says why it is counted anyway.
   pub self_check_failures: u64,
   pub self_checks: u64,
   /// A log waiting to be sent, with the time it claims.
@@ -102,7 +102,7 @@ impl Client {
   /// race you from the line rather than from wherever they happened to be.
   ///
   /// A ghost recorded in the other mode is dropped rather than raced: a race
-  /// log replays a four-way race, and running one beside a trial would put
+  /// log replays a four-way race and running one beside a trial would put
   /// three phantom cars on a track that has none.
   pub fn restart_as(&mut self, mode: Mode, size: TrackSize, field: usize) {
     self.mode = mode;
@@ -118,8 +118,8 @@ impl Client {
     self.last_place = None;
     self.last_refusal = None;
     self.recorder = Recorder::new(self.rules_version, mode, size, self.field as u16);
-    // A ghost is only worth racing against a run of the same shape. A different
-    // track is a different lap, and a different field size is a different race.
+    // A ghost is only raced against a run of the same shape, since a different
+    // track or field size makes it a different lap or race.
     self
       .ghosts
       .retain(|g| g.ghost.log.mode == mode && g.ghost.log.track == size && g.ghost.log.field as usize == self.field);
@@ -146,16 +146,16 @@ impl Client {
 
   /// Advances the trial by one tick under one input.
   ///
-  /// The input is recorded and applied in the same call, which is the only way
-  /// to be sure the log says what the run did. Recording somewhere else, from a
-  /// value read somewhere else, is how a ghost and its run come apart.
+  /// The input is recorded and applied in the same call so the log always
+  /// matches what the run did. Recording from a value read somewhere else lets
+  /// a ghost drift from its run.
   pub fn step(&mut self, input: Input, controls: &Controls) {
     if !self.running {
       return;
     }
     self.recorder.observe(input);
     // Only the player's input is recorded. The rest of the field is a function
-    // of the world, so it costs nothing to store and nothing to send.
+    // of the world, so it costs nothing to store or send.
     let inputs = crate::sim::rules::field_inputs(&self.world, &self.track, input, 0);
     crate::sim::rules::step_world(&mut self.world, &inputs, &self.track);
     self.tick += 1;
@@ -197,8 +197,8 @@ impl Client {
       }
     }
 
-    // The claim. Honest by default; the panel can make it a lie, which is the
-    // only way to watch the verification do its job.
+    // The claimed time. It matches the run unless the panel's cheat switch is
+    // on, which lets you watch the verification refuse it.
     let claimed = if controls.cheat { time.saturating_sub(time / 3).max(1) } else { time };
     self.outbox = Some((finished, claimed));
   }
@@ -222,8 +222,8 @@ impl Client {
   ///
   /// It is caught up to the local tick, so a ghost that arrives mid-attempt
   /// appears where it *would* be rather than at the line. That is the one place
-  /// this example needs to reconstruct a state at an arbitrary moment, and it
-  /// is one line, because the log can produce any tick on demand.
+  /// this example needs to reconstruct a state at an arbitrary moment. It takes
+  /// only a short loop, because the log can produce any tick on demand.
   pub fn add_ghost(&mut self, ghost: Ghost) {
     if self.ghosts.iter().any(|g| g.ghost.id == ghost.id) {
       return;
@@ -330,7 +330,7 @@ mod tests {
   #[test]
   fn a_ghost_arriving_mid_attempt_appears_where_it_would_be() {
     // The one place a state has to be reconstructed at an arbitrary moment,
-    // which an event log makes a one-liner.
+    // which the event log keeps short.
     let c = controls();
     let mut server = Server::new(1);
     let mut driver = Client::new(0, Track::circuit(), server.rules_version);

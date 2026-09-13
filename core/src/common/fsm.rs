@@ -28,7 +28,8 @@ pub trait FsmContext<Op, AppID: AgentId> {
 /// ```
 ///
 /// When a state needs to read or mutate game state, write your own `FsmContext`
-/// holding `&mut YourState` instead: this type is a convenience, not a ceiling.
+/// holding `&mut YourState` instead: this type only covers states that need
+/// nothing but the queue.
 #[derive(Debug)]
 pub struct OpsQueue<Op, AppID: AgentId> {
   ops: Vec<TargetedOp<Op, AppID>>,

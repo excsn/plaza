@@ -3,8 +3,8 @@ import 'package:test/test.dart';
 
 /// Transliterated from `client_utils/src/correction.rs`.
 void main() {
-  /// The point of an adaptive threshold: whatever the level, if it is *the* level
-  /// then it is not news. A fixed threshold either flags all of these or none of
+  /// An adaptive threshold stops flagging a level once it becomes the norm,
+  /// whatever the level is. A fixed threshold either flags all of these or none of
   /// them depending on where it was set.
   test('a steady stream of similar corrections is never abnormal', () {
     final m = CorrectionMonitor(floor: 1.0);
@@ -47,8 +47,8 @@ void main() {
     for (var i = 0; i < 300; i++) {
       m.record(5.0);
     }
-    // The world got harder to predict and stayed that way. Flagging the change is
-    // correct, it really is news. Flagging it forever is not.
+    // The world got harder to predict and stayed that way. The change should be
+    // flagged at first and stop being flagged once it is the new level.
     for (var i = 0; i < 500; i++) {
       m.record(40.0);
     }
@@ -71,7 +71,8 @@ void main() {
     expect(m.record(50.0), isTrue, reason: 'something well past the floor still should');
   });
 
-  /// A monitor without a warmup is loudest at the moment it knows least.
+  /// Without a warmup the monitor flags the most while its baseline is least
+  /// reliable.
   test('nothing is flagged while warming up', () {
     final m = CorrectionMonitor(floor: 1.0, warmup: 10);
     expect(m.isWarmingUp, isTrue);

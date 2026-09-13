@@ -79,8 +79,8 @@
       ? `${board.phase}, round ${board.round} of ${board.total_rounds}${board.reversed ? ' (order reversed)' : ''}`
       : board.phase;
 
-    // The order, drawn in the direction it is currently running. This is the
-    // whole example: watch the arrows flip at the end of every pass.
+    // The order, drawn in the direction it is currently running. The arrows
+    // flip at the end of every pass.
     const order = board.reversed ? [...board.order].reverse() : board.order;
     el('order').innerHTML = '';
     order.forEach((player, i) => {

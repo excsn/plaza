@@ -1,6 +1,6 @@
 //! Desktop, over `tungstenite` on a worker thread.
 //!
-//! The thread exists to keep [`Socket::poll`] honest. `tungstenite` is
+//! The thread exists so [`Socket::poll`] never blocks. `tungstenite` is
 //! blocking, a frame loop cannot block, and the alternative (an async runtime)
 //! would drag tokio into a client whose whole job is to render at 60 fps. So one
 //! thread owns the socket and talks to the frame loop through channels.
@@ -121,8 +121,8 @@ fn run(url: String, commands: Receiver<Command>, events: Sender<Event>, state: A
           return finish(&state, &events, CloseReason::Local);
         }
         Err(TryRecvError::Empty) => break,
-        // The handle was dropped. Close politely rather than abandoning the
-        // socket, so the far end sees a clean goodbye instead of a reset.
+        // The handle was dropped. Send a close frame rather than abandoning the
+        // socket, so the far end sees a clean close instead of a reset.
         Err(TryRecvError::Disconnected) => {
           let _ = socket.close(None);
           let _ = socket.flush();

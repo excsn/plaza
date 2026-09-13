@@ -1,5 +1,5 @@
-//! The play field, the ships, and the settings that decide who may say you
-//! died.
+//! The play field, the ships and the settings, including which death rule
+//! applies.
 
 use serde::{Deserialize, Serialize};
 
@@ -8,9 +8,8 @@ pub const SIM_STEP_MS: u64 = 16;
 pub const FIELD_W: f32 = 420.0;
 pub const FIELD_H: f32 = 600.0;
 
-/// Deliberately small. A shmup is dodged by pixels, and a hitbox the size of
-/// the sprite would make the whole example about tolerance rather than about
-/// timing.
+/// Deliberately small. A shmup is dodged by pixels and a hitbox the size of the
+/// sprite would make the whole example about tolerance instead of timing.
 pub const SHIP_R: f32 = 2.5;
 pub const SHIP_SPEED: f32 = 190.0;
 pub const SHIP_LIVES: u32 = 3;
@@ -150,7 +149,7 @@ impl Ship {
 
 /// A bullet a player fired. **Not derivable**: it exists because a human
 /// pressed a key at a moment nothing can predict, so every one of these costs
-/// bytes on the wire. The comparison this example is built around.
+/// bytes on the wire.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PlayerBullet {
   pub id: u32,
@@ -160,16 +159,16 @@ pub struct PlayerBullet {
 
 /// Who is allowed to say a ship was hit.
 ///
-/// The question no other example in this repository asks, because it is the
-/// only one where the correction has no ease and no undo: a position can be
-/// smoothed towards the truth over a few frames, and a death cannot.
+/// No other example in this repository needs this, because in the others a
+/// wrong position can be smoothed towards the truth over a few frames. A death
+/// cannot be smoothed or undone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeathRule {
-  /// The server decides, against the ship position it holds. Correct, and it
-  /// kills you a round trip after you watched the bullet miss.
+  /// The server decides, against the ship position it holds. This is correct
+  /// but it kills you a round trip after you watched the bullet miss.
   ServerOnly,
-  /// The ship decides. What shipped co-op shmups actually do, and it feels
-  /// perfect because it is judged against exactly what the player saw.
+  /// The ship decides. Shipped co-op shmups do this and it feels right,
+  /// because it is judged against exactly what the player saw.
   ClientDeclares,
   /// The ship declares and the server recomputes the curtain at the tick that
   /// was named. Only possible because the curtain is a function of the tick.
@@ -200,17 +199,16 @@ pub struct Controls {
   pub render_delay_ms: u64,
 
   pub death_rule: DeathRule,
-  /// Stops declaring deaths, for one seat, on purpose.
+  /// Stops declaring deaths for one seat, on purpose.
   ///
-  /// The fault this example injects. Under `ClientDeclares` it is an immortal
-  /// ship, and the number worth watching is not that it works but how loudly it
-  /// shows up in a count the server can take for free.
+  /// Under `ClientDeclares` this makes an immortal ship. The server's
+  /// undeclared count, which it gets for free, shows it clearly.
   pub silent_seat: bool,
 
   pub predict_self: bool,
   /// Draw the curtain from the closed form rather than from anything sent.
-  /// Off, the field is empty, which is the cheapest possible demonstration that
-  /// nothing about it crossed the wire.
+  /// When off, the field is empty, which shows that nothing about it crossed
+  /// the wire.
   pub derive_curtain: bool,
   pub show_hitbox: bool,
 
@@ -261,9 +259,8 @@ mod tests {
 
   #[test]
   fn a_ship_is_smaller_than_the_bullets_it_dodges() {
-    // The genre's whole feel. A hitbox the size of the sprite turns the
-    // example into a question about tolerance rather than about timing, and
-    // every number here would then be measuring the tolerance.
+    // A hitbox the size of the sprite would make the example about tolerance
+    // instead of timing and every number here would measure the tolerance.
     assert!(SHIP_R < ENEMY_BULLET_R);
   }
 

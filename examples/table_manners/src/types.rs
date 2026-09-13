@@ -23,17 +23,17 @@ pub const FLOOD_WINDOW_MS: u64 = 1000;
 /// verdict was removal.
 pub const FLOOD_TOLERANCE: u64 = 20;
 
-/// Why a seat was vacated. The distinction the whole example turns on: a drop
-/// keeps your seat warm, and a kick does not.
+/// Why a seat was vacated. The example depends on one distinction: a drop
+/// keeps your seat warm and a kick does not.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Parting {
   /// The network went away. Come back and the seat is still yours.
   Dropped,
   /// The host removed you. The seat is gone and so is the grace.
   Kicked,
-  /// You stopped talking to us.
+  /// Said nothing for longer than the AFK timeout.
   Afk,
-  /// You would not stop talking to us.
+  /// Kept sending past the flood tolerance.
   Flooding,
   /// The party is over for everybody.
   Drained,

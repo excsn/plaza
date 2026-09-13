@@ -67,7 +67,7 @@ impl GameState {
 }
 
 /// The deterministic step, run identically on both peers: same state and inputs
-/// in, same state out, every time. That equality is the whole basis of rollback,
+/// in, same state out, every time. Rollback depends on that equality:
 /// re-simulating from a restored frame lands exactly where the other peer already
 /// is. `inputs[p]` is player `p`'s input for this frame.
 pub fn step(state: &GameState, inputs: &[Input]) -> GameState {
@@ -108,9 +108,8 @@ pub struct InputPacket {
 pub const INPUT_ENTRY_BYTES: usize = 2 + 1;
 /// Bytes for the acknowledgement: a frame delta plus the 64-bit mask.
 ///
-/// Deliberately counted at full width. It is the cost the technique has to earn
-/// back, and shaving it to 32 bits to flatter the comparison would be measuring
-/// the wrong thing.
+/// Counted at full width. It is the cost the technique has to recover and
+/// shaving it to 32 bits would tilt the comparison toward targeted redundancy.
 pub const ACK_BYTES: usize = 2 + 8;
 
 impl InputPacket {
@@ -126,7 +125,7 @@ pub enum Redundancy {
   /// or mispredicts until a later frame's input arrives.
   None,
   /// Repeat the last [`REDUNDANCY`] frames every packet, whether or not the other
-  /// side needs them. Simple, and pays the same toll on a perfect link as on a
+  /// side needs them. Simple, but costs the same on a perfect link as on a
   /// terrible one.
   Blind,
   /// Repeat only the frames the other side's acknowledgement says it is missing.
@@ -134,7 +133,7 @@ pub enum Redundancy {
   Targeted,
 }
 
-/// Which mechanisms are on. The three-way story: prediction off is delay-based
+/// Which mechanisms are on. The three combinations: prediction off is delay-based
 /// (wait for inputs, hitch under latency); prediction on with rollback off trusts
 /// guesses forever (responsive but desyncs); both on is rollback proper.
 #[derive(Clone, Copy, Debug)]

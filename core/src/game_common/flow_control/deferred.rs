@@ -2,7 +2,7 @@
 //!
 //! Extracted after being hand-written nine times across four examples. Every
 //! turn-based example schedules work against its phase (a turn timeout, a
-//! rematch, a day's deadline), stamps each event with [`Epoch`], and writes the
+//! rematch, a day's deadline), stamps each event with [`Epoch`] and writes the
 //! same guard in its drain loop:
 //!
 //! ```ignore
@@ -17,21 +17,20 @@
 //! inside [`due`](PhasedScheduler::due) and application events carry no epoch
 //! field at all.
 //!
-//! # Capturing at schedule time is the discipline, kept
+//! # When the token is captured
 //!
-//! Every hand-written site carried the same comment: the token is taken *after*
-//! the transition, so it names the occupancy the work belongs to. That
-//! ordering still matters here, in the same shape: schedule after you
-//! transition. What the type removes is the other half of the mistake, an
-//! event constructed with one occupancy's token and drained against another's
-//! rule.
+//! The token must be taken *after* the transition, so it names the occupancy
+//! the work belongs to. That still applies here: schedule after you
+//! transition. What the type prevents is the other mistake: an event
+//! constructed with one occupancy's token and drained against another's rule.
 //!
 //! # What stays with the application
 //!
-//! Only the epoch. `card_table` also asks whether the timed-out player is
-//! *still on turn*, and `draft_board`'s reversal makes that an identity check a
-//! generation counter would get wrong. Checks like that are the game's, and a
-//! block that absorbed them would be deciding game rules.
+//! This type checks only the epoch. `card_table` also asks whether the
+//! timed-out player is *still on turn* and `draft_board`'s reversal makes that
+//! an identity check a generation counter would get wrong. Checks like that
+//! belong to the game; a block that absorbed them would be deciding game
+//! rules.
 
 use std::fmt::Debug;
 
@@ -71,9 +70,9 @@ impl<E: Clone + Debug + Send + 'static> PhasedScheduler<E> {
 
   /// Everything due at `now` whose occupancy still holds.
   ///
-  /// Stale events are consumed and dropped: nothing cancelled them, their
-  /// token simply stopped matching, which is the whole design. An event that
-  /// outlived its phase must not act on the phase that replaced it.
+  /// Stale events are consumed and dropped because their token no longer
+  /// matches. An event that outlived its phase must not act on the phase that
+  /// replaced it.
   pub fn due<P>(&mut self, now: u64, phase: &Phased<P>) -> Vec<E> {
     self
       .inner
@@ -136,8 +135,7 @@ mod tests {
 
   #[test]
   fn work_outlived_by_its_phase_is_dropped_not_fired() {
-    // The guard this type exists to own: nine hand-written copies of it across
-    // four examples, all this line.
+    // Nine hand-written copies of this guard existed across four examples.
     let mut phase = Phased::new(Season::Spring);
     let mut chores: PhasedScheduler<Chore> = PhasedScheduler::new();
     chores.schedule_after(0, 5, &phase, Chore::Water);
@@ -162,8 +160,8 @@ mod tests {
 
   #[test]
   fn returning_to_the_same_phase_is_a_new_occupancy() {
-    // The property that makes the token a token rather than a phase compare:
-    // spring-again is not the spring the chore was scheduled in.
+    // The token compares occupancies rather than phases: returning to spring
+    // starts a new occupancy, so the chore from the first spring is stale.
     let mut phase = Phased::new(Season::Spring);
     let mut chores: PhasedScheduler<Chore> = PhasedScheduler::new();
     chores.schedule_after(0, 5, &phase, Chore::Water);

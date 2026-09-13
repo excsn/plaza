@@ -281,8 +281,7 @@ void main() {
     });
 
     /// The same direction change, with rollback off: the misprediction is detected
-    /// and then ignored, so the present never lands on the truth. The "why rollback"
-    /// contrast.
+    /// and then ignored, so the present never lands on the truth.
     test('rollback disabled keeps a wrong guess and diverges from the truth', () {
       final remote = List<In>.generate(10, (f) => f < 4 ? const In(1) : const In(-3));
       final local = List<In>.filled(10, const In(1));

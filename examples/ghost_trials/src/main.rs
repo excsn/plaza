@@ -1,4 +1,4 @@
-//! Frame loop: place towers, watch a wave nobody sent you, and try to break it.
+//! Frame loop: pick a mode and circuit, then race the ghosts and the CPU field.
 
 mod render;
 mod ui;
@@ -13,8 +13,9 @@ use ghost_trials::sim::types::{Controls, Mode};
 
 /// Reports a fatal misconfiguration.
 ///
-/// Never `process::exit` on wasm: there is no process to exit, the call traps,
-/// and a browser shows `RuntimeError: unreachable executed` with no reason.
+/// Never `process::exit` on wasm: there is no process to exit, so the call
+/// traps and a browser shows `RuntimeError: unreachable executed` with no
+/// reason.
 fn give_up(message: String) {
   if cfg!(target_arch = "wasm32") {
     println!("{message}");
@@ -125,11 +126,11 @@ async fn frame_loop(options: role::Options) {
 
   loop {
     let dt = get_frame_time().min(0.25);
-    // Read absolutely rather than accumulated. Adding a truncated frame time
-    // each frame runs the clock slow: 16.67ms counted as 16 loses 4% a second
-    // at 60fps and 13.6% at 144, and every rate measured against it reads high
-    // by the same amount. Truncating an absolute clock once is off by at most a
-    // millisecond, for ever.
+    // Read from the absolute clock rather than accumulated. Adding a truncated
+    // frame time each frame runs the clock slow: 16.67ms counted as 16 loses 4%
+    // a second at 60fps and 13.6% at 144 and every rate measured against it
+    // reads high by the same amount. Truncating the absolute clock is never off
+    // by more than a millisecond.
     clock_ms = (get_time() * 1000.0) as u64;
     perf.observe(dt);
 
@@ -211,8 +212,8 @@ async fn frame_loop(options: role::Options) {
         racing.then(|| sim.position()),
       );
 
-      // The split against the ghost being chased, in the only currency a trial
-      // has: how far round each of you is.
+      // The split against the ghost being chased, measured as the difference in
+      // how far round each of you is.
       let split = sim.rival().and_then(|rival| {
         let mine = sim.racer().progress();
         let theirs = rival.racer().progress();
@@ -286,16 +287,14 @@ async fn frame_loop(options: role::Options) {
 
 /// What is held down this frame.
 ///
-/// Read once per frame and applied to every tick the frame covers, which is the
-/// honest translation of a key that is either down or not into a simulation
-/// that advances in fixed steps.
+/// Read once per frame and applied to every tick the frame covers, since a key
+/// is either down or not and the simulation advances in fixed steps.
 #[cfg(any(feature = "server", all(feature = "client", feature = "websocket")))]
 fn read_input(pointers: &Pointers) -> ghost_trials::sim::types::Input {
-  // Two steer buttons and a charge, rather than a stick: the input is one of
-  // three values, and thresholding an analogue drag back into three is a
-  // threshold to get wrong. The charge has to be holdable **at the same time**
-  // as a steer, which is the whole reason these read real touches instead of
-  // the mouse macroquad synthesises from them.
+  // Two steer buttons and a charge rather than a stick: the input is one of
+  // three values and thresholding an analogue drag back into three can go
+  // wrong. The charge has to be holdable at the same time as a steer, so these
+  // read real touches instead of the mouse macroquad synthesises from them.
   let left = is_key_down(KeyCode::Left) || is_key_down(KeyCode::A) || Button::bottom_right(2, "<").held(pointers);
   let right = is_key_down(KeyCode::Right) || is_key_down(KeyCode::D) || Button::bottom_right(1, ">").held(pointers);
   let charge = is_key_down(KeyCode::Space) || Button::bottom_right(0, "chg").held(pointers);
@@ -307,8 +306,8 @@ fn read_input(pointers: &Pointers) -> ghost_trials::sim::types::Input {
   ghost_trials::sim::types::Input::new(steer, charge)
 }
 
-/// Frame time, because a client that cannot keep up simulates in bursts, and a
-/// burst is a client that briefly stops matching anybody.
+/// Frame time. A client that cannot keep up simulates in bursts and during a
+/// burst it briefly stops matching anybody.
 struct Perf {
   mean_dt: f32,
   window: std::collections::VecDeque<f32>,

@@ -18,7 +18,7 @@ pub type RelicId = u32;
 
 pub const FIELD: f32 = 200.0;
 /// Enough that a per-recipient view is a small fraction of the world, which is
-/// the whole reason the query has to be a query rather than a filter.
+/// why relevance needs a spatial query rather than a filter over everything.
 pub const RELICS: usize = 240;
 pub const SCOUTS_PER_PLAYER: usize = 3;
 pub const VISION: f32 = 26.0;
@@ -35,8 +35,8 @@ pub enum FogOp {
   // Client to server.
   /// Send my scouts to a point. The only input in the game.
   MoveTo { x: f32, y: f32 },
-  /// Turn the deferral off, so events are told the moment they happen. The
-  /// fault injection: it is what makes the leak counter move.
+  /// Turn the deferral off, so events are told the moment they happen. This is
+  /// the fault injection that makes the leak counter move.
   SetLeakMode(bool),
 
   // Server to client.
@@ -81,10 +81,9 @@ pub struct Relic {
 
 /// An event a player has not been allowed to hear yet.
 ///
-/// It is kept whole rather than summarised: when the place it happened in comes
-/// into view, this is delivered as it was, with `late` set. That is what keeps
-/// two boards telling the same story despite one of them hearing it minutes
-/// after the other.
+/// It is kept in full, not summarised. When the place it happened comes into
+/// view, it is delivered as it was with `late` set. This keeps two boards
+/// consistent even when one hears about the event minutes after the other.
 #[derive(Clone, Debug)]
 pub struct Withheld {
   pub relic: RelicId,
@@ -99,7 +98,7 @@ pub struct PlayerStats {
   pub told: u64,
   pub told_late: u64,
   /// Positions that reached this player which they could not see at the time.
-  /// Audited on the way out rather than asserted in a comment.
+  /// Counted on the way out.
   pub leaks: u64,
   /// Relics the grid query offered, against the ones that survived the exact
   /// distance test. The difference is what the index saves.
@@ -124,7 +123,7 @@ pub struct FogState {
   pub grid: RelicGrid,
   pub tick: u64,
   /// When true, captures are told to everyone the instant they happen. The
-  /// game plays identically and the secrecy is gone, which is the point.
+  /// toggle shows that the game plays identically with the secrecy gone.
   pub leak_mode: bool,
   pub next_unit: UnitId,
 }
@@ -203,7 +202,7 @@ pub struct PlayerView {
   pub tick: u64,
   pub my_units: Vec<UnitView>,
   /// Only enemies inside one of your scouts' vision. An enemy you cannot see
-  /// is absent, not flagged: there is nothing in this payload to hide.
+  /// is left out entirely, not flagged.
   pub enemy_units: Vec<UnitView>,
   /// Only relics you can see right now. Your client remembers the rest.
   pub relics: Vec<RelicView>,

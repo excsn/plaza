@@ -43,9 +43,8 @@ impl StateLogic<CardOp, PlayerId, TableState> for TableLogic {
 
         for op in ops {
           if let CardOp::PlayCard(card) = op {
-            // The guard is compound: the right phase *and* the right player's
-            // turn. `Phased` never sees this, because it is the game's rule, not
-            // plaza's.
+            // The check needs both the right phase and the right player's turn.
+            // `Phased` does not make this check, because it is a game rule.
             if *state.phase.current() != TablePhase::Playing {
               warn!(%player, phase = ?state.phase.current(), "rejected: not the playing phase");
               continue;
@@ -96,9 +95,9 @@ fn seat_player(state: &mut TableState, agent: &Agent<PlayerId>, ctx: &mut Ctx) -
   }
 
   state.agents.insert(player, agent.clone());
-  // Mid-round, the newcomer stays out of the turn order until the next deal:
-  // the live round was dealt to the players it started with, and a handless
-  // player on turn is a turn nobody can end. `begin_round` seats them.
+  // Mid-round, the newcomer stays out of the turn order until the next deal.
+  // The live round was dealt to the players it started with. A player with no
+  // hand could never end their turn. `begin_round` seats them.
   if !state.rounds.round_in_progress() {
     state.turns.add_actor(player);
   }
@@ -159,7 +158,7 @@ fn begin_round(state: &mut TableState, ctx: &mut Ctx) {
   state.deal();
 
   if let Err(reason) = state.rounds.start_next_round(ctx) {
-    // The round limit is reached: that is the end of the match, not an error.
+    // The round limit is reached, which ends the match.
     debug!(%reason, "no further rounds");
     finish_match(state, ctx);
     return;
@@ -208,8 +207,8 @@ fn play_card(state: &mut TableState, player: PlayerId, card: Card, on_their_beha
 
 /// Scores the trick, ends the round, and starts the next one or finishes.
 fn resolve_trick(state: &mut TableState, ctx: &mut Ctx) {
-  // Moving out of `Playing` bumps the epoch, which is what makes any timeout
-  // still pending for this round stale. Nothing needs cancelling.
+  // Moving out of `Playing` bumps the epoch, which makes any timeout still
+  // pending for this round stale. Nothing needs cancelling.
   state.phase.transition_to(TablePhase::Scoring, ctx, CardOp::PhaseChanged);
 
   let winner = state.trick_winner();
@@ -264,8 +263,8 @@ fn start_match(state: &mut TableState, ctx: &mut Ctx) {
 
 /// Schedules the table to play for whoever is on turn, if they take too long.
 ///
-/// The token is taken *now*, so it names this occupancy of `Playing`. By the
-/// time it fires the round may have ended, and the epoch is what says so.
+/// The token is taken now, so it names this occupancy of `Playing`. If the
+/// round has ended by the time it fires, the epoch shows it.
 fn arm_turn_timeout(state: &mut TableState) {
   let Some(player) = state.turns.current_turn_actor() else {
     return;
@@ -275,24 +274,24 @@ fn arm_turn_timeout(state: &mut TableState) {
     .schedule_after(state.tick, state.turn_timeout_ticks, &state.phase, TableEvent::AutoPlay { player });
 }
 
-/// Fires any timeout that has come due, discarding the ones overtaken by events.
+/// Fires any timeout that has come due and skips the ones that no longer apply.
 fn run_due_timeouts(state: &mut TableState, ctx: &mut Ctx) -> bool {
   let mut round_ended = false;
 
   for due in state.timeouts.due(state.tick, &state.phase) {
     match due {
       TableEvent::AutoPlay { player } => {
-        // The scheduler already dropped anything from a finished round. What
-        // it cannot know is the game's half: still the right phase, but they
-        // played in time and the turn moved on.
+        // The scheduler already dropped anything from a finished round. It
+        // cannot tell when the phase is still right but the player played in
+        // time and the turn moved on, so that is checked here.
         if state.turns.current_turn_actor() != Some(player) {
           debug!(%player, "timeout dropped: they already played");
           continue;
         }
 
         // Choosing the card is a search: `best_play_for` clones the state and
-        // tries each candidate. That it can is the point, and it is why nothing
-        // in `TableState` holds a timer, a channel, or a boxed closure.
+        // tries each candidate. Nothing in `TableState` holds a timer, a channel
+        // or a boxed closure, which is why it can be cloned.
         let Some(card) = state.best_play_for(&player) else {
           continue;
         };
@@ -390,7 +389,7 @@ mod tests {
 
   #[tokio::test]
   async fn a_mid_match_joiner_waits_out_the_round_instead_of_ending_the_match() {
-    // The bug this pins: filling a seat mid-match called begin_round, whose
+    // Filling a seat mid-match used to call begin_round, whose
     // start_next_round error (a round was in progress) was misread as the round
     // limit, finishing the match instantly.
     let mut state = seat_everyone().await;
@@ -441,9 +440,9 @@ mod tests {
 
   #[tokio::test]
   async fn a_finished_table_that_refills_deals_a_fresh_match() {
-    // The sibling of draft_board's dead end: the rematch event fires into a
-    // short table and is skipped, so the seat that refills afterwards has to
-    // open the fresh match itself.
+    // As in draft_board, the rematch event fires into a short table and is
+    // skipped, so the seat that refills afterwards has to open the fresh match
+    // itself.
     let mut state = seat_everyone().await;
     play_out_the_match(&mut state).await;
     TableLogic

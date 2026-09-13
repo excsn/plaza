@@ -1,9 +1,8 @@
 //! Drawing the arena.
 //!
-//! Three things are drawn that a shooter cannot normally see, and they are the
-//! reason this example is worth watching rather than reading: the position the
-//! server rewound to, the sight line that decided a kill, and the gap between
-//! where you are drawing somebody and where they are.
+//! Three things are drawn that a shooter cannot normally see. They are the
+//! position the server rewound to, the sight line that decided a kill and the
+//! gap between somebody's drawn position and their real one.
 
 use macroquad::prelude::*;
 
@@ -95,9 +94,9 @@ pub fn draw_player(board: &Board, id: PlayerId, pos: V2, alive: bool, is_me: boo
 
 /// Where the server rewound a target to when it judged a shot.
 ///
-/// The single most useful thing on the screen: a hollow ring at the position
-/// the shooter was granted, next to the solid body where the target actually
-/// was. The gap between them is what the target paid.
+/// A hollow ring at the position the shooter was granted, next to the solid
+/// body where the target actually was. The gap between them comes from the
+/// shooter's latency.
 pub fn draw_rewind_ghost(board: &Board, id: PlayerId, snap: PlayerSnap) {
   let at = board.at(snap.pos);
   let mut colour = seat_colour(id);
@@ -113,8 +112,8 @@ pub fn draw_rocket(board: &Board, rocket: &RocketState) {
 
 /// A tracer, coloured by what the rewind did to it.
 ///
-/// Amber for a shot the rewind granted, because that is the one somebody else
-/// paid for, and it should be the one that catches the eye.
+/// Amber for a shot the rewind granted, because that hit cost the target, so it
+/// should stand out.
 pub fn draw_tracer(board: &Board, shot: &ShotEvent, age: f32) {
   if shot.weapon == Weapon::Rocket {
     return;

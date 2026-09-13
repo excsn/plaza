@@ -1,5 +1,5 @@
 //! The headless simulation: a gravity field defined by a handful of black holes,
-//! thousands of pellets it moves, and the wire between the server and each
+//! thousands of pellets it moves and the wire between the server and each
 //! client.
 //!
 //! Nothing here touches a renderer, so every claim the example makes is a number

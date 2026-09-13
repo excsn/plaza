@@ -1,13 +1,14 @@
-//! Interpolation that knows which way the entity was going.
+//! Interpolation that uses the velocity recorded at each sample.
 //!
-//! Straight-line interpolation between two snapshots is right when the samples
-//! are close together and wrong when they are not. At 60 snapshots a second the
-//! error over a 16ms chord is invisible. At 10, the chord is 100ms of a curved
-//! path flattened into a line, and the entity visibly corners: it slides to each
-//! sample, changes direction, and slides to the next. Fiedler hits exactly this
-//! in [snapshot interpolation](https://gafferongames.com/post/snapshot_interpolation/)
+//! Straight-line interpolation between two snapshots works when the samples are
+//! close together. At 60 snapshots a second the error over a 16ms chord is
+//! invisible. At 10, the chord is 100ms of a curved path flattened into a line
+//! and the entity visibly corners: it slides to each sample, changes direction
+//! and slides to the next. Fiedler hits this in
+//! [snapshot interpolation](https://gafferongames.com/post/snapshot_interpolation/)
 //! and fixes it with a Hermite spline, which passes through both samples *and*
-//! leaves along the velocity recorded at each, so the seams stop being corners.
+//! leaves along the velocity recorded at each, so there are no corners at the
+//! seams.
 //!
 //! The cost is that you must have the velocity at **both** ends, which is why
 //! this is a type of its own rather than a flag on
@@ -16,20 +17,20 @@
 //! Everything else is the same, including that the target should trail the
 //! stream by a couple of send intervals so two real samples bracket it.
 //!
-//! **Only for motion that is smooth between samples**, and this is the sharp
-//! edge rather than a caveat. A straight line cannot leave the segment its two
-//! samples bracket; a spline can, and does, whenever the recorded velocity is a
-//! poor prediction of the path. Measured over 300 solver-driven cubes at 10Hz,
-//! with impacts in the scene, the spline left that segment on **half of all
-//! frames by up to 2.48 units** and finished 13x *worse* than the chord it
-//! replaced. On a smoothly curving path it is 484x better. The difference is
-//! entirely whether velocity at a sample predicts the path to the next one.
+//! **Only use it for motion that is smooth between samples.** A spline leaves
+//! the segment its two samples bracket whenever the recorded velocity is a poor
+//! prediction of the path, which a straight line never does. Measured over 300
+//! solver-driven cubes at 10Hz, with impacts in the scene, the spline left that
+//! segment on **half of all frames by up to 2.48 units** and finished 13x
+//! *worse* than the chord it replaced. On a smoothly curving path it is 484x
+//! better. The difference is entirely whether velocity at a sample predicts the
+//! path to the next one.
 //!
-//! So: reach for it for a steered character, an orbit, a projectile in free
-//! flight. Do not reach for it for anything that collides between samples,
-//! where plain interpolation is bounded and therefore safer. Worth it below
-//! roughly 20 snapshots a second, and not worth the second velocity on the wire
-//! much above that.
+//! Use it for a steered character, an orbit or a projectile in free flight. Do
+//! not use it for anything that collides between samples, where plain
+//! interpolation is bounded and therefore safer. It helps below roughly 20
+//! snapshots a second and is not worth sending the second velocity much above
+//! that.
 //!
 //! ```
 //! use plaza_client_utils::hermite::HermiteView;
@@ -100,11 +101,12 @@ impl HermiteInterpolatable<crate::math::Vec3> for crate::math::Vec3 {
 
 /// A ring of `(time, state, velocity)` samples, rendered with a spline.
 ///
-/// The [`RemoteView`](crate::remote_view::RemoteView) of low send rates. It
-/// holds rather than extrapolates past the newest sample, because a spline
-/// already spends the velocity on looking right between samples and coasting
-/// past the end on the same number is a different decision with a different
-/// failure (see [`RenderOpts`](crate::remote_view::RenderOpts)).
+/// The low-send-rate counterpart of
+/// [`RemoteView`](crate::remote_view::RemoteView). It holds rather than
+/// extrapolates past the newest sample, because the spline already uses the
+/// velocity between samples and coasting past the end on it is a separate
+/// decision with its own failure mode (see
+/// [`RenderOpts`](crate::remote_view::RenderOpts)).
 #[derive(Debug, Clone)]
 pub struct HermiteView<State, Velocity> {
   samples: VecDeque<(u64, State, Velocity)>,
@@ -228,7 +230,7 @@ mod tests {
     assert!(just_after.abs() < 0.01, "left flat, not at a slope: {just_after}");
   }
 
-  /// The claim the type exists for, measured rather than asserted.
+  /// Measures the spline against a straight line on a curve.
   #[test]
   fn on_a_curve_at_a_low_send_rate_it_beats_a_straight_line() {
     // A circling entity sampled ten times a second, drawn at sixty.

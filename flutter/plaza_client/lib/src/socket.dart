@@ -5,8 +5,8 @@ enum SocketState { connecting, open, closed }
 
 /// The transport, as this package needs it.
 ///
-/// Deliberately not a WebSocket. Reaching every Dart target with one socket
-/// implementation means `dart:io` on native and `package:web` on the browser,
+/// Not tied to WebSocket. Reaching every Dart target with one socket
+/// implementation means `dart:io` on native and `package:web` on the browser
 /// and picking either here would decide the app's platform support for it.
 /// Supply your own (`web_socket_channel` is the usual answer) and this package
 /// stays pure Dart with nothing to conditionally import.
@@ -14,11 +14,11 @@ abstract class PlazaSocket {
   /// Frames as they arrive: a `String` for a text frame, a `List<int>` for a
   /// binary one. Which arrives follows the server's codec.
   ///
-  /// **Single-subscription, and it must buffer whatever arrives before the first
-  /// listener.** The server speaks first, so a socket that is open before anyone
-  /// is listening is the normal case, not an edge one, and a broadcast stream
-  /// discards those frames without a trace. The `Hello` is the first thing on the
-  /// wire and therefore the first thing lost.
+  /// **Single-subscription and it must buffer whatever arrives before the first
+  /// listener.** The server speaks first, so a socket is normally open before
+  /// anyone is listening and a broadcast stream discards those frames without a
+  /// trace. The `Hello` is the first thing on the wire and therefore the first
+  /// thing lost.
   Stream<Object> get messages;
 
   /// Sends one frame, already built. Same two shapes.
@@ -29,15 +29,15 @@ abstract class PlazaSocket {
   /// Completes when the socket is finished, however it finished.
   Future<void> get done;
 
-  /// The WebSocket close code, once the far side has sent one, and `null`
-  /// before that or when the link died without a close frame.
+  /// The WebSocket close code once the far side has sent one. `null` before
+  /// that or when the link died without a close frame.
   ///
   /// This is how a rejection is told from a drop. RFC 6455 reserves 4000-4999
-  /// for the application, so a server refusing a credential closes with a 4xxx
-  /// and means it; 1006 is no close frame at all, which is the transport
-  /// failing rather than the server deciding. A client that cannot tell them
-  /// apart either retries a token the server has already refused, or gives up
-  /// on a connection that only needed reconnecting.
+  /// for the application, so a server refusing a credential closes with a
+  /// 4xxx; 1006 is no close frame at all, which is the transport failing rather
+  /// than the server deciding. A client that cannot tell them apart either
+  /// retries a token the server has already refused or gives up on a
+  /// connection that only needed reconnecting.
   int? get closeCode;
 
   Future<void> close();
@@ -49,8 +49,8 @@ typedef SocketFactory = Future<PlazaSocket> Function(Uri url);
 
 /// A socket pair with no network, for tests and local play.
 ///
-/// Mirrors the `loopback` feature of the Rust `plaza_ws` crate, and exists for
-/// the same reason: the lifecycle is worth testing without standing a server up.
+/// Mirrors the `loopback` feature of the Rust `plaza_ws` crate, so the
+/// lifecycle can be tested without a server.
 class LoopbackSocket implements PlazaSocket {
   LoopbackSocket() : _incoming = StreamController<Object>();
 

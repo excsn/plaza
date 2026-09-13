@@ -1,11 +1,11 @@
 //! How fast one connection may speak, judged before the queue everyone shares.
 //!
 //! A client that floods reaches `forward_incoming` at whatever rate its socket
-//! allows, and the only thing between it and the controller is a bounded queue
-//! that fills for *everybody*. Dropping at that queue is too late by
-//! definition: by then the flood has already cost the frames of every other
-//! client behind it. So the judgement stands one step earlier, on the
-//! connection task, per connection, before anything shared is touched.
+//! allows and the only thing between it and the controller is a bounded queue
+//! that fills for *everybody*. Dropping at that queue is too late: by then the
+//! flood has already cost the frames of every other client behind it. So the
+//! gate runs one step earlier, on the connection task, per connection, before
+//! anything shared is touched.
 //!
 //! **It reads no content.** At this point a frame is still encoded bytes, and
 //! opening them to decide would put a decode on the path a flood is trying to
@@ -14,13 +14,12 @@
 //! is already bounded by [`Limits`](crate::manager::Limits): frames per second
 //! times the largest one is a byte ceiling without a second number to keep.
 //!
-//! **The number is the application's**, the same division
-//! [`Overflow`](crate::manager::Overflow) and the AFK rule already draw. Plaza
-//! owns where the gate stands, what it counts and what a verdict means; how
-//! fast is too fast, and whether too fast is worth ending a connection over,
-//! are answers only the game has. There is no default rate: a session
-//! configured with none admits everything, exactly as it did before this
-//! module existed.
+//! **The application sets the rate**, the same split
+//! [`Overflow`](crate::manager::Overflow) and the AFK rule use. Plaza decides
+//! where the gate runs, what it counts and what each verdict does. The game
+//! decides how fast is too fast and whether exceeding it ends the connection.
+//! There is no default rate: a session configured with none admits everything,
+//! as it did before this module existed.
 
 /// What exceeding the rate means.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -107,7 +106,7 @@ pub(crate) struct Bucket {
 
 impl Bucket {
   /// A bucket that starts full at `now_us`, which is what registration builds:
-  /// the first frame of a connection is never the one that is late.
+  /// a connection's first frame never finds the bucket empty.
   pub(crate) fn full(rate: Option<&Rate>, now_us: u64) -> Self {
     Self {
       tokens: rate.map_or(0.0, |r| f64::from(r.burst.max(1))),
@@ -156,9 +155,9 @@ mod tests {
 
   #[test]
   fn an_idle_connection_does_not_bank_more_than_its_burst() {
-    // Otherwise a client that says nothing for an hour buys an hour's flood,
-    // which is the failure a window-and-counter has and a bucket is chosen to
-    // avoid.
+    // Otherwise a client that says nothing for an hour could then send an
+    // hour's worth of frames at once, which is the failure a window-and-counter
+    // has and a bucket avoids.
     let rate = Rate::per_second(10.0).burst(5);
     let mut bucket = Bucket::full(Some(&rate), 0);
     for _ in 0..5 {

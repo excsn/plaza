@@ -1,5 +1,5 @@
 //! Everything that crosses the wire, compiled into both the server and the
-//! browser client. The simulation types ride here too: the wire carries whole
+//! browser client. The simulation types are here too: the wire carries whole
 //! worlds and the inputs that made them, because the client re-simulates.
 
 use serde::{Deserialize, Serialize};
@@ -33,24 +33,24 @@ pub enum Occupant {
 
 /// Which simulation produced a frame.
 ///
-/// `PROTOCOL` covers what a message looks like; this covers what it means. Two
-/// peers on different backends agree about every field of every message and
-/// disagree about every world, which is the failure the digest would otherwise
-/// report sixty times a second without ever naming the cause.
+/// `PROTOCOL` covers a message's layout and this names the simulation behind
+/// it. Two peers on different backends decode every message the same way but
+/// compute different worlds. Without this field the digest would report that
+/// sixty times a second without naming the cause.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Physics {
   /// The owned fixed-point step in [`crate::sim`].
   Fx,
-  /// Rapier, identified by the exact build that produced the frame: agreeing
-  /// on "rapier" is not agreement, because determinism holds same-version-only
+  /// Rapier, identified by the exact build that produced the frame. Both peers
+  /// saying "rapier" is not enough, because determinism holds same-version-only
   /// and a dependency bump moves no type definition `PROTOCOL` can see.
   Rapier { pin: u32 },
 }
 
 /// One authoritative tick: the world after it ran, and **the inputs it ran
 /// with**. Echoing the applied inputs is what turns the server into an input
-/// orderer a rollback session can confirm against; the digest is what proves
-/// the client's re-simulation landed on this exact world.
+/// orderer a rollback session can confirm against; the digest checks that the
+/// client's re-simulation landed on this exact world.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FrameUpdate {
   pub frame: u64,

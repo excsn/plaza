@@ -1,5 +1,5 @@
 //! The colony. Struct-of-arrays because the step visits every ant every tick
-//! and the tick is the ceiling this example exists to measure.
+//! and the tick is the limit this example measures.
 
 use plaza_server_utils::relevance::{CellSpace, CellTable, GridQuantizer};
 
@@ -175,7 +175,8 @@ impl Colony {
         self.hy[i] = ny;
       }
 
-      // A pinch of wander so the column is a stream, not a rail.
+      // A little random wander so the column spreads instead of following one
+      // exact line.
       if next_u32(&mut self.rng) & 0x3f == 0 {
         let spin = if next_u32(&mut self.rng) & 1 == 0 { 0.35f32 } else { -0.35 };
         let (s, c) = spin.sin_cos();
@@ -202,7 +203,8 @@ impl Colony {
     self.regrow();
   }
 
-  /// Sites regrow a little each tick, so the colony never starves flat.
+  /// Sites regrow a little each tick, so the colony never runs out of food
+  /// entirely.
   fn regrow(&mut self) {
     for _ in 0..4 {
       let pick = (next_u32(&mut self.rng) as usize) % self.sites.len();

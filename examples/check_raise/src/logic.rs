@@ -1,14 +1,14 @@
-//! The table's rules, and the only place [`TableState`] changes.
+//! The table's rules and the only place [`TableState`] changes.
 //!
-//! # The round that will not say when it ends
+//! # The betting round
 //!
-//! Every turn order in this workspace closes by exhaustion; a betting round
-//! closes by consensus. [`Round::pending`] is the seats still owed an ask, a
-//! raise **rebuilds it** with everyone active except the raiser, and the
-//! street ends only when the queue drains: action has returned to the last
-//! aggressor with nobody owing. Folding removes a seat mid-queue; an all-in
-//! seat stays seated, keeps its stake and is never asked again, the state no
-//! shipped turn manager has a word for.
+//! Every other turn order in this workspace ends once each seat has had its
+//! turn. A betting round ends when nobody owes an answer. [`Round::pending`]
+//! is the seats still owed an ask. A raise **rebuilds it** with everyone
+//! active except the raiser and the street ends only when the queue drains:
+//! action has returned to the last aggressor with nobody owing. Folding
+//! removes a seat mid-queue. An all-in seat stays seated, keeps its stake and
+//! is never asked again, which no shipped turn manager can represent.
 
 use async_trait::async_trait;
 use plaza::agent::Agent;
@@ -92,7 +92,7 @@ impl StateLogic<PokerOp, PlayerId, TableState> for TableLogic {
     let output = LogicOutput::ops(ctx.into_ops());
     if resnapshot {
       let everyone: Vec<Agent<PlayerId>> = state.agents.values().cloned().collect();
-      // Per recipient, never uniform: the provider cuts a side's view, and a
+      // Per recipient, never uniform: the provider cuts a side's view and a
       // uniform request would hand every client the spectator's whole board.
       return Ok(output.and_snapshot(SnapshotRequest::to(everyone)));
     }
@@ -199,7 +199,7 @@ fn start_hand(state: &mut TableState, ctx: &mut Ctx) {
   info!(hand = state.hand, button = state.button, "shuffle up and deal");
 
   // Blinds, then the preflop round: the big blind is the street's opening
-  // bet, and the big blind keeps the option when everyone only calls.
+  // bet and keeps the option when everyone only calls.
   let sb = state.next_playing(state.button);
   let bb = state.next_playing(sb);
   pay(state, sb, SMALL_BLIND);
@@ -357,7 +357,7 @@ fn perform(state: &mut TableState, seat: Seat, act: Act, ctx: &mut Ctx) -> bool 
       }
       let paid = pay(state, seat, owed + size);
       state.round.bet += size;
-      // The opener sets the line; everything after moves it.
+      // The opening bet sets the line; each raise after it counts as a reopen.
       if state.round.raises >= 1 {
         state.panel.reopened += 1;
       }
@@ -579,8 +579,8 @@ fn run_due_events(state: &mut TableState, ctx: &mut Ctx) -> bool {
   changed
 }
 
-/// The house's game: tight preflop, honest postflop, a seeded needle of
-/// aggression.
+/// The house's policy: tight preflop, straightforward postflop and a seeded
+/// chance of an aggressive raise.
 pub fn bot_action(state: &TableState, seat: Seat) -> Act {
   let chair = &state.chairs[seat as usize];
   let owed = state.owed(seat);
@@ -620,7 +620,7 @@ pub fn bot_action(state: &TableState, seat: Seat) -> Act {
   if owed == 0 {
     Act::Call
   } else if roll % 5 == 0 && can_raise {
-    // The needle: an unmade hand raising is what makes reopening real.
+    // An unmade hand sometimes raises, so rounds actually reopen.
     Act::Raise
   } else {
     Act::Fold

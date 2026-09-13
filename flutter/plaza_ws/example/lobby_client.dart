@@ -1,11 +1,11 @@
-/// A console client for `examples/lobby_world`, and the worked answer to "what
-/// does an app actually do about a version skew".
+/// A console client for `examples/lobby_world` that shows what an app can do
+/// about a version skew.
 ///
-/// The handshake is reported, never enforced: plaza records what a peer declared
-/// and keeps serving it, because a version is a build hash and a peer that merely
-/// recompiled is indistinguishable from one whose shapes changed. So the policy is
-/// the application's, and this file is one. It is deliberately a *harsh* one, and
-/// says why below.
+/// The handshake reports a mismatch without enforcing anything: plaza records
+/// what a peer declared and keeps serving it, because a version is a build hash
+/// and a peer that merely recompiled is indistinguishable from one whose shapes
+/// changed. So the policy is up to the application and this file picks a strict
+/// one, explained below.
 ///
 /// Run it against a live server:
 ///
@@ -33,7 +33,7 @@ Future<void> main(List<String> args) async {
   final seconds = int.parse(_option(args, '--seconds') ?? '3');
 
   // A real app has this from the const its `build.rs` publishes with
-  // `plaza_wire::build::emit`. Passing it in is what lets this demonstrate both
+  // `plaza_wire::build::emit`. Passing it in lets this demonstrate both
   // outcomes against one server.
   final declared = ProtocolVersion(int.parse(_option(args, '--protocol') ?? '0'));
 
@@ -54,11 +54,11 @@ Future<void> main(List<String> args) async {
       case Connected(resumed: final resumed):
         stdout.writeln(resumed ? '· reconnected' : '· connected to $url');
 
-      // The whole point of the file. Plaza has told us the server speaks
-      // something else and has left the connection open; what happens next is
-      // ours to choose, and there are at least four defensible answers:
+      // Plaza has reported that the server speaks something else and has left
+      // the connection open. What happens next is up to us and there are at
+      // least four defensible answers:
       //
-      //   - stop, and tell the user to update. What this does, because a console
+      //   - stop and tell the user to update. What this does, because a console
       //     client cannot reload itself and playing on would corrupt state that
       //     someone else can see.
       //   - keep playing read-only: render what decodes, send nothing.
@@ -66,8 +66,8 @@ Future<void> main(List<String> args) async {
       //   - reload, which is what a browser client does and an installed app
       //     cannot.
       //
-      // Retrying is the one answer that is always wrong: the next connection
-      // reaches the same server with the same two versions.
+      // Retrying is always wrong: the next connection reaches the same server
+      // with the same two versions.
       case Outdated(ours: final ours, theirs: final theirs):
         stderr.writeln('! this build speaks ${ours.value}, the server speaks ${theirs.value}');
         stderr.writeln('! update and reconnect; retrying would reach the same server');
@@ -80,19 +80,19 @@ Future<void> main(List<String> args) async {
         stderr.writeln('! gave up after $attempts attempts');
         finish(_failedExit);
 
-      // A kind this build has never heard of. Skipped, not fatal, which is what
-      // lets a newer server add frame kinds without breaking this client.
+      // A kind this build has never heard of. Skipped rather than fatal, so a
+      // newer server can add frame kinds without breaking this client.
       case SkippedFrame(kindByte: final kind):
         stdout.writeln('· skipped a frame of kind $kind');
     }
   });
 
   client.ops.listen((op) {
-    // `variantName` and `variantFields` rather than `op['Welcome']`, and this is
-    // the trap they exist for: serde writes a struct variant as a one-entry map
-    // but a *unit* variant as a bare string, so `QueueLeft` below arrives as
-    // `"QueueLeft"`. A client that only ever indexes drops it silently, and the
-    // symptom is indistinguishable from the server not sending.
+    // Use `variantName` and `variantFields` rather than `op['Welcome']`: serde
+    // writes a struct variant as a one-entry map but a *unit* variant as a bare
+    // string, so `QueueLeft` below arrives as `"QueueLeft"`. A client that only
+    // ever indexes drops it silently and the symptom is indistinguishable from
+    // the server not sending.
     final name = variantName(op);
     final fields = variantFields(op);
 

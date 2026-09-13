@@ -1,4 +1,4 @@
-//! The authoritative field, as `plaza` core wants it.
+//! The authoritative field in the shape `plaza` core expects.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -176,8 +176,8 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         let op = match state.seat(key) {
           // The welcome carries every wave already in flight. A joiner given
           // only future waves derives an empty field and flies through a
-          // curtain it cannot see, and nothing in the frames it receives would
-          // ever say so.
+          // curtain it cannot see and nothing in the frames it receives would
+          // show it.
           Some(seat) => Op::Welcome {
             player: seat as PlayerId,
             policy: state.policy(),
@@ -231,9 +231,10 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         let out = state.sim.advance(delta_time.as_millis() as u64, &state.controls);
         let now = state.sim.now_ms();
 
-        // Causes before consequences. A wave has to arrive before the frame
-        // whose ships are already dodging it, or the curtain appears out of
-        // nothing and the client's derivation starts mid-air.
+        // Waves and downed arms go out before frames. A wave has to arrive
+        // before the frame whose ships are already dodging it. Otherwise the
+        // curtain appears from nowhere and the client's derivation starts
+        // partway through.
         let mut outbound: Vec<Op> = Vec::new();
         for wave in out.waves {
           outbound.push(Op::WaveUp(Box::new(wave)));
@@ -248,8 +249,8 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
           outbound.push(Op::Frame(Box::new(frame)));
         }
 
-        // Priced here, where every outbound op passes through one place. The
-        // split is the example's headline and it cannot be taken anywhere else.
+        // Priced here, because this is the one place every outbound op passes
+        // through.
         if !outbound.is_empty() {
           let derivable: Vec<Op> = outbound.iter().filter(|op| wire_cost::is_derivable_half(op)).cloned().collect();
           let streamed: Vec<Op> = outbound.iter().filter(|op| !wire_cost::is_derivable_half(op)).cloned().collect();

@@ -106,9 +106,9 @@ impl Ball {
   }
 }
 
-/// Server-side state. Not serializable, and deliberately: what clients are
-/// sent is [`PongSnapshotPayload`], which is a different shape because the
-/// roster and the physics clock are the server's business.
+/// Server-side state. Not serializable on purpose. Clients are sent
+/// [`PongSnapshotPayload`] instead, which leaves out the roster and the
+/// physics clock that only the server needs.
 #[derive(Debug, Clone)]
 pub struct PongGameState {
   pub game_id: Uuid,
@@ -118,7 +118,7 @@ pub struct PongGameState {
   pub scores: HashMap<PlayerId, u32>,
   /// Seat 0 is [`PlayerSide::Left`], seat 1 is [`PlayerSide::Right`]. People
   /// admit at rank 0 and bots at rank 1, so a bot holds a paddle only until a
-  /// person wants one, and the swap lands on the tick in `resolve`.
+  /// person wants one. The swap happens on the tick in `resolve`.
   pub seats: Roster<PlayerId>,
   /// Everyone connected, players and spectators alike. A uniform snapshot
   /// names its recipients, so the roster has to live somewhere; the controller
@@ -170,9 +170,9 @@ impl Default for PongGameState {
   }
 }
 
-/// What a client is sent. The same for every recipient, which is what makes
-/// the pass uniform: pong has no hidden information, both paddles and the ball
-/// are on screen for everyone.
+/// What a client is sent. The same for every recipient, so the pass is
+/// uniform: pong has no hidden information and both paddles and the ball are
+/// on screen for everyone.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PongSnapshotPayload {
   pub phase: GamePhase,

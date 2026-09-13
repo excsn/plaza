@@ -1,6 +1,6 @@
 //! The table, scripted: no window, no socket. One human seat played by the
-//! house's own policy, a stretch of hands, and the reopening ledger checked
-//! at the end.
+//! house's own policy for a stretch of hands, with the reopening ledger
+//! checked at the end.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -48,8 +48,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let wren = Agent::new_human(1);
   let (_conn, inbox) = session.connect(wren.clone()).await?;
 
-  // Wren's hand: when the ask is hers, play a plain honest game from the
-  // view alone: check what is free, call what is cheap, fold the rest.
+  // When the ask is Wren's, she plays a plain game from the view alone:
+  // check what is free, call what is cheap, fold the rest.
   let hand_session = session.clone();
   let hand = tokio::spawn(async move {
     while let Ok(msg) = inbox.recv().await {

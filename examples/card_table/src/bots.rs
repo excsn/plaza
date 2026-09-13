@@ -4,10 +4,9 @@
 //! the remaining seats once someone has waited a while, rather than at startup:
 //! three people opening three tabs should get each other.
 //!
-//! They play from [`player_view`], the same payload a browser receives, which
-//! here is not a nicety but the point. A bot reading `TableState` would hold
-//! every hand at the table, and an example whose whole claim is that a client
-//! cannot would be demonstrating it with a client that does.
+//! They play from [`player_view`], the same payload a browser receives. A bot
+//! reading `TableState` would hold every hand at the table, which the example
+//! says a client cannot do.
 
 use std::time::Duration;
 
@@ -94,8 +93,7 @@ async fn play(tx: TableCommands, me: PlayerId) {
     if view.phase != TablePhase::Playing || view.whose_turn != Some(me) {
       continue;
     }
-    // Lead low, so a bot does not simply hoover every trick with its best card
-    // and the table has a game in it.
+    // Lead low, so a bot does not take every trick with its best card.
     let Some(card) = view.my_hand.iter().min().copied() else {
       continue;
     };

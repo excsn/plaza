@@ -21,8 +21,8 @@ pub mod workload;
 /// correlation.
 ///
 /// Not gated on the shipped transports, deliberately: a transport that enables
-/// neither still has a link plane to answer for, and gating this is what made
-/// the seam a privilege rather than a surface.
+/// neither still has a link plane to answer for; gating this made the seam
+/// usable only by the shipped transports.
 pub mod control;
 
 /// The connection loop a transport writes, minus the socket: the parts above

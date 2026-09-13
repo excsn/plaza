@@ -1,6 +1,7 @@
-//! A snake draft, written to find out whether `TurnManager` is a seam.
+//! A snake draft, written to test whether `TurnManager` fits a second turn
+//! order.
 //!
-//! See [`snake`] for the finding. The rest of the crate is a fixture around it.
+//! See [`snake`] for what it found. The rest of the crate is a fixture around it.
 
 pub mod logic;
 pub mod snake;

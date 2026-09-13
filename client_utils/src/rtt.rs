@@ -6,13 +6,13 @@
 //! client (measuring the server) and a server (measuring a client) use the same
 //! estimator.
 //!
-//! # The unit is yours
+//! # Units
 //!
 //! Nothing here names one. Samples go in as whatever unit you stamped a probe
 //! with, and every number that comes back out is in that same unit: feed
 //! milliseconds and read milliseconds, feed microseconds and read
-//! microseconds. Mixing two units across one estimator is the only way to get
-//! a wrong answer, and no signature can stop you, so pick one where you stamp
+//! microseconds. The only way to get a wrong answer is to mix two units in one
+//! estimator and the types cannot prevent that, so pick one where you stamp
 //! and keep it.
 
 /// Smooths round-trip samples into a stable estimate.

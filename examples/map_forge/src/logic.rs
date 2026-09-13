@@ -1,12 +1,12 @@
 //! The bench's rules. The only place `ForgeState` changes.
 //!
-//! The collaborative surface is `app_common` consumed as shipped: the
+//! The collaborative surface is `app_common` used as shipped: the
 //! [`LockManager`] answers every paint, the board mutates only through the
-//! property payloads, the roster only through the collection payloads, and
-//! presence is relayed rather than stored. What the application still writes
-//! is exactly what those docs promise it must: the rules (a paint needs its
-//! region's lock), the consequences (a denial is a counted refusal some
-//! optimistic client now reverses), and the crossing into the game.
+//! property payloads, the roster only through the collection payloads and
+//! presence is relayed without being stored. The application writes what
+//! those docs say it must: the rules (a paint needs its region's lock), the
+//! consequences (a denial is a counted refusal some optimistic client now
+//! reverses) and the handoff to the game.
 
 use async_trait::async_trait;
 use bomb_grid::sim::protocol::Intent;
@@ -106,7 +106,7 @@ fn arrive(state: &mut ForgeState, agent: &Agent<PlayerId>, ctx: &mut Ctx) -> boo
 }
 
 /// A leaver's locks are force-released with no releasing agent named, which
-/// is exactly the shape the payload's `Option` exists for.
+/// is the case the payload's `Option` is for.
 fn depart(state: &mut ForgeState, player: PlayerId, ctx: &mut Ctx) -> bool {
   state.agents.remove(&player);
   if !state.is_editor(player) {
@@ -265,8 +265,8 @@ fn handle(state: &mut ForgeState, player: PlayerId, op: ForgeOp, ctx: &mut Ctx) 
 
     ForgeOp::Presence(update) => {
       state.meters.presence_updates += 1;
-      // Relayed, not stored: presence is a stream about now, and `app_common`
-      // ships the envelope for exactly this.
+      // Relayed without being stored: presence only describes the current
+      // moment and `app_common` ships the envelope for this.
       ctx
         .ops_q()
         .push(TargetedOp::new_system_all(vec![ForgeOp::PresenceChanged(
@@ -303,8 +303,8 @@ fn handle(state: &mut ForgeState, player: PlayerId, op: ForgeOp, ctx: &mut Ctx) 
   }
 }
 
-/// The crossing: the property store becomes bomb_grid's grid, the roster
-/// becomes its seats, and from here on the rules are that crate's.
+/// The playtest handoff: the property store becomes bomb_grid's grid, the
+/// roster becomes its seats and from here on bomb_grid's rules apply.
 fn start_playtest(state: &mut ForgeState) {
   let party = state.editors.clone();
   let players = party.len().max(1);

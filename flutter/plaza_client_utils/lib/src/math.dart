@@ -7,7 +7,7 @@
 ///
 /// A Flutter or Flame application already has `vector_math`, whose `Vector2` is
 /// mutable and better integrated with everything around it. These exist so this
-/// package can stay dependency-free, not to compete with it.
+/// package can stay dependency-free rather than to replace it.
 ///
 /// Ported from `plaza_client_utils::math`.
 library;

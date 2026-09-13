@@ -41,19 +41,19 @@ class Arena {
 /// The overlay keys the widget layer registers.
 ///
 /// The game never adds one itself. `overlays.add` asserts that a builder is
-/// registered, and builders come from `GameWidget`, so a game that adds its own
+/// registered and builders come from `GameWidget`, so a game that adds its own
 /// overlays cannot be loaded without the widget that configures it, which makes it
-/// untestable headless for no gain. The game owns state; the widget layer decides
-/// what that state looks like.
+/// untestable headless. The game owns state; the widget layer decides what that
+/// state looks like.
 class Overlays {
   static const hud = 'hud';
 }
 
 /// The lobby as a Flame scene.
 ///
-/// What this example is actually for is the two things a shipped game has to do
-/// that a test cannot show it doing: pick a policy for a version skew, and decide
-/// what to draw while the connection is not open.
+/// This example shows two things a shipped game has to do that a test cannot
+/// show: pick a policy for a version skew and decide what to draw while the
+/// connection is not open.
 class LobbyGame extends FlameGame with PlazaGame {
   LobbyGame({required this.url, required this.connect, required this.protocol});
 
@@ -71,7 +71,7 @@ class LobbyGame extends FlameGame with PlazaGame {
   String? status;
 
   /// Set when the server speaks a wire this build does not. Nothing is sent while
-  /// it is set, which is this game's policy and not the library's.
+  /// it is set; that is this game's policy rather than the library's.
   Outdated? skew;
 
   bool get playable => skew == null && plazaReady && plaza.status == PlazaStatus.open;
@@ -94,9 +94,9 @@ class LobbyGame extends FlameGame with PlazaGame {
 
   @override
   void onPlazaOp(Object? op) {
-    // `variantName` and `variantFields`, never `op['Catalogue']`: a unit variant
-    // arrives as a bare string and indexing drops it silently. `QueueLeft` below
-    // is exactly that case.
+    // Use `variantName` and `variantFields` rather than `op['Catalogue']`: a unit
+    // variant arrives as a bare string and indexing drops it silently.
+    // `QueueLeft` below is that case.
     final name = variantName(op);
     final f = variantFields(op);
 
@@ -126,14 +126,14 @@ class LobbyGame extends FlameGame with PlazaGame {
   @override
   void onPlazaEvent(PlazaEvent event) {
     switch (event) {
-      // The policy. A game cannot exit the way a console client can and must not
-      // play on: it would send ops the server reads as something else, and the
-      // damage lands in state other players can see. So it blocks input and says
-      // so, which is the same decision the console example makes and a different
-      // action, because the two have different things they are able to do.
+      // The skew policy. A game cannot exit the way a console client can and
+      // must not play on: it would send ops the server reads as something else
+      // and the damage lands in state other players can see. So it blocks input
+      // and says so. The console example makes the same decision but exits
+      // instead, since it can.
       //
-      // Retrying is the answer that is always wrong. The next connection reaches
-      // the same server with the same two versions.
+      // Retrying is always wrong: the next connection reaches the same server
+      // with the same two versions.
       case Outdated():
         skew = event;
         status = 'this build is out of date';
@@ -148,7 +148,7 @@ class LobbyGame extends FlameGame with PlazaGame {
     }
   }
 
-  /// Asks to be paired rather than choosing, which is the other half of a lobby.
+  /// Asks to be paired instead of choosing an arena.
   void quickMatch() {
     if (playable) sendPlazaOp(variant('QuickMatch'));
   }
@@ -170,7 +170,8 @@ class LobbyGame extends FlameGame with PlazaGame {
 }
 
 /// A tappable arena. Unplayable arenas are drawn and refused rather than hidden,
-/// because "too slow for your link" is information and an absent row is not.
+/// because "too slow for your link" tells the player why they cannot join,
+/// which a missing row would not.
 class ArenaCard extends RectangleComponent with TapCallbacks, HasGameReference<LobbyGame> {
   ArenaCard({required this.arena, required Vector2 position})
       : super(

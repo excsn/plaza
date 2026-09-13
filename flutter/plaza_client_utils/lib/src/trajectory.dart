@@ -1,20 +1,20 @@
 /// Second-order dead reckoning: coasting a remote entity through a gap in the
-/// packet stream using where it was *heading*, not just how fast it was going.
+/// packet stream using where it was *heading* as well as how fast it was going.
 ///
 /// `ExtrapolationBase` coasts on the velocity a snapshot carried, which is first
-/// order and therefore exactly wrong for anything turning: a target on a curve is
-/// projected straight off the tangent, and the longer the gap the further off it
-/// flies. Most things worth extrapolating are turning.
+/// order and therefore wrong for anything turning: a target on a curve is
+/// projected straight off the tangent and the longer the gap the further off it
+/// flies.
 ///
 /// [TrajectoryPredictor] fits the next order up. It keeps the last three samples,
 /// takes velocity from the newest pair and acceleration from the change between
-/// pairs, and projects a curve. That is strictly better over short gaps and
-/// strictly worse over long ones, because a quadratic diverges faster than a line,
-/// so the acceleration term is **damped** by a coefficient and the whole
-/// projection is clamped to a horizon. Both are the caller's to set, and the
-/// defaults are deliberately timid.
+/// pairs and projects a curve. A curve is more accurate than a line over short
+/// gaps and less accurate over long ones, because a quadratic diverges faster
+/// than a line, so the acceleration term is **damped** by a coefficient and the
+/// whole projection is clamped to a horizon. Both are the caller's to set and the
+/// defaults are conservative.
 ///
-/// Scalar on purpose, matching `ScalarKalman`: run one per axis. A
+/// Scalar, matching `ScalarKalman`: run one per axis. A
 /// generic-over-state version would need a vector-space bound that every consumer
 /// would then have to satisfy, for arithmetic the consumer can do in two lines.
 ///
@@ -73,8 +73,8 @@ class TrajectoryPredictor {
   /// The value projected to [timeMs].
   ///
   /// Null until a sample has arrived. With one sample it holds that value; with
-  /// two it is first order; with three it is the damped curve. Degrading by sample
-  /// count rather than refusing to answer is what lets a caller use it from the
+  /// two it is first order; with three it is the damped curve. It degrades by
+  /// sample count rather than refusing to answer, so a caller can use it from the
   /// first packet.
   ///
   /// Times before the newest sample are answered by the same polynomial, so this

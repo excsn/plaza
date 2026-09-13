@@ -1,10 +1,9 @@
-//! The ground rules both ends share: what blocks, what sees, and the one
+//! The ground rules both ends share: what blocks, what sees and the one
 //! canonical path a march walks.
 //!
 //! Shared verbatim so the client can show reachable cells and lines of sight
-//! without asking, and so the server's path is a fact rather than a choice:
-//! the walk is deterministic to the cell, which is what lets a test say
-//! exactly where an overwatch trigger fires.
+//! without asking. The walk is deterministic to the cell, which lets a test
+//! say exactly where an overwatch trigger fires.
 
 use crate::protocol::{Cell, UnitId, MAP_H, MAP_W, MOVE_RANGE, ROCKS, SIGHT, WATCH_REACH};
 
@@ -31,21 +30,21 @@ fn neighbours(cell: Cell) -> [Option<Cell>; 4] {
   ]
 }
 
-/// Walking eyes: within [`SIGHT`] on a clear line. What you can see, you can
-/// shoot at.
+/// Walking eyes: within [`SIGHT`] on a clear line. A unit can shoot at
+/// anything it sees.
 pub fn sees(from: Cell, to: Cell) -> bool {
   clear_within(from, to, SIGHT)
 }
 
 /// A watcher's lane: within [`WATCH_REACH`] on a clear line. Longer than
-/// [`sees`] on purpose; the band between the two is where an ambush lives.
+/// [`sees`] on purpose; ambushes happen in the band between the two.
 pub fn watches(from: Cell, to: Cell) -> bool {
   clear_within(from, to, WATCH_REACH)
 }
 
 /// Line of sight within `range` and no rock on the Bresenham line between the
-/// endpoints. Endpoints do not block themselves, and units never block sight;
-/// only the ground does.
+/// endpoints. Endpoints do not block themselves and units never block sight;
+/// only rocks do.
 fn clear_within(from: Cell, to: Cell, range: u8) -> bool {
   if manhattan(from, to) > range {
     return false;

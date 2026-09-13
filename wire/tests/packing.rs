@@ -4,8 +4,7 @@
 //! Glenn Fiedler's [snapshot compression](https://gafferongames.com/post/snapshot_compression/)
 //! article works a scene of 901 cubes at 60Hz and takes it from 17.38 Mbps to
 //! its 256 kbps target. This reproduces the shape of that payload against the
-//! three things plaza can do with it, because "bit packing would help" is a
-//! claim that deserves a number rather than a paragraph.
+//! three things plaza can do with it, to measure how much bit packing helps.
 //!
 //! Run it with output:
 //! ```sh
@@ -54,7 +53,7 @@ fn scene() -> Vec<Cube> {
   (0..CUBES)
     .map(|i| {
       let unit = |lo: f32, hi: f32, r: f32| lo + r * (hi - lo);
-      // Most of a settled scene is asleep, which is the whole point of the flag.
+      // Most of a settled scene is asleep, which is what the flag is for.
       let at_rest = next() < 0.8;
       let quat = [next() - 0.5, next() - 0.5, next() - 0.5, next() - 0.5];
       let norm = quat.iter().map(|c| c * c).sum::<f32>().sqrt();
@@ -152,7 +151,7 @@ enum Op {
 /// sequence of numbers.
 ///
 /// `Vec<u8>` reaches a codec through `serialize_seq`, so every byte is encoded
-/// as its own integer: MessagePack spends two on anything over 127, and the bit
+/// as its own integer: MessagePack spends two on anything over 127 and the bit
 /// codec spends a ten-bit varint. Half the saving from packing by hand is given
 /// straight back at the envelope unless the field says `serialize_bytes`. This
 /// is what `serde_bytes` exists for; it is fifteen lines, so here it is inline.

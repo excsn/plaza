@@ -1,6 +1,6 @@
 # Usage Guide: plaza
 
-How to build a shared-state application on `plaza`: writing the rules, standing up a controller, sending a joiner what it should see, driving time, authorizing ops, asking a running controller a question, and shutting it down.
+How to build a shared-state application on `plaza`: writing the rules, standing up a controller, sending a joiner what it should see, driving time, authorizing ops, asking a running controller a question and shutting it down.
 
 ## Table of Contents
 
@@ -35,16 +35,16 @@ How to build a shared-state application on `plaza`: writing the rules, standing 
 
 ## Core Concepts
 
-*   **`StateType`**: your shared state. One instance, owned by the controller, mutated from nowhere else.
+*   **`StateType`**: your shared state. One instance, owned by the controller and changed nowhere else.
 *   **`Op`**: your operations. What a client submits and what the server sends back, in one enum.
 *   **`Agent<ID>`**: who acted, as `Human`, `Bot` or `System`. `ID` is your own identifier type.
-*   **`StateLogic`**: the rules. The only place state changes, and the only thing you must write.
+*   **`StateLogic`**: the rules. State changes only here and this is the one trait you must write.
 *   **`LogicInput`**: what reaches the rules: `AgentOps`, `AgentJoined`, `AgentLeft`, `TimeStep`.
-*   **`LogicOutput`**: what the rules return: ops to send, and optionally a request for fresh snapshots.
-*   **`TargetedOp`**: one or more ops plus who they go to. `new_system_all`, `new_system_to`, and the rest.
+*   **`LogicOutput`**: what the rules return: ops to send and optionally a request for fresh snapshots.
+*   **`TargetedOp`**: one or more ops plus who they go to. `new_system_all`, `new_system_to` and the rest.
 *   **`SnapshotProvider`**: what a joining or refreshing agent is sent. Called once per recipient.
 *   **`OpGuard`**: may this agent do this at all, judged before the rules run, with the state read-only.
-*   **`StateController`**: owns the state and processes one input at a time on its own task. No locks anywhere in your logic.
+*   **`StateController`**: owns the state and processes one input at a time on its own task, so your logic needs no locks.
 *   **`CommandSender`**: the handle everything else holds. Submits ops, drives time, asks questions, orders a shutdown.
 *   **`Session`**: the transport. `InProcessSession` ships here; real sockets live in `plaza_session`.
 *   **`TickDriver`**: what sends the controller a time step, at a rate you choose.
@@ -214,7 +214,7 @@ match input {
 }
 ```
 
-An op that arrives from an agent whose seat has already gone is normal, not a fault: a packet crossed a departure. Drop it rather than erroring, or a race the network guarantees kills connections.
+An op can arrive from an agent whose seat has already gone, because a packet crossed a departure. Expect it and drop the op rather than returning an error, since erroring on a race the network will always produce kills connections.
 
 ### Returning Ops to Specific Agents
 
@@ -240,7 +240,7 @@ let (tx, controller) = StateControllerBuilder::new(
 .build();
 ```
 
-If nothing you build ever needs catch-up on join, say so once and write no `create_snapshot` at all:
+If nothing needs catch-up on join, use `without_snapshots` and skip `create_snapshot` entirely:
 
 ```rust,ignore
 let (tx, controller) = StateControllerBuilder::without_snapshots(logic, session, state).build();
@@ -258,7 +258,7 @@ The controller owns the state and processes one input at a time on its own task,
 
 ### A View per Recipient
 
-`create_snapshot` receives the agent the snapshot is *for*, and the controller calls it once per recipient. A different payload per agent is the normal path, not a special case.
+`create_snapshot` receives the agent the snapshot is *for* and the controller calls it once per recipient. Returning a different payload for each agent is the normal use.
 
 ```rust,ignore
 let me = target.and_then(|a| a.id());
@@ -271,7 +271,7 @@ Ok(Some(GameOp::Snapshot(Box::new(GameView {
 }))))
 ```
 
-When the provider is a pure function of the state and the recipient, which most are, skip the `async fn` and the `Ok(..)` ceremony:
+When the provider is a pure function of the state and the recipient, which most are, wrap a plain function in `SnapshotFn` instead of writing the `async fn` and `Ok(..)`:
 
 ```rust,ignore
 .snapshot_provider(Arc::new(SnapshotFn(view)))
@@ -295,7 +295,7 @@ Ok(None)
 
 ### Pushing Fresh Views
 
-When a change alters what players may see, logic can push rather than wait to be asked:
+When a change alters what players may see, logic can send fresh snapshots without waiting for a request:
 
 ```rust,ignore
 Ok(LogicOutput::ops(ops).and_snapshot(SnapshotRequest::to(state.seated_players())))
@@ -311,7 +311,7 @@ The controller does not advance time on its own: something has to send it `Proce
 tokio::spawn(TickDriver::from_hz(60).run(tx.clone()));
 ```
 
-`run` passes the measured elapsed time, so logic that integrates over it stays correct when a tick runs late. Right for a physics step, a decay, a cooldown.
+`run` passes the measured elapsed time, so logic that integrates over it stays correct when a tick runs late. Use it for a physics step, a decay or a cooldown.
 
 ### Fixed Steps
 
@@ -319,7 +319,7 @@ tokio::spawn(TickDriver::from_hz(60).run(tx.clone()));
 tokio::spawn(TickDriver::from_hz(120).run_fixed(tx.clone(), Duration::from_millis(16)));
 ```
 
-**Use this whenever anything predicts, replays or rolls back this logic.** Measured time means the step size is whatever the host's scheduler delivered: 16 ms, then 17, then 16. A simulation advanced by that is a function of the scheduler as well as of its inputs, so no client can reproduce it. `run_fixed` accumulates elapsed time and spends it as whole steps of exactly the size you asked for, carrying the remainder; after a long stall the world falls behind rather than repaying the debt as a burst.
+**Use this whenever anything predicts, replays or rolls back this logic.** Measured time means the step size is whatever the host's scheduler delivered: 16 ms, then 17, then 16. A simulation advanced by that is a function of the scheduler as well as of its inputs, so no client can reproduce it. `run_fixed` accumulates elapsed time and spends it as whole steps of exactly the size you asked for, carrying the remainder. After a long stall the simulation falls behind instead of running the missed steps in a burst.
 
 ### Virtual Time for Tests
 
@@ -330,7 +330,7 @@ TickDriver::run_virtual(&tx, Duration::from_secs(1), 5).await;       // 5s of ga
 
 ## Authorizing Ops
 
-"May this agent do this at all" is authorization, not rules. Mixing it into `StateLogic` smears security checks through the handlers; an `OpGuard` is the one auditable place for it. The controller runs it per op, ahead of `process_input`, with the state read-only, and a refused op never reaches the rules.
+Whether an agent may do something at all is an authorization question, separate from the rules. Putting it in `StateLogic` spreads security checks across the handlers; an `OpGuard` keeps them in one place. The controller runs it per op, ahead of `process_input`, with the state read-only. A refused op never reaches the rules.
 
 ### A Guard as a Function
 
@@ -353,7 +353,7 @@ let (tx, controller) = StateControllerBuilder::new(logic, session, snapshotter, 
 
 The reply, if any, goes back to the source as a system op, so a client can say what happened instead of appearing to freeze. `ControllerStats::ops_refused` counts every refusal.
 
-System submissions and time steps are never screened. The guard judges the actor's standing rather than the act's content: whether this player may vote in this phase is the guard's, whether their target exists stays in the rules. It is sync on purpose, since it runs per op on the controller's task, so a permission that lives in a database belongs loaded into state rather than fetched mid-stream.
+System submissions and time steps are never screened. The guard decides whether this agent may submit this op at all. For example, whether a player may vote in this phase belongs in the guard, while whether the player they voted for exists belongs in the rules. The guard is synchronous because it runs per op on the controller's task, so load any permission kept in a database into state ahead of time instead of fetching it per op.
 
 ### A Guard With State
 
@@ -375,7 +375,7 @@ The default is `NoGuard`, which admits everything.
 let whole = query_state(&tx).await?;   // the only thing needing StateType: Clone
 ```
 
-When a field is what you want, ask for the field. The closure runs on the controller's task with the state borrowed, so nothing is copied.
+To read one field, use `query_with`. The closure runs on the controller's task with the state borrowed, so nothing is copied.
 
 ```rust,ignore
 let seated = query_with(&tx, |state| state.seated_players().len()).await?;
@@ -383,7 +383,7 @@ let seated = query_with(&tx, |state| state.seated_players().len()).await?;
 
 ## Shutting Down
 
-`run` returns the final state, and commands already queued when `Shutdown` arrives are processed first, so a closing broadcast submitted beforehand is guaranteed to go out.
+`run` returns the final state and commands already queued when `Shutdown` arrives are processed first, so a closing broadcast submitted beforehand is guaranteed to go out.
 
 ```rust,ignore
 tx.send(ControllerCommand::SubmitSystemOps { /* "server closing" */ }).await?;
@@ -393,7 +393,7 @@ let final_state = handle.await??;
 
 ## Choosing a Transport
 
-`InProcessSession` ships here for tests and local play: each client gets its own inbox, and message targeting is resolved server-side exactly as a real transport would.
+`InProcessSession` ships here for tests and local play: each client gets its own inbox and message targeting is resolved server-side exactly as a real transport would.
 
 ```rust,ignore
 let session = InProcessSession::<Op, PlayerId>::new();
@@ -403,22 +403,22 @@ session.client_send(agent, vec![op]).await;
 
 For WebSockets or TCP, add [`plaza_session`](../session/). Implementing `Session` yourself is four async methods and two stream accessors.
 
-Presence is one ordered stream (`PresenceEvent::{Joined, Left}`) deliberately: separate channels let a leave overtake a join, which breaks reconnection.
+Presence is one ordered stream (`PresenceEvent::{Joined, Left}`) because separate channels would let a leave overtake a join, which breaks reconnection.
 
 ## Optional Modules
 
-None of this is required; take what fits. Each is a trait plus at most a ready-made implementation, so anything provided can be swapped.
+These modules are optional. Each is a trait plus at most a ready-made implementation, so anything provided can be swapped.
 
 | Module | What it holds |
 |---|---|
 | `common::scheduler` | Events or callbacks on a tick (`u64`) or game-time (`Duration`) axis |
-| `common::reconnect` | `ReconnectTracker`: disconnect grace bookkeeping, no timers, expiry means what you say |
+| `common::reconnect` | `ReconnectTracker`: disconnect grace bookkeeping with no timers; you decide what expiry means |
 | `common::closure` | `ClosureLog`: the closes this host ordered, so an ordered close is told apart from a netdrop |
 | `common::fsm` | `StateMachine`, with `OpsQueue` as the minimal context |
 | `common::participants` | `ParticipantTracker` |
 | `common::math` | Plain `Vec2`/`Vec3`/`Quat` for op payloads |
 | `game_common::reconciliation` | The server half of client-side prediction: sequence tracking, delayed input buffers, a rewind buffer |
-| `game_common::flow_control` | Turns, rounds, phases, and deferred work belonging to a phase |
+| `game_common::flow_control` | Turns, rounds, phases and deferred work belonging to a phase |
 | `game_common::scorekeeping` | `Scorekeeper` and a `HashMap` implementation |
 | `app_common` | Op payload shapes for collaborative apps: locking, presence, ordered collections, object CRUD |
 
@@ -434,9 +434,9 @@ match query_state(&tx).await {
 }
 ```
 
-*   **`StateLogicError`**: what your rules return. `InvalidOperation` for an op that cannot be honoured, and the variants around it.
+*   **`StateLogicError`**: what your rules return. `InvalidOperation` for an op that cannot be honoured and the variants around it.
 *   **`SnapshotError<ID>`**: what a provider returns when it cannot build a view for an agent.
 *   **`SessionError<ID>`**: transport-level failure, including whatever a real transport wraps.
 *   **`QueryError`**: `query_state` and `query_with` when the controller has gone or the reply was dropped.
 
-Returning `Err` from `process_input` is logged and does not stop the controller: one bad op must not take the room down with it. Reserve it for an op that genuinely cannot be honoured, and prefer answering the offender with an op of your own.
+Returning `Err` from `process_input` is logged and does not stop the controller, so one bad op cannot take the room down. Reserve it for an op that genuinely cannot be honoured and prefer answering the offender with an op of your own.

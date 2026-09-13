@@ -1,7 +1,7 @@
-//! The datagram transport, assembled from plaza's published seam the way
-//! `foreign_soil` proved a third party can. One socket receives for
-//! everyone; sending goes through [`SendPath`](crate::send::SendPath), which
-//! is where the UDP and AF_XDP arms part company.
+//! The datagram transport, built on plaza's published seam as `foreign_soil`
+//! showed a third party can. One socket receives for everyone; sending goes
+//! through [`SendPath`](crate::send::SendPath), which is where the UDP and
+//! AF_XDP arms differ.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -116,9 +116,9 @@ async fn recv_loop<ID: AgentId, C: WireCodec>(
           continue;
         }
 
-        // A datagram from an unseen address is a connection: the adapter's
-        // invention, as foreign_soil found, with the idle sweep below as the
-        // other half of that decision.
+        // A datagram from an unseen address opens a connection. The adapter
+        // defines that (as foreign_soil found) and the idle sweep below
+        // closes it.
         if !peers.contains_key(&from) {
           let agent = agent_factory(from);
           let (to_peer, from_socket) = mpsc::unbounded_channel();

@@ -1,12 +1,11 @@
 //! What a zone costs as its population grows, in bytes and in tick time.
 //!
-//! `wire_cost` answers the bytes question at the population the example is
-//! played at. This answers the one that decides whether the shape is an MMO
-//! shape: **what happens to the tick when the zone is not small.**
+//! `wire_cost` measures bytes at the population the example is played at. This
+//! measures **what happens to the tick when the zone is large**, which decides
+//! whether the design works for an MMO.
 //!
-//! Two axes, and keeping them apart is the whole design of this file, because
-//! the first version of it conflated them and produced a number that looked
-//! like a scaling wall and was a spawn artefact:
+//! Two axes, kept apart because the first version of this file mixed them and
+//! produced what looked like a scaling wall but was a spawn artefact:
 //!
 //! 1. **Population at constant density.** More people, proportionally more
 //!    room, so how many are in view stays put. This is a zone growing.
@@ -15,23 +14,22 @@
 //!
 //! They have different curves. Population is linear in clients, because each
 //! one is another frame. Crowding is quadratic in aggregate, because each of N
-//! clients has N people in view, and no amount of population headroom saves a
-//! zone from it.
+//! clients has N people in view. Population headroom does not help with it.
 //!
 //! **Characters are placed on the spiral directly rather than through
 //! `spawn_at`.** That routes through `terrain::footing_near`, which searches
 //! twelve rings for standable ground and falls back to the origin when it finds
 //! none. The map is 232 units across and the spiral leaves it at 256
 //! characters, so every population past that piled up on one spot and the
-//! measurement read a crowd. Terrain is a property of the played example, not
-//! of the shape being measured; `ground_at` is noise and answers anywhere.
+//! measurement read a crowd. Terrain belongs to the played example rather than
+//! to what is being measured; `ground_at` is noise and gives a height anywhere.
 //!
-//! Every character is a connected client, which is the worst case and the one
-//! worth knowing: a zone of bots costs nothing per bot, because `step_once`
-//! builds frames for `state.agents` and a bot has no socket.
+//! Every character is a connected client, which is the worst case: a zone of
+//! bots costs nothing per bot, because `step_once` builds frames for
+//! `state.agents` and a bot has no socket.
 //!
-//! Run with `cargo run -p gow_3d --release --example zone_scale`. Release, and
-//! not a test: a debug build measures the wrong thing by an order of magnitude.
+//! Run with `cargo run -p gow_3d --release --example zone_scale`. Release
+//! rather than a test, because a debug build is off by an order of magnitude.
 
 use std::time::Instant;
 
@@ -87,8 +85,7 @@ fn zone_of(count: usize, spread: f32, delivery: Delivery, precision: Precision) 
   for seat in 0..count as u16 {
     state.zone.admit(seat, at(seat, spread));
     // Seated *and* connected, because a frame is built for `state.agents` and
-    // the worst case this file exists to measure is every character holding a
-    // socket.
+    // this file measures the worst case, where every character holds a socket.
     let player = seat as u32;
     let plaza_server_utils::Admission::Seated { .. } = state.roster.admit(player) else {
       continue;
@@ -113,7 +110,7 @@ struct Cost {
 /// called the assembly directly would measure only the mode that does not.
 /// Encoding is charged **once per `TargetedOp`**, which is what the session
 /// layer does: a payload addressed to many agents is encoded once and its
-/// bytes refcounted, so the fan-out's whole claim is visible here or nowhere.
+/// bytes refcounted, so this is the only place the fan-out's saving can show.
 async fn tick(logic: &GowLogic, state: &mut GowState, cost: &mut Cost) {
   let before = state.zone.now_ms;
   let started = Instant::now();

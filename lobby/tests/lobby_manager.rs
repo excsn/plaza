@@ -83,9 +83,9 @@ struct TestRoomFactory {
   /// The concrete handles, kept beside the lobby's trait objects.
   ///
   /// This is the pattern an application uses when it needs something of its
-  /// rooms that the seam does not carry: the factory built them, so it can keep
+  /// rooms that the trait does not carry: the factory built them, so it can keep
   /// them. Putting those methods on `RoomHandle` would name `GameOp` and
-  /// `GameStateType` on a trait whose whole point is not to.
+  /// `GameStateType` on a trait designed to name neither.
   spawned: Mutex<HashMap<RoomId, Arc<InProcessRoomHandle<GameOp, PlayerId, GameState, GameSettings>>>>,
 }
 
@@ -168,7 +168,7 @@ fn manager() -> InMemoryLobbyManager<TestRoomFactory> {
 }
 
 /// The lobby plus the factory that built its rooms, for a test that needs
-/// something of a room the seam does not carry.
+/// something of a room the trait does not carry.
 fn manager_with_factory() -> (InMemoryLobbyManager<TestRoomFactory>, Arc<TestRoomFactory>) {
   let factory = Arc::new(TestRoomFactory::default());
   (InMemoryLobbyManager::new(Arc::clone(&factory)), factory)
@@ -331,8 +331,8 @@ async fn a_full_room_refuses_new_players() {
     .expect("spawn");
 
   // The room's own session owns the player count; simulate it filling up
-  // through the factory's own handle, since the lobby holds a seam that
-  // deliberately cannot reach in and do this.
+  // through the factory's own handle, since the lobby's trait object cannot
+  // do this.
   factory.concrete(&metadata.room_id).update_player_count_in_metadata(1);
 
   let result = lobby
@@ -459,10 +459,10 @@ async fn a_player_who_never_joined_a_room_leaves_cleanly() {
 
 #[tokio::test]
 async fn a_connection_too_slow_for_a_room_is_refused_with_both_numbers() {
-  // The refusal a client can act on. A room that schedules inputs ahead can only
-  // carry a connection whose delay fits the schedule; past that the player is
-  // seated and then silently loses every input, which reads as a broken game.
-  // Refused here instead, and with the measurement attached rather than a string.
+  // A room that schedules inputs ahead can only carry a connection whose delay
+  // fits the schedule; past that the player is seated and then silently loses
+  // every input. The lobby refuses the join instead, with both numbers attached
+  // rather than a string.
   let lobby = manager();
   let (owner, _) = player();
   let created = lobby
@@ -521,10 +521,9 @@ async fn a_room_with_no_budget_takes_anybody() {
 
 #[tokio::test]
 async fn a_slow_connection_is_routed_rather_than_turned_away() {
-  // Why this belongs to a lobby rather than to a room. A room can only say yes
-  // or no; a lobby can say *where*. Given rooms with different schedules, a slow
-  // link gets the one built for it instead of a door slam, and refusal is what
-  // is left when nothing fits.
+  // A room can only accept or refuse, while a lobby can pick which room. Given
+  // rooms with different schedules, a slow link gets the one built for it
+  // instead of a refusal. It is refused only when nothing fits.
   let lobby = manager();
   for budget in [Some(50u32), Some(300), None] {
     let (owner, _owner_agent) = player();

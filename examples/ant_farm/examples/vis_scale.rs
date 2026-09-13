@@ -1,12 +1,12 @@
-//! Dense versus sparse visibility, priced on one axis.
+//! Dense versus sparse visibility, measured side by side.
 //!
 //! The dense shape is `VisibilitySet`: a bitset per watcher diffed word at a
 //! time, O(population) per watcher per tick however small the pane. The
 //! sparse shape diffs a sorted id set against only what the grid query
-//! returned, O(visible). Both observe the identical query result, whose cost
-//! is reported in its own column so nothing hides inside either shape.
+//! returned, O(visible). Both observe the identical query result. The query's
+//! cost is reported in its own column rather than folded into either shape.
 //!
-//! Run release or the numbers are fiction:
+//! Run in release; debug-build numbers are not meaningful:
 //! `cargo run --release -p plaza_example_ant_farm --example vis_scale`
 
 use std::time::Instant;

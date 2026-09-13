@@ -26,7 +26,7 @@ use crate::types::{op_frame, AgentKey, ArcadeOp, DuplicateLogin};
 pub type Arcade = TcpPlazaSession<ArcadeOp, AgentKey>;
 
 /// The whole arcade: the shipped TCP transport with the door's rules plugged
-/// into its seams. No transport is written here, which is the point.
+/// into its seams. No transport is written here, on purpose.
 pub async fn arcade(policy: DuplicateLogin) -> (Arc<Arcade>, Arc<Door>) {
   let door = Door::new(policy);
 

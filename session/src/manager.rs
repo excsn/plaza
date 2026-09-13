@@ -52,12 +52,11 @@ pub const DEFAULT_PROBE_FAST_INTERVAL: Duration = Duration::from_millis(125);
 pub const DEFAULT_PROBE_IDLE_INTERVAL: Duration = Duration::from_secs(5);
 /// Default number of latency probes a connection keeps in flight.
 ///
-/// Not one. A probe is answered a round trip after it goes out, and the fast
-/// phase sends another every 125ms, so any link slower than that has a pong
-/// land after the next probe was sent. With a single slot every one of those
-/// samples is discarded and the link is never measured at all, which is worst
-/// at exactly the latencies worth measuring. This covers two seconds of the
-/// fast phase.
+/// More than one. A probe is answered a round trip after it goes out and the
+/// fast phase sends another every 125ms, so any link slower than that has a
+/// pong land after the next probe was sent. With a single slot every one of
+/// those samples is discarded, so a link slower than 125ms is never measured at
+/// all. This covers two seconds of the fast phase.
 pub const DEFAULT_PROBE_SLOTS: usize = 16;
 /// Default cap on one inbound length-delimited frame. TCP only.
 ///
@@ -69,7 +68,7 @@ pub const DEFAULT_MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 
 /// Depths of the queues a session owns.
 ///
-/// Defaults are a starting point, not a prescription: what suits a 16-player
+/// Defaults are only a starting point: what suits a 16-player
 /// room and what suits a 4000-connection relay are not the same number, and
 /// only the application knows which it is.
 #[derive(Debug, Clone)]
@@ -110,7 +109,8 @@ pub enum OutboundOverflow {
   ///
   /// A client that cannot keep up is not going to catch up, and one that has
   /// missed frames from a stream that is not self-correcting is holding a view
-  /// the server never authored. Ending it is honest where dropping is not.
+  /// the server never authored. Ending the connection is better than letting it
+  /// keep that view.
   Disconnect,
 }
 
@@ -134,8 +134,8 @@ pub enum InboundOverflow {
 /// What a full presence queue means.
 ///
 /// There is no `Disconnect` here either: a lost join is a client the controller
-/// never hears about, so disconnecting it would be answering a bookkeeping
-/// failure by inventing a second one.
+/// never hears about, so disconnecting it would add a second bookkeeping
+/// failure to the first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PresenceOverflow {
   /// Discard the event. The one drop where a single loss is a correctness
@@ -262,9 +262,9 @@ impl Probes {
 /// The clock a session stamps `Pong.responder` with.
 ///
 /// Returns a number in whatever unit the application chose; nothing here reads
-/// it as a quantity, converts it, or has a default for it. Called on a
-/// connection task, so a clock that lives on the simulation loop is published
-/// rather than borrowed: store the tick into an `AtomicU64` and close over it.
+/// it as a quantity, converts it or has a default for it. Called on a
+/// connection task, so a clock that lives on the simulation loop has to be
+/// shared: store the tick into an `AtomicU64` and close over it.
 pub type SessionClock = Arc<dyn Fn() -> u64 + Send + Sync>;
 
 /// What a session declares and what it can answer with.
@@ -315,9 +315,8 @@ impl SessionOptions {
 
   /// Derives every queue depth and limit from what the application does.
   ///
-  /// The starting point rather than the last word: any field can still be set
-  /// after this call, and the individual builders below override what the
-  /// derivation chose.
+  /// A starting point: any field can still be set after this call; the
+  /// individual builders below override what the derivation chose.
   ///
   /// ```rust,ignore
   /// SessionOptions::with_protocol(ProtocolVersion(PROTOCOL))
@@ -474,8 +473,8 @@ impl Debug for SessionOptions {
 /// An inbound `SessionMessage` whose ops are still encoded bytes.
 ///
 /// **Inbound only.** A client sends one framed op batch and the transport
-/// attaches the `Agent` from the connection, because who a message is from is
-/// the server's fact and not the client's claim. The deserialize bridge then
+/// attaches the `Agent` from the connection, because the server, not the
+/// client, decides who a message is from. The deserialize bridge then
 /// splits the kind tag off and decodes the body into the application's `Op`.
 ///
 /// Outbound needs no equivalent: a frame is built once and what the transport
@@ -497,9 +496,9 @@ pub struct IncomingFrame<ID: AgentId> {
 ///
 /// **Cloning shares rather than copies.** A broadcast to N clients hands the
 /// same buffer to each, so fan-out costs a refcount bump rather than N
-/// allocations and N memcpys. That matters more than the arithmetic suggests,
-/// because the copies happened inside `broadcast`'s read guard, and every one
-/// of them widened the window a register or deregister had to wait through.
+/// allocations and N memcpys. The copies used to happen inside `broadcast`'s
+/// read guard, so every one of them widened the window a register or
+/// deregister had to wait through.
 ///
 /// A newtype rather than an alias so that guarantee is this crate's to state
 /// rather than a detail of whichever buffer type it happens to hold. A
@@ -639,8 +638,9 @@ struct ClientHandle<ID: AgentId> {
   /// only the read guard the send path already takes.
   rtt_us: AtomicU64,
   /// The smallest seen. Jitter only ever *adds* delay, so the minimum is the
-  /// best estimate of the true one, and it is the number to compare a schedule
-  /// against: a mean flatters a link that is usually fine and occasionally awful.
+  /// best estimate of the true one and it is the number to compare a schedule
+  /// against. A mean misreports a link that is usually fine and occasionally
+  /// very slow.
   min_rtt_us: AtomicU64,
   samples: AtomicU64,
   /// What this client said it speaks, `0` until its `Hello` arrives (or for
@@ -655,8 +655,8 @@ struct ClientHandle<ID: AgentId> {
   min_link_rtt_us: AtomicU64,
   link_samples: AtomicU64,
   /// Frames this link discarded, which only a datagram profile ever does. The
-  /// application cannot count these for itself: what the link lost never
-  /// reaches it, which is the whole point of losing it.
+  /// application cannot count these itself, because what the link loses never
+  /// reaches it.
   link_dropped: AtomicU64,
   /// Read by the connection task on every frame, written by the application
   /// whenever it likes; the task picks a change up on its next frame or timer.
@@ -693,13 +693,13 @@ impl LinkHandle {
 
   /// Which setting of the profile is current. A probe launched under one
   /// generation whose answer arrives under another measured a link that
-  /// existed for neither leg's whole journey, and its sample is about nothing.
+  /// existed for neither leg's whole journey, so its sample is meaningless.
   pub fn generation(&self) -> u64 {
     self.generation.load(Ordering::Acquire)
   }
 
-  /// Whether anything at all is being done to this link. One relaxed load,
-  /// and the whole reason this type exists.
+  /// Whether anything at all is being done to this link. One relaxed load;
+  /// this check is what the type exists for.
   pub fn impaired(&self) -> bool {
     self.impaired.load(Ordering::Acquire)
   }
@@ -1133,7 +1133,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
   /// after that queue has already cost everybody else their frames.
   ///
   /// A shed frame still counts as a frame and still stamps activity. It
-  /// arrived, and a flooder is the opposite of idle.
+  /// arrived and a flooding client is not idle.
   #[must_use = "a frame the gate refused must not be forwarded"]
   pub fn record_inbound_activity(&self, conn_id: ConnectionId, bytes: usize) -> Verdict {
     let now_us = self.now_us();
@@ -1231,9 +1231,8 @@ impl<ID: AgentId> ConnectionManager<ID> {
   /// The live connections an agent holds, newest last. Empty for an agent with
   /// none, which includes one that just left.
   ///
-  /// The bridge between "I know who" and "I can act": a decoded op names an
-  /// agent, and a close, a deadline, or a per-connection reader needs a
-  /// connection.
+  /// Maps an agent to its connections: a decoded op names an agent, while a
+  /// close, a deadline or a per-connection reader needs a connection.
   pub fn connections_of(&self, id: &ID) -> Vec<ConnectionId> {
     self
       .connections
@@ -1244,7 +1243,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
   }
 
   /// Orders a connection's task to flush what is queued, write the farewell if
-  /// any, and close the socket. Returns whether a live connection took the
+  /// any and close the socket. Returns whether a live connection took the
   /// order.
   ///
   /// The departure then arrives as an ordinary `Left`: a forced disconnect and
@@ -1257,13 +1256,13 @@ impl<ID: AgentId> ConnectionManager<ID> {
     }
   }
 
-  /// Arms, moves, or with `after: None` clears this connection's deadline.
+  /// Arms, moves or (with `after: None`) clears this connection's deadline.
   /// Returns whether a live connection took the order.
   ///
   /// The deadline is enforced by the connection task's own loop, so no timer
   /// exists anywhere else; expiry goes through the same flush-then-farewell
-  /// close as [`close_connection`](Self::close_connection). What stamps,
-  /// renews, or revokes it, and what the farewell says, is the application's.
+  /// close as [`close_connection`](Self::close_connection). The application
+  /// decides what stamps, renews or revokes it and what the farewell says.
   pub fn set_deadline(&self, conn_id: ConnectionId, after: Option<Duration>, farewell: Option<OutboundFrame>) -> bool {
     let connections = self.connections.read();
     match connections.get(conn_id) {
@@ -1286,11 +1285,11 @@ impl<ID: AgentId> ConnectionManager<ID> {
       .count()
   }
 
-  /// Closes every live connection: everyone told, then closed. Returns how
-  /// many took the order.
+  /// Closes every live connection, each after its farewell. Returns how many
+  /// took the order.
   ///
   /// The same flush-then-farewell path as a single close, per connection, so a
-  /// drain differs from a kick only in who it names.
+  /// drain is a kick applied to every connection.
   pub fn disconnect_all(&self, farewell: Option<OutboundFrame>) -> usize {
     let connections = self.connections.read();
     connections
@@ -1324,8 +1323,8 @@ impl<ID: AgentId> ConnectionManager<ID> {
   /// a controller draining presence, and a broadcast that disconnects a client
   /// would otherwise wait on that controller while holding up every other
   /// recipient of the same frame: the send that caused the departure would be
-  /// blocked by announcing it. Losing one `Left` event is a bounded failure the
-  /// counter records; a stalled fan-out is not.
+  /// blocked by announcing it. Losing one `Left` event is a bounded failure
+  /// that the counter records, while a stalled fan-out has no bound.
   async fn remove(&self, conn_id: ConnectionId, may_wait: bool) {
     let handle = self.connections.write().remove(conn_id);
     match handle {
@@ -1486,7 +1485,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
 
   /// Records one round trip for a connection, measured by the transport.
   ///
-  /// **The server timing its own probe, never a number the client reported.**
+  /// **The server times its own probe; the client reports nothing.**
   /// A client can understate its own latency, and anything that gates entry or
   /// sizes a schedule has to be measured rather than claimed. Timing the probe
   /// is spoof-proof in the direction that matters: a client can delay its reply
@@ -1638,14 +1637,15 @@ impl<ID: AgentId> ConnectionManager<ID> {
     self.sample(conn_id, |h| h.rtt_us.load(Ordering::Relaxed))
   }
 
-  /// The smallest round trip seen, which is the honest estimate of the link's
+  /// The smallest round trip seen, which is the best estimate of the link's
   /// true latency. Prefer it when deciding whether a connection fits a schedule.
   pub fn min_rtt(&self, conn_id: ConnectionId) -> Option<Duration> {
     self.sample(conn_id, |h| h.min_rtt_us.load(Ordering::Relaxed))
   }
 
   /// How many round trips have been measured, so a caller can wait for enough of
-  /// them before deciding anything. One sample on a jittery link decides nothing.
+  /// them before deciding anything. A single sample is not enough on a jittery
+  /// link.
   pub fn rtt_samples(&self, conn_id: ConnectionId) -> u64 {
     self
       .connections
@@ -1662,8 +1662,8 @@ impl<ID: AgentId> ConnectionManager<ID> {
   /// player reconnecting is a new connection but the same agent.
   ///
   /// Returns the **minimum** seen. Jitter only ever adds delay, so the smallest
-  /// sample is the honest estimate of the link, where a mean flatters a
-  /// connection that is usually fine and occasionally awful.
+  /// sample is the closest estimate of the link. A mean misreports a connection
+  /// that is usually fine and occasionally very slow.
   pub fn agent_rtt(&self, id: &ID) -> Option<(Duration, u64)> {
     let connections = self.connections.read();
     let (_, handle) = connections.for_agent(id).next()?;
@@ -1802,7 +1802,7 @@ where
   /// The result is shared by every recipient, so this runs once per message
   /// rather than once per client. `Bytes::from` takes the codec's `Vec` whole
   /// and adds no copy, which is also why the buffer cannot be kept and reused:
-  /// it leaves as the frame. What it can be is the right size on the first try,
+  /// it leaves as the frame. It can still be the right size on the first try,
   /// taken from what the last frames measured, because a `Vec` growing from
   /// nothing reallocates and copies several times before a small message is
   /// even finished.
@@ -1819,8 +1819,8 @@ where
         source,
       })?;
     // Decays toward the smaller sizes rather than latching onto the largest, so
-    // one fat snapshot does not oversize every op batch after it, and a stream
-    // of them still settles where it belongs.
+    // one fat snapshot does not oversize every op batch after it while a steady
+    // stream of snapshots keeps the hint at their size.
     let hint = self.encode_hint.load(Ordering::Relaxed);
     self.encode_hint.store(buf.len().max(hint / 2), Ordering::Relaxed);
     Ok(Frame::from(buf))
@@ -1859,7 +1859,7 @@ async fn deserialize_bridge<Op, ID, C>(
     };
     // Two-stage dispatch: the kind says what the body is, so a protocol frame
     // decodes as a version and an ops frame as the application's ops. This is
-    // the whole reason the tag is worth a byte.
+    // why the tag gets its own byte.
     match frame::Kind::from_byte(tag) {
       Some(frame::Kind::Ops) => {}
       Some(frame::Kind::Hello) => {
@@ -1869,13 +1869,13 @@ async fn deserialize_bridge<Op, ID, C>(
             if !theirs.agrees_with(expected) {
               // Recorded and reported, never refused and not warned about. A
               // version is a build hash, so a peer that merely recompiled is
-              // indistinguishable from one whose shapes changed, and this layer
+              // indistinguishable from one whose shapes changed and this layer
               // cannot tell which it is looking at. Whether a mismatch is fatal,
-              // cosmetic, or worth telling the client to reload is the
+              // cosmetic or worth telling the client to reload is the
               // application's, which reads it back through
-              // `ConnectionManager::protocol`. A `warn!` here is this layer
-              // forming that opinion on the application's behalf, and on a fleet
-              // mid-rollout it is a warning per connection about nothing.
+              // `ConnectionManager::protocol`. A `warn!` here would make that
+              // call on the application's behalf and on a fleet mid-rollout it
+              // would be one warning per connection for a harmless rebuild.
               //
               // Skipping unknown *kinds* is what actually keeps an older peer
               // working; this only records what it said.
@@ -2043,9 +2043,9 @@ mod tests {
 
   #[test]
   fn fanning_a_frame_out_shares_one_buffer() {
-    // The property, not the type: `broadcast` hands the same encoded frame to
-    // every matching connection, and a queue that owned its bytes turned that
-    // into an allocation and a memcpy each, inside the read guard. Asserting on
+    // `broadcast` hands the same encoded frame to every matching connection
+    // and a queue that owned its bytes turned that into an allocation and a
+    // memcpy each, inside the read guard. Asserting on
     // the pointer rather than the contents is deliberate, because a `Vec<u8>`
     // queue passes any equality check and fails this one.
     let frame: OutboundFrame = Frame::from(vec![7u8; 4096]);
@@ -2142,10 +2142,10 @@ mod tests {
 
   #[tokio::test]
   async fn one_broadcast_costs_one_buffer_and_a_pointer_per_recipient() {
-    // What the footprint scenario measured, as a property rather than a
-    // number: a broadcast's memory is the frame, not the frame times the
-    // recipients. `memory_budget` is derived against the opposite case, a
-    // payload addressed to one agent, which allocates per recipient.
+    // The footprint scenario measured this: a broadcast's memory is one frame
+    // rather than one per recipient. `memory_budget` is derived against the
+    // opposite case, a payload addressed to one agent, which allocates per
+    // recipient.
     let manager = manager_with(Overflow::default());
     let mut inboxes = Vec::new();
     for seat in 1..=4u32 {

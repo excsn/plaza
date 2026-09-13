@@ -1,14 +1,12 @@
 //! A server and its clients in one process, with an impaired link between them.
 //!
-//! The measurement this harness exists for is a negative one, and it is the
-//! sharpest version of it in the repository: **latency cannot affect a lap
-//! time**. Not "barely", not "within a tolerance". The run happens entirely on
-//! the machine driving it, so the link is not in the loop at all. The other
-//! playgrounds spend their effort making latency cheap; here it is not on the
-//! path.
+//! The main measurement here is that **latency cannot affect a lap time** at
+//! all, not even within a tolerance. The run happens entirely on the machine
+//! driving it, so the link is not involved. The other playgrounds spend their
+//! effort making latency cheap; here it is not on the path.
 //!
-//! What the link does decide is when a ghost turns up, and how quickly a lie is
-//! caught. Both are worth watching and neither touches the driving.
+//! The link decides when a ghost turns up and how quickly a faked time is
+//! caught. Neither affects the driving.
 
 use plaza_client_utils::net_sim::{LatencyLink, Rng};
 
@@ -54,7 +52,7 @@ impl World {
     }
   }
 
-  /// One simulation tick for everybody, and one turn of the wire.
+  /// One simulation tick for everybody and one round of wire delivery.
   pub fn step(&mut self, controls: &Controls) {
     self.clock_ms += SIM_STEP_MS;
     self.server.advance(SIM_STEP_MS);
@@ -89,8 +87,8 @@ impl World {
     for (seat, log, claimed) in due {
       let answers = self.server.submit(seat, log, claimed);
       for op in answers {
-        // An acceptance is everybody's business: a ghost is for racing. A
-        // refusal is only the sender's.
+        // An acceptance goes to everybody, since everybody races the ghost. A
+        // refusal goes only to the sender.
         let broadcast = matches!(op, Op::Accepted { .. });
         for (to, link) in self.down.iter_mut().enumerate() {
           if broadcast || to == seat {
@@ -193,9 +191,8 @@ mod tests {
 
   #[test]
   fn a_lost_submission_costs_the_run_rather_than_the_board() {
-    // There is no retry here, deliberately. A dropped submission is a lap
-    // nobody recorded, which is a disappointment and not a corruption: the
-    // board still holds only runs that were verified.
+    // There is deliberately no retry. A dropped submission loses that run and
+    // the board still holds only runs that were verified.
     let c = Controls {
       loss_pct: 100.0,
       latency_ms: 60,

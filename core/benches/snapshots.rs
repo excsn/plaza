@@ -13,8 +13,8 @@
 //!
 //! The context arm isolates the per-agent `context.clone()`. Only
 //! `ForPerspective(String)` allocates; `Full` and `DeltaFromVersion` are trivial
-//! to copy and `Custom` is a refcount bump, so the string variant is the whole
-//! of what dropping the clone could buy.
+//! to copy and `Custom` is a refcount bump, so the string variant is all that
+//! dropping the clone could save.
 
 use std::future::Future;
 use std::hint::black_box;
@@ -104,8 +104,8 @@ impl SnapshotProvider<Seat, World, Op> for Yielding {
 }
 
 /// Waits on something the runtime is not driving, which is what a provider
-/// reading a database or a cache does. The one shape where overlapping the calls
-/// can pay, and the arm that proves the harness can see a win at all.
+/// reading a database or a cache does. This is the one shape where overlapping
+/// the calls can pay, so this arm shows whether the harness can detect a win.
 struct Delayed;
 
 #[async_trait]

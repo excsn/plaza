@@ -133,14 +133,13 @@ where
       return Err(LobbyError::JoinRoomFailed("Room is full.".to_string()));
     }
 
-    // Checked here rather than by the room, because the lobby is the only place
-    // that can do the useful thing about it: send this player somewhere they can
-    // actually play. A room can only refuse.
+    // Checked here rather than by the room, because only the lobby can send
+    // this player to a room they can play in. A room can only refuse.
     //
     // The measurement is supplied by the caller rather than taken here. The
-    // lobby owns no socket, and the number has to be one the *server* measured
-    // rather than one the client reported, or it decides nothing: a client can
-    // understate its own latency and this gates entry.
+    // lobby owns no socket and the number has to be one the *server* measured
+    // rather than one the client reported: a client can understate its own
+    // latency and this gates entry.
     if let (Some(allowed), Some(measured)) = (metadata.max_one_way_ms, payload.measured_one_way_ms)
       && measured > allowed
     {
@@ -214,13 +213,13 @@ where
 
   /// The rooms this connection could actually play in, best fit first.
   ///
-  /// The reason latency admission belongs to a lobby rather than to a room. A
-  /// room can only say yes or no; a lobby can say *where*. A player on a slow
-  /// link is routed to a room whose schedule is deep enough for them instead of
-  /// being turned away, and refusal is what is left when nothing fits.
+  /// Latency admission belongs to a lobby rather than to a room because a room
+  /// can only accept or refuse, while a lobby can pick which room. A player on
+  /// a slow link is routed to a room whose schedule is deep enough for them
+  /// instead of being turned away. They are refused only when nothing fits.
   ///
   /// Ordered by how tight a fit each room is, so a fast connection is not sent
-  /// to the room built for slow ones and made to pay its schedule.
+  /// to a room built for slow ones and given its delay.
   pub fn rooms_playable_at(&self, one_way_ms: u32) -> Vec<RoomMetadata<F::CustomGameSettings>> {
     let rooms: Vec<_> = self.rooms.lock().values().map(|handle| handle.metadata()).collect();
     crate::routing::playable_at(one_way_ms, rooms)

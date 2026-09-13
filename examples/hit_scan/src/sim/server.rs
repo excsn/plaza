@@ -1,8 +1,7 @@
-//! The authority, and the one decision it makes that has a loser.
-//!
-//! [`resolve_shot`] is the file's reason to exist. Everything above it exists
-//! to put two sets of positions in front of it: where the targets are, and
-//! where the shooter last saw them.
+//! The authority. The decision here that can go against another player is
+//! [`resolve_shot`], which judges each shot against where the targets are now
+//! and where the shooter last saw them. The rest of the file keeps the state
+//! those two sets of positions come from.
 
 use std::collections::VecDeque;
 
@@ -31,22 +30,21 @@ pub struct Shot {
 /// Judges one shot in two worlds and reports which one it landed in.
 ///
 /// The rewound world is authoritative: `hit` is what the shooter saw, because
-/// refusing them that is the same as telling them their aim does not work. What
-/// the present world is for is the *verdict*, and the verdict is the only place
-/// the cost shows up. A hit granted by rewind is a hit that was taken off a
-/// target who had already moved, and no count of hits alone will ever say so.
+/// refusing them that makes their aim feel broken. The present world is only
+/// used for the *verdict*, which records the cost. A hit granted by rewind
+/// landed on a target who had already moved and a count of hits alone does not
+/// show that.
 ///
-/// Both worlds are passed in rather than read from anywhere, so the caller
-/// decides what "where the shooter saw them" means and this function cannot
-/// quietly disagree with the panel about it.
+/// Both worlds are passed in, so the caller decides what "where the shooter
+/// saw them" means and this function cannot disagree with the panel about it.
 pub fn resolve_shot(shot: Shot, present: &[(PlayerId, PlayerSnap)], past: &[(PlayerId, PlayerSnap)]) -> ShotEvent {
   let then = cast(shot.from, shot.aim, RIFLE_RANGE, past);
   let now = cast(shot.from, shot.aim, RIFLE_RANGE, present);
 
   let verdict = match (then.target, now.target) {
     (Some(a), Some(b)) if a == b => Verdict::Plain,
-    // Two different victims is still the rewind choosing, and choosing against
-    // whoever the present would have spared.
+    // Two different victims still counts as granted: the rewind hit someone the
+    // present would have missed.
     (Some(_), Some(_)) => Verdict::GrantedByRewind,
     (Some(_), None) => Verdict::GrantedByRewind,
     (None, Some(_)) => Verdict::DeniedByRewind,
@@ -69,11 +67,11 @@ pub fn resolve_shot(shot: Shot, present: &[(PlayerId, PlayerSnap)], past: &[(Pla
   }
 }
 
-/// A short ring of the last measurements, kept so the panel can show a middle
-/// rather than a mean.
+/// A short ring of the last measurements, so the panel can show a median
+/// instead of a mean.
 ///
-/// A mean of a latency-shaped distribution is decided by its tail, and the tail
-/// here is one player on a bad link.
+/// The mean of a latency distribution is dominated by its tail, which here is
+/// one player on a bad link.
 #[derive(Clone, Debug, Default)]
 pub struct Recent {
   values: VecDeque<u64>,
@@ -111,8 +109,7 @@ impl Recent {
   }
 }
 
-/// Everything the panel counts. Both halves of the trade, side by side, which
-/// is the whole point.
+/// Everything the panel counts, for the shooter's side and the target's side.
 #[derive(Clone, Debug, Default)]
 pub struct Stats {
   pub shots_fired: u64,
@@ -124,7 +121,7 @@ pub struct Stats {
   pub deaths_behind_cover: u64,
   pub from_the_past: Recent,
 
-  /// Shots whose honest rewind was longer than the cap allowed.
+  /// Shots that needed a longer rewind than the cap allowed.
   pub rewind_clamped: u64,
   /// Frames the ghost enforcement held back rather than sent on the tick they
   /// were minted.
@@ -150,8 +147,8 @@ impl Stats {
 #[derive(Clone, Debug, Default)]
 pub struct Tickout {
   /// Plural because ghost enforcement queues frames and a slow wake can release
-  /// two at once. Sending only the newest would drop the one in between, which
-  /// is a lost timeline rather than a saved byte.
+  /// two at once. Sending only the newest would drop the one in between and
+  /// lose part of the timeline.
   pub frames: Vec<Frame>,
   pub shots: Vec<ShotEvent>,
   pub deaths: Vec<DeathEvent>,
@@ -162,14 +159,13 @@ struct Bot {
   target: Option<PlayerId>,
   repick_at_ms: u64,
   strafe: f32,
-  /// Where it was when it was last steered, and how many steps it has spent
-  /// asking to move without arriving anywhere.
+  /// Where it was when it was last steered and how many steps it has tried to
+  /// move without getting anywhere.
   ///
   /// Without this a bot walks into a wall and stays there for the rest of the
   /// session. The direction it wants is quantised to eight, so a bot pressed
   /// against a vertical face while aiming a few degrees off due west resolves
-  /// to due west, which has no vertical component to slide on. It looks like a
-  /// bot that has decided to stand still.
+  /// to due west, which has no vertical component to slide on.
   last_pos: V2,
   stuck_steps: u32,
 }
@@ -185,17 +181,16 @@ pub struct Server {
   pending_ms: u64,
   last_send_ms: u64,
 
-  /// Held directions. A *level*: the newest input for a tick replaces any
-  /// earlier one, because a direction that arrived twice is still one
-  /// direction.
+  /// Held directions, a level input: the newest input for a tick replaces any
+  /// earlier one.
   moves: Vec<InputSchedule<Dir8>>,
-  /// Shots. *Events*: every one that arrives must fire, because dropping one is
-  /// a trigger pull that never happened.
+  /// Shots, an event input: every one that arrives must fire, because a
+  /// dropped shot is a trigger pull that never happens.
   shots: Vec<InputSchedule<(i16, Weapon)>>,
 
   history: HistoricalStateBuffer<PlayerId, PlayerSnap, u64>,
-  /// Frames minted but not yet old enough to send, when the ghost permission is
-  /// being enforced rather than declared.
+  /// Frames minted but not yet old enough to send, used when the ghost
+  /// permission is enforced.
   withheld: VecDeque<Frame>,
 
   bots: Vec<Bot>,
@@ -285,16 +280,16 @@ impl Server {
     }
   }
 
-  /// Positions as they are, which is what the present half of a verdict reads.
+  /// Current positions, which the present half of a verdict reads.
   pub fn snaps_now(&self) -> Vec<(PlayerId, PlayerSnap)> {
     self.players.iter().map(|p| (p.id, PlayerSnap { pos: p.pos, alive: p.alive })).collect()
   }
 
-  /// The truth history, for anything that needs to ask where things were.
+  /// The truth history, for anything that needs to know where things were.
   ///
-  /// The same buffer a rewind reads. An honest render error is a second reader
-  /// of it, which is why measuring one correctly costs almost nothing once a
-  /// game has lag compensation at all.
+  /// It is the buffer a rewind reads. The drawn-instant render error reads it
+  /// too, so once a game has lag compensation that measurement costs almost
+  /// nothing extra.
   pub fn history(&self) -> &HistoricalStateBuffer<PlayerId, PlayerSnap, u64> {
     &self.history
   }
@@ -329,17 +324,16 @@ impl Server {
 
   /// Accepts one input for a named tick, or refuses it.
   ///
-  /// Two schedules rather than one because the kinds have different loss
-  /// semantics: a dropped direction is corrected by the next one, and a dropped
-  /// shot is gone.
+  /// Two schedules because the kinds handle loss differently: a dropped
+  /// direction is replaced by the next one and a dropped shot is lost.
   pub fn submit(&mut self, seat: usize, tick: u64, intent: Intent, controls: &Controls) -> bool {
     let window = InputWindow {
       max_late: controls.input_max_late_ticks,
       max_early: controls.input_max_early_ticks,
     };
-    // Derived from the clock at the call site, never a counter this owns: a
-    // schedule that kept its own would survive a reset the clock did not, and
-    // silently refuse every input from then on.
+    // Derived from the clock at the call site, never from a counter this owns.
+    // A schedule that kept its own counter would survive a reset the clock did
+    // not and then silently refuse every input.
     let current = self.clock_ms / SIM_STEP_MS;
     match intent {
       Intent::Walk(dir) => match self.moves.get_mut(seat) {
@@ -430,7 +424,7 @@ impl Server {
         continue;
       }
       // `execute_due`, not `drain_due`: a level input only needs its newest
-      // value for this tick, and running three stale directions in a row would
+      // value for this tick. Running three stale directions in a row would
       // walk a path nobody asked for.
       if let Some(dir) = self.moves[seat].execute_due(current) {
         self.players[seat].dir = dir;
@@ -454,8 +448,8 @@ impl Server {
   /// Puts one trigger pull through the rules.
   ///
   /// `compensate` is false for a shooter with no link to compensate for, which
-  /// is what a bot is. Passing it rather than reading a seat's kind keeps the
-  /// decision at the call site, where the reason for it is visible.
+  /// means a bot. It is passed in instead of read from the seat's kind so the
+  /// decision stays at the call site.
   fn fire(&mut self, shooter: PlayerId, aim_deg: i16, weapon: Weapon, fired_tick: u64, controls: &Controls, compensate: bool, out: &mut Tickout) {
     let Some(p) = self.players.get(shooter as usize) else { return };
     if !p.alive {
@@ -477,14 +471,14 @@ impl Server {
         self.stats.shots_fired += 1;
 
         // What the shooter's screen showed when they pulled the trigger: their
-        // input names a tick a playout depth ahead, and they were watching a
-        // world a render delay behind. Both, because both are real.
+        // input names a tick a playout depth ahead and they were watching a
+        // world a render delay behind, so the full rewind is the sum of both.
         let honest = if compensate { controls.playout_delay_ms + controls.render_delay_ms } else { 0 };
         let fired_ms = fired_tick * SIM_STEP_MS;
-        // The dial's ceiling, then the window the buffer can actually answer:
-        // early in a session retention is shorter than `HISTORY_MS` claims, and
-        // past its oldest sample the buffer clamps, resolving the shot against
-        // a position the server no longer knows.
+        // The dial's ceiling, then the window the buffer can actually answer.
+        // Early in a session retention is shorter than `HISTORY_MS` and past
+        // its oldest sample the buffer clamps, which would resolve the shot
+        // against a position the server no longer has.
         let budget = controls.rewind_budget_ms().min(self.retained_ms(fired_ms));
         let rewind_ms = honest.min(budget);
         if honest > budget {
@@ -495,7 +489,7 @@ impl Server {
         // The shooter is in neither list. A ray starting at the centre of a
         // body hits that body at zero distance, so leaving themselves in makes
         // every shot a suicide. Their own position is the muzzle and is read
-        // from the present, never rewound: that is where they are standing.
+        // from the present, never rewound, because that is where they stand.
         let present: Vec<_> = self.snaps_now().into_iter().filter(|(id, _)| *id != shooter).collect();
         let past: Vec<_> = if rewind_ms == 0 {
           present.clone()
@@ -543,9 +537,8 @@ impl Server {
           vel: aim.normalized().scale(ROCKET_SPEED),
           dies_at_ms: self.clock_ms + ROCKET_LIFETIME_MS,
         });
-        // No verdict: a rocket is not resolved at all yet. Its fairness is a
-        // client's patience rather than a server's policy, which is the
-        // comparison this weapon is here to make.
+        // No verdict: a rocket is not resolved yet. Its fairness depends on the
+        // shooter waiting for it to land, not on server policy.
         out.shots.push(ShotEvent {
           shooter,
           weapon,
@@ -576,7 +569,7 @@ impl Server {
       let wanted = step.len();
       let next = move_circle(r.pos, step, ROCKET_R);
       // `move_circle` slides along cover, so a rocket that covered less ground
-      // than it asked for is a rocket that ran into something.
+      // than it asked for ran into something.
       let travelled = next.dist(r.pos);
       r.pos = next;
 
@@ -600,8 +593,8 @@ impl Server {
         .filter(|(_, d)| *d <= ROCKET_BLAST_R + PLAYER_R)
         .collect();
       for (victim, dist) in caught {
-        // Falls off with distance, and cover does not stop a blast: the two
-        // weapons would otherwise be the same weapon at different speeds.
+        // Falls off with distance and cover does not stop a blast. Otherwise
+        // the two weapons would differ only in speed.
         let falloff = 1.0 - (dist / (ROCKET_BLAST_R + PLAYER_R)).clamp(0.0, 1.0);
         let damage = (ROCKET_DAMAGE as f32 * (0.4 + 0.6 * falloff)).round() as i32;
         let killer = if victim == owner { None } else { Some(owner) };
@@ -631,17 +624,17 @@ impl Server {
       k.kills += 1;
     }
 
-    // The number this example exists to print. Asked of the *present*: could
-    // the victim, standing where they stand now, be seen from where the shooter
-    // stands now? If not, they reached cover and were shot there anyway.
+    // Checked against the present: can the victim, where they stand now, be
+    // seen from where the shooter stands now? If not, they reached cover and
+    // were shot there anyway.
     let behind_cover = match killer.and_then(|k| self.players.get(k as usize)) {
       Some(shooter) => !line_of_sight(victim_pos, shooter.pos),
       None => false,
     };
 
-    // How far behind the victim's own present the fatal decision was made. The
-    // shooter's rewind plus the delay the victim renders at: peeker's advantage
-    // with both terms visible.
+    // How far behind the victim's own present the fatal decision was made: the
+    // shooter's rewind plus the victim's render delay, the two terms of
+    // peeker's advantage.
     let from_the_past_ms = rewind_ms + controls.render_delay_ms;
 
     self.stats.deaths += 1;
@@ -687,10 +680,10 @@ impl Server {
       return;
     }
 
-    // Enforcement, and the only formulation that works: withhold against the
-    // *declared timeline* rather than against the wire. Delaying the send alone
-    // changes nothing, because the client's playout clock is derived from the
-    // stream and shifts with it, leaving the buffer depth identical.
+    // Enforcement withholds against the *declared timeline*, not the wire.
+    // Delaying the send alone changes nothing, because the client's playout
+    // clock is derived from the stream and shifts with it, so the buffer depth
+    // stays the same.
     let horizon = self.clock_ms.saturating_sub(controls.render_delay_ms);
     while self.withheld.front().is_some_and(|f| f.server_time_ms <= horizon) {
       let frame = self.withheld.pop_front().expect("just checked");
@@ -747,10 +740,10 @@ impl Server {
       let dist = to_target.len();
       let seen = line_of_sight(me, target.pos);
 
-      // Closes when it cannot see, strafes when it can. Enough to keep bodies
-      // crossing sight lines, which is the traffic the rewind numbers need, and
-      // deliberately no more: a bot good enough to be interesting would make
-      // every number a fact about the bot.
+      // Closes in when it cannot see its target and strafes when it can. That
+      // keeps bodies crossing sight lines, which the rewind numbers need. A
+      // smarter bot would make the numbers measure the bot instead of the
+      // netcode.
       let mut want = if !seen || dist > 220.0 {
         to_target.normalized()
       } else {
@@ -758,8 +751,8 @@ impl Server {
       };
 
       // Wedged against a face it cannot slide along: turn ninety degrees and
-      // walk out along it. Reversing instead would produce a bot that paces
-      // the same two cells, which reads as working and is not.
+      // walk out along it. Reversing instead makes a bot pace between the same
+      // two cells without ever getting out.
       if self.bots[seat].stuck_steps > 8 {
         want = V2::new(-want.y, want.x).scale(self.bots[seat].strafe);
       }
@@ -864,7 +857,7 @@ mod tests {
   const OPEN_LANE_Y: f32 = 162.0;
 
   /// Two players in a straight open lane, the target having just stepped out of
-  /// it. The whole example in one setup.
+  /// it.
   fn duel(controls: &Controls) -> Server {
     let mut s = Server::new(2, SEED);
     s.take_seat(0);
@@ -888,8 +881,8 @@ mod tests {
 
   #[test]
   fn a_rewind_grants_a_hit_the_present_would_have_missed() {
-    // The headline. The target is out of the lane *now* and was in it when the
-    // shooter's screen was drawn, and the server sides with the shooter.
+    // The target is out of the lane now and was in it when the shooter's
+    // screen was drawn. The server sides with the shooter.
     let controls = Controls { rewind: Rewind::Capped, rewind_cap_ms: 250, ..quiet() };
     let mut s = duel(&controls);
     let event = shoot_east(&mut s, &controls);
@@ -900,8 +893,7 @@ mod tests {
 
   #[test]
   fn the_same_shot_misses_when_the_server_refuses_to_look_back() {
-    // The other half of the trade, and the reason the panel needs a switch
-    // rather than a paragraph: nothing about the shooter changed.
+    // The same shot with the rewind off. Nothing about the shooter changed.
     let controls = Controls { rewind: Rewind::Off, ..quiet() };
     let mut s = duel(&controls);
     let event = shoot_east(&mut s, &controls);
@@ -912,9 +904,8 @@ mod tests {
 
   #[test]
   fn a_rewind_shorter_than_the_lag_it_compensates_is_counted_as_clamped() {
-    // A cap is not free: past it the shooter is being asked to lead their
-    // target again, and the panel should say how often that happened rather
-    // than letting the cap look costless.
+    // Past the cap the shooter has to lead their target again, so the panel
+    // counts how often that happens.
     let controls = Controls { rewind: Rewind::Capped, rewind_cap_ms: 20, playout_delay_ms: 100, render_delay_ms: 100, ..quiet() };
     let mut s = duel(&controls);
     let event = shoot_east(&mut s, &controls);
@@ -939,10 +930,10 @@ mod tests {
 
   #[test]
   fn a_bots_shot_is_not_compensated_because_a_bot_has_no_link() {
-    // Compensating a shooter with no latency would invent unfairness rather
-    // than correct any, and every bot kill would land in the granted column.
-    // Both seats are bots, facing each other down the open lane, so the claim
-    // is tested without depending on either of them finding the other.
+    // Compensating a shooter with no latency would create unfairness instead
+    // of correcting it and every bot kill would land in the granted column.
+    // Both seats are bots facing each other down the open lane, so the test
+    // does not depend on either of them finding the other.
     let controls = Controls { bots: true, players: 2, rewind: Rewind::Capped, ..quiet() };
     let mut s = Server::new(2, SEED);
     s.players[0].pos = V2::new(120.0, OPEN_LANE_Y);
@@ -959,11 +950,11 @@ mod tests {
 
   #[test]
   fn a_bot_walked_into_a_wall_gets_out_of_it_again() {
-    // pellet_maze's lesson, paid for again here: a bot that looks broken makes
-    // the example look broken. Steering is quantised to eight directions, so a
-    // bot pressed against a vertical face while wanting to go a few degrees off
-    // due west resolves to due west and stands there for ever. It is invisible
-    // without a number, because a stationary bot is a plausible bot.
+    // pellet_maze hit this too: a bot that looks broken makes the example look
+    // broken. Steering is quantised to eight directions, so a bot pressed
+    // against a vertical face while wanting to go a few degrees off due west
+    // resolves to due west and stands there for ever. A bot standing still
+    // looks plausible, so only a number catches it.
     let controls = Controls { bots: true, players: 2, ..quiet() };
     let mut s = Server::new(2, SEED);
     s.take_seat(0);
@@ -982,9 +973,8 @@ mod tests {
 
   #[test]
   fn a_direction_and_a_shot_do_not_share_a_queue() {
-    // Two schedules, because the kinds have different loss semantics. Mixed
-    // into one queue, `execute_due` keeping only the newest would silently eat
-    // every shot fired on a tick that also carried a direction.
+    // In one shared queue, `execute_due` would keep only the newest input and
+    // silently drop every shot fired on a tick that also carried a direction.
     let controls = quiet();
     let mut s = Server::new(2, SEED);
     s.take_seat(0);
@@ -995,8 +985,8 @@ mod tests {
 
     let out = s.advance(SIM_STEP_MS * 2, &controls);
     assert_eq!(s.players[0].dir, Dir8::E, "the direction landed");
-    // The second shot is refused by the cooldown rather than by the queue,
-    // which is a rule and not a dropped input: the schedule handed both over.
+    // The cooldown refuses the second shot. The schedule handed both over, so
+    // no input was dropped.
     assert_eq!(out.shots.len(), 1);
     assert_eq!(s.stats.shots_fired, 1);
   }
@@ -1004,8 +994,8 @@ mod tests {
   #[test]
   fn an_input_naming_a_tick_that_has_already_run_is_refused_rather_than_shifted() {
     // Correcting a backdated tick still executes the input, so a lag switch
-    // loses the lie and keeps the steering. Dropping it makes backdating cost
-    // the input.
+    // keeps its steering even though the backdating is caught. Dropping it
+    // makes backdating cost the input.
     let controls = Controls { input_max_late_ticks: 2, ..quiet() };
     let mut s = Server::new(2, SEED);
     s.take_seat(0);
@@ -1020,9 +1010,9 @@ mod tests {
 
   #[test]
   fn enforcing_the_ghost_permission_withholds_a_frame_until_its_instant_has_passed() {
-    // Not a delayed send: withheld against the *declared* timeline. A client's
-    // playout clock is derived from the stream and shifts with it, so merely
-    // sending later leaves the unresolved window exactly as it was.
+    // Frames are withheld against the declared timeline. A client's playout
+    // clock is derived from the stream and shifts with it, so only sending
+    // later would leave the unresolved window exactly as it was.
     let controls = Controls { allow_ghost: false, render_delay_ms: 100, sync_hz: 20, ..quiet() };
     let mut s = Server::new(2, SEED);
     s.take_seat(0);
@@ -1065,9 +1055,9 @@ mod tests {
   fn a_rewind_never_reaches_past_the_history_it_can_read() {
     // `HistoricalStateBuffer` clamps to its oldest sample rather than refusing,
     // so an unbounded budget would resolve shots against a position the server
-    // no longer knows and report it as fact. The bound is the buffer's real
-    // window, not `HISTORY_MS`: this session is younger than the constant, and
-    // a budget of the constant would still reach past everything recorded.
+    // no longer has and report the result as real. The bound is the buffer's
+    // real window, not `HISTORY_MS`: this session is younger than the constant
+    // and a budget of the constant would still reach past everything recorded.
     let controls = Controls { rewind: Rewind::Uncapped, playout_delay_ms: 4000, render_delay_ms: 4000, ..quiet() };
     let mut s = duel(&controls);
     let oldest = s.history().oldest_time(&s.players[1].id).expect("the duel recorded history");
@@ -1102,7 +1092,7 @@ mod tests {
   fn a_shooter_cannot_hit_themselves() {
     // A ray starting at the centre of a body hits that body at zero distance,
     // so leaving the shooter in the cast makes every trigger pull a suicide.
-    // It reads as a wildly effective weapon until somebody checks who died.
+    // It looks like a very effective weapon until somebody checks who died.
     let controls = Controls { rewind: Rewind::Capped, ..quiet() };
     let mut s = duel(&controls);
     let event = shoot_east(&mut s, &controls);
@@ -1112,9 +1102,8 @@ mod tests {
 
   #[test]
   fn a_death_behind_cover_is_counted_as_one() {
-    // The victim reaches cover and is shot there anyway, which is what
-    // granting the shooter their own view costs. Constructed rather than waited
-    // for: the count is the claim, so it must be reachable on purpose.
+    // The victim reaches cover and is shot there anyway. The situation is set
+    // up directly instead of waiting for it to happen in play.
     let controls = Controls { rewind: Rewind::Capped, rewind_cap_ms: 400, playout_delay_ms: 100, render_delay_ms: 100, ..quiet() };
     let mut s = Server::new(2, SEED);
     s.take_seat(0);
@@ -1168,8 +1157,8 @@ mod tests {
 
   #[test]
   fn a_slow_wake_produces_every_frame_rather_than_the_newest_one() {
-    // Minting per step rather than per wake. Skipping the frames in between is
-    // a lost timeline on the client, not a saved byte.
+    // Minting per step rather than per wake. Skipping the frames in between
+    // would lose part of the client's timeline.
     let controls = Controls { sync_hz: 60, ..quiet() };
     let mut s = Server::new(2, SEED);
     s.take_seat(0);

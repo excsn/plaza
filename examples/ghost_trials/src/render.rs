@@ -1,11 +1,11 @@
-//! Drawing the circuit, the racer, and the runs that already happened.
+//! Drawing the circuit, the racer and the runs that already happened.
 //!
-//! A ghost is drawn hollow, and that is the only visual idea here worth
-//! stating: it is not a second car, it is the same track being driven again by
-//! a recording, and the eye should read it as an echo rather than as traffic.
+//! A ghost is drawn hollow because it is a recording driving the same track
+//! rather than a second car, so it should not read as traffic.
 //!
-//! This module is also the only one allowed to reach for a float. The sine
-//! table, the positions and the times are all integers; the pixels are not.
+//! This module is also the only one allowed to use floats. The sine table, the
+//! positions and the times are all integers; only the pixel coordinates are
+//! floats.
 
 use macroquad::prelude::*;
 
@@ -97,8 +97,8 @@ pub fn draw_track(board: &Board, track: &Track, next: u16) {
     if i == 0 {
       draw_text("start", at.x - 16.0, at.y - r - 6.0, 15.0, Color::new(0.6, 0.9, 1.0, 0.8));
     }
-    // The order, because "in order" is the rule and a player has to be able to
-    // see what order means.
+    // A line to the next ring shows the order, since the rings count only in
+    // order.
     let next_ring = board.at(track.ring(i as u16 + 1));
     draw_line(at.x, at.y, next_ring.x, next_ring.y, 1.0, Color::new(0.18, 0.20, 0.24, 1.0));
   }
@@ -130,12 +130,13 @@ pub fn draw_pickups(board: &Board, pickups: &[Pickup], tick: u32) {
   }
 }
 
-/// One racer. `ghost` draws it hollow: an echo of a run, not another car.
+/// One racer. `ghost` draws it hollow, as a replay of a run rather than
+/// another car.
 /// How long a finished car lingers before it is gone, in ticks.
 ///
 /// It goes hollow first rather than vanishing on the line, so a player can see
-/// who came in and where. It goes *away* rather than lingering, because a
-/// stationary car is read as an obstacle, and this one is not one any more.
+/// who came in and where. It then disappears rather than lingering, because a
+/// stationary car reads as an obstacle and this one no longer is.
 const FINISHED_LINGER: u32 = 90;
 
 pub fn draw_racer(board: &Board, racer: &Racer, colour: Color, ghost: bool, tick: u32, place: Option<usize>) {
@@ -166,9 +167,9 @@ pub fn draw_racer(board: &Board, racer: &Racer, colour: Color, ghost: bool, tick
   }
   draw_triangle(nose, left, right, colour);
 
-  // The place, on the car. With a field of thirty-two, a table down the side of
-  // the screen is a table nobody reads while driving: the number a player wants
-  // is the one attached to the thing they are looking at.
+  // The place, drawn on the car. With a field of thirty-two nobody reads a
+  // table down the side of the screen while driving, so the number goes on the
+  // car the player is looking at.
   if let Some(place) = place {
     let text = format!("{place}");
     let dims = measure_text(&text, None, (size * 1.6) as u16, 1.0);
@@ -201,7 +202,7 @@ pub fn draw_racer(board: &Board, racer: &Racer, colour: Color, ghost: bool, tick
   }
 }
 
-/// The top band: the clock, the split against the rival ghost, and the record.
+/// The top band: the clock, the split against the rival ghost and the record.
 pub fn draw_hud(board: &Board, elapsed_ms: u64, lap: u16, best: Option<u64>, split: Option<i64>, mode: Mode) {
   let y = board.origin.y - 34.0;
   draw_text(&format_ms(elapsed_ms), board.origin.x, y, 30.0, Color::new(0.95, 0.96, 0.98, 1.0));
@@ -228,7 +229,7 @@ pub fn draw_hud(board: &Board, elapsed_ms: u64, lap: u16, best: Option<u64>, spl
   draw_text(&record, right - w, y, 20.0, Color::new(1.0, 0.88, 0.5, 1.0));
 }
 
-/// The bottom strip: the leaderboard, and what a ghost cost to send.
+/// The bottom strip: the leaderboard and what a ghost cost to send.
 pub fn draw_board(board: &Board, ghosts: &[(u32, PlayerId, u64, usize, usize)], me: Option<PlayerId>) {
   let strip = Rect::new(0.0, board.strip_top(), screen_width(), STRIP_H);
   draw_rectangle(strip.x, strip.y, strip.w, strip.h, Color::new(0.08, 0.09, 0.11, 1.0));
@@ -253,8 +254,8 @@ pub fn draw_board(board: &Board, ghosts: &[(u32, PlayerId, u64, usize, usize)], 
     let line = format!("{}.  P{}  {}", place + 1, player + 1, format_ms(*time));
     draw_text(&line, 16.0, y, 18.0, if mine { colour } else { Color::new(colour.r * 0.8, colour.g * 0.8, colour.b * 0.8, 1.0) });
 
-    // The measurement, on screen beside the thing it measures: what this run
-    // cost to send as inputs, against what it would have cost as a path.
+    // What this run cost to send as inputs against what it would have cost as
+    // a path, shown beside the run.
     let cost = format!("{} B of inputs, not {} B of path", log_bytes, path_bytes);
     draw_text(&cost, 210.0, y, 15.0, Color::new(0.5, 0.55, 0.6, 1.0));
     y += 22.0;
@@ -265,11 +266,11 @@ pub fn draw_board(board: &Board, ghosts: &[(u32, PlayerId, u64, usize, usize)], 
 ///
 /// On the canvas rather than in the panel for the reason `seed_defense` records
 /// about its build menu: the panel is for what crossed the wire and what it
-/// cost, and choosing what to play is the game.
+/// cost, while choosing what to play is part of the game.
 pub struct Menu {
   cards: Vec<(Mode, Rect)>,
-  /// The setup rows, which change the controls in place rather than starting
-  /// anything: picking a track is not picking a game.
+  /// The setup rows, which change the controls in place without starting a
+  /// run.
   options: Vec<(Rect, MenuOption)>,
 }
 
@@ -363,7 +364,7 @@ pub fn draw_menu(best_trial: Option<u64>, ghosts: usize, controls: &Controls) ->
     cards.push((mode, rect));
   }
 
-  // The setup: which circuit, and how many cars. Both change what a run *is*,
+  // The setup: which circuit and how many cars. Both change what a run *is*,
   // so they are chosen here rather than hidden in the diagnostics panel.
   let mut options = Vec::new();
   let mut row_y = y + card_h + 28.0;
@@ -419,8 +420,8 @@ pub fn draw_menu(best_trial: Option<u64>, ghosts: usize, controls: &Controls) ->
 
 /// Where the player is in the CPU field, drawn only in a race.
 pub fn draw_positions(board: &Board, world: &ghost_trials::sim::rules::World, me: usize) {
-  // The top few only. A list of thirty-two is not a readout, it is wallpaper,
-  // and the number that matters to a driver is drawn on their own car.
+  // The top few only. A list of thirty-two is too long to read while driving.
+  // The number that matters to a driver is drawn on their own car.
   let mut y = board.origin.y + 14.0;
   for (place, index) in world.standings().iter().enumerate().take(5) {
     let racer = &world.racers[*index];
@@ -449,8 +450,8 @@ pub fn draw_result(board: &Board, time_ms: u64, place: Option<u32>, refused: Opt
   let dims = measure_text(&text, None, 48, 1.0);
   draw_text(&text, mid - dims.width * 0.5, y, 48.0, Color::new(1.0, 0.95, 0.7, 1.0));
 
-  // Where you came in the CPU field, which is the thing a race is played on and
-  // the board time is not.
+  // Where you finished in the CPU field. A race is decided by position rather
+  // than by the board time.
   if let Some(position) = finished_position {
     let ordinal = match position {
       1 => "won".to_owned(),

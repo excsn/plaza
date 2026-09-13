@@ -1,13 +1,13 @@
-//! The ground, as a rule rather than a payload.
+//! The ground, derived on both ends instead of sent.
 //!
 //! Both ends compute the height of a point from its coordinates, so a zone of
-//! hills and hollows costs **nothing on the wire** and needs no load step. It is
-//! the same trick poketo plays with its map and curtain_fire with its bullet
-//! pattern: a thing derivable from a seed is a thing nobody has to send.
+//! hills and hollows costs **nothing on the wire** and needs no load step.
+//! poketo does the same with its map and curtain_fire with its bullet pattern:
+//! anything derivable from a seed does not have to be sent.
 //!
 //! That is also why this file is not tagged as a wire root. Nothing here is
-//! serialized, so tuning the landscape must not move the protocol version and
-//! disconnect every client over a hill that got taller.
+//! serialized, so tuning the landscape must not change the protocol version and
+//! disconnect every client.
 
 /// Half the width of the zone. The world runs `-EDGE ..= EDGE` on both axes.
 pub const EDGE: f32 = 120.0;
@@ -60,9 +60,9 @@ fn octave_at(x: f32, z: f32, scale: f32, octave: u32) -> f32 {
 
 /// The height of the ground under a point.
 ///
-/// Three octaves: the shape of the country, the hills on it, and enough detail
+/// Three octaves: the shape of the country, the hills on it and enough detail
 /// that a slope is never a plane. The rim falls away, so the edge of the world
-/// reads as a coastline rather than an invisible wall.
+/// looks like a coastline rather than an invisible wall.
 pub fn height_at(x: f32, z: f32) -> f32 {
   let broad = octave_at(x, z, LATTICE, 0);
   let hills = octave_at(x, z, LATTICE / 2.7, 1) * 0.42;
@@ -102,7 +102,7 @@ pub fn steepness(x: f32, z: f32) -> f32 {
 /// The steepest ground a character may stand on. Anything past it is scenery.
 pub const CLIMBABLE: f32 = 1.6;
 
-/// What grows here, which is the whole of the art budget.
+/// What covers the ground here. It is the only art the landscape has.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Cover {
   Water,
@@ -155,8 +155,8 @@ mod tests {
 
   #[test]
   fn the_ground_is_the_same_answer_every_time() {
-    // The whole reason terrain costs no bytes: two machines derive it. A
-    // heightmap that drifted would put every client on a different hill.
+    // Terrain costs no bytes because both machines derive it. A heightmap that
+    // drifted would put every client on a different hill.
     for i in 0..200 {
       let (x, z) = (i as f32 * 1.37 - 90.0, i as f32 * -0.93 + 40.0);
       assert_eq!(height_at(x, z), height_at(x, z));
@@ -165,8 +165,8 @@ mod tests {
 
   #[test]
   fn it_is_not_a_plane() {
-    // The complaint that started this: a flat world is nothing to look at and
-    // nothing to fight on.
+    // The terrain was added because a flat world gave nothing to look at or
+    // fight on.
     let mut low = f32::MAX;
     let mut high = f32::MIN;
     for xi in -60..60 {
@@ -181,8 +181,8 @@ mod tests {
 
   #[test]
   fn the_ground_is_continuous() {
-    // A seam is a place a character teleports up or down, and a lattice with
-    // no easing shows exactly that.
+    // A seam makes a character teleport up or down and a lattice with no
+    // easing produces seams.
     for i in 0..400 {
       let x = i as f32 * 0.61 - 100.0;
       let a = height_at(x, 12.0);

@@ -1,7 +1,6 @@
-/// Flame glue for plaza: a game mixin that owns the connection, and a readout.
+/// Flame glue for plaza: a game mixin that owns the connection, plus a readout.
 ///
-/// Deliberately thin. Anything thicker than wiring belongs in the game or in a
-/// utils package.
+/// Kept to wiring. Anything more belongs in the game or in a utils package.
 library;
 
 export 'package:plaza_client/plaza_client.dart';

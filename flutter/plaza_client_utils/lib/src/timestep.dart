@@ -13,8 +13,8 @@ int _nanosOfHz(int hz) => (1.0 / hz * 1e9).round();
 ///
 /// Each item is the step duration in nanoseconds, which is the value the
 /// simulation must advance by ([FixedTimestep.stepSecs] is the seconds form).
-/// Taking it from here rather than from the frame delta is what stops a caller
-/// stepping by the wrong amount.
+/// Take it from here rather than from the frame delta, so the caller never steps
+/// by the wrong amount.
 class Steps extends Iterable<int> {
   Steps(this._count, this.stepNanos);
 
@@ -47,8 +47,8 @@ class _StepsIterator implements Iterator<int> {
 
 /// Turns real elapsed time into a whole number of fixed simulation steps.
 ///
-/// Engine-agnostic on purpose. Some Dart engines provide a fixed step and some do
-/// not, and a building block cannot assume one does.
+/// Engine-agnostic: some Dart engines provide a fixed step and some do not, so
+/// this does not assume one does.
 ///
 /// Ported from `plaza_client_utils::timestep::FixedTimestep`. Internals are
 /// integer nanoseconds like the Rust side's, so a rate that does not divide a
@@ -136,16 +136,16 @@ class FixedTimestep {
   ///
   /// For rendering between fixed steps: interpolating the drawn state by this
   /// removes the stutter a fixed step shows when the step rate and the refresh
-  /// rate disagree. Worth knowing it exists, because the usual first diagnosis of
-  /// that stutter is that the step rate is too low.
+  /// rate disagree. That stutter is often misdiagnosed as a step rate that is too
+  /// low.
   double get alpha => _accumulatedNanos / _stepNanos;
 
   /// Elapsed time the catch-up cap refused, in total whole milliseconds. Real
   /// time the simulation never ran.
   ///
-  /// Non-zero after a tab was backgrounded or a machine slept, and worth
-  /// surfacing: a world quietly behind wall time explains a whole class of "it
-  /// desynced and I do not know when".
+  /// Non-zero after a tab was backgrounded or a machine slept. Worth surfacing,
+  /// since a world behind wall time explains many "it desynced and I do not know
+  /// when" reports.
   int get droppedMs => _droppedNanos ~/ 1000000;
 
   /// Discards the carried remainder, for a world that has been rebuilt. Leaves
@@ -155,11 +155,11 @@ class FixedTimestep {
 
 /// Something that should happen every interval, driven by elapsed time.
 ///
-/// The same accumulator as [FixedTimestep] with a different consumption rule, and
-/// separate because the two answer different questions. A fixed step asks "how
-/// much simulation does this frame pay for", where every step must run or the
-/// world falls behind. A period asks "is it time yet", where the work is usually
-/// idempotent and running it twice in one frame is waste rather than correctness.
+/// It uses the same accumulator as [FixedTimestep] with a different consumption
+/// rule. A fixed step counts how much simulation a frame pays for and every step
+/// must run or the world falls behind. A period only reports whether it is time
+/// yet; the work is usually idempotent, so running it twice in one frame is
+/// wasted work.
 ///
 /// Ported from `plaza_client_utils::timestep::Periodic`.
 class Periodic {
@@ -205,8 +205,8 @@ class Periodic {
   /// Adds elapsed time and says whether the period elapsed, at most once.
   ///
   /// The remainder carries, so the average rate stays exact. Time beyond a single
-  /// interval is *kept*, not discarded, so a long frame is repaid on the following
-  /// ones rather than resetting the phase.
+  /// interval is kept rather than discarded, so a long frame is repaid on the
+  /// following ones rather than resetting the phase.
   bool due(int elapsedMs) {
     _accumulatedNanos += elapsedMs * 1000000;
     if (_accumulatedNanos >= _intervalNanos) {

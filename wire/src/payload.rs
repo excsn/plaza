@@ -1,14 +1,14 @@
 //! Carrying packed bytes without paying for them twice.
 //!
 //! A `Vec<u8>` field reaches a codec through `serialize_seq`, so every byte is
-//! re-encoded as its own integer: MessagePack spends two on anything above 127,
+//! re-encoded as its own integer: MessagePack spends two on anything above 127
 //! and [`crate::bit_codec`] spends a ten-bit varint. On the payload in
-//! `wire/tests/packing.rs` that costs 15502 bytes to carry 10396, handing back
-//! half of what the packing just won.
+//! `wire/tests/packing.rs` that costs 15502 bytes to carry 10396, giving back
+//! half of the packing saving.
 //!
-//! [`Payload`] is the fix, and it is small enough that reaching for a
-//! dependency to get it would be the larger cost. Wrap the packed bytes and the
-//! same payload travels in 10411, a fifteen-byte header over the raw layout.
+//! [`Payload`] is the fix and it is small enough that a dependency for it would
+//! cost more than the code. Wrap the packed bytes and the same payload travels
+//! in 10411, a fifteen-byte header over the raw layout.
 //!
 //! ```
 //! # use plaza_wire::Payload;
@@ -81,8 +81,8 @@ impl std::ops::Deref for Payload {
   }
 }
 
-/// Prints the length rather than the bytes: a packed frame in a log line is
-/// noise, and the length is the number anybody actually wants.
+/// Prints the length rather than the bytes, because raw packed bytes are
+/// unreadable in a log line and the length is what a reader wants.
 impl fmt::Debug for Payload {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     write!(f, "Payload({} bytes)", self.0.len())

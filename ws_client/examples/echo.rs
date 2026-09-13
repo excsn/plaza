@@ -8,10 +8,10 @@
 //! ```
 //!
 //! Sends one binary and one text message, prints what comes back, then closes,
-//! exercising every arm of [`Event`] including a close it asked for. Deliberately
-//! written as a **frame loop with a fixed budget**, not as a linear script,
-//! because that is how the API is meant to be used and it is the shape that
-//! would expose a `poll` that secretly blocked.
+//! exercising every arm of [`Event`] including a close it asked for. Written as a
+//! **frame loop with a fixed budget** rather than a linear script, because that
+//! is how the API is meant to be used and a frame loop would expose a `poll`
+//! that secretly blocked.
 
 use std::thread;
 use std::time::{Duration, Instant};

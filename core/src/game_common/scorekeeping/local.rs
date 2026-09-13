@@ -104,8 +104,8 @@ mod tests {
 
   #[test]
   fn resetting_keeps_a_player_on_the_board_and_forgetting_takes_them_off() {
-    // The distinction the trait exists to make: "still here, start over" is not
-    // the same question as "gone", and only the first used to be answerable.
+    // Resetting a score and removing a player are separate calls; before
+    // `forget_player` only the reset existed.
     let mut scores = board();
     let player = Uuid::new_v4();
     scores.set_score(&player, 40);

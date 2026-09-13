@@ -12,7 +12,7 @@ server = ["dep:plaza_session", "dep:plaza_server_utils", "dep:plaza_wire", "dep:
 rapier = ["dep:rapier2d", "dep:plaza_wire"]
 # Rapier's own cross-platform determinism, which costs `parallel` and `simd8`
 # (it is mutually exclusive with both). Separate because whether this rink needs
-# it is a measurable question, not an assumption: see the README.
+# it can be measured: see the README.
 rapier-determinism = ["rapier", "rapier2d/enhanced-determinism"]
 native = ["plaza_ws/native"]
 web = ["client", "websocket", "plaza_ws/miniquad"]
@@ -36,9 +36,9 @@ tracing = { workspace = true, optional = true }
 macroquad = "=0.4.15"
 egui-macroquad = "=0.17.3"
 
-# Determinism holds same-version-only, so the version is a correctness input
-# rather than a preference. `enhanced-determinism` is added by the
-# `rapier-determinism` feature, not here.
+# Determinism holds same-version-only, so the exact version affects
+# correctness. `enhanced-determinism` is added by the `rapier-determinism`
+# feature, not here.
 rapier2d = { version = "=0.35.1", optional = true, default-features = false, features = [
   "dim2",
   "f32",

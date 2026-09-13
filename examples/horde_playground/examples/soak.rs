@@ -1,13 +1,14 @@
 //! A soak at the slider ceiling: 128 seats, minutes of simulated time,
-//! periodic stall/resume cycles on the one real client, and the numbers that
+//! periodic stall/resume cycles on the one real client and the numbers that
 //! must NOT trend: modelled bandwidth, full rebuilds, timeline restarts,
-//! underruns, and the gap between what the server declares visible and what
+//! underruns and the gap between what the server declares visible and what
 //! the client holds.
 //!
 //! Run with `cargo run -p horde_playground --release --example soak
 //! --no-default-features --features native,client`. Every seat acknowledges
 //! (the arena acknowledges for bots; the real client acks what it applies),
-//! because an unacknowledged soak measures the pathology, not the system.
+//! because without acknowledgements a soak measures that failure mode rather
+//! than the system.
 
 use horde_playground::sim::client::Client;
 use horde_playground::sim::server::{Seat, Server};

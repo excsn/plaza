@@ -1,7 +1,7 @@
-//! Ties the server, the clients, and the wire together, and measures the two
-//! things this example exists to show: what sending the field costs against
-//! sending the particles, and how far a locally integrated pellet drifts from
-//! the truth between corrections.
+//! Ties the server, the clients and the wire together and measures the two
+//! things this example compares: what sending the field costs against sending
+//! the particles and how far a locally integrated pellet drifts from the truth
+//! between corrections.
 
 use plaza_client_utils::net_sim::{LatencyLink, Rng};
 
@@ -132,7 +132,8 @@ impl World {
   }
 
   /// How long, on average, before a given pellet is refreshed. Field sync bounds
-  /// divergence by covering everything eventually, not by covering it often.
+  /// divergence by refreshing every pellet eventually. It does not need to
+  /// refresh them often.
   pub fn refresh_interval_secs(&self, controls: &Controls) -> f64 {
     if controls.mode != SyncMode::Field || controls.corrections_per_packet == 0 {
       return f64::INFINITY;
@@ -172,14 +173,14 @@ impl World {
   }
 
   /// Force evaluations per second **on one machine**: every pellet integrated
-  /// against every point source in the field it was given, every step. This is
-  /// what the "send the field" bet spends instead of bandwidth, and it grows
-  /// linearly with the size of that field, so it is the number that decides
-  /// whether the technique is affordable at a given crowd size.
+  /// against every point source in the field it was given, every step. Field
+  /// sync spends this instead of bandwidth and it grows linearly with the size
+  /// of that field, so it decides whether the technique is affordable at a given
+  /// crowd size.
   ///
-  /// Read off the client rather than the server's hole count, because those stop
-  /// being the same number once the field is aggregated: that is precisely the
-  /// saving, and a metric computed from the hole count could not see it.
+  /// Read off the client rather than the server's hole count, because the two
+  /// differ once the field is aggregated and a metric computed from the hole
+  /// count would miss that saving.
   pub fn force_evals_per_client_per_sec(&self) -> f64 {
     let field = self.mean_field_size();
     self.server.pellets.len() as f64 * field * crate::sim::types::SIM_HZ as f64
@@ -198,12 +199,11 @@ impl World {
   /// Total pull a client's field exerts, against what the server's actually
   /// does.
   ///
-  /// This is the one number that separates aggregating from culling, and neither
-  /// the bandwidth readout nor the error readout can show it. Culling deletes
-  /// forces, so the client's total falls below the truth and it integrates a
-  /// world that is quietly lighter than the real one. Aggregating keeps every
-  /// gram and only blurs where it acts, so the total matches whatever the angle
-  /// is set to.
+  /// This number separates aggregating from culling and neither the bandwidth
+  /// readout nor the error readout shows it. Culling deletes forces, so the
+  /// client's total falls below the truth and it integrates a lighter world than
+  /// the real one. Aggregating keeps all the mass and only approximates where it
+  /// acts, so the total matches whatever the angle is set to.
   pub fn field_weight(&self, player: usize) -> (f32, f32) {
     let believed = self.clients[player].field_weight();
     let truth: f32 = self.server.holes.iter().filter(|h| h.alive).map(|h| h.effective_mass()).sum();
@@ -283,11 +283,10 @@ mod tests {
 
   #[test]
   fn a_locally_integrated_field_stays_close_to_the_truth() {
-    // The whole bet: with the same field and the same step, a client that
-    // integrates locally tracks the server without being sent pellet positions.
-    // Judged on the median: the error distribution is heavy-tailed, because a
-    // few pellets falling through a core diverge chaotically and dominate any
-    // mean. The median describes the pellet you actually look at.
+    // With the same field and the same step, a client that integrates locally
+    // tracks the server without being sent pellet positions. Judged on the
+    // median, because the error distribution is heavy-tailed: a few pellets
+    // falling through a core diverge chaotically and dominate any mean.
     let c = Controls::default();
     let w = run(&c, 6);
     let (median, _p90) = w.pellet_error_percentiles(0);
@@ -305,7 +304,7 @@ mod tests {
     let w_some = run(&some, 8);
 
     // On the median, for the same reason as the test above: a handful of pellets
-    // falling through a core diverge chaotically and own any mean, which makes
+    // falling through a core diverge chaotically and dominate any mean, which makes
     // the mean non-monotonic in the correction budget even though the typical
     // pellet improves steadily.
     let (none_med, _) = w_none.pellet_error_percentiles(0);
@@ -318,8 +317,8 @@ mod tests {
 
   #[test]
   fn culling_the_field_breaks_the_local_physics() {
-    // Relevance culling is right for rendering and wrong for simulation inputs:
-    // a hole you were not told about still bends every pellet you hold.
+    // Relevance culling is fine for rendering but not for simulation inputs:
+    // a hole you were not told about still pulls every pellet you hold.
     let full = Controls { cull_attractors: false, ..Controls::default() };
     let culled = Controls { cull_attractors: true, ..Controls::default() };
 
@@ -345,8 +344,8 @@ mod tests {
 
   #[test]
   fn aggregating_keeps_the_weight_that_culling_throws_away() {
-    // The distinction the whole technique rests on, as a number. Both send a
-    // shorter field than the truth; only one of them still adds up.
+    // Both send a shorter field than the truth, but only aggregation keeps the
+    // total pull.
     let base = Controls { player_count: 64, ..Controls::default() };
     let culled = run_at(&Controls { cull_attractors: true, ..base }, 4);
     let aggregated = run_at(&Controls { aggregation_theta: 0.5, ..base }, 4);
@@ -380,14 +379,14 @@ mod tests {
 
   #[test]
   fn aggregation_buys_far_more_compute_than_it_costs_accuracy() {
-    // The trade that justifies it at 64 holes: per-machine force evaluations fall
-    // by a third while the typical pellet barely moves, because a distant crowd
-    // really is well described by one body at its centre of mass.
+    // At 64 holes per-machine force evaluations fall by a third while the
+    // typical pellet barely moves, because a distant crowd is well described by
+    // one body at its centre of mass.
     //
-    // Note which resource this saves. Bandwidth is dominated by pellet
-    // corrections, not by the field, so coarsening the field can only ever reach
-    // the third of the traffic that the field occupies. Compute is entirely
-    // field-bound, and that is where the saving lands.
+    // This saves compute more than bandwidth. Bandwidth is dominated by pellet
+    // corrections, so coarsening the field only reaches the third of the
+    // traffic the field occupies. Compute is entirely field-bound, so that is
+    // where the saving lands.
     let base = Controls { player_count: 64, ..Controls::default() };
     let full = run_at(&base, 5);
     let agg = run_at(&Controls { aggregation_theta: 0.3, ..base }, 5);
@@ -406,14 +405,11 @@ mod tests {
 
   #[test]
   fn a_wide_angle_is_worse_than_culling_and_that_is_the_limit() {
-    // Measured, and it refutes the obvious expectation that keeping every gram of
-    // the field must beat deleting most of it. Past an opening angle of about 1.0
-    // the criterion lets a viewer sit close to a cell it has already accepted, so
-    // a whole quadrant's mass collapses onto a single point near the pellets being
-    // integrated, and a spurious concentration is worse than a missing force.
-    //
-    // The technique has a safe range rather than a monotone dial, which is the
-    // part that would not have been obvious without measuring it.
+    // Keeping all of the field's mass does not always beat deleting most of it.
+    // Past an opening angle of about 1.0 the criterion lets a viewer sit close to
+    // a cell it has already accepted, so a whole quadrant's mass collapses onto a
+    // single point near the pellets being integrated. A false concentration of
+    // mass is worse than a missing force.
     let base = Controls { player_count: 64, ..Controls::default() };
     let culled = run_at(&Controls { cull_attractors: true, ..base }, 5);
     let wide = run_at(&Controls { aggregation_theta: 1.2, ..base }, 5);
@@ -429,10 +425,10 @@ mod tests {
 
   #[test]
   fn covering_every_pellet_beats_targeting_the_worst() {
-    // Counter-intuitive and measured: spending the budget on the pellets deepest
-    // in a well is much worse than sweeping all of them in rotation, because the
-    // deep ones are about to be swallowed (and a respawn resyncs them anyway)
-    // while everything else is left to drift without a bound.
+    // Spending the budget on the pellets deepest in a well is much worse than
+    // sweeping all of them in rotation, because the deep ones are about to be
+    // swallowed (and a respawn resyncs them anyway) while everything else is
+    // left to drift without limit.
     let sweep = Controls { priority_corrections: false, ..Controls::default() };
     let target = Controls { priority_corrections: true, ..Controls::default() };
 
@@ -450,7 +446,7 @@ mod tests {
   #[test]
   fn contact_drains_both_players_and_can_eliminate() {
     // Holes attract each other, so with four of them in one arena contact is
-    // inevitable, and contact drains. Somebody should lose mass for it.
+    // inevitable and contact drains. Somebody should lose mass for it.
     let c = Controls::default();
     let mut w = World::new(&c, c.player_count, 0x81AC_C0DE);
     // Drive player 0 toward the middle, where the others are drifting.
@@ -469,8 +465,7 @@ mod tests {
 
   #[test]
   fn pressed_holes_never_interpenetrate() {
-    // They squeeze, they do not pass through: at every moment any two live holes
-    // are at least tangent.
+    // At every moment any two live holes are at least tangent.
     let c = Controls::default();
     let mut w = World::new(&c, c.player_count, 0x81AC_C0DE);
     for i in 0..(20 * 60) {
@@ -490,9 +485,8 @@ mod tests {
 
   #[test]
   fn a_dash_outruns_the_pull_that_a_walk_cannot() {
-    // The escape mechanic, as a number: the attraction at contact is tuned above
-    // walking speed and below a dash, which is what makes a grapple sticky and a
-    // dash the way out.
+    // The attraction at contact is tuned above walking speed and below a dash,
+    // so walking cannot break a grapple and a dash can.
     use crate::sim::types::{BlackHole, DASH_SPEED_MULT, HOLE_PULL_SCALE, HOLE_SPEED, MAX_HOLE_PULL, START_MASS};
     let hole = BlackHole { pos: Vec2::new(0.0, 0.0), mass: START_MASS, alive: true };
     let contact = hole.radius() * 2.0;

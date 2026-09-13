@@ -77,7 +77,7 @@ void main() {
     });
 
     /// An outstanding handle must stop naming anything the moment its subject
-    /// dies, not whenever something happens to want the index.
+    /// dies rather than whenever something next takes the index.
     test('the generation bumps on free even if the slot is never reused', () {
       final pool = SlotAllocator();
       final key = pool.alloc();

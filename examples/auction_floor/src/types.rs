@@ -12,16 +12,16 @@ pub type ItemId = u32;
 pub type Tick = u64;
 
 /// Simulation rate. Everything on the wire is named in ticks, never in wall
-/// clock, so a client and the server can disagree about the time and still agree
-/// about the moment.
+/// clock, so a client and the server can have different clocks and still name
+/// the same tick.
 pub const TICK_HZ: u32 = 20;
 
 /// How long an item stays contestable after it drops.
 ///
 /// Every grab for one item is collected across this whole window and resolved
-/// together at the end of it. That is what makes ping irrelevant: a slow player
-/// is not racing a fast one to arrive first, they are both naming a tick inside
-/// the same window.
+/// together at the end of it. This is why ping does not matter: a slow player
+/// and a fast one both name a tick inside the same window, so neither is racing
+/// to arrive first.
 pub const WINDOW: Tick = 10;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,7 +56,7 @@ pub struct FloorView {
   /// The recipient's own earliest legal claim, in ticks after a drop.
   ///
   /// Derived from the round trip the transport measured for *this* connection,
-  /// so it is a different number for every player and none of them chose it.
+  /// so it differs per player and no client can set it.
   pub your_floor: Tick,
   pub your_rtt_ms: u32,
   pub you: PlayerId,
@@ -69,9 +69,9 @@ pub enum Rejection {
   NoSuchItem,
   /// Named a tick before this connection could physically have seen the drop.
   ///
-  /// The bound is the server's own latency measurement. A client cannot argue
-  /// with it, which is the point: naming the earliest tick in the window is the
-  /// obvious cheat, and this is what makes it not work.
+  /// The bound is the server's own latency measurement, so a client cannot
+  /// change it. Naming the earliest tick in the window is the obvious cheat and
+  /// this bound stops it.
   TooEarly { floor: Tick, named: Tick },
   /// Named a tick after the contest closed.
   TooLate { closed: Tick, named: Tick },
@@ -86,7 +86,7 @@ pub enum AuctionOp {
   /// `req` is the client's own correlation id. It is here rather than in an
   /// envelope because the wire has no envelope: a frame is a kind byte and the
   /// ops. Several items can be on the floor at once, so "your last claim was
-  /// refused" is not a usable answer and the id is doing real work.
+  /// refused" is not a usable answer and the reply needs to name the claim.
   Grab { req: u64, item: ItemId, tick: Tick },
 
   Welcome {

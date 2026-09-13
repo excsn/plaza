@@ -26,15 +26,15 @@ pub enum TableEvent {
   NextHand,
 }
 
-/// One street's betting round: the machinery the example exists to expose.
+/// One street's betting round, the structure this example is built around.
 #[derive(Clone, Debug, Default)]
 pub struct Round {
   /// The standing bet each active seat must match this street.
   pub bet: u32,
   /// Bets and raises so far this street, against the cap.
   pub raises: u8,
-  /// Seats still owed an ask, in order. A raise rebuilds this, which is the
-  /// finish line moving.
+  /// Seats still owed an ask, in order. A raise rebuilds this, which moves
+  /// the end of the round.
   pub pending: VecDeque<Seat>,
   /// The last bettor or raiser: where action must return to.
   pub aggressor: Option<Seat>,

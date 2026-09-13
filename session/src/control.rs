@@ -5,7 +5,7 @@
 //! transports call in here, which is why a latency probe behaves the same over
 //! a WebSocket and over TCP.
 //!
-//! # Two round trips, deliberately
+//! # Two round trips
 //!
 //! The WebSocket transport times its own ping frame underneath everything
 //! plaza does, and that stays as it was. The probe here is a `Kind::Ping`
@@ -18,13 +18,13 @@
 //!
 //! On a server only the session originates probes; on a client only the
 //! application does. So every `Pong` a side receives answers a `Ping` it sent,
-//! and the echoed origin is the whole of the correlation.
+//! and the echoed origin alone matches a `Pong` to its `Ping`.
 //!
-//! Several are outstanding at once, which is not an optimisation. A probe is
-//! answered a round trip after it leaves and another goes out every 125ms in
-//! the fast phase, so on any link slower than that the reply lands after its
-//! successor was sent. Tracking one at a time discarded every such sample and
-//! left the link unmeasured at precisely the latencies worth measuring.
+//! Several must be outstanding at once. A probe is answered a round trip after
+//! it leaves and another goes out every 125ms in the fast phase, so on any link
+//! slower than that the reply lands after its successor was sent. Tracking one
+//! at a time discarded every such sample, so a link slower than 125ms was never
+//! measured.
 
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -164,7 +164,7 @@ pub fn handle_inbound<ID: AgentId, C: WireCodec>(
   manager: &ConnectionManager<ID>,
 ) -> Inbound {
   // An empty frame is malformed rather than unknown, and the bridge already
-  // reports it; forwarding keeps that one voice.
+  // reports it, so forwarding it avoids a second report.
   let Some((tag, body)) = frame::split(&frame_bytes) else {
     return gated(frame_bytes, conn_id, manager);
   };
@@ -284,10 +284,10 @@ mod tests {
 
   #[tokio::test]
   async fn a_pong_that_straddles_a_profile_change_is_discarded_not_recorded() {
-    // The sample that poisoned the minimum: a probe launched under one profile
-    // whose answer arrives under another rode the old link out and the new one
-    // back, so it measured neither. Forgetting the in-flight probes on the
-    // change sends its pong down the answers-no-open-probe branch.
+    // A probe launched under one profile whose answer arrives under another
+    // went out on the old link and came back on the new one, so it measured
+    // neither and would leave a wrong minimum. Forgetting the in-flight probes
+    // on the change sends its pong down the answers-no-open-probe branch.
     let manager = manager();
     let agent = Agent::new_human(7u32);
     let (tx, _rx) = plaza::session::session_channel(4);

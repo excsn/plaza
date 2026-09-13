@@ -1,14 +1,13 @@
 //! The AF_XDP send arm: TX only, by design.
 //!
 //! Transmit needs no BPF redirect program, so this stays a socket and a ring:
-//! frames go out through the XSK, and everything inbound (ops, probe pongs)
+//! frames go out through the XSK while everything inbound (ops, probe pongs)
 //! keeps arriving at the plain UDP socket, because the frames built here name
-//! that socket's address and port as their source. One process, two exits,
-//! one entrance.
+//! that socket's address and port as their source.
 //!
-//! Requirements this cannot paper over: CAP_NET_ADMIN (or root), a Linux
-//! kernel new enough for AF_XDP (5.x), and a destination MAC for the next
-//! hop, since bypassing the kernel stack also bypasses its neighbour table.
+//! Requirements: CAP_NET_ADMIN (or root), a Linux kernel new enough for
+//! AF_XDP (5.x) and a destination MAC for the next hop, since bypassing the
+//! kernel stack also bypasses its neighbour table.
 
 use std::ffi::CString;
 use std::net::SocketAddr;

@@ -6,9 +6,9 @@
 //! the stack and hands the token to the opponent; a pass hands it back; two
 //! passes in succession resolve the top of the stack, and every resolution
 //! returns the token to the turn's owner with the pass count cleared. The
-//! machine cannot resolve anything without both duelists declining first,
-//! which is the discipline the genre is famous for losing track of, stated
-//! as control flow instead of as a rule book.
+//! machine cannot resolve anything without both duelists declining first.
+//! Games in this genre are known for losing track of that rule; here it is
+//! control flow instead of a line in a rule book.
 
 use async_trait::async_trait;
 use plaza::agent::Agent;

@@ -39,10 +39,10 @@ const TRANSPORT: &str = "tcp";
 /// an op that carries it.
 pub type AgentFactory<ID> = Arc<dyn Fn(SocketAddr) -> Result<Agent<ID>, Refusal> + Send + Sync>;
 
-/// Turned away at the door.
+/// A refused connection.
 ///
 /// The farewell is bytes the application already encoded; the transport does
-/// not know or care what reason they spell.
+/// not know what reason they spell.
 pub struct Refusal {
   pub farewell: Option<OutboundFrame>,
 }
@@ -121,8 +121,8 @@ where
 
   /// Binds and declares the protocol version this build speaks.
   ///
-  /// A client's `Hello` is compared against it and a mismatch is logged, not
-  /// refused: the number is a build hash, so a peer that merely recompiled
+  /// A client's `Hello` is compared against it and a mismatch is logged rather
+  /// than refused: the number is a build hash, so a peer that merely recompiled
   /// cannot be told apart from one that changed shape.
   pub async fn bind_with_protocol(
     addr: impl Into<String>,

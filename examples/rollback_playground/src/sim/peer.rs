@@ -3,7 +3,7 @@
 //! It is a thin wrapper over a [`RollbackSession`]: the session is already the
 //! whole rollback loop, so this only pins down which player index is *local* to
 //! this peer and turns the demo's toggles into policy the session leaves to the
-//! app, predict-vs-wait, and rollback on or off.
+//! app: predict-vs-wait and rollback on or off.
 
 use plaza_client_utils::rollback::{Frame, RollbackConfig, RollbackSession};
 

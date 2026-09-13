@@ -1,17 +1,17 @@
 //! What level of detail is worth on this zone, measured in pixels.
 //!
-//! The crowd column of `zone_scale` is the expensive one, and level of detail
-//! is the standard answer to it. The question that decides whether to reach for
-//! it is not bytes or microseconds, it is **what the player sees**, so that is
-//! what this measures: every scheme is priced in screen-space error at 1080p
-//! and a 45 degree vertical field of view, which is the camera
-//! `render::over_the_shoulder` actually builds.
+//! The crowd column of `zone_scale` is the expensive one and level of detail is
+//! the standard fix for it. Whether to use it depends on **what the player
+//! sees** rather than bytes or microseconds, so that is what this measures:
+//! every scheme is priced in screen-space error at 1080p and a 45 degree
+//! vertical field of view, which is the camera `render::over_the_shoulder`
+//! actually builds.
 //!
-//! The conversion is the whole argument. Pixels per world unit at distance `d`
-//! is `H / (2 d tan(fovy/2))`, which is 1304/d here. So the error a player can
-//! see **shrinks with distance**, and an error budget may grow linearly with it:
-//! a body 46 units away can be a whole 0.035 units out of place before anyone
-//! could tell, and one 5 units away cannot be 0.004 out.
+//! Pixels per world unit at distance `d` is `H / (2 d tan(fovy/2))`, which is
+//! 1304/d here. So the error a player can see **shrinks with distance** and an
+//! error budget can grow linearly with it: a body 46 units away can be 0.035
+//! units out of place before anyone could tell, while one 5 units away cannot
+//! be 0.004 out.
 //!
 //! Four schemes, one metric:
 //!
@@ -20,8 +20,8 @@
 //!   Keeps every individual; spends less on the far ones.
 //! - `merged`: `AggregateTree`, the library's Barnes-Hut block, which replaces
 //!   a distant cluster with its weighted centroid.
-//! - `culled`: a view cap at half the radius, which is what a naive fix reaches
-//!   for and is here to be beaten.
+//! - `culled`: a view cap at half the radius, the naive fix, included for
+//!   comparison.
 //!
 //! Run with `cargo run -p gow_3d --release --example crowd_lod`.
 
@@ -189,7 +189,7 @@ fn main() {
       merged.bits += u64::from(SHIPPED_BITS) * 2 + 16;
     }
 
-    // culled: half the radius, and everything past it simply is not there.
+    // culled: half the radius; everything past it is dropped.
     let mut culled = Seen::default();
     for s in &audience {
       let Some(character) = state.zone.characters.get(s) else { continue };

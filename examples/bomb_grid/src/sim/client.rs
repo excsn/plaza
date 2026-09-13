@@ -1,33 +1,31 @@
-//! What a client believes, and what it does when the server disagrees.
+//! What a client believes and what it does when the server disagrees.
 //!
-//! This is the file the example exists for.
+//! This file holds the core of the example.
 //!
 //! # Why there is no `PredictedPlayer` here
 //!
-//! `plaza_client_utils::PredictedPlayer` is the right tool for a continuous
-//! entity, and both other networked playgrounds use it. It cannot be used here,
-//! and the reason is not that it is missing a feature: its whole shape is
-//! *seen* position, *settled* position, and an ease between them over a few
-//! frames. On a lattice there is nothing between two cells. A correction of one
-//! cell has no fraction to travel through, so an ease would be drawing the
-//! player somewhere they have never been, in a game where where you are decides
-//! whether you are on fire.
+//! `plaza_client_utils::PredictedPlayer` suits a continuous entity and both
+//! other networked playgrounds use it. It cannot be used here because of how it
+//! is built rather than a missing feature: it holds a *seen* position, a
+//! *settled* position and an ease between them over a few frames. On a lattice
+//! there is nothing between two cells. A correction of one cell has no fraction
+//! to travel through, so an ease would draw the player in a place they have
+//! never been, in a game where your position decides whether you are on fire.
 //!
-//! So a correction here **snaps**, and the honest thing to do is count the snaps
-//! and put the number on screen. That is the trade a grid game makes and it
-//! cannot be smoothed away.
+//! So a correction here **snaps**. This client counts the snaps so the panel
+//! can put the number on screen.
 //!
-//! # What is predicted, and what is not
+//! # What is predicted and what is not
 //!
 //! Only the local player, and only through [`rules`], which is the same code the
 //! server runs. Remote players, bombs and pickups are drawn from what arrived,
 //! at one render instant behind the server clock, exactly as the other
 //! playgrounds draw remote state.
 //!
-//! A dropped bomb is predicted too, and it is the sharper case: a bomb is a
-//! discrete event with a discrete refusal (the carry limit, an occupied cell),
-//! so a refused prediction is a bomb the player watched appear and then vanish.
-//! Counting those is how the panel makes optimism's cost legible.
+//! A dropped bomb is predicted too. A bomb is a discrete event with a discrete
+//! refusal (the carry limit, an occupied cell), so a refused prediction is a
+//! bomb the player watched appear and then vanish. The panel counts those, so
+//! the cost of predicting bombs is visible.
 
 use std::collections::VecDeque;
 
@@ -40,7 +38,7 @@ use crate::sim::types::*;
 ///
 /// A second at 60 Hz. The comparison has to be against the *same moment*, or a
 /// client with 200 ms of latency reports a snap on every frame simply for being
-/// ahead, which is the reading that makes a prediction counter useless.
+/// ahead, which would make the counter useless.
 const HISTORY: usize = 64;
 
 /// The most ticks the prediction will catch up in one call.
@@ -110,15 +108,15 @@ pub struct Client {
   held: Dir,
   /// Whether the server is holding the world still.
   ///
-  /// It does exactly that between a round being settled and the next board
+  /// The server does that between a round being settled and the next board
   /// arriving, so the last explosion stays on screen long enough to read. There
   /// is nothing in a frame that says so: the players simply stop moving, which
   /// is indistinguishable from everybody standing still.
   ///
   /// A client that does not know keeps walking a player the server is
-  /// deliberately freezing, and every frame becomes a correction invented out
-  /// of a rule the client was never told. The black hole example hit the same
-  /// thing through its respawn delay, which is why `PredictedPlayer` grew
+  /// deliberately freezing and every frame becomes a correction caused by a
+  /// rule the client was never told about. The black hole example hit the same
+  /// problem through its respawn delay, which is why `PredictedPlayer` has
   /// `set_active`: nothing else expressed "the server has stopped simulating
   /// this".
   paused: bool,
@@ -127,27 +125,25 @@ pub struct Client {
   /// How far behind the server clock remote state is drawn.
   render_delay_ms: u64,
 
-  /// Snaps: a correction the client could not ease, only jump.
+  /// Snaps: corrections the client had to jump rather than ease.
   pub snaps: u64,
   /// Total cells jumped, so one four-cell snap is distinguishable from four
-  /// one-cell ones. A count alone hides the difference and the difference is
-  /// exactly what a player feels.
+  /// one-cell ones. A count alone hides the difference and a player feels it.
   pub snapped_cells: u64,
   /// Server time of the newest snap, for a fading marker on screen.
   pub last_snap_ms: u64,
   /// Bombs this client drew and the server never confirmed.
   pub phantom_bombs: u64,
-  /// Bombs predicted in total: the denominator, without which the count above
-  /// says nothing.
+  /// Bombs predicted in total: the denominator for the count above.
   pub predicted_bombs: u64,
   /// Frames describing a tick this client had not simulated yet.
   ///
-  /// The measurement the offline harness cannot make, because it hands its
-  /// clients the server's own clock. A real client *fits* one, and a fit that
-  /// sits behind the stream makes every cell boundary look like a
-  /// disagreement: the newest tick it has run is still the previous cell. This
-  /// counts how often that happened, so the residual snap rate has somewhere to
-  /// be attributed instead of being guessed at.
+  /// The offline harness cannot measure this, because it hands its clients the
+  /// server's own clock. A real client *fits* one and a fit that sits behind
+  /// the stream makes every cell boundary look like a disagreement: the newest
+  /// tick it has run is still the previous cell. This counts how often that
+  /// happened, so the residual snap rate can be attributed rather than guessed
+  /// at.
   pub unreached_frames: u64,
   /// The newest tick any frame has described, for the lead readout.
   newest_frame_tick: u64,
@@ -191,7 +187,7 @@ impl Client {
     self.render_delay_ms = ms;
   }
 
-  /// Tells this client the server has stopped simulating, or resumed.
+  /// Tells this client the server has stopped simulating or resumed.
   ///
   /// Set from `Op::RoundOver`, cleared by the next round. See the note on
   /// `paused` for why a client that guesses instead is wrong every frame of the
@@ -271,18 +267,18 @@ impl Client {
 
   /// Records an input this client is sending, scheduled for the tick it names.
   ///
-  /// **Not applied immediately, and that is the whole subtlety.** The server
-  /// runs a tick-addressed input on the tick it named, which is now plus the
-  /// playout depth. A client that predicted it the instant the key went down
-  /// would be running that input a playout depth *earlier* than the server,
-  /// and on a lattice that is not a small error that eases away: it is a whole
-  /// cell of disagreement on every single input, and the snap counter would
-  /// read as though prediction did not work at all.
+  /// **Applied on the tick it names rather than immediately.** The server runs
+  /// a tick-addressed input on the tick it named, which is now plus the playout
+  /// depth. A client that predicted it the instant the key went down would be
+  /// running that input a playout depth *earlier* than the server. On a lattice
+  /// that is a whole cell of disagreement on every single input rather than a
+  /// small error that eases away, so the snap counter would read as though
+  /// prediction did not work at all.
   ///
-  /// So prediction here hides the **round trip** and nothing else. The playout
-  /// delay is still paid, by everybody, which is exactly what makes a contested
-  /// cell independent of ping. Turning the playout buffer off in the panel
-  /// removes both the fairness and this delay together.
+  /// So prediction here removes the **round-trip** wait and nothing else.
+  /// Everybody still pays the playout delay and that shared delay makes a
+  /// contested cell independent of ping. Turning the playout buffer off in the
+  /// panel removes both the fairness and this delay.
   pub fn schedule_input(&mut self, seq: u64, tick: u64, intent: Intent, now_server_ms: u64) {
     self.pending.push_back(Pending {
       seq,
@@ -354,18 +350,18 @@ impl Client {
 
   /// Advances the prediction to whatever tick the clock says it is.
   ///
-  /// **Driven by the clock, not by the caller's frame delta**, and that is the
-  /// whole of it. The server advances its players exactly once per tick, on a
-  /// fixed grid derived from its own clock. A client that advanced once per
-  /// frame would be stepping at whatever rate the renderer happened to hit, on
-  /// a grid not aligned with the server's, and the two drift apart *within a
-  /// single cell*: they cross the boundary at different moments, and any frame
-  /// that lands in the gap between those moments is a disagreement about which
-  /// cell the player is in.
+  /// **Driven by the clock rather than by the caller's frame delta.** The
+  /// server advances its players exactly once per tick, on a fixed grid derived
+  /// from its own clock. A client that advanced once per frame would be
+  /// stepping at whatever rate the renderer happened to hit, on a grid not
+  /// aligned with the server's. The two would drift apart *within a single
+  /// cell*: they cross the boundary at different moments and any frame that
+  /// lands in the gap between those moments is a disagreement about which cell
+  /// the player is in.
   ///
   /// In a continuous game that is a sub-pixel wobble nobody sees. On a lattice
-  /// it is a whole cell, so it snaps, and it gets worse the more cells you
-  /// cross: open ground is where it becomes obvious. Measured on a 120 Hz
+  /// it is a whole cell, so it snaps and it gets worse the more cells you
+  /// cross, which is why open ground shows it most. Measured on a 120 Hz
   /// renderer against a 62 Hz server, it was eight snaps per hundred frames
   /// with no packet loss and an eight millisecond link.
   ///
@@ -387,9 +383,9 @@ impl Client {
       self.next_tick = target.saturating_sub(CATCH_UP_TICKS);
     }
 
-    // While the server is holding the world still, so is this client. Not a
-    // special case inside the movement rule: the server is not *running* the
-    // rule, so neither is this.
+    // While the server is holding the world still, this client does too. It is
+    // not a special case inside the movement rule: the server is not *running*
+    // the rule, so this client does not run it either.
     if self.predict && !self.paused {
       // Inclusive of the target: tick N's inputs take effect *for* tick N, so
       // reaching tick N means N has been simulated, not that it is next.
@@ -432,9 +428,9 @@ impl Client {
 
   /// Folds in one authoritative frame.
   ///
-  /// This is where a disagreement is found, and it is compared **at the frame's
-  /// own instant** rather than against the newest belief: a client running a
-  /// latency ahead of the server is not wrong for being ahead, and comparing
+  /// This is where a disagreement is found. It is compared **at the frame's own
+  /// instant** rather than against the newest belief, because a client running
+  /// a latency ahead of the server is not wrong for being ahead and comparing
   /// the two directly would report a snap on every frame.
   pub fn on_frame(&mut self, frame: &Frame, controls: &Controls) {
     self.frames_seen += 1;
@@ -453,13 +449,13 @@ impl Client {
       return;
     }
 
-    // A frame describing a tick this client has not reached yet is not
-    // evidence of anything. That happens whenever the clock estimate sits
-    // behind the stream, which is ordinary for a fitted clock, and comparing
-    // anyway reports the client's own lag as a misprediction: at a cell
-    // boundary the newest tick it *has* simulated is the previous cell, so
-    // every crossing looks like a disagreement. It is the same rule as the
-    // start of history, at the other end.
+    // A frame describing a tick this client has not reached yet tells it
+    // nothing. That happens whenever the clock estimate sits behind the
+    // stream, which is ordinary for a fitted clock. Comparing anyway reports
+    // the client's own lag as a misprediction: at a cell boundary the newest
+    // tick it *has* simulated is the previous cell, so every crossing looks
+    // like a disagreement. It is the same rule as at the start of history,
+    // applied at the other end.
     let reached = self.next_tick.saturating_sub(1);
     self.newest_frame_tick = self.newest_frame_tick.max(frame.tick);
     if frame.tick > reached {
@@ -475,7 +471,7 @@ impl Client {
     if disagrees && !died {
       // Measured at the frame's instant, not against where the prediction has
       // since got to. The second is a different quantity: a client that has
-      // already walked on could be back in agreement by now, and reporting a
+      // already walked on could be back in agreement by now and reporting a
       // zero-cell snap would say the correction was free when a whole cell of
       // it was drawn.
       let jump = believed.map_or(1, |cell| cell.distance(authoritative.cell)).max(1);
@@ -510,8 +506,7 @@ impl Client {
     // Re-run the same tick loop from the frame's tick to now, so the replayed
     // state is produced by exactly the process that produces the live one.
     // Replaying with one big `dt` instead would land somewhere the tick loop
-    // never visits, which is a second implementation of the rule wearing the
-    // first one's name.
+    // never visits, which amounts to a second implementation of the rule.
     //
     // Inputs are *not* cleared of their `applied` flag: they are replayed by
     // being re-run through `step_once`, which reapplies any whose tick falls in
@@ -542,7 +537,7 @@ impl Client {
   /// Keyed by tick rather than by milliseconds because that is the unit both
   /// sides actually step in: comparing at a millisecond that falls inside a
   /// tick asks what the client believed halfway through a step the server
-  /// takes atomically, and the answer is a disagreement that does not exist.
+  /// takes atomically and the answer is a disagreement that does not exist.
   ///
   /// The newest entry at or before the tick asked about. Before the history
   /// covers it (a joiner's first frames), `None` means "no opinion", which is
@@ -555,17 +550,17 @@ impl Client {
   ///
   /// The server acknowledges an input on **arrival**, which is well before the
   /// tick it was named for: an input aimed at `now + playout` is acknowledged
-  /// within a round trip and executed a playout depth from now, and on a fast
-  /// link the acknowledgement wins that race every time.
+  /// within a round trip and executed a playout depth from now, so on a fast
+  /// link the acknowledgement always arrives first.
   ///
-  /// So an acknowledgement is not permission to forget the input. This list is
-  /// two things at once: the replay buffer for a correction, and this client's
-  /// own schedule of inputs whose tick has not come. Trimming on the sequence
-  /// alone empties the second one from under the first, and the local
-  /// prediction never runs what it dropped. That is invisible while you hold a
-  /// direction and obvious the moment you release one: the release is discarded
-  /// in flight, `held` keeps the old direction for ever, and every frame
-  /// becomes a snap back followed by another step the wrong way.
+  /// So an acknowledgement does not mean the input can be dropped. This list
+  /// is both the replay buffer for a correction and this client's own schedule
+  /// of inputs whose tick has not come. Trimming on the sequence alone empties
+  /// the schedule and the local prediction never runs what it dropped. That is
+  /// invisible while you hold a direction and obvious the moment you release
+  /// one: the release is discarded in flight, `held` keeps the old direction
+  /// for ever and every frame becomes a snap back followed by another step the
+  /// wrong way.
   pub fn on_input_ack(&mut self, seq: u64) {
     self.pending.retain(|p| p.seq > seq || !p.applied);
   }
@@ -575,8 +570,8 @@ impl Client {
   /// Applied to the board immediately rather than at the render instant,
   /// because the tiles it clears are an *input* to the movement rule this
   /// client is predicting against: holding a wall the server has destroyed
-  /// would refuse a step the server allows, which is a snap manufactured out of
-  /// stale state. The fire is drawn on the timeline; the board is not.
+  /// would refuse a step the server allows, which causes a snap from stale
+  /// state. Only the fire is drawn on the timeline.
   pub fn on_blast(&mut self, blast: &BlastEvent) {
     for cell in &blast.cleared {
       self.grid.set(*cell, Tile::Empty);
@@ -612,8 +607,8 @@ impl Client {
   ///
   /// Positive is healthy and expected: the client runs at the clock's estimate
   /// of *now* while a frame describes a moment one delivery ago. At or below
-  /// zero the clock estimate is trailing the stream, and every cell boundary
-  /// then reads as a disagreement it is not.
+  /// zero the clock estimate is trailing the stream and every cell boundary
+  /// then reads as a disagreement when it is not one.
   pub fn tick_lead(&self) -> i64 {
     self.next_tick.saturating_sub(1) as i64 - self.newest_frame_tick as i64
   }
@@ -660,8 +655,8 @@ mod tests {
 
   #[test]
   fn a_client_that_agrees_never_snaps() {
-    // The baseline the snap counter is only meaningful against: run the same
-    // inputs on both sides at zero latency and nothing should ever jump.
+    // The baseline for the snap counter: run the same inputs on both sides at
+    // zero latency and nothing should ever jump.
     let c = controls();
     let mut server = Server::new(2, B0MB_SEED);
     let mut client = joined(&server, 0);
@@ -681,8 +676,8 @@ mod tests {
 
   #[test]
   fn a_disagreement_snaps_a_whole_cell_and_is_counted() {
-    // The thing that cannot be eased. The server is told nothing, so the client
-    // walks on its own and is corrected back.
+    // A correction that cannot be eased. The server is told nothing, so the
+    // client walks on its own and is corrected back.
     let c = controls();
     let mut server = Server::new(2, B0MB_SEED);
     let mut client = joined(&server, 0);
@@ -702,8 +697,8 @@ mod tests {
 
   #[test]
   fn being_ahead_of_the_server_is_not_a_misprediction() {
-    // The trap this history buffer exists for. A client a latency ahead is
-    // *right*, and comparing its newest belief against an old frame reports a
+    // The case this history buffer exists for. A client a latency ahead is
+    // *right* and comparing its newest belief against an old frame reports a
     // snap on every single one.
     let c = controls();
     let mut server = Server::new(2, B0MB_SEED);
@@ -733,8 +728,8 @@ mod tests {
 
   #[test]
   fn a_refused_bomb_is_retired_as_a_phantom() {
-    // The discrete refusal with no way to ease it: the player saw a bomb and
-    // then did not.
+    // A discrete refusal that cannot be eased: the player saw a bomb and then
+    // it was gone.
     let c = controls();
     let server = Server::new(2, B0MB_SEED);
     let mut client = joined(&server, 0);
@@ -756,8 +751,8 @@ mod tests {
 
   #[test]
   fn the_carry_limit_is_refused_locally_rather_than_predicted_and_withdrawn() {
-    // Predicting a bomb the server is certain to refuse would be a phantom
-    // manufactured by the client. The shared rule is what prevents it.
+    // Predicting a bomb the server is certain to refuse would create a phantom
+    // from the client's own mistake. The shared rule prevents it.
     let c = controls();
     let server = Server::new(2, B0MB_SEED);
     let mut client = joined(&server, 0);
@@ -772,8 +767,8 @@ mod tests {
   #[test]
   fn a_blast_clears_the_board_immediately_rather_than_on_the_timeline() {
     // The board feeds the movement rule this client predicts against, so
-    // holding a destroyed wall would refuse a step the server allows and
-    // manufacture a snap.
+    // holding a destroyed wall would refuse a step the server allows and cause
+    // a snap.
     let c = controls();
     let mut server = Server::new(2, B0MB_SEED);
     server.grid.set(Cell::new(2, 1), Tile::Soft);
@@ -793,7 +788,8 @@ mod tests {
   #[test]
   fn a_death_is_adopted_rather_than_counted_as_a_misprediction() {
     // Nothing here predicts whether you are on fire, so learning that you died
-    // is an update, not a correction. Counting it would bury the real snaps.
+    // is an update rather than a correction. Counting it would hide the real
+    // snaps among false ones.
     let c = controls();
     let mut server = Server::new(2, B0MB_SEED);
     let mut client = joined(&server, 0);
@@ -831,13 +827,13 @@ mod tests {
 
   #[test]
   fn an_acknowledgement_does_not_discard_an_input_this_client_has_not_run_yet() {
-    // The bug a player reports as "it kept walking after I let go", and the
+    // The bug a player reports as "it kept walking after I let go" and the
     // reason it survives a correct clock.
     //
-    // An input is named for `now + playout`, and the server acknowledges it on
+    // An input is named for `now + playout` and the server acknowledges it on
     // **arrival**, which is well before that tick. If the acknowledgement
     // retires it from the pending list, the local prediction never runs it: the
-    // release is discarded in flight, `held` keeps its old direction for ever,
+    // release is discarded in flight, `held` keeps its old direction for ever
     // and every frame is a snap back followed by another step the wrong way.
     let c = controls();
     let server = Server::new(2, B0MB_SEED);
@@ -875,13 +871,13 @@ mod tests {
     // advances once per *frame* is running a different clock: it steps at
     // whatever rate the renderer happens to hit, on a grid that is not aligned
     // with the server's, and the two drift apart within a single cell. On a
-    // lattice that lands as a real disagreement about which cell you are in
-    // every time a step completes, and a frame arriving in that window is a
-    // snap. It gets worse the more cells you cross, which is exactly what open
-    // ground means.
+    // lattice that shows up as a real disagreement about which cell you are in
+    // every time a step completes and a frame arriving in that window is a
+    // snap. It gets worse the more cells you cross, so open ground shows it
+    // most.
     //
-    // The property that fixes it: predicted state is a function of the tick,
-    // never of the poll count. Two clients handed the same clock must agree
+    // The fix: predicted state is a function of the tick, never of the poll
+    // count. Two clients handed the same clock must agree
     // however many times each was called.
     let c = controls();
     let server = Server::new(2, B0MB_SEED);

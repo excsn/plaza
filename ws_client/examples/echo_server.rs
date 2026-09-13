@@ -5,9 +5,8 @@
 //! cargo run -p plaza_ws --features native --example echo_server -- 9001
 //! ```
 //!
-//! Blocking and one thread per connection, which is exactly what an echo server
-//! should be. This is a test fixture, not a building block: the real server side
-//! of plaza is `plaza_session`.
+//! Blocking, with one thread per connection, which is all an echo server needs.
+//! It is a test fixture; the real server side of plaza is `plaza_session`.
 
 use std::net::TcpListener;
 use std::thread;

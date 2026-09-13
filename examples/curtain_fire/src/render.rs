@@ -3,8 +3,7 @@
 //! The curtain drawn here was never received. It is evaluated from the same
 //! closed form the server uses, every frame, from a handful of wave
 //! announcements. Turning "derive the curtain" off in the panel empties the
-//! screen, which is the cheapest possible demonstration that none of it was
-//! ever on the wire.
+//! screen, which shows that none of it was ever on the wire.
 
 use macroquad::prelude::*;
 
@@ -63,7 +62,7 @@ pub fn draw_field(board: &Board) {
   );
 }
 
-/// The whole enemy half, and not one byte of it arrived.
+/// The whole enemy half, none of which arrived over the wire.
 pub fn draw_curtain(board: &Board, bullets: &[Bullet]) {
   let r = board.len(ENEMY_BULLET_R);
   for bullet in bullets {
@@ -111,8 +110,8 @@ pub fn draw_ship(board: &Board, id: PlayerId, pos: V2, alive: bool, is_me: bool,
     vec2(at.x + body * 0.7, at.y + body * 0.8),
     Color { a: alpha, ..colour },
   );
-  // The hitbox, drawn because the whole genre is about knowing exactly where
-  // it is. A ship whose sprite is its hitbox is a different game.
+  // The hitbox is drawn because the player needs to know exactly where it is
+  // to dodge.
   if controls.show_hitbox {
     draw_circle(at.x, at.y, board.len(SHIP_R).max(1.5), if is_me { WHITE } else { Color::new(1.0, 1.0, 1.0, 0.5) });
   }
@@ -123,9 +122,8 @@ pub fn draw_ship(board: &Board, id: PlayerId, pos: V2, alive: bool, is_me: bool,
 
 /// The server's own curtain, over the top of the derived one.
 ///
-/// Host only, and the only place the two can be compared at all: a joiner has
-/// nothing to compare against, because the field it draws is the only one it
-/// has ever been given.
+/// Host only. A joiner has nothing to compare against, because the field it
+/// draws is the only one it has.
 #[cfg(feature = "server")]
 pub fn draw_truth_curtain(board: &Board, bullets: &[Bullet]) {
   for bullet in bullets {

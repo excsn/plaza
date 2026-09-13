@@ -1,30 +1,30 @@
 # 00. What plaza is made of
 
-The question this chapter answers: why is plaza shaped the way it is, and what does that shape promise you?
+This chapter explains how plaza is structured and what that structure lets you do.
 
-## Blocks, with prescriptions on top
+## Blocks and prescriptions
 
-Plaza is two layers, and the layering is the whole design.
+Plaza has two layers.
 
-The bottom layer is **blocks**: small, single-purpose pieces that each solve one problem completely and know nothing about each other. A seat table. A delta baseline. An RTT estimator. A spatial grid. A connection close. Each block is a plain type you own and drive; almost none of them spawn tasks, hold timers, or read the clock behind your back. Time is a parameter, not an ambient authority.
+The bottom layer is **blocks**: small, single-purpose pieces that each solve one problem completely and know nothing about each other, such as a seat table, a delta baseline, an RTT estimator, a spatial grid or a connection close. Each block is a plain type you own and drive; almost none of them spawn tasks, hold timers or read the clock on their own. Time is passed in as a parameter.
 
-The top layer is **prescriptions**: assembled answers for the common cases, built from the blocks using only their public surfaces. The `StateController` loop is a prescription. `PredictedPlayer` is a prescription. The shipped WebSocket and TCP transports are prescriptions. So are the examples, which are prescriptions with a README explaining themselves.
+The top layer is **prescriptions**: ready-made answers for the common cases, built from the blocks using only their public API. The `StateController` loop, `PredictedPlayer` and the shipped WebSocket and TCP transports are all prescriptions. So are the examples, each with a README explaining it.
 
-The promise that makes this more than architecture talk: **any prescription can be ripped apart and rebuilt your way, and you lose nothing by doing it.** A prescription never uses private access to the blocks it assembles, so your reassembly stands on the same floor plaza's does. [Chapter 33](33-bring-your-own-socket.md) is the proof in the hardest case, a whole transport written outside the workspace against the published seam alone, and the crate docs for [`LinkDriver`](../../session/API_REFERENCE.md) state the contract outright: it is a convenience, not a ceiling.
+You can take any prescription apart and rebuild it your own way without losing anything. A prescription uses only the public API of the blocks it assembles, so your version has the same access plaza's does. [Chapter 33](33-bring-your-own-socket.md) builds a whole transport outside the workspace using only the published API. The [`LinkDriver`](../../session/API_REFERENCE.md) docs say the same: it is a convenience and does not limit what a transport can do.
 
-## Extracted, not speculated
+## Where the blocks came from
 
-Plaza's blocks were not designed in advance and then hoped useful. Nearly every one was extracted from an example that had to hand-write it first, and the module docs carry the incident that forced it: the seat that remembered its previous occupant, the delta stream that never re-mentioned a lost despawn, the deadline that closed a socket mid-farewell. When you read a plaza doc and it tells you a story, that story is the reason the API has the shape it has. If a block seems oddly specific, an example bled for that specificity, and the doc will say where.
+Nearly every block was extracted from an example that had to write it by hand first. The module docs describe the bug that led to each one: the seat that remembered its previous occupant, the delta stream that never re-sent a lost despawn, the deadline that closed a socket mid-farewell. Those stories explain why each API looks the way it does. If a block seems oddly specific, its doc names the example that needed it.
 
-The same rule bounds what plaza ships: a piece with one consumer stays in that consumer. Extraction happens when something needs the same shape twice.
+Plaza extracts a piece into a crate once a second example needs it. Until then it stays in the example that wrote it.
 
-## Mechanism below, policy above, no defaults in between
+## Mechanism and policy
 
-Plaza owns *mechanism*: delivering frames, resolving who is connected, measuring round trips, counting what each connection sends, closing sockets cleanly. Plaza never owns *why*: which duplicate login wins, what a ban list contains, how long AFK is, when a room dies. Where a default would decide policy for everyone, plaza deliberately ships none, and the docs say so at each spot. If you go looking for the "kick idle players after N seconds" option, you will not find N; you will find a reader that tells you how idle each player is and a close that takes your reason with it. [Chapter 40](40-the-right-to-say-no.md) walks the whole surface.
+Plaza handles mechanism: delivering frames, tracking who is connected, measuring round trips, counting what each connection sends and closing sockets cleanly. Policy is up to you: which duplicate login wins, what a ban list contains, how long counts as AFK, when a room shuts down. Where a default would pick a policy for everyone, plaza ships no default and the docs say so. For example, there is no "kick idle players after N seconds" option. Instead there is a reader that reports how long each player has been idle and a close call that takes your reason. [Chapter 40](40-the-right-to-say-no.md) covers all of it.
 
-## Not just games
+## Apps other than games
 
-This guide says "player", "match", and "world" because games are the demanding case: they stress every part of this at once. Nothing about plaza is game-specific, and if you are building a collaborative app, most of this guide describes things you already do under different names:
+This guide says "player", "match" and "world" because games use every part of plaza at once. Nothing in plaza is game-specific. If you are building a collaborative app, most of this guide covers things you already do under other names:
 
 | Your app's word | This guide's word |
 |---|---|
@@ -38,21 +38,21 @@ This guide says "player", "match", and "world" because games are the demanding c
 | moderation, rate limiting, session expiry | governance |
 | graceful deploy | drain |
 
-The examples include real apps: [shared_counter](../../examples/shared_counter/) is the hello world, [typing_indicator](../../examples/typing_indicator/) is presence with timeouts, [auction_floor](../../examples/auction_floor/) is contested writes arbitrated fairly. The suggested app-builder reading path is in [the guide's front page](README.md).
+The examples include apps: [shared_counter](../../examples/shared_counter/) is the hello world, [typing_indicator](../../examples/typing_indicator/) is presence with timeouts and [auction_floor](../../examples/auction_floor/) arbitrates contested writes fairly. The guide's [front page](README.md) has a suggested reading order for app builders.
 
-## What plaza deliberately does not do
+## What plaza does not do
 
-- **Persistence.** Plaza state lives in memory for the lifetime of a controller. Databases, saves, and event logs are yours.
-- **Identity and auth.** An `Agent` is an ID and nothing else. Where the ID comes from (a token, a cookie, a counter) is yours, and plaza will faithfully treat whatever you mint as the same returning player, or not, exactly as you derive it.
-- **Matchmaking as a service, ban storage, appeal flows.** The lobby crate gives you rooms and placement mechanics; who plays with whom is policy.
-- **An opinion about your engine or your renderer.** The client blocks are runtime-free and wasm-safe precisely so they can live inside whatever loop you already have.
+- **Persistence.** Plaza state lives in memory for the lifetime of a controller. Databases, saves and event logs are yours.
+- **Identity and auth.** An `Agent` is an ID and nothing else. Where the ID comes from (a token, a cookie, a counter) is up to you. Plaza treats two connections as the same returning player exactly when you give them the same ID.
+- **Matchmaking as a service, ban storage, appeal flows.** The lobby crate gives you rooms and placement mechanics; deciding who plays with whom is up to you.
+- **An opinion about your engine or your renderer.** The client blocks are runtime-free and wasm-safe so they can run inside whatever loop you already have.
 
-## Lineage
+## Further reading
 
-Plaza's netcode vocabulary comes from the writing that taught everyone: Gabriel Gambetta's Fast-Paced Multiplayer series and Glenn Fiedler's Gaffer on Games articles. The guide does not re-teach that theory; [chapter 20](20-hiding-the-wire.md) tells you exactly where to read it and then maps each concept to the block that implements it here.
+Plaza's netcode vocabulary comes from Gabriel Gambetta's Fast-Paced Multiplayer series and Glenn Fiedler's Gaffer on Games articles. The guide does not repeat that material. [Chapter 20](20-hiding-the-wire.md) says where to read it and maps each concept to the plaza block that implements it.
 
 ## How to read this guide
 
-Each chapter ends with a lab: a runnable example that makes the chapter's claims observable, and usually falsifiable, with a toggle or a slider. Run the labs. A guide you only read is a guide you will misremember.
+Each chapter ends with a lab: a runnable example, usually with a toggle or a slider, that lets you see the chapter's claims hold or fail. Run the labs.
 
-When you want the full inventory rather than the story, [the parts bin](90-the-parts-bin.md) lists every block in every crate with one line on when to reach for it.
+When you want the full inventory rather than the explanations, [the parts bin](90-the-parts-bin.md) lists every block in every crate with one line on when to use it.

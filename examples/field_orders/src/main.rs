@@ -138,8 +138,8 @@ fn resolve_click(client: &NetClient, selected: &mut Option<u8>, cell: Cell) -> O
   }
 }
 
-/// Everything on screen that is presentation rather than truth: floating
-/// announcements, damage pops, hit flashes, eased health bars, and the phase
+/// Everything on screen that is presentation rather than game state: floating
+/// announcements, damage pops, hit flashes, eased health bars and the phase
 /// countdown. All of it is derived from moments the server sent; none of it
 /// feeds back into an order.
 #[cfg(all(feature = "client", feature = "websocket"))]
@@ -149,7 +149,8 @@ struct Fx {
   pops: Vec<render::Pop>,
   /// Unit id to the clock time its flash ends.
   flash: std::collections::HashMap<u8, u64>,
-  /// Unit id to the health the bar currently shows, easing toward the truth.
+  /// Unit id to the health the bar currently shows, easing toward the real
+  /// value.
   shown_hp: std::collections::HashMap<u8, f32>,
   /// The last authoritative hp seen, so a strike can say what it cost.
   last_hp: std::collections::HashMap<u8, i8>,

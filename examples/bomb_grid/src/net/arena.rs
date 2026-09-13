@@ -1,8 +1,8 @@
 //! The authoritative arena, as `plaza` core wants it: one `StateType` that owns
-//! everything mutable, and one stateless `StateLogic` that acts on it.
+//! everything mutable and one stateless `StateLogic` that acts on it.
 //!
 //! The adaptation is small, because [`sim::Server`] was already shaped for it:
-//! it never reads client state, `advance` is a tick function, and inputs are
+//! it never reads client state, `advance` is a tick function and inputs are
 //! already addressed by tick rather than applied on arrival. What this adds is
 //! seats that fill and empty.
 //!
@@ -30,13 +30,13 @@ use crate::sim::types::{BombState, Cell, Controls, Grid, PlayerId, PlayerState, 
 /// supplied by the client.
 pub type PlayerKey = u64;
 
-/// Everything the omniscient half of a host needs, published by the arena and
-/// read by the host's UI and renderer.
+/// Everything the host's UI and renderer need from the server side, published
+/// by the arena.
 ///
 /// A host is the server *and* a client in one process, so unlike a joiner it
-/// legitimately holds both: the truth here, and its own believed state in its
-/// [`NetClient`]. Drawing the two over each other is what makes a snap visible
-/// as a thing that happened rather than a number in a panel.
+/// legitimately holds both: the authoritative state here and its own predicted
+/// state in its [`NetClient`]. Drawing the two over each other makes a snap
+/// visible on screen as well as in the panel.
 ///
 /// [`NetClient`]: crate::net::client::NetClient
 #[derive(Clone, Debug, Default)]
@@ -54,7 +54,7 @@ pub struct HostView {
   pub bombs_placed: u64,
   pub longest_chain: usize,
   /// `(accepted, late, closed, ahead, last margin)` per seat. The host-side
-  /// half of a joiner's own input readout, and the only place a rejection is
+  /// half of a joiner's own input readout and the only place a rejection is
   /// visible at all: an input is acknowledged on arrival, before admission, so
   /// a refused one looks exactly like an applied one from the client.
   pub input_verdicts: Vec<(u64, u64, u64, u64, Option<i64>)>,
@@ -72,7 +72,7 @@ pub struct Arena {
   /// The newest input sequence accepted per player, echoed back so a client can
   /// bound its replay buffer.
   acked: HashMap<PlayerKey, u64>,
-  /// One-shot ops the client has not yet proved it heard.
+  /// One-shot ops the client has not yet confirmed.
   pending: OneShots<PlayerKey, Op>,
 }
 
@@ -104,7 +104,7 @@ impl Arena {
   }
 
   /// Seats a joiner, or refuses when the arena is full. Refusing is a real
-  /// outcome: a demo people can share is a demo people can overfill.
+  /// outcome, because a shared demo can get more joiners than it has seats.
   fn seat(&mut self, key: PlayerKey) -> Option<usize> {
     let seating = self.seats.seat(key);
     if let Seating::Fresh(seat) = seating {
@@ -116,7 +116,7 @@ impl Arena {
   fn unseat(&mut self, key: &PlayerKey) {
     if let Some(seat) = self.seats.unseat(key) {
       // Handed back to the bots rather than left frozen, so a disconnect does
-      // not leave a statue standing in the arena soaking up blasts.
+      // not leave a motionless player in the arena absorbing blasts.
       self.sim.release_seat(seat);
     }
     self.acked.remove(key);
@@ -187,8 +187,7 @@ impl ArenaLogic {
   /// Pushes the panel's link settings down to the transport when they change.
   fn publish_link(&self, controls: &Controls) {
     let Some(link) = &self.link else { return };
-    // One way, applied in each direction, which is what the slider has always
-    // meant here.
+    // The slider is one-way latency, applied in each direction.
     let one_way = DirectionProfile {
       delay: Duration::from_millis(controls.latency_ms),
       jitter: Duration::from_millis(controls.jitter_ms),
@@ -215,8 +214,8 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
           Some(seat) => {
             let policy = state.policy();
             // The board goes with the welcome. A joiner mid-round needs the
-            // walls that are still standing, not the ones the round started
-            // with, and `round_start` reads the live grid.
+            // walls that are still standing rather than the ones the round
+            // started with and `round_start` reads the live grid.
             let round = state.sim.round_start();
             Op::Welcome {
               player: seat as PlayerId,
@@ -224,13 +223,12 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
               round: Box::new(round),
             }
           }
-          // Said outright rather than left silent. A connection with no seat
-          // receives no frames, which is indistinguishable from a broken
-          // server unless somebody says so.
+          // Sent explicitly. A connection with no seat receives no frames,
+          // which looks the same as a broken server unless the client is told.
           None => Op::NoSeat { seats: state.sim.seats() },
         };
-        // Declared rather than merely sent: a datagram link can lose it, and
-        // nothing else in this protocol would ever mention the seat again.
+        // Declared rather than just sent, because a datagram link can lose it
+        // and nothing else in this protocol would ever mention the seat again.
         let now = state.sim.now_ms();
         let op = state.pending.declare(key, op, now);
         Ok(LogicOutput::ops(vec![TargetedOp::new_system_to(key, vec![op])]))
@@ -245,10 +243,10 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         let Some(key) = source.id_cloned() else {
           return Ok(LogicOutput::none());
         };
-        // A client that is talking has plainly received whatever let it talk, so
-        // this is the acknowledgement and no ack op has to exist. Before the
-        // seat gate: a seatless client's traffic confirms its `NoSeat` too, and
-        // that verdict is just as unrepeatable as a welcome.
+        // A client that sends anything must have received its welcome, so its
+        // traffic is the acknowledgement and no ack op is needed. This runs
+        // before the seat gate so a seatless client's traffic confirms its
+        // `NoSeat` too, since nothing else would send that verdict again either.
         state.pending.confirm(&key);
         let Some(seat) = state.seat_of(&key) else {
           return Ok(LogicOutput::none());
@@ -259,7 +257,7 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
           match op {
             Op::Move { seq, dir, tick } => {
               // Out-of-order *arrivals* are dropped: a straggler carries
-              // nothing new, and an older direction overwriting a newer one
+              // nothing new and an older direction overwriting a newer one
               // reads to the player as the controls sticking. Out-of-order
               // *execution* is a different matter and is the schedule's job.
               if state.acked.get(&key).is_some_and(|newest| seq <= *newest) {
@@ -287,7 +285,7 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
       LogicInput::TimeStep { delta_time } => {
         // Pick up whatever the panel changed. A seat-count change rebuilds the
         // world, so it is deliberately not live-editable here: reseating
-        // everyone mid-round is a bigger hammer than a slider should be.
+        // everyone mid-round is too disruptive for a slider.
         let live = *self.controls.lock();
         self.publish_link(&live);
         if let Some(clock) = &self.clock {
@@ -331,9 +329,9 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
             .into_iter()
             .map(|(key, op)| TargetedOp::new_system_to(key, vec![op])),
         );
-        // Acknowledgements are not impaired: reeling a prediction back in
-        // should not itself be delayed, and they ride the tick because inputs
-        // arrive far more often than frames go out.
+        // Acknowledgements are not impaired, because trimming a prediction's
+        // pending inputs should not itself be delayed. They are sent every tick
+        // because inputs arrive far more often than frames go out.
         for (key, seq) in &state.acked {
           targeted.push(TargetedOp::new_system_to(*key, vec![Op::InputAck { seq: *seq }]));
         }
@@ -386,7 +384,7 @@ mod tests {
   /// A direction this seat can actually walk, and where it leads.
   ///
   /// Never a hardcoded `Dir::Right`: `SeatTable` does not fill from the front,
-  /// so a joiner can land in any corner, and in three of the four corners the
+  /// so a joiner can land in any corner and in three of the four corners the
   /// obvious direction is the border wall. A test that hardcodes one is
   /// asserting about the board layout rather than about the code under test.
   fn open_dir(state: &Arena, seat: usize) -> (Dir, crate::sim::types::Cell) {
@@ -511,10 +509,10 @@ mod tests {
     }
   }
 
-  /// The other half of the contract, and the half whose absence is silent: a
-  /// welcome that is never confirmed is repeated into a client that treats it
-  /// as a fresh start, so the first seconds of play rebuild the world over and
-  /// over. The guard above only asserts that repeats happen.
+  /// The other half of the contract, whose absence would go unnoticed: a
+  /// welcome that is never confirmed is repeated to a client that treats it as
+  /// a fresh start, so the first seconds of play rebuild the world over and
+  /// over. The test above only asserts that repeats happen.
   #[test]
   fn traffic_from_a_client_stops_the_repeats() {
     let controls = Controls { datagram_link: true, ..quiet() };
@@ -534,9 +532,9 @@ mod tests {
     assert_eq!(repeats, 0, "confirmed, so nothing is repeated");
   }
 
-  /// What the arena still owns of impairment: turning the panel's numbers into
-  /// a link profile, once, and only when they change. Holding the frames back
-  /// is the session's, and is tested where that happens.
+  /// The arena's part of impairment: turning the panel's numbers into a link
+  /// profile, once and only when they change. Holding the frames back is the
+  /// session's job and is tested there.
   #[test]
   fn the_sliders_are_published_to_the_link_rather_than_applied_here() {
     let controls = Controls { latency_ms: 200, loss_pct: 25.0, ..quiet() };

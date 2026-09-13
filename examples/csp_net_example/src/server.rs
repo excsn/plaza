@@ -3,8 +3,7 @@
 //! using Tokio MPSC channels to mimic network communication with clients.
 
 /// Ticks between broadcasts. One means every tick, which is what this demo
-/// wants; the constant exists so lowering the rate is a change of value rather
-/// than a change of shape.
+/// wants; the constant exists so the rate can be lowered by editing one value.
 const SEND_EVERY: u64 = 1;
 
 use crate::common_types::{CspSnapshotPayload, 
@@ -156,8 +155,8 @@ impl StateLogic<GameOp, PlayerId, ServerGameState> for ServerLogic {
         // We use our fixed server tick interval
         state.current_server_tick += 1;
 
-        // The knob the original `% 1` was standing in for. It was always true,
-        // so the gate it looked like was not one.
+        // Replaces the original `% 1`, which was always true and never gated
+        // anything.
         if state.current_server_tick.is_multiple_of(SEND_EVERY) {
           let mut remote_snapshots = Vec::new();
           for (id, box_state) in state.boxes.iter() {

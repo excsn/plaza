@@ -473,7 +473,7 @@ impl Battle {
 
   /// Offers a choice for a named turn.
   ///
-  /// The turn number is the whole of the protocol. A duplicate names a turn
+  /// The protocol relies on the turn number alone. A duplicate names a turn
   /// that has resolved, so it is stale and ignored rather than applied; there
   /// is no sequence number, no dedup table and no window to keep.
   pub fn offer(&mut self, seat: u16, turn: u32, choice: Choice) -> Offered {
@@ -700,7 +700,7 @@ mod tests {
     assert_ne!(play(4242), play(99), "while a different battle does not");
 
     // Over many battles the risky move misses at about the rate it claims.
-    // One battle could be lucky; a rate cannot.
+    // A single battle could be lucky, so this measures the rate.
     let (mut rolls, mut missed) = (0, 0);
     for seed in 0..200 {
       for landed in play(seed) {

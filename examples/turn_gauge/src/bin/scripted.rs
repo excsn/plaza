@@ -1,7 +1,7 @@
 //! The battle, scripted: no window, no socket. One human commander against the
 //! bot, a stretch under each regime, and the projection audit running the
-//! whole time through the same [`OrderMirror`] the windows use. The run fails
-//! loudly if the mirror ever disagrees with a turn the server opened.
+//! whole time through the same [`OrderMirror`] the windows use. The run exits
+//! with an error if the mirror ever disagrees with a turn the server opened.
 
 use std::sync::Arc;
 use std::time::Duration;

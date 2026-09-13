@@ -31,14 +31,15 @@ void main() {
       expect(b.restarts, 0);
     });
 
-    /// The number that says the render delay is too small for this link.
+    /// A climbing underrun count means the render delay is too small for this
+    /// link.
     test('a packet arriving after its instant was drawn is an underrun', () {
       final b = buffer(lostAhead: 1000);
       b.push(500, 1, 'late', 600);
       expect(b.underruns, 1);
     });
 
-    /// A gap this large is a discontinuity, not a delay.
+    /// A gap this large is a discontinuity rather than a delay.
     test('an arrival too far ahead loses the timeline', () {
       final b = buffer(lostAhead: 100);
       expect(b.push(5000, 1, 'jump', 0), Admission.timelineLost);
@@ -56,7 +57,7 @@ void main() {
       expect(b.length, 1);
     });
 
-    /// The transport's verdict arriving from outside: a resume backlog dropped
+    /// A timeline loss the buffer did not detect itself: a resume backlog dropped
     /// unread, a reconnect.
     test('an external timeline loss keeps only the newest', () {
       final b = buffer();

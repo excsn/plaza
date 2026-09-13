@@ -1,20 +1,20 @@
 /// Rust's checked arithmetic, for the ports that rely on it.
 ///
 /// Dart's operators wrap on overflow, so `a + b` already matches Rust's
-/// `wrapping_add` and needs nothing here. That is load-bearing in [SetDigest],
-/// where the whole point is to reproduce `u64` wrapping arithmetic exactly.
+/// `wrapping_add` and needs nothing here. [SetDigest] depends on this, since it
+/// must reproduce `u64` wrapping arithmetic exactly.
 /// What Dart has no operator for is *saturating*, which several ports depend on
 /// to keep a bad measurement from becoming a negative one.
 ///
-/// # The limit worth stating
+/// # Limits
 ///
 /// These reproduce Rust's **`i64`** semantics exactly: Dart's `int` has the same
 /// range and the same two's-complement behaviour. They do **not** reproduce the
 /// `u64` versions, because Dart has no `u64` to saturate within. Every use in
 /// this package is a millisecond timestamp or a duration, where the meaningful
-/// floor is zero rather than `u64::MIN`, and [saturatingSub] gives that. If
-/// something ever carries genuine `u64` semantics, the answer is `BigInt` or a
-/// documented bound, not this.
+/// floor is zero rather than `u64::MIN` and [saturatingSub] gives that. If
+/// something ever carries genuine `u64` semantics, use `BigInt` or a documented
+/// bound instead.
 library;
 
 /// The largest value a Dart `int` holds, and Rust's `i64::MAX`.
@@ -28,15 +28,15 @@ const int intMin = -0x8000000000000000;
 /// The zero floor rather than [intMin] is deliberate: every caller here is
 /// subtracting timestamps, where a negative result means the inputs were
 /// impossible (a reply stamped before it was sent, a packet arriving before the
-/// moment it describes) and the honest reading is "no elapsed time" rather than
-/// a negative duration that then poisons a smoothed average.
+/// moment it describes) and the right reading is "no elapsed time" rather than
+/// a negative duration that then skews a smoothed average.
 int saturatingSub(int a, int b) {
   if (a <= b) return 0;
   final result = a - b;
   // `a > b` with a wrapped result means the true difference is above [intMax],
   // which happens whenever `b` is negative and `a` is large. Returning the
   // wrapped value here would hand a caller a negative "duration", which is the
-  // exact failure the floor exists to prevent.
+  // failure the floor exists to prevent.
   return result < 0 ? intMax : result;
 }
 
@@ -81,7 +81,8 @@ int? checkedAdd(int a, int b) {
   return result;
 }
 
-/// `a - b`, or null on overflow. Negative results are fine; only wrapping is not.
+/// `a - b` or null on overflow. A negative result is returned as is; only a
+/// wrapped one gives null.
 int? checkedSub(int a, int b) {
   final result = a - b;
   if (a >= 0 && b < 0 && result < 0) return null;

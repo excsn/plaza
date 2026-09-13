@@ -1,14 +1,14 @@
 //! Ethernet, IPv4 and UDP headers, built by hand.
 //!
-//! AF_XDP hands the NIC raw frames, so everything the kernel stack normally
-//! writes is this module's to write. Pure and platform-independent on
-//! purpose: the arithmetic is testable on any machine, only the socket that
-//! consumes these frames is Linux's.
+//! AF_XDP hands the NIC raw frames, so this module writes everything the
+//! kernel stack normally would. It is pure and platform-independent so the
+//! arithmetic is testable on any machine; only the socket that consumes these
+//! frames is Linux-only.
 
 /// Ethernet (14) + IPv4 without options (20) + UDP (8).
 pub const HEADER: usize = 42;
 
-/// The fixed half of every frame this process sends: one NIC, one source.
+/// The fixed part of every frame this process sends: one NIC and one source.
 /// The destination MAC is the next hop (the gateway, for anything routed),
 /// never the final recipient's.
 #[derive(Clone, Copy, Debug)]

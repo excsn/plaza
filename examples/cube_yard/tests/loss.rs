@@ -2,9 +2,8 @@
 //!
 //! Stage four deltas against what was last *sent*, which is exact on TCP and
 //! wrong on anything that can drop a packet. This runs both schemes over the
-//! same lossy link and prices the difference, because "you would need acks on
-//! UDP" is the kind of claim that stays true in a README long after it has
-//! stopped being true in the code.
+//! same lossy link and measures the difference, so the claim that a datagram
+//! transport would need acks is tested rather than only stated in the README.
 //!
 //! ```sh
 //! cargo test -p cube_yard --test loss -- --nocapture
@@ -19,7 +18,7 @@ use cube_yard::protocol::{CubeState, Drive, CUBES};
 use cube_yard::sim::{Yard, MAX_PLAYERS};
 use plaza_client_utils::AckWindow;
 
-/// Deterministic loss, so a run is a measurement rather than an anecdote.
+/// Deterministic loss, so a run can be repeated exactly.
 struct Link {
   seed: u64,
   drop_rate: f32,
@@ -56,8 +55,8 @@ fn settle(ticks: usize) -> Yard {
   yard
 }
 
-/// A player ploughing through the field, because a **settled** yard prices
-/// nothing: with every cube asleep a lost frame costs no accuracy at all, and
+/// A player ploughing through the field, because a **settled** yard measures
+/// nothing: with every cube asleep a lost frame costs no accuracy at all and
 /// both schemes reported 0.003 whatever the loss rate.
 fn ploughing() -> [Drive; MAX_PLAYERS] {
   let mut driving = [Drive::default(); MAX_PLAYERS];
@@ -76,11 +75,11 @@ fn snapshot(yard: &Yard) -> Vec<CubeState> {
   cubes
 }
 
-/// Error over **the cubes this frame carried**, not the whole yard.
+/// Error over **the cubes this frame carried** rather than the whole yard.
 ///
-/// Under a budget most cubes are simply waiting their turn, and comparing those
-/// against truth measures staleness, which is the scheme working. What a decode
-/// bug looks like is a cube arriving and landing in the wrong place.
+/// Under a budget most cubes are waiting their turn and comparing those against
+/// the server's positions only measures staleness, which is expected. A decode
+/// bug shows up as a cube arriving and landing in the wrong place.
 fn error_of(truth: &[CubeState], held: &[CubeState], named: &[usize]) -> f32 {
   named
     .iter()
@@ -255,8 +254,8 @@ fn an_acknowledged_baseline_survives_loss_and_last_sent_does_not() {
         "at {rate} loss the acked baseline should be the more accurate one"
       );
     }
-    // Both schemes spend the whole budget, so bandwidth cannot be where the
-    // difference lands; what an older baseline costs is room for fewer cubes.
+    // Both schemes spend the whole budget, so the difference cannot show up as
+    // bandwidth. An older baseline costs room for fewer cubes instead.
     assert!(
       (sent.bytes as f32 - ack.bytes as f32).abs() / (sent.bytes as f32) < 0.05,
       "a budget is a ceiling for both: {} vs {}",

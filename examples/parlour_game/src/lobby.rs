@@ -4,10 +4,10 @@
 //! the server measured, and that only exists on a socket the transport pings.
 //!
 //! **Where this differs from `lobby_world`.** There, arenas are standing rooms
-//! and placement means finding one with a free seat. Here a table is *created*
-//! for the match that formed, which is what a card game wants and what a client
-//! dialling a per-match endpoint needs. `handle_create_room_request` runs inside
-//! `seat_formed`, so the room and the match have the same lifetime.
+//! and placement means finding one with a free seat. Here a table is created
+//! for the match that formed, which suits a card game and a client dialling a
+//! per-match endpoint. `handle_create_room_request` runs inside `seat_formed`,
+//! so the room and the match have the same lifetime.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -115,13 +115,13 @@ impl LobbyLogic {
     ASSIGNED_LINKS_MS[n % ASSIGNED_LINKS_MS.len()]
   }
 
-  /// Socket ping first, the frame-path number when that plane has nothing:
-  /// matchmaking wants the link, not what plaza's own pipeline adds to it, and
-  /// the fallback is what a transport without ping frames would live on.
+  /// Socket ping first, the frame-path number when that plane has nothing.
+  /// Matchmaking wants the link without what plaza's own pipeline adds to it.
+  /// The fallback is what a transport without ping frames would use.
   ///
   /// `None` for a connection barely a moment old, before either plane has a
   /// sample. `LinkQuality` renders that as zero and the client re-lists; the
-  /// admission payload sends the honest absence instead.
+  /// admission payload sends `None` instead.
   fn measured_rtt_ms(&self, player: PlayerId) -> Option<u32> {
     self
       .session
@@ -149,8 +149,8 @@ impl LobbyLogic {
   /// Every live table, marked with whether this link can carry it.
   ///
   /// Usually short or empty, because tables here are spawned per match rather
-  /// than standing. What it is for is spectating, and for showing that a match
-  /// you were placed in is a real room somebody else can watch.
+  /// than standing. It is there for spectating and to show that a match you
+  /// were placed in is a real room somebody else can watch.
   fn catalogue(&self, link: LinkQuality) -> Vec<TableCard> {
     self.refresh_seat_counts();
 
@@ -208,7 +208,7 @@ impl LobbyLogic {
 
   /// Seats a match the queue formed, at a table spawned for it.
   ///
-  /// Bots join by command rather than by connecting, which is the whole reason
+  /// Bots join by command rather than by connecting, which is why
   /// `Agent::Bot` exists: they are participants the transport never sees, so a
   /// broadcast simply never matches them and nothing has to special-case one.
   async fn seat_formed(&self, state: &mut LobbyState, formed: Formed<PlayerId>) -> Vec<TargetedOp<LobbyOp, PlayerId>> {
@@ -337,8 +337,8 @@ impl StateLogic<LobbyOp, PlayerId, LobbyState> for LobbyLogic {
       LogicInput::AgentLeft { agent_id } => {
         state.links.remove(&agent_id);
         state.queue.remove(&agent_id);
-        // The departure a table cannot infer: a closing socket means nothing,
-        // but leaving the lobby means the seat will never be taken.
+        // A table cannot infer this departure: a closing socket tells it
+        // nothing, but leaving the lobby means the seat will never be taken.
         if let Some(room_id) = state.reserved_in.remove(&agent_id) {
           self
             .tell_table(&room_id, "lobby departure", TableOp::Withdraw { player: agent_id })
@@ -405,9 +405,8 @@ impl StateLogic<LobbyOp, PlayerId, LobbyState> for LobbyLogic {
               let link = LinkQuality::new(measured.unwrap_or(0), extra);
               state.links.insert(player, link);
 
-              // An unmeasured link is not a perfect one: `None` here means the
-              // manager's schedule gate abstains, where a manufactured zero
-              // would sail through it.
+              // `None` here means the manager's schedule gate abstains. A
+              // made-up zero would pass the gate as a perfect link.
               let payload = JoinRoomRequestPayload {
                 measured_one_way_ms: measured.map(|_| link.one_way_ms),
                 room_id,

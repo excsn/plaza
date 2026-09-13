@@ -31,8 +31,8 @@ void main() {
       expect(m[const SlotKey(3, 0)], isNull, reason: 'the old occupant is gone');
     });
 
-    /// The entire point of the generation. Without the check this deletes a live
-    /// entity that merely inherited the slot.
+    /// The generation check prevents this. Without it this deletes a live entity
+    /// that merely inherited the slot.
     test('a stale removal is refused and counted', () {
       final m = mirror();
       m.insert(const SlotKey(3, 5), 'orc');
@@ -97,7 +97,7 @@ void main() {
         expect(m.acks.contains(1), isTrue);
       });
 
-      /// Merging is what leaves the drift that prompted the rebuild.
+      /// Merging keeps the drift that prompted the rebuild.
       test('a full baseline clears rather than merging', () {
         final m = mirror();
         m.insert(const SlotKey(1, 0), 'old');
@@ -127,8 +127,8 @@ void main() {
         expect(m.digest, expected);
       });
 
-      /// The check a lost or malformed removal cannot hide from, because it is
-      /// over the whole set rather than over the messages that arrived.
+      /// A lost or malformed removal cannot escape this check, because it covers
+      /// the whole set rather than only the messages that arrived.
       test('a lost removal is caught by the digest', () {
         final m = mirror();
         m.insert(const SlotKey(1, 0), 'a');
@@ -172,8 +172,8 @@ void main() {
     });
 
     group('without generations', () {
-      /// Running deliberately without them is how you demonstrate what they are
-      /// for: every reference matches whatever is in the slot.
+      /// Running without them demonstrates what they prevent: every reference
+      /// matches whatever is in the slot.
       test('a stale reference silently hits the new occupant', () {
         final m = DeltaMirror<String>(generational: false);
         m.insert(const SlotKey(3, 5), 'orc');

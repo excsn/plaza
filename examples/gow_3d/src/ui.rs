@@ -1,8 +1,8 @@
-//! What the player is told about themselves, their target, and their party.
+//! What the player is told about themselves, their target and their party.
 //!
-//! The party frame is the argument for a second relevance channel made visible:
-//! it keeps working when a member is across the zone and out of view, and there
-//! is no distance query that produces it. Walk away from somebody you are
+//! The party frame shows why a second relevance channel is needed: it keeps
+//! working when a member is across the zone and out of view. No distance
+//! query produces it. Walk away from somebody you are
 //! partied with and watch their entry stay while their body goes.
 
 use gow_3d::abilities::BAR;
@@ -73,8 +73,7 @@ impl Trailing {
 /// Damage and healing, floating off whoever it happened to.
 ///
 /// Projected by hand because the numbers are screen-space text over a
-/// world-space point, and that is the one thing a 3D camera cannot draw for
-/// you.
+/// world-space point, which a 3D camera cannot draw.
 pub fn draw_popups(client: &NetClient, camera: &Camera3D, now_ms: u64) {
   let matrix = camera.matrix();
   for popup in &client.popups {
@@ -120,9 +119,9 @@ pub fn draw_hud(client: &NetClient, yaw: f32) {
   party_frame(client, yaw);
 }
 
-/// Health, mana, and whether you are down. Read from the frame's `you` block,
-/// which is the fix for a player pressing keys and seeing nothing: a client
-/// never appears in its own audience list, so none of this was readable before.
+/// Health, mana and whether you are down. Read from the frame's `you` block: a
+/// client never appears in its own audience list, so before that block existed
+/// none of this was readable and key presses seemed to do nothing.
 fn player_frame(client: &NetClient) {
   let Some(you) = client.you else { return };
   let (x, y) = (24.0, 24.0);
@@ -146,8 +145,8 @@ fn player_frame(client: &NetClient) {
   );
 
   if let Some(up_in) = you.up_in_ms {
-    // The whole screen says it, because being dead and not knowing when that
-    // ends is the one state a player cannot act their way out of.
+    // Shown across the whole screen, because a downed player cannot do
+    // anything and needs to know when that ends.
     draw_rectangle(
       0.0,
       0.0,
@@ -211,7 +210,7 @@ fn target_frame(client: &NetClient) {
   }
 }
 
-/// Your own cast bar. The whole latency argument, and the one thing the old
+/// Your own cast bar, which the latency argument is about and which the old
 /// client could not draw at all.
 fn cast_bar(client: &NetClient) {
   let Some((index, share)) = client.my_cast() else {
@@ -256,8 +255,7 @@ fn action_bar(client: &NetClient) {
       draw_text(format!("{} mp", spell.mana).as_str(), x + 6.0, y + 53.0, 15.0, BLUE);
     }
 
-    // The cooldown sweep, which is the only reason a player believes a key is
-    // going to work before they press it.
+    // The cooldown sweep shows the player when a key will work again.
     if let Some(you) = client.you
       && you.ready_in_ms > 0
     {
@@ -287,8 +285,8 @@ fn party_frame(client: &NetClient, yaw: f32) {
     bar(24.0, y, 150.0, 20.0, share, tint, &format!("seat {}", other.seen.seat));
 
     if out_of_view {
-      // A bearing, because the point of tracking somebody you cannot see is
-      // knowing where to go. The arrow is the only part of this interface that
+      // A bearing, because a player tracking somebody out of view needs to
+      // know where to go. The arrow is the only part of this interface that
       // would be impossible with one channel.
       let to = vec3(other.seen.at.0, other.seen.at.1, other.seen.at.2);
       let from = vec3(client.at.0, client.at.1, client.at.2);
@@ -340,8 +338,8 @@ pub fn draw_panel(client: &mut NetClient, url: &str, dials: &Dials) {
       ui.label(format!("height {:.1} m", client.at.1));
       ui.separator();
 
-      // The two channels, separately, because the whole claim of this example
-      // is that the second one costs only what the first one missed.
+      // The two channels, separately, because this example claims the second
+      // one costs only what the first one missed.
       ui.label(format!("near         {near}"));
       ui.label(format!("of them beasts {beasts}"));
       ui.label(format!("subscribed   {subscribed}"));
@@ -352,15 +350,14 @@ pub fn draw_panel(client: &mut NetClient, url: &str, dials: &Dials) {
       ui.label(format!("{:.1} KiB/s session", client.meter.session_kib_per_sec(now)));
       ui.separator();
 
-      // Zero for an honest client, which is the only reason it is worth a row:
-      // a number that is always zero is a number you notice changing.
+      // Zero for an honest client, so any change is easy to notice.
       ui.label(format!("claims refused {}", client.refused));
       ui.separator();
 
       // The comparison this example was planned around, in one session rather
       // than two builds. Switch the dial and watch both rows move: under
       // client authority the gap is a send interval's travel, under server
-      // authority it is a round trip's, and the local character stops
+      // authority it is a round trip's and the local character stops
       // answering the key immediately.
       ui.label(format!("authority     {}", match client.authority {
         Authority::Server => "server decides",
@@ -373,8 +370,8 @@ pub fn draw_panel(client: &mut NetClient, url: &str, dials: &Dials) {
         let current = dial.lock().authority;
         if ui.button(format!("switch to {}", current.other().label())).clicked() {
           dial.lock().authority = current.other();
-          // Or the worst case carries across the switch and the two arms are
-          // compared against one number that belongs to whichever came first.
+          // Otherwise the worst gap carries across the switch and both modes
+          // are compared against a number from whichever ran first.
           client.forget_the_worst();
         }
       } else {
@@ -383,11 +380,11 @@ pub fn draw_panel(client: &mut NetClient, url: &str, dials: &Dials) {
 
       ui.separator();
 
-      // The other two dials, and the reason they are dials rather than a
-      // decision: which one wins is a property of the world. Delivery is the
-      // CPU axis and precision is the bytes axis, and both pay most where the
-      // zone is most crowded. Read off the wire, so what is shown is what the
-      // server did rather than what it was last asked for.
+      // The other two dials. They are dials rather than fixed choices because
+      // which setting wins depends on the world. Delivery is the CPU axis and
+      // precision is the bytes axis; both save most where the zone is most
+      // crowded. Read off the wire, so what is shown is what the server did
+      // rather than what it was last asked for.
       ui.label(format!("delivery      {}", client.delivery.label()));
       ui.label(format!("precision     {}", client.precision.label()));
       if let Some(dial) = dials {

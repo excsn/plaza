@@ -1,7 +1,7 @@
 //! A queue with priority bands: better ranks first, arrival order within a
 //! band, membership removal. One of the two blocks [`Roster`](super::Roster)
-//! is composed of, and public for the same reason: a queueing rule `Roster`
-//! does not express is built from this directly.
+//! is composed of. It is public so a queueing rule `Roster` does not express
+//! can be built from this directly.
 
 #[derive(Clone, Debug)]
 struct Entry<Key> {

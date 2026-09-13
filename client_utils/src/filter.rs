@@ -1,24 +1,23 @@
 //! A scalar Kalman filter: an optimal smoother for one noisy signal.
 //!
 //! [`crate::rtt::RttEstimator`] smooths round-trip time with a fixed-weight
-//! moving average, cheap, tuning-free, and the right default. A moving average
-//! trusts every sample equally forever, though; a Kalman filter instead tracks
-//! how *confident* it is and weights each new measurement against that, so it
-//! settles quickly then rejects jitter once settled. It is the building-block
-//! upgrade for a signal that wants it, latency, jitter, a bandwidth estimate,
-//! offered as an option, not forced on anyone.
+//! moving average, which is cheap, needs no tuning and is the right default. A
+//! moving average weights every sample the same forever. A Kalman filter
+//! tracks how *confident* it is and weights each new measurement against that,
+//! so it settles quickly and then rejects jitter. It is an optional upgrade for
+//! a signal that needs it, such as latency, jitter or a bandwidth estimate.
 //!
 //! This is the one-dimensional random-walk case (estimate a scalar that drifts
 //! slowly under noisy measurement), which is all a latency or jitter estimate
-//! needs, and it is about thirty lines with two knobs:
+//! needs. It is about thirty lines with two knobs:
 //!
 //! - **process noise** (`Q`): how much the true value is expected to wander
 //!   between samples. Higher means trust new measurements more (faster, jumpier).
 //! - **measurement noise** (`R`): how noisy each reading is. Higher means smooth
 //!   harder (slower, steadier).
 //!
-//! The knobs are the whole point of a building block: pick them for your signal,
-//! or wrap it in a policy that adapts them. `f32` matches the rest of the crate;
+//! The knobs are yours to set: pick them for your signal or wrap the filter in
+//! a policy that adapts them. `f32` matches the rest of the crate;
 //! latency and jitter magnitudes never need more.
 
 /// A one-dimensional Kalman filter over a scalar signal.
@@ -129,11 +128,10 @@ mod tests {
 
   /// Retuning a live filter, which nothing was calling.
   ///
-  /// The two knobs are a ratio, not two numbers: `Q` says how much the truth is
-  /// expected to move between measurements and `R` says how much a measurement
-  /// lies, and the gain is what falls out. A policy that adapts responsiveness
-  /// turns one of them, so both need to move the gain in the direction the doc
-  /// comment implies.
+  /// The gain depends on the ratio of the two knobs: `Q` says how much the
+  /// truth is expected to move between measurements and `R` says how noisy a
+  /// measurement is. A policy that adapts responsiveness turns one of them, so
+  /// each needs to move the gain in the documented direction.
   mod retuning {
     use super::*;
 
@@ -157,8 +155,7 @@ mod tests {
 
     #[test]
     fn more_measurement_noise_trusts_the_measurement_less() {
-      // R is "the sensor lies", and it has to pull the other way from Q or the
-      // two knobs are the same knob.
+      // R is "the sensor is noisy" and it has to pull the opposite way from Q.
       let trusting = settled_gain(0.1, 0.01);
       let sceptical = settled_gain(0.1, 100.0);
       assert!(
@@ -188,8 +185,8 @@ mod tests {
 
     #[test]
     fn neither_knob_can_be_set_to_something_that_breaks_the_arithmetic() {
-      // A negative variance is not a filter that behaves oddly, it is one that
-      // produces NaN and takes every reading downstream with it.
+      // A negative variance makes the filter produce NaN, which then spreads to
+      // every reading downstream.
       let mut f = ScalarKalman::new(0.1, 1.0);
       f.set_process_noise(-5.0);
       f.set_measurement_noise(0.0);

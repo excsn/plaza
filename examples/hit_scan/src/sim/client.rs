@@ -1,12 +1,11 @@
-//! One player's belief about the arena, and how wrong it is allowed to be.
+//! One player's view of the arena.
 //!
-//! Three different things are drawn here and they are drawn three different
-//! ways, which is the part worth reading. Your own player is *predicted*,
-//! because waiting a round trip to turn is unplayable. Everybody else is
-//! *interpolated between samples that have already arrived*, because a guess
-//! about somebody else's steering is a guess about a human. Rockets are neither
-//! and are simply watched, because they are the one body whose future the
-//! server has already decided.
+//! Three kinds of thing are drawn here, each in a different way. Your own
+//! player is *predicted*, because waiting a round trip to turn is unplayable.
+//! Other players are *interpolated between samples that have already
+//! arrived*, because predicting their steering means guessing what a human
+//! will do. Rockets are shown as the newest frame has them, because the
+//! server has already decided their path.
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -19,11 +18,11 @@ use crate::sim::types::{
   Controls, Dir8, PLAYER_R, PLAYER_SPEED, PlayerId, PlayerSnap, PlayerState, RocketState, SIM_STEP_MS, V2, Weapon,
 };
 
-/// A correction big enough to be a disagreement rather than arithmetic noise.
+/// The smallest correction counted as a disagreement.
 ///
-/// Below this the two sides differ by the accumulated error of stepping the
-/// same rule at slightly different moments, which is not a netcode event and
-/// counting it would bury the ones that are.
+/// Below this the two sides differ only by the accumulated error of stepping
+/// the same rule at slightly different moments. That is not a netcode event
+/// and counting it would hide the ones that are.
 const SNAP_PX: f32 = 1.5;
 
 /// How many ticks of our own input history to keep for replay.
@@ -32,7 +31,7 @@ const REPLAY_TICKS: usize = 240;
 /// An input that has been sent and not yet both acknowledged and run.
 ///
 /// The direction is not kept here: the schedule holds it, and a second copy
-/// would be a second answer to the same question.
+/// could disagree with it.
 #[derive(Clone, Copy, Debug)]
 struct Named {
   seq: u64,
@@ -82,10 +81,9 @@ pub struct Client {
   /// The direction last handed to [`Client::press`], which exists only to
   /// avoid resending an unchanged level input.
   ///
-  /// Separate from `held` on purpose, and the separation is the whole of the
-  /// prediction being correct. Letting a press write `held` runs the input a
-  /// playout depth before the server will, so the two sides walk the same route
-  /// out of step and every frame arrives as a correction.
+  /// Kept separate from `held`. Letting a press write `held` runs the input a
+  /// playout depth before the server does, so the two sides walk the same
+  /// route out of step and every frame arrives as a correction.
   last_pressed: Dir8,
 
   input_seq: u64,
@@ -161,17 +159,17 @@ impl Client {
 
   /// Schedules a direction whether or not it changed, and returns the op.
   ///
-  /// The unconditional form, for the keepalive on a real wire: a held
-  /// direction is a *level*, so a lost change is not a missing update but a
-  /// wrong state that persists until the player presses something else. That
-  /// reads as the controls sticking rather than as packet loss.
+  /// The unconditional form, for the keepalive on a real wire. A held
+  /// direction is a level input, so if a change is lost the server keeps the
+  /// old direction until the player presses something else. To the player
+  /// that looks like the controls sticking, not like packet loss.
   pub fn schedule_walk(&mut self, dir: Dir8, server_time_ms: u64) -> Op {
     self.last_pressed = dir;
     self.input_seq += 1;
     let tick = self.aim_tick(server_time_ms);
-    // Scheduled for the tick it named rather than applied now. Applying it
-    // immediately runs the input a whole playout depth before the server will,
-    // and every single one of them then reads as a correction.
+    // Scheduled for the tick it named, not applied now. Applying it now runs
+    // the input a whole playout depth before the server does and every input
+    // then shows up as a correction.
     self.schedule.submit(tick, dir, self.sim_tick, self.window());
     self.unrun.push(Named { seq: self.input_seq, tick });
     Op::Move { seq: self.input_seq, tick, dir }
@@ -183,9 +181,8 @@ impl Client {
   }
 
   /// Pulls the trigger. The aim crosses the wire with the shot rather than
-  /// being tracked continuously, because it is only ever needed at this
-  /// instant, and a shot that named its own aim cannot be resolved against a
-  /// stale one.
+  /// being tracked continuously, because it is only needed at this instant
+  /// and a shot that names its own aim cannot be resolved against a stale one.
   pub fn shoot(&mut self, aim: V2, weapon: Weapon, server_time_ms: u64) -> Option<Op> {
     if !self.started {
       return None;
@@ -273,10 +270,9 @@ impl Client {
   /// Puts the authoritative position back under the prediction, then replays
   /// everything that has happened since.
   ///
-  /// The replay is the half that matters. Snapping to the authoritative
-  /// position alone would drag the player backwards by exactly one round trip
-  /// on every frame, because that position is a round trip old by the time it
-  /// arrives.
+  /// Snapping to the authoritative position without the replay would drag the
+  /// player backwards by exactly one round trip on every frame, because that
+  /// position is a round trip old by the time it arrives.
   fn reconcile(&mut self, authoritative: &PlayerState, at_tick: u64) {
     let before = self.predicted;
     self.predicted = authoritative.pos;
@@ -311,7 +307,7 @@ impl Client {
     while self.sim_tick < target_tick {
       self.sim_tick += 1;
       // The same schedule the server runs, on the same tick numbers, which is
-      // the only reason the two agree at all.
+      // what keeps the two in agreement.
       if let Some(dir) = self.schedule.execute_due(self.sim_tick) {
         self.held = dir;
       }

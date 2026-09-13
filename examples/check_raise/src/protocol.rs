@@ -1,7 +1,7 @@
 //! Everything that crosses the wire, compiled into both the server and the
-//! browser client. The hole cards are the one secret: each seat's pair rides
-//! only in that seat's view until a showdown turns them face up, card_table's
-//! seam carrying a game where the secret is the whole economy.
+//! browser client. The hole cards are the one secret: each seat's pair is sent
+//! only in that seat's view until a showdown turns them face up, so
+//! card_table's seam carries a game that depends entirely on hidden cards.
 
 use plaza::game_common::flow_control::phases::op_payloads::PhaseChangedNoticePayload;
 use serde::{Deserialize, Serialize};
@@ -38,8 +38,8 @@ pub const BIG_BET: u32 = 4;
 pub const RAISE_CAP: u8 = 4;
 
 pub const STARTING_STACK: u32 = 40;
-/// A stack below this rebuys to the start at the next deal: a lab keeps its
-/// players solvent.
+/// A stack below this rebuys to the starting stack at the next deal, so
+/// nobody busts out of the lab.
 pub const REBUY_FLOOR: u32 = 10;
 
 /// A seat's clock to act; past it the server checks or folds for them.
@@ -93,8 +93,9 @@ pub enum Act {
   Raise,
 }
 
-/// What the panel counts. The reopening numbers are the example's deliverable:
-/// how often a closed-looking round was reopened, and who never got asked.
+/// What the panel counts. The reopening numbers are what this example
+/// measures: how often a round that looked closed was reopened and which
+/// seats never got asked.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Panel {
   pub hands: u64,
@@ -102,9 +103,9 @@ pub struct Panel {
   /// Prompts made: every time a seat was actually asked to act.
   pub offers: u64,
   /// Seats a pending rebuild left out because they were already all-in:
-  /// present, invested, and never asked again.
+  /// present, invested and never asked again.
   pub skipped: u64,
-  /// Raises past the street's opening bet: each one moved the finish line.
+  /// Raises past the street's opening bet: each one reopened the round.
   pub reopened: u64,
   pub folds: u64,
   pub allins: u64,
@@ -166,10 +167,10 @@ pub enum PokerOp {
   TakeAction { act: Act },
 
   HandStarted { hand: u64, button: Seat },
-  /// Your two, yours alone.
+  /// Your two hole cards, sent only to you.
   Holes { cards: [Card; 2] },
   StreetStarted { street: Street, board: Vec<Card> },
-  /// A seat acted: what it paid, and whether that emptied it.
+  /// A seat acted: what it paid and whether that emptied its stack.
   ActionTaken { seat: Seat, act: Act, paid: u32, allin: bool },
   /// The ask moved.
   ToAct { seat: Seat, owed: u32 },

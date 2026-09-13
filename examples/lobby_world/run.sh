@@ -6,9 +6,9 @@
 # and served by the same actix app as the sockets, so there is nothing to build
 # separately and nothing to serve it with.
 #
-# What this does buy over `cargo run -p plaza_example_lobby_world` is working
-# from anywhere. The examples are their own workspace, so that command only
-# resolves from inside `examples/`.
+# The advantage over `cargo run -p plaza_example_lobby_world` is that this
+# works from any directory. The examples are their own workspace, so that
+# command only resolves from inside `examples/`.
 #
 # Usage: ./run.sh [-- <cargo args>]
 set -euo pipefail

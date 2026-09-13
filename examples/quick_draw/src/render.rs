@@ -1,4 +1,4 @@
-//! Drawing the duel: two gunslingers, the signal, and the verdict with both
+//! Drawing the duel: two gunslingers, the signal and the verdict with both
 //! orderings face up.
 
 use macroquad::prelude::*;
@@ -21,7 +21,7 @@ fn name_of(me: Option<PlayerId>, player: PlayerId) -> String {
 }
 
 pub fn draw_scene(view: &DuelView, me: Option<PlayerId>, fired: bool, flash: f32) {
-  // The signal moment washes the whole screen; nothing subtle about a draw.
+  // The signal moment washes the whole screen so nobody can miss it.
   if flash > 0.0 {
     draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.3, 0.95, 0.45, flash * 0.25));
   }

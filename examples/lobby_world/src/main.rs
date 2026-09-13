@@ -1,4 +1,4 @@
-//! Rooms, placement, and travel: the `plaza_lobby` example. See README.md.
+//! Rooms, placement and travel: the `plaza_lobby` example. See README.md.
 //!
 //! Open http://127.0.0.1:8090 in several tabs; each is assigned a different
 //! link, so the room lists differ.
@@ -39,10 +39,10 @@ const STATIC_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/static");
 const REAP_EVERY: Duration = Duration::from_secs(15);
 
 /// How long a dynamic room may carry no traffic before the reaper drains it.
-/// The pre-spawned arenas are the fixed offering and are never reaped.
+/// The pre-spawned arenas are never reaped.
 const ROOM_IDLE_AFTER: Duration = Duration::from_secs(45);
 
-/// Only the match queue needs the lobby to advance time, and it measures its
+/// Only the match queue needs the lobby to advance time and it measures its
 /// patience in seconds.
 /// Longer than a placement takes to dial, shorter than the seat reservation it
 /// pairs with, which currently has no window of its own.

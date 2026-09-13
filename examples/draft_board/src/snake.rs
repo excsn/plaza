@@ -1,39 +1,39 @@
 //! A [`TurnManager`] whose order reverses at the end of every pass.
 //!
-//! Written to answer one question: is `TurnManager` a seam, or a description of
-//! the one thing that implements it? `RoundRobinTurnManager` has been its only
-//! implementation, so nothing had ever tried.
+//! Written to test whether `TurnManager` fits a second turn order or only
+//! describes the one type that implements it. `RoundRobinTurnManager` had been
+//! its only implementation.
 //!
-//! # What it found, and what changed as a result
+//! # What it found
 //!
-//! The advance fit from the start. `end_current_turn_and_advance` returning the
-//! *same* actor at a reversal is allowed by a contract that promises the next
-//! turn rather than a different holder of it.
+//! The advance fit from the start. The contract promises the next turn and does
+//! not require a different actor, so `end_current_turn_and_advance` can return
+//! the same actor at a reversal.
 //!
-//! Two things did not, and the trait moved rather than this type working around
-//! them. It held **two** methods while every consumer called five, so `begin`,
-//! `restart`, `add_actor` and `remove_actor` were inherent on
-//! `RoundRobinTurnManager` alone and a conforming manager could be written that
-//! no application could seat or change the roster of. And nothing could report a
-//! **pass boundary**, which round-robin hides because its actor changes there;
-//! under a snake the actor is the same on both sides, so a caller inferring the
-//! boundary from the actor reads it backwards. That is now
-//! [`Advanced::PassClosed`](plaza::game_common::flow_control::Advanced).
+//! Two things did not fit. The trait was changed for both instead of this type
+//! working around them. First, it held two methods while every consumer called
+//! five: `begin`, `restart`, `add_actor` and `remove_actor` were inherent on
+//! `RoundRobinTurnManager` alone, so a conforming manager could be written that
+//! no application could seat or change the roster of. Second, nothing could
+//! report a pass boundary. Round-robin hides this because its actor changes
+//! there. Under a snake the actor is the same on both sides, so a caller
+//! inferring the boundary from the actor misses it. The advance now returns
+//! [`Advanced::PassClosed`](plaza::game_common::flow_control::Advanced) there.
 //!
-//! The remaining divergence is deliberate and is why a policy abstraction is not
-//! obviously the next step: `remove_actor` at the end of the roster **wraps** in
-//! round-robin and **pulls back** here, because a snake at the end is about to
-//! turn around rather than start over. Two implementations differing in advance,
-//! in removal fixup, and in what `restart` resets is more variation than a
-//! single `next(index)` hook would carry.
+//! The remaining difference is deliberate. `remove_actor` at the end of the
+//! roster wraps in round-robin and pulls back here, because a snake at the end
+//! is about to turn around. The two implementations differ in the advance, in
+//! the removal fixup and in what `restart` resets. A single `next(index)` hook
+//! would not carry all of that, so a shared policy abstraction is not the
+//! obvious next step.
 //!
-//! # The reversal, and why it is not a wrap
+//! # The reversal
 //!
-//! Round-robin wraps: after the last actor comes the first. A snake **reverses**,
+//! Round-robin wraps: after the last actor comes the first. A snake reverses,
 //! so the actor at the end of the order takes two turns in a row, one closing a
-//! pass and one opening the next. That is the whole difference, it is the reason
-//! a draft uses it (picking last is compensated by picking first next round), and
-//! it is the boundary a wrapping manager cannot express at all.
+//! pass and one opening the next. That is the only difference from round-robin.
+//! A draft uses it so the drafter who picks last in one round picks first in
+//! the next.
 
 use std::fmt::Debug;
 use std::marker::PhantomData;
@@ -177,9 +177,9 @@ where
 
   /// Removes an actor, leaving the turn on whoever now holds that slot.
   ///
-  /// Direction is preserved, and a cursor past the end is pulled back to the
-  /// last seat rather than wrapped to the first: a snake at the end of its
-  /// roster is about to turn around, not about to start over.
+  /// Direction is preserved. A cursor past the end is pulled back to the last
+  /// seat and not wrapped to the first, because a snake at the end of its
+  /// roster is about to turn around.
   fn remove_actor(&mut self, actor: &TurnActorId) -> bool {
     let Some(index) = self.actors.iter().position(|a| a == actor) else {
       return false;
@@ -200,9 +200,9 @@ where
 
   /// Steps along the order, reversing rather than wrapping at either end.
   ///
-  /// At a reversal the returned actor is the **same** one that just played. The
-  /// trait's contract allows it, since it promises the next actor rather than a
-  /// different one, and a draft depends on it.
+  /// At a reversal the returned actor is the same one that just played. The
+  /// trait's contract allows this, since it promises the next actor and not a
+  /// different one. A draft depends on it.
   fn end_current_turn_and_advance(
     &mut self,
     context: &mut dyn FsmContext<Op, AppID>,
@@ -232,8 +232,8 @@ where
       self.current = Some(current + 1);
     }
 
-    // The reversal *is* the pass boundary, and it is the case where the cursor
-    // does not move: the same actor closes one pass and opens the next.
+    // A reversal is a pass boundary and the cursor does not move there: the
+    // same actor closes one pass and opens the next.
     let reversed = self.current == Some(current) && last > 0;
     self.in_pass = if reversed { 1 } else { self.in_pass + 1 };
     self.turn_number = self.turn_number.saturating_add(1);
@@ -278,16 +278,16 @@ mod tests {
 
   #[test]
   fn the_order_reverses_rather_than_wrapping() {
-    // The whole example in one assertion. Round-robin would give 1,2,3,1,2,3.
+    // Round-robin would give 1,2,3,1,2,3.
     let mut turns = order(vec![1, 2, 3]);
     assert_eq!(walk(&mut turns, 8), vec![1, 2, 3, 3, 2, 1, 1, 2, 3]);
   }
 
   #[test]
   fn the_actor_at_a_reversal_holds_two_turns_in_a_row() {
-    // `end_current_turn_and_advance` returning the *same* actor is what the
-    // trait's contract has to permit for a snake to be writable at all. It
-    // promises the next actor, not a different one.
+    // A snake needs the trait's contract to let `end_current_turn_and_advance`
+    // return the same actor. The contract promises the next actor and does not
+    // require a different one.
     let mut turns = order(vec![1, 2, 3]);
     let mut ctx = Ctx::new();
     turns.begin(&mut ctx);
@@ -304,9 +304,9 @@ mod tests {
 
   #[test]
   fn a_pass_boundary_is_not_visible_from_the_returned_actor() {
-    // Why the application counts picks instead of watching the manager: the
-    // actor is unchanged across the boundary, so "did it change" reports the
-    // opposite of the truth exactly where it matters.
+    // The actor is unchanged across the boundary, so checking whether it
+    // changed misses the boundary. This is why the application counts picks
+    // instead of watching the manager.
     let mut turns = order(vec![1, 2, 3]);
     let mut ctx = Ctx::new();
     turns.begin(&mut ctx);
@@ -380,8 +380,8 @@ mod tests {
 
   #[test]
   fn restarting_returns_to_the_top_travelling_forwards() {
-    // A new draft is not the next pass of the old one, so `restart` undoes the
-    // direction as well as the position.
+    // `restart` resets the direction as well as the position, since a new
+    // draft does not continue the old one's passes.
     let mut turns = order(vec![1, 2, 3]);
     let mut ctx = Ctx::new();
     walk(&mut turns, 3);
@@ -394,14 +394,12 @@ mod tests {
 
   #[test]
   fn it_is_usable_behind_the_trait_it_implements() {
-    // The seam, whole: a caller holding any manager can seat it, read it,
-    // advance it, and change its roster. Before the trait was widened this test
-    // had to reach past it to a concrete `begin` before it could start.
+    // A caller holding any manager can seat it, read it, advance it and change
+    // its roster. Before the trait was widened this test had to call a
+    // concrete `begin` first.
     let mut concrete = order(vec![1, 2]);
     let mut ctx = Ctx::new();
 
-    // Everything through the trait now, including the seating that used to
-    // force a caller back to the concrete type.
     let turns: &mut dyn TurnManager<TestOp, u32, u32> = &mut concrete;
     turns.begin(&mut ctx);
     turns.add_actor(3);

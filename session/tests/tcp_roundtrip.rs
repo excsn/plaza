@@ -358,11 +358,11 @@ async fn a_hello_is_dispatched_as_a_version_and_an_unknown_kind_is_skipped() {
 
 #[tokio::test]
 async fn a_disagreeing_client_is_reported_and_left_connected() {
-  // The division of labour. A version is a build hash, so a peer that merely
-  // recompiled is indistinguishable here from one whose shapes changed, and this
-  // layer cannot tell which it has. So it records the number and keeps serving;
-  // whether the mismatch is fatal, cosmetic, or worth telling the client to
-  // reload is the application's, and this is where it reads it.
+  // A version is a build hash, so a peer that merely recompiled is
+  // indistinguishable here from one whose shapes changed and this layer cannot
+  // tell which it has. So it records the number and keeps serving; whether the
+  // mismatch is fatal, cosmetic or worth telling the client to reload is the
+  // application's and this is where it reads it.
   let player_id = Uuid::new_v4();
   let agent_factory: plaza_session::tcp::AgentFactory<PlayerId> =
     Arc::new(move |_peer| Ok(Agent::new_human(player_id)));
@@ -413,8 +413,7 @@ async fn a_disagreeing_client_is_reported_and_left_connected() {
 async fn a_link_slower_than_the_probe_interval_is_still_measured() {
     // The probe schedule is 125ms in its fast phase. A round trip longer than
     // that means a pong lands after the next probe went out, so a single
-    // outstanding slot discards every sample and the link never gets measured
-    // at exactly the latencies worth measuring.
+    // outstanding slot discards every sample and such a link is never measured.
   let player_id = Uuid::new_v4();
   let agent_factory: plaza_session::tcp::AgentFactory<PlayerId> =
     Arc::new(move |_peer| Ok(Agent::new_human(player_id)));

@@ -1,7 +1,8 @@
 //! The rink, in fixed point. One `step` shared verbatim by the server, every
-//! client's rollback session, and the tests: determinism is not a property to
-//! check after the fact, it is the reason `Fx` is the only arithmetic here.
-//! Nothing in this file may touch a float; `Fx::to_f32` is the renderer's.
+//! client's rollback session and the tests. `Fx` is the only arithmetic here
+//! so that determinism holds by construction instead of being checked after
+//! the fact. Nothing in this file may touch a float; `Fx::to_f32` is the
+//! renderer's.
 
 use plaza_client_utils::fixed::Fx;
 use serde::{Deserialize, Serialize};
@@ -26,8 +27,8 @@ pub fn team(seat: usize) -> usize {
 }
 
 /// One tick's intent for one paddle: a held direction, `-1..=1` each axis.
-/// A level, not an edge, which is what lets a missing frame repeat the last
-/// one and be right almost always.
+/// A level rather than an edge, so a missing frame can repeat the last one and
+/// be right almost always.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaddleInput {
   pub dx: i8,
@@ -186,8 +187,8 @@ pub fn step(world: &World, inputs: &[PaddleInput]) -> World {
 
     // A reflection rather than a re-aim: the tangential component survives,
     // so a puck pinched between two paddles keeps its slide along their gap
-    // and walks out instead of shuttling forever. The normal component is
-    // topped up to shot speed so a hit still feels like a hit.
+    // and works its way out instead of bouncing between them forever. The
+    // normal component is topped up to shot speed.
     let vn = next.puck_vel.x.mul(nx) + next.puck_vel.y.mul(ny);
     if vn < Fx::ZERO {
       let twice = Fx::from_int(2).mul(vn);
@@ -227,7 +228,7 @@ pub fn step(world: &World, inputs: &[PaddleInput]) -> World {
     }
   }
 
-  // Speed cap, then a whisper of friction so an untouched puck settles.
+  // Speed cap, then a little friction so an untouched puck settles.
   let v2 = next.puck_vel.x.mul(next.puck_vel.x) + next.puck_vel.y.mul(next.puck_vel.y);
   let max = Fx::from_int(PUCK_MAX_SPEED);
   if v2 > max.mul(max) {
@@ -295,8 +296,8 @@ pub fn bot_chase(world: &World, seat: usize) -> PaddleInput {
   } else {
     world.puck_vel.x > Fx::ZERO
   };
-  // A still puck is nobody's by the two rules above when it rests exactly on
-  // the line, and a puck nobody contests is a stalled game.
+  // A still puck resting exactly on the line matches neither rule above and an
+  // uncontested puck stalls the game.
   let puck_still = world.puck_vel.x == Fx::ZERO;
 
   // One skater on the puck, the partner minding the net: whichever seat is

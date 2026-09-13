@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# The zero-ceremony path: stand the colony up and open the observer window on
-# it. Pass --connect <host:port> to watch a server already running somewhere
-# else, in which case nothing is started locally. --half sizes the pane;
-# every other argument goes to the server (--ants, --sites, --seed, --bind).
+# Starts the colony and opens the observer window on it. Pass --connect
+# <host:port> to watch a server already running somewhere else, in which case
+# nothing is started locally. --half sizes the pane; every other argument goes
+# to the server (--ants, --sites, --seed, --bind).
 #
 # Usage: ./run-native.sh [--ants N] [--half N] [--connect <host:port>]
 set -euo pipefail

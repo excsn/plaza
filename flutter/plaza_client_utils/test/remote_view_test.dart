@@ -101,8 +101,9 @@ void main() {
     expect(outside.x, closeTo(inside.x, 0.05), reason: 'crossing the cap must not jump');
   });
 
-  /// Not in the Rust original, which logs a warning. Reaching the cap steadily is
-  /// almost never a starved link, it is a render target computed the wrong way.
+  /// Not in the Rust original, which logs a warning. Reaching the cap steadily
+  /// almost always comes from a render target computed the wrong way rather than
+  /// a starved link.
   test('renders past the cap are counted', () {
     final v = view()..push(100, const S(0.0), 10.0);
     expect(v.overExtrapolations, 0);

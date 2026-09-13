@@ -81,9 +81,9 @@ impl ForgeState {
     }
   }
 
-  /// The crossing: the property store becomes the grid bomb_grid plays.
-  /// Everything unset is open floor; the outer ring is always wall, because a
-  /// bomb chasing a player off the board is nobody's authored intent.
+  /// The playtest handoff: the property store becomes the grid bomb_grid
+  /// plays. Everything unset is open floor; the outer ring is always wall,
+  /// because no author means for a bomb to chase a player off the board.
   pub fn to_grid(&self, players: usize) -> Grid {
     let mut grid = Grid::generate(1, players.max(1));
     for y in 0..BOARD_H {

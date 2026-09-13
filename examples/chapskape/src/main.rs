@@ -144,9 +144,9 @@ async fn frame_loop(options: role::Options, bots: usize) {
     let mouse = Vec2::from(mouse_position());
     let over_pack = ui::pack_slot_at(mouse).is_some();
 
-    // The camera is turned by the player and never by the game, which is the
-    // one thing a click-to-move game must not take away: a body that walks
-    // itself and a camera that also swings itself is a body nobody is driving.
+    // Only the player turns the camera. In a click-to-move game the body walks
+    // itself, so if the camera also swung itself the player would control
+    // nothing.
     if is_key_down(KeyCode::Left) || is_key_down(KeyCode::A) {
       yaw += TURN_SPEED * dt;
     }
@@ -188,8 +188,8 @@ async fn frame_loop(options: role::Options, bots: usize) {
     if client.ready() {
       if is_mouse_button_pressed(MouseButton::Left) {
         if let Some(slot) = ui::pack_slot_at(mouse) {
-          // The pack is the one private thing on screen, and the two things
-          // worth doing with a square are using it and getting rid of it.
+          // The pack is the one private thing on screen. A square can be used
+          // or dropped.
           if is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift) {
             client.drop_slot(slot as u8);
           } else {
@@ -252,8 +252,7 @@ async fn frame_loop(options: role::Options, bots: usize) {
       }
 
       // Everybody else, drawn between the two squares they were last reported
-      // on. At this tick length interpolation is not a refinement, it is the
-      // whole visual experience.
+      // on. At this tick length interpolation is required.
       let tick_ms = client.tick_ms;
       let per_second = 1000.0 / tick_ms.max(1) as f32;
       for other in client.others.values() {

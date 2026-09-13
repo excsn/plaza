@@ -1,34 +1,32 @@
 //! What the field names cost, on the traffic this game actually sends.
 //!
 //! The figure quoted for `MsgPackNamedCodec` (67% of JSON, against compact's
-//! 40%) comes from a synthetic ten-op message, and this repository has been
-//! wrong-footed twice by exactly that kind of number: a 55% win on despawns
-//! that was 0.7% of traffic, and a 15% variant-tag share that was 1%. A share
-//! is set by the *mix*, so it has to be measured on the mix.
+//! 40%) comes from a synthetic ten-op message. This repository has been misled
+//! twice by that kind of number: a 55% win on despawns that was 0.7% of
+//! traffic and a 15% variant-tag share that was 1%. A share depends on the
+//! traffic mix, so it has to be measured on real traffic.
 //!
 //! What is measured here is the whole outbound stream of one match: every
-//! broadcast notice, every refusal, and the per-recipient snapshot the
-//! controller builds for each seated player, which is by far the largest
-//! message and the one that decides the answer.
+//! broadcast notice, every refusal and the per-recipient snapshot the
+//! controller builds for each seated player. The snapshot is by far the largest
+//! message and dominates the total.
 //!
 //! # What it found
 //!
-//! Named costs **+190%** over compact on this traffic, not the +67% the
-//! synthetic figure implies, and lands at **76% of JSON** where compact is
-//! **26%**. So the real choice is a quarter of JSON or three quarters of it,
-//! and picking named to keep a hand-written client simple is close to giving
-//! up MessagePack.
+//! Named costs +190% over compact on this traffic rather than the +67% the
+//! synthetic figure implies. It lands at 76% of JSON where compact is 26%, so
+//! picking named to keep a hand-written client simple gives up most of what
+//! MessagePack saves.
 //!
-//! The reason generalises, and it is the opposite of what was expected. A field
-//! name is paid **per field per message**, so the premium tracks a message's
-//! *width*, not its size. `PlayerView` has fifteen fields and is sent once per
-//! recipient per change; a notice has two or three behind a variant name both
-//! encodings pay for. The widest, most frequent message therefore pays most.
+//! The reason generalises and is the opposite of what was expected. A field
+//! name is paid per field per message, so the premium grows with a message's
+//! field count rather than its size. `PlayerView` has fifteen fields and is
+//! sent once per recipient per change; a notice has two or three behind a
+//! variant name both encodings pay for. The widest, most frequent message
+//! therefore pays most.
 //!
-//! Note this runs the other way from [`curtain_fire`]'s variant-name result,
-//! where a fixed per-message tag made *small* messages the expensive ones. Both
-//! are true, and together they say: a per-message cost punishes small messages,
-//! a per-field cost punishes wide ones.
+//! This runs the other way from [`curtain_fire`]'s variant-name result, where a
+//! fixed per-message tag made small messages the expensive ones.
 //!
 //! [`curtain_fire`]: https://docs.rs/plaza
 
@@ -186,12 +184,11 @@ async fn snapshot_pass(state: &TableState, players: &[PlayerId], mut into: Cost)
 mod tests {
   use super::*;
 
-  /// The headline: named nearly triples this wire, and lands close to JSON.
+  /// Named nearly triples this wire and lands close to JSON.
   ///
   /// Bounded rather than exact, because the deal and the rules decide the mix
-  /// and a rules change should not fail this. What it protects is the
-  /// conclusion, which is much stronger than the synthetic figure implies:
-  /// the choice here is roughly "a quarter of JSON or three quarters of it".
+  /// and a rules change should not fail this. The bounds hold the conclusion:
+  /// compact is roughly a quarter of JSON and named roughly three quarters.
   #[tokio::test]
   async fn the_names_nearly_triple_a_real_match() {
     let cost = measure_a_match(3).await;
@@ -216,15 +213,15 @@ mod tests {
     );
   }
 
-  /// The direction that was guessed wrong, and the reason worth carrying.
+  /// Wide snapshots pay a larger premium than narrow notices, which is the
+  /// opposite of the initial guess.
   ///
-  /// A field name is paid **per field per message**, so the premium tracks how
-  /// many fields a message has, not how small it is. A notice is two or three
-  /// short fields behind a variant name both encodings pay for; a per-recipient
-  /// view is fifteen. So the largest and most frequent message on this wire is
-  /// also the one that pays proportionally most, which is the opposite of the
-  /// variant-name result in `curtain_fire`, where a fixed per-message tag made
-  /// *small* messages the expensive ones.
+  /// A field name is paid per field per message, so the premium grows with how
+  /// many fields a message has rather than how small it is. A notice is two or
+  /// three short fields behind a variant name both encodings pay for; a
+  /// per-recipient view is fifteen. So the largest and most frequent message on
+  /// this wire also pays proportionally most. In `curtain_fire` a fixed
+  /// per-message tag made small messages the expensive ones instead.
   #[tokio::test]
   async fn a_wide_snapshot_pays_more_than_a_narrow_notice() {
     let cost = measure_a_match(3).await;

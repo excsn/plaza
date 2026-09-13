@@ -1,13 +1,14 @@
 //! Two people agreeing on something, with a server as the only thing that may
 //! commit it.
 //!
-//! Not a state broadcast and not a rollback: nobody is predicting anything and
-//! there is no world to reconcile. What there is instead is an **agreement**,
+//! This is neither a state broadcast nor a rollback: nobody is predicting
+//! anything and there is no world to reconcile. What there is instead is an
+//! **agreement**,
 //! which is a shape neither of the other regimes in this tree has. Both sides
 //! offer, both confirm, and only then does anything change hands; until then
 //! either can walk away and both are exactly where they started.
 //!
-//! The rule that carries the whole thing is that **changing an offer clears
+//! The key rule is that **changing an offer clears
 //! both confirmations**. Without it there is a bait and switch: confirm what
 //! you can see, then swap what you are giving before the commit lands. Every
 //! trade window that has ever shipped without that rule has had the same

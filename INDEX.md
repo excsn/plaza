@@ -6,7 +6,7 @@ Companion to [README.md](README.md) (what Plaza is). This file answers "where do
 
 | File | What it is for |
 |---|---|
-| [README.md](README.md) | What Plaza is, and the crate map. |
+| [README.md](README.md) | What Plaza is and the crate map. |
 
 Each crate also carries a `README.md` (how to use it) and an `API_REFERENCE.md` (its full public surface).
 
@@ -14,16 +14,16 @@ Each crate also carries a `README.md` (how to use it) and an `API_REFERENCE.md` 
 
 | Crate | Path | Role |
 |---|---|---|
-| `plaza` | [core/](core/) | The controller loop, the four traits an app implements, and optional building blocks. Depends on no other workspace crate. |
+| `plaza` | [core/](core/) | The controller loop, the four traits an app implements and optional building blocks. Depends on no other workspace crate. |
 | `plaza_session` | [session/](session/) | Real transports. One shared connection manager, thin per-protocol adapters, plus the optional listen-server HTTP layer (`actix_host`). |
 | `plaza_lobby` | [lobby/](lobby/) | Rooms on a single server: spawn, list, join, reap. Talks to rooms only through core's `ControllerCommand`. |
 | `plaza_client_utils` | [client_utils/](client_utils/) | Client-side prediction and smoothing. **No workspace dependencies**: deliberately, so wasm and engine-plugin builds stay free of the server's async runtime. |
 | `plaza_server_utils` | [server_utils/](server_utils/) | Relevance streaming, delta baselines, lag-compensation rewind, aggregation, seats. Runtime-free and wasm-safe like the client crate, whose interpolation, digest and slot-key types it shares. Its only workspace dependency is that crate. |
-| `plaza_wire` | [wire/](wire/) | The wire vocabulary shared by a server and its clients, runtime-free: the message envelope, the `WireCodec` trait, the common netcode payload types, and the build-time protocol version hash. |
-| `plaza_ws` | [ws_client/](ws_client/) | One client-side WebSocket interface across desktop, browser and in-process. The counterpart to `plaza_session`, which is server-only by construction. |
+| `plaza_wire` | [wire/](wire/) | The wire vocabulary shared by a server and its clients, runtime-free: the message envelope, the `WireCodec` trait, the common netcode payload types and the build-time protocol version hash. |
+| `plaza_ws` | [ws_client/](ws_client/) | One client-side WebSocket interface across desktop, browser and in-process. The counterpart to `plaza_session`, which is server-only by design. |
 
 
-Examples live in [examples/](examples/), one crate each, in their own workspace (their pinned renderers and wasm targets stay out of the publishable graph; `./check.sh` verifies both workspaces, and the feature list inside it is load-bearing). Plus [examples/playground_common/](examples/playground_common/): the four listen-server roles and their argument parsing, shared by the two playgrounds. Not part of the library, because argument parsing is an opinion every real application already has; it is a separate crate only because a wasm client needs the same vocabulary and must not inherit an HTTP server to get it.
+Examples live in [examples/](examples/), one crate each, in their own workspace (their pinned renderers and wasm targets stay out of the publishable graph; `./check.sh` verifies both workspaces and the feature list inside it is required). Plus [examples/playground_common/](examples/playground_common/): the four listen-server roles and their argument parsing, shared by the two playgrounds. It is not part of the library, because every real application already has its own argument parsing; it is a separate crate only because a wasm client needs the same role names and must not pull in an HTTP server to get them.
 
 ## The loop (start here)
 
@@ -35,10 +35,10 @@ Examples live in [examples/](examples/), one crate each, in their own workspace 
 | Loopback transport for tests and local play | [core/src/session/in_process.rs](core/src/session/in_process.rs) |
 | What a client is sent, per recipient or one uniform view for all; `SnapshotProvider`, `SnapshotContext`. Worked examples: [card_table](examples/card_table/) (per-recipient), [tag_arena](examples/tag_arena/) (uniform) | [core/src/snapshot.rs](core/src/snapshot.rs) |
 | Fixed-rate and virtual time stepping | [core/src/tick_driver.rs](core/src/tick_driver.rs) |
-| `Agent`, and the `AgentId` blanket trait | [core/src/agent.rs](core/src/agent.rs) |
+| `Agent` and the `AgentId` blanket trait | [core/src/agent.rs](core/src/agent.rs) |
 | Live counters the controller writes and anyone reads: tick duration, queue depth, ops | [core/src/stats.rs](core/src/stats.rs) |
 | Error hierarchy | [core/src/error.rs](core/src/error.rs) |
-| What the command channel costs against producer count, and what an op path costs end to end | [core/benches/controller.rs](core/benches/controller.rs) |
+| What the command channel costs against producer count and what an op path costs end to end | [core/benches/controller.rs](core/benches/controller.rs) |
 | Four ways to run a snapshot pass, against providers that return immediately, yield, or wait | [core/benches/snapshots.rs](core/benches/snapshots.rs) |
 
 **Reading order for a newcomer:** `state_logic.rs` → `controller.rs` → `session/mod.rs`. Everything else is optional.
@@ -51,7 +51,7 @@ Examples live in [examples/](examples/), one crate each, in their own workspace 
 |---|---|
 | Event schedulers, generic over a tick (`u64`) or game-time (`Duration`) axis | [common/scheduler/event_scheduler.rs](core/src/common/scheduler/event_scheduler.rs) |
 | Callback schedulers, same two axes | [common/scheduler/callback_scheduler.rs](core/src/common/scheduler/callback_scheduler.rs) |
-| `SchedulerInstant`, `ScheduledEventId`, and the four public aliases | [common/scheduler/mod.rs](core/src/common/scheduler/mod.rs) |
+| `SchedulerInstant`, `ScheduledEventId` and the four public aliases | [common/scheduler/mod.rs](core/src/common/scheduler/mod.rs) |
 | Finite state machines | [common/fsm.rs](core/src/common/fsm.rs) |
 | Participant registry | [common/participants.rs](core/src/common/participants.rs) |
 | Disconnect grace periods for reconnection | [common/reconnect.rs](core/src/common/reconnect.rs) |
@@ -65,13 +65,13 @@ Examples live in [examples/](examples/), one crate each, in their own workspace 
 | Fixed-delay input buffering for fairness | [reconciliation/delayed_input_processing.rs](core/src/game_common/reconciliation/delayed_input_processing.rs) |
 | Rewind buffer for lag compensation; `Interpolatable` | [server_utils/src/history.rs](server_utils/src/history.rs) |
 | Wire shapes for prediction: `SequencedClientInput`, `AuthoritativeStateUpdate`, `RemoteEntitySnapshot` | [reconciliation/op_payloads.rs](core/src/game_common/reconciliation/op_payloads.rs) |
-| Turn and round traits, plus `RoundRobinTurnManager`, `SequentialRoundManager`, and `Phased` for holding a phase. Worked example: [card_table](examples/card_table/) | [flow_control/](core/src/game_common/flow_control/) |
+| Turn and round traits, plus `RoundRobinTurnManager`, `SequentialRoundManager` and `Phased` for holding a phase. Worked example: [card_table](examples/card_table/) | [flow_control/](core/src/game_common/flow_control/) |
 | `Scorekeeper` trait and `HashMapScorekeeper` | [scorekeeping/](core/src/game_common/scorekeeping/) |
 | `PlayerIntent` | [input_intent.rs](core/src/game_common/input_intent.rs) |
 
 ### `app_common/`: collaboration payloads
 
-Op shapes for non-game apps: [locking/](core/src/app_common/locking/), [presence/](core/src/app_common/presence/), [ordered_collection_ops/](core/src/app_common/ordered_collection_ops/), [object_property_ops/](core/src/app_common/object_property_ops/). These are payload definitions, not engines, the application still writes the logic.
+Op shapes for non-game apps: [locking/](core/src/app_common/locking/), [presence/](core/src/app_common/presence/), [ordered_collection_ops/](core/src/app_common/ordered_collection_ops/), [object_property_ops/](core/src/app_common/object_property_ops/). These are payload definitions only; the application still writes the logic.
 
 ## `plaza_session`
 
@@ -79,8 +79,8 @@ Both transports share everything that is not socket I/O, which is why the adapte
 
 | What | Entry |
 |---|---|
-| Connection registry, message targeting, serialization, the deserialize bridge (two-stage dispatch on the frame kind), and the `Session` impl both transports delegate to | [session/src/manager.rs](session/src/manager.rs) |
-| The protocol handshake: `with_protocol` declares a version, every new connection is sent a `Hello`, and a peer's declaration is recorded per agent | [session/src/manager.rs](session/src/manager.rs) |
+| Connection registry, message targeting, serialization, the deserialize bridge (two-stage dispatch on the frame kind) and the `Session` impl both transports delegate to | [session/src/manager.rs](session/src/manager.rs) |
+| The protocol handshake: `with_protocol` declares a version, every new connection is sent a `Hello` and a peer's declaration is recorded per agent | [session/src/manager.rs](session/src/manager.rs) |
 | Pluggable wire format; re-exports `WireCodec` and `JsonCodec` from [`plaza_wire`](#plaza_wire) | [session/src/codec.rs](session/src/codec.rs) |
 | actix-web WebSocket adapter: `handle_connection` is the whole integration | [session/src/actix_ws.rs](session/src/actix_ws.rs) |
 | Length-delimited TCP adapter | [session/src/tcp.rs](session/src/tcp.rs) |
@@ -88,7 +88,7 @@ Both transports share everything that is not socket I/O, which is why the adapte
 | Queue depths, limits and overflow policy, derived from a named `Workload` or set field by field | [session/src/workload.rs](session/src/workload.rs) |
 | What routing a frame to a target costs, the agent index against the registry pass it replaced | [session/benches/broadcast.rs](session/benches/broadcast.rs) |
 | What it costs to build an outbound frame | [session/benches/encode.rs](session/benches/encode.rs) |
-| What each queue absorbs before it drops, and whether a workload parameter's derived depth sits on the knee | [session/benches/saturation.rs](session/benches/saturation.rs) |
+| What each queue absorbs before it drops and whether a workload parameter's derived depth sits on the knee | [session/benches/saturation.rs](session/benches/saturation.rs) |
 | What one frame pays to ask whether its link is impaired | [session/benches/passthrough.rs](session/benches/passthrough.rs) |
 | What a snapshot pass pays for addressing recipients one at a time | [session/benches/snapshot_fanout.rs](session/benches/snapshot_fanout.rs) |
 | What the transport carried and what it dropped rather than stalling for | [session/src/stats.rs](session/src/stats.rs) |
@@ -100,15 +100,15 @@ Both transports share everything that is not socket I/O, which is why the adapte
 
 | What | Entry |
 |---|---|
-| `WireCodec` trait (with `is_text` and `encode_into`), `JsonCodec`, and `MsgPackCodec` / `MsgPackNamedCodec` (feature `msgpack`). What the names cost on real traffic, measured: [parlour_game](examples/parlour_game/) | [wire/src/lib.rs](wire/src/lib.rs) |
+| `WireCodec` trait (with `is_text` and `encode_into`), `JsonCodec` and `MsgPackCodec` / `MsgPackNamedCodec` (feature `msgpack`). What the names cost on real traffic, measured: [parlour_game](examples/parlour_game/) | [wire/src/lib.rs](wire/src/lib.rs) |
 | Identity on the wire: `Agent`, `AgentId`. Here rather than in core because a wasm client cannot depend on core | [wire/src/envelope.rs](wire/src/envelope.rs) |
-| Framing: the kind byte in front of every message, the skip-unknown rule that lets a frame kind be added later, and `ProtocolVersion` for the `Hello` handshake | [wire/src/frame.rs](wire/src/frame.rs) |
+| Framing: the kind byte in front of every message, the skip-unknown rule that lets a frame kind be added later and `ProtocolVersion` for the `Hello` handshake | [wire/src/frame.rs](wire/src/frame.rs) |
 | What the codecs and the framing actually cost, with an allocation-counting allocator | [wire/benches/wire.rs](wire/benches/wire.rs) |
 | Shared netcode payload vocabulary (`SequencedClientInput`, `AuthoritativeStateUpdate`, `RemoteEntitySnapshot`, `TimestampedClientAction`) | [wire/src/payloads.rs](wire/src/payloads.rs) |
 | Build-time protocol version: hash the sources that define your messages, emit a `u32` (feature `build`, used from a `build.rs`) | [wire/src/build/mod.rs](wire/src/build/mod.rs) |
-| Sub-byte packing: a bit writer and reader, nibble varints, bounded-float quantisation, smallest-three quaternions. What a derive cannot reach, measured: 51877 bytes to 10396 on 901 cubes | [wire/src/bits.rs](wire/src/bits.rs) |
-| A `WireCodec` that bit-packs any `Serialize` type with no layout written by hand. 1.4x on the same payload, and the ceiling of what a derive can do, because serde carries no bounds | [wire/src/bit_codec.rs](wire/src/bit_codec.rs) |
-| `Payload`: bytes that stay bytes. A packed array in a `Vec<u8>` field is re-encoded integer by integer and costs 15502 to carry 10396 | [wire/src/payload.rs](wire/src/payload.rs) |
+| Sub-byte packing: a bit writer and reader, nibble varints, bounded-float quantisation, smallest-three quaternions. Measured at 51877 bytes to 10396 on 901 cubes, which a derive cannot reach | [wire/src/bits.rs](wire/src/bits.rs) |
+| A `WireCodec` that bit-packs any `Serialize` type with no layout written by hand. 1.4x on the same payload, which is as far as a derive can go because serde carries no bounds | [wire/src/bit_codec.rs](wire/src/bit_codec.rs) |
+| `Payload`: a field type that keeps packed bytes as bytes. A packed array in a `Vec<u8>` field is re-encoded integer by integer and costs 15502 to carry 10396 | [wire/src/payload.rs](wire/src/payload.rs) |
 
 Split out from `plaza_session` so a client can share the server's encoding without inheriting its async runtime: pure serde, no tokio, no actix. Server code sees these through the `plaza_session` re-export and rarely names this crate directly.
 
@@ -116,8 +116,8 @@ Split out from `plaza_session` so a client can share the server's encoding witho
 
 | What | Entry |
 |---|---|
-| Create / join / list / reap, and password verification | [lobby/src/manager.rs](lobby/src/manager.rs) |
-| Quick match: a queue with patience, and the seats it fills with bots. Worked examples: [lobby_world](examples/lobby_world/) (into standing rooms), [parlour_game](examples/parlour_game/) (spawning one per match) | [lobby/src/queue.rs](lobby/src/queue.rs) |
+| Create / join / list / reap and password verification | [lobby/src/manager.rs](lobby/src/manager.rs) |
+| Quick match: a queue with patience and the seats it fills with bots. Worked examples: [lobby_world](examples/lobby_world/) (into standing rooms), [parlour_game](examples/parlour_game/) (spawning one per match) | [lobby/src/queue.rs](lobby/src/queue.rs) |
 | One-use placement tickets, so a room learns who connected without asking them | [lobby/src/tickets.rs](lobby/src/tickets.rs) |
 | `RoomFactory`: what an app implements per game type | [lobby/src/factory.rs](lobby/src/factory.rs) |
 | `RoomHandle` and the in-process implementation | [lobby/src/room.rs](lobby/src/room.rs) |
@@ -133,22 +133,22 @@ Split out from `plaza_session` so a client can share the server's encoding witho
 | **Rollback netcode** (deterministic lockstep: save-state history, input prediction, the `RollbackSession` bundle) | [rollback.rs](client_utils/src/rollback.rs) |
 | Predict locally, reconcile against the server | [prediction.rs](client_utils/src/prediction.rs) |
 | Unacknowledged input replay buffer | [input_buffer.rs](client_utils/src/input_buffer.rs) |
-| What a reconciliation did, and an adaptive test for what counts as abnormal | [correction.rs](client_utils/src/correction.rs) |
+| What a reconciliation did and an adaptive test for what counts as abnormal | [correction.rs](client_utils/src/correction.rs) |
 | Snapshot buffering and interpolation for remote entities, plus the render clock | [interpolation.rs](client_utils/src/interpolation.rs) |
 | Extrapolation when snapshots run out | [extrapolation.rs](client_utils/src/extrapolation.rs) |
-| Easing a reconciliation correction over a few frames, and `AdaptiveDecay` for clearing a large error sooner than a small one rather than in the same time | [smoothing.rs](client_utils/src/smoothing.rs) |
+| Easing a reconciliation correction over a few frames and `AdaptiveDecay` for clearing a large error sooner than a small one rather than in the same time | [smoothing.rs](client_utils/src/smoothing.rs) |
 | Interpolation that uses the velocity at both ends, for a send rate low enough that a straight line corners visibly | [hermite.rs](client_utils/src/hermite.rs) |
-| Fixed-size simulation steps out of a variable frame, and "is it time yet" beside it | [timestep.rs](client_utils/src/timestep.rs) |
+| Fixed-size simulation steps out of a variable frame and "is it time yet" beside it | [timestep.rs](client_utils/src/timestep.rs) |
 | The client's mirror of a streamed entity set: apply, check generations, fold the digest, compare | [mirror.rs](client_utils/src/mirror.rs) |
 | `(index, generation)` handles and the allocator that recycles them | [slot.rs](client_utils/src/slot.rs) |
 | An order-independent digest of a set of `u64` keys, maintainable in O(1) | [digest.rs](client_utils/src/digest.rs) |
 | Send an input only when it changes, plus the keepalive that makes that safe | [coalesce.rs](client_utils/src/coalesce.rs) |
-| The playout queue: bounded, ordered by sequence, and the discontinuity verdict a resumed client acts on | [playout.rs](client_utils/src/playout.rs) |
+| The playout queue: bounded, ordered by sequence and the discontinuity verdict a resumed client acts on | [playout.rs](client_utils/src/playout.rs) |
 | Measured arrival statistics and the render-delay budget they imply | [arrival.rs](client_utils/src/arrival.rs) |
 | Client-side `Vec2`/`Vec3`/`Quat` with operators and slerp | [math.rs](client_utils/src/math.rs) |
 | Delay, jitter and loss applied where the link is | [conditioner.rs](session/src/conditioner.rs) |
 | Frames the session answers for itself (probes, their schedule) | [control.rs](session/src/control.rs) |
-| Saying a one-shot op until the peer proves it heard | [oneshot.rs](server_utils/src/oneshot.rs) |
+| Resending a one-shot op until the peer acknowledges it | [oneshot.rs](server_utils/src/oneshot.rs) |
 | Round-trip latency estimation from probe samples | [rtt.rs](client_utils/src/rtt.rs) |
 | A probe's epoch bookkeeping across reconnect and resume | [timeline.rs](client_utils/src/timeline.rs) |
 | Sliding-window acknowledgement: a sequence number plus a 64-bit arrival mask, so a sender resends only the gaps (and `contiguous_base`, for a protocol that re-derives instead) | [ack.rs](client_utils/src/ack.rs) |
@@ -161,17 +161,17 @@ Note the intentional overlap with `core/src/common/math.rs`: keeping this crate 
 
 ## `plaza_ws`
 
-The client-side socket, with one interface over three backends. `plaza_session` is tokio/actix and server-only, so a client, and least of all a browser one, could not use it.
+The client-side socket, with one interface over three backends. `plaza_session` is tokio/actix and server-only, so no client could use it, least of all a browser one.
 
 | What | Entry |
 |---|---|
-| The `Socket` trait, `Event`, `CloseReason`. Non-blocking `poll` into a caller-owned buffer, for frame loops with nowhere to put a future | [ws_client/src/lib.rs](ws_client/src/lib.rs) |
+| The `Socket` trait, `Event`, `CloseReason`. Non-blocking `poll` into a caller-owned buffer, for frame loops that cannot await a future | [ws_client/src/lib.rs](ws_client/src/lib.rs) |
 | In-process pair, so a host that plays runs the same client its joiners do | [ws_client/src/loopback.rs](ws_client/src/loopback.rs) |
 | Desktop, `tungstenite` on a worker thread with a non-blocking stream | [ws_client/src/native.rs](ws_client/src/native.rs) |
 | Browser under macroquad: `extern "C"` against our own JS plugin, no dependencies, because wasm-bindgen cannot coexist with miniquad's loader | [ws_client/src/miniquad.rs](ws_client/src/miniquad.rs), [ws_client/js/plaza_ws.js](ws_client/js/plaza_ws.js) |
 | Dropping a resume backlog before parsing it, under the resume contract | [ws_client/src/backlog.rs](ws_client/src/backlog.rs) |
-| Guards the silent-stub failure: parses a bundle's imports and fails if the plugin does not satisfy them | [ws_client/check_js_imports.py](ws_client/check_js_imports.py) |
-| Guards the browser pages nothing compiles: kind bytes against `Kind`, unhandled unit variants, and a page's own MessagePack codec run against the Rust fixtures | [examples/check_pages.py](examples/check_pages.py) |
+| Catches the silent-stub failure: parses a bundle's imports and fails if the plugin does not satisfy them | [ws_client/check_js_imports.py](ws_client/check_js_imports.py) |
+| Checks the browser pages, which nothing compiles: kind bytes against `Kind`, unhandled unit variants and a page's own MessagePack codec run against the Rust fixtures | [examples/check_pages.py](examples/check_pages.py) |
 
 ## `plaza_server_utils`
 
@@ -181,23 +181,23 @@ The server-side counterpart, also runtime-free and wasm-safe. Shares `client_uti
 |---|---|
 | Historical state rewind for lag compensation | [server_utils/src/history.rs](server_utils/src/history.rs) |
 | Relevance / interest management: Morton keys, a spatial grid, a visibility-diff bitset, a hysteresis tier boundary | [server_utils/src/relevance.rs](server_utils/src/relevance.rs) |
-| Per-subscriber delta bookkeeping: which packets landed, what to send and what to retract, the rebuild when a mirror has drifted, and the flow control that stops streaming to a reader that stopped reading | [server_utils/src/delta.rs](server_utils/src/delta.rs) |
+| Per-subscriber delta bookkeeping: which packets landed, what to send and what to retract, the rebuild when a mirror has drifted and the flow control that stops streaming to a reader that stopped reading | [server_utils/src/delta.rs](server_utils/src/delta.rs) |
 | Tick-addressed input buffering: the accepting window, reject-not-correct, level and event semantics | [server_utils/src/input_schedule.rs](server_utils/src/input_schedule.rs) |
-| Subscription relevance, the question a radius cannot ask: who a client chose to care about wherever they are, kept both ways round so a departure knows who to tell | [server_utils/src/subscription.rs](server_utils/src/subscription.rs) |
+| Subscription relevance, for what a radius cannot express: who a client chose to follow wherever they are, indexed both ways so a departure knows who to tell | [server_utils/src/subscription.rs](server_utils/src/subscription.rs) |
 | Hierarchical aggregation: a Barnes-Hut tree that coarsens a distant crowd instead of culling it, for entities a client simulates rather than draws | [server_utils/src/aggregate.rs](server_utils/src/aggregate.rs) |
-| A bounded number of seats, and a type that will not let you forget whether one is fresh | [server_utils/src/seats/mod.rs](server_utils/src/seats/mod.rs) |
+| A bounded number of seats and a type that will not let you forget whether one is fresh | [server_utils/src/seats/mod.rs](server_utils/src/seats/mod.rs) |
 | Running totals into rates, with the divide-by-zero guard every copy had to remember | [server_utils/src/meter.rs](server_utils/src/meter.rs) |
-| Which entities fit the packet when they cannot all fit: priority that survives the ticks an entity is not sent on, so nothing starves and a budget is a ceiling rather than an outcome | [server_utils/src/priority.rs](server_utils/src/priority.rs) |
+| Which entities fit the packet when they cannot all fit: priority that carries over the ticks an entity is not sent on, so nothing starves and the budget is a ceiling you set | [server_utils/src/priority.rs](server_utils/src/priority.rs) |
 | Which entities have stopped, so a packet can stop paying for them. Rest is a run of quiet ticks; waking is immediate | [server_utils/src/rest.rs](server_utils/src/rest.rs) |
 
-`SetDigest`, `SlotKey`/`SlotAllocator` and `DeltaMirror` are re-exported from `client_utils`, not defined here: both sides have to agree about them, and a browser client must not inherit a server to get them.
+`SetDigest`, `SlotKey`/`SlotAllocator` and `DeltaMirror` are re-exported from `client_utils`, not defined here: both sides have to agree about them and a browser client must not inherit a server to get them.
 
 ## Tests
 
 | Where | Covers |
 |---|---|
 | [core/tests/in_process_pipeline.rs](core/tests/in_process_pipeline.rs) | The controller runtime end to end: join→snapshot, op→broadcast, tick driver, leave, shutdown. |
-| [session/tests/tcp_roundtrip.rs](session/tests/tcp_roundtrip.rs) | A framed client's op reaching the controller, a broadcast reaching the client, and bind failure surfacing. |
+| [session/tests/tcp_roundtrip.rs](session/tests/tcp_roundtrip.rs) | A framed client's op reaching the controller, a broadcast reaching the client and bind failure surfacing. |
 | [lobby/tests/lobby_manager.rs](lobby/tests/lobby_manager.rs) | Room lifecycle, passwords, filters, reaping: including regression tests for the join deadlock and premature reaping. |
 | `core/src/common/scheduler/*` | Scheduler semantics, inline. |
 | `core/src/game_common/reconciliation/*` | Input tracking, delayed input, historical buffer, inline. |
@@ -210,7 +210,7 @@ The server-side counterpart, also runtime-free and wasm-safe. Shares `client_uti
 ## Conventions
 
 - `parking_lot` for `Mutex`/`RwLock`, never `std::sync` (workspace-wide excsn rule).
-- All channels are `fibre`, not `tokio::sync`. What that buys, measured twice (fibre's own channel arena at `fibre/channels/arena/docs/mpsc.md`, and `core/benches/controller.rs`'s producer sweep): throughput independent of producer count on the bounded async MPSC shape, where tokio's collapses past a handful of senders, 2x slower at 64 producers in plaza's own workload and worse under saturation. The cost is 3-5% on a nearly-uncontended threaded queue, which no deployment observes. Sync call sites use `try_send`; fibre's `send` is a future, so `let _ = tx.send(x);` silently does nothing.
+- All channels are `fibre`, not `tokio::sync`. What that buys, measured twice (fibre's own channel arena at `fibre/channels/arena/docs/mpsc.md` and `core/benches/controller.rs`'s producer sweep): throughput independent of producer count on the bounded async MPSC shape, where tokio's collapses past a handful of senders, 2x slower at 64 producers in plaza's own workload and worse under saturation. The cost is 3-5% on a nearly-uncontended threaded queue, which no deployment would notice. Sync call sites use `try_send`; fibre's `send` is a future, so `let _ = tx.send(x);` silently does nothing.
 - Bench results live in [docs/benches/](docs/benches/), one page per bench target.
 - A session's two notification streams (inbound messages and presence), are single-consumer: they are *taken*, not subscribed to. Taking one twice panics.
 - Joins and leaves share one ordered `PresenceEvent` stream on purpose. Splitting them lets a leave overtake a join under `select!`, which broke reconnection.

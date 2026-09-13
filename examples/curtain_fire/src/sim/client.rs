@@ -1,11 +1,11 @@
-//! One pilot's belief about the field.
+//! One pilot's view of the field.
 //!
-//! The unusual part: **the client does not receive the curtain, it computes
-//! it.** Everything the server knows about the enemy bullets, this knows too,
-//! from the same closed form and the same handful of wave announcements. The
-//! two ends never disagree about a bullet. They disagree about where the ship
-//! was, which is why the death question has three answers and why only one of
-//! them is both fair and checkable.
+//! **The client computes the curtain instead of receiving it.** It knows
+//! everything the server knows about the enemy bullets, from the same closed
+//! form and the same handful of wave announcements. The two ends never
+//! disagree about a bullet. They disagree about where the ship was, which is
+//! why there are three death rules and only one of them is both fair and
+//! checkable.
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -60,13 +60,12 @@ pub struct ClientStats {
   pub deaths_felt: u64,
   /// Ticks spent flying a ship this client already knew was hit.
   ///
-  /// The number that condemns `ServerOnly`, and it is not the one this example
-  /// was planned around. A derivable curtain means the client is never the last
-  /// to know: it computed the same field the server did and saw the contact at
-  /// the same tick. So the rule does not decide *who finds out*, it decides
-  /// **who is allowed to act on it**, and under `ServerOnly` the player watches
-  /// themself keep flying for a round trip after they know they are dead.
-  /// Which is worse than not knowing.
+  /// This shows what `ServerOnly` costs, which is not what this example was
+  /// planned around. With a derivable curtain the client computes the same
+  /// field the server does and sees the contact on the same tick, so the rule
+  /// only decides **who is allowed to act on it**. Under `ServerOnly` the player
+  /// keeps flying for a round trip after they know they are dead, which is
+  /// worse than not knowing.
   pub flown_while_dead_ticks: u64,
   /// Bullets drawn from a wave whose emitter had already been shot down,
   /// before the op saying so arrived.
@@ -93,11 +92,9 @@ pub struct Client {
   history: VecDeque<(u64, Dir8)>,
   /// Where this client *drew itself* on each recent tick.
   ///
-  /// Needed to answer the only question that condemns `ServerOnly`, and it has
-  /// to be a record rather than the current position: "was there anything to
-  /// dodge at the tick I was killed on" is a question about the past, and
-  /// asking it of the present answers a different question that happens to
-  /// compile.
+  /// Needed to check whether there was anything to dodge at the tick this
+  /// client was killed on. That is a question about the past, so it needs a
+  /// record; asking it of the current position answers a different question.
   pos_history: VecDeque<(u64, V2)>,
   sim_tick: u64,
   held: Dir8,
@@ -216,7 +213,7 @@ impl Client {
     let tick = self.aim_tick(server_time_ms);
     self.last_input_tick = tick;
     // Scheduled for the tick it named, never applied on the press. Applying it
-    // now runs the input a playout depth before the server does, and every
+    // now runs the input a playout depth before the server does and every
     // frame then arrives as a correction.
     self.schedule.submit(tick, dir, self.sim_tick, self.window());
     Op::Move { seq: self.input_seq, tick, dir }
@@ -240,8 +237,7 @@ impl Client {
         self.clock.set_delay(policy.render_delay_ms);
         self.ships = start.ships.clone();
         // Every wave already in flight. Without these a joiner flies through a
-        // curtain it cannot see, which is the one failure mode a derived field
-        // has that a streamed one does not.
+        // curtain it cannot see. A streamed field cannot fail this way.
         self.waves = start.waves.clone();
         self.downed = start.downed.clone();
         self.sim_tick = start.tick;
@@ -328,7 +324,7 @@ impl Client {
     self.ships = frame.ships;
   }
 
-  /// Advances the prediction, re-derives the curtain, and decides whether this
+  /// Advances the prediction, re-derives the curtain and decides whether this
   /// client believes it has just been hit.
   ///
   /// Returns a declaration to send, when the rule asks for one. Returning it
@@ -357,7 +353,7 @@ impl Client {
       self.pos_history.push_back((self.sim_tick, self.predicted));
     }
 
-    // The curtain, derived. Nothing about this arrived from anywhere.
+    // The curtain, derived locally. None of it was received.
     if controls.derive_curtain {
       curtain_at(&self.waves, &self.downed, self.sim_tick, &mut self.curtain);
     } else {
@@ -377,7 +373,7 @@ impl Client {
 
     // Only the rules that ask. Under `ServerOnly` a declaration is noise the
     // server would ignore, and sending it anyway would make the panel's
-    // "declared" count a lie about which rule is running.
+    // "declared" count wrong about which rule is running.
     let rule = self.policy.map(|p| p.death_rule).unwrap_or(controls.death_rule);
     if rule == DeathRule::ServerOnly {
       return None;
@@ -385,14 +381,14 @@ impl Client {
     if self.declared_tick.is_some_and(|t| self.sim_tick.saturating_sub(t) < 30) {
       return None;
     }
-    // The seat that has stopped owning up. Under `ClientDeclares` this is an
-    // immortal ship; the interesting part is what it costs the server to see.
+    // The seat that has stopped declaring. Under `ClientDeclares` this is an
+    // immortal ship; the panel shows what it costs the server to detect it.
     if controls.silent_seat && self.me == 0 {
       return None;
     }
-    // Acted on here rather than when the verdict returns. That is the whole
-    // difference between the rules: the contact is not news to this client,
-    // only the permission to react to it is.
+    // Acted on here rather than when the verdict returns. This is the only
+    // difference between the rules: the client already knows about the contact
+    // and the rule only decides whether it may react to it.
     self.declared_tick = Some(self.sim_tick);
     self.self_marked = Some(self.sim_tick);
     self.invuln_until_tick = self.sim_tick + (crate::sim::types::INVULN_MS / SIM_STEP_MS);

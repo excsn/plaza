@@ -124,8 +124,8 @@ impl StateLogic<GameOp, PlayerId, GameState> for DebuffLogic {
               }
             }
             // Server-originated: the snapshot provider builds these, clients
-            // never send one. Above the catch-all, or the arm the comment
-            // describes is unreachable and the comment describes nothing.
+            // never send one. Above the catch-all or this arm would be
+            // unreachable.
             GameOp::Snapshot(_) => {}
             _ => {}
 }

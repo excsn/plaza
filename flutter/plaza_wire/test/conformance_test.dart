@@ -7,8 +7,8 @@ import 'package:test/test.dart';
 
 /// Golden vectors written by the Rust side.
 ///
-/// This is what stops the Dart packages becoming a second, drifting definition
-/// of the protocol. The Rust crate encodes; these decode and re-encode.
+/// These keep the Dart packages from drifting into a second definition of the
+/// protocol. The Rust crate encodes; these decode and re-encode.
 /// Regenerate with:
 ///
 ///   PLAZA_REGENERATE_FIXTURES=1 cargo test -p plaza_wire \
@@ -26,13 +26,10 @@ void main() {
   });
 
   group('the two codecs are not the same shape', () {
-    /// The single most important thing to know before writing a Dart client.
-    ///
     /// plaza's `MsgPackCodec` is the **compact** one, so a Rust struct is an
     /// array of its fields in declaration order and the field names never
     /// cross the wire at all. Under JSON the same type carries its names. A
-    /// client written against one and pointed at the other decodes nothing
-    /// and blames the transport.
+    /// client written against one and pointed at the other decodes nothing.
     test('a struct variant is positional under msgpack, named under json', () {
       final packed = msgPackDecode(bytesOf('ops_batch.msgpack')) as List;
       final asJson = jsonOf('ops_batch.json') as List;
@@ -215,8 +212,8 @@ void main() {
     });
   });
 
-  /// The strong test. Decoding correctly is half a mirror: a client that reads
-  /// the server and still sends something the server cannot read is no use.
+  /// A client that reads the server correctly can still send bytes the server
+  /// cannot read, so the re-encode is checked too.
   test('re-encoding reproduces the Rust bytes exactly', () {
     for (final name in ['ops_batch', 'ops_empty', 'edges', 'hello']) {
       for (final ext in ['msgpack', 'named.msgpack']) {

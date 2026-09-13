@@ -321,7 +321,7 @@ async fn a_landing_is_drawable_for_longer_than_the_frame_that_carried_it() {
   }
   let landed_at = landed_at.expect("the cast landed at all");
 
-  // The frame after is already silent about it, which is the whole point.
+  // The frame after already says nothing about it, as an event should.
   let out = tick(&logic, &mut state).await;
   now += 33;
   deliver(&socket, &ops_for(&out, 0));
@@ -346,8 +346,8 @@ async fn a_landing_is_drawable_for_longer_than_the_frame_that_carried_it() {
 #[tokio::test]
 async fn what_each_authority_mode_costs() {
   // The comparison this example was planned around, and the reason both modes
-  // live in one build: two builds and two sessions compare two memories of how
-  // something felt.
+  // live in one build: separate builds would mean comparing two sessions from
+  // memory.
   //
   // Same walk, same speed constant, same send rate, driven through the real
   // wire both ways. What differs is who decides.
@@ -446,9 +446,10 @@ async fn what_each_authority_mode_costs() {
 
 #[tokio::test]
 async fn a_position_from_a_client_that_does_not_own_one_is_refused() {
-  // A client that has not noticed the mode changed is not a cheat, but taking
-  // its word would be: under server authority a claimed position is not a
-  // claim to check, it is a packet from a client running the other game.
+  // A client that has not noticed the mode changed is not cheating, but the
+  // server still must not take its word: under server authority a claimed
+  // position is a packet from a client running the other game rather than a
+  // claim to check.
   let dial = Controls::default().shared();
   dial.lock().authority = Authority::Server;
   let logic = GowLogic::new().with_dial(dial);

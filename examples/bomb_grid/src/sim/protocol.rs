@@ -1,24 +1,24 @@
 //! What crosses the wire.
 //!
-//! Three asymmetries are deliberate, and each one is a rule about who owns what.
+//! Three asymmetries are deliberate. Each one is a rule about who owns what.
 //!
-//! **A client sends an intent, never a position.** [`Op::Move`] is a direction,
-//! and the server decides which cell that reaches. On a lattice the temptation
-//! to send a cell is stronger than in a continuous game, because a cell looks
-//! like a discrete fact rather than a claim; it is still a claim, and a client
-//! that could send one could stand anywhere.
+//! **A client sends an intent rather than a position.** [`Op::Move`] is a
+//! direction and the server decides which cell that reaches. On a lattice it is
+//! more tempting to send a cell than in a continuous game, because a cell looks
+//! like a discrete fact. It is still a claim and a client that could send one
+//! could stand anywhere.
 //!
 //! **A client never says who it is.** Nothing upstream carries a player id:
-//! `plaza_session` attaches the `Agent` from the connection, because identity is
-//! the server's fact.
+//! `plaza_session` attaches the `Agent` from the connection, because the server
+//! decides identity.
 //!
-//! **A blast is announced, not derived.** A client holds every bomb's cell,
-//! radius and fire time, so it could compute the explosion itself, and that is
-//! exactly the trap: a chain reaction fires a bomb *early*, and the arms are cut
-//! by walls that another blast may have just removed. Two sides evaluating that
-//! independently agree almost always, and the times they do not are the times
-//! somebody dies. So the server resolves the whole cascade and says what
-//! happened, in one [`Op::Blast`].
+//! **The server announces each blast.** A client holds every bomb's cell,
+//! radius and fire time, so it could compute the explosion itself. But a chain
+//! reaction fires a bomb *early* and the arms are cut by walls that another
+//! blast may have just removed. Two sides evaluating that independently agree
+//! almost always, but the cases where they disagree are the ones where somebody
+//! dies. So the server resolves the whole cascade and says what happened in one
+//! [`Op::Blast`].
 
 use serde::{Deserialize, Serialize};
 
@@ -28,10 +28,10 @@ use crate::sim::types::{BombState, Cell, Dir, Grid, PlayerId, PlayerState, Power
 /// define it (see `build.rs`), so it cannot drift out of date the way a manual
 /// constant does.
 ///
-/// The point is a browser client that is a build product: it does not rebuild
-/// when the server does, so a page from before a wire change is the normal state
-/// of affairs. Without a version the failure is silent in the worst way, because
-/// the page loads and only the messages whose shape changed are rejected.
+/// The browser client is a build product and does not rebuild when the server
+/// does, so a page from before a wire change is common. Without a version the
+/// failure is silent: the page loads and only the messages whose shape changed
+/// are rejected.
 pub const PROTOCOL: u32 = WIRE_PROTOCOL;
 
 include!(concat!(env!("OUT_DIR"), "/wire_protocol.rs"));
@@ -39,24 +39,24 @@ include!(concat!(env!("OUT_DIR"), "/wire_protocol.rs"));
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Op {
   // ---- client to server ----
-  /// Where this player wants to walk, and **which tick it is meant for**.
+  /// Where this player wants to walk and **which tick it is meant for**.
   ///
-  /// A tick rather than a timestamp, for the reason the horde example spells
-  /// out: a tick is the client naming *the server's own unit of time*, which is
-  /// either still open or is not, where a timestamp needs a shared clock whose
-  /// error is the slack a liar hides in.
+  /// A tick rather than a timestamp, for the reason the horde example gives: a
+  /// tick names *the server's own unit of time*, which is either still open or
+  /// closed, while a timestamp needs a shared clock and a cheater can hide
+  /// inside that clock's error.
   ///
   /// It matters more here than in a continuous game. Two players reaching for
-  /// the same escape cell is decided by whoever the server processes first, and
+  /// the same escape cell is decided by whoever the server processes first and
   /// without playout that is decided by ping.
   Move { seq: u64, dir: Dir, tick: u64 },
   /// Drop a bomb at whatever cell this player occupies on `tick`. The cell is
-  /// not carried: it is the server's answer, not the client's claim.
+  /// not carried, because the server decides it.
   DropBomb { seq: u64, tick: u64 },
   /// Round-trip probe; the reply echoes `origin_ms` verbatim.
 
   // ---- server to client ----
-  /// Sent once on join: which player is yours, the settings a client cannot see,
+  /// Sent once on join: which player is yours, the settings a client cannot see
   /// and the board.
   Welcome {
     player: PlayerId,
@@ -96,10 +96,9 @@ pub struct RoundStart {
 ///
 /// Everything here is small and bounded (at most four players, a handful of
 /// bombs and pickups on a 15x13 board), so it goes out whole rather than as a
-/// delta. That is a genuine difference from the horde example and not an
-/// oversight: relevance and delta compression exist to make an unbounded world
-/// affordable, and this world has a hard ceiling a hundred times below the point
-/// where either would pay for its own machinery.
+/// delta, unlike the horde example. Relevance and delta compression exist to
+/// make an unbounded world affordable and this world has a hard ceiling a
+/// hundred times below the point where either would pay for itself.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Frame {
   pub server_time_ms: u64,
@@ -111,10 +110,10 @@ pub struct Frame {
   pub powerups: Vec<PowerupState>,
 }
 
-/// One explosion, and everything it did, resolved by the server in one pass.
+/// One explosion and everything it did, resolved by the server in one pass.
 ///
 /// A cascade is a single event rather than one per bomb: chained bombs fire in
-/// the same instant, and splitting them would let a client draw the first arm
+/// the same instant and splitting them would let a client draw the first arm
 /// before it knows the second one exists.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct BlastEvent {
@@ -172,9 +171,9 @@ impl Op {
 
 /// What a client asked for, before the server has judged it.
 ///
-/// Named as its own type because the two upstream ops share a fate: both are
-/// scheduled by tick, both may be refused for naming a closed one, and the
-/// client predicts both.
+/// Named as its own type because the two upstream ops are handled the same
+/// way: both are scheduled by tick, both may be refused for naming a closed one
+/// and the client predicts both.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Intent {
   Walk(Dir),

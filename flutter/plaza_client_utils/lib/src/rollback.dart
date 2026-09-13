@@ -1,5 +1,5 @@
-/// A logical simulation frame. Rollback counts in fixed frames, not wall time:
-/// two peers agree on "frame 900", never on a millisecond.
+/// A logical simulation frame. Rollback counts in fixed frames rather than wall
+/// time, so two peers agree on "frame 900" and never on a millisecond.
 typedef Frame = int;
 
 /// A frame-indexed ring of whole-world state snapshots.
@@ -32,9 +32,9 @@ class StateHistory<S> {
 
   /// How many saves fell outside the window and reset it.
   ///
-  /// Not in the Rust original, which logs a warning. A counter is more useful in a
-  /// library with no logger to reach for: non-zero means frames were saved
-  /// non-contiguously, which rollback assumes never happens.
+  /// Not in the Rust original, which logs a warning. A library with no logger
+  /// uses a counter instead: non-zero means frames were saved non-contiguously,
+  /// which rollback assumes never happens.
   int resets = 0;
 
   /// Records the state at [frame].
@@ -222,8 +222,8 @@ class RollbackConfig {
 
 /// The default input predictor: repeat the last confirmed input unchanged.
 ///
-/// This is right whenever a player holds their input steady, which dominates most
-/// games, and it is what a session uses unless another rule is supplied.
+/// This is right whenever a player holds their input steady, which is most of
+/// the time in most games. A session uses it unless another rule is supplied.
 I repeatLastInput<I>(I last, Frame frame) => last;
 
 /// The whole rollback loop for one peer, wired.
@@ -235,8 +235,8 @@ I repeatLastInput<I>(I last, Frame frame) => last;
 /// counterpart to `PredictedPlayer` for the authoritative model.
 ///
 /// Each peer runs its own session and calls its local player index the "local"
-/// one; the two are otherwise identical, which is the point, both re-simulate to
-/// the same state from the same inputs.
+/// one. The sessions are otherwise identical and both re-simulate to the same
+/// state from the same inputs.
 ///
 /// [I] must have a meaningful `==`: that comparison is how a confirmation is
 /// judged against the guess it replaces. A type with identity equality reports
@@ -284,7 +284,7 @@ class RollbackSession<S, I> {
       config.maxRollbackFrames < 1 ? 1 : config.maxRollbackFrames;
 
   /// The deterministic step: same state and inputs in, same state out, every time
-  /// and on every peer, which is what rollback rests on.
+  /// and on every peer.
   final S Function(S state, List<I> inputs) advance;
 
   /// Takes the last confirmed input and the frame being predicted, and returns the
@@ -336,9 +336,9 @@ class RollbackSession<S, I> {
   /// Turns rollback on or off (on by default). With it off the session still
   /// predicts and advances, but never restores or re-simulates: it trusts every
   /// guess permanently. That is not a way to ship, since predictions that are
-  /// never corrected drift a peer out of sync, but it isolates what rollback buys,
-  /// and it is the mechanism a delay-based front end disables when it waits for
-  /// inputs instead of predicting them.
+  /// never corrected drift a peer out of sync, but it shows what rollback
+  /// contributes and it is the mechanism a delay-based front end disables when it
+  /// waits for inputs instead of predicting them.
   set rollbackEnabled(bool enabled) => _rollbackEnabled = enabled;
   bool get rollbackEnabled => _rollbackEnabled;
 

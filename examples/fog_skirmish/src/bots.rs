@@ -2,13 +2,11 @@
 //!
 //! They run in the server process and could read `FogState`, which would let
 //! them walk straight to an uncaptured relic across the map. They read
-//! [`player_view`] through `query_with` instead: a bot that plays on
-//! information the fog is supposed to deny would make the example prove the
-//! opposite of what it claims.
+//! [`player_view`] through `query_with` instead, so a bot gets only what the
+//! fog allows.
 //!
-//! So a bot here is genuinely exploring. It heads for the nearest relic it can
-//! actually see, and when it can see none, it sweeps to a corner it has not
-//! visited lately, which is what a player does.
+//! A bot heads for the nearest relic it can see. When it can see none it
+//! sweeps to a corner it has not visited lately.
 
 use std::time::Duration;
 

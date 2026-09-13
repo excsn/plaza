@@ -56,11 +56,10 @@ pub enum Side {
   Wolf,
 }
 
-/// The phase is the rule set, not a stage of one flow. At [`Night`] a single
-/// role may act and everyone else may do nothing; by [`Day`] everyone alive
-/// may act and the wolf's power is gone. That is a different job for `Phased`
-/// than `card_table`'s Dealing to Playing to Scoring, where every player may do
-/// the same things throughout.
+/// The phase decides which rules apply. At [`Night`] a single role may act and
+/// nobody else may. At [`Day`] everyone alive may act and the wolf cannot hunt.
+/// In `card_table`, Dealing to Playing to Scoring is one flow in stages and
+/// every player may do the same things throughout.
 ///
 /// [`Night`]: VillagePhase::Night
 /// [`Day`]: VillagePhase::Day
@@ -68,10 +67,11 @@ pub enum Side {
 pub enum VillagePhase {
   /// Seats are still filling. Nobody may act.
   Waiting,
-  /// The wolf chooses. Privately: the choice crosses the wire once, at dawn.
+  /// The wolf chooses. The choice is private and crosses the wire once, at
+  /// dawn.
   Night,
-  /// The village votes. Ballots are collected, not applied: nothing resolves
-  /// until the phase closes.
+  /// The village votes. Ballots are stored and nothing resolves until the
+  /// phase closes.
   Day,
   /// One side has won and every role is face up.
   Over,
@@ -85,9 +85,8 @@ pub struct RoundSummary {
   pub exiled: Option<PlayerId>,
 }
 
-/// What one recipient is told. Built per recipient, which is the point:
-/// `your_role` differs for everyone, and `everyone` is withheld from the
-/// living.
+/// What one recipient is told. Built per recipient because `your_role`
+/// differs for everyone and `everyone` is withheld from the living.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct VillageView {
   pub phase: VillagePhase,
@@ -95,18 +94,16 @@ pub struct VillageView {
   /// condition rather than a count.
   pub round: u32,
   pub living: Vec<PlayerId>,
-  /// The fallen, face up. A death reveals the role; that is the village's rule
-  /// and the snapshot merely carries it.
+  /// The fallen, face up. A death reveals the role.
   pub dead: Vec<(PlayerId, Role)>,
   /// Yours alone. `None` for a spectator.
   pub your_role: Option<Role>,
-  /// Who has voted so far. Who they voted *for* stays out of the view: only
-  /// the tally at dusk carries counts, and never individual ballots.
+  /// Who has voted so far. Who they voted for stays out of the view. Only the
+  /// tally at dusk carries counts and it never carries individual ballots.
   pub voted: Vec<PlayerId>,
   pub your_vote: Option<PlayerId>,
   /// Every role, face up. `Some` for the dead and once the game is over,
-  /// `None` for the living: the dead know everything, and can no longer be
-  /// asked about it.
+  /// `None` for the living.
   pub everyone: Option<Vec<(PlayerId, Role)>>,
   pub winner: Option<Side>,
   /// Games won at this village, across deals.
@@ -121,8 +118,8 @@ pub enum VillageOp {
   /// large as one.
   Snapshot(Box<VillageView>),
 
-  /// The wolf naming tonight's victim. Never broadcast: the server answers
-  /// with dawn, not with a receipt.
+  /// The wolf naming tonight's victim. Never broadcast: the server sends no
+  /// acknowledgement and the result shows up at dawn.
   Hunt(PlayerId),
   /// A ballot. Resubmitting overwrites; nothing is counted until dusk.
   Vote(PlayerId),
@@ -133,7 +130,7 @@ pub enum VillageOp {
   /// Broadcast at first light: who was taken, face up.
   Dawn { victim: PlayerId, role: Role },
   /// Broadcast at dusk: the counts per candidate and who, if anyone, is exiled.
-  /// Counts, never ballots.
+  /// Individual ballots are never sent.
   VotesTallied {
     counts: Vec<(PlayerId, u32)>,
     exiled: Option<(PlayerId, Role)>,
@@ -156,11 +153,11 @@ pub enum Refusal {
   NotNow,
   /// The phase allows it and your role does not.
   NotYourRole,
-  /// The dead do not speak.
+  /// A dead player cannot act.
   Dead,
   /// Connected, but not seated at this village.
   Spectating,
-  /// Dead, absent, or yourself.
+  /// Dead, absent or yourself.
   NoSuchTarget,
 }
 
@@ -181,12 +178,10 @@ pub enum VillageEvent {
 #[derive(Clone, Debug)]
 pub struct VillageState {
   pub phase: Phased<VillagePhase>,
-  /// `None`: there is no last round. The game runs until a side wins, which is
-  /// the unbounded mode this example exists to drive.
+  /// `None`: there is no last round. The game runs until a side wins.
   pub rounds: SequentialRoundManager<VillageOp, PlayerId, RoundSummary>,
-  /// Games won across deals. A village that lives for hours is the standing
-  /// room the scorekeeper's `forget_player` was built for: a leaver comes off
-  /// the board entirely rather than haunting it at zero.
+  /// Games won across deals. A village runs for hours, so a leaver is removed
+  /// with the scorekeeper's `forget_player` and not left on the board at zero.
   pub wins: HashMapScorekeeper<PlayerId, u32>,
 
   pub seats: Roster<PlayerId>,
@@ -205,11 +200,11 @@ pub struct VillageState {
   pub tick: u64,
   pub timeouts: PhasedScheduler<VillageEvent>,
   /// Fields rather than the constants, because the scripted run wants
-  /// deadlines it can reach on purpose and a browser wants ones a person can
-  /// think inside.
+  /// deadlines it can reach on purpose and a person in a browser needs longer
+  /// ones.
   pub night_ticks: u64,
   pub day_ticks: u64,
-  /// What one tick lasts, only so phase notices can carry an honest
+  /// What one tick lasts, only so phase notices can carry an accurate
   /// `duration_hint`. Nothing here reads a clock.
   pub tick_interval: Duration,
 }

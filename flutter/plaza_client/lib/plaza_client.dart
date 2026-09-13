@@ -1,6 +1,6 @@
 /// The plaza session lifecycle in Dart: handshake, ops, reconnect, resume.
 ///
-/// Transport-agnostic on purpose. Supply a [PlazaSocket] (`web_socket_channel`
+/// Transport-agnostic. Supply a [PlazaSocket] (`web_socket_channel`
 /// is the usual answer) and this package stays pure Dart with nothing to
 /// conditionally import.
 library;

@@ -1,6 +1,6 @@
 //! Drawing the horde. Reads `sim` results only; owns no state.
 //!
-//! Two views, and the contrast between them is the whole demonstration:
+//! Two views, drawn so they can be compared:
 //!
 //! - The **main view** follows your player and draws what your client actually
 //!   received: only the enemies inside its relevance radius, drawn where the
@@ -14,8 +14,7 @@ use horde_playground::sim::{Controls, EnemyKind, Vec2 as SimVec2, World, ARENA_H
 
 const C_YOU: Color = SKYBLUE;
 const C_PEER: Color = Color::new(0.5, 0.8, 1.0, 0.9);
-/// Somebody this client subscribed to, which is a different promise from
-/// somebody it can see.
+/// Somebody this client subscribed to, as opposed to somebody it can see.
 const C_SQUAD: Color = Color::new(0.45, 0.95, 0.55, 1.0);
 const C_KNOWN: Color = ORANGE;
 const C_TRUTH: Color = Color::new(1.0, 0.6, 0.2, 0.35);
@@ -37,20 +36,20 @@ use horde_playground::sim::PLAYER_MAX_HEALTH;
 /// the first frame and there is no transient to mask.
 #[cfg(all(feature = "client", feature = "websocket"))]
 ///
-/// Short enough not to be a wait, long enough that the first frame arriving is a
-/// transition rather than a pop.
+/// Short enough that nobody waits on it and long enough that the first frame
+/// fades in instead of popping.
 const FADE_IN_SECS: f32 = 0.45;
 
-/// Masks the join transient, which is not a cosmetic problem.
+/// Masks the join transient.
 ///
 /// A client that renders in the past has nothing to draw until its timeline has
 /// started and a frame has been played out of it. Every game that renders in the
 /// past holds a screen over that gap and fades in, because the alternative is
-/// showing a world that is not merely empty but *wrong*: entities at the origin,
-/// then all of them arriving at once.
+/// showing a *wrong* world: entities at the origin, then all of them arriving at
+/// once.
 ///
 /// One overlay rather than an alpha threaded through every draw call: it masks
-/// uniformly, costs one rectangle, and cannot be forgotten by whoever adds the
+/// uniformly, costs one rectangle and cannot be forgotten by whoever adds the
 /// next entity type.
 #[cfg(all(feature = "client", feature = "websocket"))]
 pub fn draw_fade_in(ready_secs: Option<f32>) {
@@ -342,7 +341,7 @@ pub fn draw_minimap(world: &World, controls: &Controls, cam: &Camera) {
 /// Drawn from the client's own list rather than the server's, so a coin the
 /// client has optimistically claimed disappears immediately and reappears if the
 /// server awards it to somebody else. That reappearance is the correction that
-/// cannot be smoothed, and it is meant to be visible.
+/// cannot be smoothed and it is meant to be visible.
 fn draw_coins(world: &World, controls: &Controls, cam: &Camera) {
   if !controls.coins {
     return;
@@ -364,9 +363,9 @@ fn draw_coins(world: &World, controls: &Controls, cam: &Camera) {
 /// Announcements, and a persistent line of what you own.
 ///
 /// Both exist because nothing else in the game says an upgrade happened. The
-/// wallet changing is the only signal the protocol carries, and a number quietly
+/// wallet changing is the only signal the protocol carries and a number quietly
 /// going down while enemy behaviour quietly changes is indistinguishable from a
-/// bug, which is exactly how it read before this.
+/// bug, which is how it read before this.
 pub fn draw_notices(world: &World, controls: &Controls, cam: &Camera) {
   // The coin banner only when coins exist; the notice stack always, so a
   // difficulty step-up announces itself even with coins off.
@@ -480,7 +479,7 @@ pub fn draw_client_world(client: &horde_playground::net::client::NetClient, cont
 
   // One instant for everything, obtained once. Enemies, shots, peers and your
   // own marker are all drawn at `at`, so the picture cannot contradict itself: a
-  // shot leaves the player who fired it, and reaches the enemy it was aimed at.
+  // shot leaves the player who fired it and reaches the enemy it was aimed at.
   // Nothing is predicted; the only thing deliberately off this instant is the
   // ghost overlay, whose job is to show the future.
   //
@@ -570,13 +569,12 @@ pub fn draw_host_world(view: &horde_playground::net::arena::HostView, client: &h
   let you = client.my_position();
   // The server ghost: the authoritative state under what this client believes.
   //
-  // A host may legitimately draw it because it *is* the server, and it is on by
-  // default because every delay here is deliberate and every one of them is
-  // invisible on its own. A peer is drawn interpolated, a send interval or two in
+  // A host may draw it because it *is* the server. It is on by default because
+  // every delay here is deliberate and each one is invisible on its own. A peer is drawn interpolated, a send interval or two in
   // the past; your own player is drawn predicted, slightly ahead; an enemy is
   // drawn wherever the chosen strategy puts it. Without something to compare
   // against, a wrong client and a correct one look identical, which is how
-  // several bugs here survived for days.
+  // several bugs here went unnoticed for days.
   // Gated on `allow_ghost` even though a host owns the truth regardless: a host
   // that kept its ghost while denying everyone else's could not see what the
   // setting does. An observer stays omniscient; spectating is its job.
@@ -656,9 +654,9 @@ pub fn draw_observer_world(view: &horde_playground::net::arena::HostView, contro
 /// How solidly to draw a peer whose position is `age` seconds old, or `None`
 /// once it is too old to draw at all.
 ///
-/// Full strength while the far tier is keeping it current, then a fade rather
-/// than a cliff, so a peer that drops out reads as "was here" instead of
-/// vanishing or, worse, staying put and lying.
+/// Full strength while the far tier is keeping it current, then a gradual fade,
+/// so a peer that drops out reads as "was here" instead of vanishing or, worse,
+/// staying drawn at a position that is no longer true.
 #[cfg(all(feature = "client", feature = "websocket"))]
 fn peer_alpha(age: Option<f32>) -> Option<f32> {
   /// Longer than a far-tier interval plus slack, so an ordinary distant peer
@@ -689,7 +687,7 @@ pub fn draw_client_minimap(client: &horde_playground::net::client::NetClient, co
     }
   } else {
     // Culling alone: a real client knows nothing past its radius, so the map can
-    // only show what it holds. That emptiness is the honest picture.
+    // only show what it holds. An empty map past the radius is correct.
     for (_, pos, _) in client.sim.render_at().map(|at| client.sim.render(controls, at)).unwrap_or_default() {
       draw_rectangle(ox + pos.x * s, oy + pos.y * s, 1.0, 1.0, C_KNOWN);
     }
@@ -701,14 +699,14 @@ pub fn draw_client_minimap(client: &horde_playground::net::client::NetClient, co
       draw_circle(ox + you.x * s, oy + you.y * s, 2.5, C_YOU);
       continue;
     }
-    // Faded by how stale the position is, and gone once nothing has confirmed
-    // it for a while. A marker that keeps its full colour is claiming a peer is
-    // there now; drawing one from a sample nobody has refreshed in a minute is
-    // how the map came to show teammates frozen in places they had long left.
-    // A squadmate is never faded and never dropped. The fade exists because a
-    // far-tier marker is a stale guess about a stranger; a squadmate is in the
-    // frame because this client asked for them, so their position is as fresh
-    // as anyone's standing next to you.
+    // Faded by how stale the position is and dropped once nothing has confirmed
+    // it for a while. A marker at full colour says the peer is there now.
+    // Drawing one from a sample nobody has refreshed in a minute made the map
+    // show teammates frozen in places they had long left. A squadmate is never
+    // faded or dropped: the fade is for far-tier markers, which are stale
+    // guesses about strangers, while a squadmate is in the frame because this
+    // client asked for them, so their position is as fresh as that of anyone
+    // standing next to you.
     let squad = client.sim.squad().contains(&(i as horde_playground::sim::PlayerId));
     let (x, y) = (ox + p.x * s, oy + p.y * s);
     if squad {

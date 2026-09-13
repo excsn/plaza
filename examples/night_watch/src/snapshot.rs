@@ -1,7 +1,6 @@
-//! The view, built once per recipient. That is not a detail here, it is the
-//! game: `your_role` differs for every player, and `everyone` is handed to the
-//! dead and withheld from the living. A uniform snapshot could not carry this
-//! game at all.
+//! The view, built once per recipient. `your_role` differs for every player
+//! and `everyone` goes to the dead but not the living, so a uniform snapshot
+//! could not work for this game.
 
 use async_trait::async_trait;
 use plaza::agent::Agent;

@@ -1,19 +1,18 @@
-//! A cast bar, which is a latency budget the player agreed to in advance.
+//! Cast bars and the global cooldown.
 //!
-//! The claim this example exists to make, and it is about design rather than
-//! about code: an ability with a cast time hides its round trip, because the
-//! player is already waiting. What they perceive is not the delay but the
-//! **fraction of the wait that was delay**, and a cast bar is a way of making
-//! that fraction small without anyone noticing you did it.
+//! An ability with a cast time hides its round trip, because the player is
+//! already waiting. What they notice is the **fraction of the wait that was
+//! delay** rather than the delay itself and a cast bar makes that fraction
+//! small.
 //!
 //! Nothing here predicts, reconciles or interpolates. The client starts a bar
 //! when the key goes down and the server says what happened; the gap between
-//! the bar finishing and the answer arriving is the whole of the exposure, and
-//! a longer cast does not shrink it, it *dilutes* it.
+//! the bar finishing and the answer arriving is the only exposure. A longer
+//! cast does not shrink that gap, but it makes the gap a smaller share of the
+//! wait.
 //!
-//! Set against puck_rink, which spends a rollback apparatus to hide a hundred
-//! milliseconds on five bodies, this is the same problem solved by asking the
-//! designer instead of the network.
+//! puck_rink uses rollback to hide a hundred milliseconds on five bodies. Here
+//! the game design solves the same problem instead.
 
 /// Milliseconds an ability takes to go off.
 pub type Ms = u64;
@@ -33,9 +32,8 @@ pub struct Perceived {
 impl Perceived {
   /// The share of the whole wait that was exposure.
   ///
-  /// The number that matters, and the reason a cast time works at all: a
-  /// hundred and fifty milliseconds is the entire experience of an instant
-  /// ability and a tenth of a one-and-a-half second cast.
+  /// A hundred and fifty milliseconds is the whole wait for an instant ability
+  /// and a tenth of the wait for a one-and-a-half second cast.
   pub fn share(&self) -> f32 {
     if self.answer == 0 {
       return 0.0;
@@ -59,13 +57,11 @@ pub fn press(cast_ms: Ms, rtt_ms: Ms) -> Perceived {
   }
 }
 
-/// The global cooldown, which does the same job for the inputs a cast does for
-/// the outcome.
+/// The global cooldown, which covers inputs the way a cast covers the outcome.
 ///
-/// A player who cannot act again for this long is a player whose next input was
-/// never going to be frame-tight, so nothing has to be predicted to keep it
-/// responsive. It is the reason an instant ability in this genre is still not a
-/// latency problem.
+/// A player who cannot act again for this long has no next input that needs
+/// frame-accurate timing, so nothing has to be predicted to keep it responsive.
+/// That is why an instant ability in this genre is still not a latency problem.
 pub const GLOBAL_COOLDOWN_MS: Ms = 1500;
 
 /// Whether an input arriving this late still lands inside the window the design
@@ -80,10 +76,8 @@ mod tests {
 
   #[test]
   fn a_longer_cast_dilutes_the_delay_rather_than_hiding_it() {
-    // Worth being precise about, because "cast times hide latency" is a claim
-    // people repeat and it is not quite true: the exposure is the same
-    // hundred and fifty milliseconds at every cast time. What changes is what
-    // fraction of the wait it is.
+    // The exposure is the same hundred and fifty milliseconds at every cast
+    // time. Only its fraction of the wait changes.
     let rtt = 150;
     for cast in [0u64, 500, 1500] {
       let p = press(cast, rtt);
@@ -108,9 +102,8 @@ mod tests {
     }
     println!("\n  puck_rink spends a rollback apparatus to hide 100ms on five bodies.\n  this asks the designer for a second and a half instead.\n");
 
-    // The finding, asserted so it cannot quietly reverse: at a cast time the
-    // genre actually uses, a bad connection is a smaller share of the wait
-    // than a good connection is of an instant ability.
+    // At a cast time the genre uses, a bad connection is a smaller share of the
+    // wait than a good connection is for an instant ability.
     let instant_on_a_good_line = press(0, 30).share();
     let cast_on_a_bad_one = press(1500, 300).share();
     assert!(
@@ -121,8 +114,8 @@ mod tests {
 
   #[test]
   fn the_global_cooldown_covers_what_a_cast_time_does_not() {
-    // An instant ability is not an exception to the design absorbing latency,
-    // because the player still cannot act again for a second and a half.
+    // An instant ability is still covered, because the player cannot act again
+    // for a second and a half.
     assert!(within_the_wait(0, 300), "an instant on a bad line is still inside the cooldown");
     assert!(!within_the_wait(0, 2000), "and two seconds is not a game, it is a fault");
   }

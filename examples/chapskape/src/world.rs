@@ -8,8 +8,7 @@
 //! Here it buys something neither of those needed. **The pathfinder runs on
 //! both ends over this**, so a client can expand a destination into a route
 //! before the server has heard the click. A map that arrived as a payload would
-//! make that a synchronisation problem; a map that is a function makes it
-//! nothing at all.
+//! make that a synchronisation problem, which a derived map avoids entirely.
 //!
 //! Which is also why this file is not a wire root. Nothing in it is
 //! serialized, so moving a lake must not move the protocol version and
@@ -80,10 +79,10 @@ pub fn steepness(tile: Tile) -> f32 {
 
 /// The map, worked out once and then read.
 ///
-/// Derived rather than loaded, which is the claim, and derived **once**, which
-/// is the arithmetic. A search settles thousands of squares and asks each of
-/// them whether it can be walked on; asking three octaves of noise and four
-/// neighbours every time turns one click into a million hashes. The rule is
+/// Derived rather than loaded and derived **once** for speed. A search settles
+/// thousands of squares and asks each of them whether it can be walked on;
+/// asking three octaves of noise and four neighbours every time turns one click
+/// into a million hashes. The rule is
 /// still the only source of truth, and both ends still build this from it and
 /// from nothing else.
 struct Table {
@@ -218,7 +217,7 @@ pub fn walkable(tile: Tile) -> bool {
 /// Something standing in a square that can be worked at.
 ///
 /// Derived, so a world of several thousand of them costs nothing to join and
-/// nothing to hold: an id is a square index, and a square index is a position.
+/// nothing to hold: an id is a square index, which is also its position.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Prop {
   Tree,
@@ -407,8 +406,8 @@ mod tests {
 
   #[test]
   fn the_map_is_the_same_answer_every_time() {
-    // The whole reason it costs no bytes, and the whole reason a client can
-    // path before the server answers.
+    // This is why it costs no bytes and why a client can path before the
+    // server answers.
     for i in 0..500i16 {
       let tile = Tile::new(i % SIZE, (i * 7) % SIZE);
       assert_eq!(tile_height(tile), tile_height(tile));
@@ -449,8 +448,8 @@ mod tests {
   #[test]
   fn there_is_enough_to_do() {
     // The still half of the world has to be numerous enough for the relevance
-    // question to be a real one: a hundred props is a list, four thousand is a
-    // problem.
+    // question to be a real one: a hundred props could just be sent as a list,
+    // but four thousand cannot.
     let mut counts = std::collections::BTreeMap::new();
     for y in 0..SIZE {
       for x in 0..SIZE {

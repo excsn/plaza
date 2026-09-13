@@ -1,10 +1,10 @@
-//! The authoritative arena, as `plaza` core wants it: one `StateType` that owns
-//! everything mutable, and one stateless `StateLogic` that acts on it.
+//! The authoritative arena in the shape `plaza` core expects: one `StateType`
+//! that owns everything mutable and one stateless `StateLogic` that acts on it.
 //!
-//! The adaptation is small, because [`sim::Server`] was already shaped for it:
-//! it never reads client state, `advance` is a tick function, and inputs are
-//! addressed by tick rather than applied on arrival. What this adds is seats
-//! that fill and empty, and a door that can refuse.
+//! The adaptation is small, because [`sim::Server`] already fits: it never
+//! reads client state, `advance` is a tick function and inputs are addressed
+//! by tick instead of applied on arrival. This adds seats that fill and empty
+//! and admission that can refuse a link.
 //!
 //! [`sim::Server`]: crate::sim::Server
 
@@ -40,10 +40,10 @@ pub type RttSource = Arc<dyn Fn(&PlayerKey) -> Option<u64> + Send + Sync>;
 
 /// Everything the omniscient half of a host needs.
 ///
-/// A host is the server *and* a client in one process, so unlike a joiner it
-/// legitimately holds both: the truth here, and its own believed state in its
-/// [`NetClient`]. Drawing the two over each other is what makes the disagreement
-/// visible as a thing that happened rather than a number in a panel.
+/// A host is the server and a client in one process, so unlike a joiner it
+/// holds both the truth here and its own predicted state in its [`NetClient`].
+/// Drawing the two over each other shows the disagreement on screen as well as
+/// in the panel.
 ///
 /// [`NetClient`]: crate::net::client::NetClient
 #[derive(Clone, Debug, Default)]
@@ -59,8 +59,8 @@ pub struct HostView {
   /// Where the server had everybody at the instant a client with the configured
   /// render delay is drawing.
   ///
-  /// Published because an honest render error cannot be computed without it,
-  /// and the buffer that answers it is the same one a shot is rewound through.
+  /// Published because the drawn-instant render error needs it. It comes from
+  /// the same buffer a shot is rewound through.
   pub truth_at_render: Vec<(PlayerId, PlayerSnap)>,
   pub refused: u64,
 }
@@ -106,8 +106,8 @@ impl Arena {
 
   fn unseat(&mut self, key: &PlayerKey) {
     if let Some(seat) = self.seats.unseat(key) {
-      // Handed back to the bots rather than left frozen, so a disconnect does
-      // not leave a statue standing in the arena absorbing shots.
+      // Handed back to the bots instead of left frozen, so a disconnected
+      // player does not leave a motionless body in the arena absorbing shots.
       self.sim.release_seat(seat);
     }
     self.acked.remove(key);
@@ -186,11 +186,9 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         };
 
         // A link that cannot reach the input window is refused with both
-        // numbers, because a player whose every input names a closed tick is
-        // not slightly disadvantaged, they are unable to act. Letting them in
-        // to discover that is worse than saying so. The measurement is the
-        // server's own; a client's claim about its own latency would be the
-        // one number worth lying about.
+        // numbers, because a player whose every input names a closed tick
+        // cannot act at all. The measurement is the server's own, since a
+        // client could lie about its own latency to get in.
         let allowed = state.controls.playable_one_way_ms();
         let measured = self.rtt.as_ref().and_then(|f| f(&key));
         if let Some(one_way) = measured
@@ -230,7 +228,7 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         let Some(key) = source.id_cloned() else {
           return Ok(LogicOutput::none());
         };
-        // A client that is talking has plainly received whatever let it talk.
+        // A client that is sending ops has received whatever let it send them.
         // Before the seat gate, so a seatless client's traffic confirms its
         // `NoSeat` too.
         state.pending.confirm(&key);
@@ -243,7 +241,7 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
             Op::Move { seq, tick, dir } => {
               // Out-of-order *arrivals* are dropped: an older direction
               // overwriting a newer one reads as the controls sticking.
-              // Out-of-order *execution* is the schedule's business.
+              // Out-of-order *execution* is handled by the schedule.
               if state.acked.get(&key).is_some_and(|newest| seq <= *newest) {
                 continue;
               }
@@ -272,16 +270,16 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         if let Some(clock) = &self.clock {
           clock.store(state.sim.now_ms(), Ordering::Relaxed);
         }
-        // The seat count rebuilds the world, so it is deliberately not live:
-        // reseating everyone mid-fight is a bigger hammer than a slider.
+        // The seat count rebuilds the world, so it is not live: a slider should
+        // not reseat everyone mid-fight.
         state.controls = Controls { players: state.controls.players, ..live };
 
         let out = state.sim.advance(delta_time.as_millis() as u64, &state.controls);
         let now = state.sim.now_ms();
 
-        // Ordered on purpose: the shot, then the death it caused, then the
-        // frame describing the world they left behind. A client that saw the
-        // frame first would draw a corpse before it knew why.
+        // Ordered: the shot, then the death it caused, then the frame after
+        // both. A client that saw the frame first would draw a corpse before it
+        // had the shot that caused it.
         let mut outbound: Vec<Op> = Vec::new();
         for shot in out.shots {
           outbound.push(Op::Shot(Box::new(shot)));
@@ -323,8 +321,8 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
 /// Mean distance between what a client drew and where the server had everybody
 /// **at the instant that client was drawing**.
 ///
-/// The honest render error, live rather than in the harness. Free here: the
-/// truth history it needs is the one the rewind already keeps.
+/// The drawn-instant render error, computed live instead of in the harness.
+/// The truth history it needs is the one the rewind already keeps.
 pub fn honest_render_error(view: &HostView, drawn: &[(PlayerId, V2, bool)], me: PlayerId) -> Option<f32> {
   let mut sum = 0.0;
   let mut n = 0u32;
@@ -340,8 +338,8 @@ pub fn honest_render_error(view: &HostView, drawn: &[(PlayerId, V2, bool)], me: 
   (n > 0).then(|| sum / n as f32)
 }
 
-/// The same measurement taken the way this repository has always taken it:
-/// against truth **now**, which charges a client for a delay it chose.
+/// The same measurement taken the way the rest of this repository takes it:
+/// against truth **now**, which counts a chosen render delay as error.
 pub fn naive_render_error(view: &HostView, drawn: &[(PlayerId, V2, bool)], me: PlayerId) -> Option<f32> {
   let mut sum = 0.0;
   let mut n = 0u32;
@@ -421,9 +419,8 @@ mod tests {
 
   #[test]
   fn a_link_that_cannot_reach_the_window_is_refused_at_the_door_with_both_numbers() {
-    // Refused rather than admitted and left twitching. The panel's own claim
-    // is checkable from the refusal: it carries what was measured and what was
-    // allowed, so nobody has to trust the verdict.
+    // The refusal carries what was measured and what was allowed, so the
+    // player can check it.
     let controls = Controls { playout_delay_ms: 100, input_max_late_ticks: 4, ..quiet() };
     let allowed = controls.playable_one_way_ms();
     let logic = ArenaLogic::new(Arc::new(Mutex::new(controls)), None).with_rtt(Arc::new(|_| Some(900)));
@@ -583,9 +580,9 @@ mod tests {
 
   #[test]
   fn a_cause_leaves_before_the_frame_that_already_contains_its_effect() {
-    // Ordering is the whole reason a client can draw a tracer at all: a frame
-    // showing a corpse, arriving before the shot that made it, is a death with
-    // no visible cause.
+    // The ordering is what lets a client draw a tracer: a frame showing a
+    // corpse that arrives before the shot that caused it is a death with no
+    // visible cause.
     let controls = Controls { sync_hz: 60, ..quiet() };
     let logic = ArenaLogic::new(Arc::new(Mutex::new(controls)), None);
     let mut state = Arena::new(controls, SEED);

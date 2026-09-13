@@ -1,6 +1,6 @@
 //! A client on the real wire, shared by the desktop window and the wasm page.
 //!
-//! The one live piece beyond decoding: the **claim**. A press is stamped with
+//! Beyond decoding, the client builds the **claim**. A press is stamped with
 //! the client's estimate of server time, from the pump's timeline over pongs
 //! and every stamped op, then named as a tick and an offset inside it. The
 //! server floors the claim; this side only aims it.
@@ -90,8 +90,8 @@ impl NetClient {
   }
 
   /// The trigger. Stamped now, on the local estimate of the server clock;
-  /// legal in Steady too, because a false start is the server's to rule on,
-  /// not this side's to hide.
+  /// legal in Steady too, because the server rules on false starts and the
+  /// client must not hide one.
   pub fn fire(&mut self) {
     let at_us = self.server_time_ms() * 1000;
     let op = DrawOp::Fire {

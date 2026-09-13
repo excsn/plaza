@@ -2,8 +2,8 @@
 //!
 //! The host wakes twenty times a second and the world moves once or twice in
 //! that, which is deliberate: a game tick is a budget drawn down rather than a
-//! wake-up answered, so its length is a dial rather than a constant. Turning it
-//! from 600ms to 50ms is the experiment, and what it costs is the finding.
+//! wake-up answered, so its length is a dial rather than a constant. The
+//! experiment is turning it from 600ms to 50ms and measuring what that costs.
 //!
 //! A frame is built per client, because two people standing in different
 //! corners of a map have nothing in common. What is in one splits three ways:
@@ -142,8 +142,8 @@ impl StateLogic<SkapeOp, PlayerId, SkapeState> for SkapeLogic {
         let Some(player) = source.id_cloned() else {
           return Err(StateLogicError::InvalidOperation("ops from an unidentified agent".into()));
         };
-        // A player whose seat has gone is not an error, it is a packet that
-        // crossed a departure.
+        // An op from a player whose seat has gone is a packet that crossed a
+        // departure rather than an error.
         if let Some(seat) = state.seat_of(player) {
           for op in ops {
             apply(state, seat, op);
@@ -227,8 +227,8 @@ fn apply(state: &mut SkapeState, seat: Seat, op: SkapeOp) {
     SkapeOp::Use { slot } => state.zone.use_slot(seat, slot),
     SkapeOp::Run { on } => state.zone.set_running(seat, on),
     SkapeOp::Cancel => state.zone.cancel(seat),
-    // Server-to-client ops arriving from a client are noise, not a protocol
-    // error worth killing a connection over.
+    // Server-to-client ops arriving from a client are ignored as noise rather
+    // than treated as a protocol error that kills the connection.
     SkapeOp::World(_) | SkapeOp::Seated { .. } => {}
   }
 }
@@ -304,9 +304,9 @@ fn frame_for(state: &mut SkapeState, seat: Seat) -> Frame {
   };
   let middle = actor.tile;
 
-  // Everyone but the viewer. A client never appears in its own audience, and
-  // what it needs to know about itself is not a subset of what it is told about
-  // anybody else, so it travels in `You` instead.
+  // Everyone but the viewer. A client never appears in its own audience. What
+  // it needs to know about itself includes things nobody else is told, so it
+  // travels in `You` instead.
   let mut actors: Vec<Seen> = state
     .zone
     .actors
@@ -360,8 +360,8 @@ fn frame_for(state: &mut SkapeState, seat: Seat) -> Frame {
 fn you_of(state: &mut SkapeState, seat: Seat) -> Option<You> {
   let tick = state.zone.tick;
   let actor = state.zone.actors.get_mut(&seat)?;
-  // Sent only when it moved. A pack that has not changed is a pack the client
-  // already has, and standing in a field is most of a session.
+  // Sent only when it moved, since the client already has an unchanged pack
+  // and standing in a field is most of a session.
   let private = actor.private_moved.then(|| Private {
     pack: actor.pack.as_vec(),
     xp: actor.xp.to_vec(),
@@ -478,7 +478,7 @@ mod tests {
 
   #[tokio::test]
   async fn walking_costs_one_op_and_several_seconds() {
-    // The headline claim, asserted rather than asserted about. One op moves a
+    // The headline claim, as an assertion. One op moves a
     // body for as long as the route is long, and nothing comes back.
     let logic = SkapeLogic::new();
     let mut state = SkapeState::new();

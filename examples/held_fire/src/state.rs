@@ -12,8 +12,8 @@ use crate::protocol::{
 use crate::sight;
 
 /// Work scheduled against one occupancy of a phase. Everything that can go
-/// stale carries a [`Mark`] of the situation it was scheduled in: the
-/// situation moving on is what invalidates a clock, not time.
+/// stale carries a [`Mark`] of the situation it was scheduled in: a clock
+/// goes stale when the situation moves on, not when time passes.
 #[derive(Clone, Debug)]
 pub enum WatchEvent {
   /// A lone human has waited long enough; the bot takes the other side.
@@ -37,7 +37,7 @@ pub struct Marching {
   pub walk: Vec<Cell>,
   /// Cells already taken.
   pub step: usize,
-  /// The standing overwatch offer, and the answer it holds. The answer is
+  /// The standing overwatch offer and the answer it holds. The answer is
   /// only ever *applied* at the step window's close, so a fire, a hold and
   /// silence all cost the mover exactly one window: nothing about the timing
   /// says whether anyone was watching.
@@ -205,8 +205,8 @@ impl WatchState {
     });
 
     // A commander's live panel hides the offer counters: "offers 3, held 3"
-    // on the mover's screen is a held shot leaking through arithmetic. The
-    // whole ledger opens once the battle is over, and spectators always see
+    // on the mover's screen would reveal a held shot by subtraction. The
+    // whole ledger opens once the battle is over and spectators always see
     // it.
     let mut panel = self.panel;
     if !spectator && *self.phase.current() == BattlePhase::Fighting {

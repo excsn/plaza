@@ -134,8 +134,8 @@ async fn the_client_walks_the_route_the_server_walks() {
   // The whole design in one test. The client draws the journey the instant the
   // click happens; the server hears about it a round trip later and expands the
   // same square with the same rule; and the client then checks every confirmed
-  // square against the route it already drew. Zero divergence is not an
-  // aspiration here, it is what a shared rule means.
+  // square against the route it already drew. Zero divergence is required
+  // here, because both ends run one shared rule.
   let (logic, mut state, mut client, socket) = both_sides(Relevance::OnChange).await;
   let from = client.route.predicted;
   let to = world::footing_near(Tile::new(from.x + 18, from.y + 11));

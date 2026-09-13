@@ -42,15 +42,15 @@ class MyGame extends FlameGame with PlazaGame {
 
 `onLoad` builds the client and connects; `onRemove` stops it. Send with [`sendPlazaOp`](API_REFERENCE.md#method-sendplazaop), which counts what it sent and returns false when there was no open socket.
 
-## Resume is handled for you
+## Resume
 
-Flame routes the platform lifecycle to `lifecycleStateChange`, and the mixin overrides it. On `AppLifecycleState.resumed` it resets the render clock and calls [`PlazaClient.resume`](../plaza_client/API_REFERENCE.md#method-resume): whatever queued while the process was frozen is dropped unread, and the game hears `Connected(resumed: true)`, which is where it should ask for fresh state rather than replaying a world that has moved on.
+Flame routes the platform lifecycle to `lifecycleStateChange` and the mixin overrides it. On `AppLifecycleState.resumed` it resets the render clock and calls [`PlazaClient.resume`](../plaza_client/API_REFERENCE.md#method-resume): whatever queued while the process was frozen is dropped unread and the game hears `Connected(resumed: true)`, which is where it should ask for fresh state rather than replaying stale state.
 
-This is the one hook that makes resume library behaviour rather than per-app folklore. Override `lifecycleStateChange` and call `super` if you need more.
+This hook lets the library handle resume instead of each app doing it. Override `lifecycleStateChange` and call `super` if you need more.
 
 ## The readout
 
-[`PlazaDebugHud`](API_REFERENCE.md#class-plazadebughud) is a `StatelessWidget` that shows what is invisible from inside a game: whether the two ends agree about the wire format, whether the link is flapping rather than down, and whether frames are arriving this build cannot read.
+[`PlazaDebugHud`](API_REFERENCE.md#class-plazadebughud) is a `StatelessWidget` that shows what is invisible from inside a game: whether the two ends agree about the wire format, whether the link is flapping rather than down and whether frames are arriving this build cannot read.
 
 ```dart
 GameWidget<MyGame>(
@@ -62,11 +62,11 @@ GameWidget<MyGame>(
 )
 ```
 
-## The game must not add its own overlays
+## Overlays
 
-`overlays.add` asserts that a builder is registered, and builders come from `GameWidget`. A game that adds an overlay in its own code therefore **cannot be loaded without the widget that configures it**, which breaks `flutter test` and any headless use.
+`overlays.add` asserts that a builder is registered and builders come from `GameWidget`. A game that adds an overlay in its own code therefore **cannot be loaded without the widget that configures it**, which breaks `flutter test` and any headless use.
 
-Keep the state in the game and let the widget layer watch it. [`PlazaStats`](API_REFERENCE.md#class-plazastats) is a `ChangeNotifier` for exactly this, and [`stats.outdated`](API_REFERENCE.md#property-outdated) is what an update screen should key off:
+Keep the state in the game and let the widget layer watch it. [`PlazaStats`](API_REFERENCE.md#class-plazastats) is a `ChangeNotifier` for this and [`stats.outdated`](API_REFERENCE.md#property-outdated) is what an update screen should key off:
 
 ```dart
 AnimatedBuilder(
@@ -86,7 +86,7 @@ Both arguments to `observePlazaStamp` come from the application, because only it
 
 ## The example
 
-[`example/`](example/) is a Flame client for `examples/lobby_world`: the arena list as a scene, tap to join, quick match, the readout, and a skew policy that blocks input and names both versions.
+[`example/`](example/) is a Flame client for `examples/lobby_world`: the arena list as a scene, tap to join, quick match, the readout and a skew policy that blocks input and names both versions.
 
 ```sh
 cd ../../examples && cargo run -p plaza_example_lobby_world &

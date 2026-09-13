@@ -18,11 +18,12 @@ use crate::extrapolation::{Extrapolatable, ExtrapolationBase};
 use crate::interpolation::{Interpolatable, SnapshotBuffer};
 
 /// How a [`RemoteView`] resolves a render. The booleans map directly onto UI
-/// toggles; a real client fixes them, and **which way it fixes them is a real
-/// decision** rather than the obvious "both on".
+/// toggles. A real client fixes them and should **choose the values
+/// deliberately** rather than defaulting to "both on".
 ///
 /// Interpolation is nearly always right. Extrapolation is a fallback for a
-/// starved buffer, and whether it helps depends on the *entity*, not the game:
+/// starved buffer and whether it helps depends on the *entity* rather than the
+/// game:
 /// it works when the next state follows from the current one, which is true of
 /// vehicles, projectiles and anything with inertia and a turning limit, and
 /// false of anything steered instantaneously by a person or an AI. Dead
@@ -54,7 +55,7 @@ impl Default for RenderOpts {
   }
 }
 
-/// # If you know the entity's rule, none of these three is what you want
+/// # When you know the entity's rule
 ///
 /// This type answers "where was it", from samples alone. An entity whose
 /// behaviour you can run locally is better served by
@@ -153,10 +154,10 @@ where
   /// How many renders asked for a time further past the newest sample than
   /// `max_extrapolation_ms`, and were served the capped coast instead.
   ///
-  /// Climbing steadily is the signal worth watching, and it is almost never a
-  /// starved link: it means the render target is being computed ahead of the
-  /// newest sample rather than trailing it, so this entity is dead reckoned every
-  /// frame and never interpolated. The cure is to steer the render clock toward
+  /// A steadily climbing count is almost never a starved link: it means the
+  /// render target is being computed ahead of the newest sample rather than
+  /// trailing it, so this entity is dead reckoned every frame and never
+  /// interpolated. The fix is to steer the render clock toward
   /// the stream (see [`InterpolationClock::resync`](crate::interpolation::InterpolationClock::resync))
   /// so the target trails by a couple of send intervals.
   pub fn over_extrapolations(&self) -> u64 {
@@ -171,11 +172,11 @@ where
   /// The oldest instant this view can still interpolate at.
   ///
   /// A target before this is **clamped to the oldest snapshot**, which silently
-  /// draws the entity at a newer instant than the one asked for. That is the
-  /// right degradation and the wrong thing to hide: a caller rendering a whole
+  /// draws the entity at a newer instant than the one asked for. Clamping is the
+  /// right fallback, but it should not be hidden: a caller rendering a whole
   /// scene at one instant should compare its target against this and count the
-  /// times the view could not reach it, because the alternative is one entity
-  /// quietly living on a different timeline than everything around it.
+  /// times the view could not reach it. Otherwise one entity is silently drawn
+  /// on a different timeline from everything around it.
   pub fn oldest_timestamp(&self) -> Option<u64> {
     self.buffer.oldest_timestamp()
   }

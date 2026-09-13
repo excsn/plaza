@@ -192,9 +192,9 @@ async fn offline() {
 
 /// Swaps the path of a socket URL, keeping scheme, host and port.
 ///
-/// A placement names a path rather than a whole address on purpose: the arena
-/// does not know what hostname a client reached it by, and inventing one is how
-/// a redirect sends somebody to a machine they cannot route to.
+/// A placement names a path rather than a whole address: the arena does not
+/// know what hostname a client reached it by and a redirect that invents one can
+/// send somebody to a machine they cannot route to.
 #[cfg(all(feature = "client", feature = "websocket"))]
 fn redirect(current: &str, path: &str) -> String {
   match current.find("://").and_then(|i| current[i + 3..].find('/').map(|j| i + 3 + j)) {
@@ -263,27 +263,27 @@ async fn networked(
 
   loop {
     let controls_now = *controls.lock();
-    // Two different quantities, and conflating them is what makes a backgrounded
-    // tab unrecoverable.
+    // Two different quantities. Conflating them makes a backgrounded tab
+    // unrecoverable.
     //
     // `now_ms` is **what time it is**, taken from the real clock. A browser
-    // stops running frames for a hidden tab, and a client whose clock is the sum
+    // stops running frames for a hidden tab and a client whose clock is the sum
     // of the frames it happened to run believes less time passed than did, for
     // ever: its estimate of server time is wrong by however long it was away,
-    // nothing it receives is ever due, and the playout queue grows without
+    // nothing it receives is ever due and the playout queue grows without
     // bound.
     //
-    // `step_budget` is **how much simulation this frame may run**, and that is
-    // the thing worth capping, so returning to a tab does not dump the minutes
-    // it was away into one frame.
+    // `step_budget` is **how much simulation this frame may run**. That is what
+    // gets capped, so returning to a tab does not dump the minutes it was away
+    // into one frame.
     let real_ms = (get_time() * 1000.0) as u64;
     let step_budget = real_ms.saturating_sub(now_ms).min(100);
     now_ms = real_ms;
     client.poll(now_ms, &controls_now);
 
     // Measured and sent to an arena that can carry this link. Reconnecting is
-    // the client's half of placement, and it is the whole difference between
-    // being told where to go and being turned away.
+    // the client's half of placement; without it, being told where to go would
+    // leave the player as stuck as being turned away.
     if let Status::Placed { endpoint, .. } = &client.status {
       let target = redirect(&url, endpoint);
       println!("placed in another arena: {url} -> {target}");
@@ -318,10 +318,10 @@ async fn networked(
     let cam = Camera::follow(client.my_position());
     clear_background(BLACK);
 
-    // Over the world and under everything else. The join transient is a property
-    // of the world, not of the readouts: a panel that faded with it would be
-    // hiding the numbers that say why the world is not there yet, and the egui
-    // pass below draws straight to the screen rather than into a layer.
+    // Over the world and under everything else. Only the world fades in: a panel
+    // that faded with it would hide the numbers that say why the world is not
+    // there yet. The egui pass below also draws straight to the screen rather
+    // than into a layer.
     let fade = ready_at.map(|at| now_ms.saturating_sub(at) as f32 / 1000.0);
 
     #[allow(unused_mut)]
@@ -493,7 +493,7 @@ fn read_input() -> SimVec2 {
 
 /// A floating on-screen joystick for touch devices.
 ///
-/// Wherever a finger first lands becomes the origin, and the drag from there is
+/// Wherever a finger first lands becomes the origin and the drag from there is
 /// the steering direction. Deliberately *relative* rather than "move toward where
 /// I touch": the drag delta lives in one coordinate space, so it cannot be skewed
 /// by the high-DPI mismatch between touch coordinates and the drawing buffer that
@@ -514,8 +514,8 @@ impl TouchSteer {
     let origin = *self.origin.get_or_insert(touch.position);
     let (dx, dy) = (touch.position.x - origin.x, touch.position.y - origin.y);
     let len = (dx * dx + dy * dy).sqrt();
-    // A dead zone so a still thumb does not drift, and a short throw so a small
-    // drag already means full speed, which is what a thumb joystick wants.
+    // A dead zone so a still thumb does not drift and a short throw so a small
+    // drag already means full speed.
     if len <= 16.0 {
       return SimVec2::new(0.0, 0.0);
     }
@@ -526,21 +526,20 @@ impl TouchSteer {
 /// A frame-rate readout, bottom right.
 /// A frame-time readout, rather than an fps one.
 ///
-/// **Frame time is the number that maps onto what a player feels**, and fps is a
-/// reciprocal that compresses exactly the region worth seeing: 8ms to 16ms reads
-/// as a dramatic 120 to 60, while 33ms to 50ms, which is the difference between
-/// rough and unplayable, reads as a modest 30 to 20.
+/// Frame time maps onto what a player feels. Fps is a reciprocal that
+/// compresses the region worth seeing: 8ms to 16ms reads as a dramatic 120 to
+/// 60, while 33ms to 50ms, which is the difference between rough and
+/// unplayable, reads as a modest 30 to 20.
 ///
-/// **The worst frame in the window is kept beside the mean** because a hitch is
-/// one long frame. An average over a second is the instrument that hides it,
-/// which is the same reason the wire readout tracks a worst frame rather than a
-/// rate.
+/// The worst frame in the window is kept beside the mean because a hitch is one
+/// long frame and an average over a second hides it. The wire readout tracks a
+/// worst frame rather than a rate for the same reason.
 ///
 /// The mean smooths *frame time* and reciprocates at the end. The previous
 /// version averaged `1.0 / dt` directly, which is biased toward fast frames: a
 /// single 100ms stall contributes 10 to that average while the ten 8ms frames
-/// around it contribute 125 each, so the stall is almost invisible in the very
-/// number meant to reveal it.
+/// around it contribute 125 each, so the stall barely shows in the number meant
+/// to reveal it.
 #[derive(Default)]
 pub struct Perf {
   /// Smoothed frame time in seconds. Zero until the first frame.
@@ -550,17 +549,17 @@ pub struct Perf {
 }
 
 impl Perf {
-  /// About two seconds at 60fps, one at 120: long enough that a spike does not
-  /// scroll away before it is read, short enough to be about *now*.
+  /// About two seconds at 60fps, one at 120: long enough that a spike stays
+  /// until it is read and short enough to only reflect recent frames.
   const WINDOW: usize = 120;
 
   /// A ~50-frame time constant: half a second at 120fps, most of a second at 60.
   ///
-  /// Deliberately slower than it looks like it should be. Frame time is noisy
-  /// even on an idle machine (7ms to 10ms is ordinary vsync jitter), and a fast
-  /// filter on a noisy signal, printed to a couple of digits, churns constantly
-  /// and reads as instability that is not there. The mean exists to be *stable
-  /// enough to compare against*; the worst-frame figure beside it is what reacts.
+  /// Slower than it looks like it should be. Frame time is noisy even on an idle
+  /// machine (7ms to 10ms is ordinary vsync jitter) and a fast filter on a noisy
+  /// signal, printed to a couple of digits, changes constantly and looks like
+  /// instability that is not there. The mean is meant to be stable enough to
+  /// compare against; the worst-frame figure beside it is the one that reacts.
   const SMOOTHING: f32 = 0.02;
 
   fn observe(&mut self, dt: f32) {
@@ -589,8 +588,8 @@ fn draw_perf(perf: &mut Perf) {
   let fps = if perf.mean_dt > 0.0 { 1.0 / perf.mean_dt } else { 0.0 };
   let text = format!("{mean_ms:.1} ms  (worst {worst_ms:.1})   {fps:.0} fps");
   let dims = measure_text(&text, None, 18, 1.0);
-  // Judged on the worst frame, not the mean: a run that averages well and
-  // stalls regularly is the case this readout exists to catch.
+  // Judged on the worst frame rather than the mean, so a run that averages well
+  // but stalls regularly still shows up.
   let color = if worst_ms > 33.0 {
     Color::new(1.0, 0.5, 0.4, 0.95)
   } else if worst_ms > 20.0 {

@@ -2,7 +2,7 @@
 //! them.
 //!
 //! A free function over metadata rather than a method on the manager, because
-//! the rule is worth having without one. A game whose rooms are a fixed table
+//! the rule is useful without a manager. A game whose rooms are a fixed table
 //! decided at startup should not have to implement a `RoomFactory` to ask this
 //! question, and the manager's own
 //! [`rooms_playable_at`](crate::manager::InMemoryLobbyManager::rooms_playable_at)
@@ -14,13 +14,11 @@ use crate::op_payloads::RoomMetadata;
 
 /// The rooms this connection could play in, best fit first.
 ///
-/// **Ordered tightest-schedule-first**, so a fast connection is not sent to the
-/// room built for slow ones and made to pay a delay it does not need. A room
-/// that states no limit sorts last: it will take anybody, which makes it the
-/// fallback rather than the first choice.
+/// **Ordered tightest-schedule-first**, so a fast connection is not sent to a
+/// room built for slow ones and given a delay it does not need. A room that
+/// states no limit sorts last: it will take anybody, so it is the fallback.
 ///
-/// Full rooms are dropped, because offering a room somebody cannot enter is the
-/// same unhelpfulness as offering one they cannot play in.
+/// Full rooms are dropped too, since a player cannot enter them.
 pub fn playable_at<S: Clone + Debug>(one_way_ms: u32, rooms: impl IntoIterator<Item = RoomMetadata<S>>) -> Vec<RoomMetadata<S>> {
   let mut rooms: Vec<_> = rooms
     .into_iter()
@@ -33,9 +31,9 @@ pub fn playable_at<S: Clone + Debug>(one_way_ms: u32, rooms: impl IntoIterator<I
 
 /// The single best room for this connection, or `None` when nothing fits.
 ///
-/// `None` is the only case that justifies refusing somebody. Everything else is
-/// a placement, which is the whole reason this decision belongs to a lobby: a
-/// room can only say yes or no, and this can say *where*.
+/// Refuse a connection only when this returns `None`; any other result is a
+/// placement. This decision belongs to a lobby because a room can only accept
+/// or refuse, while this picks a room.
 pub fn best_for<S: Clone + Debug>(one_way_ms: u32, rooms: impl IntoIterator<Item = RoomMetadata<S>>) -> Option<RoomMetadata<S>> {
   playable_at(one_way_ms, rooms).into_iter().next()
 }

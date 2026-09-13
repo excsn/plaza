@@ -208,7 +208,7 @@ impl Host {
   /// **The host no longer measures the rate.** The session does, at the door,
   /// and a guest over it is already costing itself its own frames and nobody
   /// else theirs; what is left here is the escalation, which is policy and
-  /// belongs to the party. That division is the whole change: this used to be a
+  /// belongs to the party. That division is what changed: this used to be a
   /// window the host advanced by hand, and the first frame over it removed a
   /// guest, because removal was the only verdict available.
   pub fn over_rate(&self, key: u64) -> bool {
@@ -267,8 +267,8 @@ impl Host {
 
 /// Applies the timeouts the host set, from the manager's own readers.
 ///
-/// The one timer in the example, and it is the application's: the session
-/// keeps the readings, the host owns the numbers and the sweep.
+/// This is the only timer in the example and it belongs to the application.
+/// The session keeps the readings; the host owns the numbers and the sweep.
 pub async fn steward(host: Arc<Host>, afk: std::time::Duration) {
   let mut ticker = tokio::time::interval(std::time::Duration::from_millis(200));
   loop {

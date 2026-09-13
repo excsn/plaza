@@ -2,9 +2,9 @@
 
 ## 1. Introduction & Core Concepts
 
-`plaza_client` owns a plaza connection's life: it sends the [`Hello`](#the-handshake), carries ops both ways, reconnects with [backoff](#class-backoff), and handles the suspend and resume a mobile app meets that a browser tab does not.
+`plaza_client` owns a plaza connection's life: it sends the [`Hello`](#the-handshake), carries ops both ways, reconnects with [backoff](#class-backoff) and handles the suspend and resume a mobile app meets that a browser tab does not.
 
-Two things it deliberately does not know. **What an op is**: the Rust side defines the vocabulary, so ops arrive as decoded values and the application pattern-matches them. **How to open a socket**: you supply a [`SocketFactory`](#typedef-socketfactory), because choosing `dart:io` or `package:web` here would decide the consuming app's platform support.
+It does not define ops and it does not open sockets. The Rust side defines the op vocabulary, so ops arrive as decoded values and the application pattern-matches them. To open a socket you supply a [`SocketFactory`](#typedef-socketfactory), because choosing `dart:io` or `package:web` here would decide the consuming app's platform support.
 
 ```dart
 import 'package:plaza_client/plaza_client.dart';
@@ -14,18 +14,18 @@ That entry point re-exports the whole of [`plaza_wire`](../plaza_wire/API_REFERE
 
 ## 2. Error Handling
 
-**Nothing here throws for a network condition.** Every failure a running connection meets is reported as a [`PlazaEvent`](#sealed-class-plazaevent) on [`events`](#property-events), because a connection that drops is ordinary and an exception would make the ordinary case the exceptional path.
+Nothing here throws for a network condition. Every failure a running connection meets is reported as a [`PlazaEvent`](#sealed-class-plazaevent) on [`events`](#property-events), because dropped connections are routine and should not be handled as exceptions.
 
 | Condition | Reported as |
 |---|---|
 | The socket factory threw, or the socket closed | [`Disconnected`](#class-disconnected), then a retry is scheduled |
-| Retries exhausted | [`GaveUp`](#class-gaveup), and the status goes to `closed` |
-| The two ends declared different wire versions | [`Outdated`](#class-outdated), and **the connection stays open** |
-| A frame arrived with a kind byte this build does not know | [`SkippedFrame`](#class-skippedframe), and the frame is dropped |
+| Retries exhausted | [`GaveUp`](#class-gaveup) and the status goes to `closed` |
+| The two ends declared different wire versions | [`Outdated`](#class-outdated) and **the connection stays open** |
+| A frame arrived with a kind byte this build does not know | [`SkippedFrame`](#class-skippedframe) and the frame is dropped |
 | An ops frame decoded to something other than a list | [`Disconnected`](#class-disconnected), naming the type that arrived |
 | Sending while the socket is not open | [`sendOps`](#method-sendops) returns false. No queue, no throw. |
 
-A codec handed a body it cannot read still throws (`FormatException`, or [`MsgPackError`](../plaza_wire/API_REFERENCE.md#class-msgpackerror)); that is a disagreement about the format rather than a network condition, and it surfaces where the frame is decoded.
+A codec handed a body it cannot read still throws (`FormatException` or [`MsgPackError`](../plaza_wire/API_REFERENCE.md#class-msgpackerror)); that is a disagreement about the format rather than a network condition and it surfaces where the frame is decoded.
 
 ## 3. The client
 
@@ -65,7 +65,7 @@ Broadcast, so several parts of an app can listen. Read each value with [`variant
 
 #### Property `events`
 
-`Stream<PlazaEvent>`. Lifecycle events. Broadcast, and closed by [`stop`](#method-stop).
+`Stream<PlazaEvent>`. Lifecycle events. Broadcast and closed by [`stop`](#method-stop).
 
 #### Property `pongs`
 
@@ -75,7 +75,7 @@ Stream<Pong> get pongs
 
 Answers to the probes [`sendPing`](#method-sendping) started. Broadcast, like [`ops`](#property-ops).
 
-**Inbound `Kind.ping` frames are answered here and never surfaced**, because echoing a value back is something this client can finish by itself. That is the half the server's session cannot do alone, and doing it is what puts a Flutter client into the server's `agent_link_rtt`.
+**Inbound `Kind.ping` frames are answered here and never surfaced**, because this client can echo a value back without the application. The server's session cannot send that half of the exchange itself. Answering is what puts a Flutter client into the server's `agent_link_rtt`.
 
 #### Property `status`
 
@@ -87,7 +87,7 @@ Answers to the probes [`sendPing`](#method-sendping) started. Broadcast, like [`
 
 #### Property `serverProtocol`
 
-`ProtocolVersion?`. What the server said it speaks, once its `Hello` has arrived. Null before that, and reset to null on every reconnect.
+`ProtocolVersion?`. What the server said it speaks, once its `Hello` has arrived. Null before that and reset to null on every reconnect.
 
 #### Property `agreed`
 
@@ -95,7 +95,7 @@ Answers to the probes [`sendPing`](#method-sendping) started. Broadcast, like [`
 
 #### Property `timeline`
 
-[`Timeline`](#class-timeline). The clocks, and the epoch that says which measurements still count. Plaza has no ping of its own, since the transport's heartbeat is the server measuring the client, so feed this around your own ping op.
+[`Timeline`](#class-timeline). The clocks and the epoch that says which measurements still count. Plaza has no ping of its own, since the transport's heartbeat is the server measuring the client, so feed this around your own ping op.
 
 #### Property `codec`, `url`
 
@@ -117,7 +117,7 @@ bool sendOps(List<Object?> ops)
 
 Sends a batch as one [`Kind.ops`](../plaza_wire/API_REFERENCE.md#enum-kind) frame.
 
-Returns **false and drops them if the socket is not open**. There is no outbound queue, deliberately: a queue that survives a reconnect replays intent the player has moved on from, and what is worth retrying is a decision only the application can make.
+Returns **false and drops them if the socket is not open**. There is no outbound queue, deliberately: a queue that survives a reconnect replays intent the player has moved on from and what is worth retrying is a decision only the application can make.
 
 #### Method `sendOp`
 
@@ -133,7 +133,7 @@ One op. Same rule.
 bool sendFrame(Kind kind, Object? body)
 ```
 
-One frame of any kind, for the control plane an op enum has no business carrying. Same drop-when-closed rule as [`sendOps`](#method-sendops). [`sendPing`](#method-sendping) is the reason this exists.
+One frame of any kind, for control frames that do not belong in the op enum. Same drop-when-closed rule as [`sendOps`](#method-sendops). [`sendPing`](#method-sendping) uses it.
 
 #### Method `sendPing`
 
@@ -153,7 +153,7 @@ Future<void> resume()
 
 Call on `AppLifecycleState.resumed`.
 
-A suspended app is the suspended browser tab problem wearing a different name. Whatever queued while the process was frozen describes a world that has moved on, so it is dropped unread rather than played out, and the connection is remade if it did not survive.
+A suspended app has the same problem as a suspended browser tab. Whatever queued while the process was frozen is out of date, so it is dropped unread rather than played out and the connection is remade if it did not survive.
 
 Always invalidates the [`Timeline`](#method-onresume) completely. Emits `Connected(resumed: true)` either way, which is where an application should ask for a fresh snapshot rather than trying to catch up.
 
@@ -163,7 +163,7 @@ Always invalidates the [`Timeline`](#method-onresume) completely. Emits `Connect
 Future<void> stop()
 ```
 
-Closes the socket, cancels any pending retry, and closes both streams. Terminal: a stopped client does not reconnect and `start` will not restart it.
+Closes the socket, cancels any pending retry and closes both streams. Terminal: a stopped client does not reconnect and `start` will not restart it.
 
 ### Enum `PlazaStatus`
 
@@ -206,7 +206,7 @@ class Disconnected extends PlazaEvent {
 }
 ```
 
-`reason` is for logs and diagnostics, not for matching on. `closeCode` is, and it is the field that separates a server refusing this client from a link that failed: a 4xxx is deliberate, `null` is a close with no code (a 1006-shaped drop) and is worth retrying unchanged. See [`PlazaSocket.closeCode`](#property-closecode).
+`reason` is for logs and diagnostics. Match on `closeCode` instead, which separates a server refusing this client from a link that failed: a 4xxx is deliberate, `null` is a close with no code (a 1006-shaped drop) and is worth retrying unchanged. See [`PlazaSocket.closeCode`](#property-closecode).
 
 ### Class `Outdated`
 
@@ -220,7 +220,7 @@ class Outdated extends PlazaEvent {
 
 The two ends were built from different wire definitions.
 
-**The connection stays open.** Plaza reports and does not judge, so ops keep arriving after this fires. A browser client's answer is to reload; a shipped app cannot, so it has to say so, and continuing past the prompt means decoding against a definition the server no longer holds.
+**The connection stays open.** Plaza reports the mismatch and keeps serving, so ops keep arriving after this fires. A browser client's answer is to reload; a shipped app cannot, so it has to say so and continuing past the prompt means decoding against a definition the server no longer holds.
 
 Carries both versions because a useful update prompt names them.
 
@@ -244,7 +244,7 @@ class SkippedFrame extends PlazaEvent {
 }
 ```
 
-A frame arrived whose kind this build does not know. Skipped rather than fatal, and surfaced only so a diagnostic panel can count them: a number that climbs means the server is ahead of this client.
+A frame arrived whose kind this build does not know. Skipped rather than fatal and surfaced only so a diagnostic panel can count them: a number that climbs means the server is ahead of this client.
 
 ## 5. The transport seam
 
@@ -261,13 +261,13 @@ abstract class PlazaSocket {
 }
 ```
 
-The transport, as this package needs it. **Deliberately not a WebSocket**: see [`SocketFactory`](#typedef-socketfactory).
+The transport, as this package needs it. It is not tied to WebSocket: see [`SocketFactory`](#typedef-socketfactory).
 
 #### Property `messages`
 
 `Stream<Object>`. Frames as they arrive: a `String` for a text frame, a `List<int>` for a binary one. Which arrives follows the server's codec.
 
-**Single-subscription, and it must buffer whatever arrives before the first listener.** This is a contract, not a preference. The server speaks first, so a socket that is open before anyone is listening is the normal case rather than an edge one, and a broadcast stream discards those frames without a trace. The `Hello` is the first thing on the wire and therefore the first thing lost, which presents as a handshake that never happened on a connection that is working fine.
+**Single-subscription and it must buffer whatever arrives before the first listener.** The server speaks first, so a socket is normally open before anyone is listening and a broadcast stream discards those frames without a trace. The `Hello` is the first thing on the wire and therefore the first thing lost, which presents as a handshake that never happened on a connection that is working fine.
 
 #### Method `send`
 
@@ -289,9 +289,9 @@ Sends one frame, already built by [`buildFrame`](../plaza_wire/API_REFERENCE.md#
 
 `int?`. The WebSocket close code once the far side has sent one, `null` before that or when the link died without a close frame.
 
-This is how a rejection is told from a drop. RFC 6455 reserves 4000-4999 for the application, so a server refusing a credential closes with a 4xxx and means it, while 1006 is no close frame at all and is the transport failing rather than the server deciding. A client that cannot tell them apart either retries a token the server has already refused, or gives up on a connection that only needed reconnecting. Surfaced to applications on [`Disconnected`](#class-disconnected).
+This is how a rejection is told from a drop. RFC 6455 reserves 4000-4999 for the application, so a server refusing a credential closes with a 4xxx, while 1006 is no close frame at all and is the transport failing rather than the server deciding. A client that cannot tell them apart either retries a token the server has already refused or gives up on a connection that only needed reconnecting. Surfaced to applications on [`Disconnected`](#class-disconnected).
 
-An implementation with no notion of a close code returns `null` for ever, which reads correctly as "nothing was said".
+An implementation with no notion of a close code returns `null` for ever, meaning no code was sent.
 
 #### Method `close`
 
@@ -315,7 +315,7 @@ typedef SocketFactory = Future<PlazaSocket> Function(Uri url);
 
 Opens a socket to `url`. **Called again on every reconnect, so it must be usable more than once.**
 
-Reaching every Dart target with one socket implementation means `dart:io` on native and `package:web` in a browser. Picking either inside this package would decide the consuming app's platform support, so it is supplied instead: [`webSocketConnect`](../plaza_ws/API_REFERENCE.md#function-websocketconnect) from [`plaza_ws`](../plaza_ws/) is the usual answer, and [`LoopbackSocket`](#class-loopbacksocket) covers tests.
+Reaching every Dart target with one socket implementation means `dart:io` on native and `package:web` in a browser. Picking either inside this package would decide the consuming app's platform support, so it is supplied instead: [`webSocketConnect`](../plaza_ws/API_REFERENCE.md#function-websocketconnect) from [`plaza_ws`](../plaza_ws/) is the usual answer and [`LoopbackSocket`](#class-loopbacksocket) covers tests.
 
 ### Class `LoopbackSocket`
 
@@ -329,7 +329,7 @@ class LoopbackSocket implements PlazaSocket {
 }
 ```
 
-A socket pair with no network, for tests and local play. Mirrors the `loopback` feature of the Rust `plaza_ws` crate and exists for the same reason: the lifecycle is worth testing without standing a server up.
+A socket pair with no network, for tests and local play. Mirrors the `loopback` feature of the Rust `plaza_ws` crate, so the lifecycle can be tested without a server.
 
 Starts in `SocketState.open`, so a factory is just `(_) async => socket`.
 
@@ -378,7 +378,7 @@ class Backoff {
 
 How long to wait before trying again. Exponential with a ceiling and jitter.
 
-**The jitter matters more than the curve.** Without it, a server that drops every client at once gets them all back in the same millisecond, which is how a recoverable blip becomes an outage.
+The jitter is more important than the shape of the curve. Without it, a server that drops every client at once gets them all back in the same millisecond and that burst can turn a recoverable blip into an outage.
 
 Asserts `factor >= 1` (a smaller factor shortens each wait) and `0 <= jitter < 1`. Pass a seeded `Random` to make a test deterministic.
 
@@ -421,7 +421,7 @@ class Timeline {
 }
 ```
 
-The client's clocks, and the epoch that says which measurements still count.
+The client's clocks and the epoch that says which measurements still count.
 
 A **reconnect** invalidates measurements in flight but keeps what has been learned: the socket changed, the link probably did not. A **resume** invalidates both, because arbitrary wall time passed and a least-squares fit across a ten-minute gap produces a meaningless skew.
 
@@ -474,7 +474,7 @@ class Pong {
 }
 ```
 
-An answered probe: the stamp it went out with, echoed back untouched, and the responder's clock if it had one to offer. `responderMs` is null when the server has no clock installed, which has to be distinguishable from a clock reading zero. Its unit is the server's, agreed out of band.
+An answered probe: the stamp it went out with, echoed back untouched and the responder's clock if it had one to offer. `responderMs` is null when the server has no clock installed, which has to be distinguishable from a clock reading zero. Its unit is the server's, agreed out of band.
 
 ### Class `Probe`
 
@@ -488,4 +488,4 @@ class Probe {
 
 A latency measurement in flight.
 
-Carries the epoch it was started in. A probe whose epoch has moved on is discarded rather than recorded: a ping sent before the app was suspended and answered after it measures the suspend, not the network, and one such sample poisons a smoothed estimator for minutes.
+Carries the epoch it was started in. A probe whose epoch has moved on is discarded rather than recorded: a ping sent before the app was suspended and answered after it measures the suspend rather than the network and one such sample skews a smoothed estimator for minutes.

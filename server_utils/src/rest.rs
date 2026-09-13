@@ -1,22 +1,22 @@
 //! Which entities have stopped, so the packet can stop paying for them.
 //!
-//! In a settled physics scene most things are not moving, and the cost of
-//! saying so is one bit against the thirty-three a velocity costs. That is
-//! Fiedler's at-rest flag, and it is the cheapest compression in
+//! In a settled physics scene most things are not moving. Marking an entity at
+//! rest costs one bit, where a velocity costs thirty-three. That is Fiedler's
+//! at-rest flag and it is the cheapest compression in
 //! [snapshot compression](https://gafferongames.com/post/snapshot_compression/)
 //! because it needs no new machinery on the wire, only the knowledge of which
 //! entities qualify.
 //!
-//! Knowing is the part worth a type. A single quiet tick means nothing, since a
-//! body at the top of its arc has zero velocity and is about to fall, and a
-//! body resting on the floor jitters by an epsilon forever. So rest is a *run*
-//! of quiet ticks, and waking is immediate: one moving tick and it is awake
-//! again, because being slow to notice motion is visible and being slow to
-//! notice stillness costs only bandwidth.
+//! This type decides which entities qualify. A single quiet tick is not enough,
+//! since a body at the top of its arc has zero velocity and is about to fall
+//! and a body resting on the floor jitters by an epsilon forever. So an entity
+//! is at rest after a *run* of quiet ticks and wakes immediately: one moving
+//! tick and it is awake again, because waking late shows on screen while
+//! resting late only costs bandwidth.
 //!
-//! What counts as moving stays yours. A solver already knows: rapier's island
-//! manager sleeps bodies, so `!body.is_sleeping()` is the whole input. Without
-//! one, a speed against an epsilon does the job.
+//! You decide what counts as moving. A physics solver already tracks it:
+//! rapier's island manager sleeps bodies, so `!body.is_sleeping()` is the whole
+//! input. Without a solver, compare a speed against an epsilon.
 //!
 //! ```
 //! use plaza_server_utils::rest::RestDetector;
@@ -31,7 +31,7 @@
 //! assert!(!rest.at_rest(0), "and one moving tick ends it");
 //! ```
 
-/// Tracks how long each entity has been still, and calls it rest after a run.
+/// Tracks how long each entity has been still and calls it rest after a run.
 ///
 /// Indexed densely, like [`crate::priority::PriorityAccumulator`], so a
 /// [`crate::SlotKey`] is already the index.
@@ -125,7 +125,7 @@ mod tests {
 
   #[test]
   fn a_single_quiet_tick_is_not_rest() {
-    // The case this exists for: a body at the apex of a jump reads as still.
+    // A body at the apex of a jump reads as still.
     let mut rest = RestDetector::new(5);
     rest.observe(0, true);
     rest.observe(0, false);

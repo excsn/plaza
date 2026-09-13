@@ -3,7 +3,7 @@
 // A frame is one kind byte, then the encoded body. On a text socket the kind
 // rides as the first character and the body is JSON; on a binary socket the
 // kind is the first byte and the body is whatever codec the server declared.
-// An unknown kind is skipped, never an error: that rule is what lets a server
+// An unknown kind is skipped rather than treated as an error, so a server can
 // add frame kinds without breaking deployed clients.
 //
 // Ops are serde externally-tagged enums. A struct variant arrives as a
@@ -54,10 +54,10 @@ function announceHello(sock, codec) {
   }
 }
 
-// The default reaction to a server's Hello: reload once when the page provably
-// outlived the server it was stamped by. Guarded so a still-mismatched reload
-// (a cached page, a proxy) degrades to a console error instead of a loop.
-// No-op when either side's version is unknown, and outside a browser.
+// The default reaction to a server's Hello: reload once when the page's stamped
+// version differs from the server's. Guarded so a still-mismatched reload (a
+// cached page, a proxy) degrades to a console error instead of a loop. No-op
+// when either side's version is unknown or outside a browser.
 function staleCheck(theirs) {
   const mine = ownProtocol();
   if (!mine || !theirs || theirs === mine) return;
@@ -81,8 +81,8 @@ function jsonFrame(kind, value) {
 function onJsonFrame(sock, data, onOp, onHello) {
   const kind = data.charCodeAt(0);
   if (kind === KIND_PING) {
-    // Echo the stamp untouched: this is what lets the server report a round
-    // trip for a browser client at all.
+    // Echo the stamp untouched so the server can measure a browser client's
+    // round trip.
     const ping = JSON.parse(data.slice(1));
     if (sock.readyState === 1) {
       sock.send(jsonFrame(KIND_PONG, { origin: ping.origin, responder: null }));

@@ -1,27 +1,26 @@
 //! A drop-in predicted local player: the whole client-side entity, wired.
 //!
-//! Prediction, reconciliation, and correction smoothing are separate primitives
+//! Prediction, reconciliation and correction smoothing are separate primitives
 //! ([`PredictedEntity`], [`ClientInputBuffer`], [`ErrorSmoother`]) so they can be
-//! composed freely. But almost every client composes them the same way, so this
-//! bundles them into one type you feed inputs and server packets, and read a
-//! render position back from. The primitives stay public for anyone who wants to
+//! composed freely. Almost every client composes them the same way, so this
+//! bundles them into one type: you feed it inputs and server packets and read a
+//! render position back. The primitives stay public for anyone who wants to
 //! wire it differently.
 //!
 //! # Before you write an `apply`
 //!
-//! **It is meant to be the server's step function, not a client copy of it.**
-//! Whatever the server does that your copy leaves out does not disappear; it
-//! arrives as a correction on every packet, indistinguishable from network
-//! jitter and hardest to spot exactly when it matters most. If the rule needs
-//! the world to run (gravity, wind, a platform), pass it through
-//! [`set_context`](PredictedPlayer::set_context) rather than writing a reduced
-//! rule that does not need it.
+//! **Use the server's own step function rather than a client copy of it.**
+//! Whatever the server does that your copy leaves out shows up as a correction
+//! on every packet. It looks like network jitter and is hardest to spot when it
+//! matters most. If the rule needs the world to run (gravity, wind, a
+//! platform), pass it through [`set_context`](PredictedPlayer::set_context)
+//! rather than writing a reduced rule that does not need it.
 //!
 //! **Predict only what the entity's own input decides.** An ability the server
-//! grants subject to a cooldown you cannot see is a permission, not a movement:
-//! guessing it means snapping back whenever the guess is wrong. Mispredicting
-//! continuous movement is invisible once eased; mispredicting a discrete grant
-//! is not.
+//! grants subject to a cooldown you cannot see is a permission rather than a
+//! movement. Guessing it means snapping back whenever the guess is wrong.
+//! Easing hides a misprediction of continuous movement but cannot hide a
+//! misprediction of a discrete grant.
 //!
 //! **This is for the discrete input model**, where the server consumes one input
 //! per simulation step. If your server holds an input and integrates it every
@@ -126,8 +125,8 @@ impl<State: Clone + Debug, Input: Clone + Debug, Ctx> PredictedPlayer<State, Inp
   ///
   /// The context is held rather than passed per input, so a replay uses the
   /// newest world rather than a snapshot per buffered input. That is a different
-  /// approximation, not a strictly better one: the inputs being replayed happened
-  /// in the past, under a world that has since moved. It is the cheap one, and
+  /// approximation rather than a strictly better one: the inputs being replayed
+  /// happened in the past, under a world that has since moved. It is cheaper and
   /// over a replay window of a few frames the difference is usually far smaller
   /// than the force being modelled. An application that needs the exact history
   /// can still carry a snapshot in its `Input` and leave this at `()`.
@@ -148,9 +147,9 @@ impl<State: Clone + Debug, Input: Clone + Debug, Ctx> PredictedPlayer<State, Inp
   /// the server is doing too.
   ///
   /// Without this the client keeps predicting movement for an entity the server
-  /// has pinned in place, and every packet reports a disagreement the client
-  /// invented. That reads as a correction storm with no cause in the network at
-  /// all, and it is one of the more confusing ways for prediction to go wrong.
+  /// has pinned in place and every packet reports a disagreement the client
+  /// invented. That shows up as a stream of corrections with no network cause,
+  /// which is confusing to debug.
   pub fn set_active(&mut self, active: bool) {
     self.active = active;
   }
@@ -165,12 +164,12 @@ impl<State: Clone + Debug, Input: Clone + Debug, Ctx> PredictedPlayer<State, Inp
   /// Moves the entity outright, with no ease and no replay: a spawn, a respawn,
   /// a teleport.
   ///
-  /// The distinction from an ordinary correction is cause, not size. A
+  /// This differs from an ordinary correction by cause rather than size. A
   /// correction is a disagreement about a continuous path and must be eased, or
-  /// the player sees a jerk. A teleport is not a disagreement at all, and easing
-  /// one draws the entity smoothly across the level, through everything in
-  /// between, which is worse than the snap it was avoiding. Pending inputs are
-  /// dropped because they describe a journey that no longer happened.
+  /// the player sees a jerk. A teleport is not a disagreement. Easing one draws
+  /// the entity smoothly across the level through everything in between, which
+  /// looks worse than the snap. Pending inputs are dropped because they
+  /// describe a journey that did not happen.
   pub fn teleport(&mut self, state: State) {
     self.predicted.current_predicted_state = state.clone();
     self.predicted.last_authoritative_state = state;
@@ -339,10 +338,10 @@ mod tests {
 
   #[test]
   fn a_forced_entity_predicts_the_force_from_its_context() {
-    // The lesson a real game paid for: an entity the server moves by more than
-    // its own input has to run the same rule, and that rule needs the world. With
-    // nowhere to put the world, a client writes a second, lesser rule and drifts
-    // by the whole size of the force it left out.
+    // An entity the server moves by more than its own input has to run the
+    // same rule and that rule needs the world. With nowhere to put the world, a
+    // client writes a second, simpler rule and drifts by the whole size of the
+    // force it left out.
     fn apply_with_wind(p: &mut P, i: &f32, wind: &f32) {
       p.0 += *i + *wind;
     }
@@ -366,7 +365,7 @@ mod tests {
   fn a_frozen_entity_stops_predicting_instead_of_inventing_corrections() {
     // A server that is holding an entity still (dead, stunned, mid respawn) will
     // keep reporting the same position. A client that keeps integrating input
-    // into it manufactures a correction every single packet, out of nothing.
+    // into it produces a correction on every packet with no real cause.
     let mut me = player(0.0);
     me.input(1.0);
     assert_eq!(me.logical().0, 1.0);

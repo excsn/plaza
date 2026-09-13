@@ -1,11 +1,10 @@
-//! Standing the arena up behind a WebSocket, and serving the browser client
+//! Standing the arena up behind a WebSocket and serving the browser client
 //! from the same port.
 //!
 //! [`plaza_session::host::SimHost`] is the whole stack (session with the
 //! build's protocol and simulation clock, controller, fixed-step driver, the
-//! `/ws` route, and the HTTP side with its cache busting). What is left here is
-//! the part that is actually this arena's: which state, which logic, and at
-//! what tick rate.
+//! `/ws` route and the HTTP side with its cache busting). What is left here is
+//! specific to this arena: which state, which logic and at what tick rate.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,8 +29,8 @@ pub async fn serve(bind: &str, controls: Arc<Mutex<Controls>>, view: Option<Arc<
     .serve_dir(static_dir)
     .cache_bust(WASM_FILE)
     // `run_fixed` underneath, never `run`: measured elapsed time would make the
-    // simulation's rate a property of the host's scheduler, and on a lattice
-    // that lands as a snap at every cell boundary.
+    // simulation's rate a property of the host's scheduler and on a lattice
+    // that shows up as a snap at every cell boundary.
     .run(plaza_wire::MsgPackCodec, PROTOCOL, Arena::new(initial, B0MB_SEED), |wiring| {
       ArenaLogic::new(controls, view).with_link(wiring.link_sink()).with_clock(wiring.sim_clock.clone())
     })

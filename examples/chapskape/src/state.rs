@@ -1,12 +1,11 @@
 //! What the server owns: one world, who is standing in it, and what each of
 //! them has already been told about the half that does not move.
 //!
-//! That last part is the only bookkeeping here that is not obvious, and it is
-//! the whole of the still-world argument. A viewer's memory of the props is a
-//! handful of ids against the tick each comes back on. It is small because
-//! almost nothing is ever out, and it is *possible* because the tick is
-//! absolute: a countdown would differ every tick and there would be nothing to
-//! remember.
+//! That last part is the only non-obvious bookkeeping here and change-only prop
+//! relevance depends on it. A viewer's memory of the props is a handful of ids
+//! against the tick each comes back on. It is small because almost nothing is
+//! ever out. It works because the tick is absolute: a countdown would change
+//! every tick, so there would be nothing stable to remember.
 
 use std::collections::HashMap;
 
@@ -21,7 +20,7 @@ use crate::zone::{Zone, MAX_ACTORS};
 /// The most game ticks one wake-up may run.
 ///
 /// A host that stalled and came back owing two seconds must not spend them all
-/// in one frame: the world would jump and every client would watch it happen.
+/// in one frame or the world would visibly jump for every client.
 pub const CATCH_UP: u32 = 3;
 
 pub struct SkapeState {
@@ -36,9 +35,9 @@ pub struct SkapeState {
   pub tick_ms: u64,
   /// The game clock's budget, drawn down in whole ticks.
   ///
-  /// The host wakes far more often than the world moves, so a game tick is a
-  /// budget being drawn down rather than a wake-up being answered, and the
-  /// tick length stays a dial because the catch-up cap is counted in ticks.
+  /// The host wakes far more often than the world moves, so a game tick runs
+  /// when the budget holds a whole tick rather than on every wake-up. The tick
+  /// length stays adjustable because the catch-up cap is counted in ticks.
   pub ticker: FixedTimestep,
   pub now_ms: u64,
   /// What each viewer has been told about the props, by id against the tick
@@ -100,11 +99,11 @@ impl SkapeState {
   /// What to put on this viewer's frame about the props, under the mode the
   /// world is running.
   ///
-  /// In `EveryTick` this is everything out in view, which is what a visibility
-  /// diff over movers would do and what the still world does not need. In
-  /// `OnChange` it is the difference against what this viewer already knows,
-  /// with a zero standing for "that one is back", because a client cannot infer
-  /// an absence from a stream that says nothing when nothing happened.
+  /// In `EveryTick` this is everything out in view, as a visibility diff over
+  /// movers would send; the still world does not need that. In `OnChange` it is
+  /// the difference against what this viewer already knows, with a zero
+  /// meaning "that one is back", because in a stream that is silent when
+  /// nothing changes an absence tells the client nothing.
   pub fn objects_for(&mut self, seat: Seat, middle: crate::protocol::Tile) -> Vec<ObjectState> {
     let mut visible = std::mem::take(&mut self.scratch);
     self.zone.depleted_in_view(middle, &mut visible);
@@ -120,10 +119,10 @@ impl SkapeState {
         self.told.diff(seat, visible.iter().map(|state| (state.id, state.ready_at)), |id, ready_at| {
           match ready_at {
             Some(ready_at) => changed.push(ObjectState { id, ready_at: *ready_at }),
-            // What the viewer knows and no longer sees is not the same
-            // question as what came back. A prop that left the view is
-            // forgotten silently; one that is standing again has to be said,
-            // or the client draws a stump for ever.
+            // A prop the viewer knew about and no longer sees has either left
+            // the view or come back. One that left the view is forgotten
+            // silently; one that is standing again has to be sent, or the
+            // client draws a stump for ever.
             None => {
               let tile = crate::world::prop_tile(id);
               if middle.steps_to(tile) <= crate::zone::VIEW {
@@ -170,8 +169,7 @@ mod tests {
 
   #[test]
   fn a_change_only_stream_says_a_depletion_once() {
-    // The whole of the still-world argument in one assertion: the second frame
-    // costs nothing, and so does the hundredth.
+    // After the first frame, a depleted prop costs nothing on any later frame.
     let mut state = SkapeState::new();
     state.mode = Relevance::OnChange;
     let middle = world::the_green();
@@ -190,9 +188,9 @@ mod tests {
 
   #[test]
   fn a_prop_coming_back_has_to_be_said_out_loud() {
-    // The failure a change-only stream invites: silence means nothing happened,
-    // so a client that was told about a stump and never told otherwise draws
-    // one for the rest of the session.
+    // In a change-only stream silence means nothing happened, so a client told
+    // about a stump and never told otherwise draws one for the rest of the
+    // session.
     let mut state = SkapeState::new();
     state.mode = Relevance::OnChange;
     let middle = world::the_green();
@@ -234,8 +232,8 @@ mod tests {
 
   #[test]
   fn two_viewers_are_told_separately() {
-    // A viewer's memory is a viewer's, and sharing one would mean the second
-    // client to arrive is never told about anything the first already knows.
+    // Each viewer has its own memory. A shared one would mean the second client
+    // to arrive is never told anything the first already knows.
     let mut state = SkapeState::new();
     state.mode = Relevance::OnChange;
     let middle = world::the_green();

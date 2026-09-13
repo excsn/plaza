@@ -23,10 +23,10 @@ class ChannelSocket implements PlazaSocket {
     unawaited(_channel.sink.done.then((_) => _finish()).catchError((_) => _finish()));
   }
 
-  /// Connects, and does not return until the handshake has completed.
+  /// Connects and does not return until the handshake has completed.
   ///
-  /// Waiting matters: `WebSocketChannel.connect` returns immediately and a frame
-  /// sent before the socket is open is dropped silently on some platforms, which
+  /// `WebSocketChannel.connect` on its own returns immediately and a frame sent
+  /// before the socket is open is dropped silently on some platforms, which
   /// would lose the Hello.
   static Future<ChannelSocket> connect(Uri url, {Iterable<String>? protocols}) async {
     final channel = WebSocketChannel.connect(url, protocols: protocols);

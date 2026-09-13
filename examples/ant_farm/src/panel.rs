@@ -1,4 +1,5 @@
-//! The numbers on screen: which phase owns the tick, and what the wire costs.
+//! The numbers on screen: which phase takes most of the tick and what the wire
+//! costs.
 //!
 //! The panel accumulates a second of ticks and then produces one
 //! [`StatsSnapshot`], which the server prints and also broadcasts, so an

@@ -498,15 +498,14 @@ impl Zone {
     }
     // The clock moved, so the index describes a world that no longer exists:
     // a body may have finished falling out of it without anybody touching a
-    // position. Marking it here rather than at each of the places that might
-    // have caused it is what keeps that from being a hunt for the one caller
-    // that forgot.
+    // position. Marking it here once means no caller that might have caused it
+    // has to remember to.
     self.stale = true;
     out
   }
 
-  /// Applies one landed ability. The whole of hit detection, on the server, at
-  /// one instant, against a named target.
+  /// Applies one landed ability. This is all of hit detection: one check on
+  /// the server at one instant against a named target.
   fn resolve(&mut self, caster: Seat, spell: Ability) -> Option<Seat> {
     let (from, target, kind) = self
       .characters

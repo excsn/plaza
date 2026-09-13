@@ -26,7 +26,7 @@ pub struct RunState {
   pub chest_keys: u8,
   pub seats: Vec<Seat>,
   /// The seat lifecycle: who is seated, whose seat is held. The tracker below
-  /// is the clock that decides when a hold ends; this is what a hold *is*.
+  /// decides when a hold ends; this records the hold itself.
   pub roster: Roster<PlayerId>,
   pub agents: HashMap<PlayerId, Agent<PlayerId>>,
 

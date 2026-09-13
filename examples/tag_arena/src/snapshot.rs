@@ -9,8 +9,8 @@ use plaza::{
 /// The world as anyone sees it.
 ///
 /// Public because the server-side bots read the same view a browser does,
-/// through `query_with` rather than a socket: a bot that plays from privileged
-/// state is not playing the same game.
+/// through `query_with` rather than a socket, so a bot has no information a
+/// player lacks.
 pub fn world_view(state: &ArenaState) -> WorldSnapshot {
   let mut runners: Vec<RunnerView> = state
     .runners

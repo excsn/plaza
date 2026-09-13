@@ -19,7 +19,7 @@ class RenderOpts {
 /// Holds the interpolate, extrapolate or hold choice internally and returns the
 /// right state, rather than handing a caller a starvation callback to invert
 /// control over. Which of the three happened is visible from the options and the
-/// buffer, not from a branch the application has to write.
+/// buffer rather than from a branch the application has to write.
 ///
 /// Extrapolation caps the *duration*, so the entity coasts to the limit and
 /// stops there. Returning the raw newest sample past the limit is the obvious
@@ -53,8 +53,8 @@ class RemoteView<S, V> {
   ///
   /// Not in the Rust original, which logs a warning. Holding at the cap is a
   /// legitimate outcome, so this is not an error, but reaching it *steadily* means
-  /// this entity's packets have stopped arriving and the view is drawing a guess
-  /// that has stopped improving.
+  /// this entity's packets have stopped arriving and the view is drawing an
+  /// extrapolation no new sample is updating.
   int overExtrapolations = 0;
 
   /// Records a sample. The velocity is kept beside it for extrapolation.

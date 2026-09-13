@@ -1,9 +1,9 @@
 //! The rules both sides run, as one piece of code.
 //!
-//! The same discipline as `bomb_grid`'s `rules.rs`, and for the same reason:
-//! a rule written twice diverges, and on a lattice it diverges into different
-//! cells rather than into a few pixels. What is new here is that the movement
-//! rule **consumes a place-triggered input** ([`crate::sim::turn_queue`]), so
+//! The same approach as `bomb_grid`'s `rules.rs`, for the same reason: two
+//! copies of a rule diverge and on a lattice they diverge by whole cells rather
+//! than a few pixels. The new part is that the movement rule **consumes a
+//! place-triggered input** ([`crate::sim::turn_queue`]), so
 //! the queue has to be threaded through it rather than applied before it. A
 //! turn is only ever resolved at a cell boundary, and the boundary is inside
 //! this function.
@@ -19,9 +19,9 @@ use crate::sim::types::{Cell, Dir, Maze, PlayerState, Step, SIM_STEP_MS};
 /// where the server took it.
 ///
 /// **Leftover time carries into the next step.** Without the carry a run of N
-/// cells loses up to N ticks, which is invisible over one cell and is a whole
-/// cell over a corridor, and it is exactly the drift that puts a client and a
-/// server at different junctions.
+/// cells loses up to N ticks. That is invisible over one cell and adds up to a
+/// whole cell over a corridor, which is enough to put a client and a server at
+/// different junctions.
 pub fn advance_player(
   player: &mut PlayerState,
   queue: &mut TurnQueue,
@@ -83,7 +83,7 @@ pub fn advance_player(
 ///
 /// Deterministic and shared, so a client can run the pursuers itself and only
 /// be corrected, rather than waiting to be told where four other things are.
-/// The same trick horde uses for its enemies, on rails.
+/// horde does the same for its enemies.
 ///
 /// **Never reverses unless there is no choice.** A pursuer that may turn back
 /// at any moment oscillates in a corridor and is both trivial to escape and
@@ -132,13 +132,12 @@ pub fn pellet_dir(at: Cell, heading: Dir, pellets: &[Cell], maze: &Maze, avoid: 
   // Seeded in a fixed direction order, so ties between equal-length paths
   // resolve the same way every time.
   //
-  // **Reversing is excluded unless it is the only way out**, exactly as the
-  // pursuit rule excludes it, and for a sharper reason. A runner eats the cell
-  // it stands on, so the nearest remaining pellet is very often the one just
-  // behind it: seeded naively, the rule turns the runner round, it eats the
-  // next cell back, and the nearest pellet is behind it again. That is a bot
-  // that paces one corridor for a whole round, covering three hundred cells to
-  // eat fifty.
+  // **Reversing is excluded unless it is the only way out**, as in the
+  // pursuit rule. A runner eats the cell it stands on, so the nearest
+  // remaining pellet is very often the one just behind it: seeded naively, the
+  // rule turns the runner round, it eats the next cell back and the nearest
+  // pellet is behind it again. The result is a bot that paces one corridor
+  // for a whole round, covering three hundred cells to eat fifty.
   let mut exits: Vec<Dir> = maze.exits(at).into_iter().filter(|d| *d != heading.opposite()).collect();
   if exits.is_empty() {
     exits = maze.exits(at);

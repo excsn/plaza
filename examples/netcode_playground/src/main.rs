@@ -97,8 +97,8 @@ fn read_input(world: &World, controls: &Controls, view: &View) -> MoveInput {
 ///
 /// Worth having on every one of these: they all push entity counts and per-frame
 /// work hard enough that "is this the network or is this my machine?" is a real
-/// question, and without a frame counter the two are indistinguishable. Smoothed,
-/// because raw per-frame values are unreadable, and it turns red when a frame is
+/// question and without a frame counter the two are indistinguishable. Smoothed,
+/// because raw per-frame values are unreadable. It turns red when a frame is
 /// slow enough to feel.
 fn draw_perf(smoothed: &mut f32) {
   let dt = get_frame_time();

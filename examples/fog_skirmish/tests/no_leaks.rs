@@ -2,11 +2,11 @@
 //!
 //! The test reads what arrived in a client's inbox, not what the server meant
 //! to send. pellet_maze shipped a per-recipient frame that was filtered
-//! correctly and leaked anyway, through events beside it that named cells
-//! nobody had scouted, and a test written against the server's intent would
-//! have passed the whole time.
+//! correctly and leaked anyway through events beside it that named cells
+//! nobody had scouted. A test written against the server's intent would have
+//! passed the whole time.
 //!
-//! So the audit here is over **every op**, classified by
+//! So the audit here covers every op, classified by
 //! [`positions_named`](plaza_example_fog_skirmish::vision::positions_named),
 //! which has no wildcard arm: a new op variant fails to compile until someone
 //! decides what it reveals.
@@ -55,8 +55,8 @@ async fn seat(h: &Harness, id: PlayerId) -> ClientInbox<FogOp, PlayerId> {
   inbox
 }
 
-/// Sends both players chasing the same relics, so their scouts genuinely move
-/// in and out of each other's vision and captures happen unobserved.
+/// Sends both players chasing the same relics, so their scouts move in and out
+/// of each other's vision and captures happen unobserved.
 async fn skirmish(h: &Harness, a: PlayerId, b: PlayerId, rounds: usize) {
   let targets = [
     (FIELD * 0.5, FIELD * 0.5),
@@ -157,8 +157,8 @@ async fn a_capture_out_of_sight_is_held_and_told_later() {
     "Bob captured nothing out of Alice's sight, so the deferral was never exercised"
   );
 
-  // Her own, at her feet, are hers to know about: the rule is about what you
-  // can see, not who did it. What she must not hear is Bob, across the map.
+  // She may be told about her own captures, since they happen where she can
+  // see. She must not hear about Bob's, across the map.
   let told_of_bob = drain(&alice_inbox)
     .iter()
     .filter(|op| matches!(op, FogOp::Captured { by, .. } if *by == bob))
@@ -191,7 +191,7 @@ async fn a_capture_out_of_sight_is_held_and_told_later() {
     "Alice reached the far corner and was never told what had happened there"
   );
 
-  // And she is told about a place she can now see: the point of telling late.
+  // The released event names a place she can now see.
   let leaked = query_with(&h.tx, move |state: &FogState| {
     late
       .iter()

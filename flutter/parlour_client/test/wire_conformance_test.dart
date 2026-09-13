@@ -3,8 +3,8 @@
 /// The fixtures are written by the Rust side:
 ///     PLAZA_REGENERATE_FIXTURES=1 cargo test -p plaza_example_parlour_game --test wire_fixtures
 ///
-/// Compact MessagePack is the pass that matters: field order is the whole
-/// contract there, and re-encoding to the exact server bytes is what proves
+/// Compact MessagePack matters most, because field order is the only thing that
+/// identifies a field there. Re-encoding to the exact server bytes checks that
 /// the generated order is the Rust order.
 import 'dart:convert';
 import 'dart:io';

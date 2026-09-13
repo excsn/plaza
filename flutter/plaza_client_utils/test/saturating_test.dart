@@ -112,7 +112,7 @@ void main() {
 
   group('the callers that needed this', () {
     /// A reply stamped after its own arrival must not become a negative round
-    /// trip that then poisons a smoothed average.
+    /// trip that then skews a smoothed average.
     test('a pong from the future reads as zero', () {
       final e = RttEstimator();
       e.observePong(2000, 1000);

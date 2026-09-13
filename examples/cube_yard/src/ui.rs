@@ -1,4 +1,4 @@
-//! The panel: what the wire cost, and what stage one is spending it on.
+//! The panel: what the wire cost and what stage one is spending it on.
 
 use cube_yard::controls::{Controls, ENCODINGS};
 use cube_yard::net::client::{NetClient, Status};

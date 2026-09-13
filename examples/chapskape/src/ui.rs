@@ -1,9 +1,8 @@
-//! What the player is told, and the two dials the panel exists to turn.
+//! What the player is shown and the panel's two dials.
 //!
-//! The pack is the interesting half. It is the one thing on screen that came
-//! down a stream nobody else is on, and it is sent only when it moves, so a
-//! player standing in a wood is paying nothing for twenty-eight squares they
-//! already have.
+//! The pack is the one thing on screen that came down a stream nobody else is
+//! on. It is sent only when it changes, so a player standing in a wood pays
+//! nothing for twenty-eight squares they already have.
 
 use chapskape::controls::TICKS_MS;
 use chapskape::net::client::{NetClient, Status};
@@ -40,7 +39,7 @@ fn pack_origin() -> Vec2 {
 /// Which pack square a point is over.
 ///
 /// Shared with the drawing rather than written twice, because two copies of a
-/// layout is how a click lands one square from where it looks.
+/// layout can drift apart and a click would land one square off.
 pub fn pack_slot_at(point: Vec2) -> Option<usize> {
   let origin = pack_origin();
   for slot in 0..SLOTS {
@@ -75,7 +74,7 @@ fn bar(x: f32, y: f32, w: f32, h: f32, share: f32, tint: Color, label: &str) {
   draw_text(label, x + 6.0, y + h - 5.0, h - 4.0, INK);
 }
 
-/// Health, what you are doing, and the run switch.
+/// Health, what you are doing and the run switch.
 pub fn draw_hud(client: &NetClient) {
   let Some(you) = client.you.as_ref() else {
     return;
@@ -153,7 +152,7 @@ pub fn draw_skills(client: &NetClient) {
   }
 }
 
-/// Twenty-eight squares, which is the whole of the private stream made visible.
+/// Twenty-eight squares, which show the whole private stream.
 pub fn draw_pack(client: &NetClient, hover: Option<usize>) {
   let origin = pack_origin();
   let width = (SLOT + SLOT_GAP) * PACK_COLUMNS as f32 + 6.0;
@@ -195,7 +194,7 @@ pub fn draw_pack(client: &NetClient, hover: Option<usize>) {
   }
 }
 
-/// Everything that was said once and will not be said again.
+/// Messages that are only sent once.
 pub fn draw_notices(client: &NetClient) {
   let now = client.now_ms();
   let bottom = screen_height() - 210.0;
@@ -220,8 +219,8 @@ pub fn draw_notices(client: &NetClient) {
 
 /// Damage and healing, floating off whoever it happened to.
 ///
-/// Projected by hand, because screen-space text over a world-space point is the
-/// one thing a 3D camera cannot draw for you.
+/// Projected by hand, because a 3D camera cannot draw screen-space text over a
+/// world-space point.
 pub fn draw_splats(client: &NetClient, camera: &Camera3D) {
   let now = client.now_ms();
   let matrix = camera.matrix();
@@ -310,17 +309,16 @@ pub fn draw_panel(client: &mut NetClient, url: &str, dials: &Dials) -> bool {
       ui.label(format!("people {people}, things {foes}"));
       ui.separator();
 
-      // The headline. gow_3d sends a held direction thirty times a second;
-      // this sends a place, and a place lasts as long as the walk does.
+      // gow_3d sends a held direction thirty times a second; this sends a
+      // place, which lasts as long as the walk does.
       ui.label(format!("ops a minute   {ops_per_minute:.0}"));
       ui.label(format!("ops in all     {}", client.ops_sent));
       ui.label(format!("{:.2} KiB/s", client.meter.kib_per_sec(now)));
       ui.label(format!("{:.2} KiB/s session", client.meter.session_kib_per_sec(now)));
       ui.separator();
 
-      // Zero is the expected reading, which is exactly what makes it worth a
-      // row: a route both ends derive from one rule has nothing to disagree
-      // about, and a number climbing here means the rule stopped being one.
+      // Zero is the expected reading, because both ends derive the route from
+      // one rule. A number climbing here means the two ends have diverged.
       ui.label(format!("squares confirmed {}", client.route.confirmations));
       ui.label(format!("route diverged    {}", client.route.diverged));
       ui.separator();
@@ -345,8 +343,8 @@ pub fn draw_panel(client: &mut NetClient, url: &str, dials: &Dials) -> bool {
             }
           }
         });
-        // What the slider is for: at six hundred the tick is something a
-        // player counts against, and at fifty it is something to hide again.
+        // At six hundred a player can time actions against the tick; at fifty
+        // it has to be hidden again.
         ui.label("600 is a game you can read, 50 is a netcode problem");
       } else {
         ui.label("(the host owns these dials)");
@@ -361,7 +359,7 @@ pub fn draw_panel(client: &mut NetClient, url: &str, dials: &Dials) -> bool {
   captured
 }
 
-/// The one line of instructions, which a game this shape genuinely needs.
+/// One line of instructions, since click-to-move controls are not obvious.
 pub fn draw_help() {
   draw_text(
     "click to go there, click a tree or a brute to work it, R runs, space stops, click your pack to use, shift-click to drop",

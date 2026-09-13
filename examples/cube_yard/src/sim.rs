@@ -1,12 +1,12 @@
-//! The yard: a walled floor, a pile of cubes, and the player cubes that shove
+//! The yard: a walled floor, a pile of cubes and the player cubes that shove
 //! them around.
 //!
-//! Server-side only, and deliberately configured as puck_rink's opposite.
-//! There, every client re-simulates and a digest proves the machines agree, so
-//! `enhanced-determinism` is mandatory and `parallel` is forbidden. Here the
-//! server is the only simulation and clients render what it sends, so
-//! determinism buys nothing and `parallel` is free to take. Same crate, and the
-//! netcode family is what decides the configuration.
+//! Server-side only and deliberately configured the opposite way to
+//! puck_rink. There, every client re-simulates and a digest proves the
+//! machines agree, so `enhanced-determinism` is mandatory and `parallel` is
+//! forbidden. Here the server is the only simulation and clients render what it
+//! sends, so determinism is not needed and `parallel` can be enabled. It is the
+//! same crate with its features chosen by the netcode family.
 
 use std::collections::HashMap;
 
@@ -16,15 +16,15 @@ use crate::protocol::{CubeState, Drive, CUBES, TICK_HZ};
 
 /// Half-extent of a pile cube, so they are one unit across.
 const CUBE: f32 = 0.5;
-/// Player cubes are bigger, so shoving reads as shoving.
+/// Player cubes are bigger, so a shove is easy to see.
 const PLAYER: f32 = 1.5;
 /// Half-width of the floor.
 ///
-/// Effectively infinite rather than actually: the field is 37 across, so this
-/// leaves a hundred units of ground in every direction. There is no edge to
-/// lose a cube over and no wall to pile them against, and the only reason it is
-/// finite at all is that the wire quantises positions over a bounded range (see
-/// `pack`), and an unbounded range would mean unbounded precision loss.
+/// Large enough to act as infinite: the field is 37 across, so this leaves a
+/// hundred units of ground in every direction. There is no edge to lose a cube
+/// over and no wall to pile them against. It is finite only because the wire
+/// quantises positions over a bounded range (see `pack`) and an unbounded range
+/// would mean unbounded precision loss.
 pub const YARD: f32 = 150.0;
 /// Where the field of cubes actually sits, well inside the floor.
 pub const FIELD: f32 = 40.0;
@@ -35,7 +35,7 @@ const SPACING: f32 = 2.4;
 /// How fast a held direction moves a player cube.
 ///
 /// Set as a velocity rather than pushed as a force: a platformer stops when you
-/// let go, and a force plus damping coasts, which reads as ice.
+/// let go, while a force plus damping coasts and feels like ice.
 pub(crate) const DRIVE_SPEED: f32 = 14.0;
 /// Upward speed a jump starts with.
 pub(crate) const JUMP_SPEED: f32 = 12.0;
@@ -44,21 +44,21 @@ pub(crate) const JUMP_SPEED: f32 = 12.0;
 /// a corner contact launched the player at 8.3 and it arced to a height of 12.
 const CLIMB_MAX: f32 = 2.0;
 
-/// Roll mode is **driven, not simulated**, and that is deliberate.
+/// Roll mode is deliberately **driven rather than simulated**.
 ///
 /// Handing the player to the solver means a torque can only become travel
-/// through friction, and friction then decides everything: it ground a loaded
-/// ball to a halt, and raised enough to stop the cube spinning on the spot it
+/// through friction and friction then decides everything: it ground a loaded
+/// ball to a halt and, raised enough to stop the cube spinning on the spot, it
 /// measured 1059N against a 950N motor, so the cube simply stopped. Every
-/// coefficient after that was tuning around a machine that should not have been
-/// there.
+/// coefficient after that was tuning around a mechanism that should not have
+/// been there.
 ///
 /// A cube moves when a key is held and stops when it is not. The roll is read
 /// off the velocity, so it always matches the travel and never fights the floor
-/// for grip. Gravity, jumping and every collision stay real; what is authored is
-/// the intent, which is the one thing a player is entitled to.
+/// for grip. Gravity, jumping and every collision stay physical; only the
+/// player's intent is authored.
 ///
-/// The **field** is where the physics lives, and it is the only place it should.
+/// The solver is for the **field** of cubes.
 pub(crate) const ROLL_SPEED: f32 = 15.0;
 /// Reached and shed in about a fifth of a second, which is a key press.
 const ROLL_EASE: f32 = 0.28;
@@ -96,13 +96,13 @@ const GRAVITY: f32 = 9.81;
 const FIELD_DEADBAND: f32 = CUBE_FRICTION * GRAVITY;
 /// How much of the shove goes upward.
 ///
-/// Pushing straight away from the player's centre looks wrong for the same
-/// reason it feels wrong: the player hovers *above* the field, so "away" for
-/// the cube directly beneath is straight **down**, and the whole shove is spent
-/// pressing it into the floor. Only once a cube is off to one side does any of
-/// the push become horizontal, which reads as nothing happening until it is
-/// already past. Flattening the direction to the ground plane and adding lift
-/// makes the field scatter outward and up, the way a downdraft would.
+/// Pushing straight away from the player's centre looks wrong: the player
+/// hovers *above* the field, so "away" for the cube directly beneath is
+/// straight **down** and the whole shove is spent pressing it into the floor.
+/// Only once a cube is off to one side does any of the push become horizontal,
+/// so nothing seems to happen until the player is already past. Flattening the
+/// direction to the ground plane and adding lift makes the field scatter
+/// outward and up, the way a downdraft would.
 const REPEL_LIFT: f32 = 0.3;
 
 /// The hold in roll mode, as a spring toward the player's **surface** rather
@@ -117,28 +117,29 @@ const CARRY_PULL: f32 = 26.0;
 const CARRY_DAMP: f32 = 6.0;
 /// A carried cube is **detected** by everything and **pushes** nothing.
 ///
-/// Solidity is what turns a gathered ball into a snowplough. Held cubes that
-/// push the player make it climb its own ball, measured at a height of 13 on a
-/// flat floor; held cubes that push the *field* wedge against it, and at 26
-/// carried the player was down to 0.4 units per second, which is stuck.
+/// A solid gathered ball acts as a snowplough. Held cubes that push the player
+/// make it climb its own ball, measured at a height of 13 on a flat floor; held
+/// cubes that push the *field* wedge against it and with 26 carried the player
+/// was down to 0.4 units per second, which is stuck.
 ///
-/// Filtering the solver and not the collision groups is what leaves the pickup
-/// test and the ground check reading a narrow phase that still sees everything.
+/// Filtering the solver groups rather than the collision groups leaves the
+/// pickup test and the ground check reading a narrow phase that still sees
+/// everything.
 ///
-/// Both sides of a pair have to agree, and `solver_groups` is a **separate
+/// Both sides of a pair have to agree and `solver_groups` is a **separate
 /// field from `collision_groups` that defaults to `ALL`**: setting the player's
 /// collision groups and filtering on its solver groups filters nothing, because
 /// the default membership matches every filter. Every carried cube stayed fully
-/// solid, and the giveaway was a player resting at 2.495 on four cubes it was
+/// solid and the giveaway was a player resting at 2.495 on four cubes it was
 /// supposed to be passing through.
 const PLAYER_GROUP: Group = Group::GROUP_1;
 const CUBE_GROUP: Group = Group::GROUP_2;
 const FLOOR_GROUP: Group = Group::GROUP_3;
 
 /// The ground is the exception. A cube stuck to the underside of a player that
-/// is resting on it has nowhere to be, and with every contact filtered it sank
-/// into the slab and fell out of the bottom at y = -2, which is exactly where
-/// the wire's lower bound sits.
+/// is resting on it has nowhere to go and with every contact filtered it sank
+/// into the slab and fell out of the bottom at y = -2, which is where the
+/// wire's lower bound sits.
 fn carried_groups() -> InteractionGroups {
   InteractionGroups::new(CUBE_GROUP, FLOOR_GROUP, InteractionTestMode::And)
 }
@@ -151,9 +152,9 @@ fn loose_groups() -> InteractionGroups {
 /// direction it arrived from, held in the player's frame so the clump turns
 /// with the cube it is stuck to.
 ///
-/// Springing toward a *distance* instead leaves gravity to choose which point
-/// on that sphere, and the answer is always the lowest one, so everything
-/// collected in a bag underneath. A carried cube is weightless for the same
+/// Springing toward a *distance* instead lets gravity pull every held cube to
+/// the lowest point on that sphere, so everything collected in a bag
+/// underneath. A carried cube is weightless for the same
 /// reason: magnetism is the only thing deciding where it sits.
 fn surface_hold(direction: Vec3) -> Vec3 {
   let reach = direction.abs().max_element().max(1e-3);
@@ -172,8 +173,7 @@ const FIELD_MAX: f32 = 62.0;
 /// With no walls, this is the only thing that bounds the world: launched at
 /// this speed a cube lands about a hundred units away, which from the edge of
 /// the field is comfortably inside the floor. Without it the repulsion could
-/// throw one clean off, and a cube falling for ever is a cube the client draws
-/// for ever.
+/// throw one clean off the floor and the client would draw it falling for ever.
 pub(crate) const CUBE_MAX_SPEED: f32 = 24.0;
 
 pub const MAX_PLAYERS: usize = 4;
@@ -190,9 +190,9 @@ const STILL: f32 = 0.05;
 /// hold still: a settled yard showed patches of them lying flat on the ground
 /// with nothing near them.
 ///
-/// A run of quiet ticks per body is what the wire wants, and it matches
-/// [`RestDetector`](plaza_server_utils::RestDetector), which the priority side
-/// already uses. Waking is immediate; only rest has to be earned.
+/// The wire needs a run of quiet ticks per body, which matches
+/// [`RestDetector`](plaza_server_utils::RestDetector) on the priority side.
+/// Waking is immediate; only rest waits for the run of quiet ticks.
 const REST_TICKS: u16 = 20;
 
 pub struct Yard {
@@ -238,9 +238,9 @@ impl Yard {
     let mut bodies = RigidBodySet::new();
     let mut colliders = ColliderSet::new();
 
-    // One floor, no walls. A wall is something to pile cubes against and an
-    // edge is something to lose them over, and this game wants neither: shove a
-    // cube as hard as you like and it lands on ground and stays there.
+    // One floor and no walls, because the game wants no wall to pile cubes
+    // against and no edge to lose them over: shove a cube as hard as you like
+    // and it lands on ground and stays there.
     colliders.insert(
       ColliderBuilder::cuboid(YARD, 1.0, YARD)
         .translation(Vec3::new(0.0, -1.0, 0.0))
@@ -248,11 +248,10 @@ impl Yard {
         .solver_groups(InteractionGroups::new(FLOOR_GROUP, Group::ALL, InteractionTestMode::And)),
     );
 
-    // A flat field, evenly spaced and resting on the floor. Not a heap: the
-    // whole game is ploughing furrows through a regular pattern, and a pile has
-    // no pattern to disturb. It also means the scene settles and *stays*
-    // settled, which is what makes the at-rest saving real rather than
-    // theoretical.
+    // A flat field, evenly spaced and resting on the floor, rather than a heap:
+    // the game is about ploughing furrows through a regular pattern and a pile
+    // has no pattern to disturb. The scene also settles and *stays* settled, so
+    // the at-rest saving actually applies.
     let mut handles = Vec::with_capacity(CUBES + MAX_PLAYERS);
     let mut cube_of: HashMap<ColliderHandle, usize> = HashMap::with_capacity(CUBES);
     let side = (CUBES as f32).sqrt().ceil() as usize;
@@ -291,8 +290,8 @@ impl Yard {
       );
       let collider = colliders.insert_with_parent(
         // Almost frictionless, deliberately: nothing depends on grip now that
-        // the drive is a force, and friction was the thing stopping a loaded
-        // cube from moving at all.
+        // the drive is a force and friction was what stopped a loaded cube from
+        // moving at all.
         ColliderBuilder::cuboid(PLAYER, PLAYER, PLAYER)
           .friction(0.15)
           .density(2.5)
@@ -336,8 +335,8 @@ impl Yard {
   /// Asked of the narrow phase rather than inferred from vertical speed. The
   /// speed test said "grounded" at the apex of every jump, where the velocity
   /// passes through zero, so holding the key launched again at the top of each
-  /// arc and the player climbed for ever. A contact below is the actual
-  /// question, and it is the one the solver can already answer.
+  /// arc and the player climbed for ever. A contact below is what matters and
+  /// the solver can already report it.
   fn set_solver_groups(&mut self, index: usize, groups: InteractionGroups) {
     let collider = self.bodies[self.handles[index]].colliders()[0];
     self.colliders[collider].set_solver_groups(groups);
@@ -352,8 +351,8 @@ impl Yard {
       }
       let other = if pair.collider1 == collider { pair.collider2 } else { pair.collider1 };
       // A cube stuck to the underside is not ground. It is below the player and
-      // touching it, which is the whole test, so a gathered clump became its own
-      // launchpad and jump could be held down forever.
+      // touching it, which is all the test checks, so a gathered clump became
+      // its own launchpad and jump could be held down forever.
       if let Some(index) = self.cube_of.get(&other)
         && self.carried[*index].is_some() {
           return false;
@@ -381,11 +380,10 @@ impl Yard {
 
   pub fn step(&mut self, driving: &[Drive; MAX_PLAYERS]) {
     // Rapier's `add_force` and `add_torque` **persist across timesteps** until
-    // reset. Left uncleared they accumulate every tick, which is not a slow
-    // drift but a runaway: the roll torque reached 46 rad/s against a cap of
-    // 7.5, cubes were flung off the floor entirely, and the player was thrown
-    // across the yard. Every apparent "energy from nowhere" symptom in this
-    // file traced back to here.
+    // reset. Left uncleared they accumulate every tick and run away quickly:
+    // the roll torque reached 46 rad/s against a cap of 7.5, cubes were flung
+    // off the floor entirely and the player was thrown across the yard. Every
+    // apparent "energy from nowhere" symptom in this file traced back to here.
     for handle in &self.handles {
       let body = &mut self.bodies[*handle];
       body.reset_forces(false);
@@ -410,7 +408,7 @@ impl Yard {
       if drive.rolling {
         // Physical: a torque about the axis across the direction of travel, and
         // friction is what turns spinning into going somewhere. Nothing is set,
-        // so mass matters, momentum is real, and the cube is slowed by whatever
+        // so mass matters, momentum is real and the cube is slowed by whatever
         // it ploughs into. It also cannot launch itself off the floor, because
         // nothing is forcing a rotation the solver then has to un-penetrate.
         let load = 1.0 / (1.0 + carried_mass * LOAD_SHARE);
@@ -431,10 +429,10 @@ impl Yard {
         jump_now = drive.jump && !self.held_jump[seat];
         self.held_jump[seat] = drive.jump;
       } else {
-        // Hovering: the vertical velocity is *set* toward the target height,
-        // not added to. Adding a lift to whatever gravity had just done leaves
-        // the two in equilibrium wherever they happen to cancel, which measured
-        // as floating at 3.3 with the target at 5.
+        // Hovering: the vertical velocity is *set* toward the target height
+        // rather than added to. Adding a lift to whatever gravity had just done
+        // leaves the two in equilibrium wherever they happen to cancel, which
+        // measured as floating at 3.3 with the target at 5.
         let at = body.translation();
         let climb = ((HOVER_HEIGHT - at.y) * HOVER_STIFF).clamp(-HOVER_DAMP, HOVER_DAMP);
         body.set_linvel(Vec3::new(horizontal.x, climb, horizontal.z), true);
@@ -480,8 +478,9 @@ impl Yard {
   ///
   /// Hovering **repels**: everything within reach is pushed away, which is what
   /// carves furrows through the field without the cube ever touching it.
-  /// Rolling **attracts**, but only what it has actually run into, and weakly,
-  /// so the ball grows as you plough through rather than sucking the field in
+  /// Rolling **attracts**, but only what it has actually run into and only
+  /// weakly, so the ball grows as you plough through rather than sucking the
+  /// field in
   /// from a distance.
   ///
   /// **Neither mode applies a reaction to the player.** Both drive it directly,
@@ -539,22 +538,23 @@ impl Yard {
 
         // A push too weak to beat the cube's own friction is not applied to a
         // cube that is not already moving. The field fades to nothing at its
-        // rim, so the outer band could never shift what it touched, and holding
+        // rim, so the outer band could never shift what it touched and holding
         // those cubes awake left a halo trailing each player: 205 of 901 awake
         // against 55 actually moving, every one of them paying a velocity on
         // the wire to hold still.
         //
-        // Keyed on **motion**, not on `is_sleeping`. Gating the wake alone
+        // Keyed on **motion** rather than on `is_sleeping`. Gating the wake alone
         // changes nothing, because a cube woken while the player was close
         // keeps getting the small push as it recedes and so never gets the run
         // of quiet ticks it needs to sleep again. A cube that is moving still
-        // gets the weak push, so the field itself has no cliff in it.
+        // gets the weak push, so the field has no sudden edge.
         if push.length() < FIELD_DEADBAND && body.linvel().length() < STILL {
           continue;
         }
         body.wake_up(true);
-        // A force, integrated over the step, not a velocity handed out every
-        // tick: the latter is an acceleration of sixty times whatever you wrote.
+        // A force integrated over the step rather than a velocity handed out
+        // every tick, which would be an acceleration of sixty times whatever
+        // you wrote.
         let force = push * body.mass();
         body.add_force(force, true);
 
@@ -565,15 +565,16 @@ impl Yard {
       }
 
       // Deliberately no reaction on the player. It is *driven*, so a force
-      // pushing back on authored motion has nothing to be conserved against,
-      // and the cubes it gathers rest on the ground while the spring pulls them
-      // up: the reaction levitated the player on its own clump at a height of
-      // 2.49 with no floor contact at all, which is the "I keep floating up"
-      // and the infinite jump in one term. A ball's weight is in LOAD_SHARE.
+      // pushing back on authored motion has nothing to be conserved against.
+      // The cubes it gathers rest on the ground while the spring pulls them up
+      // and the reaction levitated the player on its own clump at a height of
+      // 2.49 with no floor contact at all, which caused both the "I keep
+      // floating up" report and the infinite jump. A ball's weight is in
+      // LOAD_SHARE.
     }
   }
 
-  /// Picks up whatever the rolling cube has run into, and drops everything when
+  /// Picks up whatever the rolling cube has run into and drops everything when
   /// it lifts off again.
   fn update_carried(&mut self, driving: &[Drive; MAX_PLAYERS]) {
     for (seat, drive) in driving.iter().enumerate() {
@@ -656,21 +657,20 @@ impl Yard {
   /// Fiedler's "quantise both sides": the server simulating at a precision it
   /// never transmits means the client is always looking at a rounded copy of a
   /// truth that has already moved on. Snapping first makes what the client
-  /// receives *be* the state, so the two cannot drift apart in the digits below
-  /// the wire's resolution.
+  /// receives exactly the server's state, so the two cannot drift apart in the
+  /// digits below the wire's resolution.
   ///
-  /// **Only bodies that are actually moving get snapped**, and that is not a
-  /// detail. Snapping everything every tick took the settled pile from 905
-  /// asleep to 0: a resting cube jitters by less than one quantisation step, so
-  /// it is re-snapped forever, and writing a body's position marks it modified,
-  /// which is enough to stop it ever reaching the sleep threshold. Keying on
-  /// `is_sleeping` does not help either, because that is the state it can no
-  /// longer get into.
+  /// **Only bodies that are actually moving get snapped.** Snapping everything
+  /// every tick took the settled pile from 905 asleep to 0: a resting cube
+  /// jitters by less than one quantisation step, so it is re-snapped every
+  /// tick. Writing a body's position marks it modified, which stops it ever
+  /// reaching the sleep threshold. Skipping sleeping bodies does not help
+  /// either, because a snapped body can no longer fall asleep.
   ///
-  /// Keying on motion breaks the circle, and the rule it leaves is the one that
-  /// was always right: a body that is not moving is not drifting, so there is
-  /// no divergence for snapping to prevent. Costing the at-rest flag to fix
-  /// drift that does not exist would be a bad trade twice over.
+  /// Snapping only moving bodies fixes it: a body that is not moving is not
+  /// drifting, so there is no divergence for snapping to prevent. Losing the
+  /// at-rest flag to fix drift that does not exist would cost bandwidth for
+  /// nothing.
   pub fn snap_to_wire(&mut self) -> usize {
     let mut snapped = 0usize;
     for handle in &self.handles {
@@ -704,8 +704,8 @@ impl Yard {
 
   /// How many bodies the solver currently has asleep.
   ///
-  /// The input [`RestDetector`](plaza_server_utils::RestDetector) wants, and a
-  /// signal a hand-rolled simulation would have to derive for itself.
+  /// The input [`RestDetector`](plaza_server_utils::RestDetector) wants. A
+  /// hand-rolled simulation would have to derive this signal for itself.
   pub fn sleeping(&self) -> usize {
     self.handles.iter().filter(|h| self.bodies[**h].is_sleeping()).count()
   }
@@ -765,7 +765,7 @@ mod tests {
     let mut cubes = Vec::new();
     yard.snapshot(&mut cubes);
     // There are no walls to hold anything in, so what matters is that the floor
-    // reaches far enough that nothing has run out of it, and that gravity has
+    // reaches far enough that nothing has run out of it and that gravity has
     // put everything back down on it.
     for (i, cube) in cubes.iter().enumerate() {
       assert!(cube.pos[1] > -2.0, "cube {i} fell through the floor: {:?}", cube.pos);
@@ -809,7 +809,7 @@ mod tests {
   fn a_settled_pile_goes_to_sleep() {
     let mut yard = Yard::new();
     run(&mut yard, 900);
-    // The whole point of the at-rest flag: most of a settled scene is asleep,
+    // This is what the at-rest flag is for: most of a settled scene is asleep
     // and the solver already knows which part.
     assert!(yard.sleeping() > CUBES / 2, "only {} of {CUBES} asleep", yard.sleeping());
   }
@@ -836,9 +836,9 @@ mod tests {
     let speed = travelled / 2.5;
     assert!(speed > 5.0, "holding a direction should get it rolling, got {speed:.2}/sec");
 
-    // And it stops promptly. This is the reversal: the earlier assertion here
-    // required it to *carry momentum* into the release, which is what a solver
-    // driving the cube gave. A key press is intent, so letting go is too.
+    // It stops promptly. An earlier version of this assertion required it to
+    // *carry momentum* into the release, which is what a solver driving the
+    // cube gave. A key press expresses intent, so releasing it does too.
     for _ in 0..20 {
       yard.step(&idle_rolling());
     }
@@ -880,9 +880,10 @@ mod tests {
     );
   }
 
-  /// Rolling rather than sliding: the spin and the travel have to be coupled.
+  /// Rolling rather than sliding: the spin and the travel have to be coupled,
+  /// though not locked together.
   ///
-  /// Not locked together, though. Driving a cube with a torque means it slips
+  /// Driving a cube with a torque means it slips
   /// whenever the torque exceeds what friction can transmit, which is real and
   /// is the cost of making the mode physical; an authored roll could hold the
   /// exact ratio and could not be slowed by what it hits. So this checks the
@@ -924,14 +925,14 @@ mod tests {
     );
   }
 
-  /// Rolling should ride the field, not hop on it.
+  /// Rolling should ride the field rather than hop on it.
   ///
-  /// The cube's roll is authored rather than torqued, and a cube spun that way
+  /// The cube's roll is authored rather than torqued and a cube spun that way
   /// digs a corner into the floor: the solver resolves the penetration by
   /// throwing it upward once per quarter turn, which measured as an eleven unit
-  /// launch and read as constant bouncing. Capping the rise fixed it, and the
-  /// property worth pinning is *reversals* rather than range, because climbing
-  /// over a cube and down the far side is legitimate and hopping is not.
+  /// launch and read as constant bouncing. Capping the rise fixed it and the
+  /// property to pin is *reversals* rather than range, because climbing over a
+  /// cube and down the far side is legitimate and hopping is not.
   #[test]
   fn the_field_cannot_punt_a_rolling_cube_into_the_air() {
     // Driving into the lattice at speed, a corner contact gave the player a
@@ -961,8 +962,8 @@ mod tests {
     }
     let lo = heights.iter().cloned().fold(f32::MAX, f32::min);
     let hi = heights.iter().cloned().fold(0.0f32, f32::max);
-    // Bouncing is *reversals*, not range: riding up over a cube and down the
-    // other side is one climb, and hopping is many.
+    // Bouncing shows up as *reversals* rather than range: riding up over a cube
+    // and down the other side is one climb and hopping is many.
     let mut reversals = 0;
     for w in heights.windows(3) {
       let (a, b, c) = (w[0], w[1], w[2]);
@@ -980,7 +981,7 @@ mod tests {
   }
 
   /// It slows to a stop rather than stopping the instant you release, which is
-  /// what a physical roll buys and costs.
+  /// what a physical roll gives.
   #[test]
   fn a_full_ball_slows_a_cube_without_ever_stopping_it() {
     // The failure this pins: driving with a torque, speed peaked at 6.3 with
@@ -1221,11 +1222,11 @@ mod tests {
       .count();
     assert!(shoved > 20, "the repulsion field should plough a furrow, moved {shoved}");
 
-    // And outward, not pressed into the floor: pushing radially away from a
+    // Outward rather than pressed into the floor: pushing radially away from a
     // player that hovers *above* the field drives the cube directly beneath it
     // straight down, which does nothing at all. Asserted as "not driven under"
     // rather than the "thrown into the air" this used to check, because a field
-    // strong enough to launch cubes was the thing that read as too strong.
+    // strong enough to launch cubes looked too strong.
     let resting = CUBE - 0.15;
     let pressed = (0..CUBES).filter(|&i| after[i].pos[1] < resting).count();
     assert_eq!(pressed, 0, "the field should shove cubes aside, not into the floor");
@@ -1274,9 +1275,9 @@ mod tests {
       let mut driving = [Drive::default(); MAX_PLAYERS];
       driving[0] = Drive { dx: -1, dz: 0, jump: true, rolling };
 
-      // Bounded, not capped at an arbitrary number: riding your own ball of
-      // cubes is legitimate height, and what must not happen is climbing
-      // without limit. So the second half must not tower over the first.
+      // Bounded rather than capped at an arbitrary number: riding your own ball
+      // of cubes is legitimate height but climbing without limit is not. So the
+      // second half must not rise far above the first.
       let mut early = 0.0f32;
       let mut late = 0.0f32;
       for tick in 0..900 {

@@ -1,10 +1,10 @@
 //! The rink, scripted: no window, no socket. One human takes a paddle among
-//! three bots, skates for a while, and the script re-simulates every frame the
-//! server broadcast from the inputs it echoed, proving the digest claim the
-//! rollback session lives on.
+//! three bots and skates for a while. The script re-simulates every frame the
+//! server broadcast from the inputs it echoed and checks the digests the
+//! rollback session depends on.
 //!
 //! `--physics both` runs the same script on each backend in turn and prints
-//! them side by side, which is the comparison the second backend exists for.
+//! the results side by side.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -31,7 +31,7 @@ struct Report {
   checked: u64,
   diverged: u64,
   goals: [u16; 2],
-  /// What the join cost: zero when a frame was baseline enough.
+  /// What the join cost: zero when a frame alone was a complete baseline.
   baseline_bytes: usize,
 }
 
@@ -126,7 +126,7 @@ async fn audit(physics: Physics) -> Result<Report, Box<dyn std::error::Error>> {
                 }
               }
               // A backend whose view is complete needs no handover: its first
-              // frame is the ground the rest is stepped from.
+              // frame is the world the rest are stepped from.
               None => body = Body::seed(update.physics, &update.world),
             }
             if update.world.scores != goals {

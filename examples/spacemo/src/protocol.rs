@@ -1,10 +1,9 @@
 //! Everything that crosses the wire.
 //!
-//! The shape cube_yard arrived at, with one difference that is the whole point
-//! of this example: a frame carries **only what the recipient can see**, so
-//! every packet is per-link from the first stage rather than as an optimisation
-//! bolted on at stage three. In a volume there is no version of "send the
-//! world" worth measuring, because the world is mostly out of view.
+//! The same shape as cube_yard's, except that a frame carries **only what the
+//! recipient can see**, so every packet is per-link from the first stage rather
+//! than an optimisation added later. Sending the whole world is not worth
+//! measuring in a volume, because most of it is out of view.
 
 use serde::{Deserialize, Serialize};
 
@@ -24,15 +23,15 @@ pub fn frame_to_ms(frame: u64) -> u64 {
 /// One ship as the wire carries it.
 ///
 /// Orientation is a quaternion here and two angles in the simulation. The sim
-/// wants angles because a flight model reasons in them; the wire wants a
-/// quaternion because smallest-three is 29 bits and two f32 angles are 64, and
-/// because a client interpolating between orientations wants to slerp.
+/// uses angles because a flight model works in them. The wire uses a
+/// quaternion because smallest-three is 29 bits against 64 for two f32 angles
+/// and a client interpolating between orientations needs to slerp.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ShipState {
   pub seat: u16,
   /// Hits left. A **state**, so a client that missed the frame a hit landed on
-  /// still learns the result from the next one, which is exactly what the hit
-  /// event beside it cannot offer.
+  /// still learns the result from the next one, which the hit event beside it
+  /// cannot do.
   pub health: u8,
   pub pos: [f32; 3],
   pub rot: [f32; 4],
@@ -41,15 +40,14 @@ pub struct ShipState {
 
 /// What a client is asking for, as a **state rather than a change**.
 ///
-/// Aim is absolute, and that is the load-bearing decision. A mouse hands you
-/// deltas, and a lost delta is wrong for ever: nothing later contradicts it, so
-/// the orientation never recovers. An absolute aim is corrected by the very
-/// next packet that arrives. Same principle as the throttle being a level, in
-/// the place where it is much less obvious.
+/// Aim is absolute. A mouse gives deltas and a lost delta is wrong for ever:
+/// nothing later contradicts it, so the orientation never recovers. An
+/// absolute aim is corrected by the next packet that arrives. The throttle is
+/// a level for the same reason.
 ///
 /// The cost is that this changes every frame the mouse moves, where a keyed
-/// turn rate changed only on press and release, so the upstream side stops
-/// being free. That is a measurement this example did not previously have.
+/// turn rate changed only on press and release, so upstream traffic is no
+/// longer close to zero.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Fly {
   /// Throttle, -1 to 1.
@@ -65,9 +63,8 @@ pub struct Fly {
 /// A bolt in flight, as the wire carries it.
 ///
 /// No orientation: a bolt points where it is going, so the client derives the
-/// look of it from the velocity it already has. That is a third of a ship's
-/// cost for a thing there are far more of, which is the trade transient
-/// entities want.
+/// look of it from the velocity it already has. That makes it a third of a
+/// ship's cost, which matters because there are far more bolts than ships.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BoltState {
   /// Whether it is chasing something, which is the difference between a shot a
@@ -108,9 +105,10 @@ pub struct FrameUpdate {
   pub hits: Vec<u16>,
   /// Kills this tick, of the ones this client can see or is part of.
   ///
-  /// The second event on this wire, and the one that has to reach the people it
-  /// names: you are told you were killed even if the killer was never in your
-  /// view, because "something out there got you" is worse than a name.
+  /// The second event on this wire. It has to reach the people it names: you
+  /// are told you were killed even if the killer was never in your view,
+  /// because being told only that something out there got you is worse than
+  /// being told who.
   pub kills: Vec<Kill>,
 }
 

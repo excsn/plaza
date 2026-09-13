@@ -1,9 +1,10 @@
-//! The battle drawn, and the battle *played*: the command menu sits under your
-//! unit, targets are picked by clicking their cards, and the your-turn banner
-//! and clock make the state of play unmissable. The act list across the top is
-//! the client's own projection, never anything the server sent, and the panel
-//! says whether that projection has ever been wrong. Hovering a target draws a
-//! second, dimmed bar: the queue as it would stand if you gave that order.
+//! Drawing the battle and taking input: the command menu sits under your unit,
+//! targets are picked by clicking their cards and the your-turn banner and
+//! clock show whose move it is and how long is left. The act list across the
+//! top is the client's own projection, never anything the server sent. The
+//! panel says whether that projection has ever been wrong. Hovering a target
+//! draws a second, dimmed bar: the queue as it would stand if you gave that
+//! order.
 
 use macroquad::prelude::*;
 use turn_gauge::net::client::{Moment, NetClient};
@@ -212,7 +213,7 @@ fn interact_hover_only(view: &BattleView, _hud: &Hud) -> Option<UnitId> {
     .map(|u| u.id)
 }
 
-/// The unmissable half: whose move it is, what to do next, and how much of the
+/// The turn banner: whose move it is, what to do next and how much of the
 /// clock is left.
 fn draw_turn_banner(view: &BattleView, hud: &Hud, w: f32, now_ms: u64) {
   if view.phase != BattlePhase::Fighting {
@@ -285,7 +286,7 @@ fn draw_command_menu(view: &BattleView, actor: UnitId, hud: &Hud, now_ms: u64) {
     draw_text(&sub, rect.x + 12.0, rect.y + 48.0, 17.0, if spent { DARKGRAY } else { GRAY });
   }
 
-  // A nudge that never sleeps: the menu pulses until something is selected.
+  // The menu pulses until something is selected.
   if hud.selected.is_none() {
     let first = menu_rect(0, kit.len());
     let last = menu_rect(kit.len() - 1, kit.len());
@@ -326,7 +327,7 @@ fn menu_note(kind: MoveKind, me: &Unit) -> String {
 }
 
 /// The act list: the client's derived queue, current actor first. Under a
-/// hover, the would-be queue rides beneath it, dimmed.
+/// hover, the would-be queue is drawn beneath it, dimmed.
 fn draw_act_list(client: &NetClient, w: f32, now_ms: u64, preview: Option<&[UnitId]>) {
   let Some(view) = &client.view else { return };
   if view.phase != BattlePhase::Fighting {
@@ -393,8 +394,8 @@ fn draw_unit(unit: &Unit, rect: Rect, current: bool, targetable: bool, aimed: bo
   };
   draw_text(&format!("{} the {role}", unit_name(unit.id)), x + 10.0, y + 22.0, 24.0, ink);
 
-  // Health, its shield riding on the same bar, then speed: the numbers a
-  // guard and a haste visibly move.
+  // Health with its shield on the same bar, then speed: the numbers a guard
+  // and a haste change.
   let bar_w = w - 20.0;
   draw_rectangle(x + 10.0, y + 34.0, bar_w, 10.0, Color::new(0.25, 0.25, 0.25, 1.0));
   let hp = (unit.hp.max(0) as f32 / MAX_HP as f32) * bar_w;

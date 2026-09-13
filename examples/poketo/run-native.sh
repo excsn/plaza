@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# The zero-ceremony path: open the poketo as a native desktop window. With
-# no arguments this is `--role host`, which plays *and* stands up the server, so
-# it also serves the browser page and prints an address others can join at. Pass
-# `--role client --connect <url>` to join someone else, or `--role headless` for
+# Opens the poketo as a native desktop window. With no arguments this is
+# `--role host`, which plays *and* stands up the server, so it also serves the
+# browser page and prints an address others can join at. Pass
+# `--role client --connect <url>` to join someone else or `--role headless` for
 # the deployable server.
 #
 # Arrows or WASD walk a tile at a time. Stepping onto the wrong tile starts a
-# battle, where 1 strikes and 2 guards; nothing else is a control, because a
+# battle, where 1 strikes and 2 guards. Those are the only controls, since a
 # turn-based battle has nothing to hold down.
 #
 #

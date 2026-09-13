@@ -15,8 +15,8 @@ websocket = ["dep:plaza_ws", "dep:plaza_wire"]
 
 [dependencies]
 plaza = { workspace = true }
-# The artifact's whole point: the board this editor forges is played by
-# bomb_grid's own rules, so the two examples share the simulation types.
+# The board this editor forges is played by bomb_grid's own rules, so the
+# two examples share the simulation types.
 bomb_grid = { path = "../bomb_grid", default-features = false }
 playground_common = { workspace = true }
 serde = { workspace = true }

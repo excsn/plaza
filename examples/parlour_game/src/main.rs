@@ -1,4 +1,4 @@
-//! A card game behind a lobby: the shape a matchmade, turn-based game takes.
+//! A card game behind a lobby, built the way a matchmade turn-based game is.
 //!
 //! Open http://127.0.0.1:8092 in three tabs and press quick match in each, or
 //! press it in one and wait for the bots. See README.md.
@@ -36,8 +36,8 @@ const REAP_EVERY: Duration = Duration::from_secs(15);
 /// table here is spawned for one match, so all of them are eventually reaped.
 const TABLE_IDLE_AFTER: Duration = Duration::from_secs(45);
 
-/// Only the match queue needs the lobby to advance time, and it measures its
-/// patience in seconds.
+/// Only the match queue needs the lobby to advance time and its timeout is
+/// counted in seconds.
 /// Longer than a placement takes to dial, shorter than the seat reservation it
 /// pairs with, which currently has no window of its own.
 const PLACEMENT_WINDOW: Duration = Duration::from_secs(30);

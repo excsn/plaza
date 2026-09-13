@@ -6,8 +6,8 @@
 /// to correct it: one nudges the position, the other dilates the speed.
 ///
 /// Milliseconds throughout. The Rust original is generic over its timestamp
-/// type; Dart has no numeric trait bounds worth the ceremony, so this fixes the
-/// unit rather than pretending to be generic over one.
+/// type; Dart has no practical numeric trait bound for it, so this fixes the
+/// unit instead.
 ///
 /// Ported from `plaza_client_utils::interpolation::InterpolationClock`.
 class InterpolationClock {
@@ -57,7 +57,7 @@ class InterpolationClock {
     _now = corrected < 0 ? 0 : corrected.toInt();
   }
 
-  /// The rate-based cousin of [resync]: adjusts the estimate's *speed* so it
+  /// The rate-based alternative to [resync]: adjusts the estimate's *speed* so it
   /// glides into alignment rather than jumping. Pair with [advanceScaled].
   ///
   /// Behind the newest, run slightly fast; ahead of it, which means
@@ -111,8 +111,8 @@ class ServerSnapshot<S> {
 /// render target.
 ///
 /// The Rust original constrains its state type with an `Interpolatable` trait.
-/// Dart takes the blend as a function instead, which is the same information
-/// without a trait system to lean on.
+/// Dart takes the blend as a function instead, which carries the same
+/// information.
 ///
 /// Ported from `plaza_client_utils::interpolation::SnapshotBuffer`.
 class SnapshotBuffer<S> {

@@ -26,9 +26,8 @@ Map<String, (int, int)> loadPinned() {
 }
 
 void main() {
-  /// The reason this file exists. If each side computed its own fold, a
-  /// disagreement in the arithmetic would be indistinguishable from a
-  /// disagreement about the world.
+  /// If each side computed its own fold, a disagreement in the arithmetic would
+  /// be indistinguishable from a disagreement about the world.
   group('agreement with the Rust implementation', () {
     final pinned = loadPinned();
 
@@ -85,7 +84,7 @@ void main() {
     });
 
     /// Two sets whose key hashes happen to sum alike still differ if their
-    /// sizes do, which is what folding the cardinality buys.
+    /// sizes do, which is why the cardinality is folded in.
     test('cardinality is folded in', () {
       final a = SetDigest()..insert(0);
       final b = SetDigest()

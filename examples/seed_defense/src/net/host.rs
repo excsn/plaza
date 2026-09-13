@@ -3,9 +3,8 @@
 //!
 //! [`plaza_session::host::SimHost`] is the whole stack (session with the
 //! build's protocol and simulation clock, controller, fixed-step driver, the
-//! `/ws` route, and the HTTP side with its cache busting). What is left here is
-//! the part that is actually this arena's: which state, which logic, and at
-//! what tick rate.
+//! `/ws` route and the HTTP side with its cache busting). What is left here is
+//! specific to this arena: which state, which logic and at what tick rate.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -31,9 +30,8 @@ pub async fn serve(bind: &str, controls: Arc<Mutex<Controls>>, view: Option<Arc<
     .serve_dir(static_dir)
     .cache_bust(WASM_FILE)
     // `run_fixed` underneath, never `run`: measured elapsed time would make the
-    // simulation's rate a property of the host's scheduler, and with no
-    // corrections here that would cost every client its agreement with the
-    // server, permanently.
+    // simulation's rate depend on the host's scheduler. With no corrections
+    // here, every client would then permanently disagree with the server.
     .run(plaza_wire::MsgPackCodec, PROTOCOL, Arena::new(initial, WORLD_SEED), |wiring| {
       ArenaLogic::new(controls, view).with_link(wiring.link_sink()).with_clock(wiring.sim_clock.clone())
     })

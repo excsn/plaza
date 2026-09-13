@@ -53,8 +53,8 @@ pub fn draw_hud(client: &NetClient) {
     );
   }
 
-  // Newest at the bottom, fading with age, because a feed that reorders itself
-  // is a feed nobody can read mid-fight.
+  // Newest at the bottom, fading with age, because nobody can read a feed that
+  // reorders itself mid-fight.
   let now = client.frame;
   let recent: Vec<&(u64, String)> = client.announcements.iter().rev().take(5).collect();
   for (row, (at, line)) in recent.iter().enumerate() {

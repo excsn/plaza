@@ -2,8 +2,8 @@
 //!
 //! A lobby admits a player, and some time later that player opens a socket to
 //! the room. In between, the room has to be able to tell an admitted player from
-//! anyone else who happens to connect, or its capacity is decided by whoever
-//! dials fastest and the lobby's accounting is decorative.
+//! anyone else who happens to connect. Otherwise capacity goes to whoever dials
+//! fastest and the lobby's count of admitted players means nothing.
 //!
 //! Keep one of these in the room's state and drive it:
 //!
@@ -11,7 +11,7 @@
 //! match input {
 //!   LogicInput::AgentJoined { agent } => {
 //!     let id = agent.id_cloned().unwrap();
-//!     // Admitted *and* still room: the two checks are not one, because the
+//!     // Admitted *and* still room: both checks are needed because the
 //!     // lobby's capacity check and this connect are not atomic.
 //!     let seat = if state.reserved.consume(&id) && state.seated() < state.max {
 //!       Seat::Player
@@ -27,30 +27,30 @@
 //!
 //! # A closing socket must not cancel a reservation
 //!
-//! This is the whole reason the type exists rather than a bare `HashSet`, and it
-//! was found the expensive way. When a player moves from one room to another,
-//! the lobby reserves the new seat and *then* the client closes its old socket,
-//! so the room sees `AgentLeft` after the reservation was made. A room that
-//! withdraws on disconnect throws away a seat the lobby has already promised, and
-//! the player silently lands as a spectator while the lobby reports them seated.
-//! Neither half complains.
+//! This is why the type exists rather than a bare `HashSet`. When a player
+//! moves from one room to another, the lobby reserves the new seat and *then*
+//! the client closes its old socket, so the room sees `AgentLeft` after the
+//! reservation was made. A room that withdraws on disconnect throws away a seat
+//! the lobby has already promised and the player silently lands as a spectator
+//! while the lobby reports them seated.
 //!
-//! So [`withdraw`](SeatReservations::withdraw) is the lobby's word, never the
-//! transport's. This is [`ReconnectTracker`](plaza::common::reconnect)'s lesson
-//! from the other side: plaza reports a dropped connection and deliberately does
-//! not say what it means, because the transport does not know. Only the lobby
-//! can tell "gone" from "the same player, one second later".
+//! So only the lobby calls [`withdraw`](SeatReservations::withdraw), never a
+//! disconnect handler. [`ReconnectTracker`](plaza::common::reconnect) follows
+//! the same rule from the other side: plaza reports a dropped connection and
+//! deliberately does not say what it means, because the transport does not
+//! know. Only the lobby can tell "gone" from "the same player, one second
+//! later".
 //!
-//! # A promise with a duration is still the lobby's word
+//! # Expiry
 //!
 //! [`with_expiry`](SeatReservations::with_expiry) does not contradict the rule
-//! above. The lobby sets the window when it reserves, so a lapse is the lobby
-//! having said "for this long" rather than the transport having said anything.
+//! above. The lobby sets the window when it reserves, so a lapse enforces a
+//! limit the lobby chose and the transport plays no part in it.
 //! Drive it from your `TimeStep` arm with [`tick`](SeatReservations::tick),
 //! which hands back whoever lapsed so the lobby's own records can follow.
 //!
 //! **The window has to be longer than the placement ticket's.** Redemption is
-//! two steps in two places: the route spends the ticket, the session comes up,
+//! two steps in two places: the route spends the ticket, the session comes up
 //! and only then does the room's logic consume the reservation. Equal windows
 //! strand a client that dialled at the edge, holding a spent ticket and seated
 //! as a spectator.
@@ -99,7 +99,7 @@ impl<ID: AgentId> SeatReservations<ID> {
   /// players so the lobby can clear its records too.
   ///
   /// Call it from `LogicInput::TimeStep` with the same `delta_time`. Nothing
-  /// here reads a clock, exactly as nothing here reacts to a disconnect.
+  /// here reads a clock or reacts to a disconnect.
   pub fn tick(&mut self, delta: Duration) -> Vec<ID> {
     self.elapsed = self.elapsed.saturating_add(delta);
     let Some(window) = self.window else {
@@ -150,8 +150,8 @@ impl<ID: AgentId> SeatReservations<ID> {
 
   /// Cancels a reservation that will never be used.
   ///
-  /// **Call this from the lobby, not from a disconnect.** The lobby knows when a
-  /// player was placed elsewhere or left; a closed socket knows neither.
+  /// **Call this from the lobby, not from a disconnect.** Only the lobby knows
+  /// whether a player was placed elsewhere or left.
   pub fn withdraw(&mut self, player: &ID) -> bool {
     self.held.remove(player).is_some()
   }
@@ -272,8 +272,7 @@ mod tests {
 
   #[test]
   fn a_player_who_arrived_never_lapses() {
-    // The property that keeps expiry from racing an arrival: consuming removes
-    // the reservation, so a seated player is already out of reach of the sweep.
+    // Consuming removes the reservation, so expiry cannot race an arrival.
     let mut seats = SeatReservations::with_expiry(Duration::from_secs(45));
     seats.reserve(1);
     assert!(seats.consume(&1));

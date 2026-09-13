@@ -3,13 +3,13 @@
 //!
 //! # What this concluded
 //!
-//! That none of them are worth it, and horde now takes the option this table
-//! does not contain: **do not predict the local player at all.** The client
-//! draws it from the played-out stream at the same instant as every other
-//! entity, so prediction and authority cannot disagree and there is nothing to
-//! correct. Kept because the measurements are the argument for that, and because
-//! the row that looks best here (A, immediate response) is the one that ships
-//! the stiffness.
+//! None of them are worth it. Horde now takes an option this table does not
+//! contain: it does not predict the local player at all. The client draws it
+//! from the played-out stream at the same instant as every other entity, so
+//! prediction and authority cannot disagree and there is nothing to correct.
+//! The file is kept because these measurements support that choice and because
+//! the row that looks best here (A, immediate response) is the one that
+//! produces the stiffness.
 //!
 //! The server executes an input at the **tick the client named**, in tick order.
 //! That is what makes the world replayable, and every strategy here keeps it.
@@ -22,7 +22,7 @@
 //! Two metrics, because they disagree and measuring only the first is what hid
 //! this. `correction` is how hard the prediction is dragged toward authority.
 //! `response` is how long after the press the drawn player actually turns, which
-//! is the thing a hand feels.
+//! is what the player feels.
 
 use plaza_client_utils::{HeldInputConfig, HeldInputPredictor};
 
@@ -66,7 +66,7 @@ struct Strategy {
   predict_the_schedule: bool,
   /// Correct by **replaying the schedule** from the authoritative sample's own
   /// tick, rather than by advancing that sample under whatever is held now and
-  /// easing toward it. The client knows the schedule: it wrote it.
+  /// easing toward it. The client knows the schedule because it wrote it.
   replay: bool,
 }
 
@@ -142,8 +142,9 @@ fn run(s: Strategy, one_way_ms: u64) -> Outcome {
     in_flight.retain(|(at, _, _)| *at > now);
     for (_, sampled_at, pos) in due {
       if s.replay {
-        // Snap to authority, then re-run the schedule from its tick to now. Same
-        // rule, same order, same ticks, so it lands where the server will.
+        // Snap to authority, then re-run the schedule from its tick to now. The
+        // rule, order and ticks match the server's, so it lands where the server
+        // will.
         let seen = me.render();
         let mut p = pos;
         let mut t = sampled_at;
@@ -165,7 +166,7 @@ fn run(s: Strategy, one_way_ms: u64) -> Outcome {
       }
     }
 
-    // What a hand feels: when does the drawn player actually start going back?
+    // What the player feels: when does the drawn player actually start going back?
     let drawn = me.render();
     if now >= flip_at && out.response_ms < 0 && drawn.x < last_drawn.x - 0.01 {
       out.response_ms = (now - flip_at) as i64;
@@ -183,7 +184,7 @@ fn run(s: Strategy, one_way_ms: u64) -> Outcome {
 }
 
 /// The same world with the correction switched off entirely, so the raw
-/// disagreement is visible rather than the thing fighting it.
+/// disagreement shows instead of the correction working against it.
 fn run_uncorrected(depth: u64, predict_schedule: bool) -> (f32, f32) {
   let mut client = V::default();
   let mut server_pos = V::default();

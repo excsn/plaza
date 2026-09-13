@@ -1,5 +1,5 @@
-//! The control panel, and the live readouts that turn every claim this example
-//! makes into a number you can watch move.
+//! The control panel and the live readouts for the numbers this example
+//! measures.
 
 use egui_macroquad::egui;
 use horde_playground::sim::types::{MAX_PLAYERS, RENDER_DELAY_MAX_MS, SEND_RATE_MAX_HZ, SIM_STEP_MS};
@@ -12,8 +12,8 @@ use horde_playground::sim::{Controls, RemoteMode, World};
 /// a host reading 60 KiB/s and a browser reading 180 went unexplained: the
 /// server counts an idealised encoding (a 3 byte id, quantised positions) while
 /// the wire carries MessagePack, which still spends bytes on its own structure
-/// and on enum variant names. The gap between them is the format's price, and it
-/// is the one number about wire cost this example measures rather than models.
+/// and on enum variant names. The gap between them is what the format costs and
+/// it is the one wire-cost number this example measures rather than models.
 #[cfg(all(feature = "client", feature = "websocket"))]
 fn client_traffic(ui: &mut egui::Ui, client: &horde_playground::net::client::NetClient) {
   let (recent, session) = client.downstream_per_sec();
@@ -26,8 +26,8 @@ fn client_traffic(ui: &mut egui::Ui, client: &horde_playground::net::client::Net
     client.packets_per_sec()
   ))
   .on_hover_text("Both directions, measured on the wire: down is counted as bytes arrive before decoding, up is counted as each op is serialised. Yours alone, not the arena's, which is what makes it the number that says whether your own link is the problem. Upstream is small and asymmetric by design: an input per tick unless coalescing is on, plus an acknowledgement per applied frame, against a whole world coming the other way.");
-  // The spike, not the average. A per-second rate is exactly the instrument
-  // that hides a two-frame stall, and a two-frame stall is what a player feels.
+  // The spike rather than the average. A per-second rate hides a two-frame
+  // stall, which is what a player feels.
   let (worst_bytes, worst_ops) = client.worst_frame();
   let decode_us = client.decode_micros();
   let heavy = decode_us >= 2_000.0 || worst_bytes >= 32 * 1024;
@@ -59,18 +59,17 @@ fn client_traffic(ui: &mut egui::Ui, client: &horde_playground::net::client::Net
 
 /// One collapsible section.
 ///
-/// The panel carries roughly fifty widgets and twenty readouts, and any given
-/// experiment wants two of them. Collapsing is what keeps the rest reachable
-/// without making them the thing you scroll past every time.
+/// The panel carries roughly fifty widgets and twenty readouts and any given
+/// experiment wants two of them. Collapsing keeps the rest reachable without
+/// making you scroll past them every time.
 fn section<R>(ui: &mut egui::Ui, title: &str, default_open: bool, add: impl FnOnce(&mut egui::Ui) -> R) {
   egui::CollapsingHeader::new(egui::RichText::new(title).strong())
     .default_open(default_open)
       .show(ui, add);
 }
 
-/// The sliders and toggles, identical for the offline playground, a host, and an
-/// observer, so they live in one place rather than being copied and left to
-/// drift. On a networked build these edits reach the running arena through the
+/// The sliders and toggles, identical for the offline playground, a host and an
+/// observer, so they live in one place rather than in copies that drift apart. On a networked build these edits reach the running arena through the
 /// shared `Controls`; offline they drive the `World` directly.
 fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls) {
   section(ui, "world", true, |ui| {
@@ -82,13 +81,12 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls) {
   });
 
   // The link comes first because it is an *input* to the two budgets below.
-  // Nothing here is real: the host runs the server in this process, so the
-  // actual link is microseconds and these sliders are what make it behave as
-  // though it were not. Latency and jitter are properties of a network you do
-  // not control; the delays and rates under them are policy you choose to cover
-  // it. Keeping them in one section, above the things they constrain, is the
-  // whole point of this grouping: split across sections, the terms of a budget
-  // hide their relationship exactly while you are editing it.
+  // The link is simulated: the host runs the server in this process, so the
+  // actual link is microseconds and these sliders make it behave like a real
+  // one. Latency and jitter are properties of a network you do not control; the
+  // delays and rates under them are policy you choose to cover it. They sit in
+  // one section above the things they constrain, because split across sections
+  // the terms of a budget are hard to relate while you are editing it.
   section(ui, "simulated link", true, |ui| {
     ui.add(egui::Slider::new(&mut controls.latency_ms, 0..=400).text("latency ms"))
       .on_hover_text("One way, each direction, applied to traffic leaving the host and to traffic arriving from a client. Not a setting a real deployment has: the host runs the server in this process, so the real link is microseconds and this is what stands in for one. The two budgets below are sized to cover it.");
@@ -145,8 +143,8 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls) {
       .on_hover_text("Off is apply-on-arrival, which is what ping-independence costs you: whoever is closer to the server reaches the coin first.");
     // The budget this group has to satisfy, spelled out against the link above.
     // An input named for `press + playout` that lands past the accepting window
-    // is dropped, so this is the ceiling on who can play here at all, and
-    // admission refuses a connection past it rather than seating it broken.
+    // is dropped, so this is the ceiling on who can play here at all. Admission
+    // refuses a connection past it rather than seating a player who cannot move.
     let admit = controls.playout_delay_ms + controls.input_max_late_ticks * SIM_STEP_MS;
     ui.label(
       egui::RichText::new(format!(
@@ -284,8 +282,8 @@ fn warn_line_amber(ui: &mut egui::Ui, text: String, warn: bool) -> egui::Respons
   }
 }
 
-/// The panel a networked client gets. Deliberately smaller than the host's:
-/// every cross-side readout needs server truth, and a joiner does not have it.
+/// The panel a networked client gets. Smaller than the host's: every
+/// cross-side readout needs server truth and a joiner does not have it.
 #[cfg(all(feature = "client", feature = "websocket"))]
 pub fn draw_net_ui(client: &horde_playground::net::client::NetClient, url: &str, role: horde_playground::role::Role, controls: &mut Controls) {
   use horde_playground::net::client::Status;
@@ -350,10 +348,10 @@ pub fn draw_net_ui(client: &horde_playground::net::client::NetClient, url: &str,
           )
           .on_hover_text("The host computes this budget from its sliders; this client cannot see them, so it measures: the smoothed one-way lateness of declared timestamps against the synced clock, the mean deviation in that lateness, and the gap between consecutive declared timestamps across both streams. Amber means the render delay in force is smaller than what this link measurably needs, and the underrun counter above is where that shows up.");
         }
-        // The input round trip, spelled out. Every failure in this loop plays
-        // as the same thing, a player who cannot move, and these three lines
-        // say which stage broke: the aim (this client's clock), the ack (the
-        // server refusing or never receiving), or the pong (the sync feed).
+        // The input round trip, spelled out. Every failure in this loop looks
+        // the same, a player who cannot move. These three lines say which
+        // stage broke: the aim (this client's clock), the ack (the server
+        // refusing or never receiving) or the pong (the sync feed).
         let (seq, acked) = client.input_ack_lag();
         let lag = seq.saturating_sub(acked);
         warn_line_amber(ui, format!("inputs: seq {seq}, newest acked {acked} (lag {lag})"), lag > 30)
@@ -447,20 +445,19 @@ pub fn draw_host_ui(
         let culled = if total > 0 { (1.0 - known as f32 / total.max(1) as f32) * 100.0 } else { 0.0 };
         ui.label(format!("your client knows {known} of ~{} enemies ({culled:.0}% culled)", view.alive));
         // Straight after what this client holds, because it is the same subject:
-        // what one client knows, and what that costs it. The host's own player is
+        // what one client knows and what that costs it. The host's own player is
         // a client on a real socket with no privilege, so it has exactly the
-        // counters a joiner does, and putting them beside the arena-wide model is
-        // what explains a host reading 60 KiB/s while a browser reads 180.
+        // counters a joiner does. Putting them beside the arena-wide model
+        // explains a host reading 60 KiB/s while a browser reads 180.
         client_traffic(ui, client);
         let (compact, naive) = (view.bytes_per_sec() / 1024.0, view.naive_bytes_per_sec() / 1024.0);
         ui.label(format!("modelled, all players: {:.1} KiB/s session, {compact:.1} KiB/s recent", view.lifetime_bytes_per_sec() / 1024.0))
           .on_hover_text("Scope first, then the two windows. **All players** is the whole arena: the host builds and meters a packet per seat, so this covers every one of them, not just your own client. **Modelled**, because it is what those packets would cost with compact ids and quantised positions, not what the MessagePack on the wire actually costs. The line above measures that.");
         ui.label(format!("with uuids + f32 positions: {naive:.1} KiB/s ({:.0}% saved)", if naive > 0.0 { (1.0 - compact / naive) * 100.0 } else { 0.0 }));
-        // Spawns as a share of what is sent, because the ratio is the readout
-        // that matters and two separate numbers hid it: a stream whose
-        // baselines are advancing announces a little churn, and one that is not
-        // announces its whole visible set, for ever, at numbers that look
-        // entirely reasonable side by side.
+        // Spawns as a share of what is sent, because two separate numbers hid
+        // the ratio: a stream whose baselines are advancing announces a little
+        // churn and one that is not announces its whole visible set for ever,
+        // at numbers that look reasonable side by side.
         let sent = view.mean_relevant().max(1.0);
         ui.label(format!("sent per packet: {:.0} entities ({:.0}% of it new)", sent, view.mean_spawns_per_packet() / sent * 100.0))
           .on_hover_text("A delta stream in steady state should be mostly position samples for entities the client already holds. If most of a packet is new arrivals, somebody's baseline is not advancing and every packet is a full re-send: that is what an unacknowledged stream looks like, and it is expensive while looking healthy.");
@@ -542,11 +539,10 @@ pub fn draw_observer_ui(view: &horde_playground::net::arena::HostView, controls:
         ))
         .on_hover_text("Two numbers because they answer different questions and neither is a substitute for the other. **Now** is over a rolling eight seconds, so it responds to a slider you just moved and settles when the world does. **Session** is the total over the whole run, which is the right figure for quoting what a configuration cost but is not a rate: while it sits below the current number it is still climbing toward it, by less and less, for as long as the run lasts, and that climb is a property of the average rather than of the traffic. The live count rides along because a bandwidth figure is meaningless without it: an arena whose horde has been wiped out is cheap to send, and reads as a saving rather than as a missing world.");
         ui.label(format!("with uuids + f32 positions: {:.1} KiB/s", view.naive_bytes_per_sec() / 1024.0));
-        // Spawns as a share of what is sent, because the ratio is the readout
-        // that matters and two separate numbers hid it: a stream whose
-        // baselines are advancing announces a little churn, and one that is not
-        // announces its whole visible set, for ever, at numbers that look
-        // entirely reasonable side by side.
+        // Spawns as a share of what is sent, because two separate numbers hid
+        // the ratio: a stream whose baselines are advancing announces a little
+        // churn and one that is not announces its whole visible set for ever,
+        // at numbers that look reasonable side by side.
         let sent = view.mean_relevant().max(1.0);
         ui.label(format!("sent per packet: {:.0} entities ({:.0}% of it new)", sent, view.mean_spawns_per_packet() / sent * 100.0))
           .on_hover_text("A delta stream in steady state should be mostly position samples for entities the client already holds. If most of a packet is new arrivals, somebody's baseline is not advancing and every packet is a full re-send: that is what an unacknowledged stream looks like, and it is expensive while looking healthy.");
@@ -607,11 +603,11 @@ fn phantom_and_missing(view: &horde_playground::net::arena::HostView, client: &h
   let live: BTreeSet<Handle> = view.truth.iter().map(|(h, _, _)| *h).collect();
   let at = client.sim.render_at();
   let held: BTreeSet<Handle> = at.map(|at| client.sim.render(controls, at)).unwrap_or_default().into_iter().map(|(h, _, _)| h).collect();
-  // Dead *at the instant being drawn*, not dead now. A client that renders in
-  // the past is holding everything that has died since that instant, by
-  // construction, and comparing it against the present charges it for the delay
-  // rather than finding a drifted mirror: at a thousand kills a second and a
-  // render delay that is a couple of hundred false phantoms, reported in red.
+  // Dead *at the instant being drawn* rather than dead now. A client that
+  // renders in the past always holds everything that has died since that
+  // instant. Comparing it against the present charges it for the delay rather
+  // than finding a drifted mirror: at a thousand kills a second and a render
+  // delay that is a couple of hundred false phantoms, reported in red.
   let drawn_at = at.map(|at| at.server_time_ms()).unwrap_or(view.server_now_ms);
   let died_since: BTreeSet<Handle> = view.recently_dead.iter().filter(|(_, t)| *t > drawn_at).map(|(h, _)| *h).collect();
   let phantoms = held.iter().filter(|h| !live.contains(h) && !died_since.contains(h)).count();

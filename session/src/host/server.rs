@@ -4,8 +4,8 @@
 use actix_web::{middleware, web, App, HttpResponse, HttpServer};
 use plaza_wire::frame::ProtocolVersion;
 
-/// One page and its assets, served with the stamping that keeps a browser from
-/// running yesterday's bundle against today's server.
+/// One page and its assets, served with version stamps so a browser does not
+/// run an old bundle against a newer server.
 #[derive(Clone, Debug)]
 struct Page {
   dir: String,
@@ -22,9 +22,8 @@ impl Page {
   /// modification time.
   ///
   /// Read per request rather than at startup, so rebuilding the client reaches
-  /// an already-running host without restarting it. That is the workflow this
-  /// exists for: the bundle is a build product, so it does not rebuild when the
-  /// server does.
+  /// an already-running host without restarting it. The bundle is a build
+  /// product and does not rebuild when the server does.
   fn stamped_html(&self) -> Option<String> {
     let dir = std::path::Path::new(&self.dir);
     let mut html = std::fs::read_to_string(dir.join("index.html")).ok()?;
@@ -39,8 +38,8 @@ impl Page {
     }
     if let Some(protocol) = self.protocol {
       // Before `</head>`, so the value exists before any body script runs. A
-      // static page has no build to bake a version into; being told at serve
-      // time is the only way it can ever say what it speaks.
+      // static page has no build step to bake a version into, so the value
+      // injected here is the only version it has.
       let tag = format!("<script>window.PLAZA_PROTOCOL = {};</script>", protocol.0);
       match html.find("</head>") {
         Some(at) => html.insert_str(at, &tag),
@@ -55,9 +54,8 @@ impl Page {
       return HttpResponse::NotFound().body("index.html is missing from the served directory");
     };
     HttpResponse::Ok()
-      // On *this* response above all. A cached index would keep quoting the old
-      // stamp, which is the trap that makes cache busting look like it does not
-      // work.
+      // This response needs it most: a cached index keeps quoting the old stamp
+      // and cache busting then appears not to work.
       .insert_header(("Cache-Control", "no-cache"))
       .content_type("text/html; charset=utf-8")
       .body(html)
@@ -67,9 +65,9 @@ impl Page {
 /// A local address somebody else could actually reach.
 ///
 /// No dependency and no packets: connecting a UDP socket only picks a route, so
-/// the kernel fills in the source address it would use. Printing it matters more
-/// than it sounds, because "it is running" and "here is what to send your
-/// friend" are different pieces of information and only one of them is useful.
+/// the kernel fills in the source address it would use. Printing it matters
+/// because knowing a server is running does not tell you what address to send
+/// a friend.
 pub fn lan_address() -> Option<String> {
   let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
   socket.connect("8.8.8.8:80").ok()?;
@@ -86,7 +84,7 @@ pub fn lan_address() -> Option<String> {
 /// A convenience for binaries. A library or an application with its own
 /// subscriber should not call it; it is a no-op after the first call and after
 /// any other global subscriber is installed. `RUST_LOG` overrides the default,
-/// which is quiet enough to read and loud enough to show joins and leaves.
+/// which shows joins and leaves and keeps actix's own logs at `warn`.
 pub fn init_logging() {
   use std::sync::Once;
   static ONCE: Once = Once::new();
@@ -185,8 +183,8 @@ impl Host {
   ///
   /// Not through `tracing`: a log line only appears if somebody installed a
   /// subscriber and set a filter, and the first thing a person needs after
-  /// starting a server is a URL. Making that depend on log configuration is how
-  /// a working server looks broken.
+  /// starting a server is a URL. If that depended on log configuration, a
+  /// working server could look broken.
   fn print_banner(&self) {
     let port = self.bind.rsplit(':').next().unwrap_or("8080");
     println!("\n  listening on {}", self.bind);
@@ -238,9 +236,9 @@ impl Host {
     let server = HttpServer::new(move || {
       // `no-cache` means revalidate before reusing, not "do not store": with the
       // last-modified `actix_files` already sends, an unchanged asset still costs
-      // a 304 and no bytes. Without it a wasm bundle is the one thing guaranteed
-      // to go stale invisibly, because it is a build product and does not rebuild
-      // when the server does.
+      // a 304 and no bytes. Without it a browser can keep running a stale wasm
+      // bundle with no visible sign, because it is a build product and does not
+      // rebuild when the server does.
       let app = App::new()
         .wrap(middleware::DefaultHeaders::new().add(("Cache-Control", "no-cache")))
         .configure(configure.clone());
@@ -266,10 +264,10 @@ impl Host {
     })
     // Leave the signals to the process. A windowed host runs this on a background
     // thread while the frame loop owns the main one; if actix kept its own SIGINT
-    // handler, Ctrl-C would start a graceful shutdown here, close the sockets, and
-    // leave the window running and the controller spraying "connection closed" as
-    // it kept ticking into dead links. With signals off, Ctrl-C ends the whole
-    // process the way pressing it is meant to.
+    // handler, Ctrl-C would start a graceful shutdown here and close the sockets,
+    // leaving the window running and the controller logging "connection closed"
+    // as it kept ticking into dead links. With signals off, Ctrl-C ends the whole
+    // process.
     .disable_signals()
     .bind(&self.bind)
     .map_err(|e| std::io::Error::new(e.kind(), format!("could not bind {}: {e}. Is something already using that port?", self.bind)))?;
@@ -299,8 +297,8 @@ mod tests {
 
   #[test]
   fn a_cache_busted_asset_is_stamped_with_its_own_modification_time() {
-    // The whole point: the URL changes when the file does, so a browser cannot
-    // reuse a bundle built before the wire changed.
+    // The URL changes when the file does, so a browser cannot reuse a bundle
+    // built before the wire changed.
     let dir = scratch("stamped");
     write_page(&dir, "<script src=\"client.wasm\"></script>");
     std::fs::write(dir.join("client.wasm"), b"\0asm").unwrap();
@@ -309,8 +307,7 @@ mod tests {
     let html = page.stamped_html().expect("the index is there");
     assert!(html.contains("client.wasm?v="), "the asset URL was not stamped: {html}");
 
-    // And it moves when the file does, which is the property that actually
-    // defeats the cache. A stamp that never changed would be decoration.
+    // The stamp changes when the file does, which is what defeats the cache.
     let before = html;
     std::thread::sleep(std::time::Duration::from_millis(1100));
     std::fs::write(dir.join("client.wasm"), b"\0asm\0").unwrap();

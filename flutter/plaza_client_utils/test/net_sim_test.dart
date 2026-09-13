@@ -87,8 +87,8 @@ void main() {
 
     /// A WebSocket or TCP stream cannot deliver out of order, so jitter has to show
     /// up as lateness and never as shuffling. Getting this wrong invents a failure
-    /// mode the real transport cannot produce, and a delta stream will dutifully
-    /// diverge under it, which is a day spent chasing nothing.
+    /// mode the real transport cannot produce and a delta stream diverges under
+    /// it, which wastes time on a failure that cannot occur.
     test('an ordered link delays but never reorders', () {
       final link = LatencyLink<int>();
       final rng = Rng(7);

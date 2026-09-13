@@ -2,9 +2,9 @@
 //!
 //! They live in the server process, so they could read `ArenaState` directly.
 //! They read `world_view` through `query_with` instead, which is the same
-//! `WorldSnapshot` a browser receives: a bot with privileged information is not
-//! playing the game it appears to be playing, and its behaviour stops being
-//! evidence that a real client could do the same.
+//! `WorldSnapshot` a browser receives. A bot reading privileged state would be
+//! playing a different game from a browser, so its behaviour would not show
+//! that a real client could do the same.
 
 use std::time::Duration;
 

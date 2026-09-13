@@ -24,13 +24,13 @@ class PlayerConfig {
 /// and eases the correction.
 ///
 /// Exposes both the exact [logical] state, for further game logic, and a smoothed
-/// [render] state, for drawing. Keeping those separate is the point: game rules
-/// must not read a state that has been smoothed for the eye.
+/// [render] state, for drawing. They are kept separate because game rules must
+/// not read a state that has been smoothed for display.
 ///
 /// This is the model for a server that consumes **one input per simulation step**.
 /// For a server that holds an input and integrates it every tick, use
-/// [HeldInputPredictor] instead; sending repeats to that one tells it nothing,
-/// and dropping repeats from this one drops actual movement.
+/// [HeldInputPredictor] instead; sending repeats to that one tells it nothing
+/// new and dropping repeats from this one drops actual movement.
 ///
 /// Ported from `plaza_client_utils::predicted_player::PredictedPlayer`.
 class PredictedPlayer<S, I, C> {
@@ -60,10 +60,10 @@ class PredictedPlayer<S, I, C> {
   /// Replaces the world the prediction runs against.
   ///
   /// Held rather than passed per input, so a replay uses the newest world rather
-  /// than a snapshot per buffered input. That is a different approximation, not a
-  /// strictly better one: the inputs being replayed happened under a world that
-  /// has since moved. It is the cheap one, and over a few frames the difference
-  /// is usually far smaller than the force being modelled. An application needing
+  /// than a snapshot per buffered input. That is also an approximation, with
+  /// different errors: the inputs being replayed happened under a world that has
+  /// since changed. It is the cheap one and over a few frames the difference is
+  /// usually far smaller than the force being modelled. An application needing
   /// the exact history carries a snapshot in its own input type instead.
   set context(C ctx) => _ctx = ctx;
   C get context => _ctx;
@@ -74,10 +74,9 @@ class PredictedPlayer<S, I, C> {
 
   /// Moves the entity without easing, dropping pending inputs.
   ///
-  /// A teleport is not a disagreement, and easing one draws the entity smoothly
-  /// across the level through everything in between, which is worse than the snap
-  /// it was avoiding. The pending inputs describe a journey that no longer
-  /// happened.
+  /// Easing a teleport would draw the entity smoothly across the level through
+  /// everything in between, which is worse than the snap it was avoiding. The pending inputs describe movement from the old
+  /// position, which no longer applies.
   void teleport(S state) {
     _predicted.predicted = state;
     _predicted.authoritative = state;

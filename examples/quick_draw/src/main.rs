@@ -1,4 +1,4 @@
-//! Frame loop: hold steady, watch for the signal, and fire on the estimate of
+//! Frame loop: hold steady, watch for the signal and fire on the estimate of
 //! the server's clock this client has been feeding all along.
 
 #[cfg(all(feature = "client", feature = "websocket"))]
@@ -142,8 +142,8 @@ async fn frame_loop(options: role::Options) {
       }
     }
 
-    // The trigger. Sent even during Steady: a false start is the server's to
-    // rule on, and hiding it client-side would hide the rule.
+    // The trigger. Sent even during Steady: the server rules on false starts.
+    // Suppressing one client-side would keep that rule from ever running.
     let pressed = is_key_pressed(KeyCode::Space) || is_mouse_button_pressed(MouseButton::Left);
     if pressed
       && !fired

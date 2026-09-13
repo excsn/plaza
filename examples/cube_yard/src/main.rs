@@ -1,4 +1,4 @@
-//! Frame loop: drive a cube into a pile, and watch what it costs to be told
+//! Frame loop: drive a cube into a pile and watch what it costs to be told
 //! where the pile went.
 
 #[cfg(all(feature = "client", feature = "websocket"))]
@@ -169,12 +169,12 @@ async fn frame_loop(options: role::Options, encoding: Encoding, snap: bool, send
 
   loop {
     let dt = get_frame_time().min(0.25);
-    // Read absolutely rather than accumulated. Adding a truncated frame time
-    // each frame runs the clock slow: 16.67ms counted as 16 loses 4% a second
-    // at 60fps and 13.6% at 144, and every rate measured against it reads high
-    // by the same amount. Truncating an absolute clock once is off by at most a
-    // millisecond, for ever, which is why horde_playground has always done it
-    // this way.
+    // Read from the absolute clock rather than accumulated. Adding a truncated
+    // frame time each frame runs the clock slow: 16.67ms counted as 16 loses 4%
+    // a second at 60fps and 13.6% at 144 and every rate measured against it
+    // reads high by the same amount. Truncating the absolute clock is never off
+    // by more than a millisecond, which is why horde_playground has always done
+    // it this way.
     clock_ms = (get_time() * 1000.0) as u64;
 
     client.poll(clock_ms);
@@ -191,7 +191,7 @@ async fn frame_loop(options: role::Options, encoding: Encoding, snap: bool, send
 
     if client.ready() {
       // Fixed behind and above the cube you drive, never orbiting: a camera
-      // that turns makes "left" mean a different direction every second, and
+      // that turns makes "left" mean a different direction every second and
       // the input is in world axes.
       let target = client
         .mine

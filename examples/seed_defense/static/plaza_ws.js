@@ -11,8 +11,8 @@
 // instantiates the raw module itself. That is also why wasm-bindgen crates
 // (gloo-net, web-sys, tokio-tungstenite-wasm) cannot be used here. They need
 // wasm-bindgen-cli to rewrite the module and their own loader to instantiate it,
-// and miniquad already owns instantiation. Worse, the bundle stubs out imports
-// nothing provides, so such a build loads and then silently does nothing.
+// and miniquad already owns instantiation. The bundle also stubs out imports
+// nothing provides, so such a build loads without error and then does nothing.
 //
 // Messages are queued and drained by the Rust side once per frame. Nothing here
 // calls into wasm: JS never re-enters the module, it only answers when asked,
@@ -146,9 +146,9 @@
   }
 
   // Where this page came from, as a WebSocket URL. A browser client that
-  // hardcoded 127.0.0.1 works only on the machine hosting it, which is the one
-  // case where you did not need a network. Deriving it means the page served by
-  // a host is already pointed at that host, over wss:// if the page was secure.
+  // hardcoded 127.0.0.1 works only on the machine hosting it. Deriving it means
+  // the page served by a host is already pointed at that host, over wss:// if
+  // the page was secure.
   function plaza_ws_page_url(ptr) {
     const url = (location.protocol === "https:" ? "wss:" : "ws:") + "//" + location.host + "/ws";
     const bytes = encoder.encode(url);

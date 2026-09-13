@@ -12,8 +12,8 @@ class Pong {
 ///
 /// Carries the epoch it was started in. A probe whose epoch has moved on is
 /// discarded rather than recorded: a ping sent before the app was suspended and
-/// answered after it measures the suspend, not the network, and one such sample
-/// poisons a smoothed estimator for minutes.
+/// answered after it measures the suspend rather than the network and one such
+/// sample skews a smoothed estimator for minutes.
 class Probe {
   const Probe(this.epoch, this.sentAtMs);
   final int epoch;

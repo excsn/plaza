@@ -3,12 +3,12 @@
 //! Backwards from every other example in this tree, and the difference is worth
 //! stating precisely: there is no predicted state here, so there is nothing to
 //! reconcile and nothing to ease off. The local character moves because the
-//! player moved it, and the position sent to the server is not a request that
-//! will come back corrected, it is the truth being reported.
+//! player moved it. The position sent to the server is a report of the truth
+//! rather than a request that will come back corrected.
 //!
-//! Which leaves exactly one case to handle, and it is not smoothing: a
-//! `Refused`. An honest client never sees one, so easing it would be easing a
-//! cheat back into place. It snaps.
+//! That leaves one case to handle: a `Refused`. An honest client never sees
+//! one, so easing it would only ever ease a cheat back into place. The client
+//! snaps to it instead.
 //!
 //! Everyone **else** is a remote position arriving at the tick rate, and that
 //! is ordinary: they interpolate, exactly as horde_playground's do.
@@ -216,9 +216,8 @@ pub struct NetClient {
   ///
   /// Kept because a landing is an **event**: no later frame mentions it, so a
   /// client that does not remember one has no way to draw it for longer than
-  /// the single frame it arrived in. This is the client-side half of what
-  /// makes an event different from a state, and forgetting it is why the
-  /// server bothers to send it at all.
+  /// the single frame it arrived in. This is the client-side half of handling
+  /// an event: the server sends it once and the client has to remember it.
   pub flashes: HashMap<Seat, u64>,
   /// Who the next ability is aimed at.
   pub target: Option<Seat>,
@@ -432,10 +431,10 @@ impl NetClient {
         self.at = you.at;
         self.seeded = true;
       } else if self.authority == Authority::Server {
-        // The server owns it, so this is not an echo, it is the answer. No
+        // The server owns it, so this is the answer rather than an echo. No
         // prediction and no reconciliation: the character is drawn where the
-        // server last said, which is what makes the round trip visible
-        // rather than hidden, and visible is the point of the comparison.
+        // server last said, so the round trip is visible, which is what the
+        // comparison is meant to show.
         self.gap = crate::movement::distance(self.at, you.at);
         self.at = you.at;
       } else {
@@ -613,8 +612,8 @@ impl NetClient {
 
   /// What the local player is casting, if anything, as a share run so far.
   ///
-  /// Read from `you` rather than from the audience list, which is the whole
-  /// point of that block existing: a client never appears in its own list.
+  /// Read from `you` rather than from the audience list, which is why that
+  /// block exists: a client never appears in its own list.
   pub fn my_cast(&self) -> Option<(u8, f32)> {
     let you = self.you?;
     let index = you.casting?;

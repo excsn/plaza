@@ -2,8 +2,8 @@
 //!
 //! This one carries the outbox: every acting op is sequenced, kept until the
 //! server's snapshot acks it, and **re-sent in full after a resume**. That
-//! resend is the at-least-once half; the server's per-seat sequence line is
-//! the at-most-once half; together the delve is exactly-once across a drop.
+//! resend gives at-least-once delivery and the server's per-seat sequence
+//! line gives at-most-once, so the delve is exactly-once across a drop.
 //! The severed states are self-inflicted on purpose: the panel's buttons cut
 //! the link to make the machinery visible.
 

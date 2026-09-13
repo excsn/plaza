@@ -1,40 +1,40 @@
 # draft_board
 
-A snake draft, written to answer one question: is `TurnManager` a seam, or a description of the one thing that implements it?
+A snake draft, written to test whether `TurnManager` fits a second turn order or only describes the one type that implements it.
 
 ```sh
 cargo run -p plaza_example_draft_board                    # the scripted run
 cargo run -p plaza_example_draft_board --bin serve        # the browser version, three tabs
 ```
 
-## The question, and why it was open
+## Background
 
-`RoundRobinTurnManager` had been the trait's only implementation since it was written. A public trait with one implementor tells you nothing: the trait might genuinely describe a category, or it might describe its one member and no one had noticed. Nothing in the workspace had ever tried to write a second, so this example writes one and reports what happened.
+`RoundRobinTurnManager` had been the trait's only implementation since it was written. With one implementor there was no way to tell whether the trait fit other turn orders or only round-robin. Nothing in the workspace had tried to write a second, so this example writes one and reports what happened.
 
-[`SnakeTurnManager`](src/snake.rs) runs down the roster and then back along it, so with three drafters the order is `1,2,3` then `3,2,1` then `1,2,3`. That is the order every real draft uses, and picking last is compensated by picking first next round.
+[`SnakeTurnManager`](src/snake.rs) runs down the roster and then back along it, so with three drafters the order is `1,2,3` then `3,2,1` then `1,2,3`. Real drafts use this order because the drafter who picks last in one round picks first in the next.
 
-## The answer: half a seam, and it has since been closed
+## What the second implementation found
 
-**The advance carried it, including the part that looks illegal.** `end_current_turn_and_advance` returns the **same actor** at a reversal, because the drafter closing one pass opens the next, and the contract permits that: it promises the next turn rather than a different holder of it. A wrapping manager cannot express that boundary at all, which is why a draft needs its own.
+**The advance fit.** At a reversal `end_current_turn_and_advance` returns the same actor, because the drafter closing one pass opens the next. The contract allows this: it promises the next turn and does not require a different actor. A wrapping manager cannot express that boundary, so a draft needs its own manager.
 
-**Everything around it did not.** The trait held `current_turn_actor` and the advance while every consumer called five methods: `begin`, `restart`, `add_actor` and `remove_actor` were inherent on `RoundRobinTurnManager` alone. A conforming manager could be written that no application could seat, restart, or change the roster of. The trait now carries all six, and `it_is_usable_behind_the_trait_it_implements` seats, advances, and mutates the roster entirely through `dyn TurnManager`, which it could not do when it was first written.
+**The rest of the lifecycle was not on the trait.** The trait held `current_turn_actor` and the advance while every consumer called five methods: `begin`, `restart`, `add_actor` and `remove_actor` were inherent on `RoundRobinTurnManager` alone. A conforming manager could be written that no application could seat, restart or change the roster of. The trait now carries all six and `it_is_usable_behind_the_trait_it_implements` seats, advances and mutates the roster entirely through `dyn TurnManager`, which it could not do when it was first written.
 
-**And a pass boundary was invisible from the return value.** Round-robin hides this: its actor changes at the wrap, so a caller can infer the boundary. Under a snake the actor is *unchanged* there, so the same inference reports the exact opposite of the truth at the only moment it matters. That is now [`Advanced::PassClosed`](../../core/API_REFERENCE.md), returned by the advance, and this example's dedicated pick counter was deleted when it landed.
+**A pass boundary was invisible from the return value.** Round-robin hides this problem: its actor changes at the wrap, so a caller can infer the boundary. Under a snake the actor stays the same there, so the same check misses the boundary. The advance now returns [`Advanced::PassClosed`](../../core/API_REFERENCE.md) at a boundary. This example's own pick counter was deleted when that landed.
 
-**What deliberately still differs, and why it matters.** `remove_actor` at the end of the roster **wraps** in round-robin and **pulls back** here, since a snake at the end is about to turn around rather than start over; there is a test on each. Two implementations differing in the advance, in the removal fixup, and in what `restart` resets is more variation than a single "give me the next index" hook would carry, which is the argument against factoring these into shared machinery plus a policy until a third order exists to design against.
+**What still differs.** `remove_actor` at the end of the roster wraps to the first seat in round-robin and pulls back to the last seat here, since a snake at the end is about to turn around. There is a test for each. The two implementations differ in the advance, in the removal fixup and in what `restart` resets. A single "give me the next index" hook could not carry all of that, so they stay separate until a third turn order exists to design a shared policy against.
 
 ## What else is in here
 
-The rest is a fixture around that finding, deliberately small.
+The rest of the example is a small fixture around that finding.
 
-**A public board, which is the contrast with `card_table` worth noticing.** A draft has nothing to hide, so [`BoardSnapshotter`](src/snapshot.rs) builds one view and the controller sends it to everyone. `card_table` is the opposite case and pays one build and one encode per recipient to keep a hand secret. Both are the same trait; which one you want is a property of your game and not of plaza.
+**A public board.** A draft has nothing to hide, so [`BoardSnapshotter`](src/snapshot.rs) builds one view and the controller sends it to everyone. `card_table` does the opposite: it pays one build and one encode per recipient to keep each hand secret. Both use the same trait. Which one you want depends on your game.
 
-**A pick clock on the same `Epoch`-guarded scheduler.** Sit on the clock and the board takes the best remaining prospect for you. The stale-token check earns its keep twice over here: a drafter legitimately holds two turns in a row at a reversal, so a generation counter would call the second one stale and a plain identity check is what works.
+**A pick clock on the same `Epoch`-guarded scheduler.** Sit on the clock and the board takes the best remaining prospect for you. The stale-token check here is an identity check: a drafter holds two turns in a row at a reversal, so a generation counter would call the second one stale.
 
-**A finished draft racks the board and drafts again.** The standings stay up for `INTERMISSION_TICKS`, then scores zero and a fresh pool is dealt. `restart` puts the order back at the top travelling forwards rather than continuing the snake, because a new draft is not the next pass of the old one.
+**A finished draft racks the board and drafts again.** The standings stay up for `INTERMISSION_TICKS`, then scores zero and a fresh pool is dealt. `restart` puts the order back at the first seat travelling forwards, since a new draft starts over and does not continue the old snake.
 
 ## The lab
 
-Open three tabs at http://127.0.0.1:8093. The order strip at the top draws itself in the direction it is currently running, so the reversal is a thing you watch happen rather than a claim: the arrows flip at the end of every pass, and whoever picked last picks again immediately. Stall on the clock to see the board pick for you, and let the draft finish to see it rack.
+Open three tabs at http://127.0.0.1:8093. The order strip at the top is drawn in the direction the order is currently running. The arrows flip at the end of every pass and whoever picked last picks again immediately. Stall on the clock to see the board pick for you and let the draft finish to see it rack.
 
-The scripted run makes the same point in a log, and stalls on purpose in the third pass.
+The scripted run shows the same thing in a log and stalls on purpose in the third pass.

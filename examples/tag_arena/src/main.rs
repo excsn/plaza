@@ -4,8 +4,8 @@
 //! and, every tick, sends everyone the same whole-world snapshot as one uniform
 //! pass: the provider runs once, the payload encodes once, and each recipient
 //! gets a refcounted copy (`SnapshotRequest::uniform`). Clients keep no op
-//! history; the latest snapshot IS the game, so a stale one is discarded and a
-//! mid-game joiner is caught up by the very next frame.
+//! history; the latest snapshot is the complete game state, so a stale one is
+//! discarded and a mid-game joiner is caught up by the very next frame.
 //!
 //! Open http://127.0.0.1:8080 to play. Bots are already running, so one browser
 //! tab is a game; open a second to be chased by a person instead.

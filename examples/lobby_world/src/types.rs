@@ -4,10 +4,10 @@ use uuid::Uuid;
 /// The wire format's version, derived at build time from this file (see
 /// `build.rs`), so it cannot drift out of date the way a manual constant does.
 ///
-/// The point is a client that is a separate build product: it does not rebuild
-/// when the server does, so a client from before a wire change is the normal
-/// state of affairs. Without a version the failure is silent in the worst way,
-/// because the connection succeeds and only the messages whose shape changed are
+/// This matters because the client is a separate build product: it does not
+/// rebuild when the server does, so a client from before a wire change is the
+/// normal state of affairs. Without a version the failure is silent: the
+/// connection succeeds and only the messages whose shape changed are
 /// rejected.
 pub const PROTOCOL: u32 = WIRE_PROTOCOL;
 
@@ -16,7 +16,7 @@ include!(concat!(env!("OUT_DIR"), "/wire_protocol.rs"));
 pub type PlayerId = u64;
 pub type RoomId = Uuid;
 
-/// Server-measured throughout. A client-reported latency would be understated,
+/// Server-measured throughout. A client-reported latency could be understated
 /// and this decides admission.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct LinkQuality {
@@ -93,7 +93,7 @@ pub struct RoomCard {
 pub enum LobbyOp {
   ListRooms,
   Join { room_id: RoomId },
-  /// Be paired rather than choose. The other half of a lobby.
+  /// Be paired instead of choosing a room.
   QuickMatch,
   LeaveQueue,
   /// Deliberately bypasses `handle_join_room_request`: a spectator takes no
@@ -187,8 +187,8 @@ pub enum RoomOp {
   Rejected {
     reason: String,
   },
-  /// The arena is closing and this connection is about to be; the reason rides
-  /// ahead of the close.
+  /// The arena is closing and this connection is about to be; the reason is
+  /// sent ahead of the close.
   Closed {
     reason: String,
   },

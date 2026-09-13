@@ -77,7 +77,7 @@
 <body>
 
 <h1>parlour_game</h1>
-<div class="sub">A lobby that spawns a table per match. The lobby speaks JSON; the table speaks named MessagePack, from the same server on the same port.</div>
+<div class="sub">A lobby that spawns a table per match. The lobby speaks JSON; the table speaks compact MessagePack, from the same server on the same port.</div>
 
 <div class="cols">
   <div>
@@ -140,14 +140,13 @@
 <script>
 /* --------------------------------------------------------------- messagepack
 
-The table's session uses `MsgPackNamedCodec`, so this page is exactly the client
-that codec exists for: one written by hand, in another language, with no way to
-recover a Rust struct's field order. Under the default `MsgPackCodec` a struct
-arrives as a bare array and every read below would have to be an index.
+The table's session uses the compact `MsgPackCodec`, so a struct arrives as a
+bare array in declaration order. `namedBody` below turns each one back into
+named fields using the `SHAPES` tables, which are copied by hand from types.rs.
 
 Only what this wire carries is implemented. An unknown byte throws rather than
-returning something plausible, because a decoder that guesses is worse than one
-that stops.
+returning something plausible, because a wrong value is harder to notice than
+an error.
 */
 
 function mpDecode(bytes) {
@@ -383,11 +382,11 @@ function drawTables(tables) {
 
 const mpCodec = { encode: mpEncode, decode: mpDecode };
 
-/* Compact msgpack sends a struct as its fields in declaration order, and these
-   tables are that order, copied from types.rs. This is the price a hand-written
-   peer pays against the compact codec (the Dart client generates its types and
-   pays nothing); the protocol version moves whenever the order changes, so a
-   stale copy of this page is told to reload rather than left misreading. */
+/* Compact msgpack sends a struct as its fields in declaration order and these
+   tables are that order, copied from types.rs. A hand-written peer has to keep
+   them in sync by hand; the Dart client generates its types instead. The
+   protocol version moves whenever the order changes, so a stale copy of this
+   page is told to reload rather than left misreading. */
 const SHAPES = {
   Snapshot: ['table', 'phase', 'round', 'total_rounds', 'whose_turn', 'your_seat', 'stake', 'coins', 'my_hand', 'opponents', 'played', 'scores', 'seats_taken', 'seats_total', 'spectators', 'bots'],
   PhaseChanged: ['new_phase', 'previous_phase', 'duration_hint', 'reason'],
@@ -434,11 +433,10 @@ function enterTable(placed) {
 }
 
 /* A snapshot arrives on a deal and a resolved trick, and nothing in between:
-   the rest of the round is narrated as ops. So the page has to *apply* them,
-   or the table sits frozen between deals showing a hand that has already been
-   played. This is the same rule a server-authoritative game usually states as
-   "we only send full state on major changes", and it is the client's half of
-   that bargain. */
+   the rest of the round arrives as ops. So the page has to apply them.
+   Otherwise the table stays frozen between deals showing a hand that has
+   already been played. Server-authoritative games often send full state only
+   on major changes and this is the client side of that arrangement. */
 function onPlayed(player, card) {
   if (!view) return;
   view.played.push([player, card]);

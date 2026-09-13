@@ -58,9 +58,8 @@ impl StateLogic<DraftOp, PlayerId, DraftState> for DraftLogic {
 
     let output = LogicOutput::ops(ctx.into_ops());
     if resnapshot {
-      // The board is public, so one view serves everyone and the controller
-      // builds it once. `card_table` is the opposite case and pays per recipient
-      // for it; a draft has nothing to hide and should not.
+      // The board is public, so the controller builds one view for everyone.
+      // `card_table` builds one per recipient to keep hands secret.
       let everyone: Vec<Agent<PlayerId>> = state.agents.values().cloned().collect();
       return Ok(output.and_snapshot(SnapshotRequest::uniform(everyone)));
     }
@@ -101,11 +100,11 @@ fn seat_drafter(state: &mut DraftState, agent: &Agent<PlayerId>, ctx: &mut Ctx) 
 
 /// Opens a draft from a clean board, voiding whatever a previous one left.
 ///
-/// The resets are no-ops on a genuinely fresh board and are what make a
-/// refilled one openable at all: an abandoned draft leaves a round in progress
-/// and a finished one leaves the limit reached, and `start_next_round` refuses
-/// both. Before this existed, a board that emptied and refilled sat in
-/// `Picking` with no actor and refused every take.
+/// The resets do nothing on a fresh board. A refilled board needs them: an
+/// abandoned draft leaves a round in progress, a finished one leaves the limit
+/// reached and `start_next_round` refuses both. Without the resets, a board
+/// that emptied and refilled sat in `Picking` with no actor and refused every
+/// take.
 fn start_draft(state: &mut DraftState, ctx: &mut Ctx) {
   state.scores.reset_all_scores();
   state.rounds.reset();
@@ -126,8 +125,8 @@ fn unseat_drafter(state: &mut DraftState, player: &PlayerId) {
   info!(player, "drafter left the board");
 
   // The leaver's pending clock names them, so the identity check will drop it.
-  // Without one of its own the successor's pick never times out and the draft
-  // waits forever on somebody who may also have walked away.
+  // The successor needs a clock of their own or their pick never times out
+  // and the draft waits forever on somebody who may also have left.
   if held_the_clock && *state.phase.current() == DraftPhase::Picking {
     arm_clock(state);
   }
@@ -189,9 +188,9 @@ fn record(state: &mut DraftState, player: PlayerId, prospect: Prospect, on_their
   }]));
   info!(player, %prospect, auto = on_their_behalf, "prospect taken");
 
-  // The manager says when the pass closed, because it is the only thing that
-  // knows: a snake reverses onto the *same* actor there, so a caller comparing
-  // the new turn against the old would read the boundary backwards.
+  // The manager reports when the pass closed. A snake reverses onto the same
+  // actor there, so comparing the new turn against the old one would miss the
+  // boundary.
   match state.turns.end_current_turn_and_advance(ctx) {
     Ok(moved) if moved.pass_closed() => end_round(state, ctx),
     _ => arm_clock(state),
@@ -264,7 +263,7 @@ fn arm_clock(state: &mut DraftState) {
     .schedule_after(state.tick, state.pick_timeout_ticks, &state.phase, BoardEvent::AutoPick { player });
 }
 
-/// Fires whatever came due, discarding what the world overtook.
+/// Fires whatever came due and skips events that no longer apply.
 fn run_due_events(state: &mut DraftState, ctx: &mut Ctx) -> bool {
   let mut changed = false;
 
@@ -272,9 +271,8 @@ fn run_due_events(state: &mut DraftState, ctx: &mut Ctx) -> bool {
     match due {
       BoardEvent::AutoPick { player } => {
         // The scheduler already dropped anything from a closed draft. The
-        // game's half is an identity check rather than a generation one, and
-        // under a snake it earns its keep twice over: the same drafter
-        // legitimately holds two turns in a row at a reversal, so a counter
+        // game checks identity here and not a generation count, because the
+        // same drafter holds two turns in a row at a reversal and a counter
         // would call the second one stale.
         if state.turns.current_turn_actor() != Some(player) {
           debug!(player, "clock dropped: they already picked");
@@ -360,8 +358,7 @@ mod tests {
 
   #[tokio::test]
   async fn the_pick_order_snakes_across_passes() {
-    // The example's headline, at the level a player would see it. A round-robin
-    // board would read 1,2,3,1,2,3,1,2,3.
+    // A round-robin board would read 1,2,3,1,2,3,1,2,3.
     let mut state = open_board().await;
     let mut order = Vec::new();
     for _ in 0..(SEATS * ROUNDS as usize) {
@@ -532,8 +529,8 @@ mod tests {
 
   #[tokio::test]
   async fn a_board_that_emptied_after_finishing_still_opens_when_it_refills() {
-    // The sibling dead end: the rack event fires into an empty board and is
-    // skipped, so a later refill found the round limit reached and stalled.
+    // The rack event fires into an empty board and is skipped, so a later
+    // refill found the round limit reached and stalled.
     let mut state = open_board().await;
     draft_it_out(&mut state).await;
     for player in 1..=SEATS as PlayerId {

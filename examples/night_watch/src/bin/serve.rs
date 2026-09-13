@@ -1,9 +1,9 @@
-//! The village over real WebSockets, so the secrecy is something you see.
+//! The village over real WebSockets, so you can see the secrecy in a browser.
 //!
 //! Open http://127.0.0.1:8094 in **five** tabs: the deal happens when the fifth
 //! seat fills. One tab knows it is the wolf and the others know only their own
-//! role, because every snapshot is built per recipient. Get killed, and your
-//! tab shows you everything: the dead see all, and can no longer be asked.
+//! role, because every snapshot is built per recipient. Get killed and your
+//! tab shows every role.
 //!
 //! Nights and days are long enough here to think in; the scripted run in
 //! `main.rs` keeps the short defaults so its deadlines fire on purpose.

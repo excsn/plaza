@@ -1,10 +1,11 @@
-//! Closes this host ordered, and the difference between them and a netdrop.
+//! Records the closes this host ordered so they can be told apart from a
+//! netdrop.
 //!
 //! Plaza reports every departure the same way, as
 //! [`LogicInput::AgentLeft`](crate::state_logic::LogicInput::AgentLeft): it
 //! does not say whether the host ordered the close or the network went away.
-//! Only whoever ordered a close knows why, so the pending reason *is* the
-//! discrimination: a departure with no entry recorded here is a netdrop.
+//! Only whoever ordered a close knows why, so the pending reason is what
+//! tells the two apart: a departure with no entry recorded here is a netdrop.
 //!
 //! [`ClosureLog`] is that record, extracted from two examples that each kept
 //! the same two tables by hand. It holds no sockets and sends nothing: the
@@ -12,7 +13,7 @@
 //! order, and tells the log what it did:
 //!
 //! ```ignore
-//! // Ordering a close: the goodbye rides ahead of it, once.
+//! // Ordering a close: the goodbye is sent first, once.
 //! if state.closures.order(key, Parting::Kicked) {
 //!   session.deregister_agent(&key, Some(farewell_frame));
 //! }
@@ -32,8 +33,8 @@
 //! Ops and presence reach the controller on different streams, so an op can
 //! arrive after its connection's close was ordered; that is why
 //! [`was_ordered`](ClosureLog::was_ordered) keeps answering `true` after the
-//! departure is applied. On a host that lives long enough for that to add up,
-//! call [`forget`](ClosureLog::forget) once a key can never speak again.
+//! departure is applied. On a long-lived host, where those entries add up,
+//! call [`forget`](ClosureLog::forget) once a key can never send again.
 
 use std::collections::{HashMap, HashSet};
 
@@ -48,8 +49,8 @@ pub enum Departed<Reason> {
   Netdrop,
 }
 
-/// The closes this host ordered: who was told to go, why, and which
-/// departures were nobody's decision.
+/// The closes this host ordered: who was told to go and why. A departure with
+/// no entry was a netdrop.
 #[derive(Clone, Debug)]
 pub struct ClosureLog<ID: AgentId, Reason> {
   ordered: HashSet<ID>,
@@ -72,9 +73,9 @@ impl<ID: AgentId, Reason> ClosureLog<ID, Reason> {
 
   /// Records a close this host is ordering, keeping the first reason.
   ///
-  /// `true` exactly once per key: the goodbye is sent once, however many
-  /// rules conclude the same guest must go. A second order neither re-sends
-  /// nor rewrites; the first reason is the honest one.
+  /// `true` exactly once per key, so the goodbye is sent once even when
+  /// several rules decide to close the same guest. A second order neither
+  /// re-sends the goodbye nor replaces the first reason.
   pub fn order(&mut self, id: ID, reason: Reason) -> bool {
     if !self.ordered.insert(id.clone()) {
       return false;
@@ -85,7 +86,7 @@ impl<ID: AgentId, Reason> ClosureLog<ID, Reason> {
 
   /// Whether this key was ever ordered closed. Still `true` after the
   /// departure: ops and presence travel on different streams, so an op can
-  /// trail the close it lost the race to.
+  /// arrive after the close.
   pub fn was_ordered(&self, id: &ID) -> bool {
     self.ordered.contains(id)
   }
@@ -101,8 +102,8 @@ impl<ID: AgentId, Reason> ClosureLog<ID, Reason> {
     }
   }
 
-  /// Forgets a key entirely, including the ops-after-close guard. For hosts
-  /// that live long enough to care, once the key can never speak again.
+  /// Forgets a key entirely, including the ops-after-close guard. Call it on a
+  /// long-lived host once the key can never send again.
   pub fn forget(&mut self, id: &ID) {
     self.ordered.remove(id);
     self.pending.remove(id);
@@ -139,8 +140,8 @@ mod tests {
 
   #[test]
   fn the_goodbye_is_sent_once_and_the_first_reason_wins() {
-    // Two rules concluding the same guest must go is one goodbye, and the
-    // reason that reached them is the one the departure reports.
+    // Two rules ordering the same guest out send one goodbye. The departure
+    // reports the first reason recorded.
     let mut log: ClosureLog<u64, &str> = ClosureLog::new();
     assert!(log.order(7, "kicked"));
     assert!(!log.order(7, "drained"));
@@ -149,8 +150,8 @@ mod tests {
 
   #[test]
   fn the_ops_after_close_guard_outlives_the_departure() {
-    // Ops and presence travel on different streams, so an op can trail the
-    // close it lost the race to; the guard has to keep answering.
+    // Ops and presence travel on different streams, so an op can arrive after
+    // the close; the guard has to keep answering.
     let mut log: ClosureLog<u64, &str> = ClosureLog::new();
     log.order(7, "afk");
     log.departed(&7);

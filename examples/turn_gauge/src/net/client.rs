@@ -2,7 +2,7 @@
 //!
 //! The live piece beyond decoding is the [`OrderMirror`]: every op feeds it,
 //! it derives who must act next, and each turn the server opens is checked
-//! against that derivation. The panel's divergence count is its verdict.
+//! against that derivation. The panel shows how many turns diverged.
 
 use std::collections::VecDeque;
 

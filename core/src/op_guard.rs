@@ -1,21 +1,22 @@
-//! May this agent do this at all: authorization ahead of [`StateLogic`].
+//! Authorization ahead of [`StateLogic`]: whether an agent may submit an op
+//! at all.
 //!
-//! "Is this player allowed to act" and "what does the act do" are different
-//! questions, and an application that answers both inside `StateLogic` smears
-//! its security checks through its handlers. An [`OpGuard`] is the one
-//! auditable place for the first question: the controller runs it per op,
-//! before `process_input`, and a refused op never reaches the rules.
+//! Whether a player may act is a separate question from what the act does.
+//! An application that answers both inside `StateLogic` spreads its security
+//! checks across its handlers. An [`OpGuard`] keeps the first question in one
+//! place: the controller runs it per op before `process_input`. A refused op
+//! never reaches the rules.
 //!
-//! The guard judges the actor's standing, not the act's content. Whether a
-//! seated, living player may vote in this phase is the guard's; whether the
-//! player they voted for exists is the rules'. The state is borrowed
-//! read-only, so authorization cannot mutate, and the trait is sync on
-//! purpose: it runs per op on the controller's task, and a permission that
-//! lives in a database belongs loaded into state, not fetched mid-stream.
+//! For example, whether a seated, living player may vote in this phase
+//! belongs in the guard, while whether the player they voted for exists
+//! belongs in the rules. The state is borrowed read-only, so authorization
+//! cannot mutate. The trait is synchronous because it runs per op on the
+//! controller's task, so load a permission kept in a database into state
+//! ahead of time instead of fetching it per op.
 //!
 //! System submissions ([`ControllerCommand::SubmitSystemOps`]) and time steps
-//! are never screened; the server trusts itself. Everything an agent submits,
-//! bots included, is.
+//! are never screened, since the server trusts its own submissions. Everything
+//! an agent submits is screened, bots included.
 //!
 //! [`StateLogic`]: crate::state_logic::StateLogic
 //! [`ControllerCommand::SubmitSystemOps`]: crate::controller::ControllerCommand::SubmitSystemOps
@@ -58,12 +59,12 @@ pub trait OpGuard<Op, ID: AgentId, StateType>: Send + Sync + 'static {
   fn guard(&self, state: &StateType, source: &Agent<ID>, op: &Op) -> OpClearance<Op>;
 }
 
-/// An [`OpGuard`] that is just a function.
+/// An [`OpGuard`] built from a plain function.
 ///
 /// The counterpart of [`SnapshotFn`](crate::snapshot::SnapshotFn): most guards
-/// are a pure function of state, source and op, and this is the wrapper that
-/// makes one a guard. A named function coerces cleanly; a closure usually
-/// needs its argument types written out.
+/// are a pure function of state, source and op; this wraps one as a guard. A
+/// named function coerces cleanly; a closure usually needs its argument types
+/// written out.
 pub struct GuardFn<F>(pub F);
 
 impl<Op, ID, StateType, F> OpGuard<Op, ID, StateType> for GuardFn<F>

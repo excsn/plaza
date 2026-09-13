@@ -1,16 +1,13 @@
 //! Twenty-eight squares that exist for one client.
 //!
-//! fog_skirmish filters a shared world per viewer, which is a different thing:
-//! the fog hides something that is there for everybody. Nothing here is
-//! filtered, because nobody else's world contains it. That makes a pack the one
-//! genuinely private stream in this tree, and the instant worth watching is the
-//! crossing: a drop turns private state into world state, and a pickup turns it
-//! back.
+//! fog_skirmish filters a shared world per viewer: the fog hides something that
+//! exists for everybody. A pack is not filtered, because it is not in anybody
+//! else's world at all. That makes it the only private stream in this tree. A
+//! drop turns private state into world state and a pickup turns it back.
 
 use crate::protocol::Item;
 
-/// Squares in a pack. Nothing stacks, which is what makes a full pack a thing
-/// that happens rather than a limit nobody reaches.
+/// Squares in a pack. Nothing stacks, so packs do fill up in play.
 pub const SLOTS: usize = 28;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,9 +54,9 @@ impl Pack {
 
   /// Puts something in the first free square, or says there was none.
   ///
-  /// First free rather than appended, so a pack that has had a gap punched in
-  /// it fills the gap. Anything else and a player who eats from the middle
-  /// watches their pack grow past its own end.
+  /// First free rather than appended, so a gap left by taking an item gets
+  /// filled. Otherwise a player who eats from the middle sees the pack grow past
+  /// its own end.
   pub fn add(&mut self, item: Item) -> bool {
     for slot in self.slots.iter_mut() {
       if slot.is_none() {
@@ -128,8 +125,8 @@ mod tests {
 
   #[test]
   fn cooking_replaces_in_place() {
-    // A fish that moved square when it was cooked would make the pack shuffle
-    // under the player's hand for no reason they could see.
+    // A fish that moved square when cooked would shuffle the pack under the
+    // player's cursor for no visible reason.
     let mut pack = Pack::new();
     pack.add(Item::Logs);
     pack.add(Item::RawFish);

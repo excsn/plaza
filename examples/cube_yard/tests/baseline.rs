@@ -1,8 +1,7 @@
-//! What each stage costs, from the real solver rather than a synthetic scene,
-//! and what it costs in accuracy to get there.
+//! What each stage costs in bytes and in accuracy, measured on the real solver
+//! rather than a synthetic scene.
 //!
-//! Compression without an error number is half a measurement, so every row here
-//! carries both.
+//! Every row carries both the bandwidth and the error it introduces.
 //!
 //! ```sh
 //! cargo test -p cube_yard --test baseline -- --nocapture
@@ -16,9 +15,9 @@ use cube_yard::protocol::{frame_to_ms, CubeState, Cubes, FrameUpdate, YardOp, CU
 use cube_yard::sim::{Yard, MAX_PLAYERS};
 use plaza_wire::{MsgPackCodec, Payload, WireCodec};
 
-/// A settled field is the honest scene to measure: it is what the yard looks
-/// like when nobody is ploughing through it, and it is where the at-rest saving
-/// is real rather than theoretical.
+/// A settled field is the representative scene to measure: it is what the yard
+/// looks like when nobody is ploughing through it and the at-rest saving
+/// actually applies there.
 fn settled(snap: bool) -> Yard {
   let mut yard = Yard::new();
   let idle = [Default::default(); MAX_PLAYERS];
@@ -105,8 +104,8 @@ fn the_stages_priced_side_by_side() {
     worst
   );
   // Stage three: only what fits a hard budget, scored from where a client is
-  // standing. Measured over a run rather than one frame, because the whole
-  // point is that a cube skipped now goes out shortly after.
+  // standing. Measured over a run rather than one frame, because a cube
+  // skipped now goes out shortly after.
   let mut stream = Stream::new(truth.len());
   let eye = Some(truth[CUBES].pos);
   let mut total = 0usize;
@@ -142,8 +141,8 @@ fn the_stages_priced_side_by_side() {
     let (payload, picked) = pack::pack_delta_until_full(&truth, &order, &mut stream.baseline, BUDGET_BITS);
     stream.sent(&picked);
     delta_cubes += picked.len();
-    // Read it back the way a client would, so the row is not a claim about an
-    // encoder nobody decoded.
+    // Read it back the way a client would, so the row is checked against a
+    // real decode.
     assert!(pack::unpack_delta(&payload, &mut baseline).is_some());
     delta_total += on_the_wire(Cubes::Delta(Payload::from(payload)));
   }
@@ -178,14 +177,14 @@ fn the_stages_priced_side_by_side() {
   );
 }
 
-/// Quantising the server's own state is not free: it perturbs every body every
-/// tick, and this is the example that says by how much.
+/// Quantising the server's own state perturbs every body every tick and this
+/// test measures by how much.
 #[test]
 fn snapping_both_sides_costs_something_and_it_is_small() {
   let loose = settled(false);
   let snapped = settled(true);
 
-  // The pile still settles, which is the property that matters.
+  // The pile still has to settle.
   assert!(
     snapped.sleeping() > (CUBES + MAX_PLAYERS) / 2,
     "snapping kept the pile awake: {} of {}",
@@ -198,7 +197,7 @@ fn snapping_both_sides_costs_something_and_it_is_small() {
   println!("  asleep      {} vs {} loose", snapped.sleeping(), loose.sleeping());
   println!("  divergence  worst {:.3}u, mean {:.3}u\n", drift.0, drift.1);
 
-  // A snapped body is a fixed point of the wire, which is the whole point.
+  // A snapped body is a fixed point of the wire, which is what snapping is for.
   let truth = snapshot(&snapped);
   let drawn = pack::unpack(&pack::pack(&truth)).unwrap();
   let (worst, _) = error(&truth, &drawn);
@@ -208,22 +207,20 @@ fn snapping_both_sides_costs_something_and_it_is_small() {
   );
 }
 
-// Where the smooth-motion case lives, and why it is not here.
+// Where the smooth-motion case is measured and why it is not here.
 //
 // A spline is for a path that curves between samples. The nearest thing this
-// scene has is the hovering player, and it flies a straight line at constant
-// speed, where a spline and a chord are the same expression: measured, both
-// give 0.647, which is a fact about straight lines rather than about either
-// technique. `plaza_client_utils::hermite` measures the curved case properly
-// on a circle and gets 484x. What cube_yard has to say about splines is the
-// contact case below, where they lose.
+// scene has is the hovering player, which flies a straight line at constant
+// speed, where a spline and a chord are the same expression: both measure
+// 0.647. `plaza_client_utils::hermite` measures the curved case on a circle
+// and gets 484x. This file measures the contact case below, where splines
+// lose.
 
 /// The whole yard at a low send rate, drawn three ways.
 ///
 /// The single-cube test above says a spline beats a straight line; this says
-/// what it is worth across a scene, and what the cheapest option costs, which
-/// is the number that decides whether the second velocity is worth putting on
-/// the wire at all.
+/// what it is worth across a scene and what the cheapest option costs. That
+/// decides whether the second velocity is worth putting on the wire at all.
 #[test]
 fn the_send_rate_axis_priced_across_the_yard() {
   use plaza_client_utils::hermite::HermiteView;
@@ -261,9 +258,9 @@ fn the_send_rate_axis_priced_across_the_yard() {
   }
 
   let (mut hermite, mut linear, mut hold) = (0.0f32, 0.0f32, 0.0f32);
-  // Is the spline overshooting its own samples? A straight line cannot leave
-  // the segment between two samples; a spline can, and that is the difference
-  // a scene with impacts in it exposes.
+  // Counts how often the spline overshoots its own samples. A straight line
+  // cannot leave the segment between two samples and a spline can, which shows
+  // up in a scene with impacts.
   let (mut overshoots, mut worst_overshoot, mut segments) = (0usize, 0.0f32, 0usize);
   for i in 0..WATCH {
     for (tick, want) in truth[i].iter().enumerate() {
@@ -310,8 +307,8 @@ fn the_send_rate_axis_priced_across_the_yard() {
   println!("  a straight line cannot do that, which is the whole difference.\n");
 
   assert!(linear < hold, "interpolating should beat holding");
-  // The finding, asserted so it cannot quietly reverse: on a scene with
-  // impacts, a spline is worse than the chord it replaces.
+  // Asserted so the result cannot reverse unnoticed: on a scene with impacts a
+  // spline is worse than the chord it replaces.
   assert!(
     hermite > linear,
     "a spline is expected to lose here; if it now wins, the docs need revisiting"
@@ -322,8 +319,8 @@ fn the_send_rate_axis_priced_across_the_yard() {
 #[test]
 fn a_settled_yard_is_mostly_asleep() {
   let yard = settled(false);
-  // The at-rest flag is worth one bit against thirty-three, and this is the
-  // measurement that says how often that trade pays.
+  // The at-rest flag trades one bit against thirty-three and this measures how
+  // often that trade pays off.
   assert!(
     yard.sleeping() > (CUBES + MAX_PLAYERS) / 2,
     "only {} of {} asleep, so the rest flag would buy little",

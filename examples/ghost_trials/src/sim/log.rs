@@ -1,34 +1,34 @@
 //! The op log: a run, stored as the inputs that produced it.
 //!
-//! This is the module the example exists for. `plaza`'s op stream is an
-//! event-sourced record, which means state is not the thing you keep, it is the
-//! thing you can always get back. Nothing else in this repository takes that
-//! literally. Here it is the entire design:
+//! This is the core of the example. `plaza`'s op stream is an event-sourced
+//! record, which means state never has to be kept because it can always be
+//! rebuilt. Nothing else in this repository relies on that directly. This
+//! example is built on it:
 //!
-//! - **A ghost is a log, not a path.** Replaying the inputs through the shared
-//!   rule reproduces the run exactly, so a ghost costs its *inputs* rather than
-//!   its positions. A two-lap run at 50 Hz is a couple of thousand ticks and a
-//!   few hundred bytes, against about twelve kilobytes of sampled positions.
-//! - **A time is not a claim, it is a consequence.** The server does not watch
-//!   anybody race. It is handed a log, replays it, and reads the time off the
-//!   replay. A client can send any number it likes; the number it sends is not
-//!   what gets recorded.
-//! - **A log is only as good as the rules it was recorded under.** Replay is
-//!   reproduction, and reproduction is a bet that today's arithmetic matches
-//!   the arithmetic that recorded it. So a log carries the version of the rules
-//!   it was made under, and one from a different version is refused rather than
-//!   replayed wrong.
+//! - **A ghost is stored as its inputs.** Replaying the inputs through the
+//!   shared rule reproduces the run exactly, so a ghost costs its *inputs*
+//!   rather than its positions. A two-lap run at 50 Hz is a couple of thousand
+//!   ticks and a few hundred bytes, against about twelve kilobytes of sampled
+//!   positions.
+//! - **The time comes from the replay.** The server does not watch anybody
+//!   race. It is handed a log, replays it and reads the time off the replay. A
+//!   client can send any number it likes, but the recorded time is the
+//!   replayed one.
+//! - **A log carries its rules version.** A replay only reproduces a run if
+//!   today's arithmetic matches the arithmetic that recorded it. So a log
+//!   carries the version of the rules it was made under and one from a
+//!   different version is refused rather than replayed wrong.
 //!
-//! The encoding is the op stream's own shape: an entry per *change* of input,
-//! not per tick. That is not a compression trick applied afterwards, it is what
-//! an event log already looks like.
+//! The encoding has one entry per *change* of input rather than per tick,
+//! which is the normal shape of an event log rather than a compression step
+//! applied afterwards.
 
 use serde::{Deserialize, Serialize};
 
 use crate::sim::rules;
 use crate::sim::types::*;
 
-/// One held input, and the tick it stops being held on.
+/// One held input and the tick it stops being held on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Span {
   pub until_tick: u32,
@@ -40,17 +40,17 @@ pub struct Span {
 pub struct InputLog {
   /// The rules this was recorded under. See the module note.
   pub rules_version: u32,
-  /// Which circuit, and how many cars. Both are needed to reproduce the run
-  /// and neither is expensive: a track is a constant both ends already have,
-  /// and a field size is a number.
+  /// Which circuit and how many cars. Both are needed to reproduce the run and
+  /// neither is expensive: a track is a constant both ends already have and a
+  /// field size is a number.
   pub track: TrackSize,
   pub field: u16,
-  /// Which game it was: a trial alone, or a race against the CPU field.
+  /// Which game it was: a trial alone or a race against the CPU field.
   ///
   /// A race log carries **only the player's inputs**, because the opponents are
   /// a pure function of the world they are in. One player's key presses
-  /// reproduce a four-way race, opponents and all, which is the same trick
-  /// `seed_defense` plays on a wave of enemies.
+  /// reproduce a four-way race, opponents included. `seed_defense` does the
+  /// same for a wave of enemies.
   pub mode: Mode,
   pub spans: Vec<Span>,
 }
@@ -68,7 +68,8 @@ impl Default for InputLog {
 }
 
 impl InputLog {
-  /// The circuit this log was driven on. Built, not carried.
+  /// The circuit this log was driven on, built from the size rather than
+  /// carried in the log.
   pub fn circuit(&self) -> Track {
     Track::of(self.track)
   }
@@ -102,7 +103,7 @@ impl InputLog {
   /// What the same run would have cost as a stream of positions, at one sample
   /// per tick: two coordinates and a heading.
   ///
-  /// The comparison the panel shows, and the reason to keep the inputs instead.
+  /// The panel shows this beside the input cost.
   pub fn path_cost(&self) -> usize {
     8 + self.ticks() as usize * 10
   }
@@ -182,10 +183,10 @@ impl Replay {
   /// How long the run took.
   ///
   /// `finished_tick` is the *index* of the tick the last lap completed on, so
-  /// the number of ticks taken is one more than it. Getting this wrong is a
+  /// the number of ticks taken is one more than it. Getting this wrong makes a
   /// twenty millisecond disagreement between the client's clock and the
-  /// server's replay, which is invisible until it is a refused submission, and
-  /// it is exactly what the client's self check caught the first time it ran.
+  /// server's replay. It is invisible until a submission is refused and it is
+  /// what the client's self check caught the first time it ran.
   pub fn time_ms(&self) -> Option<u64> {
     self.finished_tick.map(|t| (t as u64 + 1) * SIM_STEP_MS)
   }
@@ -210,14 +211,14 @@ pub const MAX_TICKS: u32 = 6_000;
 
 /// Runs a log through the shared rule and reports what happened.
 ///
-/// The same function on the client, where it draws a ghost, and on the server,
-/// where it decides whether a time is real. One implementation, because two
-/// would make a ghost that drives differently from the run it came from.
+/// The client uses it to draw a ghost and the server uses it to decide whether
+/// a time is real. There is one implementation because two would make a ghost
+/// that drives differently from the run it came from.
 pub fn replay(log: &InputLog, track: &Track) -> Replay {
   // Through the same `step_world` a live race runs, with a field of one. The
   // pickups are part of the circuit, so a replay collects them exactly where
-  // the run did, and a trial is a race with nobody else in it rather than a
-  // second implementation that could drift from the first.
+  // the run did. A trial is a race with nobody else in it rather than a second
+  // implementation that could drift from the first.
   let mut world = log.world(track);
   let mut rings = Vec::new();
   let mut finished_tick = None;
@@ -246,10 +247,10 @@ pub fn replay(log: &InputLog, track: &Track) -> Replay {
 
 /// Replays only as far as a tick, for drawing a ghost beside a live run.
 ///
-/// Called every frame with an increasing tick, which is quadratic if taken
-/// literally, so the caller keeps the racer and advances it. This is here for
-/// the cases that genuinely need a state at an arbitrary tick: seeking, and
-/// starting a ghost part way through.
+/// Calling this every frame with an increasing tick would be quadratic, so the
+/// caller keeps the racer and advances it instead. This is for the cases that
+/// need a state at an arbitrary tick: seeking and starting a ghost part way
+/// through.
 pub fn replay_to(log: &InputLog, track: &Track, tick: u32) -> Racer {
   let mut world = log.world(track);
   for t in 0..tick.min(log.ticks()).min(MAX_TICKS) {
@@ -261,8 +262,8 @@ pub fn replay_to(log: &InputLog, track: &Track, tick: u32) -> Racer {
 
 /// Checks a submitted log and the time it claims.
 ///
-/// The whole of the anti-cheat, and it is not a heuristic: the log either
-/// produces that time or it does not.
+/// This is all the anti-cheat there is. It uses no heuristic: the time is
+/// accepted only if the log produces it.
 pub fn verify(log: &InputLog, claimed_ms: u64, rules_version: u32) -> Result<Replay, Rejection> {
   if log.rules_version != rules_version {
     return Err(Rejection::WrongRules {
@@ -307,8 +308,8 @@ mod tests {
     };
     let mut recorder = Recorder::new(VERSION, mode, track.size, field as u16);
     for _ in 0..MAX_TICKS {
-      // The player is driven by the same rule the opponents are, which makes
-      // the fixture a fixture rather than a script.
+      // The player is driven by the same rule as the opponents rather than by
+      // a hand-written script.
       let mine = rules::bot_input(&world.racers[0], track, world.tick, 0);
       recorder.observe(mine);
       let inputs = rules::field_inputs(&world, track, mine, 0);
@@ -372,9 +373,9 @@ mod tests {
     let log = recorder.finish();
     assert!(log.ticks() > 400, "a real run: {} ticks", log.ticks());
     // Measured: 146 entries over 1208 ticks, 738 bytes against 12088. The
-    // threshold sits well under that because the ratio is a property of how
-    // often the *input* changes, and a fixture that steered more would score
-    // worse. See the deadband note above for the worst case.
+    // threshold sits well under that because the ratio depends on how often
+    // the *input* changes and a fixture that steered more would score worse.
+    // See the deadband note above for the worst case.
     assert!(
       log.wire_cost() * 8 < log.path_cost(),
       "{} bytes of inputs against {} of positions",
@@ -436,10 +437,10 @@ mod tests {
 
   #[test]
   fn a_log_from_different_rules_is_refused_rather_than_replayed_wrong() {
-    // The failure this example is really about. The log is fine, the player was
-    // honest, and the arithmetic that would replay it is not the arithmetic
-    // that recorded it. Replaying it anyway would produce a ghost that drives
-    // into walls, and a time nobody drove.
+    // The main failure this example guards against. The log is valid and the
+    // player was honest, but the arithmetic that would replay it is not the
+    // arithmetic that recorded it. Replaying it anyway would produce a ghost
+    // that drives into walls and a time that no run actually took.
     let track = Track::circuit();
     let (recorder, _) = drive_a_trial(&track);
     let mut log = recorder.finish();

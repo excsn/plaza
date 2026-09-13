@@ -4,34 +4,32 @@
 //! spread in it, and one send interval (so two samples always bracket the
 //! interpolation target). A host that simulates its own link can compute that
 //! from its sliders; a real client cannot, because nothing tells it the send
-//! rate or the delay. It can only **measure**, and measuring is better anyway:
-//! a server is then free to change its rate live, and a client that trusts a
-//! configured rate is wrong exactly when the rate is being changed, which is
-//! when it matters.
+//! rate or the delay. It has to **measure**. Measuring also lets a server
+//! change its rate live, whereas a client that trusts a configured rate is
+//! wrong whenever the rate changes.
 //!
-//! Two measurement decisions worth knowing, both learned the hard way:
+//! Two measurement decisions:
 //!
-//! **The buffer covers irregularity, not delay.** A steady 200 ms link needs
-//! no more buffer than a steady 20 ms one, because a constant delay just
-//! shifts the whole timeline; what eats the buffer is one frame arriving later
-//! than its neighbours. So the jitter term is the smoothed *mean deviation* of
-//! lateness (what RFC 6298 uses for the same job: cheaper and less
-//! spike-prone than variance), not the lateness itself.
+//! **The jitter term.** It is the smoothed *mean deviation* of lateness rather
+//! than the lateness itself. A steady 200 ms link needs no more buffer than a
+//! steady 20 ms one, because a constant delay only shifts the whole timeline.
+//! The buffer is used up when one frame arrives later than its neighbours.
+//! Mean deviation is what RFC 6298 uses for the same job, since it is cheaper
+//! and less spike-prone than variance.
 //!
-//! **The interval is measured between declared stamps, not arrivals.** Two
-//! packets can arrive in one poll and still describe moments an interval
-//! apart; gaps between their declared times are stable where gaps between
-//! their arrivals are noise.
+//! **The interval.** It is measured between declared stamps rather than
+//! arrival times. Two packets can arrive in one poll and still describe
+//! moments an interval apart; the gaps between their declared times are stable
+//! while the gaps between their arrivals are noise.
 
 /// Smoothed statistics over one stream's arrivals: feed it every packet, read
 /// the terms of the render-delay budget.
 ///
 /// `stamp` is the declared server time a packet describes; `recv` is the
 /// client's synced estimate of server time at arrival (the same clock its
-/// render delay is subtracted from, which is what makes the lateness readings
-/// commensurable with the delay). Keep one per interpolated stream: it is the
-/// streams peers are interpolated between that size the buffer, not the ones
-/// simulated forward from single samples.
+/// render delay is subtracted from, so the lateness readings are comparable
+/// with the delay). Keep one per interpolated stream. Streams simulated
+/// forward from single samples do not size the buffer and need none.
 #[derive(Clone, Debug)]
 pub struct ArrivalMonitor {
   smoothing: f32,
@@ -40,9 +38,9 @@ pub struct ArrivalMonitor {
   lateness_mean_ms: f32,
   jitter_ms: f32,
   /// Whether the lateness statistics have their first sample. A flag rather
-  /// than a zero sentinel, because zero is a *legitimate mean* (a loopback
-  /// client's lateness is genuinely 0 ms), and the sentinel made every such
-  /// observation a re-seed that froze the jitter at its initial value.
+  /// than a zero sentinel, because zero is a valid mean (a loopback client's
+  /// lateness is 0 ms) and a zero sentinel re-seeded on every such
+  /// observation, freezing the jitter at its initial value.
   lateness_seeded: bool,
 }
 
@@ -61,8 +59,8 @@ impl ArrivalMonitor {
   }
 
   /// Notes one arrival. Call for every packet of the stream, reordered or not:
-  /// a stamp older than the newest seen still updates lateness (it *is* late,
-  /// that is data) but never the interval, which is measured forward only.
+  /// a stamp older than the newest seen still updates lateness but never the
+  /// interval, which is measured forward only.
   pub fn observe(&mut self, stamp: u64, recv: u64) {
     let lateness = recv.saturating_sub(stamp) as f32;
     if self.newest_stamp > 0 && stamp > self.newest_stamp {
@@ -92,15 +90,15 @@ impl ArrivalMonitor {
     self.interval_ms
   }
 
-  /// The smoothed mean lateness: with an honest clock sync, the link's one-way
-  /// delay (plus whatever error the sync carries, which is exactly what the
-  /// budget must absorb anyway).
+  /// The smoothed mean lateness: with an accurate clock sync, the link's
+  /// one-way delay (plus whatever error the sync carries, which the budget has
+  /// to absorb anyway).
   pub fn lateness_ms(&self) -> f32 {
     self.lateness_mean_ms
   }
 
   /// The smoothed mean deviation of lateness: the irregularity the buffer
-  /// exists to cover.
+  /// covers.
   pub fn jitter_ms(&self) -> f32 {
     self.jitter_ms
   }
@@ -141,8 +139,8 @@ mod tests {
 
   #[test]
   fn a_constant_delay_needs_no_more_buffer_than_a_small_one() {
-    // The lesson the jitter term encodes: delay shifts the timeline, only
-    // irregularity eats the buffer.
+    // The jitter term exists because a constant delay only shifts the
+    // timeline; only irregularity uses up the buffer.
     let mut slow = ArrivalMonitor::new(0.2);
     let mut fast = ArrivalMonitor::new(0.2);
     for i in 0..200u64 {
@@ -178,14 +176,14 @@ mod tests {
 
   #[test]
   fn a_loopback_stream_with_zero_lateness_still_measures_its_jitter() {
-    // Zero is a legitimate mean, not an unseeded sentinel: on a loopback host
-    // lateness really is 0 ms, and treating it as "not seeded yet" re-seeded
-    // on every packet and froze the jitter at its initial value.
+    // Zero is a valid mean: on a loopback host lateness is 0 ms and treating
+    // it as "not seeded yet" re-seeded on every packet and froze the jitter at
+    // its initial value.
     let mut m = ArrivalMonitor::new(0.2);
     for i in 0..100u64 {
       let stamp = i * 100;
-      // Mostly instant, with the occasional late one: exactly the shape that
-      // must register as spread.
+      // Mostly instant, with the occasional late one, which must register as
+      // spread.
       let late = if i % 10 == 9 { 40 } else { 0 };
       m.observe(stamp, stamp + late);
     }

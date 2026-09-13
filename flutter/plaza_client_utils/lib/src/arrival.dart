@@ -3,15 +3,15 @@ import 'saturating.dart';
 /// Smoothed statistics over one stream's arrivals: the terms of the
 /// render-delay budget, measured rather than configured.
 ///
-/// A client cannot be told the send rate or the delay, and being told would be
-/// worse anyway: a configured rate is wrong exactly when the server changes it,
-/// which is when it matters.
+/// A client cannot be told the send rate or the delay. Being told would be
+/// worse anyway, because a configured rate is wrong from the moment the server
+/// changes it.
 ///
-/// Two decisions the Rust original records as learned the hard way. **The
-/// buffer covers irregularity, not delay**, so the jitter term is the smoothed
-/// mean deviation of lateness rather than the lateness itself: a steady 200ms
-/// link needs no more buffer than a steady 20ms one. And **the interval is
-/// measured between declared stamps, not arrivals**, because two packets can
+/// Two decisions carry over from the Rust original. The buffer is sized for
+/// irregularity rather than delay, so the jitter term is the smoothed mean
+/// deviation of lateness rather than the lateness itself: a steady 200ms link
+/// needs no more buffer than a steady 20ms one. The interval is measured
+/// between declared stamps rather than arrivals, because two packets can
 /// arrive in one poll and still describe moments an interval apart.
 ///
 /// Ported from `plaza_client_utils::arrival::ArrivalMonitor`, authoritative.
@@ -36,8 +36,8 @@ class ArrivalMonitor {
   /// client's synced estimate of server time at arrival.
   ///
   /// Call for every packet, reordered or not: a stamp older than the newest
-  /// still updates lateness, because it *is* late and that is data, but never
-  /// the interval, which is measured forward only.
+  /// still updates lateness, because it really is late, but never the interval,
+  /// which is measured forward only.
   void observe(int stamp, int recv) {
     final lateness = saturatingSub(recv, stamp).toDouble();
     if (_newestStamp > 0 && stamp > _newestStamp) {
@@ -60,7 +60,7 @@ class ArrivalMonitor {
   /// is, whatever the server was configured to.
   double get intervalMs => _intervalMs;
 
-  /// The smoothed mean lateness: with an honest clock sync, the link's one-way
+  /// The smoothed mean lateness: with an accurate clock sync, the link's one-way
   /// delay plus whatever error the sync carries.
   double get latenessMs => _latenessMeanMs;
 

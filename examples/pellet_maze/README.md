@@ -1,10 +1,10 @@
 # pellet_maze
 
-A chase in a maze, and the input that a schedule cannot fix.
+A maze chase whose turn input needs more than tick scheduling to stay in sync.
 
-Eat the pellets, do not get caught, and take the roles in turn. That part is the game. The reason this example exists is one input: **you never stop moving, and pressing a direction does not turn you.** It queues a turn, and the turn happens at the next junction where that direction is a corridor rather than a wall. Which junction that is, is a fact about the maze and the moment, and both sides have to arrive at it independently.
+Eat the pellets, don't get caught and take the roles in turn. The example is about one input. You never stop moving and **pressing a direction does not turn you straight away**: it queues a turn and the turn happens at the next junction where that direction is a corridor rather than a wall. Which junction that is depends on the maze and the moment and both sides have to work it out independently.
 
-Everything else in this repository has spent its effort on **when** an input happens. [`bomb_grid`](../bomb_grid/) put an input on a tick and made the two sides step the same quantum, and after that a shared rule ran identically on both. Here that is still true and still not enough: two sides can agree perfectly about when a turn was requested, run the same rule on the same tick, and still take the turn at **different junctions**. Then they are in different corridors, and the gap grows instead of closing.
+The other examples in this repository deal with **when** an input happens. [`bomb_grid`](../bomb_grid/) put an input on a tick and made both sides step the same quantum, so a shared rule ran identically on both. That still holds here, but two sides can agree about when a turn was requested, run the same rule on the same tick and still take the turn at **different junctions**. Then they are in different corridors and the gap grows instead of closing.
 
 ## Running it
 
@@ -16,7 +16,7 @@ Everything else in this repository has spent its effort on **when** an input hap
 cargo test -p pellet_maze                    # every claim below, as a test
 ```
 
-WASD or the arrow keys. There is no key for "stop". On a phone, a thumb pad appears the first time you touch the screen, and a press on it is a request to turn exactly as a key press is.
+WASD or the arrow keys. There is no key for "stop". On a phone, a thumb pad appears the first time you touch the screen and a press on it requests a turn the same way a key press does.
 
 ## What you are looking at
 
@@ -26,39 +26,39 @@ WASD or the arrow keys. There is no key for "stop". On a phone, a thumb pad appe
 | circle | the runner: eats pellets, is hunted |
 | square | a pursuer |
 | white arrow off a player | a **turn waiting for a junction**. If it is still there, the corner has not come |
-| hollow circle under yours | where the **server** says you are. Only a host has this; a joiner legitimately cannot |
-| red box, green box, line between | a **wrong junction**: where you turned, where the server turned, and the distance it opened |
+| hollow circle under yours | where the **server** says you are. Only a host has this; a joiner has no way to know it |
+| red box, green box, line between | a **wrong junction**: where you turned, where the server turned and the distance it opened |
 | orange ring on the floor | an **energizer**: the runner eats pursuers for six seconds |
 | blue ring on the floor | **vanish**: the runner is hidden from every other client for four and a half seconds |
 | orange halo | an energized runner. Contact now goes the other way |
-| white squares with a coloured outline | the pursuers **while that lasts**: they are prey, and they flash back to their own colour as it runs out |
+| white squares with a coloured outline | the pursuers **while that lasts**: they are prey and they flash back to their own colour as it runs out |
 | dimmed square | a pursuer that was eaten, walking home and harmless on the way |
 
-## The one decision everything follows from
+## How a turn is resolved
 
-**A turn is a request for a place, not for a time.** [`Op::Turn`](src/sim/protocol.rs) carries a direction and the tick it was asked for, and deliberately **no cell**. A client that could name the junction could name any junction, and the junction decides which corridor you end up in for the next several seconds.
+[`Op::Turn`](src/sim/protocol.rs) carries a direction and the tick it was asked for and deliberately **no cell**. The server decides which junction the turn happens at. A client that could name the junction could name any junction and the junction decides which corridor you end up in for the next several seconds.
 
-So the server decides where. [`TurnQueue`](src/sim/turn_queue.rs) is the whole mechanism and it is about sixty lines: a request is held, and on every tick where the player is exactly on a cell boundary it asks whether that direction is open. If it is, the turn is taken and the queue reports the cell it happened in. If the buffer elapses first, the turn is dropped. A turn is taken on the tick it would otherwise expire, not dropped on it, because the alternative loses turns to a rounding decision nobody would ever guess at from the feel of it.
+[`TurnQueue`](src/sim/turn_queue.rs) implements this in about sixty lines. A request is held and on every tick where the player is exactly on a cell boundary the queue checks whether that direction is open. If it is, the turn is taken and the queue reports the cell it happened in. If the buffer elapses first, the turn is dropped. If a turn becomes possible on the tick it would expire, it is taken, because dropping it there would lose turns to a rounding decision nobody could detect by feel.
 
-That has three consequences, and they are the example.
+The example is built around three consequences of that.
 
-### 1. Predicting a place is a different problem from predicting a position
+### 1. Wrong junctions and cell corrections
 
-A cell correction is bounded: one jump, then over. That is what [`bomb_grid`](../bomb_grid/) counts as a snap and it is the honest cost of predicting on a lattice.
+A cell correction is bounded: one jump and it's done. [`bomb_grid`](../bomb_grid/) counts that as a snap and it is the normal cost of predicting on a lattice.
 
-A **wrong junction** is not bounded. Take the corner one junction earlier than the server did and you are not one cell out, you are in a different corridor, heading a different way, and the error grows with every step until a frame drags you back across the maze. So the panel counts them separately and puts the wrong junctions first: `wrong junctions: 3 of 40 turns (8%), worst 6 cells apart`. Averaging the two together would let a hundred cheap corrections hide three expensive ones.
+A **wrong junction** is not bounded. Take the corner one junction earlier than the server did and you end up in a different corridor heading a different way, rather than one cell out. The error grows with every step until a frame drags you back across the maze. So the panel counts them separately and puts the wrong junctions first: `wrong junctions: 3 of 40 turns (8%), worst 6 cells apart`. Averaging the two together would let a hundred cheap corrections hide three expensive ones.
 
-The distinction is pinned by tests rather than asserted. `a_perfect_link_never_turns_at_the_wrong_junction` and `latency_alone_still_turns_at_the_right_junction` are the baseline: **latency alone does not cause a wrong junction**, at any depth, because a client running ahead of the server is not wrong, it is ahead. What does is `losing_a_turn_request_is_what_sends_the_two_sides_down_different_corridors`: a request the server never heard means the client turned and the server did not. Drag packet loss up in the panel and watch the counter move; drag latency up and watch it stay at zero.
+Tests pin the distinction. `a_perfect_link_never_turns_at_the_wrong_junction` and `latency_alone_still_turns_at_the_right_junction` are the baseline: **latency alone does not cause a wrong junction** at any depth, because running ahead of the server does not make a client wrong. Lost input does cause one, as `losing_a_turn_request_is_what_sends_the_two_sides_down_different_corridors` shows: a request the server never heard means the client turned and the server did not. Raising packet loss in the panel moves the counter and raising latency leaves it at zero.
 
-### 2. The buffer is a server setting, and a client is told it
+### 2. The turn buffer
 
-`turn_buffer_ms` is in [`ServerPolicy`](src/sim/protocol.rs) and arrives in the `Welcome`. A client does not assume it, because a client with a longer buffer would predict a turn the server had already forgotten, then run down a corridor the server never entered: a wrong junction manufactured out of a disagreement about policy rather than about the world.
+`turn_buffer_ms` is in [`ServerPolicy`](src/sim/protocol.rs) and arrives in the `Welcome`. A client does not assume it, because a client with a longer buffer would predict a turn the server had already forgotten, then run down a corridor the server never entered. That would be a wrong junction caused by a policy mismatch alone.
 
-It is also the slider worth playing with, because it is a real design decision with no correct answer. Short is precise and unforgiving: press a hair early into a corner and nothing happens. Long takes corners you pressed for four junctions ago. The panel reports both failure modes as separate counters, `turns taken` and `turns expired waiting for a place`, because they say opposite things and a single number cannot tell them apart.
+It is also a good slider to play with, since there is no right value. A short buffer is precise and unforgiving: press slightly early into a corner and nothing happens. A long one takes corners you pressed for four junctions ago. The panel reports the two failure modes as separate counters, `turns taken` and `turns expired waiting for a place`, because they point in opposite directions and one number cannot tell them apart.
 
-### 3. Invisibility has to be a property of the frame
+### 3. Vanish and the per-recipient frame
 
-The vanish power-up is the reason [`Frame`](src/sim/protocol.rs) is built **per recipient** rather than broadcast:
+The vanish power-up is why [`Frame`](src/sim/protocol.rs) is built **per recipient** rather than broadcast:
 
 ```rust
 players: self.players.iter()
@@ -66,78 +66,76 @@ players: self.players.iter()
   .cloned().collect(),
 ```
 
-A hidden runner is not dimmed on the other clients' screens, and not flagged. They are **absent**. A client handed a position it should not see has already lost the secret, whatever it chooses to draw, and "please do not render this" is a request rather than a rule. This is the same principle [`card_table`](../card_table/) applies to a hand of cards, in a game where the hidden thing moves sixty times a second, and it is what `plaza`'s per-recipient dispatch is for. `a_hidden_runner_is_absent_from_other_players_frames` asserts both halves: gone from theirs, present in their own.
+A hidden runner is left out of the other clients' frames entirely rather than dimmed or flagged. Once a client has been sent the position the secret is out, whatever it draws. [`card_table`](../card_table/) does the same with a hand of cards; here the hidden thing moves sixty times a second. This is what `plaza`'s per-recipient dispatch is for. `a_hidden_runner_is_absent_from_other_players_frames` checks that the runner is missing from other players' frames and present in its own.
 
-**And the frame was not enough**, which is the part worth carrying away. The first version hid the player from every frame and shipped, and it leaked completely, because the *events* kept going out to everybody:
+The per-recipient frame was not enough on its own. The first version hid the player from every frame and still leaked its position completely, because the *events* kept going out to everybody:
 
 - `Op::Eaten` names the exact cell a pellet went from, on the exact tick. That is a **better** position report than a frame, because a frame is rate limited and an event is not.
 - `Op::PowerTaken` names the cell of the pickup.
 - `Op::TurnTaken` names the junction. Nobody even read it: a client discards every turn report that is not its own.
 - Even `Frame::pellets_left` and `Frame::powerups` gave it away, one as a count that dropped while nothing visible was happening, the other as a pickup that vanished from a cell.
 
-So an event now carries an [`Audience`](src/sim/server.rs). Anything that names a hidden player's cell goes to that player alone and is **held** for everybody else until the vanish ends, at which point it is sent late rather than never: a client that was never told would draw pellets that are gone for the rest of the round. Turn reports are simply addressed to the player they describe, hidden or not, because that is the only client that ever read one. And the two frame fields are computed per recipient, adding back what that recipient has not been told about.
+So an event now carries an [`Audience`](src/sim/server.rs). Anything that names a hidden player's cell goes to that player alone and is **held** for everybody else until the vanish ends. It is sent then, because a client that was never told would draw pellets that are gone for the rest of the round. Turn reports are addressed to the player they describe, hidden or not, since no other client reads them. The two frame fields are computed per recipient, adding back what that recipient has not been told about.
 
-The end to end test reads the wire rather than the intent: `nothing_on_the_wire_says_where_a_hidden_player_is` takes the hidden player's actual cell on every tick and checks every op every other seat was handed against it. The one deliberate exception is the tick the vanish expires, when everything held back goes out and the player is in the frames again anyway.
+The end to end test `nothing_on_the_wire_says_where_a_hidden_player_is` checks what was actually sent: it takes the hidden player's cell on every tick and checks every op every other seat was handed against it. The one deliberate exception is the tick the vanish expires, when everything held back goes out and the player is in the frames again anyway.
 
-**The general shape: secrecy is a property of the whole outbound stream, not of one message in it.** A per-recipient frame is the obvious half and the easy half. What actually leaks is the event you did not think of as a position, and there is no way to find it by reading the frame code.
+## The match and why the score is cumulative
 
-## The match, and why the score is cumulative
+A round is rarely cleared of pellets. Three pursuers against one runner is deliberately unfair, so a round is a few seconds of pressure rather than a board to complete. The score that counts is the **total over the match**: one round per seat, with the roles rotating every round, so every seat runs exactly once and hunts in all the others.
 
-A round is rarely cleared of pellets. Three pursuers converging on one runner is not a fair fight and is not meant to be, so a round is a few seconds of pressure rather than a board to complete. What is played for is the **total over the match**, one round per seat, and the roles rotate every round, so every seat runs exactly once and hunts in all the others.
+Pellets pay one, a catch pays twenty-five, eating a pursuer while energized pays fifteen. Points scored in a round you lose still count. `a_match_runs_a_fixed_number_of_rounds_and_then_resets_the_scores` tests this.
 
-Pellets pay one, a catch pays twenty-five, eating a pursuer while energized pays fifteen. A round you lose is not a round you scored nothing in. `a_match_runs_a_fixed_number_of_rounds_and_then_resets_the_scores` holds the shape.
+The final table gets five seconds to itself before the next match is laid out. It first went out in the same tick as the next `RoundStart` and a client clears the table when a round starts, so the final scores were on screen for a single frame. `the_final_table_gets_an_interval_of_its_own` checks that nothing is laid out in that tick and nothing starts until the interval is up.
 
-The final table gets five seconds to itself before the next match is laid out. It first went out in the same tick as the next `RoundStart`, and a client clears the table when a round starts, so the thing the match was played for was on screen for a single frame. `the_final_table_gets_an_interval_of_its_own` asserts both halves: nothing is laid out in that tick, and nothing starts until the interval is up.
+Roles rotate by seat while ids stay fixed. `the_role_rotates_for_a_given_seat_while_its_identity_does_not` exists because the first version rotated by reassigning ids and a client that drives `players[seat]` then found itself playing somebody else's character between rounds.
 
-The role rotation is a seat rotation, not an identity one. `the_role_rotates_for_a_given_seat_while_its_identity_does_not` exists because the first version rotated by reassigning ids, and a client that drives `players[seat]` then finds itself playing somebody else's character between rounds.
+## The power-ups
 
-## The power-ups, and what makes one interesting here
+There are two and each one changes a rule rather than a number.
 
-Two, and they were picked because each one changes a rule rather than a number.
+**Energize** inverts contact. `resolve_contact` is one function on the server and while the runner is energized it reads the same collision the other way round: the pursuer is eaten, sent home at a faster step and harmless on the walk. A speed boost or a shield would only have changed a coefficient. Energize reverses who wins a contact and contact is what decides a round.
 
-**Energize** inverts contact. `resolve_contact` is one function on the server, and while the runner is energized it reads the same collision the other way round: the pursuer is eaten, sent home at a faster step, and harmless on the walk. Speed boosts and shields would have been a coefficient; this is the sign flipping on the rule the whole round is about.
+The inversion is drawn for **both** sides; the first version missed this. The runner gets a halo and every pursuer turns white for as long as it lasts, keeping its own colour as an outline so you can still tell which one you are and flashing over the last stretch so you can see the end coming. In the first version only the runner could see it, so the three players who had become prey found out by being eaten.
 
-The inversion is drawn on **both** sides of it, which is a rendering point worth stating because the first version missed it. The runner gets a halo, and every pursuer turns white for as long as it lasts, keeping its own colour as an outline so you can still tell which one you are, and flashing over the last stretch so the return is a deadline rather than a surprise. A rule change only one of the four players can see is a rule change nobody plays around: the runner knew, and the three players who had suddenly become prey were left to work it out from being eaten.
+**Vanish** removes the runner from what other clients are *sent*, as described above. It needs per-recipient frames, since any other approach still sends the runner's position.
 
-**Vanish** removes the runner from what other clients are *sent*, per the section above. That one could not have been done at all without per-recipient frames, and doing it any other way would have been a lie.
+Pursuers step at 205 ms per cell against the runner's 145. Being chased by three pursuers at your own speed in a maze this size is unplayable. The numbers are constants at the top of [`sim/types.rs`](src/sim/types.rs) so you can check that with one edit.
 
-Pursuers step at 205 ms per cell against the runner's 145. Being hunted by three things at your own speed in a maze this size is not a game, and the numbers are constants at the top of [`sim/types.rs`](src/sim/types.rs) precisely so that finding out is one edit away.
+## The bots
 
-## The bots, and why they had to be made good
+Three of the four seats are usually bots, so a bot that runs in circles makes the whole example look broken.
 
-Three of the four seats are usually bots, so the bots **are** the game, and a bot that runs in circles makes the whole example look broken rather than looking like a bot problem.
-
-Both jobs are BFS over the maze in [`sim/rules.rs`](src/sim/rules.rs), and both got a fix that was invisible until measured:
+Both roles use BFS over the maze in [`sim/rules.rs`](src/sim/rules.rs) and each needed a fix that only showed up once it was measured:
 
 - A pursuer does not reverse in a corridor, except at a dead end. Without that, two pursuers oscillate around the runner and never close.
 - A runner's route excludes the direction it came from unless that is the only exit, or it paces between two pellets it can no longer eat.
-- Under threat the runner **still eats**; it just refuses to walk toward a pursuer. The first version fled instead, which meant it never ate anything under pressure, which is all the time. Eating went from 36 pellets in 45 seconds to 165 as a direct consequence, and `a_bot_runner_actually_eats` fails on the old behaviour.
+- Under threat the runner **still eats**; it just refuses to walk toward a pursuer. The first version fled instead, so it never ate under pressure and the runner is under pressure nearly all the time. Eating went from 36 pellets in 45 seconds to 165 with this change and `a_bot_runner_actually_eats` fails on the old behaviour.
 
-The bots do **not** seek power-ups, and a version that did was written, measured and deleted: routing a threatened runner to a nearby energizer devoured no more pursuers over a minute, ate 22 fewer pellets, and left six power-ups on the board. A runner already crosses every corridor eating, so it walks over them anyway. The measurement is recorded in `a_bot_runner_reaches_the_energizers_and_turns_on_its_pursuers`, which asserts the board ends empty and the inversion is reached.
+The bots do **not** seek power-ups. A version that did was tried and removed after measuring it: routing a threatened runner to a nearby energizer devoured no more pursuers over a minute, ate 22 fewer pellets and left six power-ups on the board. A runner already crosses every corridor eating, so it walks over them anyway. The measurement is recorded in `a_bot_runner_reaches_the_energizers_and_turns_on_its_pursuers`, which asserts the board ends empty and the inversion is reached.
 
-`drive_bots` had its own version of the same bug: it originally skipped any player that was mid-step, and since a player begins the next step the instant it finishes the last, that was very nearly always. Bots decide about the cell they are **entering**, every tick.
+`drive_bots` had the same kind of bug: it originally skipped any player that was mid-step and since a player begins the next step the instant it finishes the last, that was nearly always. Bots now decide about the cell they are **entering**, every tick.
 
-## What is shared as code, and what that is worth
+## The shared rule code
 
-[`sim/rules.rs`](src/sim/rules.rs) holds the movement rule, the passability rule and the turn resolution, as free functions over plain state, and both sides call them. The server is the authority. A client predicting itself runs the same functions on the same tick grid.
+[`sim/rules.rs`](src/sim/rules.rs) holds the movement rule, the passability rule and the turn resolution, as free functions over plain state and both sides call them. The server is the authority. A client predicting itself runs the same functions on the same tick grid.
 
-The rule being shared is what makes a wrong junction *rare*. It is what makes a wrong junction **meaningful** when it happens: with one implementation, a disagreement about where the turn happened is always a disagreement about the input history, which is always a network fact. A second implementation would produce wrong junctions with no network cause at all, and the counter on the panel would measure nothing.
+Sharing the rule makes wrong junctions rare. It also means each one has a network cause: with one implementation, disagreeing about where a turn happened always means disagreeing about the input history. A second implementation would produce wrong junctions with no network cause at all and the panel counter would no longer measure the network.
 
-## Where the wire went
+## Wire format
 
 - **A cell is one `u16`**, packed. A struct of two `u8`s would cost a MessagePack array header per cell.
 - **Every fieldless enum crosses as a `u8`**. MessagePack writes a unit variant as its *name*, so `Dir`, `Role` and `Power` would otherwise spell themselves out on every frame.
-- **Pellets ride as events**, not as a diff of the set. There are several hundred and they only ever disappear.
+- **Pellets are sent as events** rather than as a diff of the set. There are several hundred and they only ever disappear.
 - **The maze is sent once per round.** It does not change during one.
-- **`TurnTaken` is not needed to play.** The next frame's heading already implies the turn. It carries the *place* because the place is the thing this example is about, and without it there is nothing to compare.
+- **`TurnTaken` is not needed to play.** The next frame's heading already implies the turn. It carries the cell because the wrong-junction comparison needs it.
 
 ## How it is built
 
-- **[src/sim/](src/sim/)** is the whole game, headless: the maze, the rules, the turn queue, the authority, and a client that predicts against it. No sockets, no window, no async. Every claim above is a test at this layer, and [`sim/world.rs`](src/sim/world.rs) is the harness that puts a server and its clients in one process with an impaired link between them.
-- **[src/net/](src/net/)** wraps that for a real wire and **adds no rules**. The arena is the same server behind `plaza`'s `StateLogic`, dispatching a frame per seat; the client is the same client behind a socket, a clock estimate, and a connection state.
+- **[src/sim/](src/sim/)** is the whole game, headless: the maze, the rules, the turn queue, the authority and a client that predicts against it. No sockets, no window, no async. Every claim above is a test at this layer and [`sim/world.rs`](src/sim/world.rs) is the harness that puts a server and its clients in one process with an impaired link between them.
+- **[src/net/](src/net/)** wraps that for a real wire and **adds no rules**. The arena is the same server behind `plaza`'s `StateLogic`, dispatching a frame per seat; the client is the same client behind a socket, a clock estimate and a connection state.
 - **[src/render.rs](src/render.rs)** and **[src/ui.rs](src/ui.rs)** draw it and put the numbers on screen.
 
-Both sides step in whole `SIM_STEP_MS` ticks and the server's host uses [`TickDriver::run_fixed`](../../core/API_REFERENCE.md#struct-tickdriver). `the_prediction_is_driven_by_the_clock_not_by_how_often_it_is_polled` and `an_irregular_tick_driver_produces_the_same_world_as_a_regular_one` hold that from both ends. This is not a matter of taste: it is what [bomb_grid](../bomb_grid/) cost a full debugging session to establish.
+Both sides step in whole `SIM_STEP_MS` ticks and the server's host uses [`TickDriver::run_fixed`](../../core/API_REFERENCE.md#struct-tickdriver). `the_prediction_is_driven_by_the_clock_not_by_how_often_it_is_polled` and `an_irregular_tick_driver_produces_the_same_world_as_a_regular_one` test that from both ends. [bomb_grid](../bomb_grid/) took a full debugging session to establish that this is required.
 
 ## Notes
 

@@ -1,10 +1,9 @@
 //! The rules. The only place `VillageState` changes.
 //!
-//! "May this player act at all" is not asked here: that is
-//! [`VillageGuard`](crate::guard::VillageGuard), run by the controller ahead
-//! of `process_input`, so every op these handlers see already has standing.
-//! What the handlers still refuse is the act's content: a target that is
-//! dead, absent, or yourself.
+//! Whether a player may act at all is checked by
+//! [`VillageGuard`](crate::guard::VillageGuard), which the controller runs
+//! ahead of `process_input`. The handlers here only refuse a bad target: one
+//! that is dead, absent or yourself.
 
 use async_trait::async_trait;
 use plaza::agent::Agent;
@@ -69,8 +68,8 @@ impl StateLogic<VillageOp, PlayerId, VillageState> for VillageLogic {
 
     let output = LogicOutput::ops(ctx.into_ops());
     if resnapshot {
-      // Always per recipient, never uniform: `your_role` differs for everyone
-      // and the dead are shown what the living must not see.
+      // Per recipient: `your_role` differs for everyone and the dead see roles
+      // the living do not.
       let everyone: Vec<Agent<PlayerId>> = state.agents.values().cloned().collect();
       return Ok(output.and_snapshot(SnapshotRequest::to(everyone)));
     }
@@ -88,8 +87,8 @@ fn refuse(ctx: &mut Ctx, player: PlayerId, why: Refusal) -> bool {
 
 /// Seats an arriving villager, dealing once every seat is filled.
 ///
-/// Mid-game arrivals watch: a village mid-story has no seat to give them, and
-/// the next deal is when membership changes.
+/// Mid-game arrivals watch. Seats are locked during a game and membership
+/// changes at the next deal.
 fn seat_villager(state: &mut VillageState, agent: &Agent<PlayerId>, ctx: &mut Ctx) -> bool {
   let Some(player) = agent.id_cloned() else {
     return false;
@@ -118,7 +117,7 @@ fn seat_villager(state: &mut VillageState, agent: &Agent<PlayerId>, ctx: &mut Ct
   true
 }
 
-/// The lock is the phase's shadow: a village mid-story has no seat to give.
+/// Seats lock during Night and Day.
 fn sync_lock(state: &mut VillageState) {
   if matches!(*state.phase.current(), VillagePhase::Night | VillagePhase::Day) {
     state.seats.lock();
@@ -127,8 +126,8 @@ fn sync_lock(state: &mut VillageState) {
   }
 }
 
-/// Deals the queue into seats freed since, once the story is over: a watcher
-/// becomes a villager at the next deal, never a reconnect away from one.
+/// Once the game is over, deals the waitlist into seats freed since, so a
+/// watcher becomes a villager at the next deal without reconnecting.
 fn seat_the_waiting(state: &mut VillageState, ctx: &mut Ctx) -> bool {
   sync_lock(state);
   let mut changed = false;
@@ -152,7 +151,8 @@ fn seat_the_waiting(state: &mut VillageState, ctx: &mut Ctx) -> bool {
   changed
 }
 
-/// Handles a departure: a spectator vanishes, a living player dies of it.
+/// Handles a departure. A spectator is removed and a living player is counted
+/// as dead.
 fn depart(state: &mut VillageState, player: PlayerId, ctx: &mut Ctx) -> bool {
   state.agents.remove(&player);
   state.votes.remove(&player);
@@ -163,8 +163,8 @@ fn depart(state: &mut VillageState, player: PlayerId, ctx: &mut Ctx) -> bool {
   let was_alive = state.is_alive(player);
   let role = state.roles.get(&player).copied();
   state.seats.depart(&player);
-  // Off the board entirely, not zeroed on it: a village lives for hours and a
-  // leaver at zero forever is the leak `forget_player` exists for.
+  // Removed from the scoreboard, not set to zero. A village runs for hours and
+  // leavers kept at zero would pile up, which is what `forget_player` is for.
   state.wins.forget_player(&player);
   info!(player, "left the village");
 
@@ -192,9 +192,9 @@ fn depart(state: &mut VillageState, player: PlayerId, ctx: &mut Ctx) -> bool {
   true
 }
 
-/// Deals roles and begins the first night. Total, like `draft_board`'s
-/// `start_draft`: the resets are no-ops on a fresh village and are what make a
-/// refilled one dealable at all.
+/// Deals roles and begins the first night. Like `draft_board`'s `start_draft`,
+/// it resets everything: the resets do nothing on a fresh village and let a
+/// refilled one deal.
 fn start_game(state: &mut VillageState, ctx: &mut Ctx) {
   state.games += 1;
   state.dead.clear();
@@ -233,7 +233,7 @@ fn begin_night(state: &mut VillageState, ctx: &mut Ctx) {
     .schedule_after(state.tick, state.night_ticks, &state.phase, VillageEvent::NightEnds);
 }
 
-/// The wolf's choice. Applied at dawn, not on receipt: the phase resolves once.
+/// The wolf's choice, applied at dawn when the night resolves.
 fn hunt(state: &mut VillageState, player: PlayerId, target: PlayerId, ctx: &mut Ctx) -> bool {
   if !state.is_alive(target) || target == player {
     return refuse(ctx, player, Refusal::NoSuchTarget);
@@ -243,7 +243,7 @@ fn hunt(state: &mut VillageState, player: PlayerId, target: PlayerId, ctx: &mut 
   true
 }
 
-/// First light: the night's choice lands, and the day begins or the game ends.
+/// Dawn: the night's choice lands and the day begins or the game ends.
 fn dawn(state: &mut VillageState, ctx: &mut Ctx) {
   let victim = state.hunt.take().unwrap_or_else(|| {
     // The night chooses for an idle wolf: the first living villager, in seat
@@ -283,7 +283,7 @@ fn begin_day(state: &mut VillageState, ctx: &mut Ctx) {
     .schedule_after(state.tick, state.day_ticks, &state.phase, VillageEvent::DayEnds);
 }
 
-/// A ballot. Collected, not applied: dusk resolves them all at once.
+/// A ballot. It is stored and dusk resolves all of them at once.
 fn vote(state: &mut VillageState, player: PlayerId, target: PlayerId, ctx: &mut Ctx) -> bool {
   if !state.is_alive(target) {
     return refuse(ctx, player, Refusal::NoSuchTarget);
@@ -291,15 +291,15 @@ fn vote(state: &mut VillageState, player: PlayerId, target: PlayerId, ctx: &mut 
   state.votes.insert(player, target);
   info!(player, voted = state.votes.len(), "ballot in");
 
-  // Dusk falls early once every living player has spoken. The deadline is
-  // still scheduled; moving the phase is what makes it stale.
+  // Dusk falls early once every living player has voted. The deadline stays
+  // scheduled and goes stale because the phase moved.
   if state.votes.len() >= state.living().len() {
     dusk(state, ctx);
   }
   true
 }
 
-/// Dusk: the collected ballots resolve at once, and only now.
+/// Dusk: all the collected ballots resolve here.
 fn dusk(state: &mut VillageState, ctx: &mut Ctx) {
   let mut counts: BTreeMap<PlayerId, u32> = BTreeMap::new();
   for target in state.votes.values() {
@@ -313,7 +313,7 @@ fn dusk(state: &mut VillageState, ctx: &mut Ctx) {
     .filter(|(_, count)| **count == top)
     .map(|(p, _)| *p)
     .collect();
-  // A tie exiles nobody: the village must agree, not merely lean.
+  // A tie exiles nobody: exile needs a single leader in the count.
   let exiled = (top > 0 && leaders.len() == 1).then(|| leaders[0]);
 
   if let Some(exile) = exiled {
@@ -385,7 +385,7 @@ fn game_over(state: &mut VillageState, winner: Side, reason: &str, ctx: &mut Ctx
     .schedule_after(state.tick, INTERMISSION_TICKS, &state.phase, VillageEvent::NewGame);
 }
 
-/// Fires whatever came due, discarding what the world overtook.
+/// Fires whatever came due and skips events that no longer apply.
 fn run_due_events(state: &mut VillageState, ctx: &mut Ctx) -> bool {
   let mut changed = false;
 
@@ -398,8 +398,8 @@ fn run_due_events(state: &mut VillageState, ctx: &mut Ctx) -> bool {
       }
 
       // The early-close case never reaches this arm: every living player
-      // voted, dusk fell, the phase moved, and the scheduler dropped the
-      // deadline as a letter to a house that burned down.
+      // voted, dusk fell, the phase moved and the scheduler dropped the stale
+      // deadline.
       VillageEvent::DayEnds => {
         info!("the day ends; abstainers abstain");
         dusk(state, ctx);
@@ -540,7 +540,7 @@ mod tests {
   #[tokio::test]
   async fn the_stale_day_deadline_does_not_fire_into_the_night() {
     // Night is long and day is short, so the day's deadline comes due while the
-    // village is already asleep. The epoch is what stops it tallying again.
+    // village is already asleep. The epoch stops it tallying again.
     let mut state = hamlet(100, 10).await;
     act(&mut state, 1, VillageOp::Hunt(3)).await;
     for (voter, target) in [(2, 4), (5, 4), (1, 4), (4, 2)] {
@@ -586,8 +586,8 @@ mod tests {
 
   #[tokio::test]
   async fn the_game_ends_on_a_condition_not_a_count() {
-    // The `max_rounds: None` consumer. Ties stretch the game: nobody is exiled,
-    // the nights keep coming, and only parity ends it.
+    // `max_rounds: None`. Ties exile nobody, so the nights keep coming until
+    // parity ends the game.
     let mut state = village().await;
 
     act(&mut state, 1, VillageOp::Hunt(2)).await;
@@ -685,9 +685,9 @@ mod tests {
 
   #[tokio::test]
   async fn a_mid_game_watcher_is_dealt_in_at_the_next_game() {
-    // The dead end this pins: the game dies under-seated with a willing
-    // player watching, and `NewGame` skips for seats to fill while they sit
-    // there. The waitlist deals them in instead of demanding a reconnect.
+    // The game ends under-seated with a player watching and `NewGame` skips
+    // because seats need filling. The waitlist deals the watcher in without a
+    // reconnect.
     let mut state = village().await;
     run(&mut state, LogicInput::AgentJoined {
       agent: Agent::new_human(9),

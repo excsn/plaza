@@ -16,8 +16,8 @@ port="${1:-8096}"
 
 "$here/wasm-build.sh"
 
-# actix serves .wasm with the right MIME type itself, so there is no static-server
-# ceremony to get wrong.
+# actix serves .wasm with the right MIME type itself, so no separate static
+# server is needed.
 echo
 echo "==> hosting on port $port   (Ctrl-C to stop)"
 exec cargo run -p last_word --bin last_word --release --manifest-path "$root/Cargo.toml" -- \

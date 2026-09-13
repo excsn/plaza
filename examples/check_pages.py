@@ -3,31 +3,30 @@
 
 The pages share one frame layer, `wire/js/plaza_protocol.js`, each serving its
 own copy beside the page (`sync_protocol_js.sh` refreshes them). Nothing
-compiles a page and nothing ran one, so every way it can be wrong is silent,
-and one of them shipped wrong. This checks the canonical file's constants
-against `plaza_wire::frame::Kind`, every copy against the canonical bytes, and
-the three page-level things that have actually bitten.
+compiles or runs a page, so errors in one go unnoticed and one page shipped
+with such a bug. This checks the canonical file's constants against
+`plaza_wire::frame::Kind`, every copy against the canonical bytes and the
+three page-level problems that have actually happened.
 
 **A codec that encodes the wrong container.** `parlour_game`'s page built its ops
 batch with `Object.keys([op])`, which is `["0"]`, so a play went out as a one-key
 map where the server wanted a sequence. Every play was discarded and the turn
-timeout played for the player, which reads exactly like a game rule rather than a
-bug. The fix is one branch; the reason it survived is that the page's decoder was
-exercised constantly and its encoder never.
+timeout played for the player, which looked exactly like a game rule. The fix is
+one branch; the bug survived because the page's decoder was exercised constantly
+and its encoder never.
 
-**A kind byte that drifts.** The constants live in `plaza_protocol.js`, and each
+**A kind byte that drifts.** The constants live in `plaza_protocol.js` and each
 page serves a copy. This ties the canonical file to `plaza_wire::frame::Kind`
 and each copy to the canonical file.
 
 **A unit variant nobody handles.** Serde writes a fieldless variant as a bare
 string, not a one-entry map, so a page reading `op.Something` drops it with no
 trace. Pages whose server has no fieldless variant are fine until someone adds
-one, which is when this check earns its place.
+one. This check catches that.
 
     ./check_pages.py
 
-Requires `node` only for the codec execution, which is the part that has to run
-JavaScript to mean anything.
+Requires `node` only to run the page codecs.
 """
 
 import json
@@ -64,7 +63,7 @@ def page_kinds(text):
 
 
 def unit_variants(example):
-  """The `*Op*` enums an example defines, and which of their variants are fieldless.
+  """The `*Op*` enums an example defines and which of their variants are fieldless.
 
   A bare `Name,` line inside the enum body. Doc comments and attributes are
   skipped, which is why this reads lines rather than splitting on commas.
@@ -103,8 +102,8 @@ def extract(text, name):
 def check_codec(page, text):
   """Runs the page's own codec against fixtures the Rust side wrote.
 
-  The point is that the code under test is the code the browser runs, lifted out
-  of the page rather than reimplemented beside it.
+  The code under test is the code the browser runs, lifted out of the page
+  rather than reimplemented beside it.
   """
   decode, encode = extract(text, "mpDecode"), extract(text, "mpEncode")
   if not decode or not encode:
@@ -129,7 +128,7 @@ for (const name of {json.dumps(sorted(p.stem.replace('.named', '') for p in FIXT
   }}
 }}
 
-// The shape the bug was in: a batch is a sequence, not a one-key map.
+// The parlour_game bug: a batch must be a sequence rather than a one-key map.
 const batch = Uint8Array.from(mpEncode([{{ PlayCard: 9 }}]));
 if ((batch[0] & 0xf0) !== 0x90) {{
   fail('an ops batch encoded as 0x' + batch[0].toString(16) + ', which is not a msgpack array');
@@ -176,7 +175,7 @@ def main():
     shared = "plaza_protocol.js" in text
     inline = page_kinds(text)
     if not shared and not inline:
-      continue  # A wasm page: its framing is Rust, and check_js_imports.py covers it.
+      continue  # A wasm page: its framing is Rust and check_js_imports.py covers it.
     checked += 1
 
     if shared:
@@ -194,9 +193,9 @@ def main():
 
     enums, units = unit_variants(example)
     if not enums:
-      # Zero unit variants and no enum found are the same answer from here, and
-      # only one of them is a pass. Every op enum is named `*Op*` today; one
-      # named otherwise would make this check silently vacuous.
+      # Finding no enum looks the same here as finding no unit variants, but only
+      # the second is a pass. Every op enum is named `*Op*` today; one named
+      # otherwise would make this check pass without checking anything.
       fail(example, "has a page but no `*Op*` enum was found, so its variants were never checked")
     if units and not re.search(r"\b(opName|variantName)\b", text):
       named = ", ".join(f"{k}::{v}" for k, vs in units.items() for v in vs)

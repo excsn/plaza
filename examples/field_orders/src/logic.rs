@@ -1,13 +1,13 @@
 //! The rules. The only place `BattleState` changes.
 //!
-//! # What had to be hand-written, which is the example's finding
+//! # What had to be hand-written
 //!
-//! `flow_control` manages *sequences*: a turn order that hands the floor to one
-//! actor, rounds that count. A command phase is neither. It holds every unit of
+//! `flow_control` manages sequences: a turn order that gives one actor the
+//! turn and rounds that count. A command phase is neither. It holds every unit of
 //! an army at once, up to sixteen commanders each ordering their own squad in
 //! any order, and the phase is over when the **set** of unspent units is empty.
 //! That is [`Activation`] plus [`maybe_end_phase`], the same thirty lines at
-//! two players and at thirty-two: the set got wider, the shape did not change.
+//! two players and at thirty-two, since only the size of the set changes.
 
 use async_trait::async_trait;
 use plaza::agent::Agent;
@@ -114,7 +114,7 @@ fn refuse(ctx: &mut Ctx, player: PlayerId, why: Refusal) -> bool {
 }
 
 /// An arriving commander joins the lobby. Nothing counts down by itself: the
-/// host (the first mustered) picks the field and starts it, like any lobby.
+/// host (the first mustered) picks the field and starts it.
 /// A mid-battle joiner watches, mustered for the next deploy.
 fn muster(state: &mut BattleState, agent: &Agent<PlayerId>, ctx: &mut Ctx) -> bool {
   let Some(player) = agent.id_cloned() else {
@@ -349,8 +349,8 @@ fn land_blow(state: &mut BattleState, from: &Unit, upon: &Unit, counter: bool, c
   felled
 }
 
-/// A mend: the healer's whole action. Ends the activation like a strike, and
-/// nothing answers a bandage.
+/// A mend: the healer's whole action. Ends the activation like a strike and
+/// draws no counterstrike.
 fn heal(state: &mut BattleState, player: PlayerId, unit: u8, target: u8, ctx: &mut Ctx) -> bool {
   if let Err(why) = guard(state, player, unit) {
     return refuse(ctx, player, why);
@@ -413,10 +413,10 @@ fn end_phase_ordered(state: &mut BattleState, player: PlayerId, ctx: &mut Ctx) -
   true
 }
 
-/// The set check that is the whole within-side structure: the phase is over
-/// when no unit of the commanding army has anything left to do. At two squads
-/// that set is eight wide; at thirty-two commanders it is sixty-four, and the
-/// check has not changed.
+/// The set check, which is all the structure a side's phase has: the phase is
+/// over when no unit of the commanding army has anything left to do. At two
+/// squads that set is eight wide and at thirty-two commanders it is
+/// sixty-four; the check is the same.
 fn maybe_end_phase(state: &mut BattleState, ctx: &mut Ctx) {
   let BattlePhase::Command(army) = *state.phase.current() else {
     return;

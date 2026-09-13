@@ -1,26 +1,26 @@
 //! A client on a real wire.
 //!
-//! It wraps the same [`sim::Client`] the offline harness runs, and adds the two
-//! things a shared clock was standing in for.
+//! It wraps the same [`sim::Client`] the offline harness runs and adds what the
+//! harness got from a shared clock.
 //!
-//! **The clock is estimated, not shared**, and here it decides something
-//! different from the other examples. Elsewhere the clock names the tick an
-//! input is *for*. Here it names the tick this client's simulation should be
-//! *at*, which is a stronger requirement: a client whose clock drifts does not
-//! aim badly, it runs the world at the wrong speed, and its digest disagrees
-//! with the server's for a reason that has nothing to do with arithmetic.
+//! Each client estimates the server clock and here the estimate decides
+//! something different from the other examples. Elsewhere the clock names the
+//! tick an input is *for*. Here it names the tick this client's simulation
+//! should be *at*, which is a stronger requirement: a client whose clock drifts
+//! runs the world at the wrong speed and its digest disagrees with the
+//! server's for a reason unrelated to arithmetic.
 //!
-//! **The newest server timestamp is a floor, carried forward at wall rate.**
-//! That mechanism is [`Timeline::note_stamp`] now: a stamp the server wrote is
-//! a lower bound that needs no synchronisation to trust, and it has to keep
-//! advancing between messages or the simulation stalls between digests and
-//! then catches up in a burst.
+//! The newest server timestamp is a floor under the estimate, carried forward
+//! at wall rate by [`Timeline::note_stamp`]. A stamp the server wrote is a
+//! lower bound that needs no synchronisation. It has to keep advancing between
+//! messages. Otherwise the simulation stalls between digests and then catches
+//! up in a burst.
 //!
-//! What this client does **not** do is predict its own build. It asks, and the
-//! tower appears when the server's op arrives naming a tick everyone applies it
-//! on. Predicting it locally would mean simulating a cause the server might
-//! refuse, and there is no correction here to undo that: it would be a
-//! divergence the digest catches half a second later.
+//! This client does **not** predict its own builds. It asks and the tower
+//! appears when the server's op arrives naming a tick everyone applies it on.
+//! Predicting it locally would mean simulating a cause the server might refuse
+//! and there is no correction here to undo that: it would be a divergence the
+//! digest catches half a second later.
 //!
 //! [`sim::Client`]: crate::sim::Client
 //! [`Timeline::note_stamp`]: plaza_client_utils::Timeline::note_stamp
@@ -152,7 +152,7 @@ impl NetClient {
     });
   }
 
-  /// Drains the socket, folds in what arrived, and advances the simulation.
+  /// Drains the socket, folds in what arrived and advances the simulation.
   pub fn poll(&mut self, now_ms: u64, controls: &Controls) {
     self.now_ms = now_ms;
     let mut events = std::mem::take(&mut self.events);
@@ -160,8 +160,8 @@ impl NetClient {
     if self.digests_seen > 0 && plaza_ws::trim_backlog(&mut events, BACKLOG_TRIGGER, BACKLOG_KEEP).is_some() {
       self.resume_drops += 1;
       // A probe sent before the freeze and answered after it measures the
-      // freeze, not the network, and its origin still matches so the echo
-      // check waves it through. `on_resume` is what discards it, along with
+      // freeze, not the network. Its origin still matches, so the echo check
+      // lets it through. `on_resume` is what discards it, along with
       // everything the estimators learned across a gap of unknown length.
       self.pump.on_resume();
     }

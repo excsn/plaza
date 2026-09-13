@@ -1,18 +1,18 @@
 //! One client-side WebSocket interface, whatever is underneath.
 //!
-//! `plaza_session` covers the server and is tokio/actix by construction, so it
-//! cannot help a client, and least of all a browser one. This crate is the other
-//! half: the socket a *client* holds, with the same shape on a desktop, in a
-//! browser, and in-process.
+//! `plaza_session` covers the server and is tokio/actix by construction, so a
+//! client cannot use it (a browser client least of all). This crate covers the
+//! client side: the socket a *client* holds, with the same shape on a desktop,
+//! in a browser and in-process.
 //!
-//! # It is built for a frame loop, not for an async runtime
+//! # Built for a frame loop
 //!
 //! [`Socket::poll`] is non-blocking and drains into a caller-owned buffer. That
-//! is the whole ergonomic decision, and it is made for macroquad-style
-//! applications, which have a synchronous `loop { ...; next_frame().await }` and
-//! nowhere to put a future. An `async fn recv()` would be the natural Rust API
-//! and would be unusable there. Reusing the buffer also keeps a per-frame call
-//! allocation-free, matching how `plaza_server_utils` hands back its results.
+//! choice is made for macroquad-style applications, which have a synchronous
+//! `loop { ...; next_frame().await }` and nowhere to put a future. An
+//! `async fn recv()` would be the natural Rust API and would be unusable there.
+//! Reusing the buffer also keeps a per-frame call allocation-free, matching how
+//! `plaza_server_utils` hands back its results.
 //!
 //! ```no_run
 //! # use plaza_ws::{Socket, Event};
@@ -33,8 +33,8 @@
 //!
 //! # Backends
 //!
-//! Each is a feature, and they compose: a native host that also plays enables
-//! `native` *and* `loopback`, and talks to both over the same trait.
+//! Each is a feature. They can be combined: a native host that also plays
+//! enables `native` *and* `loopback` and talks to both over the same trait.
 //!
 //! | feature | where | underneath |
 //! |---|---|---|
@@ -42,28 +42,28 @@
 //! | `native` | desktop | `tungstenite` on a worker thread |
 //! | `miniquad` | browser, under macroquad | our own JS, registered as a miniquad plugin |
 //!
-//! ## Why the browser backend is ours rather than a crate
+//! ## The browser backend
 //!
-//! Because the constraint is the *host page's loader*, not the platform.
+//! The constraint comes from the *host page's loader* rather than from the
+//! browser.
 //!
-//! `web-sys` (and so `gloo-net`, and so `tokio-tungstenite-wasm`) needs
+//! `web-sys` (and with it `gloo-net` and `tokio-tungstenite-wasm`) needs
 //! `wasm-bindgen`, which rewrites the module with `wasm-bindgen-cli` and ships
 //! its own JS to instantiate it. miniquad's `mq_js_bundle.js` builds its own
-//! import object, lets plugins extend it, and instantiates the raw module
+//! import object, lets plugins extend it and instantiates the raw module
 //! itself. Both want to own instantiation, so under macroquad the wasm-bindgen
-//! route does not work, and it fails in the worst way available: miniquad stubs
-//! out imports nothing provides, so such a build loads happily and then silently
-//! does nothing.
+//! route does not work. It also fails silently: miniquad stubs out imports
+//! nothing provides, so such a build loads without error and then does nothing.
 //!
 //! So the `miniquad` backend is a few `extern "C"` declarations against our own
 //! JS plugin (`js/plaza_ws.js`), which needs no crate at all. The two crates
 //! that *do* use miniquad's plugin mechanism, `sapp-jsutils` and `quad-net`, are
-//! barely maintained, and the mechanism is small enough not to need them.
+//! barely maintained and the mechanism is small enough not to need them.
 //!
 //! An application that is **not** built on macroquad has the opposite problem
-//! and wants the wasm-bindgen route. That is a natural fourth backend
-//! (`tokio-tungstenite-wasm` behind a `web` feature) and is deliberately absent
-//! until something needs it, rather than shipped untested.
+//! and wants the wasm-bindgen route. It would be a fourth backend
+//! (`tokio-tungstenite-wasm` behind a `web` feature), left out until something
+//! needs it so it is not shipped untested.
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -159,7 +159,8 @@ impl std::error::Error for WsError {}
 ///
 /// Deliberately small. Anything an application can do itself (reconnection
 /// policy, backoff, heartbeats, framing of its own messages) is left to it,
-/// because those are decisions and this is a pipe.
+/// because those are the application's decisions and the socket only moves
+/// bytes.
 pub trait Socket {
   /// Sends one binary message.
   ///
@@ -224,9 +225,9 @@ pub trait Socket {
 /// arrives as a `Blob` or `ArrayBuffer` that a JS client has to decode itself,
 /// having first remembered to set `binaryType`.
 ///
-/// Send a **bare message, never an envelope**. A server attaches who a message
-/// came from, because identity is the server's fact and not the client's claim,
-/// and a client that could name itself could name somebody else.
+/// Send a **bare message rather than an envelope**. A server attaches who a message
+/// came from rather than trusting the client to say, because a client that
+/// could name itself could name somebody else.
 #[cfg(feature = "json")]
 pub trait SendJson {
   fn send_json<T: serde::Serialize>(&self, value: &T) -> Result<(), WsError>;

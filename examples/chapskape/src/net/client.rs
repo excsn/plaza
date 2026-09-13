@@ -1,8 +1,8 @@
 //! A client that answers its own clicks.
 //!
 //! Nothing here is a prediction of a *simulation*. The client runs the same
-//! pathfinder over the same derived map, so what it has after a click is not a
-//! guess at the server's answer, it is the answer. It starts walking on the
+//! pathfinder over the same derived map, so what it has after a click is the
+//! server's answer rather than a guess at it. It starts walking on the
 //! frame the mouse went down and the server starts on its next tick, and the
 //! two are then a tick and a round trip out of phase rather than in
 //! disagreement.
@@ -17,8 +17,8 @@
 //! The other asymmetry worth naming is in `objects`. Under
 //! [`Relevance::EveryTick`] a frame is the whole visible set, so absence means
 //! a prop is back. Under [`Relevance::OnChange`] absence means nothing
-//! happened, and a prop coming back has to be said out loud. Two modes, two
-//! pieces of client code, and that is what the cheaper one costs.
+//! happened, and a prop coming back has to be said out loud. The cheaper mode
+//! costs a second piece of client code.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -88,9 +88,9 @@ impl Meter {
 
 /// Somebody else, and the two squares needed to draw them between ticks.
 ///
-/// At a tick this long, interpolation is not a refinement, it is the entire
-/// visual experience: without it every body in the world teleports once every
-/// six hundred milliseconds.
+/// At a tick this long, interpolation is essential rather than a refinement:
+/// without it every body in the world teleports once every six hundred
+/// milliseconds.
 #[derive(Clone, Copy, Debug)]
 pub struct Other {
   pub seat: Seat,
@@ -540,7 +540,7 @@ impl NetClient {
   /// Something that happened to this client and to nobody else.
   ///
   /// No seat to check, because there is nobody else it could have been about.
-  /// That is the whole of the fix for a real defect: these arrived on the
+  /// That is the fix for a real defect: these arrived on the
   /// shared event list carrying no seat at all, so every passing woodcutter's
   /// level was announced as this player's own.
   fn on_yours(&mut self, yours: Yours) {
@@ -587,8 +587,8 @@ impl NetClient {
 
   /// Draws the route locally and then asks for it.
   ///
-  /// In that order, and the order is the point: the body is already walking
-  /// before the op has left the machine.
+  /// In that order, so the body is already walking before the op has left
+  /// the machine.
   fn set_out(&mut self, goal: Goal, checkable: bool) {
     let route = self.finder.route(self.route.predicted, goal);
     self.goal = Some(goal);

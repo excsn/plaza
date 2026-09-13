@@ -84,8 +84,7 @@ void main() {
 
     /// A map whose keys are all strings decodes as `Map<String, Object?>`, the
     /// type `jsonDecode` gives. Otherwise `body['rooms'] as Map<String, Object?>`
-    /// works under JSON and throws under any msgpack codec, and the app that
-    /// hits it blames the server.
+    /// works under JSON and throws under any msgpack codec.
     test('an all-string map is typed like a decoded json one', () {
       final nested = trip({
         'link': {'rtt_ms': 40, 'extra_ms': 10},

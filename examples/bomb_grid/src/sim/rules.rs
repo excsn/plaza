@@ -1,17 +1,17 @@
 //! The rules both sides run, as one piece of code.
 //!
 //! Everything in here is called by the authoritative server *and* by a client
-//! predicting its own player. That is not a convenience: it is the strongest
-//! correlation the playgrounds in this repository have found, and it is close to
-//! a controlled experiment, because both the horde and black hole examples
+//! predicting its own player. Sharing the rule this way is the strongest
+//! correlation the playgrounds in this repository have found. It is close to a
+//! controlled experiment, because both the horde and black hole examples
 //! contain entities whose rule is shared and entities whose rule was written
-//! twice, and only the second kind produced divergence bugs.
+//! twice. Only the second kind produced divergence bugs.
 //!
-//! On a lattice the stakes are higher than in a continuous game. A continuous
-//! rule written twice diverges by a few pixels a second and the correction eases
-//! it away invisibly. A discrete rule written twice puts the two sides in
-//! *different cells*, and there is no fraction of a cell to ease across: the
-//! client snaps, and the player sees it.
+//! This matters more on a lattice than in a continuous game. A continuous rule
+//! written twice diverges by a few pixels a second and the correction eases it
+//! away invisibly. A discrete rule written twice puts the two sides in
+//! *different cells* and there is no fraction of a cell to ease across, so the
+//! client snaps and the player sees it.
 //!
 //! These are free functions over plain state rather than methods, so the client
 //! can run them against its predicted copy without owning a `Server`.
@@ -35,14 +35,14 @@ pub fn passable(grid: &Grid, bombs: &[BombState], from: Cell, to: Cell) -> bool 
 /// **Time left over from a completed step carries into the next one.** Without
 /// that carry, a walk loses whatever fraction of a tick was left at each cell
 /// boundary, so a player crossing N cells arrives up to N ticks late. It is
-/// invisible in a single step and compounds over a corridor, and on a lattice
-/// it compounds into a whole cell of disagreement between a client predicting
-/// at its frame rate and a server stepping at its own: the two lose different
-/// remainders. Carrying the remainder is what makes the rule frame-rate
-/// independent, which is the property prediction actually rests on.
+/// invisible in a single step and compounds over a corridor. On a lattice it
+/// becomes a whole cell of disagreement between a client predicting at its
+/// frame rate and a server stepping at its own, because the two lose different
+/// remainders. Carrying the remainder makes the rule frame-rate independent,
+/// which prediction depends on.
 ///
-/// A step that cannot start (a wall, a bomb) simply does not, and the player
-/// stands still: refusing is the whole of collision here, because a cell is
+/// A step that cannot start (a wall, a bomb) does not start, so the player
+/// stands still. Collision here is just refusing the step, because a cell is
 /// either enterable or it is not.
 pub fn advance_player(player: &mut PlayerState, held: Dir, grid: &Grid, bombs: &[BombState], dt_ms: u64) {
   if !player.alive {

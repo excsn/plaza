@@ -1,28 +1,26 @@
 //! Turning a destination into a route, the same way on both ends.
 //!
-//! This is the rule that makes a click cheap. The client sends one square and
-//! then expands it here, immediately, and the server expands the same square
-//! with the same code over the same derived map and gets the same answer. There
-//! is no path on the wire, no correction coming back, and nothing to
-//! reconcile.
+//! The client sends one square and expands it here immediately. The server
+//! expands the same square with the same code over the same derived map and
+//! gets the same answer. No path goes on the wire, no correction comes back and
+//! there is nothing to reconcile.
 //!
-//! **Which puts the entire determinism surface in the tie-break.** Two routes
-//! of equal length are equally correct and only one of them is the one the
-//! server picked, so anything that leaves the choice between them to an
-//! implementation detail is a divergence waiting for the first symmetric
-//! stretch of grass. Three things make that impossible here rather than
-//! unlikely:
+//! **So determinism depends entirely on the tie-break.** Two routes of equal
+//! length are equally correct but the server picks only one, so if an
+//! implementation detail decides between them the two ends will diverge on the
+//! first symmetric stretch of grass. Three things rule that out here:
 //!
 //! - The open set is ordered on `(f, h, seq)` where `seq` counts pushes, so
 //!   ties fall to whichever was reached first and never to heap internals.
 //! - Every table is a dense array indexed by square. There is no hash map in
 //!   the search, so there is no iteration order to depend on.
 //! - Neighbours are visited in one fixed order, cardinals before diagonals,
-//!   which is also what makes a route look like something a person would walk.
+//!   which also makes routes look like something a person would walk.
 //!
 //! The budget matters for the same reason. A search that gives up returns the
-//! best partial route rather than nothing, and *which* partial is decided by
-//! the same total order, so giving up is as reproducible as succeeding.
+//! best partial route rather than nothing. *Which* partial route it picks is
+//! decided by the same total order, so a search that gives up is as
+//! reproducible as one that succeeds.
 
 use std::collections::BinaryHeap;
 
@@ -31,17 +29,16 @@ use crate::world::{self, SIZE};
 
 /// Squares a search may settle before it gives up and walks as far as it got.
 ///
-/// A click across the whole map is a request to search thirty thousand squares
-/// inside a tick that also has a world in it. Partial routes are what a player
-/// experiences as walking toward somewhere far away, which is what they asked
-/// for anyway.
+/// A click across the whole map would mean searching thirty thousand squares
+/// inside a tick that also has to run the world. A partial route looks to the
+/// player like walking toward somewhere far away, which is what they asked for.
 pub const MAX_VISITED: usize = 4500;
 
 /// Squares in one of the eight directions, cardinals first.
 ///
-/// The order is part of the protocol in everything but name: it decides which
-/// of several equal routes both ends pick, so changing it changes the answer on
-/// whichever end changed first.
+/// The order is effectively part of the protocol: it decides which of several
+/// equal routes both ends pick, so changing it on one end makes the two ends
+/// disagree.
 const STEPS: [(i16, i16); 8] = [
   (0, -1),
   (1, 0),
@@ -126,7 +123,7 @@ impl Goal {
 ///
 /// Kept rather than allocated per call because both ends run one of these on
 /// every click, and half a megabyte of dense tables is cheaper to hold than to
-/// rebuild. The generation stamp is what removes the clear: a cell is stale
+/// rebuild. The generation stamp avoids clearing the tables: a cell is stale
 /// unless it was written this search.
 pub struct Pathfinder {
   came: Vec<u32>,
@@ -160,8 +157,8 @@ impl Pathfinder {
   /// The route from one square to a goal, not including the square started on.
   ///
   /// Empty means already there. A route that does not end on the goal is a
-  /// partial one: the search ran out of budget or the goal is walled off, and
-  /// walking toward it is the honest answer to a click nobody can honour.
+  /// partial one: the search ran out of budget or the goal is walled off. For
+  /// a click that cannot be honoured, walking toward it is the best response.
   pub fn route(&mut self, from: Tile, goal: Goal) -> Vec<Tile> {
     self.route_with(from, goal, &world::walkable)
   }
@@ -308,8 +305,8 @@ mod tests {
 
   #[test]
   fn the_same_click_is_the_same_route_every_time() {
-    // The property the whole design rests on: the client draws this before the
-    // server has heard the question, so the two had better agree.
+    // The client draws this route before the server has received the click,
+    // so the two must agree.
     let mut a = Pathfinder::new();
     let mut b = Pathfinder::new();
     for i in 0..400i16 {
@@ -323,8 +320,8 @@ mod tests {
 
   #[test]
   fn a_reused_pathfinder_answers_the_same_as_a_fresh_one() {
-    // The generation stamp is an optimisation, and an optimisation that leaks
-    // state between searches would diverge the two ends after the first click.
+    // The generation stamp must not leak state between searches or the two
+    // ends would diverge after the first click.
     let mut reused = Pathfinder::new();
     let pairs: Vec<(Tile, Tile)> = (0..60i16)
       .map(|i| {
@@ -349,9 +346,9 @@ mod tests {
   #[test]
   fn the_tie_break_is_pinned_rather_than_incidental() {
     // On open ground every route of the same length is equally correct, so
-    // this asserts *which* one, on purpose. If the neighbour order or the open
-    // set's ordering changes, this fails, which is the point: both are part of
-    // the protocol in everything but name.
+    // this asserts *which* one. It fails if the neighbour order or the open
+    // set's ordering changes, because both are effectively part of the
+    // protocol.
     let mut finder = Pathfinder::new();
     let route = finder.route_with(Tile::new(5, 5), Goal::On(Tile::new(9, 7)), &open_field);
     assert_eq!(

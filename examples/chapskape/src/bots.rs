@@ -1,16 +1,15 @@
 //! The world's own, living the loop so a joining player arrives somewhere
 //! inhabited.
 //!
-//! Not decoration. gow_3d proved it by shipping without them: an empty world
-//! cannot tell you the difference between a quiet afternoon and a frame that
-//! never said anything, and every key looked broken because nothing was there
-//! to answer one.
+//! gow_3d first shipped without bots. In an empty world you cannot tell a quiet
+//! moment from a frame that carried nothing and every key looked broken because
+//! nothing was there to respond.
 //!
-//! They walk the same circle a player does. Chop until the pack is heavy, set
+//! They follow the same loop a player does. Chop until the pack is heavy, set
 //! light to the logs, catch fish, cook them on the fire, go and fight something,
 //! eat when it hurts, start again. Everything they do goes through the same ops
-//! a client sends, so nothing downstream knows the difference and nothing here
-//! is a special case the netcode would not otherwise have.
+//! a client sends, so nothing downstream can tell them apart and the netcode
+//! has no special cases for them.
 
 use std::collections::HashMap;
 
@@ -78,8 +77,8 @@ impl Bots {
 
   /// Gives anybody who has finished something the next thing to do.
   ///
-  /// Only the idle are looked at, which is what keeps a world of these cheap: a
-  /// body walking to a tree costs nothing until it arrives.
+  /// Only the idle are looked at, which keeps a world of these cheap: a body
+  /// walking to a tree costs nothing until it arrives.
   pub fn steer(&mut self, zone: &mut Zone) {
     let mut seats: Vec<Seat> = self.jobs.keys().copied().collect();
     seats.sort_unstable();
@@ -107,8 +106,8 @@ impl Bots {
     let full = actor.pack.is_full();
     let job = self.jobs.get(&seat).copied().unwrap_or(Job::Wood);
 
-    // Eating comes before everything, so a body that is losing a fight does the
-    // one thing that would save it rather than the next thing on its list.
+    // Eating comes first, so a body losing a fight heals instead of moving on
+    // to the next thing on its list.
     if hurt && cooked > 0 {
       if let Some(slot) = zone.actors[&seat].pack.find(Item::CookedFish) {
         zone.use_slot(seat, slot as u8);
@@ -182,9 +181,9 @@ impl Bots {
 
   /// Leaves what it was carrying on the ground.
   ///
-  /// Which is also what keeps the ownership timer exercised without a player
-  /// having to think of it: there is always something lying about that belongs
-  /// to somebody for another half minute.
+  /// This also keeps the ownership timer in use without a player doing
+  /// anything: there is always something on the ground that belongs to
+  /// somebody for another half minute.
   fn spill(&mut self, seat: Seat, zone: &mut Zone) {
     let Some(actor) = zone.actors.get(&seat) else {
       return;
@@ -249,7 +248,7 @@ impl Bots {
   }
 }
 
-/// Seats the hens and brutes that make the countryside worth crossing.
+/// Seats the hens and brutes that live in the countryside.
 pub fn stock(zone: &mut Zone, seats: impl Iterator<Item = Seat>, hens: usize) {
   for (index, seat) in seats.enumerate() {
     let angle = index as f32 * 2.399_963_2;
@@ -297,8 +296,8 @@ mod tests {
 
   #[test]
   fn the_world_gets_on_with_it() {
-    // The measurement that says the place is inhabited rather than populated.
-    // Nothing here is asserted about who did what, only that the loop turns.
+    // Checks that the world's own are busy rather than idle. It asserts only
+    // that the loop runs, not who did what.
     let (mut zone, mut crew) = a_world(16);
     let foes: Vec<Seat> = (100..116).collect();
     stock(&mut zone, foes.into_iter(), 10);
@@ -350,7 +349,7 @@ mod tests {
   #[test]
   fn the_loop_moves_a_body_along_it() {
     // Wood, then fish, then cook: a body that stayed on one job for ever would
-    // populate the world without inhabiting it.
+    // never show the rest of the loop.
     let (mut zone, mut crew) = a_world(1);
     for _ in 0..12 {
       zone.actors.get_mut(&0).unwrap().pack.add(Item::Logs);

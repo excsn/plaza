@@ -104,15 +104,15 @@ Keep `smoothing_secs` shorter than the send interval.
 
 ### Struct `RoutePredictor<P>` (module `route`)
 
-Prediction by **shared rule**, for the games where re-running inputs against samples is the wrong shape: the client runs the same deterministic rule the server runs (a pathfinder over a derived map), so a click's whole journey is known on both ends the moment it happens and one op covers a walk longer than any round trip. What is left to prediction is presentation: a body that sets off now, crosses squares on the local clock, and never jumps. `P` is a square; `point: fn(&P) -> [f32; 2]` maps it to the drawn plane.
+Prediction by **shared rule**, for games where re-running inputs against samples does not fit: the client runs the same deterministic rule the server runs (a pathfinder over a derived map), so a click's whole journey is known on both ends the moment it happens and one op covers a walk longer than any round trip. Prediction then only has to handle presentation: a body that sets off now and crosses squares on the local clock without jumping. `P` is a square; `point: fn(&P) -> [f32; 2]` maps it to the drawn plane.
 
 *   **`new(initial, point, step_ms)`**, **`set_step_ms`** (a live value; chase the frame's tick length with it), **`jump_to(at, now_ms)`** (seat, respawn, teleport: the one move allowed to jump), **`is_seeded()`**.
-*   **`set_out(route, checkable, now_ms)`**: takes a route the shared rule produced and touches nothing about where the body *is*. `checkable` marks a journey whose server twin expands from the same square: at rest, nothing owed, confirmed and predicted agreeing; a mid-walk click fails that and simply is not checked, and a chase of something moving should pass `false` outright. No free step is granted, or spam outruns the server and is pulled back at rest.
+*   **`set_out(route, checkable, now_ms)`**: takes a route the shared rule produced and touches nothing about where the body *is*. `checkable` marks a journey whose server twin expands from the same square: at rest, nothing owed, confirmed and predicted agreeing; a mid-walk click fails that and is not checked and a chase of something moving should pass `false` outright. No free step is granted, since otherwise spam outruns the server and is pulled back at rest.
 *   **`advance(now_ms, steps_per_tick)`** (two is a run), **`drawn(now_ms) -> [f32; 2]`**, **`walking(now_ms)`**, **`crossing(now_ms)`**, **`heading(now_ms)`** (for facing), **`plan()`** / **`plan_is_empty()`**.
-*   **`confirm(at, slack) -> Heard`**: checks the server's square against the **route** this client drew, never its current square, because the two are a tick out of phase by design. `slack` is the server's steps per tick, since a run's first square is one nothing ever reports. `Heard::{OnRoute, Diverged, Unchecked}`; a divergence means the rule stopped being one rule, and is counted in `diverged`.
-*   **`abandon(at, now_ms)`** (a refused route, drawn position preserved), **`settle(now_ms) -> bool`**: takes the server's square once the body has stopped, which is the whole of reconciliation, and deliberately not a per-tick correction: both ends are walking to the same place from different starts and will arrive together, so the usual case is a no-op.
+*   **`confirm(at, slack) -> Heard`**: checks the server's square against the **route** this client drew, never its current square, because the two are a tick out of phase by design. `slack` is the server's steps per tick, since a run's first square is one nothing ever reports. `Heard::{OnRoute, Diverged, Unchecked}`; a divergence, counted in `diverged`, means the two ends are no longer running the same rule.
+*   **`abandon(at, now_ms)`** (a refused route, drawn position preserved), **`settle(now_ms) -> bool`**: takes the server's square once the body has stopped. This is the only reconciliation step. There is deliberately no per-tick correction, because both ends are walking to the same place from different starts and will arrive together, so the usual case is a no-op.
 
-The prerequisite is the first principle at full strength: the rule must be shared code over shared **state**, deterministic on both ends (see [`determinism`](#19-module-determinism)), or every journey diverges.
+This requires the first principle applied strictly: the rule must be shared code over shared **state**, deterministic on both ends (see [`determinism`](#19-module-determinism)). Otherwise every journey diverges.
 
 ### Struct `HeldInputPredictor<State, Input, Ctx>`
 
@@ -154,7 +154,7 @@ A cubic Hermite spline through both samples, leaving along the velocity recorded
 
 ### Struct `AdaptiveDecay`
 
-Per-frame correction decay whose rate depends on the size of the error. This is the rate, not the state: keep your own offset, multiply it by `retain` each frame, add it to what you draw.
+Per-frame correction decay whose rate depends on the size of the error. It supplies only the rate. Keep your own offset, multiply it by `retain` each frame and add it to what you draw.
 
 *   **`new(small, large, small_at, large_at)`**. **`Default`**: keep 0.95 of the error per frame at or below 0.25 units, 0.85 at or above 1.0, blended between.
 *   **`retain(&self, magnitude, dt_secs) -> f32`**: the fraction of an error that size to keep after `dt_secs`. Framerate-independent.
@@ -222,7 +222,7 @@ Requires `State: Clone + Debug`, `Input: Clone + Debug + PartialEq`.
 
 ### Struct `BufferedInput<Op, PredictedStateSnapshot>`
 
-One recorded input: its sequence number, the op, and the state before it applied.
+One recorded input: its sequence number, the op and the state before it applied.
 
 ## 5. Interpolation
 
@@ -255,15 +255,15 @@ timeline.complete(probe, now, pong.responder);   // feeds both estimators
 *   **`begin(now) -> Probe`**, **`complete(probe, now, responder: Option<u64>) -> bool`**: `false` when the probe was discarded. With a `responder` the clock fit gets an exchange too; without one, only the round trip is recorded.
 *   **`on_reconnect()`**: invalidates measurements in flight, keeps what has been learned. **`on_resume()`**: invalidates both. **`epoch()`**.
 *   **`note_stamp(stamp_ms, now_ms)`**, **`newest_stamp_ms()`**: a timestamp the server wrote into a message. Survives both `on_reconnect` and `on_resume`.
-*   **`server_time_ms(now_ms) -> u64`**: the fitted clock, falling back to `now_ms` until two exchanges are in, **floored by the newest stamp carried forward at wall rate**. The floor only ever lifts the estimate, never past the truth.
+*   **`server_time_ms(now_ms) -> u64`**: the fitted clock, falling back to `now_ms` until two exchanges are in, **floored by the newest stamp carried forward at wall rate**. The floor can only raise the estimate and never raises it past the true server time.
 *   **`with_estimators(RttEstimator, ClockSyncEstimator)`**: `new()` is this with a default `RttEstimator` and a `ClockSyncEstimator` over `CLOCK_WINDOW`.
 *   **`rtt`** and **`clock`** are public.
 
-A probe carries the epoch it started in, and one that outlives its epoch is discarded rather than recorded.
+A probe carries the epoch it started in and one that outlives its epoch is discarded rather than recorded.
 
 ### Struct `RttEstimator`
 
-**No unit is named or assumed.** Samples go in as whatever you stamped a probe with and every number comes back in that same unit. Mixing two units across one estimator is the only way to get a wrong answer, and no signature can stop you.
+**No unit is named or assumed.** Samples go in as whatever you stamped a probe with and every number comes back in that same unit. The only way to get a wrong answer is to mix two units in one estimator and the types cannot prevent that.
 
 *   **`new(alpha)`** / **`Default`** (alpha 0.1): each sample's moving-average weight.
 *   **`rtt()`**, **`one_way()`** (half the RTT), **`min_rtt()`**, **`jitter()`** (smoothed mean deviation). Each `None` before the first sample.
@@ -280,7 +280,7 @@ Fits the client-to-server clock **offset and its skew** by least squares over a 
 
 **Both ends must mean the same unit.** Unlike `RttEstimator`, this compares your clock against someone else's, so a disagreement about the unit produces a confident wrong answer rather than a visible one.
 
-A round trip cannot recover the *asymmetric* one-way offset without an external time source. The regression buys the drift rate cleanly, not the asymmetric constant.
+A round trip cannot recover the *asymmetric* one-way offset without an external time source. The regression recovers the drift rate cleanly but cannot recover the asymmetric constant.
 
 ### Struct `ScalarKalman`
 
@@ -303,7 +303,7 @@ where Timestamp: Copy + Debug + PartialOrd {
 
 ### Trait `ToF32`
 
-Converts a timestamp, or the difference between two, into `f32`. Implemented for `u64`, `i64`, `f32`, `f64`, and `Duration`.
+Converts a timestamp or the difference between two timestamps into `f32`. Implemented for `u64`, `i64`, `f32`, `f64` and `Duration`.
 
 `Interpolatable` and `ToF32` are shared with `plaza_server_utils`, so one state type feeds both a client's `SnapshotBuffer` and the server's `HistoricalStateBuffer` with a single impl.
 
@@ -366,7 +366,7 @@ The newest sequence number, plus a bitmask of the `WINDOW` (64) before it. Bit `
 
 ### Struct `TrajectoryPredictor`
 
-Second-order dead reckoning for one scalar: keeps the last three samples, takes velocity from the newest pair and acceleration from the change between pairs, and projects a damped quadratic. Run one per axis.
+Second-order dead reckoning for one scalar: keeps the last three samples, takes velocity from the newest pair and acceleration from the change between pairs and projects a damped quadratic. Run one per axis.
 
 *   **`new(damping: f32, max_horizon_ms: u64)`**: `damping` scales the acceleration term, `0.0` being plain constant velocity and `1.0` the full quadratic. `max_horizon_ms` clamps how far past the newest sample a prediction may reach; beyond it the projection is evaluated *at* the horizon and held. There is no unbounded setting.
 *   **`observe(time_ms, value)`**: samples at or before the newest are ignored.
@@ -377,7 +377,7 @@ Second-order dead reckoning for one scalar: keeps the last three samples, takes 
 
 ### Struct `FixedTimestep`
 
-*   **`from_step(Duration)`** / **`from_step_ms(step_ms)`** / **`from_hz(hz)`**: **panics on zero.** `from_hz` is exact to the nanosecond, the same expression as `plaza::TickDriver::from_hz` (`Duration::from_secs_f64(1.0 / hz)`), and a test in `plaza` pins the two to each other: 60 Hz is a 16.666667 ms step on both sides. Internals are integer nanoseconds, so no float error accumulates.
+*   **`from_step(Duration)`** / **`from_step_ms(step_ms)`** / **`from_hz(hz)`**: **panics on zero.** `from_hz` is exact to the nanosecond, the same expression as `plaza::TickDriver::from_hz` (`Duration::from_secs_f64(1.0 / hz)`) and a test in `plaza` pins the two to each other: 60 Hz is a 16.666667 ms step on both sides. Internals are integer nanoseconds, so no float error accumulates.
 *   **`with_max_frame_ms(ms)`**: cap how much elapsed time one `advance` may pay for. Default `DEFAULT_MAX_FRAME`, 250 ms.
 *   **`with_max_steps(n)`**: cap catch-up in whole steps instead, the cap `TickDriver` speaks (`MAX_STEPS_PER_WAKE`) and the right one for a **slow tick over a fast driver** (a 600ms game tick fed by 50ms wakes), because a cap in steps follows the step length when the step length is a live dial. When it fires, everything still owed is dropped into `dropped_ms`; landing exactly on the cap keeps its sub-step remainder, so an ordinary full catch-up stays exact. Composes with `with_max_frame_ms`, which caps what an advance is handed rather than what it may run; raise that one when the steps cap is the policy.
 *   **`advance(&mut self, elapsed_ms) -> Steps`**: an `ExactSizeIterator` yielding the step as a `Duration`, once per step this frame paid for. The step is *yielded* so a caller cannot integrate by the frame delta instead.
@@ -405,23 +405,23 @@ Generic over the entity. The mirror owns only the keying, the agreement and the 
 *   **`begin(&mut self, seq, full_baseline)`**: start applying a packet. `full_baseline` clears first.
 *   **`insert(key, entity)`**, **`remove(key) -> Option<Entity>`**, **`get`**, **`get_mut`**, **`contains`**.
 *   **`settle(&mut self, expected: u64) -> Agreement`**: fold the digest and compare against the server's. `Agreement::agreed()` for the boolean.
-*   **`divergence_from(server_keys) -> Divergence`**: `missing` means something was lost or never sent, `extra` means a removal never landed. A digest detects and cannot diagnose.
+*   **`divergence_from(server_keys) -> Divergence`**: `missing` means something was lost or never sent, `extra` means a removal never landed. A digest shows that the sets differ but not how.
 *   **`digest()`**, **`acks() -> &AckWindow`**, **`applied_seq()`**, **`keys`**, **`iter`**, **`iter_mut`**, **`values`**, **`values_mut`**, **`len`**, **`is_empty`**, **`clear`**.
 *   **`frames_lost()`**, **`stale_refs()`**, **`divergences()`**.
 
 **Apply every packet, whatever baseline it names.** These deltas carry absolute values, so applying them is idempotent and applying a superset is harmless.
 
-The three counters are separate: sequence gaps mean the wire lost something, stale references mean a message named an occupant this mirror no longer holds, and digest divergences are the symptom no counter predicts.
+The three counters are separate: sequence gaps mean the wire lost something, stale references mean a message named an occupant this mirror no longer holds and digest divergences catch drift that neither of the other counters predicts.
 
 ## 12. Module `correction`
 
 ### Struct `Correction<State>`
 
-The state as it was `seen` before the correction, and the `settled` state after. Two states rather than a distance, so no metric is imposed on `State`.
+The state as it was `seen` before the correction and the `settled` state after. Two states rather than a distance, so no metric is imposed on `State`.
 
 ### Struct `CorrectionMonitor`
 
-A running picture of prediction error, and an adaptive test for what counts as abnormal. There is no fixed threshold: it tracks the mean and variance of the corrections it is fed.
+A running picture of prediction error and an adaptive test for what counts as abnormal. There is no fixed threshold: it tracks the mean and variance of the corrections it is fed.
 
 *   **`new()`**, **`with_warmup(samples)`**, **`with_smoothing(alpha)`**, **`with_sigma(sigma)`**, **`with_floor(floor)`**.
 *   **`record(magnitude) -> bool`**: fold in a sample, returning whether it is abnormal.
@@ -441,13 +441,13 @@ Hands out `SlotKey`s over a dense index space, recycling freed slots and bumping
 
 *   **`with_capacity(slots)`**, **`with_policy(ReusePolicy)`**.
 *   **`index_space() -> usize`**: how many indices exist, live or free. The width to size a `Vec<T>` or a `VisibilitySet` by; **`len()`** is the live count and is smaller.
-*   **`is_occupied(index) -> bool`**: membership without building a key, and without the borrow `iter` holds.
+*   **`is_occupied(index) -> bool`**: membership without building a key and without the borrow `iter` holds.
 
 It does not store your entities: keep them in a `Vec<T>` indexed by `SlotKey::index`.
 
-**The generation bumps on free, not on allocate**, so a handle stops naming anything the moment its subject dies.
+**The generation bumps on free rather than on allocate**, so a handle stops matching as soon as its entity dies.
 
-**`ReusePolicy::{Lifo, Fifo}`** decides how clustered recycled indices are, and is public contract for that reason.
+**`ReusePolicy::{Lifo, Fifo}`** decides how clustered recycled indices are and is part of the public API for that reason.
 
 **The ceiling.** A `u16` generation wraps after 65,536 reuses of one slot and nothing can detect the wrap. `Fifo` spreads reuse across the index space instead of hammering the same slots.
 
@@ -477,7 +477,7 @@ Pairs with [`HeldInputPredictor`](#struct-heldinputpredictorstate-input-ctx), ne
 
 ### Enum `Admission`
 
-What `push` concluded. **`Queued`** or **`TimelineLost`**. `#[must_use]`: `TimelineLost` obliges the caller to restart its own timeline, re-anchor its render clock on what just arrived, and drop derived state.
+What `push` concluded. **`Queued`** or **`TimelineLost`**. `#[must_use]`: `TimelineLost` obliges the caller to restart its own timeline, re-anchor its render clock on what just arrived and drop derived state.
 
 ### Struct `PlayoutBuffer<T>`
 
@@ -506,41 +506,41 @@ Keep one per interpolated stream.
 
 ### Struct `Silence`
 
-Relevance filtering has no despawn packet: a server that stops mentioning an entity has said "you cannot see this any more", and nothing else will ever say it. This is the policy for hearing that.
+Relevance filtering has no despawn packet: a server that stops mentioning an entity has said "you cannot see this any more" and no other message will say it. `Silence` decides when to act on that.
 
 *   **`Silence::new(grace)`** (const; **panics at zero**, which would forget the world on the first sweep). `grace` is in whatever unit the stamps are in, usually frames.
 *   **`keeps(&self, seen, now) -> bool`**: whether an entity last mentioned at `seen` is still present.
-*   **`sweep(&self, entities: &mut HashMap<K, V>, now, seen_of) -> usize`**: drops everything whose silence exceeded the grace and says how many. `seen_of` answers when the entity was last mentioned, or `None` for one silence must never claim: the client's own, or an entity sent once by design whose silence is its whole protocol.
+*   **`sweep(&self, entities: &mut HashMap<K, V>, now, seen_of) -> usize`**: drops everything whose silence exceeded the grace and says how many. `seen_of` answers when the entity was last mentioned. It returns `None` for an entity that silence must never remove: the client's own entity or an entity sent once by design and never mentioned again.
 
-The grace is a real decision. A frame is a *set*, and an entity at the edge of the view radius flickers in and out of it as both ends drift: dropping on the first silent frame makes the edge of the world strobe, a short grace makes it a fade. An entity streamed every frame it exists earns a short one, because its silence means it is over rather than out of budget.
+Pick the grace deliberately. A frame is a *set* and an entity at the edge of the view radius flickers in and out of it as both ends drift. Dropping on the first silent frame makes entities at the edge of the world flicker. A short grace smooths that out. An entity streamed every frame it exists can use a short grace, because its silence means it is gone rather than skipped for bandwidth budget.
 
 ## 18. Rates (module `meter`)
 
 ### Struct `RateMeter`
 
-A running total, a sample count, an elapsed clock, and the three questions over them. The clock is supplied rather than read, so a simulation that runs on its own time (or faster than real time in a test) measures itself honestly. `plaza_server_utils` re-exports it, because a claim about bandwidth is worth a number on either end of the wire and a wasm bundle must not inherit the server crate to read its own.
+A running total, a sample count and an elapsed clock, with three readings derived from them. The clock is supplied rather than read, so a simulation that runs on its own time (or faster than real time in a test) measures itself correctly. `plaza_server_utils` re-exports it, because bandwidth is worth measuring on either end of the wire and a wasm bundle must not inherit the server crate to measure its own.
 
-*   **`new()`**, **`add(amount)`**, **`add_empty()`** (a sample carrying nothing, which still counts toward the mean), **`reset()`** (forgets everything, for a world that has been rebuilt: a rate is over the current world, not every world since launch).
-*   **`elapsed(&mut self, elapsed_ms: u64)`**: sets how long this has been accruing over, and rolls the window forward. Idempotent within a bucket, so call it every tick with the simulation clock. The first call after construction or a reset also marks when the meter started. Debug-asserts the clock never goes backwards.
+*   **`new()`**, **`add(amount)`**, **`add_empty()`** (a sample carrying nothing, which still counts toward the mean), **`reset()`** (forgets everything, for a world that has been rebuilt, so the rate covers only the current world).
+*   **`elapsed(&mut self, elapsed_ms: u64)`**: sets how long this has been accruing over and rolls the window forward. Idempotent within a bucket, so call it every tick with the simulation clock. The first call after construction or a reset also marks when the meter started. Debug-asserts the clock never goes backwards.
 *   **`total()`**, **`samples()`**, **`elapsed_ms()`**, **`per_sec()`**, **`mean()`**, **`lifetime_per_sec()`**, **`share_of(&other) -> f64`**, **`running_ms()`**.
 
-**`per_sec` and `mean` are over a rolling window** (sixteen buckets of 500 ms, so eight seconds), not over the meter's whole life; `total`, `samples` and `lifetime_per_sec` are the lifetime figures. The distinction is load bearing rather than a nicety. A lifetime average chasing a steady state that has risen converges to it asymptotically, so it climbs by less and less but never stops climbing, and on a live readout that reads as a quantity slowly increasing for ever with nothing wrong. It also makes such a readout unusable for its usual purpose, because a setting you just changed is one second of evidence against the whole session. Call `elapsed` with your clock each tick to roll the window; `per_sec` divides recent traffic by the span the retained buckets actually cover, so a part-filled newest bucket does not understate it, and a full window of silence decays the rate to zero. `lifetime_per_sec` is the right answer for a summary over a fixed run, and the wrong one for a number somebody watches.
+**`per_sec` and `mean` are over a rolling window** (sixteen buckets of 500 ms, so eight seconds), not over the meter's whole life; `total`, `samples` and `lifetime_per_sec` are the lifetime figures. This matters for a live readout. A lifetime average chasing a steady state that has risen converges to it asymptotically, so it keeps climbing by less and less. On a live readout that looks like a quantity slowly increasing for ever with nothing wrong. It also makes the readout useless for tuning, because a setting you just changed is one second of evidence against the whole session. Call `elapsed` with your clock each tick to roll the window; `per_sec` divides recent traffic by the span the retained buckets actually cover, so a part-filled newest bucket does not understate it and a full window of silence decays the rate to zero. Use `lifetime_per_sec` for a summary over a fixed run and `per_sec` for a number somebody watches.
 
-**A reset meter measures only what it saw.** The clock a meter is given is usually the simulation's, and that does not restart when the meter does. `lifetime_per_sec` is therefore measured from when *this meter* started, not from zero on the caller's clock: without that, a meter reset twenty minutes into a session divides its fresh total by the whole twenty minutes, reads a fraction of the truth, and then creeps up toward it for hours. **`running_ms()`** is how long the meter has been running, which is not the same as the clock it is given once it has been reset.
+**After a reset** the meter measures only what it has seen since. The clock a meter is given is usually the simulation's and that does not restart when the meter does. `lifetime_per_sec` is therefore measured from when *this meter* started, not from zero on the caller's clock: without that, a meter reset twenty minutes into a session divides its fresh total by the whole twenty minutes, reads a fraction of the truth and then creeps up toward it for hours. **`running_ms()`** is how long the meter has been running, which is not the same as the clock it is given once it has been reset.
 
-Trivial arithmetic, and every hand-rolled copy had to remember the same divide-by-zero guard, whose absence renders as `NaN` on the first frame and looks like the thing being measured is broken. `share_of` is here because **measuring a stream's share of the packet before optimising its encoding** is the check that would have saved three separate rounds of optimising the wrong thing: despawn ids were 1.2% of horde's traffic while position samples were 86.1%.
+The arithmetic is trivial, but every hand-rolled copy needed the same divide-by-zero guard. A missing guard renders as `NaN` on the first frame, which looks like the thing being measured is broken. `share_of` is here so you **measure a stream's share of the packet before optimising its encoding**. That check would have saved three separate rounds of optimising the wrong thing: despawn ids were 1.2% of horde's traffic while position samples were 86.1%.
 
 ## 19. Module `determinism`
 
 ### Function `mix64`, struct `XorShift`, struct `ValueNoise`
 
-The same number from the same inputs, on both ends and in every build. All integer arithmetic, dependency-free, identical on wasm and native, and pinned by tests, because two builds agreeing is the entire point.
+These give the same number from the same inputs on both ends and in every build. All integer arithmetic and dependency-free. The values are identical on wasm and native and pinned by tests, because the two builds must agree.
 
-*   **`mix64(u64) -> u64`**: the murmur3 finalizer, for turning coordinates, ids and salts into independent draws. Stateless is the reason to reach for it over `XorShift`: a value keyed on `(seed, x, y)` needs no generator to carry and no order two ends could disagree about.
-*   **`XorShift`**: a deterministic stream, so a tick replayed is a tick repeated. **`new(seed)`** (const; forces the low bit on, since all-zero is the one state a xorshift never leaves), **`next() -> u64`**, **`below(bound) -> u32`**, **`unit() -> f32`** (`0.0..1.0` from the top 24 bits). One stream serves one simulation; seed parallel consumers apart with `mix64`.
+*   **`mix64(u64) -> u64`**: the murmur3 finalizer, for turning coordinates, ids and salts into independent draws. Reach for it over `XorShift` when you want a stateless draw: a value keyed on `(seed, x, y)` needs no generator to carry and no order two ends could disagree about.
+*   **`XorShift`**: a deterministic stream, so replaying a tick reproduces its draws exactly. **`new(seed)`** (const; forces the low bit on, since all-zero is the one state a xorshift never leaves), **`next() -> u64`**, **`below(bound) -> u32`**, **`unit() -> f32`** (`0.0..1.0` from the top 24 bits). One stream serves one simulation; seed parallel consumers apart with `mix64`.
 *   **`ValueNoise`**: value noise from a seed, a hash rather than a table. **`new(seed)`** (const), **`corner(xi, zi, octave) -> f32`** (the lattice value, `0.0..1.0`), **`octave(x, z, scale, octave) -> f32`** (one octave sampled at a point, eased with smoothstep so the lattice does not show as creases). Octave weights and scales are the caller's tuning; this owns only the part every terrain copied verbatim.
 
-**Iteration order is an input.** The hazard this module's docs name: a `HashMap` walked while feeding a shared random stream hands each entity a different draw on each run, so the same tick run twice stops being the same tick, with no float, no clock and no wire involved. Sort the keys before drawing, or key the draw on the entity with `mix64` so order stops mattering at all.
+**Iteration order affects the result.** A `HashMap` walked while feeding a shared random stream hands each entity a different draw on each run, so the same tick run twice gives different results, even with no float, clock or wire involved. Sort the keys before drawing or key the draw on the entity with `mix64` so order does not matter.
 
 ## 20. Module `math`
 
@@ -563,20 +563,20 @@ A deterministic latency / jitter / loss queue. Opt-in.
 
 ### Struct `Rng`
 
-A seeded, reproducible generator: **`new(seed)`**, **`unit() -> f32`**, **`up_to(n) -> u64`**. Deliberately not a "deterministic shared stream" block: identical seeds fed divergent inputs still diverge.
+A seeded, reproducible generator: **`new(seed)`**, **`unit() -> f32`**, **`up_to(n) -> u64`**. It is not meant as a deterministic stream shared between two ends: identical seeds fed different inputs still diverge.
 
 ## 22. Module `fixed` (feature `fixed`)
 
-Fixed-point arithmetic, for a wire that carries causes instead of state.
+Fixed-point arithmetic, for a wire that carries inputs instead of state.
 
 ### Struct `Fx` and struct `P`
 
 **`Fx(pub i32)`**: signed 32-bit fixed point, 24 integer bits and 8 fractional (`FRAC_BITS`, `ONE`). Serialized as the raw `i32` (`serde(transparent)`).
 
 *   **`ZERO`**, **`ONE`**, **`from_int(n)`**, **`ratio(num, den)`**, **`to_int()`**.
-*   **`to_f32()`**: the only float in the vocabulary, one way, for the renderer. Nothing in a simulation may call it.
-*   **`mul`**, **`div`**: carried in `i64` so the intermediate cannot overflow, and truncating, because rounding has a tie case two implementations can disagree about.
-*   **`abs`**, **`min`**, **`max`**, and `Add`/`Sub`/`Neg`/`AddAssign`, all wrapping.
+*   **`to_f32()`**: the only conversion to a float, for the renderer, with no conversion back. Nothing in a simulation may call it.
+*   **`mul`**, **`div`**: carried in `i64` so the intermediate cannot overflow and truncating, because rounding has a tie case two implementations can disagree about.
+*   **`abs`**, **`min`**, **`max`** and `Add`/`Sub`/`Neg`/`AddAssign`, all wrapping.
 *   **`sqrt()`**: the largest `r` with `r*r <= n`, a property of the input alone.
 
 **`P { x: Fx, y: Fx }`**: **`new`**, **`from_ints`**, **`dist_sq`**, **`dist`**.

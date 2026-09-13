@@ -1,9 +1,8 @@
-//! The half of plaza nothing had ever called. Four editors forge one
-//! bomb_grid board together, and every collaborative surface is
-//! `plaza::app_common`'s own vocabulary, used verbatim: quadrant **locks**
-//! around every paint, the board as an **object** whose tiles are properties,
-//! the spawn roster as an **ordered collection**, and live cursors as
-//! **presence**. Then the artifact crosses vocabularies: a playtest hands the
+//! Four editors build one bomb_grid board together. No example had called
+//! `plaza::app_common` before this one. Every collaborative surface uses its
+//! vocabularies verbatim: quadrant **locks** around every paint, the board as
+//! an **object** whose tiles are properties, the spawn roster as an **ordered
+//! collection** and live cursors as **presence**. A playtest then hands the
 //! authored board to `bomb_grid`'s simulation and its bombs carve the soft
 //! walls you painted.
 

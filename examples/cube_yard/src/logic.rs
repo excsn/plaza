@@ -1,7 +1,7 @@
 //! The yard's authority: step the solver, broadcast the world.
 //!
-//! Stage one broadcasts every cube to every client every tick, which is the
-//! naive thing and the point: it produces the megabit figure the packing and
+//! Stage one broadcasts every cube to every client every tick, which is naive
+//! on purpose: it produces the megabit figure the packing and
 //! priority stages are measured against.
 
 use async_trait::async_trait;
@@ -238,7 +238,7 @@ fn step_once(state: &mut YardState, ctx: &mut Ctx) {
     let (payload, picked) = if deltas {
       // Packed until the packet is actually full rather than planned against an
       // estimate: a delta cube costs anywhere from eight bits to a full
-      // absolute, and no single estimate covers that without wasting the
+      // absolute and no single estimate covers that without wasting the
       // difference.
       let order = stream.rank(&cubes, viewer).to_vec();
       let (payload, sent) = pack::pack_delta_until_full(&cubes, &order, &mut stream.baseline, BUDGET_BITS);
@@ -297,11 +297,11 @@ mod tests {
   /// stop sharing: a delta measured from a value the client never received
   /// decodes somewhere else and raises nothing.
   ///
-  /// Scored over **the cubes each frame actually names**, never the whole yard.
-  /// Under a budget most cubes are waiting their turn, and comparing those
-  /// against truth measures staleness, which is the scheme working. A decode
-  /// fault looks like a cube arriving and landing somewhere the server has
-  /// never put it.
+  /// Scored over **the cubes each frame actually names** rather than the whole
+  /// yard. Under a budget most cubes are waiting their turn and comparing those
+  /// against the server's positions only measures staleness, which is
+  /// expected. A decode fault shows up as a cube arriving and landing somewhere
+  /// the server has never put it.
   async fn dial_and_decode(from: Encoding, to: Encoding) -> f32 {
     let mut state = YardState::at_rate(from, false, crate::protocol::TICK_HZ);
     let logic = YardLogic::new();

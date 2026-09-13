@@ -2,14 +2,14 @@ import 'dart:collection';
 
 /// Ops applied one at a time, with room for an animation between them.
 ///
-/// A real-time game applies whatever arrived and draws the result, because the
-/// newest frame is the truth and an old one is worthless. A turn-based game is
-/// the opposite: every op is a thing that *happened*, in order, and a player who
-/// does not see the deal before the first card lands has missed the game.
+/// A real-time game applies whatever arrived and draws the result, because only
+/// the newest frame matters. In a turn-based game every op is an event the
+/// player needs to see in order: a player who does not see the deal before the
+/// first card lands has missed the game.
 ///
-/// `PlazaClient.ops` delivers as fast as frames arrive, so something has to sit
-/// between the stream and the scene. That is this. Ops queue; [pump] releases
-/// them one at a time, and an op that wants to be watched asks for a hold.
+/// `PlazaClient.ops` delivers as fast as frames arrive, so this class sits
+/// between the stream and the scene. Ops queue; [pump] releases them one at a
+/// time and an op worth watching asks for a hold.
 ///
 /// Nothing here knows what an op is. The caller's [Applier] does the work and
 /// returns how long to wait before the next one, so the pacing lives with the
@@ -17,7 +17,7 @@ import 'dart:collection';
 class OpSequencer {
   OpSequencer({this.maxQueued = 512});
 
-  /// A backstop, not a policy. Reaching it means ops are arriving faster than
+  /// A safety backstop only. Reaching it means ops are arriving faster than
   /// they can be watched, which for a turn-based game means something is wrong
   /// upstream rather than that the queue needs to be bigger.
   final int maxQueued;
@@ -77,8 +77,8 @@ class OpSequencer {
 
   /// Drops everything queued, for a resync.
   ///
-  /// A resumed client is sent fresh state, and replaying a backlog on top of it
-  /// would animate a world that has already moved on. Same reason the transport
-  /// drops its own backlog rather than delivering it.
+  /// A resumed client is sent fresh state and replaying a backlog on top of it
+  /// would animate stale state. The transport drops its own backlog for the
+  /// same reason.
   void clear() => _queue.clear();
 }

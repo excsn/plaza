@@ -2,13 +2,12 @@
 //!
 //! The harness every claim in this example is measured on. It is not the
 //! networked build: it stands in for the wire so a rule can be tested without a
-//! socket, and so a measurement can be repeated exactly rather than played.
+//! socket and a measurement can be repeated exactly rather than played.
 //!
 //! The impairment is [`plaza_client_utils::net_sim::LatencyLink`], which is
 //! ordered by default and is the same one the networked host puts on its real
-//! outbound path. Two copies of a delay queue that agree today are a
-//! disagreement waiting to happen, and this repository has paid for that once
-//! already.
+//! outbound path. Two copies of a delay queue would eventually drift apart;
+//! this repository has already hit that once.
 
 use plaza_client_utils::net_sim::{LatencyLink, Rng};
 
@@ -97,9 +96,9 @@ impl World {
     }
 
     for (seat, client) in self.clients.iter_mut().enumerate() {
-      // Each client's own estimate of server-now. In this harness the clock is
-      // shared, which is exactly what the networked build cannot do; that is
-      // the one thing this harness cannot measure.
+      // In this harness every client reads the server's own clock, which a
+      // networked client cannot do. That is the one thing this harness cannot
+      // measure.
       for op in self.down[seat].drain_due(now) {
         match op {
           Op::Frame(frame) => client.on_frame(&frame, controls),
@@ -111,7 +110,7 @@ impl World {
       }
       // Drained before the tick, which is the order a real client runs in:
       // `poll` then `tick`. Ticking first spends a whole tick acting on stale
-      // knowledge, and the one that matters is being told the world stopped.
+      // information and the case that matters is being told the world stopped.
       client.tick(now, controls);
     }
   }
@@ -170,8 +169,9 @@ mod tests {
 
   #[test]
   fn a_perfect_link_produces_no_snaps() {
-    // The control. Anything above zero here is a rule written twice, not a
-    // network effect, and it would invalidate every other measurement.
+    // The control. Anything above zero here means a rule was written twice
+    // rather than a network effect and would invalidate every other
+    // measurement.
     let c = quiet();
     let mut world = World::new(&c, B0MB_SEED);
     patrol(&mut world, 0, 8, &c);
@@ -181,9 +181,9 @@ mod tests {
 
   #[test]
   fn latency_alone_still_produces_no_snaps() {
-    // The measurement that says prediction is worth having. A round trip of
-    // delay is not by itself a disagreement: the client is ahead, not wrong,
-    // and the history comparison is what keeps that from reading as an error.
+    // This shows prediction is worth having. A round trip of delay is not by
+    // itself a disagreement: the client is ahead of the server but correct and
+    // the history comparison keeps that from reading as an error.
     //
     // The playout depth has to cover the link, which is the condition the next
     // test is about; here it does.
@@ -200,15 +200,15 @@ mod tests {
 
   #[test]
   fn a_link_slower_than_the_playout_depth_has_its_inputs_refused_and_snaps() {
-    // The condition an arena has to admit players against, and the reason the
-    // horde example measures a connection before seating it. An input is named
-    // for `press + playout`, so a one-way delay longer than the playout depth
-    // (plus the late window) lands after the tick it named and is dropped.
+    // The condition an arena has to check before admitting players, which is
+    // why the horde example measures a connection before seating it. An input
+    // is named for `press + playout`, so a one-way delay longer than the
+    // playout depth (plus the late window) lands after the tick it named and is
+    // dropped.
     //
-    // The client predicted it anyway, so the two sides ran different inputs,
-    // and on a lattice that can only be resolved by jumping. It is the same
-    // failure as packet loss and it is produced here by a link that is merely
-    // slow, which is why it deserves its own test.
+    // The client predicted it anyway, so the two sides ran different inputs and
+    // on a lattice that can only be resolved by jumping. It is the same failure
+    // as packet loss, produced here by a link that is only slow.
     let c = Controls {
       latency_ms: 400,
       jitter_ms: 0,
@@ -227,9 +227,9 @@ mod tests {
 
   #[test]
   fn losing_inputs_is_what_actually_snaps_a_player() {
-    // And this is the case prediction cannot save: an input the server never
-    // saw means the two sides ran different inputs, which on a lattice can only
-    // be resolved by jumping.
+    // Prediction cannot cover this case: an input the server never saw means
+    // the two sides ran different inputs, which on a lattice can only be
+    // resolved by jumping.
     let c = Controls {
       latency_ms: 80,
       loss_pct: 45.0,
@@ -238,17 +238,16 @@ mod tests {
     let mut world = World::new(&c, B0MB_SEED);
     patrol(&mut world, 0, 12, &c);
     assert!(world.total_snaps() > 0, "dropped inputs put the two sides in different cells");
-    // However much it snapped, it must end up agreeing: a correction that does
-    // not converge is a bug, not a trade-off.
+    // However much it snapped, it must end up agreeing, because a correction
+    // that does not converge is a bug.
     world.run(3_000, &c);
     assert_eq!(world.disagreement(0), Some(0), "and it always converges back");
   }
 
   #[test]
   fn a_snap_is_always_a_whole_number_of_cells() {
-    // The property that makes this example what it is. There is no such thing
-    // as a fractional correction here, so the mean snap distance is an integer
-    // count of cells and never a smoothed number.
+    // There is no such thing as a fractional correction here, so the snap
+    // distance is an integer count of cells and never a smoothed number.
     let c = Controls {
       latency_ms: 90,
       loss_pct: 40.0,
@@ -263,9 +262,9 @@ mod tests {
 
   #[test]
   fn the_playout_buffer_decides_a_contested_cell_by_press_time_not_by_ping() {
-    // The fairness claim, and the reason inputs are tick-addressed. Two players
-    // press at the same instant with very different links; the buffer is what
-    // makes the outcome the same either way.
+    // The fairness claim and the reason inputs are tick-addressed. Two players
+    // press at the same instant with very different links; the buffer makes the
+    // outcome the same either way.
     //
     // Measured as: does the near player's advantage change when the far player
     // is made much slower? With playout on, both inputs execute on the tick
@@ -300,8 +299,8 @@ mod tests {
   #[test]
   fn a_chain_reaction_reaches_every_client_as_one_event() {
     // A cascade split across two messages would let a client draw the first
-    // arm before it knows the second bomb exists, which is a flash in the wrong
-    // place on the one frame anybody is looking at it.
+    // arm before it knows the second bomb exists, which draws the flash in the
+    // wrong place at the moment the players are watching it.
     let c = quiet();
     let mut world = World::new(&c, B0MB_SEED);
     for x in 1..6u8 {
@@ -335,7 +334,7 @@ mod tests {
   #[test]
   fn a_client_never_holds_a_wall_the_server_has_destroyed() {
     // The stale-board case: a client predicting against a wall that is gone
-    // refuses a step the server allows, and manufactures a snap out of nothing.
+    // refuses a step the server allows and causes a snap from stale state.
     let c = quiet();
     let mut world = World::new(&c, B0MB_SEED);
     world.input(0, Intent::Bomb, &c);
@@ -360,10 +359,10 @@ mod tests {
     // stop moving, which looks exactly like everybody standing still.
     //
     // A client that keeps predicting through it walks a player the server is
-    // deliberately freezing, and *every frame of the interval* is a correction
-    // invented out of a rule the client was never told. Holding a direction is
-    // what makes it obvious, and holding one is what a player does when they
-    // have just won and are still leaning on the key.
+    // deliberately freezing and *every frame of the interval* becomes a
+    // correction caused by a rule the client was never told about. Holding a
+    // direction makes it obvious and players do that when they have just won
+    // and are still leaning on the key.
     let c = quiet();
     let mut world = World::new(&c, B0MB_SEED);
     world.run(500, &c);
@@ -421,9 +420,9 @@ mod tests {
 
   #[test]
   fn crossing_open_ground_on_a_steady_link_does_not_snap() {
-    // The case the tick-driven prediction exists for. A player crossing cell
+    // The case tick-driven prediction was built for. A player crossing cell
     // after cell gives the two sides a boundary to disagree about several times
-    // a second, and a client stepping on its own frame grid rather than the
+    // a second and a client stepping on its own frame grid rather than the
     // server's crosses every one of them at a different moment.
     let c = Controls {
       latency_ms: 40,
@@ -438,14 +437,14 @@ mod tests {
 
   #[test]
   fn jitter_past_the_playout_depth_is_what_is_left() {
-    // What remains once the prediction runs on the server's own tick grid, and
-    // it is a real network effect rather than a bug: jitter beyond the playout
-    // depth pushes an input past the tick it named, the schedule runs it late
-    // or refuses it, and the client had predicted it on time. That is a genuine
-    // disagreement, and on a lattice a genuine disagreement is a snap.
+    // What remains once the prediction runs on the server's own tick grid is a
+    // real network effect rather than a bug: jitter beyond the playout depth
+    // pushes an input past the tick it named, the schedule runs it late or
+    // refuses it and the client had predicted it on time. That is a real
+    // disagreement and on a lattice it shows up as a snap.
     //
-    // Paired with the test above on purpose. A snap count means nothing unless
-    // the case that should produce none actually produces none.
+    // Paired with the test above, which checks that the case that should
+    // produce no snaps produces none.
     let c = Controls {
       latency_ms: 40,
       jitter_ms: 220,

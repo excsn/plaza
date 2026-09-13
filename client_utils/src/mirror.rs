@@ -4,27 +4,27 @@
 //! This is the other half of `plaza_server_utils::DeltaBaseline`. The server
 //! decides what to send by diffing against what it believes a client holds; this
 //! is what the client actually holds, and the two have to agree exactly or the
-//! stream silently rots. Every serious bug found while building the examples
-//! this was drawn from lived in that agreement rather than in either half.
+//! stream silently goes wrong. Every serious bug found while building the
+//! examples this was drawn from was in that agreement rather than in either
+//! half.
 //!
 //! # Apply every packet, whatever baseline it names
 //!
-//! Worth stating first, because the instinct is the opposite, and the instinct
-//! is what a strict delta protocol requires: if you cannot reach the baseline a
-//! packet was built against, discard it.
+//! A strict delta protocol does the opposite: if you cannot reach the baseline
+//! a packet was built against, discard it.
 //!
 //! That is right when deltas are *relative* ("add three", "rotate by ten"). It
 //! is wrong here, because these deltas carry absolute values: an entry carries
-//! the entity in full, a removal names it outright, and a sample is a position
-//! rather than an offset. Applying them is idempotent, and applying a superset
+//! the entity in full, a removal names it outright and a sample is a position
+//! rather than an offset. Applying them is idempotent and applying a superset
 //! is harmless.
 //!
-//! Discarding instead starves the mirror, and measurably. An earlier version of
-//! the example this came from did exactly that, and at 25% packet loss the
-//! mirror emptied out while every agreement check still read perfect, because
-//! the checks only ran over what had been applied.
+//! Discarding instead empties the mirror. An earlier version of the example
+//! this came from did that and at 25% packet loss the mirror emptied out while
+//! every agreement check still read perfect, because the checks only ran over
+//! what had been applied.
 //!
-//! # What it counts, and why each number is separate
+//! # What it counts and why each number is separate
 //!
 //! - [`frames_lost`](DeltaMirror::frames_lost): gaps in the sequence. The
 //!   *cause*: the wire dropped something.
@@ -33,9 +33,9 @@
 //! - [`divergences`](DeltaMirror::divergences): times the digest disagreed. The
 //!   *symptom*, and the only one that catches a drift no counter predicts.
 //!
-//! Keeping them apart is what makes a report diagnostic instead of decorative.
-//! "Forty mismatches and zero frames lost" and "forty mismatches and forty
-//! frames lost" are different bugs, and the first one is the interesting one.
+//! Keeping them separate lets a report distinguish bugs. "Forty mismatches and
+//! zero frames lost" and "forty mismatches and forty frames lost" are different
+//! bugs and the first one is the one to investigate.
 
 use std::collections::BTreeMap;
 
@@ -68,10 +68,11 @@ impl Agreement {
 
 /// Which way a mirror diverged, given the server's own key set.
 ///
-/// A digest detects a divergence and cannot diagnose one, so anything shipping a
-/// digest wants a mode that ships the ground truth beside it. Which side the
-/// difference falls on names the bug: `missing` means something was lost or
-/// never sent, `extra` means a removal never landed or was rejected.
+/// A digest shows that a divergence happened but not where, so anything
+/// shipping a digest wants a mode that ships the ground truth beside it. Which
+/// side the difference falls on tells you the kind of bug: `missing` means
+/// something was lost or never sent, `extra` means a removal never landed or
+/// was rejected.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Divergence {
   /// Occupants this mirror holds that the server does not.
@@ -120,10 +121,10 @@ impl<Entity> DeltaMirror<Entity> {
   /// Turns generation checking off, so every reference to a slot matches
   /// whatever is in it.
   ///
-  /// This is the broken mode, kept because being able to demonstrate the bug is
-  /// worth more than pretending it cannot happen. With it off, a reference to a
-  /// dead occupant is applied to its replacement and nothing is counted, which is
-  /// exactly what makes recycled-slot corruption so hard to find in the wild.
+  /// Turning it off is the broken mode, kept so the bug can be demonstrated.
+  /// With it off, a reference to a dead occupant is applied to its replacement
+  /// and nothing is counted, which is why recycled-slot corruption is so hard
+  /// to find in practice.
   pub fn with_generations(mut self, generational: bool) -> Self {
     self.generational = generational;
     self
@@ -134,8 +135,8 @@ impl<Entity> DeltaMirror<Entity> {
   ///
   /// Changing it changes the key space, so the mirror is cleared: entries filed
   /// under the old scheme would be unreachable under the new one and would show
-  /// up as a permanent divergence. A rebuild is one packet, and a mirror keyed
-  /// two ways at once is forever.
+  /// up as a permanent divergence. A rebuild costs one packet, while a mirror
+  /// keyed two ways at once never recovers.
   pub fn set_generations(&mut self, generational: bool) {
     if self.generational != generational {
       self.generational = generational;
@@ -143,17 +144,17 @@ impl<Entity> DeltaMirror<Entity> {
     }
   }
 
-  /// Opens a packet: notes what the wire lost, acknowledges the sequence, and
+  /// Opens a packet: notes what the wire lost, acknowledges the sequence and
   /// clears the mirror if this packet is a full baseline.
   ///
   /// Call once per packet, before applying anything in it. A full baseline is
   /// the server's repair for a mirror it can no longer reach by deltas, so the
-  /// old contents must go rather than be merged with: merging is what leaves the
-  /// drift that prompted the rebuild.
+  /// old contents are dropped rather than merged, since merging keeps the drift
+  /// that prompted the rebuild.
   pub fn begin(&mut self, seq: u64, full_baseline: bool) {
     // Every frame is numbered and the link is ordered, so a jump of more than one
-    // means the wire lost what was in between. This is the direct measure, and it
-    // is what separates "the network dropped it" from "we corrupted it".
+    // means the wire lost what was in between. This measures loss directly and
+    // separates "the network dropped it" from "we corrupted it".
     if let Some(previous) = self.applied_seq
       && seq > previous + 1
     {
@@ -180,8 +181,8 @@ impl<Entity> DeltaMirror<Entity> {
   /// Removes an occupant, if this key names the one actually held.
   ///
   /// A generation mismatch is counted as a stale reference and nothing is
-  /// removed, which is the entire point: without the check this deletes a live
-  /// entity that merely inherited the slot.
+  /// removed. Without the check this would delete a live entity that inherited
+  /// the slot.
   pub fn remove(&mut self, key: SlotKey) -> Option<Entity> {
     let key = self.normalise(key);
     match self.held.get(&key.index) {
@@ -204,7 +205,7 @@ impl<Entity> DeltaMirror<Entity> {
   /// stale reference.
   ///
   /// Use this for applying a sample. Returning `None` rather than the current
-  /// occupant is what keeps a position meant for a dead entity off a live one.
+  /// occupant keeps a position meant for a dead entity off a live one.
   pub fn get_mut(&mut self, key: SlotKey) -> Option<&mut Entity> {
     let key = self.normalise(key);
     match self.held.get_mut(&key.index) {
@@ -224,9 +225,9 @@ impl<Entity> DeltaMirror<Entity> {
   /// Closes a packet: recomputes the digest and compares it to the server's.
   ///
   /// Everything in the packet has been applied by now, so the mirror must match
-  /// what the server said it should be. This is the check a lost or malformed
-  /// removal cannot hide from, because it is over the whole set rather than over
-  /// the messages that happened to arrive.
+  /// what the server said it should be. A lost or malformed removal shows up
+  /// here, because the check covers the whole set rather than the messages
+  /// that happened to arrive.
   ///
   /// The digest it computes is kept, and [`digest`](Self::digest) should be sent
   /// on the next acknowledgement: the server compares it against the state it
@@ -244,9 +245,9 @@ impl<Entity> DeltaMirror<Entity> {
 
   /// How this mirror differs from the server's own key set.
   ///
-  /// For the debugging mode that ships the truth beside the digest. Cheap enough
-  /// to call on a mismatch, far too expensive to send every packet, which is why
-  /// it takes the keys rather than assuming they are always there.
+  /// For the debugging mode that ships the truth beside the digest. It is cheap
+  /// enough to call on a mismatch, but the keys are too expensive to send every
+  /// packet, so it takes them as an argument.
   pub fn divergence_from<I: IntoIterator<Item = u64>>(&self, server_keys: I) -> Divergence {
     let theirs: std::collections::BTreeSet<u64> = server_keys.into_iter().collect();
     let mine: std::collections::BTreeSet<u64> = self.keys().map(SlotKey::encode).collect();
@@ -264,9 +265,9 @@ impl<Entity> DeltaMirror<Entity> {
   /// The digest of everything held right now.
   ///
   /// [`SetDigest`] rather than a fold written out here, because the server folds
-  /// the same keys with the same code. Two implementations that agree today are
-  /// a disagreement waiting to happen, and it would present as a divergence in
-  /// the world rather than in the arithmetic.
+  /// the same keys with the same code. Two implementations that agree today can
+  /// drift apart later. That drift would look like a divergence in the world
+  /// rather than in the arithmetic.
   fn compute_digest(&self) -> u64 {
     SetDigest::from_keys(self.keys().map(SlotKey::encode)).digest()
   }
@@ -349,18 +350,16 @@ mod tests {
 
   /// Switching the key scheme at runtime, which nothing was exercising.
   ///
-  /// The failure it prevents is the one the module docs call the hardest to
-  /// find in the wild: a mirror keyed two ways at once, where entries filed
-  /// under the old scheme are unreachable under the new one and read as a
+  /// The failure it prevents is a mirror keyed two ways at once, where entries
+  /// filed under the old scheme are unreachable under the new one and read as a
   /// permanent divergence that no packet ever repairs.
   mod switching_the_key_scheme {
     use super::*;
 
     #[test]
     fn switching_clears_the_mirror_because_the_old_keys_are_unreachable() {
-      // Away from the default, which is generations on: switching to the
-      // scheme already in force is the no-op case below, and asserting against
-      // it would have measured nothing.
+      // Switches away from the default, which is generations on. Switching to
+      // the scheme already in force is the no-op case below.
       let mut m = mirror();
       m.begin(1, true);
       m.insert(SlotKey::new(3, 1), "held");
@@ -373,8 +372,8 @@ mod tests {
 
     #[test]
     fn switching_to_the_scheme_it_already_has_keeps_everything() {
-      // The guard that makes the setter safe to call from a config reload: an
-      // idempotent write must not cost a rebuild.
+      // An idempotent write must not cost a rebuild, so the setter is safe to
+      // call from a config reload.
       let mut m = DeltaMirror::<&'static str>::new().with_generations(true);
       m.begin(1, true);
       m.insert(SlotKey::new(3, 1), "held");
@@ -386,9 +385,9 @@ mod tests {
 
     #[test]
     fn ignoring_generations_makes_a_recycled_slot_look_like_its_predecessor() {
-      // Why the toggle exists at all: with generations off, a delta meant for
-      // a dead occupant lands on its replacement and nothing counts it. This
-      // is that corruption made visible rather than a bug.
+      // With generations off, a delta meant for a dead occupant lands on its
+      // replacement and nothing counts it. This test shows that corruption on
+      // purpose.
       let mut blind = DeltaMirror::<&'static str>::new().with_generations(false);
       blind.begin(1, true);
       blind.insert(SlotKey::new(3, 1), "the first occupant");
@@ -443,8 +442,8 @@ mod tests {
 
   #[test]
   fn without_generations_the_same_reference_corrupts_the_mirror() {
-    // The failure this exists to prevent, demonstrated on purpose. Nothing is
-    // counted, because from the mirror's point of view nothing went wrong.
+    // Nothing is counted, because from the mirror's point of view nothing went
+    // wrong.
     let mut m = mirror().with_generations(false);
     m.begin(1, true);
     m.insert(SlotKey::new(41, 8), "new");
@@ -454,8 +453,8 @@ mod tests {
 
   #[test]
   fn a_gap_in_the_sequence_is_counted_as_a_lost_frame() {
-    // The direct measure of whether the wire is dropping things, which is what
-    // separates a network problem from a bookkeeping one.
+    // This measures whether the wire is dropping packets, which separates a
+    // network problem from a bookkeeping one.
     let mut m = mirror();
     m.begin(1, true);
     m.begin(2, false);
@@ -500,9 +499,9 @@ mod tests {
 
   #[test]
   fn a_drifted_mirror_is_caught_by_the_digest_and_can_say_how() {
-    // A digest detects and cannot diagnose, so the mode that ships the truth
-    // beside it is what turns a mismatch into a bug report. Which side the
-    // difference falls on names the cause.
+    // A digest shows a mismatch but not its cause. Shipping the server's keys
+    // beside it shows which side the difference falls on, which identifies the
+    // cause.
     let mut m = mirror();
     m.begin(1, true);
     m.insert(SlotKey::new(1, 0), "a");
@@ -527,9 +526,9 @@ mod tests {
 
   #[test]
   fn applying_the_same_packet_twice_changes_nothing() {
-    // Why a packet is applied whatever baseline it names: these deltas carry
-    // absolute values, so they are idempotent, and a client that discards what it
-    // cannot rebase starves its own mirror instead.
+    // These deltas carry absolute values, so they are idempotent and a packet
+    // is applied whatever baseline it names. A client that discards what it
+    // cannot rebase empties its own mirror instead.
     let mut m = mirror();
     for seq in [1, 1] {
       m.begin(seq, false);
@@ -550,8 +549,8 @@ mod tests {
 
   #[test]
   fn acknowledgements_track_what_actually_arrived() {
-    // The whole input to the server's recovery: which of its deltas this client
-    // is provably holding.
+    // The server's recovery works from this: which of its deltas this client
+    // provably holds.
     let mut m = mirror();
     for seq in [1, 2, 4] {
       m.begin(seq, false);

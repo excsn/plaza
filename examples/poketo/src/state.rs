@@ -1,8 +1,8 @@
 //! What the server owns: one overworld, and a battle for every pair in one.
 //!
-//! A seat is in exactly one of the two at a time, and that is the whole of the
-//! switch. It is not a flag on a player, it is which collection holds them: a
-//! trainer in a battle is not walked, not sent the overworld, and not visible
+//! A seat is in exactly one of the two at a time. The switch between them is
+//! which collection holds the seat rather than a flag on a player: a
+//! trainer in a battle is not walked, not sent the overworld and not visible
 //! to anyone still in it. Anything else leaves a body standing in the grass
 //! while its owner is elsewhere.
 
@@ -218,9 +218,9 @@ impl PoketoState {
   /// Puts a seat back in the overworld, keeping whatever its creature did.
   ///
   /// **Losing sends you back to the start, whole.** A creature walked out on
-  /// the single point it had left could only lose again, and the nearest spring
-  /// is a region's walk away through the grass that just beat it, so the one
-  /// thing a player could do is the one thing that cannot work. Winning leaves
+  /// the single point it had left could only lose again; the nearest spring
+  /// is a region's walk away through the grass that just beat it, so a beaten
+  /// player's only option could not work. Winning leaves
   /// the damage on, because that is what a spring is for.
   pub fn end_battle(&mut self, seat: u16) {
     let Some(battle) = self.battles.remove(&seat) else {

@@ -337,8 +337,8 @@ async fn main() {
     {
       let mut world = world.lock();
       // Emptied cells are never mentioned again (only occupied cells are
-      // packed), so absence over a few ticks IS the empty signal. Five ticks
-      // rides out a lost datagram or two without leaving frozen ants behind.
+      // packed), so a cell missing for a few ticks is empty. Five ticks covers
+      // a lost datagram or two without leaving frozen ants behind.
       let stale = tick.saturating_sub(5);
       world.cells.retain(|_, (seen, _)| *seen > stale);
       world.counts.retain(|_, (seen, _)| *seen > stale);
@@ -352,9 +352,10 @@ async fn main() {
 
       let cell_px = CELL * scale;
       if cell_px < 6.0 {
-        // Zoomed out an ant is subpixel and a million rects is a slideshow:
-        // draw each cell once, brightness by crowd. The counts map is the
-        // coarse feed; the cells map still paints during the handover.
+        // Zoomed out, an ant is smaller than a pixel and a million rects is
+        // too slow to draw: draw each cell once, brightness by crowd. The
+        // counts map is the coarse feed; the cells map still paints during the
+        // handover.
         let space = board(extent);
         let px = cell_px.max(1.0);
         let mut cell_square = |cell: u16, crowd: usize| {

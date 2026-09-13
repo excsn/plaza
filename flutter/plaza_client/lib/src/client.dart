@@ -27,16 +27,16 @@ class Disconnected extends PlazaEvent {
   final String reason;
 
   /// The close code the server sent, or `null` for a link that died without
-  /// one. A 4xxx is the server deciding, so retrying the same credential is
-  /// pointless where retrying a `null` is exactly right.
+  /// one. A 4xxx is the server deciding, so do not retry the same credential.
+  /// A `null` is worth retrying.
   final int? closeCode;
 }
 
 /// The two ends were built from different wire definitions.
 ///
-/// The browser client's answer is to reload. A shipped app cannot, so it has to
-/// say so: this is the update prompt, and continuing past it means decoding
-/// against a definition the server no longer holds.
+/// A browser client reloads. A shipped app cannot, so it shows an update
+/// prompt; continuing past it means decoding against a definition the server
+/// no longer holds.
 class Outdated extends PlazaEvent {
   const Outdated({required this.ours, required this.theirs});
   final ProtocolVersion ours;
@@ -60,9 +60,9 @@ class SkippedFrame extends PlazaEvent {
 
 /// A plaza connection: the handshake, the ops, and getting back after a drop.
 ///
-/// Deliberately does not know what an op *is*. The Rust side defines the
-/// vocabulary and this carries it, so ops arrive as decoded values and it is
-/// the application that pattern-matches them. Use `variantName` from
+/// Does not define ops. The Rust side defines the vocabulary and this carries
+/// it, so ops arrive as decoded values and the application pattern-matches
+/// them. Use `variantName` from
 /// `plaza_wire` rather than checking for a property, or every unit variant will
 /// be silently dropped.
 class PlazaClient {
@@ -145,8 +145,8 @@ class PlazaClient {
   /// Sends one op.
   bool sendOp(Object? op) => sendOps(<Object?>[op]);
 
-  /// Sends one frame of any kind, for the control plane an op enum has no
-  /// business carrying. [sendPing] is the reason this exists.
+  /// Sends one frame of any kind, for control frames that do not belong in the
+  /// op enum. [sendPing] uses it.
   bool sendFrame(Kind kind, Object? body) {
     final socket = _socket;
     if (socket == null || socket.state != SocketState.open) return false;
@@ -169,10 +169,10 @@ class PlazaClient {
 
   /// Call on `AppLifecycleState.resumed`.
   ///
-  /// A suspended app is the suspended browser tab problem wearing a different
-  /// name. Whatever queued while the process was frozen describes a world that
-  /// has moved on, so it is dropped unread rather than played out, and the
-  /// connection is remade if it did not survive. The application learns this
+  /// A suspended app has the same problem as a suspended browser tab.
+  /// Whatever queued while the process was frozen is out of date, so it is
+  /// dropped unread rather than played out and the connection is remade if it
+  /// did not survive. The application learns this
   /// through [Connected] with `resumed` set, which is where it should ask for a
   /// fresh snapshot rather than trying to catch up.
   Future<void> resume() async {
@@ -262,9 +262,9 @@ class PlazaClient {
         if (!protocol.agreesWith(theirs)) {
           _events.add(Outdated(ours: protocol, theirs: theirs));
         }
-      // Answered here rather than surfaced, because echoing a value back is
-      // something this client can finish by itself. The server's session is
-      // timing the link and this is the half it cannot do alone.
+      // Answered here rather than surfaced, because this client can echo a
+      // value back without the application. The server's session is timing
+      // the link and cannot send this half of the exchange itself.
       case Kind.ping:
         final body = codec.decode(frame.body);
         if (body is Map) {
@@ -289,8 +289,8 @@ class PlazaClient {
             _ops.add(op);
           }
         } else if (decoded != null) {
-          // A body that is not a list is a codec or shape disagreement, not a
-          // one-op batch. Surfacing it beats silently treating it as an op.
+          // A body that is not a list is a codec or shape disagreement rather
+          // than a one-op batch, so it is reported instead of treated as an op.
           _events.add(Disconnected('ops frame was ${decoded.runtimeType}, expected a list'));
         }
     }

@@ -1,10 +1,10 @@
 //! The panel.
 //!
-//! Two measurements, and they are unrelated to each other except that this game
-//! is the shape that carries both. **Who may say you died** is the netcode
-//! question no other example here asks. **What the wire carried** is the byte
-//! comparison no other example here can make, because no other example has a
-//! derivable half and an underivable half on the same wire in the same second.
+//! It shows two unrelated measurements. **Who may say you died** covers the
+//! three death rules, which no other example here needs. **What the wire
+//! carried** compares the derived half of the traffic with the streamed half,
+//! which no other example can do because none has both on the same wire at the
+//! same time.
 
 use egui_macroquad::egui;
 
@@ -146,7 +146,7 @@ pub fn draw_net_ui(client: &curtain_fire::net::client::NetClient, url: &str, ext
   });
 }
 
-/// Who may say you died, and what each answer costs.
+/// The death rule readouts and what each rule costs.
 fn draw_authority(ui: &mut egui::Ui, extras: &HostExtras, controls: Controls) {
   let stats = &extras.stats;
   section(ui, "who may say you died", true, |ui| {
@@ -159,9 +159,9 @@ fn draw_authority(ui: &mut egui::Ui, extras: &HostExtras, controls: Controls) {
       }
       DeathRule::ClientDeclares => {
         ui.label(format!("declared {}, all believed", stats.declared));
-        // The detection number, and it is free: the server derives the same
-        // curtain, so counting contacts nobody owned up to costs one
-        // comparison against an evaluation it was doing anyway.
+        // This detection is free: the server derives the same curtain, so
+        // counting undeclared contacts costs one comparison against an
+        // evaluation it was already doing.
         warn_line(
           ui,
           format!("contacts nobody owned up to: {}", stats.undeclared),
@@ -198,8 +198,8 @@ fn draw_wire(ui: &mut egui::Ui, extras: &HostExtras) {
       "{} enemy bullets on screen, {} player bullets",
       extras.curtain_now, extras.player_bullets_now
     ));
-    // The comparison. Both halves are on the same wire in the same second, so
-    // this is like for like rather than two examples quoted at each other.
+    // Both halves are on the same wire at the same time, so this compares like
+    // for like.
     ui.label(format!(
       "derived half: {} bytes total, {:.2} per enemy bullet",
       stats.bytes_derivable,
@@ -213,9 +213,10 @@ fn draw_wire(ui: &mut egui::Ui, extras: &HostExtras) {
     ui.weak("the first number falls as the curtain thickens; the second does not move");
 
     ui.separator();
-    // The measurement `IMPROVEMENTS` gates the wire-encoding primitives on, and
-    // it had never been taken. Compact MessagePack makes struct fields
-    // positional and still writes every variant name out as a string.
+    // `IMPROVEMENTS` makes the wire-encoding primitives depend on this
+    // measurement, which had not been taken before. Compact MessagePack makes
+    // struct fields positional but still writes every variant name out as a
+    // string.
     warn_line(
       ui,
       format!("{:.1}% of these bytes is the names of variants", stats.variant_name_share() * 100.0),

@@ -4,43 +4,43 @@
 
 **Plaza** is a foundation for applications where many people change one piece of state at once: multiplayer games, collaborative editors, shared whiteboards.
 
-One controller owns the state and is the only thing that mutates it, applying one operation at a time, so your rules need no locks and there is never a question of which version is real.
+One controller owns the state and is the only thing that mutates it, applying one operation at a time, so your rules need no locks and there is only ever one version of the state.
 
-Every change is an operation: a value, not a write. That makes it something you can validate, reject, broadcast, log, replay, or predict on the client before the server confirms it.
+Every change is an operation: a value describing the change rather than a direct write. So you can validate, reject, broadcast, log and replay it and the client can predict it before the server confirms it.
 
-Each client's snapshot is built *for that client*, so a card game showing every player their own hand and only the count of everyone else's is the ordinary case rather than something bolted on.
+Each client's snapshot is built *for that client*, so a card game showing every player their own hand and only the count of everyone else's is the normal case.
 
-***Building blocks, not a framework. Take what fits.***
+Plaza is a set of building blocks rather than a framework, so use the ones you need.
 
-**Want to understand how it all fits together?** [The plaza guide](docs/guide/README.md) is the learning layer: fourteen short chapters from "what plaza is made of" to lag compensation, governance, and lobbies, each anchored to a runnable example. This README is for skimming; the guide is for the curious.
+[The plaza guide](docs/guide/README.md) explains how the pieces fit together in fourteen short chapters, from "what plaza is made of" to lag compensation, governance and lobbies, each with a runnable example. This README is for skimming and the guide goes deeper.
 
 ## Project Status: Experimental ⚠️
 
-The API changes, and breaking changes land without ceremony while the shape settles. It has no production users yet.
+The API changes often and breaking changes land without notice while the design settles. It has no production users yet.
 
 Where a decision belongs to your application (how long a disconnected player keeps their seat, how state is versioned, what a player may see), Plaza provides the bookkeeping and leaves the decision to you. Anything it does provide can be swapped for your own.
 
 ## Structure
 
-*   `core/`: The main `plaza` library, the controller loop and the traits you implement. See [`core/README.md`](core/README.md) for installation, usage, and a complete program.
+*   `core/`: The main `plaza` library, the controller loop and the traits you implement. See [`core/README.md`](core/README.md) for installation, usage and a complete program.
 *   `session/`: Real transports: actix-web WebSockets and length-delimited TCP, with a pluggable wire format, plus the optional listen-server HTTP layer that serves a browser client from the same origin as the socket. See [`session/README.md`](session/README.md).
 *   `lobby/`: Rooms on a single server: create, list, join, reap. See [`lobby/README.md`](lobby/README.md).
-*   `client_utils/`: The client side: prediction (for either server input model), reconciliation, interpolation, correction smoothing, fixed timesteps, and the mirror that holds a streamed entity set. No async runtime and no server crates, so it suits wasm and engine plugins. See [`client_utils/README.md`](client_utils/README.md).
-*   `server_utils/`: The pure server-side counterpart: historical state rewind for lag compensation, relevance streaming, crowd aggregation, delta baselines, and seat allocation. Also runtime-free and wasm-safe, and shares `client_utils`'s interpolation, digest and slot-key types so the two sides cannot disagree about them. See [`server_utils/README.md`](server_utils/README.md).
+*   `client_utils/`: The client side: prediction (for either server input model), reconciliation, interpolation, correction smoothing, fixed timesteps and the mirror that holds a streamed entity set. No async runtime and no server crates, so it suits wasm and engine plugins. See [`client_utils/README.md`](client_utils/README.md).
+*   `server_utils/`: The pure server-side counterpart: historical state rewind for lag compensation, relevance streaming, crowd aggregation, delta baselines and seat allocation. Also runtime-free and wasm-safe and shares `client_utils`'s interpolation, digest and slot-key types so the two sides cannot disagree about them. See [`server_utils/README.md`](server_utils/README.md).
 *   `wire/`: The `WireCodec` trait and message envelope shared by a server and its clients, kept runtime-free, plus a build-time protocol version so the two ends can tell they were built from the same definition. See [`wire/README.md`](wire/README.md).
-*   `ws_client/`: `plaza_ws`, the client-side socket: one interface over desktop, browser and in-process. The counterpart to `session/`, which is server-only by construction. See [`ws_client/README.md`](ws_client/README.md).
+*   `ws_client/`: `plaza_ws`, the client-side socket: one interface over desktop, browser and in-process. The counterpart to `session/`, which is server-only by design. See [`ws_client/README.md`](ws_client/README.md).
 
-Each crate carries an `API_REFERENCE.md` documenting its full public surface. [`INDEX.md`](INDEX.md) maps where everything lives, and [the guide](docs/guide/README.md) explains how the pieces fit together and why they are shaped the way they are.
+Each crate carries an `API_REFERENCE.md` documenting its full public API. [`INDEX.md`](INDEX.md) maps where everything lives and [the guide](docs/guide/README.md) explains how the pieces fit together and why they are shaped the way they are.
 
 ## Getting Started
 
-Please refer to **[`core/README.md`](core/README.md)** for installation, the four type parameters everything is generic over, and a complete runnable program.
+Please refer to **[`core/README.md`](core/README.md)** for installation, the four type parameters everything is generic over and a complete runnable program.
 
 ## Examples
 
-**[examples/](examples/) is the list**, one crate each, smallest first, with what each one demonstrates. Twenty-six of them, from a two-client shared counter to a listen-server running thousands of entities.
+[examples/](examples/) lists the examples, one crate each, smallest first, with what each one demonstrates. There are twenty-six of them, from a two-client shared counter to a listen-server running thousands of entities.
 
-Start with [`shared_counter`](examples/shared_counter/) for the smallest complete application, [`pong`](examples/pong/) for real WebSockets in two browser tabs, or [`card_table`](examples/card_table/) for turns and hidden information.
+Start with [`shared_counter`](examples/shared_counter/) for the smallest complete application, [`pong`](examples/pong/) for real WebSockets in two browser tabs or [`card_table`](examples/card_table/) for turns and hidden information.
 
 The examples are their own workspace, so run them from `examples/`:
 
@@ -49,8 +49,8 @@ cd examples
 cargo run -p plaza_example_shared_counter
 ```
 
-Turning the browser playgrounds into real listen-servers surfaced a run of bugs whose causes were consistently not where the symptoms pointed, and most of what is in `client_utils` and `server_utils` today is what those argued for.
+Turning the browser playgrounds into real listen-servers turned up a series of bugs whose causes were consistently somewhere other than where the symptoms pointed and most of what is in `client_utils` and `server_utils` today was written in response to them.
 
 ## License
 
-`plaza` is licensed under the Mozilla Public License Version 2.0 (MPL-2.0). You are free to use, modify, and distribute it under the terms of the MPL-2.0, which requires that modifications to MPL-licensed files be made available under the same license.
+`plaza` is licensed under the Mozilla Public License Version 2.0 (MPL-2.0). You are free to use, modify and distribute it under the terms of the MPL-2.0, which requires that modifications to MPL-licensed files be made available under the same license.

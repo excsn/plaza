@@ -5,8 +5,8 @@ import 'package:parlour_client/wire_types.dart';
 import 'package:plaza_flame/plaza_flame.dart';
 
 /// Drives the client against `LoopbackSocket`, so it needs no server and no
-/// display. Two sockets, because that is the thing being tested: the first one
-/// is the lobby, and every later one is a table.
+/// display. Two sockets, because the handoff between them is what is tested:
+/// the first one is the lobby and every later one is a table.
 class FakeServer {
   final List<LoopbackSocket> sockets = <LoopbackSocket>[];
   final List<Uri> dialled = <Uri>[];
@@ -23,9 +23,8 @@ class FakeServer {
   }
 }
 
-/// The lobby is JSON; a table is MessagePack. Encoding each with the codec the
-/// server would use is the point, not a detail: it is what proves the client
-/// reads two wires rather than one.
+/// The lobby is JSON; a table is MessagePack. Each is encoded with the codec the
+/// server would use, which checks that the client reads both wires.
 String lobbyOps(List<Object?> ops) => buildFrame(Kind.ops, const JsonCodec().encode(ops)) as String;
 List<int> tableOps(List<Object?> ops) => buildFrame(Kind.ops, const MsgPackCodec().encode(ops)) as List<int>;
 
@@ -122,9 +121,8 @@ void main() {
       expect(game.seated, isTrue);
     });
 
-    /// The finding this example exists to carry. Closing the lobby on `Placed`
-    /// makes the server withdraw the reservation it just issued, and the player
-    /// arrives as a spectator.
+    /// Closing the lobby on `Placed` makes the server withdraw the reservation
+    /// it just issued and the player arrives as a spectator.
     test('the lobby socket stays open after placement', () async {
       final server = FakeServer();
       await seated(server);
@@ -176,7 +174,7 @@ void main() {
       expect(game.myTurn, isTrue);
     });
 
-    /// Hidden information is visible as an absence. The opponents arrive as
+    /// Hidden information shows up as missing data. The opponents arrive as
     /// counts because their ranks were never in this client's frame.
     test('opponents arrive as counts and never as cards', () async {
       final server = FakeServer();
@@ -188,8 +186,7 @@ void main() {
       expect(game.view!.myHand, isNot(contains(2)), reason: 'another seat\'s low card leaked in');
     });
 
-    /// The trap every hand-written client falls into once. `QueueLeft` is a
-    /// serde unit variant, so it arrives as the bare string `"QueueLeft"` and a
+    /// `QueueLeft` is a serde unit variant, so it arrives as the bare string `"QueueLeft"` and a
     /// client reading `op['QueueLeft']` drops it with no trace. The symptom is
     /// indistinguishable from the server never having sent it.
     test('QueueLeft arrives as a bare string and still lands', () async {

@@ -1,6 +1,6 @@
 # Usage Guide: plaza_session
 
-How to put a real network transport under a `plaza` `StateController`: standing a session up on WebSockets or TCP, sizing what it holds, measuring each connection, impairing a link, ending a session, hosting a browser client, and writing a transport of your own.
+How to put a real network transport under a `plaza` `StateController`: standing a session up on WebSockets or TCP, sizing what it holds, measuring each connection, impairing a link, ending a session, hosting a browser client and writing a transport of your own.
 
 ## Table of Contents
 
@@ -84,7 +84,7 @@ async fn ws_route(
 }
 ```
 
-`handle_connection` completes the handshake, registers the client and runs the pump; it deregisters when the socket closes. That route is the whole integration.
+`handle_connection` completes the handshake, registers the client and runs the pump; it deregisters when the socket closes. Nothing beyond that route is needed.
 
 ### Length-Delimited TCP
 
@@ -111,14 +111,14 @@ Arc::new(|peer| {
 })
 ```
 
-A refusal happens **before** `register`: nothing is allocated, announced or snapshotted, and no presence event fires. Only rules keyed on what a socket shows can fire here; a ban keyed on an account has to wait for the op that names it.
+A refusal happens **before** `register`: nothing is allocated, announced or snapshotted and no presence event fires. Only rules keyed on what a socket shows can fire here; a ban keyed on an account has to wait for the op that names it.
 
 ## A Tokio Runtime Is Required
 
 Every constructor spawns the task that decodes inbound frames.
 
 *   `TcpPlazaSession::bind*` is `async`, so it already is inside one.
-*   `ActixWsPlazaSession::{new, with_codec, with_protocol, with_options}` and `TransportSession::{new, with_protocol, with_options}` are **synchronous**, and called outside a runtime they panic with a message naming tokio rather than plaza.
+*   `ActixWsPlazaSession::{new, with_codec, with_protocol, with_options}` and `TransportSession::{new, with_protocol, with_options}` are **synchronous** and called outside a runtime they panic with a message naming tokio rather than plaza.
 
 In an actix `main` you are already inside one. Anywhere else, construct inside `Runtime::block_on` or from an async fn.
 
@@ -140,7 +140,7 @@ The version is announced to every client as a `Hello` before anything else, so a
 
 ### Deciding What a Mismatch Means
 
-This layer records what a peer declared, keeps serving it, and lets you read it back. It does not refuse and does not warn: a version is a build hash, so a peer that merely recompiled is indistinguishable here from one whose shapes changed.
+This layer records what a peer declared, keeps serving it and lets you read it back. It does not refuse and does not warn: a version is a build hash, so a peer that merely recompiled is indistinguishable here from one whose shapes changed.
 
 ```rust,ignore
 if let Some(theirs) = session.protocol(&id) {
@@ -152,13 +152,13 @@ if let Some(theirs) = session.protocol(&id) {
 }
 ```
 
-Refuse the seat, serve a degraded stream, show a banner or tell the client to reload. The `Hello` is how a version gets across; an op of yours is how the game answers.
+The game decides what to do and answers with an op of its own: refuse the seat, serve a degraded stream, show a banner or tell the client to reload.
 
 ## Configuring a Session
 
 ### Naming a Workload
 
-Every depth and cap has a default, and every default is a guess about a server this crate has never seen. The shortest way to replace all of them is to say what your application does.
+Every depth and cap has a default that knows nothing about your server. The shortest way to replace all of them is to describe what your application does.
 
 ```rust,ignore
 SessionOptions::with_protocol(ProtocolVersion(PROTOCOL))
@@ -186,7 +186,7 @@ What the presets derive today:
 | `lobby` | 8 | 8 | 4096 | 4 |
 | `local` | 32 | 32 | 32 | 4 |
 
-The striking column is `outbound`, and it is measured rather than chosen: a stalled client's socket already holds roughly 540 KiB before this crate's queue is what fills, which is over a thousand frames at 512 bytes and fourteen at 40 KiB. For a small-payload game the outbound queue is nearly a no-op and the kernel is doing the work. It becomes the binding term only once frames are large, which is why `horde` is the one preset needing a real one.
+The `outbound` column is measured rather than chosen: a stalled client's socket already holds roughly 540 KiB before this crate's queue is what fills, which is over a thousand frames at 512 bytes and fourteen at 40 KiB. For a small-payload game the outbound queue is nearly a no-op and the kernel buffer absorbs the backlog. The queue only matters once frames are large, which is why `horde` is the one preset needing a real one.
 
 ### Setting Depths and Caps by Hand
 
@@ -214,7 +214,7 @@ let cap = manager.limits().max_frame_bytes;
 
 ### What a Full Queue Does
 
-Depth is half the decision. The other half is what happens when it runs out, and the right answer differs per queue because the producers differ.
+Besides its depth, each queue needs a policy for when it runs out. The right answer differs per queue because the producers differ.
 
 ```rust,ignore
 SessionOptions::with_protocol(ProtocolVersion(PROTOCOL))
@@ -230,7 +230,7 @@ Or all at once:
 .overflow(Overflow::block_where_possible()) // waits at the two queues that have an arm to wait on
 ```
 
-Two have a failure mode worth knowing before you choose them. `backpressure_presence` wedges every connection at registration if the session starts before its controller and the presence queue fills, which is the exact case dropping exists for. `backpressure_inbound` is TCP backpressure on one client, which is the point, but a controller that falls behind applies it to every client at once.
+Two have a failure mode worth knowing before you choose them. `backpressure_presence` wedges every connection at registration if the session starts before its controller and the presence queue fills, which is the exact case dropping exists for. `backpressure_inbound` is meant to apply TCP backpressure to one client, but a controller that falls behind applies it to every client at once.
 
 One place deliberately ignores the presence policy: a departure caused by `disconnect_slow_clients` is announced without waiting, even under `backpressure_presence`, because a send that disconnects a client must not block on the controller hearing about it.
 
@@ -238,7 +238,7 @@ One place deliberately ignores the presence policy: a departure caused by `disco
 
 ### The Two Planes
 
-Both are measured by the server, and neither is a number the client reported. Nothing is added to your protocol for either.
+Both are measured by the server and neither is a number the client reported. Nothing is added to your protocol for either.
 
 ```rust,ignore
 let transport = session.agent_rtt(&id);        // the socket's own ping, under everything
@@ -247,7 +247,7 @@ let link = session.agent_link_rtt(&id);        // a Kind::Ping frame, through th
 
 The gap between them is what plaza and the configured link cost this connection. On TCP there is no transport-plane ping, so the link plane is the only round trip there is.
 
-Compare the **minimum** against a budget, not the mean: jitter only ever adds delay, so the smallest sample is the honest estimate.
+Compare the **minimum** against a budget rather than the mean. Jitter only ever adds delay, so the smallest sample is the closest to the real round trip.
 
 ```rust,ignore
 let (smoothed, min, samples) = session.connection_rtt(conn_id)?;
@@ -274,7 +274,7 @@ let session = ActixWsPlazaSession::with_options(
 sim_clock.store(state.tick_ms, Ordering::Relaxed);
 ```
 
-The closure runs on a connection task, so an authoritative clock is **published** rather than borrowed. The unit is yours and this crate never reads it as a quantity. Without a clock, `Pong.responder` is `None` and a client can still measure its round trip.
+The closure runs on a connection task, so the simulation loop stores its clock into a shared atomic for the closure to read. The unit is yours and this crate never reads it as a quantity. Without a clock, `Pong.responder` is `None` and a client can still measure its round trip.
 
 ### Turning Probes Off
 
@@ -282,7 +282,7 @@ The closure runs on a connection task, so an authoritative clock is **published*
 SessionOptions::with_protocol(ProtocolVersion(PROTOCOL)).without_probes()
 ```
 
-An inbound `Ping` is still answered, since refusing would break a peer measuring its own side. What stops is this session originating them, and `agent_link_rtt` then stays `None`.
+An inbound `Ping` is still answered, since refusing would break a peer measuring its own side. What stops is this session originating them and `agent_link_rtt` then stays `None`.
 
 ### Changing the Probe Schedule
 
@@ -292,9 +292,9 @@ SessionOptions::with_protocol(ProtocolVersion(PROTOCOL))
   .probe_slots(16)
 ```
 
-The defaults spend eight probes at 125 ms before settling to one every five seconds, which puts several samples inside the first second and then keeps an eye on a link that changes later. A LAN server and a global one want different numbers.
+The defaults spend eight probes at 125 ms before settling to one every five seconds, which puts several samples inside the first second and then keeps measuring in case the link changes later. A LAN server and a global one want different numbers.
 
-`slots` is not one of those. A probe is answered a round trip after it goes out and the fast phase sends another every 125 ms, so on any link slower than that the reply lands after its successor was sent. Tracking one at a time discards every such sample, leaving the link unmeasured at precisely the latencies worth measuring.
+`slots` is not one of those. A probe is answered a round trip after it goes out and the fast phase sends another every 125 ms, so on any link slower than that the reply lands after its successor was sent. Tracking one at a time discards every such sample, so a link slower than 125 ms goes unmeasured.
 
 ## Watching Connections
 
@@ -308,7 +308,7 @@ if let Some(idle) = session.manager().agent_idle_for(&id) {
 }
 ```
 
-Time since the last **data** frame. Probes do not count, and only the session can promise that: the control plane answers a `Ping` without the application ever seeing it, so an AFK rule written anywhere else either counts probe traffic as presence or never fires. No timer and no timeout ship with it.
+Time since the last **data** frame. Probes do not count and only the session can promise that: the control plane answers a `Ping` without the application ever seeing it, so an AFK rule written anywhere else either counts probe traffic as presence or never fires. No timer and no timeout ship with it.
 
 ### Who Is Sending How Much
 
@@ -317,7 +317,7 @@ let volume = session.manager().agent_inbound(&id);   // monotonic frames and byt
 let delta = volume.frames - last.frames;
 ```
 
-`TransportStats` counts the session as a whole, which can say *that* something floods but never *who*. Windows and thresholds stay yours: diff two readings, or feed a `plaza_server_utils::RateMeter`.
+`TransportStats` counts the session as a whole, so it can show that something is flooding but not which connection. Windows and thresholds stay yours: diff two readings or feed a `plaza_server_utils::RateMeter`.
 
 ## Impairing a Link
 
@@ -340,12 +340,12 @@ Setting an agent or all-connection profile also clears that connection's link re
 
 ### What a Loss Costs
 
-`loss` is the probability a frame is lost. `delivery` says what that means, and the two are different link types rather than two knobs on one.
+`loss` is the probability a frame is lost. `delivery` says what that means. Each of its two variants models a different kind of link.
 
-*   **`Delivery::Reliable`**, the default and the truth about both transports here. The frame arrives one retransmission timeout late and everything behind it waits. **Nothing is deleted**, because on a reliable stream a lost segment never reaches the application as a missing message.
+*   **`Delivery::Reliable`**, the default and what both transports here actually do. The frame arrives one retransmission timeout late and everything behind it waits. **Nothing is deleted**, because on a reliable stream a lost segment never reaches the application as a missing message.
 *   **`Delivery::Datagram`**, where the frame is gone and the two ends reconcile. Over a WebSocket this is a deliberate simulation of a transport plaza does not yet have, useful for exercising recovery before the channel it is for exists.
 
-No frame kind is exempt under either model. Under `Reliable` nothing is lost at all; under `Datagram` a lost probe costs one sample of the several in flight, and a lost `Hello` reads as a peer that declared nothing.
+No frame kind is exempt under either model. Under `Reliable` nothing is lost at all; under `Datagram` a lost probe costs one sample of the several in flight and a lost `Hello` reads as a peer that declared nothing.
 
 ### What the Link Reports
 
@@ -354,7 +354,7 @@ let total = session.link_dropped();
 let theirs = session.agent_link_dropped(&id);
 ```
 
-Worth reading precisely because an application cannot count it for itself: what the link lost never reaches the application.
+An application cannot count these itself, because what the link loses never reaches it.
 
 Two guarantees the conditioner makes:
 
@@ -372,11 +372,11 @@ for conn_id in session.manager().connections_of(&player) {
 }
 ```
 
-The connection task flushes what was queued, writes the farewell last and closes the socket. The departure then arrives on the presence stream as an ordinary `Left`, so game logic keeps one disconnect story whether the cable was pulled or the host said go.
+The connection task flushes what was queued, writes the farewell last and closes the socket. The departure then arrives on the presence stream as an ordinary `Left`, so game logic handles a kick the same way as a pulled cable.
 
-The farewell is an op of your own vocabulary, not a transport code. Neither transport has a close vocabulary of its own, and "removed by the host" is an application word.
+The farewell is an op from your own protocol. Neither transport has close reasons of its own, so a reason like "removed by the host" has to come from the application.
 
-`deregister` is **not** a close. It removes the connection from the registry and nothing else; the socket belongs to the connection task, and only an order through `close_connection` reaches it.
+`deregister` does **not** close the socket. It removes the connection from the registry and nothing else; the socket belongs to the connection task and only an order through `close_connection` reaches it.
 
 ### Kicking an Agent, Draining a Room
 
@@ -385,9 +385,9 @@ let closed = session.manager().deregister_agent(&id, Some(farewell.clone()));
 let drained = session.manager().disconnect_all(Some(goodbye));
 ```
 
-Everyone told, then closed. A drain differs from a kick only in who it names.
+Each connection gets the farewell and is then closed. `disconnect_all` is the same close as `deregister_agent`, applied to every live connection.
 
-Which connection goes is policy and stays yours: a duplicate login can refuse the newcomer or kick the older session with the same two calls.
+Choosing which connection to close is up to you: a duplicate login can refuse the newcomer or kick the older session with the same two calls.
 
 ### Bounding a Session With a Deadline
 
@@ -403,7 +403,7 @@ The connection task enforces it in its own loop and expiry goes through the same
 
 ### Serving the Bundle
 
-One process binds a port, serves a wasm or JS bundle from it, and puts the WebSocket route on the same origin, so the page connects back to whoever served it.
+One process binds a port, serves a wasm or JS bundle from it and puts the WebSocket route on the same origin, so the page connects back to whoever served it.
 
 ```rust,ignore
 Host::new("0.0.0.0:8080")
@@ -425,15 +425,15 @@ if let Some(addr) = plaza_session::host::lan_address() {
 
 ### Cache Busting
 
-**Not optional, and the subtle part.** A browser client is a build product that does not rebuild when the server does, so a page built before a wire change still loads, still appears to run, and only the messages whose shape changed are rejected. That reads as a netcode bug and is a deployment one.
+Cache busting is required. A browser client is a build product that does not rebuild when the server does, so a page built before a wire change still loads, still appears to run and only the messages whose shape changed are rejected. This looks like a netcode bug even though the cause is a stale page.
 
-Two halves have to be present together: `cache_bust` stamps the asset's modification time into a dynamically served `index.html`, read per request so rebuilding the client reaches an already running host without a restart, and static assets are served `no-cache`, which is what makes the stamp effective. A cached page keeps quoting the old stamp, which is the trap that makes cache busting look like it does not work.
+Two parts have to be present together. `cache_bust` stamps the asset's modification time into a dynamically served `index.html`, read per request so rebuilding the client reaches an already running host without a restart. Static assets are also served `no-cache`. Without that, a cached page keeps quoting the old stamp and cache busting appears not to work.
 
-The third half is on the wire: [`plaza_wire::build`](../wire/) derives a protocol version by hashing the sources that define your messages, so a client can announce what it was built against and be told to reload.
+A third part is on the wire: [`plaza_wire::build`](../wire/) derives a protocol version by hashing the sources that define your messages, so a client can announce what it was built against and be told to reload.
 
 ### The Whole Simulation Stack
 
-For a delta-streaming simulation, `SimHost` is everything between "I have a `StateLogic`" and "it is listening".
+For a delta-streaming simulation, `SimHost` is everything needed to take a `StateLogic` to a listening server.
 
 ```rust,ignore
 SimHost::new(bind, Duration::from_millis(SIM_STEP_MS))
@@ -447,7 +447,7 @@ SimHost::new(bind, Duration::from_millis(SIM_STEP_MS))
   .await
 ```
 
-It decides three things for you, and each is unmade by using the blocks directly: joiners get no snapshot, connections are numbered `u64` agents on a `/ws` route it registers itself, and the driver is `run_fixed`. The one with a named alternative is the driver:
+It decides three things for you, each of which you can undo by using the blocks directly: joiners get no snapshot; connections are numbered `u64` agents on a `/ws` route it registers itself; the driver is `run_fixed`. The one with a named alternative is the driver:
 
 ```rust,ignore
 SimHost::measured(bind, tick_hz)   // delivers measured elapsed time instead of fixed steps
@@ -496,17 +496,17 @@ manager.deregister(conn_id).await;
 
 The orders must be their own `select!` arm: the outbound arm is disabled the moment `deregister` drops the sender, which is exactly when a close must still work.
 
-Delegate the three `Session` methods to the inner `TransportSession`, and after `broadcast` call `disconnect_overflowed` with what it returned.
+Delegate the three `Session` methods to the inner `TransportSession` and after `broadcast` call `disconnect_overflowed` with what it returned.
 
-What you still write is framing, and enforcing `Limits::max_frame_bytes` with it. That is what a transport is.
+What you still write is framing and enforcing `Limits::max_frame_bytes` with it.
 
-**Answer probes or say why not.** A `Kind::Ping` handed to `forward_incoming` is answered by nobody: the bridge drops it and warns once per connection, and the client measuring its round trip waits forever. `LinkDriver` handles this, so the only way to get it wrong is to bypass it and forget.
+**Answering probes.** A `Kind::Ping` handed to `forward_incoming` is answered by nobody: the bridge drops it and warns once per connection and the client measuring its round trip waits forever. `LinkDriver` answers probes, so this only goes wrong if you bypass it and do not answer them yourself.
 
 `examples/foreign_soil` is a working transport built this way, in a crate with no privileged access and neither shipped transport compiled in. Its connection loop is 65 lines, about 25 of them reading and writing a socket.
 
 ### Assembling the Pieces Yourself
 
-`LinkDriver` is a convenience, not a ceiling. `Conditioner`, `ProbeState` and `LinkHandle` are public and each is useful alone.
+`LinkDriver` is optional. `Conditioner`, `ProbeState` and `LinkHandle` are public and each is useful alone.
 
 ```rust,ignore
 let link = manager.link_handle(conn_id).expect("registered");
@@ -529,7 +529,7 @@ if link.generation() != generation {
 let wake = control::earliest(next_probe, control::earliest(up.next_release(), down.next_release()));
 ```
 
-The case to expect is a transport whose link genuinely reorders: the shipped conditioner releases monotonically because a byte stream does not, so a datagram transport keeps the probe plane and writes its own release queue.
+The usual reason to do this is a transport whose link really reorders frames. The shipped conditioner releases in order because a byte stream never reorders, so a datagram transport keeps the probe plane and writes its own release queue.
 
 ## Error Handling
 
@@ -554,7 +554,7 @@ match TcpPlazaSession::<Op, PlayerId>::bind(addr, factory).await {
 
 A malformed body of any kind is a per-message problem: it is logged and dropped, never a disconnect. An unknown frame tag is skipped with a `trace!` and the connection carries on.
 
-Counters live on `TransportStats`, and the three drop counts stay separate because they mean different things. An outbound drop is usually benign for a stream of absolute state. An inbound drop is player input the client believes arrived. A presence drop is a correctness failure from a single occurrence: a lost join leaves the controller with a client it never heard of, a lost leave leaves it holding a seat forever.
+Counters live on `TransportStats` and the three drop counts stay separate because they mean different things. An outbound drop is usually benign for a stream of absolute state. An inbound drop is player input the client believes arrived. A presence drop is a correctness failure from a single occurrence: a lost join leaves the controller with a client it never heard of, a lost leave leaves it holding a seat forever.
 
 ```rust,ignore
 let stats = session.stats();

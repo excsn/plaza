@@ -1,59 +1,56 @@
-//! Subscription: the relevance a distance query cannot answer.
+//! Subscription: the entities a client follows by choice rather than by
+//! distance.
 //!
-//! [`relevance`](crate::relevance) answers *who is near me*, which is the
-//! question every example in this tree asked until one asked a second one:
-//! **who have I chosen to care about, wherever they are.** A party's health
-//! bars update across a zone, raid frames work through a wall, a spectator
-//! follows one player around a map, and a guild roster is not a distance query
-//! at all.
+//! [`relevance`](crate::relevance) answers who is near a client. This module
+//! answers who a client has chosen to follow, wherever they are. A party's
+//! health bars update across a zone, raid frames work through a wall, a
+//! spectator follows one player around a map and a guild roster has nothing to
+//! do with distance.
 //!
-//! The two are different shapes as well as different questions, which is why
-//! neither expresses the other. A grid query is a fresh answer every tick over
-//! a set that changes constantly; a subscription is a handful of entries with a
-//! lifetime measured in hours. Expressing a party as a relevance radius means
-//! an infinite radius, and expressing a grid query as a subscription means
-//! resubscribing everybody every tick.
+//! Neither can stand in for the other. A grid query is a fresh answer every
+//! tick over a set that changes constantly; a subscription is a handful of
+//! entries with a lifetime measured in hours. A party expressed as a relevance
+//! radius needs an infinite radius and a grid query expressed as subscriptions
+//! means resubscribing everybody every tick.
 //!
-//! What this block is: a directed subscription set kept **both ways round**,
-//! because both directions are asked every tick. A sender needs the set it must
-//! include; a departing key needs everyone who has to be told it is gone. Kept
-//! one way, the second question is a scan of every subscriber in the world.
+//! This block is a directed subscription set indexed **both ways round**,
+//! because both directions are queried every tick. A sender needs the set it
+//! must include; a departing key needs everyone who has to be told it is gone.
+//! With a one-way index the second query scans every subscriber in the world.
 //!
-//! What stays the app's: whether a subscription is symmetric (a party) or not
-//! (a spectator), what it costs, who may create one, and how it reaches the
-//! wire. [`Subscriptions::group`] is here because symmetric membership is the
-//! case that is easy to get subtly wrong, not because it is the only one.
+//! The app decides whether a subscription is symmetric (a party) or not (a
+//! spectator), what it costs, who may create one and how it reaches the wire.
+//! [`Subscriptions::group`] is provided because symmetric membership is easy
+//! to get subtly wrong.
 //!
-//! ## The union is the point
+//! ## Unioning with the spatial answer
 //!
-//! A subscription channel is only expensive when its members are far away. Feed
-//! [`Audience::of`] a spatial answer and a subscription set, and what it costs
-//! is the members distance missed and nothing at all for the ones standing
-//! beside you.
+//! A subscription channel only costs extra when its members are far away.
+//! Given a spatial answer and a subscription set, [`Audience::of`] adds only
+//! the members the distance query missed; members standing beside the viewer
+//! cost nothing extra.
 //!
-//! Whatever reaches the wire has to say **why** each entity is in the frame.
-//! "Near" and "subscribed" are different promises: the neighbour vanishes when
-//! the viewer walks away and the subscribed entity does not, so a client that
-//! cannot tell them apart cannot draw the interface the subscription exists
-//! for, and will drop a party member the moment they leave view.
+//! The wire has to say **why** each entity is in the frame. A near entity
+//! disappears when the viewer walks away and a subscribed one does not, so a
+//! client that cannot tell them apart cannot draw the interface the
+//! subscription is for and drops a party member as soon as they leave view.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
 /// Why an entity is in an audience.
 ///
-/// Not a hint, and not an optimisation. A client draws a nameplate for one and
-/// a party frame for the other, and the two have different lifetimes: absence
-/// from a later frame means "walked away" for [`Because::Near`] and "left the
-/// world" for [`Because::Subscribed`].
+/// A client draws a nameplate for one and a party frame for the other and the
+/// two have different lifetimes: absence from a later frame means "walked
+/// away" for [`Because::Near`] and "left the world" for [`Because::Subscribed`].
 ///
-/// **This does not cross the wire, and the copy in your protocol is
-/// deliberate.** This crate carries no serde on purpose, and the coupling that
-/// would follow is worse than the duplication: a protocol version is a hash of
-/// the types on the wire, so a wire type owned by a library means upgrading
-/// the library silently re-versions every application that uses it, and a
-/// patch release disconnects clients. Spell it again in your protocol, three
-/// variants and a name you chose, and let the two move on their own clocks.
+/// **This type does not cross the wire. Define your own copy in your
+/// protocol.** This crate carries no serde, because coupling to it would cost
+/// more than the duplication: a protocol version is a hash of the types on the
+/// wire, so a wire type owned by a library means upgrading the library
+/// silently re-versions every application that uses it and a patch release
+/// disconnects clients. Spell the three variants again in your protocol under
+/// a name you chose, so the two can change independently.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Because {
   /// Passed the spatial query.
@@ -75,11 +72,10 @@ impl Because {
   }
 }
 
-/// Who each key has chosen to care about, and who has chosen them.
+/// Who each key has chosen to care about and who has chosen them.
 ///
 /// Directed: `a` subscribing to `b` does not subscribe `b` to `a`. Use
-/// [`group`](Self::group) when the relationship is symmetric, which is what a
-/// party is: a one-sided party is a stalker.
+/// [`group`](Self::group) when the relationship is symmetric, as in a party.
 #[derive(Debug, Clone)]
 pub struct Subscriptions<K: Eq + Hash + Clone> {
   out: HashMap<K, HashSet<K>>,
@@ -97,9 +93,9 @@ impl<K: Eq + Hash + Clone> Subscriptions<K> {
   /// A fresh set, refusing any subscription that would take a key past
   /// `limit` outgoing entries.
   ///
-  /// Bounded because this is the channel with no natural ceiling: a spatial
-  /// query is limited by how many entities fit in a radius, and a subscription
-  /// is limited by nothing at all unless something says so.
+  /// Bounded because this channel has no natural limit: a spatial query is
+  /// limited by how many entities fit in a radius, while subscriptions are
+  /// unlimited unless capped here.
   pub fn new(limit: usize) -> Self {
     Self {
       out: HashMap::new(),
@@ -110,8 +106,8 @@ impl<K: Eq + Hash + Clone> Subscriptions<K> {
 
   /// Subscribes `who` to `to`. Returns false if that would pass the limit.
   ///
-  /// Refused rather than truncated. Dropping an entry silently to fit is how a
-  /// client ends up in a party that cannot see one of its members.
+  /// Refused rather than truncated. Silently dropping an entry to fit leaves a
+  /// client in a party that cannot see one of its members.
   pub fn subscribe(&mut self, who: K, to: K) -> bool {
     if who == to {
       return false;
@@ -147,9 +143,9 @@ impl<K: Eq + Hash + Clone> Subscriptions<K> {
   /// Merges the groups holding `a` and `b` into one, everyone subscribed to
   /// everyone.
   ///
-  /// A party joining a party, which is the operation that is easy to get wrong
-  /// by adding one person to one side. Refused whole if the merged group would
-  /// pass the limit, and nothing is changed when it is refused.
+  /// A party joining a party, which is easy to get wrong by adding one person
+  /// to one side. Refused whole if the merged group would pass the limit, in
+  /// which case nothing changes.
   pub fn group(&mut self, a: K, b: K) -> bool {
     if a == b {
       return false;
@@ -177,8 +173,8 @@ impl<K: Eq + Hash + Clone> Subscriptions<K> {
 
   /// Everyone in the symmetric group holding `key`, `key` included.
   ///
-  /// A key with no subscriptions is a group of one, which is what makes
-  /// [`group`](Self::group) work on a key that has never been seen.
+  /// A key with no subscriptions is a group of one, so [`group`](Self::group)
+  /// works on a key that has never been seen.
   pub fn group_of(&self, key: &K) -> Vec<K> {
     let mut members = vec![key.clone()];
     if let Some(set) = self.out.get(key) {
@@ -210,17 +206,16 @@ impl<K: Eq + Hash + Clone> Subscriptions<K> {
   }
 
   /// Takes a key out of its symmetric group, leaving directed subscriptions
-  /// alone, and returns who was told.
+  /// alone and returns who was told.
   ///
-  /// Leaving a party is not the same event as leaving the world, which is what
-  /// [`remove`](Self::remove) is for, and an application that only has the
-  /// second one ends up spelling this out of `unsubscribe` calls in both
-  /// directions and getting the dissolve wrong.
+  /// Leaving a party is a different event from leaving the world, which is what
+  /// [`remove`](Self::remove) is for. An application with only `remove` ends up
+  /// building this from `unsubscribe` calls in both directions and getting the
+  /// dissolve wrong.
   ///
-  /// **A group of one is dissolved rather than kept.** Leaving the last member
-  /// subscribed to nobody costs a lookup for ever to answer a question no
-  /// longer being asked, and it makes `group_of` report a party where a player
-  /// sees none.
+  /// **A group of one is dissolved rather than kept.** Keeping the last member
+  /// as a group costs a lookup on every query for a party that no longer
+  /// exists. It also makes `group_of` report a party where a player sees none.
   pub fn leave_group(&mut self, key: &K) -> Vec<K> {
     let members: Vec<K> = self.group_of(key).into_iter().filter(|m| m != key).collect();
     for other in &members {
@@ -239,16 +234,15 @@ impl<K: Eq + Hash + Clone> Subscriptions<K> {
     members
   }
 
-  /// Removes a key entirely, both directions, and returns everyone who was
+  /// Removes a key entirely, both directions and returns everyone who was
   /// subscribed to it.
   ///
-  /// The returned list is the point of keeping the reverse index: those are
-  /// the clients whose interface still has an entry for something that is no
-  /// longer here, and they are the ones that have to be told. Finding them by
-  /// scanning every subscriber is the alternative, and it is the whole world.
+  /// The reverse index exists to produce this list: the clients whose
+  /// interface still has an entry for the removed key and who have to be told.
+  /// Without it you would scan every subscriber in the world.
   ///
-  /// Call this on departure. A subscription that outlives the thing it is
-  /// about is a health bar that keeps updating for somebody who left.
+  /// Call this on departure. Otherwise the subscription outlives the thing it
+  /// is about and a health bar keeps updating for somebody who left.
   pub fn remove(&mut self, key: &K) -> Vec<K> {
     let watchers: Vec<K> = self.back.remove(key).map(|s| s.into_iter().collect()).unwrap_or_default();
     for watcher in &watchers {
@@ -301,15 +295,15 @@ impl<K: Eq + Hash + Clone> Subscriptions<K> {
   }
 }
 
-/// What one client is told about this tick, and why.
+/// What one client is told about this tick and why.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Audience<K> {
   /// Everyone to include, each labelled with why they are here.
   pub entries: Vec<(K, Because)>,
   /// How many came from the spatial query.
   pub near: usize,
-  /// How many the subscription added that distance did not. **This is the
-  /// number the second channel actually costs.**
+  /// How many the subscriptions added beyond the spatial query. This is what
+  /// the subscription channel costs.
   pub added: usize,
 }
 
@@ -317,8 +311,8 @@ impl<K: Eq + Hash + Clone + Ord> Audience<K> {
   /// Unions a spatial answer with a subscription set.
   ///
   /// `near` is whatever the relevance query returned, in any order; the result
-  /// is sorted so a client sees a stable order across ticks and a diff against
-  /// the previous one means something.
+  /// is sorted so a client sees a stable order across ticks and can diff it
+  /// against the previous one.
   pub fn of(near: &[K], subscriptions: &Subscriptions<K>, viewer: &K) -> Self {
     let close: HashSet<&K> = near.iter().collect();
     let mut entries: Vec<(K, Because)> = Vec::with_capacity(near.len());
@@ -426,8 +420,7 @@ mod tests {
 
   #[test]
   fn a_one_sided_subscription_is_not_a_group() {
-    // Or following somebody would drag them into your party, and they would
-    // find themselves sharing a health bar with a stranger.
+    // Otherwise following somebody would drag them into your party.
     let mut subs: Subscriptions<u32> = Subscriptions::default();
     subs.subscribe(1, 2);
     assert_eq!(subs.group_of(&1), vec![1]);
@@ -436,8 +429,8 @@ mod tests {
 
   #[test]
   fn removing_a_key_names_everyone_who_has_to_be_told() {
-    // The reason the reverse index exists. Without it this answer costs a scan
-    // of every subscriber in the world, on every departure.
+    // Without the reverse index this answer costs a scan of every subscriber
+    // in the world on every departure.
     let mut subs: Subscriptions<u32> = Subscriptions::default();
     subs.subscribe(1, 9);
     subs.subscribe(2, 9);
@@ -462,9 +455,9 @@ mod tests {
 
   #[test]
   fn unsubscribing_one_direction_leaves_the_other_and_is_no_longer_a_group() {
-    // The directed primitive, and the case worth pinning: half a symmetric
-    // pair is not a party, it is one person watching another, and `group_of`
-    // has to say so or a health bar keeps drawing for somebody who left.
+    // Half a symmetric pair is one person watching another rather than a
+    // party. `group_of` has to report that or a health bar keeps drawing for
+    // somebody who left.
     let mut subs: Subscriptions<u32> = Subscriptions::default();
     subs.pair(1, 2);
     subs.unsubscribe(&1, &2);
@@ -506,8 +499,8 @@ mod tests {
 
   #[test]
   fn the_second_to_last_leaving_dissolves_what_is_left() {
-    // A group of one is not a group, and leaving it subscribed costs a lookup
-    // for ever to answer a question nobody is asking.
+    // Keeping a group of one costs a lookup on every query for a party that
+    // no longer exists.
     let mut subs: Subscriptions<u32> = Subscriptions::default();
     subs.group(1, 2);
     subs.group(1, 3);
@@ -537,8 +530,8 @@ mod tests {
 
   #[test]
   fn a_subscriber_standing_beside_you_costs_nothing_extra() {
-    // The union is what keeps the second channel cheap, and this is the case
-    // it is cheap in: a party that stays together, which is most of the time.
+    // The union keeps the subscription channel cheap when a party stays
+    // together, which is most of the time.
     let mut subs: Subscriptions<u32> = Subscriptions::default();
     subs.pair(1, 2);
     let audience = Audience::of(&[1, 2, 3], &subs, &1);
@@ -558,8 +551,7 @@ mod tests {
 
   #[test]
   fn what_the_second_channel_costs() {
-    // The number worth having, and the argument for the whole module: a
-    // subscription is expensive only when its members are far away.
+    // A subscription costs extra only when its members are far away.
     let mut subs: Subscriptions<u32> = Subscriptions::new(4);
     subs.group(1, 2);
     subs.group(1, 3);

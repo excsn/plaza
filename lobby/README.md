@@ -2,7 +2,7 @@
 
 **License:** Mozilla Public License 2.0 (MPL-2.0) · **Status:** Experimental
 
-Rooms on a single server for [`plaza`](../core/): creating them, listing them, authorizing joins, and reaping finished ones. Each room is a `StateController` running as its own task in the same process.
+Rooms on a single server for [`plaza`](../core/): creating them, listing them, authorizing joins and reaping finished ones. Each room is a `StateController` running as its own task in the same process.
 
 How to use it: [README.USAGE.md](README.USAGE.md). Full surface: [API_REFERENCE.md](API_REFERENCE.md).
 
@@ -29,7 +29,7 @@ plaza_lobby = "0.7"
 
 ## Scope
 
-Single server. Rooms are in-process tasks, and nothing here coordinates across machines; that remains an application concern.
+Single server. Rooms are in-process tasks and nothing here coordinates across machines; that remains an application concern.
 
 ## Status
 

@@ -4,16 +4,14 @@
 //! an intent, never a position; a client never says who it is).
 //!
 //! **A turn request carries no place.** [`Op::Turn`] says which way and which
-//! tick it was asked for, and nothing about where it should be taken, because
-//! where is the server's answer rather than the client's claim. A client that
-//! could name the junction could name any junction, and the junction is what
-//! decides which corridor you end up in.
+//! tick it was asked for and nothing about where it should be taken, because
+//! the server decides where. A client that could name the junction could name
+//! any junction and the junction decides which corridor you end up in.
 //!
 //! **The server says where each turn was actually taken.** [`TurnTaken`] is not
-//! needed to play: the next frame's heading already implies it. It is here
-//! because a turn taken at a *different junction* from the one a client
-//! predicted is the failure mode this whole example is about, and without the
-//! place there is nothing to compare.
+//! needed to play: the next frame's heading already implies it. It is here so a
+//! client can detect a turn taken at a *different junction* from the one it
+//! predicted, which it cannot do without the place.
 
 use serde::{Deserialize, Serialize};
 
@@ -48,10 +46,10 @@ pub enum Op {
   Frame(Box<Frame>),
   /// Where a turn was actually taken, and by whom.
   ///
-  /// The measurement, not the mechanism. A client already knows its new heading
-  /// from the next frame; what it cannot know is whether the server took the
-  /// turn at the junction the client took it at, and that difference sends the
-  /// two down different corridors rather than leaving them one cell apart.
+  /// This is a measurement rather than part of the mechanism. A client already
+  /// knows its new heading from the next frame. What it cannot know is whether
+  /// the server took the turn at the same junction it did. If not, the two are
+  /// in different corridors rather than one cell apart.
   TurnTaken(Box<TurnTaken>),
   /// Pellets eaten since the last frame, and by whom. An event rather than a
   /// diff of the pellet set, because the set is large and the changes are few.
@@ -84,10 +82,10 @@ pub struct RoundStart {
   pub tick: u64,
   /// The server instant play begins.
   ///
-  /// An instant, not a duration: a duration would start counting when each
-  /// client happened to receive it, so a player on a slower link would begin
-  /// later than everybody else and the countdown would hand out an advantage.
-  /// Declared, like every other moment in this repository.
+  /// An instant rather than a duration. A duration would start counting when
+  /// each client received it, so a player on a slower link would begin later
+  /// than everybody else and the countdown would hand out an advantage. Every
+  /// other moment in this repository is declared the same way.
   pub starts_at_ms: u64,
 }
 
@@ -101,10 +99,10 @@ pub struct Frame {
   pub tick: u64,
   /// **Only the players this recipient is allowed to know about.**
   ///
-  /// A hidden runner is omitted here rather than flagged, because a client
-  /// handed a position it should not see has already lost the secret whatever
-  /// it draws. This is per-recipient state, which is what makes the frame a
-  /// different message for each seat rather than one broadcast.
+  /// A hidden runner is omitted here rather than flagged, because once a client
+  /// has the position the secret is out, whatever it draws. This field is per
+  /// recipient, so the frame is a different message for each seat rather than
+  /// one broadcast.
   pub players: Vec<PlayerState>,
   pub pellets_left: u32,
   pub powerups: Vec<PowerupState>,

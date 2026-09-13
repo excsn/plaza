@@ -112,7 +112,7 @@
       ? 'fallen: ' + village.dead.map(([p, r]) => `${name(p)} (${r})`).join(', ')
       : '';
 
-    // The dead see everything; the living see this empty.
+    // Filled for the dead and empty for the living.
     el('reveal').textContent = village.everyone
       ? 'you see all: ' + village.everyone.map(([p, r]) => `${name(p)} is a ${r}`).join(', ')
       : '';

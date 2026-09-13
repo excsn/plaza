@@ -116,9 +116,8 @@ void main() {
     game.onRemove();
   });
 
-  /// The lifecycle hook is the whole reason this mixin exists: it turns a
-  /// platform event into the client's resume contract without the app having
-  /// to remember to.
+  /// The lifecycle hook turns a platform event into the client's resume
+  /// contract without the app having to remember to.
   test('resuming the app resumes the connection', () async {
     final server = _Server();
     final game = _TestGame(server);
@@ -213,8 +212,8 @@ void renderTimelineTests() {
     await pump();
 
     // A stream arriving 300ms late at 100ms intervals needs far more than the
-    // 100ms default, and saying so is the point: adapting silently would hide
-    // a bad link instead of reporting it.
+    // 100ms default. The timeline reports that rather than adapting, because
+    // adapting silently would hide a bad link instead of reporting it.
     for (var i = 0; i < 60; i++) {
       final stamp = i * 100;
       game.observePlazaStamp(stamp, stamp + 300);

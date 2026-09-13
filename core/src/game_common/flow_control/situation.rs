@@ -1,13 +1,12 @@
 //! A mark of the situation as it stood, for work scheduled against it.
 //!
-//! [`Phased::epoch`](super::phases::Phased::epoch) answers "is this still the
-//! same phase"; nothing answered "is this still the same *decision*". A turn
-//! clock, a bot's think timer, a response window's deadline: each is scheduled
-//! against a moment ("seat 3 owes the next action") that ends when anything
-//! moves the game on, and the phase epoch cannot see that, because the phase
-//! did not change. Four examples wrote the same bare `key: u64` with the same
-//! compare-on-fire guard before this existed, which is the consumer count the
-//! backlog entry gated on.
+//! [`Phased::epoch`](super::phases::Phased::epoch) tells you whether the phase
+//! is still the same, but not whether the same *decision* is still pending. A
+//! turn clock, a bot's think timer, a response window's deadline: each is
+//! scheduled against a moment ("seat 3 owes the next action") that ends when
+//! anything moves the game on. The phase epoch cannot see that, because the
+//! phase did not change. Four examples wrote the same bare `key: u64` with the
+//! same compare-on-fire guard before this existed.
 //!
 //! The marker type parameter is what keeps two situations in one state from
 //! answering for each other: a `Mark<Ask>` does not compare against a
@@ -17,8 +16,8 @@
 use std::fmt::Debug;
 use std::marker::PhantomData;
 
-/// A counter for one recurring decision: advance it whenever the situation
-/// moves on, and everything scheduled against the old standing goes stale.
+/// A counter for one recurring decision. Advance it whenever the situation
+/// moves on; everything scheduled against the old value then goes stale.
 pub struct Situation<T = ()> {
   n: u64,
   _marker: PhantomData<fn() -> T>,

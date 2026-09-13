@@ -3,8 +3,8 @@ import 'package:plaza_client/plaza_client.dart';
 
 /// What a connection has actually done, for a panel to show.
 ///
-/// In the tradition of the playgrounds' readouts: every number here exists
-/// because a fault was invisible without it. `framesSkipped` climbing means the
+/// Like the playgrounds' readouts, each number here was added because a fault
+/// could not be seen without it. `framesSkipped` climbing means the
 /// server is ahead of this build; `reconnects` climbing on a still-connected
 /// session means the link is flapping rather than down, which looks identical
 /// from inside the game and is a different problem.
@@ -17,7 +17,7 @@ class PlazaStats extends ChangeNotifier {
   int resumes = 0;
 
   /// Set when the two ends were built from different wire definitions. An app
-  /// showing this should be prompting for an update, not playing on.
+  /// with this set should prompt for an update rather than play on.
   Outdated? outdated;
 
   /// Set when reconnection gave up.

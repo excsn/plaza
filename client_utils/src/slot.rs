@@ -1,27 +1,26 @@
 //! Naming an entity across a wire when its storage slot gets reused.
 //!
 //! A server that keeps entities in a dense array and recycles the gaps has the
-//! cheapest possible identifier: the array index. It is also, on its own, wrong,
-//! and wrong in a way that is very hard to see.
+//! cheapest possible identifier: the array index. On its own it is also wrong,
+//! in a way that is very hard to see.
 //!
 //! Slot 41 dies and slot 41 is refilled on the same tick. Every message about
 //! the old occupant that is still in flight, or that the client has not applied
-//! yet, now names the new one. The client dutifully moves the wrong entity, or
-//! deletes an entity that is alive, and neither side has any way to notice: the
-//! index is valid, the message is well formed, and the mirror simply drifts.
+//! yet, now names the new one. The client moves the wrong entity or deletes an
+//! entity that is alive and neither side can notice: the index is valid, the
+//! message is well formed and the mirror drifts.
 //!
 //! A generation counter fixes it. Bump it whenever a slot is refilled, and a
 //! message naming `(41, generation 7)` is provably about the occupant the sender
 //! meant, because the current occupant is generation 8 and the mismatch is
 //! visible at the point of use.
 //!
-//! # Why this type exists rather than the convention
+//! # Why a shared type
 //!
-//! Both sides have to encode the pair the same way, or their digests disagree
-//! about a world they actually hold identically, and the recovery machinery
-//! fires forever chasing a mismatch that is only in the arithmetic. That is a
-//! genuinely miserable afternoon, and it is entirely preventable by having one
-//! definition rather than two agreeing comments.
+//! Both sides have to encode the pair the same way. Otherwise their digests
+//! disagree about a world they hold identically and the recovery machinery
+//! keeps firing on a mismatch that is only in the arithmetic. One shared
+//! definition prevents that.
 //!
 //! It lives in the client crate because the server crate depends on this one:
 //! `plaza_server_utils` re-exports it beside `DeltaBaseline`, whose keys are
@@ -63,10 +62,9 @@ impl SlotKey {
 
   /// The same slot with its generation dropped.
   ///
-  /// For running deliberately without generations, which is worth being able to
-  /// do: it is how you demonstrate what they are for. Every reference to a slot
-  /// then matches whatever is in it, which is precisely the bug, made visible on
-  /// demand instead of discovered in production.
+  /// For running deliberately without generations, to demonstrate what they
+  /// are for. Every reference to a slot then matches whatever is in it, which
+  /// reproduces the bug on demand.
   pub const fn ungenerational(self) -> Self {
     Self { index: self.index, generation: 0 }
   }
@@ -91,8 +89,8 @@ impl From<u64> for SlotKey {
 
 /// The order freed slots are handed out again in.
 ///
-/// **Part of the public contract rather than an implementation detail**, because
-/// it decides how *clustered* recycled indices are, and that decides which wire
+/// **This is part of the public API**, because it decides how *clustered*
+/// recycled indices are, which in turn decides which wire
 /// encoding is cheapest for a despawn set. Measured on a real many-entity
 /// example: under [`Lifo`](ReusePolicy::Lifo) a burst of 233 despawns was 204
 /// separate runs, a mean run length of **1.14**, which is why run-length
@@ -147,11 +145,11 @@ pub enum ReusePolicy {
 /// assert_ne!(reused.generation, key.generation);
 /// ```
 ///
-/// # The ceiling, stated out loud
+/// # The generation ceiling
 ///
 /// The generation is a `u16`, so a single slot freed 65,536 times wraps and a
-/// handle from exactly that many reuses ago aliases the current occupant. That
-/// is not hypothetical at every width: at a busy example's kill rate a `u8`
+/// handle from exactly that many reuses ago aliases the current occupant. At
+/// smaller widths this happens in practice: at a busy example's kill rate a `u8`
 /// generation wraps a given slot in tens of minutes, where `u16` takes days.
 /// Nothing can detect the wrap, so the mitigation is width and, if a session
 /// runs long enough to matter, [`ReusePolicy::Fifo`] to spread reuse across the
@@ -219,10 +217,9 @@ impl SlotAllocator {
   /// the same check [`DeltaMirror::remove`] makes on the other side of the wire.
   ///
   /// The generation is bumped **here**, on free, rather than when the slot is
-  /// next taken. That matters: an outstanding handle should stop naming anything
-  /// the moment its subject dies, not whenever something happens to want the
-  /// index. Between those two moments is exactly the window a delta stream is
-  /// re-deriving retractions in.
+  /// next taken, so an outstanding handle stops matching as soon as its entity
+  /// dies rather than whenever the index is next wanted. A delta stream
+  /// re-derives retractions in the window between those two moments.
   ///
   /// [`DeltaMirror::remove`]: crate::mirror::DeltaMirror::remove
   pub fn free(&mut self, key: SlotKey) -> bool {
@@ -322,8 +319,8 @@ mod tests {
 
   #[test]
   fn a_reused_slot_is_a_different_key() {
-    // The whole point. Without the generation these two are the same u64, and a
-    // message about the first moves the second.
+    // Without the generation these two are the same u64 and a message about
+    // the first moves the second.
     let died = SlotKey::new(41, 7);
     let refilled = SlotKey::new(41, 8);
     assert_ne!(died.encode(), refilled.encode());
@@ -333,8 +330,7 @@ mod tests {
 
   #[test]
   fn dropping_the_generation_makes_a_reused_slot_indistinguishable() {
-    // The failure mode, on demand: this is what running without generations
-    // costs, and being able to show it is why the mode exists.
+    // This is what running without generations costs.
     let died = SlotKey::new(41, 7).ungenerational();
     let refilled = SlotKey::new(41, 8).ungenerational();
     assert_eq!(died, refilled, "without generations the two occupants are one key");
@@ -368,8 +364,8 @@ mod allocator_tests {
 
   #[test]
   fn a_stale_handle_cannot_free_whoever_took_the_slot() {
-    // The failure the generation exists for. Without the check this releases a
-    // live entity because a message about its predecessor arrived late.
+    // Without the check this releases a live entity because a message about
+    // its predecessor arrived late.
     let mut pool = SlotAllocator::new();
     let dead = pool.alloc();
     pool.free(dead);
@@ -394,10 +390,9 @@ mod allocator_tests {
 
   #[test]
   fn the_generation_bumps_on_free_even_if_the_slot_is_never_reused() {
-    // Bumping on free rather than on alloc is what makes a handle stop naming
-    // anything the moment its subject dies, rather than whenever something
-    // happens to want the index. That gap is exactly the window a delta stream
-    // re-derives retractions in.
+    // Bumping on free rather than on alloc makes a handle stop matching as
+    // soon as its entity dies rather than whenever the index is next wanted. A
+    // delta stream re-derives retractions in the gap between the two.
     let mut pool = SlotAllocator::new();
     let key = pool.alloc();
     pool.free(key);
@@ -407,9 +402,8 @@ mod allocator_tests {
 
   #[test]
   fn the_index_space_settles_at_the_high_water_mark() {
-    // Dense indices are the whole point: they are what `VisibilitySet` and a
-    // plain `Vec<T>` want, and the space must not grow with total entities ever
-    // created.
+    // Dense indices are what `VisibilitySet` and a plain `Vec<T>` want, so the
+    // space must not grow with total entities ever created.
     let mut pool = SlotAllocator::new();
     for _ in 0..100 {
       let batch: Vec<SlotKey> = (0..10).map(|_| pool.alloc()).collect();
@@ -423,8 +417,8 @@ mod allocator_tests {
 
   #[test]
   fn the_reuse_policy_decides_the_order_indices_come_back() {
-    // Not cosmetic: it decides how clustered a despawn set's ids are, and
-    // therefore which wire encoding is cheapest for it.
+    // It decides how clustered a despawn set's ids are and therefore which
+    // wire encoding is cheapest for it.
     let mut lifo = SlotAllocator::new().with_policy(ReusePolicy::Lifo);
     let mut fifo = SlotAllocator::new().with_policy(ReusePolicy::Fifo);
     for pool in [&mut lifo, &mut fifo] {
@@ -469,9 +463,8 @@ mod allocator_tests {
 
   #[test]
   fn the_generation_wraps_and_the_ceiling_is_where_it_is_documented() {
-    // Nothing can detect the wrap, so this pins where it happens rather than
-    // pretending it does not. The mitigation is width, and `u16` is the width
-    // `SlotKey` chose.
+    // Nothing can detect the wrap, so this pins where it happens. The
+    // mitigation is width; `u16` is the width `SlotKey` chose.
     let mut pool = SlotAllocator::new();
     let first = pool.alloc();
     assert_eq!(first.generation, 0);

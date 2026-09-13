@@ -1,13 +1,13 @@
-//! The skirmish's rules, and the only place [`WatchState`] changes.
+//! The skirmish's rules and the only place [`WatchState`] changes.
 //!
 //! # The suspended action
 //!
 //! A march is the one op in this workspace that does not resolve inside the
 //! `process_input` that accepted it. The server walks the canonical path one
-//! cell per [`STEP_MS`] window; entering an enemy watcher's sight opens an
-//! offer to the defending commander alone, and the offer is *applied* only
+//! cell per [`STEP_MS`] window. Entering an enemy watcher's sight opens an
+//! offer to the defending commander alone and the offer is *applied* only
 //! when the window closes. Fire, hold and silence therefore all cost the
-//! mover exactly one window, which is the no-leak invariant: nothing about a
+//! mover exactly one window. This is the no-leak invariant: nothing about a
 //! march's timing says whether anyone was watching it.
 
 use async_trait::async_trait;
@@ -93,7 +93,7 @@ impl StateLogic<WatchOp, PlayerId, WatchState> for WatchLogic {
     let output = LogicOutput::ops(ctx.into_ops());
     if resnapshot {
       let everyone: Vec<Agent<PlayerId>> = state.agents.values().cloned().collect();
-      // Per recipient, never uniform: the provider cuts a side's view, and a
+      // Per recipient, never uniform: the provider cuts a side's view and a
       // uniform request would hand every client the spectator's whole board.
       return Ok(output.and_snapshot(SnapshotRequest::to(everyone)));
     }
@@ -101,8 +101,8 @@ impl StateLogic<WatchOp, PlayerId, WatchState> for WatchLogic {
   }
 }
 
-/// Recipients for one side's private traffic: its commander when human, and
-/// every spectator, who sees the whole board anyway.
+/// Recipients for one side's private traffic: every spectator (who sees the
+/// whole board anyway) and the side's commander when human.
 fn to_side(state: &WatchState, side: u8, ops: Vec<WatchOp>, ctx: &mut Ctx) {
   let mut recipients: Vec<PlayerId> = state
     .agents
@@ -209,7 +209,7 @@ fn start_round(state: &mut WatchState, ctx: &mut Ctx) {
   for unit in state.units.iter_mut() {
     unit.acted = !unit.alive;
   }
-  // The opener alternates by round, so neither side owns the tempo.
+  // The opener alternates by round, so neither side always goes first.
   let opener = ((state.round + 1) % 2) as u8;
   state.side_to_act = Some(opener);
   state.key.advance();
@@ -295,7 +295,7 @@ fn act(state: &mut WatchState, player: PlayerId, order: Order, ctx: &mut Ctx) ->
 }
 
 /// Applies a validated order. Shots and stances finish inside this call; a
-/// march only *begins* here, which is the whole example.
+/// march only *begins* here and walks on in later step windows.
 fn perform_order(state: &mut WatchState, order: Order, ctx: &mut Ctx) {
   let actor = order.unit();
   // Taking any order spends a standing watch token: the stance lasts until
@@ -347,9 +347,9 @@ fn perform_order(state: &mut WatchState, order: Order, ctx: &mut Ctx) {
   }
 }
 
-/// The defender's answer to a standing offer. Recorded, never applied early:
-/// the window closes on its own schedule whatever the answer says, so timing
-/// tells the mover nothing.
+/// The defender's answer to a standing offer. It is recorded and applied only
+/// when the window closes on its own schedule, so the timing tells the mover
+/// nothing.
 fn answer(state: &mut WatchState, player: PlayerId, watcher: UnitId, fire: bool) -> bool {
   let defender = state.side_of(player);
   let Some(marching) = &mut state.marching else {
@@ -402,8 +402,8 @@ fn march_step(state: &mut WatchState, ctx: &mut Ctx) -> bool {
       }
       Some(false) => state.panel.held += 1,
       None => {
-        // Silence holds. Only a human's silence is a lapse; the bot always
-        // answers inside the window.
+        // No answer counts as a hold. Only a human's missing answer is a
+        // lapse; the bot always answers inside the window.
         if human_defender {
           state.panel.lapsed += 1;
         } else {
@@ -439,8 +439,8 @@ fn march_step(state: &mut WatchState, ctx: &mut Ctx) -> bool {
   let revealed = state.revealed.contains(&marching.unit);
   let enemy = 1 - mover_side;
 
-  // The step, told to each audience it belongs to: the mover's side and the
-  // spectators always, the enemy only while their own eyes reach the cell.
+  // The step goes to the mover's side and the spectators always and to the
+  // enemy only while their own sight reaches the cell.
   to_side(
     state,
     mover_side,
@@ -460,9 +460,9 @@ fn march_step(state: &mut WatchState, ctx: &mut Ctx) -> bool {
     }
   }
 
-  // The trigger: the first living enemy watcher whose lane the mover just
-  // crossed. A lane reaches past walking sight, which is why an ambush can
-  // exist at all. The bot answers at once; the answer still waits for the
+  // The trigger is the first living enemy watcher whose lane the mover just
+  // crossed. A lane reaches past walking sight, which is what makes an ambush
+  // possible. The bot answers at once but the answer still waits for the
   // window.
   let watcher = state
     .units
@@ -641,8 +641,9 @@ fn run_due_events(state: &mut WatchState, ctx: &mut Ctx) -> bool {
   changed
 }
 
-/// The virtual commander, and the vacant-chair fallback: shoot what it sees,
-/// watch a lane sometimes, otherwise close the distance toward what it knows.
+/// The virtual commander and the vacant-chair fallback: shoot what it sees,
+/// sometimes watch a lane and otherwise close the distance toward what it
+/// knows.
 pub fn auto_order(state: &WatchState, side: u8, roll: u64) -> Order {
   let fresh: Vec<&crate::protocol::Unit> = state
     .units
@@ -655,7 +656,7 @@ pub fn auto_order(state: &WatchState, side: u8, roll: u64) -> Order {
     .filter(|u| u.side != side && u.alive)
     .collect();
 
-  // A visible enemy in reach is taken before anything clever.
+  // A visible enemy in reach is shot first.
   let mut shot: Option<(UnitId, UnitId, i32)> = None;
   for me in &fresh {
     for them in &enemies {
@@ -851,9 +852,8 @@ mod tests {
     assert_eq!(state.unit(3).unwrap().stance, Stance::Watching, "a held token is kept");
   }
 
-  /// The example's central claim, as an equality of byte streams: the mover's
-  /// commander receives exactly the same ops whether a hidden watcher held
-  /// fire at every step or no watcher existed at all.
+  /// The mover's commander receives exactly the same ops whether a hidden
+  /// watcher held fire at every step or no watcher existed at all.
   #[tokio::test]
   async fn a_held_watch_is_invisible_on_the_movers_wire() {
     async fn mover_stream(watching: bool) -> Vec<WatchOp> {

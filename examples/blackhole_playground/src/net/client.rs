@@ -1,20 +1,22 @@
 //! A client on a real wire.
 //!
 //! It wraps the same [`sim::Client`] the offline playground uses, so the local
-//! integration, the corrections and the rendering are unchanged. What it adds is
-//! everything a shared clock and a function argument were standing in for:
+//! integration, the corrections and the rendering are unchanged. It adds what
+//! the offline build got for free from a shared clock and direct function
+//! calls:
 //!
-//! - **Your own movement is predicted.** Offline, the local player's input went
-//!   straight into authoritative state at 60 Hz. Over a wire it costs a round
-//!   trip, so the hole is predicted locally and reconciled against the server,
-//!   through [`PredictedPlayer`]. Without it the camera follows a position a
-//!   round trip old and the game feels broken in a way no readout would show.
-//! - **The clock is estimated, not shared.** `age_ms = recv - packet.server_time_ms`
-//!   was exact offline because both halves read one clock. Here it is
-//!   [`FramePump`]'s timeline over ping and pong, floored by the newest stamp
-//!   the stream has proven.
-//! - **The connection is a state, not an assumption.** Connecting, refused, and
-//!   dropped are things a player has to be told about.
+//! - **Prediction of your own movement.** Offline, the local player's input
+//!   went straight into authoritative state at 60 Hz. Over a wire it costs a
+//!   round trip, so the hole is predicted locally and reconciled against the
+//!   server through [`PredictedPlayer`]. Without it the camera follows a
+//!   position a round trip old and the game feels broken while every readout
+//!   looks fine.
+//! - **Clock estimation.** `age_ms = recv - packet.server_time_ms` was exact
+//!   offline because both halves read one clock. Here each client estimates the
+//!   server clock with [`FramePump`]'s timeline over ping and pong, floored by
+//!   the newest stamp received.
+//! - **Connection state.** Connecting, refused and dropped are all shown to the
+//!   player.
 
 use plaza_client_utils::{CorrectionMonitor, PlayerConfig, PredictedPlayer};
 use plaza_wire::{MsgPackCodec, WireCodec};
@@ -55,28 +57,28 @@ pub struct MoveInput {
 ///
 /// The hole is a **forced** entity, moved by more than its own input, so the
 /// client cannot predict it from the input alone. This is what
-/// [`PredictedPlayer::set_context`] exists for, and refreshing it each packet is
-/// what lets the client run the server's rule rather than a lesser copy of it.
+/// [`PredictedPlayer::set_context`] exists for. Refreshing it each packet lets
+/// the client run the server's rule instead of a partial copy of it.
 ///
 /// [`PredictedPlayer::set_context`]: plaza_client_utils::PredictedPlayer::set_context
 pub type Field = Vec<Attractor>;
 
 /// The movement rule, the same one the server runs.
 ///
-/// Both of the server's continuous passes are here: the steered move, and the
+/// Both of the server's continuous passes are here: the steered move and the
 /// gravitational attraction toward every other hole. Leaving the second one out
-/// is what made the hole jerk constantly, because the pull is tuned above walking
-/// speed at close range, so the unmodelled term was largest exactly when it was
-/// most visible.
+/// made the hole jerk constantly, because the pull is tuned above walking speed
+/// at close range, so the unmodelled term was largest exactly when it was most
+/// visible.
 ///
-/// What is still not predicted is the *contact separation* between two touching
-/// holes, which would need the other holes' motion predicted too, and that means
-/// running the whole field forward rather than one entity. It is the residual
-/// visible during a close grapple, and it is a deliberate stopping point.
+/// The *contact separation* between two touching holes is still not predicted.
+/// That would need the other holes' motion predicted too, which means running
+/// the whole field forward instead of one entity. It is the residual visible
+/// during a close grapple and it is left out on purpose.
 fn apply_move(pos: &mut Vec2, input: &MoveInput, field: &Field) {
   // Base speed, boosted to dash speed when this step is a predicted dash. The
-  // server multiplies the same base speed in the same direction, so this is the
-  // whole of the dash: no separate vector, just a faster walk.
+  // server multiplies the same base speed in the same direction, so the dash
+  // is just a faster walk with no separate vector.
   let speed = if input.dash { HOLE_SPEED * DASH_SPEED_MULT } else { HOLE_SPEED };
   pos.x = (pos.x + input.dir.x * speed * input.dt).clamp(0.0, ARENA_W);
   pos.y = (pos.y + input.dir.y * speed * input.dt).clamp(0.0, ARENA_H);
@@ -115,7 +117,7 @@ pub struct NetClient {
 
   /// Whether to predict the dash burst, mirrored from the panel each frame. On,
   /// the prediction moves at dash speed and the burst is smooth; off, the dash is
-  /// left unpredicted and arrives as a correction. The switch between the two.
+  /// left unpredicted and arrives as a correction.
   predict_dash: bool,
   /// The newest sequence the server says it has applied, fed back into
   /// reconciliation. `PredictedPlayer` owns the counter itself, so the number it
@@ -144,16 +146,16 @@ pub struct NetClient {
   /// What the prediction is costing, and whether any of it is abnormal.
   ///
   /// The adaptive part matters: a correction of thirty pixels means nothing
-  /// without knowing the send rate, the latency, and how much contact the game is
+  /// without knowing the send rate, the latency and how much contact the game is
   /// in, so the monitor learns the norm and reports departures from it rather
   /// than tripping a constant tuned once against one configuration.
   pub monitor: CorrectionMonitor,
 
   /// Two shadow predictions of your hole, fed the same inputs as the real one but
   /// one always predicting the dash and one never, reconciled the same way. Their
-  /// running mean corrections are a live, same-gameplay A/B of what predicting the
-  /// dash is actually worth, independent of the render switch. Cheap only because
-  /// a predictor is pure and holds nothing.
+  /// running mean corrections compare, on the same gameplay, what predicting the
+  /// dash is worth, independent of the render switch. This is cheap because a
+  /// predictor is pure and holds nothing.
   ab_dash: PredictedPlayer<Vec2, MoveInput, Field>,
   ab_nodash: PredictedPlayer<Vec2, MoveInput, Field>,
   pub ab_dash_monitor: CorrectionMonitor,
@@ -229,9 +231,9 @@ impl NetClient {
   /// Whether there is a world worth drawing yet.
   ///
   /// This client integrates pellets from a field it is *told*, so before the
-  /// first packet it has no field, no rivals, and nothing to integrate. Drawing
-  /// then is not an empty screen but a wrong one: a lone hole in a void, and
-  /// then a universe arriving at once.
+  /// first packet it has no field, no rivals and nothing to integrate. Drawing
+  /// then would show a wrong screen, not just an empty one: a lone hole in a
+  /// void and then everything arriving at once.
   pub fn ready(&self) -> bool {
     !self.sim.holes.is_empty()
   }
@@ -268,9 +270,9 @@ impl NetClient {
     }
     // Predict the dash *movement* too, when the switch is on: the hole dashes in
     // whatever direction it is already steering, so a boosted base speed while
-    // the mirror says you are dashing is the whole prediction. Off, the dash is
-    // left to arrive as a correction, the older and simpler behaviour, so the
-    // two can be compared live.
+    // the mirror says you are dashing is all the prediction needs. Off, the
+    // dash is left to arrive as a correction, the older and simpler behaviour,
+    // so the two can be compared live.
     let dash_now = self.now_ms < self.local_dash_until_ms;
     let dashing = self.predict_dash && dash_now;
     // Predicted locally at once, and the sequence it returns is what the server
@@ -358,7 +360,7 @@ impl NetClient {
           {
             // Freeze the prediction while eliminated: the server holds a dead hole
             // in place through the respawn delay, so integrating input into it
-            // manufactures a correction every packet out of nothing at all.
+            // produces a correction every packet with no cause on the server.
             let respawned = hole.1.alive && !self.local.is_active();
             self.local.set_active(hole.1.alive);
             self.ab_dash.set_active(hole.1.alive);
@@ -404,8 +406,8 @@ impl NetClient {
 
             // The same authoritative state through both shadows. `ab_dash`
             // predicts the dash and `ab_nodash` does not, and they are otherwise
-            // identical, so the gap between their norms is the dash prediction's
-            // whole worth, measured on the gameplay actually being played.
+            // identical, so the gap between their norms is what predicting the
+            // dash is worth, measured on the gameplay actually being played.
             let on = self.ab_dash.reconcile(hole.1.pos, self.acked_seq);
             self.ab_dash_monitor.record(on.seen.dist(on.settled));
             let off = self.ab_nodash.reconcile(hole.1.pos, self.acked_seq);

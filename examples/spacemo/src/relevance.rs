@@ -1,10 +1,10 @@
-//! The three strategies, from the block this example forced into existence.
+//! The three strategies, from the block this example led to.
 //!
 //! The `Field`, its `Strategy` and the `Query` instrumentation started here
-//! and graduated to `plaza_server_utils::field` with both findings attached:
-//! the flat disc funding 7.1x the bandwidth in an open volume, and gow_3d's
-//! counter-case where the height filter examines 2.7x once entities stack.
-//! What stays behind is the measurement that produced the README's numbers.
+//! and moved to `plaza_server_utils::field` along with both findings: the flat
+//! disc costs 7.1x the bandwidth in an open volume and in gow_3d's counter-case
+//! the height filter examines 2.7x once entities stack. What stays here is the
+//! measurement that produced the README's numbers.
 
 pub use plaza_server_utils::field::{truth, Field, Query, Strategy};
 
@@ -13,7 +13,7 @@ mod tests {
   use super::*;
   use plaza_client_utils::math::Vec3;
 
-  /// A deterministic spread, so a run is a measurement rather than an anecdote.
+  /// A deterministic spread, so every run gives the same numbers.
   fn scatter(count: usize, spread: Vec3) -> Vec<Vec3> {
     use plaza_client_utils::determinism::XorShift;
     let mut rng = XorShift::new(0x2545_f491_4f6c_dd1d);
@@ -23,8 +23,8 @@ mod tests {
       .collect()
   }
 
-  /// The number the example exists to produce, printed rather than asserted:
-  /// what the third axis buys, and whether it is worth having.
+  /// The main measurement, printed rather than asserted: what the third axis
+  /// buys and whether it is worth having.
   #[test]
   fn what_the_third_axis_costs_and_saves() {
     const RADIUS: f32 = 80.0;

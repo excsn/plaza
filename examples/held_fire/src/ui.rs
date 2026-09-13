@@ -1,9 +1,8 @@
 //! The side panel: numbers and the log. All play happens on the field.
 //!
-//! The offer counters read zero here while a battle runs, and that is the
-//! server's doing, not this panel's: a live "offers 3, held 3" on the mover's
-//! screen would be the held shot leaking through arithmetic. The full ledger
-//! opens when the battle ends.
+//! The offer counters read zero here while a battle runs because the server
+//! masks them: a live "offers 3, held 3" on the mover's screen would reveal
+//! the held shot by subtraction. The full ledger opens when the battle ends.
 
 use held_fire::net::client::{NetClient, Status};
 

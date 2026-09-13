@@ -78,9 +78,9 @@
                 console.log(`Point to ${body.player_id}: ${body.new_score}`);
                 break;
             case 'PhaseChange':
-                // Nothing is answered automatically any more. The phases run
-                // themselves on the server, and a client that replied here
-                // was the only reason a countdown ever ended.
+                // Nothing is answered automatically any more. The server runs
+                // the phases on its own. A client replying here used to be the
+                // only way a countdown ended.
                 console.log(`phase: ${body}`);
                 break;
             }
@@ -193,7 +193,7 @@
             }
         });
         
-        // A countdown you can cut short, which is what ReadyToPlay now means.
+        // Space cuts a countdown short by sending ReadyToPlay.
         window.addEventListener('keydown', (e) => {
             if (e.code === 'Space' && gameState && gameState.countdown > 0) {
                 e.preventDefault();

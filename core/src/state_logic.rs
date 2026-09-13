@@ -152,21 +152,20 @@ impl<Op, ID: AgentId> LogicOutput<Op, ID> {
   ///
   /// The controller sends one envelope per `TargetedOp`, and logic naturally
   /// pushes one per event, so a tick that hid a mole and spawned another sent
-  /// two frames to the same everyone: two encodes, two fan-outs, and two copies
-  /// of a frame's overhead wrapped around ops often smaller than it. The
-  /// controller calls this before sending.
+  /// two frames to everyone: two encodes, two fan-outs and two copies of the
+  /// frame overhead, which is often larger than the ops inside. The controller
+  /// calls this before sending.
   ///
-  /// **Neighbours only, and that is the whole subtlety.** Merging across a gap
-  /// reorders: given `[A→all, B→p1, C→all]`, folding `C` into `A` moves it
-  /// ahead of `B` for the one recipient that receives both. Restricting it to
-  /// runs means any two ops that can reach a common recipient keep the order
-  /// logic emitted them in, which is the only ordering guarantee ops have.
+  /// **Only neighbouring runs merge.** Merging across a gap reorders: given
+  /// `[A→all, B→p1, C→all]`, folding `C` into `A` moves it ahead of `B` for the
+  /// one recipient that receives both. Restricting it to runs means any two ops
+  /// that can reach a common recipient keep the order logic emitted them in,
+  /// which is the only ordering guarantee ops have.
   ///
-  /// **Target alone, not sender.** This used to split a run when `from_agent`
-  /// differed, which mattered while the sender rode the wire. It does not any
-  /// more: a frame is the kind byte and the ops, so two entries with the same
-  /// recipients are indistinguishable to that recipient however they were
-  /// caused, and keeping them apart cost an envelope for nothing.
+  /// **Runs are split by target only.** A frame is the kind byte and the ops,
+  /// so two entries with the same recipients are indistinguishable to that
+  /// recipient however they were caused. Splitting on `from_agent` would cost
+  /// an extra envelope for no benefit.
   pub fn coalesce(&mut self) {
     // `dedup_by` passes the later element first and drops it when the closure
     // says yes, which is exactly a fold into the run's surviving head.
@@ -274,7 +273,7 @@ mod tests {
   #[test]
   fn a_different_sender_does_not_break_the_run() {
     // The sender is not on the wire, so a recipient cannot tell these apart and
-    // splitting them would spend an envelope to preserve nothing.
+    // splitting them would spend an extra envelope for no benefit.
     let mut output = LogicOutput::ops(vec![
       TargetedOp::new(Agent::system(), MessageTarget::All, vec![1u8]),
       TargetedOp::new(Agent::new_human(7u64), MessageTarget::All, vec![2u8]),

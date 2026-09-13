@@ -238,8 +238,8 @@ impl Scene {
         continue;
       }
       let tint = if flashing.contains(&character.seat) {
-        // A landing is the one thing here that *happens* rather than *is*, so
-        // it can only be drawn from the client's own memory of the event: no
+        // A landing is the one thing here that is an event rather than state,
+        // so it can only be drawn from the client's own memory of it: no
         // later frame mentions it.
         Color::new(1.0, 0.55, 0.35, 1.0)
       } else if character.kind == Kind::Beast {
@@ -260,10 +260,9 @@ impl Scene {
   /// A body, the wedge that says which way it is looking, and two legs.
   ///
   /// There is no skeleton and no animation data. Everything here is a function
-  /// of a clock and how fast the body is moving, which is the whole budget an
-  /// example gets to spend on looking alive: a walk cycle is presentation, and
-  /// deriving it locally means it costs nothing on the wire and keeps working
-  /// at any send rate.
+  /// of a clock and how fast the body is moving, which keeps the animation
+  /// cheap. A walk cycle is presentation, so deriving it locally means it costs
+  /// nothing on the wire and keeps working at any send rate.
   fn push_body(&mut self, at: Vec3, yaw: f32, tint: Color, pose: Pose) {
     let facing = vec3(yaw.sin(), 0.0, yaw.cos());
     let side = vec3(facing.z, 0.0, -facing.x);
@@ -314,8 +313,8 @@ impl Scene {
     self.push_box(torso, vec3(BODY, (TALL - hips) * 0.5, BODY * 0.8), tint);
 
     // Arms. A cast raises them and holds; a swing throws one forward and
-    // brings it back, which is the whole difference between an ability with a
-    // bar and one without.
+    // brings it back. That is how an ability with a bar looks different from
+    // one without.
     let reach = pose.cast;
     let swung = (pose.swing * std::f32::consts::PI).sin();
     let arm_swing = -stride.sin() * 0.3 * pose.gait * (1.0 - reach) * (1.0 - swung);

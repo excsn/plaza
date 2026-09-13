@@ -53,7 +53,7 @@ fn main() {
         redundancy: mode,
         ..base
       };
-      // Loss is random, so one seed is an anecdote. Eight is enough to see the
+      // Loss is random, so one seed is not enough. Eight is enough to see the
       // crossover without the noise swamping it.
       let (mut bytes, mut per_pkt, mut delivered, mut rollbacks, mut synced) = (0.0, 0.0, 0.0, 0u64, 0u32);
       const SEEDS: u64 = 8;

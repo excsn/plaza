@@ -1,11 +1,11 @@
-//! A maze chase where an input's execution point is a **place**, not a time.
+//! A maze chase where a turn takes effect at a **place** rather than on a tick.
 //!
-//! Every other playground here keys an input to a tick, which answers *when*.
-//! A queued turn has no when: "left" pressed in a corridor is a request to turn
-//! left at the next place that is possible, and which place that is depends on
-//! where the player is, which is the thing the two sides can disagree about.
+//! Every other playground here keys an input to a tick. A queued turn has no
+//! tick: "left" pressed in a corridor is a request to turn left at the next
+//! place that is possible and which place that is depends on where the player
+//! is, which the two sides can disagree about.
 //!
-//! Read [`sim::turn_queue`] first: it is the file this example exists for.
+//! Read [`sim::turn_queue`] first; it holds the mechanism this example is about.
 
 pub mod sim;
 

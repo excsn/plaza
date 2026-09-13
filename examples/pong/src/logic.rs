@@ -53,9 +53,8 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
               }
             }
             PongOp::ReadyToPlay => {
-              // Skips the rest of whatever is counting down. The phases run
-              // themselves now, so this says "do not make me wait" rather than
-              // being the only thing that advances the game.
+              // Skips the rest of whatever is counting down. The server advances
+              // the phases on its own now, so this only shortens the wait.
               if current_state.countdown > 0 {
                 info!(player_id = %player_id, phase = ?current_state.phase, "Player is ready; skipping the countdown");
                 current_state.countdown = 1;
@@ -68,10 +67,10 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
         }
       }
       LogicInput::TimeStep { delta_time } => {
-        // The tick's own interval, which is what it is for. This used to be
-        // wall-clock since the *last input of any kind*, so a client sending
-        // paddle ops between ticks left almost no elapsed time for the tick to
-        // integrate and the ball crawled. A bot playing at 40Hz stopped it dead.
+        // The tick's own interval. This used to be wall-clock since the last
+        // input of any kind, so a client sending paddle ops between ticks left
+        // almost no elapsed time for the tick to integrate and the ball
+        // crawled. A bot playing at 40Hz stopped it completely.
         let dt_secs = delta_time.as_secs_f32();
         if current_state.phase == GamePhase::Playing {
           current_state.ball.x += current_state.ball.vx * dt_secs;
@@ -161,14 +160,14 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
           }
         }
 
-        // Seats are decided every tick: a freed seat is taken by whoever is
-        // waiting, and a bot gives one up the moment a person wants it, both
-        // as `resolve`'s shuffles rather than branches of ours.
+        // Seats are decided every tick. A freed seat goes to whoever is
+        // waiting and a bot gives one up as soon as a person wants it. Both
+        // come from `resolve` as shuffles.
         apply_shuffles(current_state, &mut ops_to_broadcast);
 
-        // Every timed phase runs itself. Nothing here waits on a client op:
-        // a browser that never answered used to leave the game stopped for
-        // everyone, and the score screen was the end of the session.
+        // Every timed phase counts down here and nothing waits on a client op.
+        // A browser that never answered used to leave the game stopped for
+        // everyone and the score screen was the end of the session.
         if current_state.countdown > 0 {
           current_state.countdown -= 1;
           if current_state.countdown == 0 {
@@ -192,9 +191,8 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
         }
 
         current_state.version += 1;
-        // The whole world, every tick, to everyone: one provider call and one
-        // encode rather than one per recipient. Pong is a state-sync game, and
-        // this is the line that says so.
+        // The whole world to everyone every tick, with one provider call and
+        // one encode instead of one per recipient.
         return Ok(
           LogicOutput::ops(ops_to_broadcast).and_snapshot(SnapshotRequest::uniform(current_state.everyone())),
         );
@@ -257,8 +255,8 @@ fn enter(
 
 /// Clears the board for a fresh match.
 ///
-/// The scores are cleared *here*, on the way in, rather than when the last one
-/// ended: a game that finished 5-3 and then sat on the score screen was still
+/// The scores are cleared here, when a game starts and not when the last one
+/// ended. A game that finished 5-3 and then sat on the score screen was still
 /// holding both numbers when the next one began.
 fn new_game(state: &mut PongGameState, out: &mut Vec<TargetedOp<PongOp, PlayerId>>) {
   state.scores.clear();
@@ -285,8 +283,8 @@ fn apply_shuffles(state: &mut PongGameState, out: &mut Vec<TargetedOp<PongOp, Pl
   }
 }
 
-/// Puts `id` at `seat`: the paddle for that side, a score to accumulate, and
-/// the `AssignPlayer` that tells them which paddle answers to them.
+/// Puts `id` at `seat`: the paddle for that side, a score to accumulate and
+/// the `AssignPlayer` that tells them which paddle is theirs.
 fn seat_in(state: &mut PongGameState, id: PlayerId, seat: usize, out: &mut Vec<TargetedOp<PongOp, PlayerId>>) {
   let side = if seat == 0 { PlayerSide::Left } else { PlayerSide::Right };
   state.paddles.insert(id, Paddle::new(id, side));

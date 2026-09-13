@@ -1,9 +1,9 @@
-//! What a frame costs: bytes, time, and allocations.
+//! What a frame costs: bytes, time and allocations.
 //!
-//! Every number quoted in the wire docs comes from here, so a claim that stops
-//! being true fails a run rather than surviving in prose. The size assertions
-//! are checked once at startup rather than timed, because a byte count is not a
-//! measurement, it is a fact.
+//! Every number quoted in the wire docs comes from here, so a number that stops
+//! being true fails a run. The size assertions
+//! are checked once at startup rather than timed, because a byte count is fixed
+//! and does not need timing.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
@@ -78,8 +78,8 @@ fn encode_frame<T: Serialize, C: WireCodec>(codec: &C, ops: &T, buf: &mut Vec<u8
   codec.encode_into(ops, buf).expect("encode");
 }
 
-/// Facts, not timings: printed and asserted so the documented numbers cannot
-/// drift silently.
+/// Fixed sizes rather than timings: printed and asserted so the documented
+/// numbers cannot drift silently.
 fn report_sizes() {
   let codec = JsonCodec;
   let mut buf = Vec::new();
@@ -121,8 +121,8 @@ fn report_sizes() {
     );
   }
 
-  // The buffer is hoisted, because reusing one is the whole claim. Allocating
-  // it inside the closure would measure the Vec, not the encode.
+  // The buffer is hoisted, because reusing one is what is being measured.
+  // Allocating it inside the closure would measure the Vec, not the encode.
   let ops = named();
   let mut reused = Vec::with_capacity(256);
   let per_encode = allocs_of(|| {
@@ -143,7 +143,7 @@ fn benches(c: &mut Criterion) {
   let positional = positional();
 
   let mut group = c.benchmark_group("encode_one_op");
-  // A reused buffer: what the transports do, and the reason `encode_into` exists.
+  // A reused buffer: what the transports do and the reason `encode_into` exists.
   let mut buf = Vec::with_capacity(1024);
   group.bench_function("json/named/into_reused_buffer", |b| {
     b.iter(|| {
@@ -157,7 +157,7 @@ fn benches(c: &mut Criterion) {
       black_box(buf.len())
     })
   });
-  // The allocating path, for the difference the trait method buys.
+  // The allocating path, for comparison with the trait method.
   group.bench_function("json/named/allocating", |b| {
     b.iter(|| {
       let mut fresh = Vec::new();

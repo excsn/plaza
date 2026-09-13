@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# The zero-ceremony path: open the cube yard as a native desktop window. With
-# no arguments this is `--role host`, which plays *and* stands up the server, so
-# it also serves the browser page and prints an address others can join at. Pass
-# `--role client --connect <url>` to join someone else, or `--role headless` for
+# Opens the cube yard as a native desktop window. With no arguments this is
+# `--role host`, which plays *and* stands up the server, so it also serves the
+# browser page and prints an address others can join at. Pass
+# `--role client --connect <url>` to join someone else or `--role headless` for
 # the deployable server.
 #
 # --encoding full|packed|budgeted|delta picks how much the wire is asked to
 # carry; --snap turns on quantise-both-sides. Both are the *starting* position:
-# a host can move between all four stages from the panel while the yard runs,
-# which is the only way to watch 2917 KiB/s become 31. See the README.
+# a host can move between all four stages from the panel while the yard runs, so
+# you can watch 2917 KiB/s fall to 31. See the README.
 #
 # CUBE_YARD_FEATURES passes extra cargo features through, if you add any.
 #

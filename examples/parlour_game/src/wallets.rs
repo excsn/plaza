@@ -41,8 +41,8 @@ impl WalletRegistry {
     taken
   }
 
-  /// For leaving the lobby. Tables must not call this: surviving a table is the
-  /// point of the registry.
+  /// For leaving the lobby. Tables must not call this: the registry exists so
+  /// balances survive a table.
   pub fn forget(&self, player: PlayerId) {
     self.balances.lock().remove(&player);
   }

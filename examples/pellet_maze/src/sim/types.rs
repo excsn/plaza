@@ -1,17 +1,15 @@
-//! The maze, and the things running around in it.
+//! The maze and the things running around in it.
 //!
-//! One decision shapes everything else, and it is not the one `bomb_grid` made.
-//! There a player **stands still** until you press something. Here a player is
-//! **always moving**, and a key press is a request to change direction *at the
-//! next place where that turn is legal*. You cannot stop, and you cannot turn
-//! mid-corridor.
+//! In `bomb_grid` a player **stands still** until you press something. Here a
+//! player is **always moving** and a key press is a request to change direction
+//! *at the next place where that turn is legal*. You cannot stop and you cannot
+//! turn mid-corridor.
 //!
-//! That makes an input's execution point a **place** rather than a time, which
-//! is the whole subject of this example. A tick-addressed input answers "when",
-//! and answering "when" is not enough when the trigger is "where": two sides can
-//! agree perfectly about the tick and still fire the turn at different
-//! intersections, and the two players then run down *different corridors*. The
-//! error is unbounded, where a mispredicted cell is one cell.
+//! So an input takes effect at a **place** rather than at a time. A
+//! tick-addressed input fixes when it runs but not where: two sides can agree
+//! about the tick and still fire the turn at different intersections and the
+//! two players then run down *different corridors*. A mispredicted cell is one
+//! cell off; this error has no bound.
 
 use serde::{Deserialize, Serialize};
 
@@ -29,26 +27,25 @@ pub const SIM_STEP_MS: u64 = 16;
 /// The unit everything is tuned in: a corridor is measured in these, and the
 /// turn buffer below is measured against it.
 pub const STEP_MS_RUNNER: u64 = 145;
-/// Pursuers are **slower**, and by more than it looks.
+/// Pursuers are **slower** by a wide margin.
 ///
-/// Three of them converge from three directions, so a small speed edge for the
-/// runner is not an edge at all: what matters is whether the runner can outrun
-/// the one closing on it while the others are still crossing the maze.
+/// Three of them converge from three directions, so a small speed edge does
+/// not help the runner. What matters is whether it can outrun the one closing
+/// on it while the others are still crossing the maze.
 pub const STEP_MS_PURSUER: u64 = 205;
 /// A pursuer that has just been eaten walks home this slowly.
 pub const STEP_MS_EATEN: u64 = 90;
 
 /// How long a queued turn stays live before it is forgotten.
 ///
-/// **A place-triggered input still needs a time bound**, and this is the whole
-/// of why. Without one, a turn pressed while running down a long corridor waits
-/// for the *next* legal intersection however far away that is, so a press from
-/// two seconds ago fires at a corner nobody meant to take. With one, an
-/// unreachable turn simply expires and the player keeps going, which is what
-/// they would expect.
+/// A place-triggered input still needs a time bound. Without one, a turn
+/// pressed while running down a long corridor waits for the *next* legal
+/// intersection however far away that is, so a press from two seconds ago
+/// fires at a corner nobody meant to take. With one, an unreachable turn
+/// expires and the player keeps going.
 ///
-/// It is deliberately a little longer than one cell, so pressing slightly early
-/// into a corner works, which is the entire reason a player wants the buffer.
+/// It is a little longer than one cell, so pressing slightly early into a
+/// corner works.
 pub const TURN_BUFFER_MS: u64 = 260;
 
 /// Pellets eaten to clear the maze.
@@ -74,18 +71,17 @@ pub const POWERUP_DENSITY: usize = 22;
 pub const ROUND_END_MS: u64 = 2200;
 /// How long everybody is held still at the start of a round.
 ///
-/// Not decoration. A player is dropped into a fresh maze in a role that may
-/// have just changed, and a game where you are running before you have read
-/// either is a game you lose to the interface. Held by the **server**, and
-/// declared to clients as an instant rather than a duration, so every client
-/// starts on the same tick rather than on whenever its own countdown finished.
+/// A player is dropped into a fresh maze in a role that may have just changed.
+/// Without the hold they would start running before reading either and lose the
+/// round to the interface. Held by the **server** and declared to clients as an
+/// instant rather than a duration, so every client starts on the same tick
+/// rather than on whenever its own countdown finished.
 pub const ROUND_START_MS: u64 = 3000;
 
 /// How long the final table stays up before the next match is laid out.
 ///
-/// Longer than the interval between rounds, because it is the only moment in
-/// the match where the whole thing is readable, and a table that clears into
-/// a countdown is a table nobody read.
+/// Longer than the interval between rounds, because it is the only moment the
+/// whole match's result is on screen.
 pub const MATCH_END_MS: u64 = 5000;
 /// How close a pursuer must be to catch the runner: the same cell.
 /// Manhattan cells between a pursuer and a runner for a catch.
@@ -249,10 +245,9 @@ impl Role {
 
 /// What a power-up does.
 ///
-/// Both are **timed, server-authoritative state changes**, which is why they
-/// are interesting here rather than only fun: a client predicting its movement
-/// through the moment one starts or ends will disagree with the server about
-/// who is dangerous to whom.
+/// Both are **timed, server-authoritative state changes**: a client predicting
+/// its movement through the moment one starts or ends will disagree with the
+/// server about who is dangerous to whom.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(into = "u8", try_from = "u8")]
 pub enum Power {
@@ -261,10 +256,10 @@ pub enum Power {
   Energize,
   /// The runner stops being **sent** to the other players.
   ///
-  /// Not drawn dimly, not skipped by the renderer: omitted from the frames
-  /// those players receive. A client that is handed a position it is not
-  /// supposed to see has already lost the secret, whatever it chooses to draw,
-  /// because a cheat client reads the buffer rather than the screen.
+  /// Omitted from the frames those players receive, rather than drawn dimly or
+  /// skipped by the renderer. A client that is handed a position has already
+  /// lost the secret, whatever it draws, because a cheat client reads the
+  /// buffer rather than the screen.
   Vanish,
 }
 
@@ -368,12 +363,11 @@ impl Default for Maze {
 impl Maze {
   /// A maze with plenty of loops, which is what this example needs.
   ///
-  /// A perfect maze (exactly one path between any two cells) would be the
-  /// obvious generator and the wrong one: it is nearly all corridor and
-  /// dead end, and the interesting case here is an **intersection**, where a
-  /// queued turn has somewhere to go. So the generator carves a grid of
-  /// corridors on the odd lattice and then knocks extra holes in it, which
-  /// makes junctions the common case rather than the rare one.
+  /// A perfect maze (exactly one path between any two cells) is the obvious
+  /// generator, but it is nearly all corridor and dead end. This example needs
+  /// **intersections**, where a queued turn has somewhere to go. So the
+  /// generator carves a grid of corridors on the odd lattice and then knocks
+  /// extra holes in it, which makes junctions the common case.
   pub fn generate(seed: u64) -> Self {
     let mut maze = Maze::default();
     let mut state = seed | 1;
@@ -517,7 +511,8 @@ pub struct PlayerState {
   pub heading: Dir,
   pub step: Option<Step>,
   pub alive: bool,
-  /// Cumulative across the **match**, not the round. Reset when a match ends.
+  /// Cumulative across the **match** rather than the round. Reset when a match
+  /// ends.
   pub score: u32,
   pub rounds_won: u16,
   /// Server time this player stops being energized, or zero.
@@ -596,8 +591,8 @@ impl PlayerState {
     }
   }
 
-  /// Resets what a round owns. **The score survives**, because it is the
-  /// match's, and the match is the thing being played.
+  /// Resets what a round owns. **The score survives**, because it belongs to
+  /// the match.
   pub fn reset_for_round(&mut self, cell: Cell, heading: Dir) {
     self.cell = cell;
     self.heading = heading;
@@ -615,17 +610,17 @@ pub struct Controls {
   pub latency_ms: u64,
   pub jitter_ms: u64,
   pub loss_pct: f32,
-  /// What a lost packet costs, which is a property of the link rather than of
-  /// this simulation. The transport underneath is a WebSocket, so the truthful
-  /// answer is a retransmission: the frame is late and nothing is missing. The
-  /// netcode above is written for the other answer, where the packet is gone,
-  /// which is the one worth demonstrating here.
+  /// What a lost packet costs, which depends on the link rather than on this
+  /// simulation. The transport underneath is a WebSocket, so in reality a lost
+  /// packet is retransmitted: the frame is late and nothing is missing. The
+  /// netcode above is written for a link where the packet is gone, which is
+  /// the case worth demonstrating here.
   pub datagram_link: bool,
   /// How long the server holds an input before it becomes eligible.
   ///
-  /// Note "eligible", not "executed": a turn is scheduled for a tick like any
-  /// other input, and then still has to wait for a place. Two delays in series,
-  /// and only one of them is a number anybody chose.
+  /// Eligible rather than executed: a turn is scheduled for a tick like any
+  /// other input and then still has to wait for a place. That is two delays in
+  /// series and only the first is a configured number.
   pub playout_delay_ms: u64,
   pub input_max_late_ticks: u64,
   pub input_max_early_ticks: u64,
@@ -703,8 +698,8 @@ mod tests {
     // A walled-in cell strands whoever spawns in it: they cannot move at all,
     // which is an unplayable round rather than an awkward one.
     //
-    // **Many seeds, not one.** A test over one sample of a random generator is
-    // a test of that sample.
+    // **Many seeds are checked.** A test over one sample of a random generator
+    // only tests that sample.
     for seed in 0..400u64 {
       let maze = Maze::generate(seed.wrapping_mul(2_654_435_761).wrapping_add(1));
       for cell in maze.corridors() {

@@ -1,5 +1,5 @@
 //! Only `protocol.rs` defines the wire: the simulation's state is rapier's and
-//! never crosses, so the projection in the protocol is the whole surface.
+//! never crosses, so the protocol's projection is all that goes on the wire.
 
 fn main() {
   plaza_wire::build::emit(&["src/protocol.rs"]);

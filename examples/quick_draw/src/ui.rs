@@ -1,5 +1,5 @@
-//! The lab panel: the dials, both columns of the harness, and the numbers the
-//! example exists to produce.
+//! The lab panel: the dials, both columns of the harness and the
+//! disagreement counts.
 
 use quick_draw::net::client::{NetClient, Status};
 use quick_draw::protocol::{Controls, FLOOR_SLACK_US};

@@ -1,19 +1,19 @@
 //! Prediction for a server that holds an input and integrates it, rather than
 //! consuming one input per step.
 //!
-//! # Which of the two models is yours
+//! # Which model
 //!
-//! There are two ways a server can consume client input, and they need different
-//! reconciliation. Choosing wrong is silent: the prediction is simply always a
-//! little bit off, in a way that looks like network jitter.
+//! There are two ways a server can consume client input and they need different
+//! reconciliation. A wrong choice raises no error: the prediction is always a
+//! little off, in a way that looks like network jitter.
 //!
 //! | model | what the server does | use |
 //! |---|---|---|
 //! | discrete | each input advances the simulation exactly one step | [`crate::PredictedPlayer`] |
 //! | continuous | an input sets a *held* value the server integrates every tick | this |
 //!
-//! Input replay is wrong for the continuous model, and wrong in a way that gets
-//! worse the more you economise on bandwidth. The client replays one input as
+//! Input replay is wrong for the continuous model and gets worse the more you
+//! economise on bandwidth. The client replays one input as
 //! one step while the server applied that direction for however many ticks
 //! passed, so the replay under-counts and the prediction sits permanently
 //! behind. Coalescing input (sending only on change, plus a keepalive) makes it
@@ -23,23 +23,22 @@
 //! sent below the simulation rate, which is most twitch games with any bandwidth
 //! pressure at all.
 //!
-//! # How the correction works, and why there is no separate render state
+//! # How the correction works and why there is no separate render state
 //!
 //! [`crate::PredictedPlayer`] keeps an exact logical state and eases only what is
 //! drawn, because replaying inputs over an authoritative state reproduces an
 //! exact answer worth keeping. Here there is nothing to replay and so no exact
-//! answer: the client is dead reckoning, and the honest thing is to bend the
-//! prediction itself toward the server a little at a time. So `logical` and
-//! `render` are the same value, and [`blend`](HeldInputConfig::blend) is the
-//! ease.
+//! answer: the client is dead reckoning, so it moves the prediction itself
+//! toward the server a little at a time. `logical` and `render` are therefore
+//! the same value and [`blend`](HeldInputConfig::blend) is the ease.
 //!
-//! **The correction is continuous on purpose.** Letting error accumulate until
-//! it crosses a threshold and then closing the whole gap at once produces a
-//! metronomic drift-snap-drift-snap that a player feels as a rhythmic tug, even
-//! at zero latency. Bending a fraction of the gap every packet absorbs the same
-//! drift invisibly. A hard snap is for a genuine discontinuity only, which is
-//! what [`with_teleport`](HeldInputPredictor::with_teleport) is for: the choice
-//! between easing and snapping is made by *cause*, never by magnitude.
+//! **Continuous correction.** Letting error accumulate until it crosses a
+//! threshold and then closing the whole gap at once produces a metronomic
+//! drift-snap-drift-snap that a player feels as a rhythmic tug, even at zero
+//! latency. Closing a fraction of the gap every packet absorbs the same drift
+//! without a visible jump. Snap only on a genuine discontinuity, using
+//! [`with_teleport`](HeldInputPredictor::with_teleport); choose between easing
+//! and snapping by *cause* rather than by magnitude.
 
 use std::fmt::Debug;
 
@@ -90,17 +89,16 @@ pub struct HeldInputPredictor<State: Clone + Debug, Input: Clone + Debug, Ctx = 
 }
 
 /// How far apart two states have to be before a correction is snapped rather
-/// than eased: the measure, and the distance past which easing is the wrong
-/// answer.
+/// than eased: the metric and the distance past which it snaps.
 type Teleport<State> = (fn(&State, &State) -> f32, f32);
 
 impl<State: Clone + Debug, Input: Clone + Debug + Default, Ctx: Default> HeldInputPredictor<State, Input, Ctx> {
-  /// `advance` must be the **server's** integration rule, not a client
+  /// `advance` must be the **server's** integration rule rather than a client
   /// approximation of it: `(state, held_input, dt_secs, context)`. Anything the
-  /// server does that this leaves out arrives as a permanent correction, and
-  /// tracking that down later is far more expensive than sharing the function
-  /// now. `Ctx` is the world a forced entity reads its forces from, and `()` for
-  /// an entity moved only by its own input.
+  /// server does that this leaves out shows up as a constant correction, which
+  /// is far harder to track down later than sharing the function now. `Ctx` is
+  /// the world a forced entity reads its forces from. Use `()` for an entity
+  /// moved only by its own input.
   pub fn new(
     initial: State,
     config: HeldInputConfig,
@@ -135,8 +133,8 @@ impl<State: Clone + Debug, Input: Clone + Debug, Ctx> HeldInputPredictor<State, 
   }
 
   /// Sets the input the server is holding for this entity. Call it whenever the
-  /// player's intent changes, independently of when it is transmitted: what is
-  /// sent is a bandwidth decision, what is integrated is a simulation one.
+  /// player's intent changes, independently of when it is transmitted: sending
+  /// is a bandwidth decision and integrating is a simulation one.
   pub fn hold(&mut self, input: Input) {
     self.held = input;
   }
@@ -158,7 +156,7 @@ impl<State: Clone + Debug, Input: Clone + Debug, Ctx> HeldInputPredictor<State, 
   /// An authoritative packet describes the past by one one-way delay, so
   /// correcting straight to it would pull the entity backward by whatever it
   /// travelled in the meantime. Advancing it by its own age under the held input
-  /// is what makes the correction target *now*.
+  /// makes the correction target the present.
   ///
   /// Public so an application can measure the disagreement itself and decide
   /// what to do about it, instead of taking this type's policy.
@@ -168,7 +166,7 @@ impl<State: Clone + Debug, Input: Clone + Debug, Ctx> HeldInputPredictor<State, 
     projected
   }
 
-  /// Bends the prediction toward the server, and reports the move.
+  /// Moves the prediction toward the server and reports the move.
   ///
   /// `age_secs` is how old `authoritative` is, usually the one-way delay from a
   /// round trip estimate. While frozen this tracks the server exactly, since the
@@ -282,8 +280,8 @@ mod tests {
 
   #[test]
   fn dead_reckoning_a_held_input_matches_the_server_exactly() {
-    // The whole promise: when the client runs the server's rule on the same held
-    // input, there is nothing to correct, however rarely input is transmitted.
+    // When the client runs the server's rule on the same held input there is
+    // nothing to correct, however rarely input is transmitted.
     let mut me = predictor(0.25);
     let mut server = HeldServer::default();
     me.hold(10.0);
@@ -308,8 +306,8 @@ mod tests {
 
   #[test]
   fn a_threshold_snap_sawtooths_where_a_continuous_blend_does_not() {
-    // The bug this primitive is shaped to prevent, reproduced next to the fix.
-    // A slow systematic drift, corrected two different ways.
+    // A slow systematic drift, corrected by a threshold snap and by a
+    // continuous blend.
     const DRIFT_PER_PACKET: f32 = 6.0;
     const THRESHOLD: f32 = 24.0;
 

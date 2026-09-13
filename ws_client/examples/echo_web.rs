@@ -5,12 +5,12 @@
 //! cargo run -p plaza_ws --features native --example echo_server -- 9001
 //! ```
 //!
-//! It must be a macroquad app, because miniquad's `mq_js_bundle.js` is precisely
-//! what is being tested: that our JS plugin registers into the import object it
-//! builds, and that the module it instantiates can call out. A plain wasm module
-//! would prove nothing about the case that matters.
+//! It must be a macroquad app, because miniquad's `mq_js_bundle.js` is what is
+//! being tested: that our JS plugin registers into the import object it builds
+//! and that the module it instantiates can call out. A plain wasm module would
+//! exercise neither.
 //!
-//! The screen is the assertion. Green means every arm of `Event` was seen.
+//! The result shows on screen: green means every arm of `Event` was seen.
 
 //! Cargo's `required-features` cannot also require a target, and the `miniquad`
 //! backend only exists on `wasm32`, so the body is gated here as well. Without

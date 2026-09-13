@@ -1,9 +1,9 @@
 //! [`Wire`]: the version derived by resolving types instead of listing files.
 //!
 //! The file-list [`emit`](super::emit) reads text and cannot follow a type into
-//! another file, so a payload defined elsewhere silently does not count, and
-//! the person who forgets a file gets a version that lies. This resolver lifts
-//! that: tag each op enum with a doc line, and everything else is derived.
+//! another file, so a payload defined elsewhere silently does not count and a
+//! forgotten file gives a wrong version. This resolver removes that limit: tag
+//! each op enum with a doc line and everything else is derived.
 //!
 //! ```text
 //! /// plaza-wire: root
@@ -20,14 +20,14 @@
 //! }
 //! ```
 //!
-//! The scanner parses every file under `src/`, starts from the tagged roots,
+//! The scanner parses every file under `src/`, starts from the tagged roots
 //! and walks field types transitively, generic arguments included. The version
 //! hashes exactly the reachable definitions, so an unrelated type sharing a
 //! file no longer moves it. Plaza's own vocabulary (the notice payloads, the
 //! netcode payloads, `Agent`) is covered by [`VOCAB_VERSION`](super::VOCAB_VERSION),
-//! baked into this crate, so it is never yours to list. A referenced type the
-//! resolver cannot place **fails the build naming the reference**, which is the
-//! point: the file-list mechanism's failure mode was silence.
+//! baked into this crate, so you never list it. A referenced type the
+//! resolver cannot place **fails the build naming the reference**, where the
+//! file-list mechanism failed silently.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -136,7 +136,7 @@ impl Wire {
   }
 
   /// Includes a vocabulary bundle: extra definition sources resolved, covered
-  /// by the version, and emitted by [`dart_types`](Self::dart_types) exactly
+  /// by the version and emitted by [`dart_types`](Self::dart_types) exactly
   /// like your own types. [`super::vocab`] ships plaza's bundles; anything
   /// else takes the same shape, `(label, source_text)` pairs, so a vendored
   /// copy of a third-party definition can be included the same way (pin your
@@ -180,17 +180,17 @@ impl Wire {
   }
 
   /// Declares a name a leaf the resolver should not chase: a macro-generated
-  /// type, or one whose wire shape is pinned elsewhere. **Uncovered by the
-  /// version**, which is why this is an explicit acknowledgement and not a
+  /// type or one whose wire shape is pinned elsewhere. **Uncovered by the
+  /// version**, which is why this is an explicit acknowledgement rather than a
   /// default.
   pub fn leaf(mut self, name: &str) -> Self {
     self.leaves.push(name.to_string());
     self
   }
 
-  /// Resolves, hashes, and publishes: `$OUT_DIR/wire_protocol.rs`,
+  /// Resolves, hashes and publishes: `$OUT_DIR/wire_protocol.rs`,
   /// `cargo:rustc-env=WIRE_PROTOCOL`, rerun directives for the scanned
-  /// directories, and the Dart const if [`dart`](Self::dart) was given.
+  /// directories and the Dart const if [`dart`](Self::dart) was given.
   pub fn emit(self) {
     for dir in &self.scan_dirs {
       println!("cargo:rerun-if-changed={}", dir.display());
@@ -637,7 +637,7 @@ mod tests {
     let phase_changed = wire_over(&dir).version();
     assert_ne!(with_all, phase_changed, "a new variant two hops from the root");
 
-    // An unreachable one does not, which the file hash could never say.
+    // An unreachable one does not, which the file hash could not distinguish.
     std::fs::write(dir.join("phase.rs"), "pub enum Phase { Day, Night, Dusk }\npub struct NotOnTheWire { pub secret: u64 }\n").unwrap();
     assert_eq!(phase_changed, wire_over(&dir).version(), "an off-wire neighbour changed shape");
     std::fs::remove_dir_all(&dir).unwrap();

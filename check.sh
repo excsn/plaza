@@ -13,15 +13,16 @@ cargo test --workspace --features "plaza_client_utils/net-sim,plaza_ws/native,pl
 cd examples
 CARGO_TARGET_DIR="$(cd .. && pwd)/target" cargo test --workspace
 
-# Nothing compiles the browser pages, so every way their hand-written frame
-# handling can be wrong is silent. One of them shipped wrong.
+# Nothing compiles the browser pages, so errors in their hand-written frame
+# handling go unnoticed. One page shipped with such a bug.
 echo "--- the browser pages ---"
 ./check_pages.py
 
 # A workspace check unifies features across its members, so a crate that uses
-# something it never declared compiles anyway, on a neighbour's enable. Only a
-# per-package check says whether a manifest is honest. Three examples were
-# under-declared this way at once, all of them building green until asked alone.
+# something it never declared compiles anyway because a neighbour enabled it.
+# Only a per-package check shows whether a manifest declares everything it uses.
+# Three examples were under-declared this way at once and all of them built
+# until checked alone.
 echo "--- each package on its own ---"
 for manifest in */Cargo.toml; do
   pkg=$(grep -m1 '^name' "$manifest" | cut -d'"' -f2)

@@ -1,4 +1,4 @@
-//! Spawning an arena on demand: its own session, its own controller, and an
+//! Spawning an arena on demand: its own session, its own controller and an
 //! endpoint the lobby can hand out.
 
 use std::collections::HashMap;

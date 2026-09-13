@@ -1,15 +1,14 @@
-//! What a zone costs per client, since the example claims it is cheap.
+//! What a zone costs per client in bytes.
 //!
-//! The argument this example makes is that a genre whose design already
-//! absorbed the latency needs almost no netcode. That is an argument about
-//! *complexity*, and it says nothing about bytes, so the bytes are worth
-//! measuring separately: a frame here is assembled per client from shared
-//! cell payloads, which is the byte cost the design pays for the relevance
-//! it gets and for a build that does not track the client count.
+//! The example argues that a genre whose design already hides the latency
+//! needs almost no netcode. That is about *complexity* and says nothing about
+//! bytes, so bytes are measured separately here. A frame is assembled per
+//! client from shared cell payloads, which costs some bytes in exchange for
+//! cell-level relevance and a build cost that does not track the client count.
 //!
 //! Encoded with the codec the example actually uses, rather than counted by
-//! hand from field widths. A hand count is a second derivation of one fact and
-//! drifts the moment a field is added.
+//! hand from field widths. A hand count derives the same fact a second time and
+//! goes stale as soon as a field is added.
 //!
 //! ```sh
 //! cargo test -p gow_3d --test wire_cost -- --nocapture
@@ -29,9 +28,8 @@ fn per_second(bytes: usize) -> f32 {
 }
 
 /// The frame one seat would be sent, encoded. The frame the server really
-/// builds, via `publish` and `frame_for`, rather than a reconstruction: a
-/// measurement that reconstructs its subject stops measuring the moment a
-/// field moves.
+/// builds, via `publish` and `frame_for`, rather than a reconstruction, which
+/// would go stale as soon as a field changed.
 fn encoded(state: &mut GowState, seat: u16) -> usize {
   let now = state.zone.now_ms;
   let mut published = state.zone.publication();
@@ -71,9 +69,9 @@ fn what_a_zone_costs_per_client() {
   println!("  bigger frame past the view radius: that is relevance working,");
   println!("  and it is the only reason a per-client frame is affordable.\n");
 
-  // The claim the example rests on: cost tracks who is *in view*, not who is
-  // in the zone. Without that, a per-client frame would be strictly worse than
-  // a broadcast, since it pays the same bytes and builds them N times.
+  // Cost tracks who is *in view* rather than who is in the zone. Otherwise a
+  // per-client frame would be strictly worse than a broadcast, since it pays
+  // the same bytes and builds them N times.
   let (_, small_seen, small_bytes) = rows[0];
   let (_, big_seen, big_bytes) = rows[rows.len() - 1];
   assert!(big_seen > small_seen, "the scene has to actually grow: {small_seen} to {big_seen}");
@@ -87,11 +85,10 @@ fn what_a_zone_costs_per_client() {
 
 #[test]
 fn the_server_side_total_is_measured_rather_than_multiplied() {
-  // One client's frame times the client count is an estimate, and it sits
-  // badly next to measured numbers: every client has a different audience, and
-  // the ones out at the rim of the spiral see fewer people than the ones in
-  // the middle. Summing the frames the server would actually build is the only
-  // honest version of this figure.
+  // One client's frame times the client count is only an estimate: every
+  // client has a different audience and the ones out at the rim of the spiral
+  // see fewer people than the ones in the middle. This sums the frames the
+  // server would actually build.
   let mut state = zone_of(MAX_CHARACTERS);
   let middle = encoded(&mut state, 0);
 
@@ -114,7 +111,7 @@ fn the_server_side_total_is_measured_rather_than_multiplied() {
   println!("  multiplication overstates it. Worth measuring rather than");
   println!("  reasoning about, which is the whole rule this tree keeps relearning.\n");
 
-  // The spread is the reason the estimate is wrong, so it has to be real.
+  // The estimate is wrong because clients differ, so check that they do.
   assert!(
     largest > smallest,
     "clients must actually differ or the multiplication would have been fine: {smallest} to {largest}"
@@ -124,18 +121,15 @@ fn the_server_side_total_is_measured_rather_than_multiplied() {
 
 #[test]
 fn a_party_across_the_zone_costs_one_entry_each() {
-  // Priced separately because it is the one cost this example adds that no
-  // other example in the tree pays, and "a second channel" sounds expensive
-  // until it has a number.
-  // **The move has to happen before the baseline, and that is the correction
-  // this test carries.** It used to walk four members out of view and into a
-  // party in one step, so the audience count never changed: four entries left
-  // the near channel and the same four arrived on the subscribed one. It
-  // measured a difference anyway, because MessagePack spelled `Because` as its
-  // variant name and "Subscribed" is six characters longer than "Near". That
-  // six was the README's per-member figure, and it was the length of a word.
-  // Packed, the tag is two bits and the number went to zero, which is what
-  // exposed it.
+  // Priced separately because no other example in the tree pays this cost.
+  // The members move out of view before the baseline is taken. The test used
+  // to walk four members out of view and into a party in one step, so the
+  // audience count never changed: four entries left the near channel and the
+  // same four arrived on the subscribed one. It measured a difference anyway,
+  // because MessagePack spelled `Because` as its variant name and "Subscribed"
+  // is six characters longer than "Near". That six was the README's
+  // per-member figure. Packed, the tag is two bits and the number went to
+  // zero, which exposed it.
   let mut state = zone_of(MAX_CHARACTERS);
   for member in 1..=4u16 {
     state.zone.place(member, (400.0 + member as f32 * 10.0, 0.0, 400.0));
@@ -160,8 +154,8 @@ fn a_party_across_the_zone_costs_one_entry_each() {
 
 #[test]
 fn a_cast_costs_nothing_anyone_can_see() {
-  // Worth pinning because the cast bar is this example's headline, and a
-  // headline feature that doubled the frame would be a poor trade.
+  // The cast bar is this example's main feature, so it must not double the
+  // frame.
   let mut state = zone_of(16);
   let quiet = encoded(&mut state, 0);
 

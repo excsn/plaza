@@ -1,8 +1,9 @@
-//! A contest decided finer than a tick: two duelists, one signal, and whoever
-//! fired first wins. The tick is plaza's resolution of truth, and two inputs
-//! naming the same tick have no principled tiebreak; this example gives the
-//! input a sub-tick offset, floors it against the link's measured one-way like
-//! the tick itself, and counts how often the two orderings disagree.
+//! A contest decided inside one tick: two duelists wait for one signal and
+//! whoever fires first wins. Plaza resolves time to the tick and two inputs
+//! naming the same tick have no principled tiebreak. This example gives the
+//! input a sub-tick offset, floors it against the link's measured one-way the
+//! same way the tick is floored and counts how often the two orderings
+//! disagree.
 
 pub mod protocol;
 pub mod role;

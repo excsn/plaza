@@ -35,9 +35,8 @@ struct Claim {
 pub struct Floor {
   pub tick: Tick,
   pub items: HashMap<ItemId, Item>,
-  /// Claims per item, in arrival order. Order is kept only for the readout;
-  /// nothing about the outcome depends on it, which is the property the whole
-  /// example exists to show.
+  /// Claims per item, in arrival order. Order is kept only for the readout.
+  /// The outcome never depends on it.
   claims: HashMap<ItemId, Vec<Claim>>,
   pub players: ParticipantTracker<PlayerId, Standing>,
   next_item: ItemId,
@@ -91,8 +90,8 @@ fn rtt_ms(session: &FloorSession, player: PlayerId) -> u32 {
 }
 
 pub struct AuctionLogic {
-  /// Held for the RTT planes. The bound on a legal claim is a number this
-  /// measured, never one a client reported.
+  /// Held for the RTT planes. The bound on a legal claim comes from the
+  /// server's own measurement and never from the client.
   session: Arc<FloorSession>,
 }
 
@@ -107,10 +106,8 @@ impl AuctionLogic {
 
   /// The earliest tick this connection could legally name for a drop.
   ///
-  /// One way, rounded down, in ticks. Rounded *down* deliberately: rounding up
-  /// would refuse honest claims from anyone whose latency sits just over a tick
-  /// boundary, and refusing a real player to catch a hypothetical one is the
-  /// wrong trade.
+  /// One way, rounded down, in ticks. Rounding up would refuse honest claims
+  /// from anyone whose latency sits just over a tick boundary.
   fn claim_floor(&self, player: PlayerId) -> Tick {
     let one_way_ms = self.rtt_ms(player) / 2;
     (one_way_ms as u64 * TICK_HZ as u64) / 1000
@@ -119,8 +116,8 @@ impl AuctionLogic {
   /// Ranks the claims for one item.
   ///
   /// Lowest named tick wins. Ties break on a hash of the player and the item,
-  /// which is arbitrary but fixed: the alternative is arrival order, and arrival
-  /// order is ping, which is the thing this is built to make irrelevant.
+  /// which is arbitrary but fixed. The alternative would be arrival order,
+  /// which depends on ping.
   fn rank(item: ItemId, claims: &[Claim]) -> Vec<Claim> {
     let mut ranked = claims.to_vec();
     ranked.sort_by_key(|c| {
@@ -236,8 +233,8 @@ impl StateLogic<AuctionOp, PlayerId, Floor> for AuctionLogic {
             }]));
           }
 
-          // The public record. No `req`, because it is nobody's reply: it is
-          // what everyone sees regardless of whether they took part.
+          // The public record. No `req`, because it is not a reply to anyone.
+          // Everyone sees it whether or not they took part.
           out.push(TargetedOp::new_system_all(vec![AuctionOp::Taken {
             item: id,
             by: winner.player,
@@ -409,8 +406,7 @@ mod tests {
     assert_eq!(state.players.get_participant_app_data(&1).unwrap().score, item.value);
   }
 
-  /// The property the example exists for: the earlier *named* tick wins, and
-  /// nothing about who asked first enters into it.
+  /// The earlier named tick wins, whoever asked first.
   #[tokio::test]
   async fn the_earlier_named_tick_wins_regardless_of_arrival_order() {
     let l = logic();
@@ -439,8 +435,8 @@ mod tests {
   }
 
   /// Every reply is correlated, so several claims can be outstanding at once
-  /// and each is answered on its own terms. This is what "your last one was
-  /// refused" cannot do.
+  /// and each gets its own answer. A reply like "your last one was refused"
+  /// could not do that.
   #[tokio::test]
   async fn concurrent_claims_are_answered_separately() {
     let l = logic();

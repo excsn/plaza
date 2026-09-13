@@ -1,8 +1,7 @@
-//! What crosses the wire, and what it costs.
+//! What crosses the wire and what it costs.
 //!
-//! The second half of that is unusual enough to be a module of its own: see
-//! [`wire_cost`]. This example is the one whose traffic splits cleanly into a
-//! half that is derived and a half that cannot be, so it is the one that can
+//! The cost accounting is in [`wire_cost`]. This example's traffic splits
+//! cleanly into a half that is derived and a half that cannot be, so it can
 //! price both.
 
 use serde::{Deserialize, Serialize};
@@ -27,10 +26,10 @@ pub struct ServerPolicy {
   pub players: usize,
 }
 
-/// The half of the world that has to be described.
+/// The half of the world that has to be sent.
 ///
 /// Ships and player bullets only. Every enemy bullet on the screen is absent
-/// from this by construction, and the panel prices what that is worth.
+/// from this by construction and the panel shows what that saves.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Frame {
   pub server_time_ms: u64,
@@ -45,9 +44,9 @@ pub enum DeathVerdict {
   Confirmed,
   /// The ship said it was hit and the curtain at that tick says otherwise.
   ///
-  /// Refusing is not generosity. A ship that can declare its own death can
-  /// declare it at a moment that suits it, and a shared curtain means the
-  /// server can check for the price of one function call.
+  /// Refusing prevents abuse. A ship that can declare its own death can
+  /// declare it at a moment that suits it. With a shared curtain the server can
+  /// check it for the price of one function call.
   Refused,
   /// The server found the contact itself, because the rule does not ask.
   ServerFound,
@@ -62,9 +61,9 @@ pub struct DeathEvent {
   pub verdict: DeathVerdict,
   /// Ticks between the contact and the server acting on it.
   ///
-  /// Under `ServerOnly` this is the round trip, and it is the number that
-  /// makes the rule unplayable: you watched the bullet miss and died anyway,
-  /// with nothing to ease and nothing to undo.
+  /// Under `ServerOnly` this is the round trip, which makes the rule
+  /// unplayable: you watched the bullet miss and still died. A death cannot be
+  /// eased or undone.
   pub late_by_ticks: u64,
 }
 
@@ -92,7 +91,8 @@ pub enum Op {
   // ---- client to server ----
   Move { seq: u64, tick: u64, dir: Dir8 },
   Fire { seq: u64, tick: u64 },
-  /// "I was hit, on this tick." Judged or trusted according to the rule.
+  /// The client's claim that it was hit on this tick. Judged or trusted
+  /// according to the rule.
   Struck { seq: u64, tick: u64 },
 
   // ---- server to client ----
@@ -120,14 +120,13 @@ pub mod wire_cost {
 
   /// The same ops with every variant renamed to a number.
   ///
-  /// This exists to take one measurement nobody in this repository had taken:
-  /// **the share of a frame that is the names of its variants**. `IMPROVEMENTS`
-  /// gates float quantization, bit packing and numeric variant tags on it, and
-  /// a shmup is the shape where the share is largest, because a curtain of tiny
-  /// messages is mostly tag.
+  /// Used to measure **the share of a frame taken up by variant names**, which
+  /// nothing else in this repository measures. `IMPROVEMENTS` makes float
+  /// quantization, bit packing and numeric variant tags depend on it. The share
+  /// is largest in a shmup, because a stream of tiny messages is mostly tag.
   ///
-  /// Borrowed rather than converted, so measuring costs no clones and the thing
-  /// measured is the thing sent.
+  /// Borrowed rather than converted, so measuring costs no clones and measures
+  /// exactly what is sent.
   #[derive(Serialize)]
   pub enum Tagged<'a> {
     #[serde(rename = "0")]
@@ -191,9 +190,8 @@ pub mod wire_cost {
 
   /// Which of the two halves an op belongs to.
   ///
-  /// The split the whole example is built to make: a wave and an emitter death
-  /// buy the entire enemy curtain, and everything else describes things a
-  /// human caused and nothing can derive.
+  /// A wave and an emitter death produce the entire enemy curtain. Everything
+  /// else describes things a human caused, which cannot be derived.
   pub fn is_derivable_half(op: &Op) -> bool {
     matches!(op, Op::WaveUp(_) | Op::ArmDown(_))
   }
@@ -236,8 +234,8 @@ mod tests {
 
   #[test]
   fn a_wave_buys_more_curtain_than_a_frame_buys_player_bullets() {
-    // The comparison in one assertion. A wave is a fixed cost that becomes
-    // hundreds of bullets; player fire costs per bullet, for ever.
+    // A wave is a fixed cost that becomes hundreds of bullets; player fire
+    // costs bytes for every bullet.
     let wave = Op::WaveUp(Box::new(make_wave(0, 9_001, 0)));
     let wave_bytes = wire_cost::bytes(std::slice::from_ref(&wave));
 
@@ -257,11 +255,11 @@ mod tests {
 
   #[test]
   fn compact_msgpack_still_spells_out_every_variant_name() {
-    // The measurement `IMPROVEMENTS` gates the wire-encoding primitives on.
-    // That compact MessagePack keeps variant names is already in
-    // `MsgPackCodec`'s own docs; the share of a frame they account for is not,
-    // and the share is what the backlog item is waiting on. A curtain of tiny
-    // messages is mostly tag, so this is where it is largest.
+    // `IMPROVEMENTS` makes the wire-encoding primitives depend on this
+    // measurement. `MsgPackCodec`'s docs already say compact MessagePack keeps
+    // variant names, but not what share of a frame they take, which is what the
+    // backlog item is waiting on. A stream of tiny messages is mostly tag, so
+    // this is where the share is largest.
     let ops = vec![
       Op::InputAck { seq: 12 },
       Op::ArmDown(crate::sim::curtain::Downed { wave: 1, arm: 2, tick: 900 }),
@@ -277,10 +275,9 @@ mod tests {
 
   #[test]
   fn the_share_that_is_variant_names_falls_as_a_message_grows() {
-    // The other half of the finding, and the reason this is a measurement
-    // rather than a rule: a tag is a fixed cost, so it dominates a stream of
-    // small events and disappears into a large frame. Anyone reaching for
-    // numeric tags should know which of the two they have.
+    // This is why it stays a measurement and not a rule: a tag is a fixed cost,
+    // so it dominates a stream of small events and is negligible in a large
+    // frame.
     let small = vec![Op::InputAck { seq: 3 }];
     let large = vec![frame_op(200)];
     let small_share = (wire_cost::bytes(&small) - wire_cost::bytes_numerically_tagged(&small)) as f32 / wire_cost::bytes(&small) as f32;
@@ -291,8 +288,8 @@ mod tests {
   #[test]
   fn the_derivable_half_is_named_exhaustively() {
     // A new op that describes the curtain and is not listed here would be
-    // counted against player fire, and the headline comparison would quietly
-    // become wrong in the flattering direction.
+    // counted against player fire and the main comparison would be skewed in
+    // favour of the derived half.
     assert!(wire_cost::is_derivable_half(&Op::WaveUp(Box::new(make_wave(0, 1, 0)))));
     assert!(wire_cost::is_derivable_half(&Op::ArmDown(crate::sim::curtain::Downed { wave: 0, arm: 0, tick: 0 })));
     assert!(!wire_cost::is_derivable_half(&frame_op(1)));

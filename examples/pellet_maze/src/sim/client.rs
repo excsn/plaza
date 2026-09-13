@@ -1,23 +1,23 @@
-//! What a client believes, and how it discovers it turned at the wrong corner.
+//! What a client believes and how it finds out it turned at the wrong corner.
 //!
-//! The prediction machinery is `bomb_grid`'s, arrived at the hard way and
-//! reused deliberately: run on the server's tick grid, never on the frame's;
-//! compare against what this client believed *on the frame's own tick*; keep an
-//! input until the prediction has run it, not until it is acknowledged. Those
-//! are not restated here beyond the code that implements them.
+//! The prediction machinery is reused from `bomb_grid`: run on the server's
+//! tick grid rather than the frame's; compare against what this client believed
+//! *on the frame's own tick*; keep an input until the prediction has run it
+//! rather than until it is acknowledged. Those rules are not explained again
+//! here beyond the code that implements them.
 //!
-//! What is new is the failure this example exists to show.
+//! The new part is the wrong-junction failure.
 //!
-//! # A cell error is bounded. A junction error is not.
+//! # Junction errors and cell errors
 //!
 //! When a mispredicted *cell* is corrected, the player jumps one cell and
 //! everything afterwards is the same. When a *turn* is taken at the wrong
-//! junction, the two sides run down **different corridors**, and every tick
-//! after that increases the distance. The correction, when it arrives, is not a
-//! step: it is a route.
+//! junction, the two sides run down **different corridors** and every tick
+//! after that increases the distance. The correction, when it arrives, has to
+//! undo a whole route rather than one step.
 //!
 //! That is why [`Client::wrong_junction`] is counted separately from
-//! [`Client::snaps`]. They are different failures with different costs, and a
+//! [`Client::snaps`]. They are different failures with different costs. A
 //! single "corrections" number would average one into the other and hide the
 //! expensive one.
 
@@ -37,11 +37,12 @@ const CATCH_UP_TICKS: u64 = 64;
 /// server to say where it took them.
 const TURN_MEMORY: usize = 8;
 /// Frames held waiting for the prediction to reach their tick. A frame that
-/// overtakes the prediction does so by about the link's jitter, so this is a
-/// backstop against a clock that has stopped advancing, not a working depth.
+/// overtakes the prediction does so by about the link's jitter, so this is only
+/// a backstop against a clock that has stopped advancing.
 const PENDING_FRAMES: usize = 16;
 /// How long an event stays "recent" for the panel's warnings, in ticks. A
-/// lifetime counter that warns forever says nothing; five seconds says "now".
+/// lifetime counter would keep warning forever and tell the player nothing; a
+/// five-second window shows what is happening now.
 const RECENT_TICKS: u64 = 310;
 
 /// One turn request sent and not yet run locally.
@@ -86,9 +87,9 @@ pub struct Client {
   ///
   /// A report can arrive **before** the client has simulated that tick: on a
   /// fast link it overtakes the local prediction. Comparing then matches the
-  /// server's turn against some older turn of the client's and manufactures a
-  /// disagreement out of arrival order. Same rule as a frame: no opinion about
-  /// a tick not yet reached.
+  /// server's turn against some older turn of the client's and reports a
+  /// disagreement caused only by arrival order. Frames follow the same rule:
+  /// nothing is compared for a tick not yet reached.
   incoming_turns: VecDeque<TurnTaken>,
   /// Frames waiting for this client to reach the tick they describe, held for
   /// the same reason as `incoming_turns`. Oldest first.
@@ -103,7 +104,7 @@ pub struct Client {
   /// different moments would end at different ones.
   starts_at_ms: u64,
 
-  /// A cell correction: bounded, one jump, then over.
+  /// A cell correction, which is bounded: one jump and it is done.
   pub snaps: u64,
   pub snapped_cells: u64,
   /// A turn taken somewhere the server did not take it. **Unbounded**: the two
@@ -124,7 +125,7 @@ pub struct Client {
   pub unreached_frames: u64,
   /// Frames older than every tick still in `history`, so there is no prediction
   /// left to compare them against. The opposite end of the window from
-  /// `unreached_frames`, and the dangerous end: an unreachable frame is
+  /// `unreached_frames` and the more dangerous one: an unreachable frame is
   /// obviously unusable, while a stale one looks exactly like agreement.
   pub stale_frames: u64,
   /// Held frames discarded because the buffer overflowed: the clock has fallen
@@ -205,8 +206,8 @@ impl Client {
   }
 
   /// What this client is currently waiting to turn into, for the panel: the
-  /// one piece of state a player cannot otherwise see, and the one that
-  /// explains why nothing has happened yet.
+  /// one piece of state a player cannot otherwise see, which explains why
+  /// nothing has happened yet.
   pub fn queued_turn(&self) -> Option<Dir> {
     self.queue.pending().map(|t| t.dir)
   }
@@ -319,8 +320,8 @@ impl Client {
     } else {
       self.next_tick = target + 1;
       self.pending_frames.clear();
-      // Standing still is a belief too. Without it a frame arriving during a
-      // countdown or a pause finds no history, and "no opinion" must not read
+      // Standing still is recorded too. Without it a frame arriving during a
+      // countdown or a pause finds no history and "no opinion" must not read
       // as disagreement any more than as agreement.
       self.record(target);
     }
@@ -378,11 +379,10 @@ impl Client {
 
   /// The server's word on where a turn actually happened.
   ///
-  /// The measurement this example is built on. A client cannot detect a
+  /// This is the measurement the example is built on. A client cannot detect a
   /// wrong-junction turn on its own: its heading is right, its cell is right
-  /// for a while, and by the time the positions disagree the cause is several
-  /// cells back. Only the server knows where it took the turn, so only the
-  /// server can say.
+  /// for a while and by the time the positions disagree the cause is several
+  /// cells back. Only the server knows where it took the turn.
   pub fn on_turn_taken(&mut self, taken: &TurnTaken) {
     if taken.player != self.me {
       return;
@@ -465,8 +465,9 @@ impl Client {
 
     let reached = self.next_tick.saturating_sub(1);
     if frame.tick > reached {
-      // Early rather than useless. Comparing now would report this client's own
-      // lag as a misprediction, but discarding skips the correction outright,
+      // A frame that arrives early is still useful. Comparing now would report
+      // this client's own lag as a misprediction, but discarding skips the
+      // correction outright,
       // and on a link whose jitter is about one tick that is most of them.
       self.unreached_frames += 1;
       self.pending_frames.push_back(frame.clone());
@@ -502,10 +503,10 @@ impl Client {
     let believed = self.believed_at_tick(at_tick);
     let died = self.predicted.alive && !authoritative.alive;
 
-    // No belief at all is a frame that fell off the back of `history`, and it
-    // is not the same answer as one that matches. Taking the authoritative
-    // state is the only defensible reading: this client cannot show the frame
-    // wrong, and unverified truth is still truth.
+    // No belief at all means the frame fell off the back of `history`, which
+    // is different from a match. The client takes the authoritative state: it
+    // cannot show the frame is wrong and the server's state stays correct even
+    // when it cannot be verified.
     if believed.is_none() {
       self.stale_frames += 1;
       self.last_stale_tick = Some(self.next_tick);
@@ -532,8 +533,8 @@ impl Client {
 
   /// Adopts an authoritative state and re-runs the tick loop over it.
   ///
-  /// **The queue is cleared rather than replayed**, and that is the one place
-  /// this differs from a continuous reconciliation. A pending turn was aimed at
+  /// **The queue is cleared rather than replayed.** This is the one place this
+  /// differs from a continuous reconciliation. A pending turn was aimed at
   /// a junction the client is no longer approaching, so replaying it would take
   /// the correction and immediately turn somewhere else wrong. A turn that
   /// still matters will be re-sent by the player, who is holding the key.

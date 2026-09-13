@@ -1,48 +1,46 @@
 //! Impairment on the link, applied where the link is.
 //!
-//! Delay, jitter and loss are properties of a connection, not of an
-//! application, so they belong to the transport that owns the socket rather
-//! than to a queue an arena maintains beside its game state. Every frame
-//! crossing an impaired connection rides them: ops, handshakes and probes
-//! alike, which is what makes a measured round trip through here mean
-//! something.
+//! Delay, jitter and loss are properties of a connection, so they belong to
+//! the transport that owns the socket rather than to a queue an arena
+//! maintains beside its game state. Every frame crossing an impaired
+//! connection is affected: ops, handshakes and probes alike. That is why a
+//! round trip measured through here includes the impairment.
 //!
-//! # What a loss costs depends on the link, not on the frame
+//! # What a loss costs
 //!
 //! [`DirectionProfile::loss`] is the probability a frame is lost in transit.
-//! [`Delivery`] says what that means, and the two answers are genuinely
-//! different link types rather than two knobs on one.
+//! [`Delivery`] says what that means. Each of its two variants models a
+//! different kind of link.
 //!
 //! On a reliable stream, which is what both transports here are, a lost
 //! segment never reaches the application as a missing message: TCP
 //! retransmits, so it costs [`RETRANSMIT_PENALTY`] and everything queued
 //! behind it waits, and what arrives is a latency spike followed by a burst.
-//! Deleting a frame would model a link plaza does not have, and an application
+//! Deleting a frame would model a link plaza does not have and an application
 //! written against that would carry reconciliation for a case that cannot
 //! occur. So [`Delivery::Reliable`] is the default and nothing is dropped.
 //!
 //! On a datagram link the frame is simply gone and the two ends reconcile.
-//! [`Delivery::Datagram`] over a stream is therefore a *simulation*, which is
-//! what makes it worth having: an application's recovery can be exercised
-//! before the channel it was written for exists.
+//! [`Delivery::Datagram`] over a stream is therefore a *simulation*. It lets an
+//! application's recovery be exercised before the channel it was written for
+//! exists.
 //!
 //! **Over a link that really is a datagram link, do not honour it.** The
 //! network loses the frame itself, so applying this too counts the loss twice.
 //! `examples/foreign_soil`'s UDP body adds only delay and jitter for that
 //! reason.
 //!
-//! No frame kind is exempt under either model, and none needs to be. Under
-//! `Reliable` nothing is lost at all. Under `Datagram` a lost probe costs one
-//! sample, which is why only one is ever in flight, and a lost `Hello` reads
-//! as a peer that declared nothing, which is the case that handshake was built
-//! to survive.
+//! No frame kind is exempt under either model. Under `Reliable` nothing is
+//! lost at all. Under `Datagram` a lost probe costs one sample and a lost
+//! `Hello` reads as a peer that declared nothing, which is the case that
+//! handshake was built to survive.
 //!
 //! # Order is preserved
 //!
 //! Release times are made monotone as frames are queued, so a delayed frame
 //! holds up everything behind it and a jitter spike arrives as a stall
-//! followed by a burst. That is head-of-line blocking, and it is what makes
-//! the retransmission penalty above cost more than the one frame that paid it.
+//! followed by a burst. This is head-of-line blocking, which is why the
+//! retransmission penalty above delays more than the one frame that was lost.
 
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -55,8 +53,8 @@ use tokio::time::Instant;
 /// stack waits before deciding a segment is gone.
 pub const RETRANSMIT_PENALTY: Duration = Duration::from_millis(200);
 
-/// What being lost costs, which is a property of the link rather than of the
-/// frame that was unlucky.
+/// What a lost frame costs, which depends on the link rather than on the
+/// frame.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Delivery {
   /// A reliable stream: the segment is retransmitted, so the frame arrives
@@ -64,11 +62,10 @@ pub enum Delivery {
   /// What both of plaza's transports actually do.
   #[default]
   Reliable,
-  /// A datagram link: the frame is gone and the two ends reconcile, or do not.
-  /// Plaza has no such transport yet, so choosing this over a WebSocket is
-  /// simulating one, which is worth doing deliberately: it is how an
-  /// application's recovery gets exercised before the channel it is for
-  /// exists.
+  /// A datagram link: the frame is gone and the two ends reconcile. Plaza has
+  /// no such transport yet, so choosing this over a WebSocket simulates one.
+  /// That lets an application's recovery be exercised before the channel it is
+  /// for exists.
   Datagram,
 }
 
@@ -82,8 +79,8 @@ pub struct DirectionProfile {
   /// Probability in `[0, 1]` that a frame is lost in transit. What that costs
   /// is [`delivery`](Self::delivery)'s to say.
   pub loss: f32,
-  /// What a loss does. Defaults to [`Delivery::Reliable`], which is the truth
-  /// about the transports underneath.
+  /// What a loss does. Defaults to [`Delivery::Reliable`], which is what the
+  /// transports underneath do.
   pub delivery: Delivery,
 }
 
@@ -133,9 +130,8 @@ impl LinkProfile {
 /// link should be stays testable without a socket.
 pub type LinkSink = std::sync::Arc<dyn Fn(LinkProfile) + Send + Sync>;
 
-/// A [`LinkSink`] with the latch that keeps an unchanged setting quiet: the
-/// profile reaches the sink when it differs from the last one published, and
-/// not otherwise.
+/// A [`LinkSink`] with a latch that skips unchanged settings: the profile
+/// reaches the sink only when it differs from the last one published.
 pub struct LinkPublisher {
   sink: LinkSink,
   published: parking_lot::Mutex<Option<LinkProfile>>,
@@ -166,9 +162,9 @@ impl LinkPublisher {
 /// xorshift64, seeded through splitmix64 so neighbouring connection ids do not
 /// produce correlated streams.
 ///
-/// Deliberately not a dependency and deliberately not seeded from the clock: a
-/// run reproduces from its connection ids, which is what makes an impaired
-/// playground session worth re-running.
+/// Written here rather than taken as a dependency and seeded from connection
+/// ids rather than the clock, so an impaired playground session re-runs the
+/// same way.
 struct XorShift64(u64);
 
 impl XorShift64 {
@@ -219,8 +215,8 @@ impl Conditioner {
   /// Queues a frame. Returns whether it was queued: false when the buffer is
   /// full, or when a datagram link lost it.
   pub fn push(&mut self, frame_bytes: Frame, profile: &DirectionProfile, now: Instant) -> bool {
-    // A local resource running out, not the network losing anything. Control
-    // frames are still admitted: refusing a handshake here would wedge a
+    // A local buffer running out rather than a network loss. Control frames
+    // are still admitted: refusing a handshake here would wedge a
     // connection for a reason that has nothing to do with the link.
     if self.queue.len() >= self.capacity && frame_bytes.first() == Some(&frame::Kind::Ops.as_byte()) {
       return false;
@@ -327,9 +323,8 @@ mod tests {
 
   #[tokio::test]
   async fn a_reliable_link_pays_for_a_loss_in_time_rather_than_in_frames() {
-    // The thing a WebSocket actually does. Nothing goes missing, whatever the
-    // slider reads, because TCP retransmits and the application only ever sees
-    // the wait.
+    // What a WebSocket actually does: nothing goes missing whatever the slider
+    // reads, because TCP retransmits and the application only sees the delay.
     let mut c = Conditioner::new(3, CAP);
     let certain_loss = DirectionProfile {
       loss: 1.0,

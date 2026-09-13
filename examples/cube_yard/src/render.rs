@@ -3,15 +3,15 @@
 //! `draw_cube` takes a position and a size and no rotation, so it cannot draw a
 //! tumbling rigid body at all. Every cube therefore goes into a mesh whose
 //! vertices are rebuilt each frame, which is also the fast path: the cost is
-//! linear in cubes rather than in draw calls, and 901 of them rebuild in about
+//! linear in cubes rather than in draw calls and 901 of them rebuild in about
 //! 158us, under one percent of a 16.7ms frame.
 //!
-//! **In chunks, though.** macroquad's batcher takes `draw_call_vertex_capacity`
-//! (10000) and `draw_call_index_capacity` (5000) and *clamps* anything larger,
-//! warning once per call and silently drawing the front of the buffer. One mesh
-//! of 905 cubes is 21720 vertices and 32580 indices, so it drew about a quarter
-//! of the yard and the rest simply was not there. Indices bind first, at 36 per
-//! cube, which is what sets [`CHUNK`].
+//! **The mesh is drawn in chunks.** macroquad's batcher takes
+//! `draw_call_vertex_capacity` (10000) and `draw_call_index_capacity` (5000)
+//! and *clamps* anything larger, warning once per call and silently drawing
+//! the front of the buffer. One mesh of 905 cubes is 21720 vertices and 32580
+//! indices, so it drew about a quarter of the yard and the rest was missing.
+//! Indices bind first, at 36 per cube, which is what sets [`CHUNK`].
 
 use macroquad::prelude::*;
 

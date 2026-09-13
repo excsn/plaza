@@ -1,10 +1,10 @@
-//! Standing the floor up behind a WebSocket, and serving the browser client
+//! Standing the floor up behind a WebSocket and serving the browser client
 //! from the same port.
 //!
-//! Two wires matter here beyond the usual stack: the session's pong clock is
-//! the simulation clock, so a client's timeline aims its sub-tick claims at
-//! sim time rather than wall time, and the session's measured RTT is what the
-//! logic floors those claims against.
+//! Two things are wired up here beyond the usual stack. The session's pong
+//! clock is the simulation clock, so a client's timeline aims its sub-tick
+//! claims at sim time rather than wall time. The session's measured RTT is
+//! what the logic floors those claims against.
 
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;

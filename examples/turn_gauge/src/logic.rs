@@ -2,12 +2,12 @@
 //!
 //! # Where each regime's order lives
 //!
-//! The initiative regime is **composition over the shipped manager**: one
+//! The initiative regime is built from the shipped manager: one
 //! `RoundRobinTurnManager` per round, built from the re-rolled order at the
 //! boundary, its own notices going straight onto the wire. The delay regime
 //! holds no manager at all: a linear scan for the lowest gauge and two integer
-//! rules in [`crate::order`]. That asymmetry is the example's finding-in-shape,
-//! and the client audits both through the same [`crate::mirror::OrderMirror`].
+//! rules in [`crate::order`]. The client audits both through the same
+//! [`crate::mirror::OrderMirror`].
 //!
 //! One deliberate deviation from the manager's own vocabulary: the round
 //! boundary is decided *before* the last advance rather than read from
@@ -175,7 +175,8 @@ fn set_regime(state: &mut GaugeState, regime: Regime, ctx: &mut Ctx) -> bool {
   }
   state.regime = regime;
   info!(?regime, "regime switched");
-  // Half a fight under each machine compares nothing; the dial deals again.
+  // A battle split between the two regimes would not compare them, so the
+  // dial deals a fresh one.
   if !state.seats.is_empty() && *state.phase.current() != BattlePhase::Waiting {
     start_battle(state, ctx);
   }
@@ -226,9 +227,9 @@ fn start_battle(state: &mut GaugeState, ctx: &mut Ctx) {
   }
 }
 
-/// The initiative boundary: re-roll against speeds as they stand, fresh
-/// manager, walk again. `RoundStarted` goes out first so a client re-derives
-/// the order it is about to be audited against.
+/// The initiative boundary: re-roll against speeds as they stand and start a
+/// fresh manager. `RoundStarted` goes out first so a client re-derives the
+/// order it is about to be audited against.
 fn start_round(state: &mut GaugeState, ctx: &mut Ctx) {
   state.round += 1;
   state.panel.rounds += 1;
@@ -319,8 +320,8 @@ fn legal(state: &GaugeState, actor: UnitId, mv: Move) -> bool {
 fn perform(state: &mut GaugeState, actor: UnitId, mv: Move, ctx: &mut Ctx) {
   let before: Vec<u32> = state.units.iter().map(|u| u.speed).collect();
 
-  // The crit is the battle's roll, not the machine's: seeded by (battle,
-  // turn), so a replay lands the same hits.
+  // The crit is seeded by (battle, turn) whichever regime runs, so a replay
+  // lands the same hits.
   let crit = mv.crit_pct() > 0 && order::rng(state.battle ^ ((state.turn as u64) << 24) ^ 0xC217) % 100 < mv.crit_pct();
   let damage = mv.damage() * if crit { 2 } else { 1 };
   order::nominal_apply(&mut state.units, actor, mv, damage);
@@ -451,8 +452,8 @@ fn run_due_events(state: &mut GaugeState, ctx: &mut Ctx) -> bool {
       }
 
       GaugeEvent::BotActs { mark } | GaugeEvent::TurnTimesOut { mark } => {
-        // The turn moved on while this was in flight; a stale clock acts for
-        // nobody.
+        // The turn moved on while this was in flight, so a stale clock does
+        // nothing.
         if !state.ask.holds(mark) || *state.phase.current() != BattlePhase::Fighting {
           continue;
         }
@@ -483,8 +484,8 @@ fn run_due_events(state: &mut GaugeState, ctx: &mut Ctx) -> bool {
 }
 
 /// The virtual commander, and the vacant-chair fallback: each class plays its
-/// kit straightforwardly, the medic patching, the trickster stealing turns,
-/// the bruiser trading its future for damage.
+/// kit straightforwardly: the medic heals, the trickster slows the enemy and
+/// the bruiser gives up later turns for damage.
 pub fn auto_move(units: &[Unit], actor: UnitId, roll: u64) -> Move {
   let me = units.iter().find(|u| u.id == actor).expect("the actor exists");
   let allies = || units.iter().filter(|u| u.alive && u.team == me.team);

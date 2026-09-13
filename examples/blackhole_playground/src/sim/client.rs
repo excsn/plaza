@@ -5,9 +5,9 @@
 //! corrections as they arrive. Under [`SyncMode::Particles`] it does no physics
 //! at all and simply draws the positions it was sent.
 //!
-//! The difference is the point. Field sync costs a few hole states per packet and
-//! makes the client do the work; particle sync costs thousands of positions and
-//! makes the client do nothing.
+//! Field sync costs a few hole states per packet and the client does the
+//! integration. Particle sync costs thousands of positions and the client only
+//! draws them.
 
 use plaza_client_utils::FixedTimestep;
 use std::collections::BTreeMap;
@@ -20,7 +20,7 @@ pub struct Client {
   pub holes: Vec<BlackHole>,
   /// The field it integrates against: those holes plus any cluster stand-ins.
   ///
-  /// Cached rather than rebuilt per step, and flat rather than two lists, because
+  /// Cached rather than rebuilt per step and flat rather than two lists, because
   /// the integrator must not care which entries are real holes and which are
   /// stand-ins for a distant crowd. If it could tell, aggregation would be a
   /// second physics path and the two sides would no longer be running the same
@@ -32,10 +32,10 @@ pub struct Client {
   now_ms: u64,
   /// Leftover time, so the local integration advances in the *same fixed step*
   /// the server uses. Integrating with the raw frame delta instead is a slightly
-  /// different timestep, and in a divergent system that alone pulls the two
+  /// different timestep and in a divergent system that alone pulls the two
   /// simulations apart.
-  /// The same fixed step the server runs. Same rule *and* same timestep, or the
-  /// two integrations are not the same simulation at all.
+  /// The same fixed step the server runs. Both sides need the same rule *and*
+  /// the same timestep to run the same simulation.
   sim: FixedTimestep,
   /// Corrections applied, so the cost of staying converged is visible.
   pub corrections_applied: u64,
@@ -58,9 +58,9 @@ impl Client {
     self.pellets.len()
   }
 
-  /// How many point sources this client integrates every pellet against. The
-  /// number aggregation exists to hold down, and the one that decides whether the
-  /// per-machine cost is affordable.
+  /// How many point sources this client integrates every pellet against.
+  /// Aggregation keeps this down and it decides whether the per-machine cost is
+  /// affordable.
   pub fn field_size(&self) -> usize {
     self.field.len()
   }
@@ -76,7 +76,7 @@ impl Client {
     // The field: the exact holes it was told, plus the cluster stand-ins for the
     // ones it was not. If the server *culled* instead of aggregating, there are
     // no stand-ins and the client integrates physics that is missing forces,
-    // which is exactly what the cull toggle is for.
+    // which is what the cull toggle demonstrates.
     self.holes = packet.holes.iter().map(|(_, h)| *h).collect();
     self.field.clear();
     self.field.extend(self.holes.iter().filter(|h| h.alive).map(|h| h.as_attractor()));

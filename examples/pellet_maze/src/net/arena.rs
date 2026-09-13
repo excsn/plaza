@@ -1,8 +1,8 @@
 //! The authoritative arena, as `plaza` core wants it.
 //!
-//! The same shape as `bomb_grid`'s, which is the point: the netcode wrapper is
-//! boilerplate once the simulation is shaped for it, and the only genuinely new
-//! thing this arena sends is [`Op::TurnTaken`], the place a turn happened.
+//! The same shape as `bomb_grid`'s. Once the simulation is shaped for it the
+//! netcode wrapper is boilerplate. The only new op this arena sends is
+//! [`Op::TurnTaken`], the cell a turn happened in.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -37,8 +37,8 @@ pub struct HostView {
   pub turns_expired: u64,
   pub catches: u64,
   pub pellets_eaten: u64,
-  /// Pursuers eaten by an energized runner. The counter that says whether the
-  /// role inversion is ever actually reached, as opposed to merely implemented.
+  /// Pursuers eaten by an energized runner. Shows whether the role inversion is
+  /// ever actually reached in play.
   pub devoured: u64,
   pub match_round: u32,
   pub match_rounds: u32,
@@ -78,9 +78,10 @@ impl Arena {
       sync_hz: self.controls.sync_hz,
       playout_delay_ms: self.controls.playout_delay_ms,
       render_delay_ms: self.controls.render_delay_ms,
-      // Told, never assumed. The buffer decides whether a turn is taken or
-      // forgotten, so a client guessing differently would predict a turn the
-      // server dropped and then run down a corridor the server never entered.
+      // The client is told the buffer rather than assuming it. The buffer
+      // decides whether a turn is taken or forgotten, so a client guessing
+      // differently would predict a turn the server dropped and then run down a
+      // corridor the server never entered.
       turn_buffer_ms: self.controls.turn_buffer_ms,
       input_max_late_ticks: self.controls.input_max_late_ticks,
       input_max_early_ticks: self.controls.input_max_early_ticks,
@@ -214,10 +215,10 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         let Some(key) = source.id_cloned() else {
           return Ok(LogicOutput::none());
         };
-        // A client that is talking has plainly received whatever let it talk, so
-        // this is the acknowledgement and no ack op has to exist. Before the
-        // seat gate: a seatless client's traffic confirms its `NoSeat` too, and
-        // that verdict is just as unrepeatable as a welcome.
+        // Any traffic from a client proves it received the op that let it talk,
+        // so this is the acknowledgement and no ack op is needed. It runs before
+        // the seat gate so a seatless client's traffic confirms its `NoSeat`
+        // too, which needs confirming just as a welcome does.
         state.pending.confirm(&key);
         let Some(seat) = state.seat_of(&key) else {
           return Ok(LogicOutput::none());
@@ -259,9 +260,9 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         if let Some((runner, by, next_in_ms)) = out.caught {
           outbound.push(Op::Caught { runner, by, next_in_ms });
         }
-        // Two lists, because secrecy is a property of who is *sent* a
-        // message. A turn report is only ever read by the player it names, and
-        // an event about an invisible player must reach nobody else.
+        // Two lists, because secrecy depends on who is *sent* a message. A turn
+        // report is only read by the player it names and an event about an
+        // invisible player must reach nobody else.
         let mut private: Vec<(PlayerId, Op)> = Vec::new();
         for taken in out.turns {
           private.push((taken.player, Op::TurnTaken(Box::new(taken))));
@@ -387,10 +388,9 @@ mod tests {
     }
   }
 
-  /// The other half of the contract, and the half whose absence is silent: a
-  /// welcome that is never confirmed is repeated into a client that treats it
-  /// as a fresh start, so the first seconds of play rebuild the world over and
-  /// over. The guard above only asserts that repeats happen.
+  /// A welcome that is never confirmed is repeated into a client that treats
+  /// it as a fresh start, so the first seconds of play rebuild the world over
+  /// and over. The guard above only asserts that repeats happen.
   #[test]
   fn traffic_from_a_client_stops_the_repeats() {
     let controls = Controls { datagram_link: true, ..quiet() };
@@ -410,9 +410,9 @@ mod tests {
     assert_eq!(repeats, 0, "confirmed, so nothing is repeated");
   }
 
-  /// What the arena still owns of impairment: turning the panel's numbers into
-  /// a link profile, once, and only when they change. Holding the frames back
-  /// is the session's, and is tested where that happens.
+  /// The arena's remaining part in impairment is turning the panel's numbers
+  /// into a link profile, once and only when they change. Holding the frames
+  /// back belongs to the session and is tested there.
   #[test]
   fn the_sliders_are_published_to_the_link_rather_than_applied_here() {
     let controls = Controls { latency_ms: 200, jitter_ms: 40, loss_pct: 25.0, ..quiet() };
@@ -556,8 +556,8 @@ mod tests {
   #[test]
   fn the_policy_tells_a_client_the_turn_buffer() {
     // A client that guessed this would predict turns the server had already
-    // forgotten, which is a wrong junction manufactured out of a mismatched
-    // constant rather than out of the network.
+    // forgotten, which produces a wrong junction from a mismatched constant
+    // with no network cause.
     let controls = Controls { turn_buffer_ms: 321, ..quiet() };
     let (cs, _view) = slots(controls);
     let logic = ArenaLogic::new(cs, None);

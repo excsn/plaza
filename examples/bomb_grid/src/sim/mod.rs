@@ -1,4 +1,4 @@
-//! The headless game: the board, the rules, the authority, and a client that
+//! The headless game: the board, the rules, the authority and a client that
 //! predicts against it. No sockets, no window, no async.
 //!
 //! Everything measurable about this example is measurable here, which is why

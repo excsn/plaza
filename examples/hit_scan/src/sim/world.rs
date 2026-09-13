@@ -1,12 +1,12 @@
 //! Server and clients in one process, with an impaired link between them.
 //!
-//! The harness every claim in this example is measured on. It is not the
-//! networked build: it stands in for the wire so a rule can be tested without a
-//! socket, and so a measurement can be repeated exactly rather than played.
+//! Every claim in this example is measured on this harness. It is not the
+//! networked build: it stands in for the wire so a rule can be tested without
+//! a socket and a measurement can be repeated exactly.
 //!
-//! One thing it deliberately cannot measure: every party here reads the same
-//! clock, where the networked build has to estimate it. Clock error is
-//! [`crate::net::client`]'s problem and is tested there.
+//! It cannot measure clock error: every party here reads the same clock, while
+//! the networked build has to estimate it. Clock error is handled and tested
+//! in [`crate::net::client`].
 
 use plaza_client_utils::net_sim::{LatencyLink, Rng};
 use plaza_server_utils::{RenderError, render_error_at};
@@ -26,9 +26,8 @@ pub struct World {
   up: LatencyLink<(usize, Op)>,
   rng: Rng,
   /// Per client, whichever of the two directions is being impaired. One-sided
-  /// impairment is the falsifier for anything that claims to be fair: if a
-  /// number moves when only *your* sending is delayed, the rule is reading
-  /// arrival order somewhere.
+  /// impairment tests anything that claims to be fair: if a number moves when
+  /// only one player's sending is delayed, some rule is reading arrival order.
   pub one_way_only: bool,
 }
 
@@ -156,10 +155,9 @@ impl World {
   /// Mean distance between where clients draw somebody and where the server
   /// has them **now**.
   ///
-  /// The figure this repository has quoted everywhere, and it is not honest: a
-  /// client drawing a render delay behind is charged the whole of that delay as
-  /// if it were error. Kept so the panel can show it next to the honest one,
-  /// because the gap between the two is the point.
+  /// This is the figure quoted elsewhere in this repository. It counts the
+  /// whole render delay as error for a client drawing that far behind. It is
+  /// kept so the panel can show it next to the drawn-instant figure.
   pub fn mean_render_error_naive(&self, controls: &Controls) -> f32 {
     let truth = self.server.snaps_now();
     let mut sum = 0.0;
@@ -181,14 +179,14 @@ impl World {
   /// Mean distance between where clients draw somebody and where the server had
   /// them **at the instant that client is drawing**.
   ///
-  /// The honest figure. It needs a truth history, which is exactly what the
-  /// server already keeps to rewind a shot, so measuring it correctly costs a
-  /// second call to a buffer that has to exist anyway.
+  /// It needs a truth history, which the server already keeps to rewind shots,
+  /// so measuring it costs one more call to that buffer.
   pub fn mean_render_error_honest(&self, controls: &Controls) -> f32 {
     self.honest_render_error(controls).mean()
   }
 
-  /// The honest figure, unreduced, so a caller can have the worst case too.
+  /// The drawn-instant figure, unreduced, so a caller can also get the worst
+  /// case.
   pub fn honest_render_error(&self, controls: &Controls) -> RenderError {
     let mut total = RenderError::new();
     for client in &self.clients {
@@ -242,8 +240,8 @@ mod tests {
   }
 
   /// Everybody walking a different pattern, so the peers a client draws are
-  /// actually moving. Every render-error number is zero in a still world, which
-  /// is a very convincing way to measure nothing.
+  /// actually moving. Every render-error number is zero in a still world, so a
+  /// test run in one would pass without measuring anything.
   fn patrol(world: &mut World, controls: &Controls, ms: u64) {
     const DIRS: [Dir8; 6] = [Dir8::E, Dir8::S, Dir8::W, Dir8::N, Dir8::Se, Dir8::Nw];
     let mut t = 0;
@@ -259,9 +257,9 @@ mod tests {
 
   /// Patrolling, and everybody shooting at whoever they can see.
   ///
-  /// Aim is taken from what the *client* is drawing, never from server truth: a
-  /// harness that aims at the real position is a harness in which lag
-  /// compensation has nothing to compensate.
+  /// Aim is taken from what the *client* is drawing, never from server truth.
+  /// Aiming at the real position would leave lag compensation nothing to
+  /// compensate for.
   fn skirmish(world: &mut World, controls: &Controls, ms: u64) {
     const DIRS: [Dir8; 6] = [Dir8::E, Dir8::S, Dir8::W, Dir8::N, Dir8::Se, Dir8::Nw];
     let mut t = 0;
@@ -290,10 +288,9 @@ mod tests {
 
   #[test]
   fn latency_alone_produces_no_disagreement() {
-    // The claim every playout scheme rests on: delay is not disagreement.
-    // Prediction removes the round trip and nothing else, and the input runs on
-    // the tick it named on both sides, so a slow link is behind rather than
-    // wrong.
+    // Every playout scheme depends on delay alone causing no disagreement.
+    // Prediction only removes the round trip and the input runs on the tick it
+    // named on both sides, so a slow link makes a client late but not wrong.
     let controls = Controls { latency_ms: 120, jitter_ms: 30, playout_delay_ms: 200, ..base() };
     let mut world = World::new(&controls, SEED);
     patrol(&mut world, &controls, 8000);
@@ -302,9 +299,9 @@ mod tests {
 
   #[test]
   fn a_link_slower_than_the_input_window_is_corrected_constantly() {
-    // The other side of it, and the reason the window is a setting. Past
-    // `playable_one_way_ms` every input names a tick that has already closed,
-    // so the player's own movement is refused and their prediction is fiction.
+    // This is why the window is a setting. Past `playable_one_way_ms` every
+    // input names a tick that has already closed, so the player's own movement
+    // is refused and their prediction never matches the server.
     let controls = Controls { latency_ms: 600, playout_delay_ms: 100, input_max_late_ticks: 4, ..base() };
     assert!(controls.latency_ms > controls.playable_one_way_ms(), "the premise");
     let mut world = World::new(&controls, SEED);
@@ -314,10 +311,10 @@ mod tests {
 
   #[test]
   fn the_honest_render_error_is_smaller_than_the_one_this_repository_quotes() {
-    // `mean_render_error` compares a drawn position against server truth *now*,
-    // so it charges a client for a render delay it is taking deliberately. The
-    // honest figure compares against truth at the instant being drawn, and the
-    // gap between the two is roughly the delay times the speed.
+    // `mean_render_error` compares a drawn position against server truth now,
+    // so it counts a deliberate render delay as error. The drawn-instant figure
+    // compares against truth at the instant being drawn. The gap between the
+    // two is roughly the delay times the speed.
     let controls = Controls { render_delay_ms: 150, sync_hz: 20, ..base() };
     let mut world = World::new(&controls, SEED);
     patrol(&mut world, &controls, 6000);
@@ -330,9 +327,8 @@ mod tests {
 
   #[test]
   fn raising_the_render_delay_inflates_the_naive_error_and_leaves_the_honest_one_alone() {
-    // The sharpest form of it. A deeper buffer is a *choice*, and a metric that
-    // punishes it is measuring the choice rather than the netcode. Only one of
-    // these two numbers is allowed to move.
+    // A deeper buffer is a choice, so a metric that grows with it measures the
+    // choice and not the netcode. Only the naive number should move.
     let shallow = Controls { render_delay_ms: 50, sync_hz: 20, ..base() };
     let deep = Controls { render_delay_ms: 250, sync_hz: 20, ..base() };
 
@@ -355,8 +351,8 @@ mod tests {
 
   #[test]
   fn delaying_only_one_players_sending_does_not_change_where_anybody_ends_up() {
-    // The falsifier. If any rule in here reads arrival order rather than the
-    // tick a client named, impairing one direction alone will move a result.
+    // If any rule here reads arrival order instead of the tick a client named,
+    // impairing one direction alone will move a result.
     let controls = Controls { latency_ms: 150, playout_delay_ms: 250, ..base() };
 
     let mut fair = World::new(&controls, SEED);
@@ -375,13 +371,11 @@ mod tests {
 
   #[test]
   fn a_rewound_server_charges_targets_for_their_killers_latency_and_an_unrewound_one_does_not() {
-    // Both halves of the trade in one comparison, over the same script. This is
-    // the number the panel exists to show: turning the rewind on does not make
-    // the game fairer, it moves who is being treated unfairly.
-    // Every seat here is a connected client, so `bots` would steer nobody: the
-    // harness has to pull the triggers itself, which is also the honest thing
-    // to measure, since it is the client-to-wire-to-rewind path that is on
-    // trial rather than the bot.
+    // The same script with the rewind on and off. Turning the rewind on changes
+    // who is treated unfairly; it does not make the game fairer overall.
+    // Every seat here is a connected client, so `bots` would steer nobody and
+    // the harness pulls the triggers itself. That way the test covers the
+    // client-to-wire-to-rewind path and not the bot.
     let with = Controls { rewind: Rewind::Uncapped, latency_ms: 200, playout_delay_ms: 250, ..base() };
     let without = Controls { rewind: Rewind::Off, ..with };
 
@@ -403,8 +397,8 @@ mod tests {
   #[test]
   fn a_client_runs_ahead_of_the_newest_frame_it_has_seen() {
     // At or below zero the client is naming input ticks the server has already
-    // run, and every one of them is refused. It is the single number that says
-    // whether the whole scheme is working.
+    // run and every one of them is refused, so this number shows whether the
+    // scheme is working at all.
     let controls = Controls { latency_ms: 100, playout_delay_ms: 150, ..base() };
     let mut world = World::new(&controls, SEED);
     patrol(&mut world, &controls, 4000);

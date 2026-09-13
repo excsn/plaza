@@ -3,8 +3,8 @@ enum Admission {
   /// Queued for its instant. Nothing to do until the clock reaches it.
   queued,
 
-  /// The gap between this arrival and the render instant is a discontinuity, not
-  /// a delay. The buffer has already dropped everything but the newest packet;
+  /// The gap between this arrival and the render instant is a discontinuity
+  /// rather than a delay. The buffer has already dropped everything but the newest packet;
   /// the caller must now restart its own timeline: re-anchor its render clock on
   /// what just arrived and drop derived state, its entity mirror above all, so
   /// the stream's own recovery rebuilds it.
@@ -21,8 +21,8 @@ enum Admission {
 ///
 /// Ported from `plaza_client_utils::playout::PlayoutBuffer`.
 class PlayoutBuffer<T> {
-  /// [maxQueued] bounds the queue absolutely: size it several times past what an
-  /// honest buffer holds at the deepest render delay and fastest send rate, so
+  /// [maxQueued] bounds the queue absolutely: size it several times past what a
+  /// healthy buffer holds at the deepest render delay and fastest send rate, so
   /// reaching it means something is wrong rather than merely slow.
   ///
   /// [lostAhead] is the discontinuity threshold: how far past the render instant
@@ -72,8 +72,8 @@ class PlayoutBuffer<T> {
     return null;
   }
 
-  /// The transport's verdict that the timeline is lost, arriving from outside: a
-  /// resume backlog discarded unread, a reconnect. Drops everything but the
+  /// Reports a timeline loss the buffer did not detect itself: a resume backlog
+  /// discarded unread, a reconnect. Drops everything but the
   /// newest, which is what the caller's restarted clock anchors on.
   void timelineLost() => _restart();
 
@@ -87,8 +87,8 @@ class PlayoutBuffer<T> {
   }
 
   /// Packets that arrived after the instant they describe had been drawn, by a
-  /// margin jitter produces. The number that says the render delay is too small
-  /// for this link.
+  /// margin jitter produces. A climbing count means the render delay is too
+  /// small for this link.
   int get underruns => _underruns;
 
   /// How many stalls were survived. Counted per restart rather than per packet

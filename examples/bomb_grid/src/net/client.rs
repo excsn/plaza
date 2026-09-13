@@ -1,24 +1,24 @@
 //! A client on a real wire.
 //!
 //! It wraps the same [`sim::Client`] the offline harness uses, so the
-//! prediction, the snap counting and the board are unchanged. What it adds is
-//! everything a shared clock and a function argument were standing in for:
+//! prediction, the snap counting and the board are unchanged. It adds what the
+//! harness gets from a shared clock and function arguments:
 //!
-//! - **The clock is estimated, not shared.** The offline harness hands its
-//!   clients the server's own `now_ms`. Here that is [`FramePump`]'s timeline
-//!   over ping and pong, and it matters more than in a continuous game: every
-//!   input names a *tick*, and a tick is computed from this estimate. An
-//!   estimate that trails the stream names ticks the server has already
-//!   closed, and every input is silently refused.
-//! - **The clock is floored at what the stream has proven, carried forward.**
-//!   The newest server timestamp actually received is a lower bound that needs
-//!   no synchronisation to trust, because the server wrote it, and it is
-//!   advanced at wall rate from the moment it landed. One clock does both jobs:
-//!   naming the tick an input is for, and deciding when this client runs that
-//!   input itself. Two clocks there is a bug with two faces, a player who
-//!   cannot move and a player who will not stop.
-//! - **The connection is a state, not an assumption.** Connecting, no seat, and
-//!   dropped are things a player has to be told about.
+//! - **The clock is estimated.** The offline harness hands its clients the
+//!   server's own `now_ms`. Here the estimate is [`FramePump`]'s timeline over
+//!   ping and pong. It matters more than in a continuous game, because every
+//!   input names a *tick* computed from this estimate. An estimate that trails
+//!   the stream names ticks the server has already closed and every input is
+//!   silently refused.
+//! - **The clock is floored at the newest stamp, carried forward.** The newest
+//!   server timestamp actually received is a lower bound that needs no
+//!   synchronisation to trust, because the server wrote it. It is advanced at
+//!   wall rate from the moment it landed. One clock does both jobs: naming the
+//!   tick an input is for and deciding when this client runs that input
+//!   itself. With two separate clocks the bug shows up either as a player who
+//!   cannot move or as a player who will not stop.
+//! - **The connection is tracked as a state.** A player has to be told about
+//!   connecting, having no seat and being dropped.
 //!
 //! [`sim::Client`]: crate::sim::Client
 
@@ -32,15 +32,14 @@ use crate::sim::protocol::{Intent, Op, ServerPolicy, PROTOCOL};
 use crate::sim::types::{Controls, Dir, PlayerId, SIM_STEP_MS};
 
 /// One codec for the whole client, matching the one the host is built with.
-/// Naming it once is the point: the two ends cannot drift onto different
-/// formats if there is only one name for the format.
+/// Naming it once keeps the two ends from drifting onto different formats.
 const WIRE: MsgPackCodec = MsgPackCodec;
 
 /// Resend the held direction at least this often.
 ///
 /// A walk is a **level**, not an edge: the server holds the last direction it
-/// was told, so sending only on change means a *dropped* change is not a missing
-/// update but a wrong state that persists. The player keeps walking until they
+/// was told, so sending only on change means a *dropped* change leaves a wrong
+/// state that persists. The player keeps walking until they
 /// press something else, which reads as the controls sticking rather than as
 /// packet loss. The keepalive bounds that to one interval.
 const INPUT_KEEPALIVE_MS: u64 = 150;
@@ -59,7 +58,7 @@ pub enum Status {
   /// Connected, but not seated yet.
   Waiting,
   Playing,
-  /// Connected and the arena was full. A real outcome, not an error.
+  /// Connected and the arena was full. A normal outcome rather than an error.
   NoSeat { seats: usize },
   Gone(String),
 }
@@ -132,20 +131,20 @@ impl NetClient {
   ///
   /// The fitted clock, **floored by the newest stamp carried forward at wall
   /// rate** ([`Timeline::server_time_ms`]). Two things make that floor
-  /// necessary rather than decorative.
+  /// necessary.
   ///
   /// A stamp the server wrote is a lower bound on server time that needs no
   /// synchronisation to trust, so a cold or disturbed fit cannot drag this
   /// below what the stream has already proven.
   ///
-  /// And it has to *advance*. A floor pinned at the last stamp freezes between
-  /// frames, and this clock is what decides when this client runs its own
+  /// The floor also has to *advance*. A floor pinned at the last stamp freezes
+  /// between frames and this clock decides when this client runs its own
   /// scheduled inputs: an input aimed at `now + playout` against a frozen clock
   /// is parked in the client's own future and never runs locally at all. The
   /// prediction then keeps walking under whatever direction last did run while
-  /// the server has long since stopped, which is what a player reports as the
-  /// controls sticking. Carrying the stamp forward at wall rate is what keeps
-  /// aiming and applying on one clock by construction.
+  /// the server has long since stopped, which a player reports as the controls
+  /// sticking. Carrying the stamp forward at wall rate keeps aiming and
+  /// applying on one clock.
   ///
   /// [`Timeline::server_time_ms`]: plaza_client_utils::Timeline::server_time_ms
   pub fn server_time_ms(&self) -> u64 {
@@ -186,7 +185,7 @@ impl NetClient {
     (self.server_time_ms() + depth) / SIM_STEP_MS
   }
 
-  /// Transmits this frame's intent, and predicts it locally.
+  /// Transmits this frame's intent and predicts it locally.
   ///
   /// Sent on change, plus a keepalive: see [`INPUT_KEEPALIVE_MS`] for why the
   /// keepalive is not optional.
@@ -230,9 +229,9 @@ impl NetClient {
     if self.frames_seen > 0 && plaza_ws::trim_backlog(&mut events, BACKLOG_TRIGGER, BACKLOG_KEEP).is_some() {
       self.resume_drops += 1;
       // A probe sent before the freeze and answered after it measures the
-      // freeze, not the network, and its origin still matches so the echo
-      // check waves it through. `on_resume` is what discards it, along with
-      // everything the estimators learned across a gap of unknown length.
+      // freeze rather than the network and its origin still matches, so the
+      // echo check accepts it. `on_resume` discards it along with everything
+      // the estimators learned across a gap of unknown length.
       self.pump.on_resume();
     }
     let mut arrivals = std::mem::take(&mut self.arrivals);
@@ -292,7 +291,7 @@ impl NetClient {
           self.last_result = Some((winner, next_in_ms));
           // The server stops simulating for the interval, so this client stops
           // predicting through it. Without this the prediction keeps walking a
-          // player the server is deliberately holding still, and every frame of
+          // player the server is deliberately holding still and every frame of
           // the interval is a snap.
           self.sim.set_paused(true);
         }
@@ -385,10 +384,11 @@ mod tests {
 
   #[test]
   fn an_input_never_aims_behind_what_the_stream_has_proven() {
-    // The failure this floor exists for, measured in the horde example and
-    // paid for twice: a clock estimate that trails the stream names ticks the
-    // server has already closed, every input is refused, and the player cannot
-    // move while every other readout looks healthy.
+    // The failure this floor prevents, first measured in the horde example,
+    // which reached this fix after two wrong ones: a clock estimate that trails
+    // the stream names ticks the server has already closed, every input is
+    // refused and the player cannot move while every other readout looks
+    // healthy.
     //
     // Here the clock is cold (no pongs at all), so the estimate falls back to
     // local time while the stream is far ahead of it.
@@ -407,9 +407,9 @@ mod tests {
 
   #[test]
   fn a_held_direction_is_coalesced_but_still_kept_alive() {
-    // Two halves of one policy. Re-sending an unchanged direction every frame
-    // is pure chatter, so it is coalesced. But sending *only* on change makes a
-    // dropped change permanent: the server holds the last direction it was
+    // Re-sending an unchanged direction every frame is wasted traffic, so it is
+    // coalesced. But sending *only* on change makes a dropped change
+    // permanent: the server holds the last direction it was
     // told, so the player keeps walking until they press something else, which
     // reads as the controls sticking rather than as packet loss.
     let socket = ScriptedSocket::new();
@@ -479,12 +479,12 @@ mod tests {
   fn this_client_applies_its_own_inputs_and_can_stop_walking() {
     // The failure a player reports as "it kept walking left after I let go".
     //
-    // An input is aimed at `server_now + playout`, and `server_now` is floored
+    // An input is aimed at `server_now + playout` and `server_now` is floored
     // against the newest stamp the stream has proven. If the clock this client
     // *applies* its own scheduled inputs on is a different one, the input is
     // parked in the client's own future and never runs locally: the prediction
     // keeps walking under the last direction that did run, the server has long
-    // since stopped, and every frame is a snap back followed by another step in
+    // since stopped and every frame is a snap back followed by another step in
     // the old direction.
     //
     // The stream here is far ahead of a cold clock, which is the ordinary state

@@ -35,9 +35,8 @@ void main() {
       expect(easeInCubic(0.25), lessThan(0.25));
     });
 
-    /// The reason quadratic exists beside cubic: cubic covers 12.5% of the
-    /// distance in the first half, which reads as sitting still then
-    /// teleporting. Quadratic covers 25%.
+    /// Cubic covers 12.5% of the distance in the first half, which reads as
+    /// sitting still then teleporting. Quadratic covers 25%.
     test('quadratic stays visible where cubic does not', () {
       expect(easeInCubic(0.5), closeTo(0.125, 1e-9));
       expect(easeInQuad(0.5), closeTo(0.25, 1e-9));
@@ -68,8 +67,8 @@ void main() {
       expect(s.sample(10.0, blend), closeTo(5.0, 1e-9));
     });
 
-    /// The logical state keeps moving while the ease runs, which is the point
-    /// of not holding a copy of it.
+    /// The logical state keeps moving while the ease runs, which is why the
+    /// smoother does not hold a copy of it.
     test('the target is live, not captured', () {
       final s = ErrorSmoother<double>(1.0);
       s.beginFrom(0.0);

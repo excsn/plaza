@@ -5,9 +5,8 @@
 //! [`InMemoryLobbyManager`], and the manager handles room creation, listing,
 //! join authorization, and reaping finished rooms.
 //!
-//! Four smaller pieces cover what sits either side of that, each holding no
-//! timers and spawning nothing, so an application drives them from its own
-//! `StateLogic`:
+//! Four smaller pieces sit around the manager. Each holds no timers and spawns
+//! nothing, so an application drives them from its own `StateLogic`:
 //!
 //! - [`MatchQueue`] for games where a player is paired rather than choosing,
 //!   including filling the seats nobody came for.

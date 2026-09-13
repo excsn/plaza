@@ -2,9 +2,8 @@
 //! must act next and checking each turn the server opens against it.
 //!
 //! One implementation on purpose. The desktop window, the wasm page, the
-//! scripted run and the logic tests all audit through this type, so "the
-//! projection agreed with the server" is one piece of code being right rather
-//! than four transcriptions of it.
+//! scripted run and the logic tests all audit through this type, so every
+//! audit runs the same code rather than four copies of it.
 
 use crate::order;
 use crate::protocol::{BattleView, Effect, GaugeOp, Move, Regime, Unit, UnitId, PROJECT};

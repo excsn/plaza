@@ -155,16 +155,16 @@ async fn frame_loop(options: role::Options, bots: usize) {
         body = Body::new(client.at);
         seeded = true;
       }
-      // The one position that arrives rather than departs. A respawn puts the
-      // character on fresh footing, and a client that kept walking from where
-      // it died would have every claim refused.
+      // The one position the server sends to the client rather than the other
+      // way round. A respawn puts the character on fresh footing and a client
+      // that kept walking from where it died would have every claim refused.
       if let Some(at) = client.take_teleport() {
         body = Body::new(at);
       }
 
-      // A dead or departed target is not a target. Dropping it here rather
-      // than waiting for the server keeps the reticle, the camera and the
-      // action bar from all describing something that is no longer there.
+      // Drop a dead or departed target here rather than waiting for the
+      // server, so the reticle, the camera and the action bar stop pointing at
+      // something that is gone.
       if let Some(target) = client.target {
         let gone = client
           .others
@@ -175,9 +175,8 @@ async fn frame_loop(options: role::Options, bots: usize) {
         }
       }
 
-      // Nothing answers a key while down. Walking a corpse around is not a
-      // feature, and every claim it sent would be refused anyway once the
-      // server had moved the body to its spawn.
+      // Keys do nothing while down. Every claim a downed client sent would be
+      // refused anyway once the server had moved the body to its spawn.
       let alive = !client.is_down();
       let turning = alive
         && (is_key_down(KeyCode::Left)
@@ -193,8 +192,8 @@ async fn frame_loop(options: role::Options, bots: usize) {
 
       // With something targeted and nobody steering, the camera comes round to
       // face it, so walking forward closes the distance. Eased rather than
-      // snapped, and given up the moment the player turns, or the camera
-      // fights the hands holding it.
+      // snapped and dropped as soon as the player turns or the camera would
+      // fight the player's own steering.
       if !turning
         && let Some(target) = client.target
         && let Some(other) = client.others.get(&target)
@@ -235,17 +234,16 @@ async fn frame_loop(options: role::Options, bots: usize) {
           client.at = body.at;
           client.moved_to(body.at, yaw);
         }
-        // The server owns it: ask, and wait. Nothing local moves, which is the
-        // whole of what this arm of the comparison looks like.
+        // The server owns it: send the intent and wait. Nothing moves locally
+        // until the server answers.
         gow_3d::protocol::Authority::Server => {
           client.intend(yaw, forward);
           body = Body::new(client.at);
         }
       }
 
-      // Tab targeting, which is the point rather than a convenience: naming the
-      // target is what removes the thing two machines would otherwise have to
-      // agree about.
+      // Tab targeting is part of the latency design: naming the target means
+      // the two machines never have to agree on whether a projectile hit.
       if alive && is_key_pressed(KeyCode::Tab) {
         let next = cycle_target(&client);
         if next.is_none() {

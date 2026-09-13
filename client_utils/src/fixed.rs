@@ -1,18 +1,19 @@
-//! Fixed-point arithmetic, for a wire that carries causes instead of state.
+//! Fixed-point arithmetic, for a wire that carries inputs instead of state.
 //!
-//! A wire that sends positions forgives arithmetic: a client whose maths
-//! differs from the server's by one part in a million is corrected on the next
-//! frame and nobody ever knows. A wire that sends **nothing but a seed and the
-//! inputs** (deterministic lockstep, an event-sourced replay) is never
-//! corrected: a difference compounds for as long as the machines run, and the
-//! two sides end up watching different games.
+//! A wire that sends positions tolerates small arithmetic differences: a
+//! client whose maths differs from the server's by one part in a million is
+//! corrected on the next frame and nobody ever knows. A wire that sends
+//! **nothing but a seed and the inputs** (deterministic lockstep, an
+//! event-sourced replay) is never corrected: a difference compounds for as
+//! long as the machines run and the two sides end up watching different
+//! games.
 //!
 //! `f32` cannot be relied on to give the same answer in a wasm build and a
 //! native one. The instructions are specified, but the compilers are free to
 //! contract a multiply and an add into a fused multiply-add, to keep an
 //! intermediate in a wider register, or to reassociate a sum, and any of those
-//! changes the last bit. One last bit, fed back into a position every tick for
-//! twenty seconds, is a visible gap.
+//! changes the last bit. A one-bit difference fed back into a position every
+//! tick grows into a visible gap within twenty seconds.
 //!
 //! So such a simulation has no floats in it at all. `Fx` is a signed 32-bit
 //! value with 8 fractional bits: a range of about +/- 8 million units at a
@@ -50,7 +51,7 @@ impl Fx {
     self.0 >> FRAC_BITS
   }
 
-  /// The only float in the simulation's vocabulary, and it is one way.
+  /// The only conversion to a float. There is no conversion back.
   ///
   /// Nothing in `sim` may call this: a value that goes through `f32` and comes
   /// back has been through an implementation the wire format cannot pin down.
@@ -88,11 +89,12 @@ impl Fx {
 
   /// Square root, in fixed point, defined as the largest `r` with `r*r <= n`.
   ///
-  /// Newton's method to get close, then a correction to that definition. The
-  /// definition is the point: "iterate until it stops changing" does not
-  /// terminate for integer Newton, which can settle into a two-value cycle, and
-  /// "iterate N times" makes the answer a function of N. Both are things two
-  /// builds could do differently. The floor is a property of the input alone.
+  /// Newton's method to get close, then a correction to that definition.
+  /// Defining it this way avoids two problems: "iterate until it stops
+  /// changing" does not terminate for integer Newton, which can settle into a
+  /// two-value cycle; "iterate N times" makes the answer a function of N. Both
+  /// are things two builds could do differently. The floor is a property of
+  /// the input alone.
   pub fn sqrt(self) -> Fx {
     if self.0 <= 0 {
       return Fx(0);
@@ -162,9 +164,8 @@ impl P {
     }
   }
 
-  /// Squared distance, which is what a range check wants: comparing squares
-  /// avoids a square root, and avoiding it removes an implementation from the
-  /// path entirely.
+  /// Squared distance, for range checks. Comparing squares avoids calling the
+  /// square root at all.
   pub fn dist_sq(self, other: P) -> Fx {
     let dx = self.x - other.x;
     let dy = self.y - other.y;
@@ -220,8 +221,8 @@ mod tests {
 
   #[test]
   fn the_square_root_terminates_on_the_two_cycle_newton_can_land_in() {
-    // The reason it is written as a floor and not as a convergence loop: for
-    // some inputs integer Newton alternates between two values for ever.
+    // It is written as a floor rather than a convergence loop because for some
+    // inputs integer Newton alternates between two values for ever.
     for raw in 1..4000i32 {
       let root = Fx(raw).sqrt();
       assert!(root.0 >= 0, "{raw}");
@@ -238,10 +239,10 @@ mod tests {
 
   #[test]
   fn a_thousand_steps_of_a_third_land_exactly_where_arithmetic_says() {
-    // The property the whole module exists for: repeated accumulation is
-    // reproducible to the bit, which is what lets two machines run a wave from
-    // a seed and still agree twenty seconds later. The same loop in `f32` is
-    // *not* guaranteed to give the same answer in two builds.
+    // Repeated accumulation is reproducible to the bit, which lets two
+    // machines run a wave from a seed and still agree twenty seconds later.
+    // The same loop in `f32` is *not* guaranteed to give the same answer in
+    // two builds.
     let step = Fx::ratio(1, 3);
     let mut a = Fx::ZERO;
     for _ in 0..1000 {

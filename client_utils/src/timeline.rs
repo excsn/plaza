@@ -1,9 +1,9 @@
 //! The client's clocks, and the bookkeeping that says which samples still count.
 //!
-//! A probe is sent, answered, and recorded. The part worth a type is what
-//! happens in between: a client that reconnects or resumes has measurements in
-//! flight that no longer measure the network, and feeding them to a smoothed
-//! estimator poisons it for minutes.
+//! A probe is sent, answered and recorded. This type handles what happens in
+//! between: a client that reconnects or resumes has measurements in flight
+//! that no longer measure the network and feeding them to a smoothed estimator
+//! skews it for minutes.
 //!
 //! ```no_run
 //! # use plaza_client_utils::Timeline;
@@ -39,7 +39,7 @@ pub struct Probe {
 /// The estimators, plus the epoch that decides which probes still count.
 ///
 /// A **reconnect** invalidates measurements in flight but keeps what has been
-/// learned: the socket changed, the link probably did not. A **resume**
+/// learned: the socket changed but the link probably did not. A **resume**
 /// invalidates both, because arbitrary wall time passed and a least-squares fit
 /// across a ten-minute gap produces a meaningless skew.
 #[derive(Debug, Clone)]
@@ -133,9 +133,9 @@ impl Timeline {
   /// by the newest stamp carried forward at wall rate.
   ///
   /// The fit answers with `now_ms` itself until two exchanges are in, so this
-  /// is always usable. The floor only ever lifts the estimate, and never past
-  /// the truth: the stamp trails real server time by the one-way delay it took
-  /// to arrive.
+  /// is always usable. The floor can only raise the estimate and never raises
+  /// it past the true server time, because the stamp trails real server time
+  /// by the one-way delay it took to arrive.
   pub fn server_time_ms(&self, now_ms: u64) -> u64 {
     let fitted = self.clock.server_time_at(now_ms as f64).unwrap_or(now_ms as f64).max(0.0) as u64;
     match self.stamp {
@@ -178,8 +178,8 @@ mod tests {
 
   #[test]
   fn a_probe_from_before_a_reconnect_is_refused() {
-    // What this exists to prevent: the answer arrives, looks like a sample, and
-    // is really a measurement of however long the client was away.
+    // The answer arrives and looks like a sample but really measures however
+    // long the client was away.
     let mut t = Timeline::new();
     let stale = t.begin(1000);
     t.on_reconnect();
@@ -190,8 +190,8 @@ mod tests {
 
   #[test]
   fn a_reconnect_keeps_what_was_learned_and_a_resume_does_not() {
-    // The socket changing does not mean the link changed; an unknown stretch of
-    // wall time passing does.
+    // A socket change leaves the link as it was, but an unknown stretch of
+    // wall time invalidates what was learned.
     let mut t = Timeline::new();
     let probe = t.begin(1000);
     t.complete(probe, 1100, Some(5550));
@@ -220,8 +220,8 @@ mod tests {
 
   #[test]
   fn a_converged_fit_ahead_of_the_stamp_wins() {
-    // The floor is a lower bound, not the estimate: once the fit is past it,
-    // the fit answers.
+    // The floor is only a lower bound: once the fit is past it, the fit
+    // answers.
     let mut t = Timeline::new();
     let probe = t.begin(1000);
     t.complete(probe, 1100, Some(5550));

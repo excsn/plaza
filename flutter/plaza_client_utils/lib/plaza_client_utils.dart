@@ -1,13 +1,13 @@
 /// Real-time client primitives, ported from `plaza_client_utils` in Rust.
 ///
-/// The whole crate is here, with the Rust unit tests transliterated alongside. A
-/// port with nothing to catch the drift is the failure that discipline exists to
-/// prevent, so where Dart forced a decision the Rust source did not have to make,
-/// the doc comment on the member says so.
+/// The whole crate is here, with the Rust unit tests transliterated alongside.
+/// Those tests exist to catch drift between the two ports. For the same reason,
+/// where Dart forced a decision the Rust source did not have to make, the doc
+/// comment on the member says so.
 ///
 /// The deterministic network simulator is the one exception, in `net_sim.dart`:
 /// the Rust crate gates it behind a `net-sim` feature because it is a test and
-/// demo aid, and a separate entry point is how Dart says the same thing.
+/// demo aid and Dart uses a separate entry point for the same purpose.
 library;
 
 export 'src/arrival.dart' show ArrivalMonitor;

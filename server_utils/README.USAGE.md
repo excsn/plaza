@@ -1,6 +1,6 @@
 # Usage Guide: plaza_server_utils
 
-How to decide what each client is told: judging a shot against the world the shooter saw, gathering who is nearby, subscribing to entities no radius will return, filling a packet to a budget, summarising what is too far to send exactly, and streaming the result so a lost packet recovers.
+How to decide what each client is told: judging a shot against the world the shooter saw, gathering who is nearby, subscribing to entities no radius will return, filling a packet to a budget, summarising what is too far to send exactly and streaming the result so a lost packet recovers.
 
 ## Table of Contents
 
@@ -50,9 +50,9 @@ How to decide what each client is told: judging a shot against the world the sho
 *   **Audience**: the two unioned, plus why each entry is in it.
 *   **`SpatialGrid`**: a flat `(x, z)` bucket index, rebuilt each tick, that answers "who is near this point" without scanning the world.
 *   **`VisibilitySet`**: a dense bitset of who is visible to one client, with a word-at-a-time diff that is the spawn and despawn stream.
-*   **Priority**: which of the relevant entities fit *this* packet, where waiting is what earns a slot.
-*   **At rest**: a run of quiet ticks, worth one bit against the thirty-three a velocity costs.
-*   **Aggregate**: a stand-in for a distant group at its weighted centroid, for entities a client computes with rather than merely draws.
+*   **Priority**: which of the relevant entities fit this packet, ranked by a score that grows each tick an entity waits.
+*   **At rest**: a run of quiet ticks. Sending it costs one bit where a velocity costs thirty-three.
+*   **Aggregate**: a stand-in for a distant group at its weighted centroid, for entities a client computes with rather than only draws.
 *   **Baseline**: what a subscriber has acknowledged, which is what a delta is diffed against.
 *   **Digest**: an order-independent summary both ends compute, so a diverged mirror is detectable.
 *   **`SlotKey`**: an index plus a generation, from `plaza_client_utils`, which both ends of a delta stream name entities by.
@@ -106,7 +106,7 @@ if let Some(past) = history.get_state_at_or_before(&target_id, shot.aim_time) {
 }
 ```
 
-The state type is yours, and the same type can feed both this buffer and a client's `SnapshotBuffer`, because both use the shared `Interpolatable` trait.
+The state type is yours and the same type can feed both this buffer and a client's `SnapshotBuffer`, because both use the shared `Interpolatable` trait.
 
 ### Sizing the Buffer
 
@@ -138,7 +138,7 @@ grid.query_radius(eye.x, eye.z, VIEW, &mut candidates);
 
 for id in &candidates {
   if distance(eye, position_of(*id)) <= VIEW {
-    out.push(*id);          // the grid over-returns; the exact test finishes the job
+    out.push(*id);          // the grid over-returns; the exact test drops the extras
   }
 }
 ```
@@ -159,7 +159,7 @@ let (entered, left) = visible.diff(near.iter().copied());
 // entered = new & !old, left = old & !new, a word at a time
 ```
 
-`visible.digest()` computes the same value `plaza_client_utils::SetDigest` does over the client's membership, which is how both ends prove they still agree.
+`visible.digest()` computes the same value `plaza_client_utils::SetDigest` does over the client's membership, so both ends can check they still agree.
 
 ### Three Dimensions
 
@@ -170,11 +170,11 @@ grid.query_radius(eye.x, eye.z, VIEW, &mut candidates);
 candidates.retain(|id| (position_of(*id).y - eye.y).abs() <= VIEW);
 ```
 
-The height filter is exact at the same query cost. It stops being free when entities **stack**: in a tower sharing one footprint, a flat cell holds every floor at once and most of what it returns is discarded. Filter on height when things are spread out, index the third axis when they stack.
+The height filter is exact at the same query cost. It stops being free when entities **stack**: in a tower sharing one footprint, a flat cell holds every floor at once and most of what it returns is discarded. When entities stack, index the third axis instead.
 
 ## Subscribing Beyond Distance
 
-`relevance` answers *who is near me*. A party health bar, a raid frame through a wall, a spectator following one player and a guild roster are the other question, and no radius expresses it.
+`relevance` answers who is near a client. A party health bar, a raid frame through a wall, a spectator following one player and a guild roster need entities the client chose, which no radius expresses.
 
 ### Creating a Subscription
 
@@ -183,12 +183,12 @@ use plaza_server_utils::subscription::{Subscriptions, Audience, Because};
 
 let mut subs: Subscriptions<Seat> = Subscriptions::new();
 
-subs.subscribe(spectator, player);   // directed: a spectator is not a party
+subs.subscribe(spectator, player);   // directed: the player does not follow back
 subs.pair(a, b);                     // symmetric
 subs.group(party_of_a, party_of_b);  // merges two groups whole
 ```
 
-Kept **both ways round**, because both directions are asked every tick: a sender needs the set it must include, and a departing key needs everyone who has to be told.
+Subscriptions are indexed **both ways round**, because both directions are queried every tick: a sender needs the set it must include and a departing key needs everyone who has to be told.
 
 ### Unioning Both Channels
 
@@ -202,11 +202,11 @@ for key in &audience.seats {
 let second_channel_cost = audience.added;   // only what distance missed
 ```
 
-Sorted, so a diff between ticks means something.
+The entries come back sorted, so they can be diffed between ticks.
 
 ### Leaving a Group Versus Leaving the World
 
-Not the same event, and treating them alike is how a health bar keeps updating for somebody who is gone.
+These are different events. Treat them alike and a health bar keeps updating for somebody who has gone.
 
 ```rust,ignore
 subs.leave_group(player);            // left the party, kept their spectators
@@ -225,13 +225,13 @@ let because = match (near.contains(&key), subs.of(viewer).any(|m| m == key)) {
 };
 ```
 
-This has to reach the wire. The two are different promises: absence from a later frame means "walked away" for one and "left the world" for the other, so a client that cannot tell them apart drops a party member the moment they leave view.
+Send this reason on the wire. Absence from a later frame means "walked away" for a near entry and "left the world" for a subscribed one, so a client that cannot tell them apart drops a party member as soon as they leave view.
 
-Subscriptions are bounded on purpose, and over-limit is refused rather than truncated: dropping an entry silently to fit is how a client ends up in a party it cannot fully see.
+Subscriptions are bounded and a subscription over the limit is refused rather than truncated. Silently dropping an entry to fit leaves a client in a party it cannot fully see.
 
 ## Filling the Packet
 
-Relevance answers who *can* see what. A hundred entities are relevant, the budget holds twenty, so which twenty this tick? First-twenty-by-id starves the tail, and so does nearest-twenty.
+Relevance answers who can see what. If a hundred entities are relevant and the budget holds twenty, something has to pick which twenty go this tick. Taking the first twenty by id starves the rest and so does taking the nearest twenty.
 
 ### Scoring and Fitting a Budget
 
@@ -245,18 +245,18 @@ for id in &audience.seats {
   priority.gain(*id, rate_for(*id));
 }
 
-// Then fit the budget. Cost per entity comes from your encoding, not an estimate.
+// Then fit the budget. Take the cost per entity from your encoding rather than an estimate.
 let chosen = priority.fill(budget_bytes, |id| encoded_size(id));
 for id in &chosen {
   frame.push(entry_for(*id));
 }
 ```
 
-Whatever did not fit **keeps what it accumulated**, so waiting is itself what earns a slot. The walk continues past an entity too large to fit, so one big one near the front cannot leave the rest of the packet empty. Ties break by index, so a server and a replay of it agree.
+Whatever did not fit **keeps its accumulated score**, so it ranks higher next tick. The walk continues past an entity too large to fit, so one big one near the front cannot leave the rest of the packet empty. Ties break by index, so a server and a replay of it agree.
 
 ### Not Paying for What Is Asleep
 
-In a settled scene most things are not moving, and saying so costs one bit against the thirty-three a velocity costs.
+In a settled scene most things are not moving. Marking an entity at rest costs one bit, where a velocity costs thirty-three.
 
 ```rust,ignore
 use plaza_server_utils::rest::RestDetector;
@@ -271,15 +271,15 @@ if rest.at_rest(id) {
 }
 ```
 
-Rest is a **run** of quiet ticks; waking is immediate. A single quiet tick means nothing, since a body at the top of its arc has zero velocity and is about to fall. Being slow to notice motion is visible; being slow to notice stillness only costs bandwidth.
+An entity is at rest after a **run** of quiet ticks and wakes on the first moving tick. A single quiet tick is not enough, since a body at the top of its arc has zero velocity and is about to fall. Waking late shows on screen, while resting late only costs bandwidth.
 
 Feed it a per-body speed test rather than a solver's own flag: a solver sleeps an *island*, so one cube jostling in a heap holds the whole heap awake.
 
-Both are indexed densely, so a `SlotKey` is already the index, and they compose: score an at-rest entity lower and it updates less often with no special case anywhere.
+Both are indexed densely, so a `SlotKey` index works for both. To update at-rest entities less often, give them a lower score.
 
 ## Summarising What Is Too Far to Send
 
-Relevance gives a binary answer, which is right for entities a client merely *draws* and wrong for entities it has to *compute* with, because dropping an input silently changes the result.
+Relevance gives a yes-or-no answer. That works for entities a client only *draws*. For entities it has to *compute* with, dropping one silently changes the result.
 
 ### Building the Tree
 
@@ -309,7 +309,7 @@ for summary in &out {
 }
 ```
 
-O(log n) summaries per viewer. Nothing in the module knows what a weight is: mass for a gravity field, a headcount for a crowd, a cluster's threat for target selection, an accumulated noise level. The only requirement is that the quantity be additive and that a distant group be adequately described by its weighted centroid.
+O(log n) summaries per viewer. The module does not interpret the weight. It can be mass for a gravity field, a headcount for a crowd, a cluster's threat for target selection or an accumulated noise level. The only requirement is that the quantity be additive and that a distant group be adequately described by its weighted centroid.
 
 ### Choosing Theta
 
@@ -321,11 +321,11 @@ tree.summarize(eye.x, eye.y, 1.5, &mut out);   // a drawing consuming them
 
 `theta = 0.0` is "aggregation off" through the same code path rather than a second implementation.
 
-**It has a safe range, not a monotone dial.** Past about `1.0` the criterion starts accepting cells the viewer is sitting close to, dropping a whole quadrant's weight onto a single nearby point. How coarse an approximation may be is a property of the consumer: a simulation compounds it into error, a drawing does not.
+Past about `1.0` the criterion starts accepting cells the viewer is sitting close to, dropping a whole quadrant's weight onto a single nearby point. How coarse the approximation can be depends on the consumer: a simulation compounds it into error and a drawing does not.
 
 ## Streaming a Changing Set Reliably
 
-`VisibilitySet::diff` gives *entered* and *left*, and the obvious next step is to send those and let each client keep a mirror. That diffs against **what the server last sent**, which assumes every packet arrives.
+`VisibilitySet::diff` gives *entered* and *left* and the obvious next step is to send those and let each client keep a mirror. That diffs against **what the server last sent**, which assumes every packet arrives.
 
 ### Sending a Delta
 
@@ -344,7 +344,7 @@ send(Delta {
 });
 ```
 
-It diffs against **what the client acknowledged**, owns the per-subscriber baselines, the acknowledgement frontier, the staleness rebuild and the digest drift check, and never learns what a key means.
+`DeltaBaseline` diffs against **what the client acknowledged** instead. It owns the per-subscriber baselines, the acknowledgement frontier, the staleness rebuild and the digest drift check and does not interpret the keys.
 
 ### Taking an Acknowledgement
 
@@ -352,9 +352,9 @@ It diffs against **what the client acknowledged**, owns the per-subscriber basel
 baseline.acknowledge(subscriber, ack.newest, ack.mask);
 ```
 
-The baseline is the newest **contiguous** acknowledgement, not the newest bit set: receiving packet N+1 after losing N does not put a client in the state N+1 implies.
+The baseline is the newest **contiguous** acknowledgement rather than the newest bit set, because receiving packet N+1 after losing N does not put a client in the state N+1 implies.
 
-The keys carry generations, and loss recovery is exactly what makes that load-bearing: a retraction re-derived after a slot was recycled would otherwise name the slot's current occupant, so the client's lookup misses and the entity it actually holds is never mentioned again.
+The keys carry generations, which loss recovery depends on: a retraction re-derived after a slot was recycled would otherwise name the slot's current occupant, so the client's lookup misses and the entity it actually holds is never mentioned again.
 
 ### Choosing a Recovery Policy
 
@@ -363,7 +363,7 @@ baseline.with_policy(RecoveryPolicy::Acked);   // diff against what was acknowle
 baseline.with_policy(RecoveryPolicy::Naive);   // diff against what was last sent
 ```
 
-`Naive` keeps the broken behaviour available, because the failure is worth being able to demonstrate. Cold start is a decision either way: there is no acknowledged state before the first acknowledgement.
+`Naive` keeps the broken behaviour available so the failure can be demonstrated. Either policy needs a cold-start rule, because there is no acknowledged state before the first acknowledgement.
 
 The client's half is `plaza_client_utils::DeltaMirror`.
 
@@ -390,7 +390,7 @@ A fresh occupant must not inherit the last one's accumulated state, which is wha
 
 ### Waitlists and Displacement
 
-`Roster` is composed of `SeatSlots` and `RankedQueue`, both public, so the policies compose: a lock for games that seat only between rounds, a ranked waitlist, displacement where a bot holds a seat only until a person wants one, seats held across an absence, and bot-driven empties.
+`Roster` is composed of `SeatSlots` and `RankedQueue`, both public, so the policies compose: a lock for games that seat only between rounds, a ranked waitlist, displacement where a bot holds a seat only until a person wants one, seats held across an absence and bot-driven empties.
 
 ## Scheduling Input
 
@@ -406,7 +406,7 @@ Rejection diagnostics say why an input was refused rather than dropping it silen
 
 ## Delivering a One-Shot Op
 
-An op with nothing behind it, a `Welcome` or a `Refused`, is lost for good on a lossy link, because nothing in the protocol will ever mention it again.
+An op with nothing behind it, a `Welcome` or a `Refused`, is lost on a lossy link, because nothing in the protocol sends it again.
 
 ```rust,ignore
 use plaza_server_utils::oneshot::Pending;
@@ -433,7 +433,7 @@ meter.record(bytes_sent, now);
 hud.line(format!("{:.1} KiB/s", meter.per_sec(now) / 1024.0));
 ```
 
-Use the windowed `per_sec` rather than `lifetime_per_sec`: a session average climbs for ever toward a level it never reaches.
+Use the windowed `per_sec` rather than `lifetime_per_sec`: a session average keeps climbing toward the current rate without reaching it.
 
 ### Measuring How Wrong a Client Was
 
@@ -443,7 +443,7 @@ use plaza_server_utils::render_error::render_error_at;
 let err = render_error_at(&history, entity, client_render_time, drawn_position);
 ```
 
-Asked at the instant the client drew, not against the present. Against the present, the figure charges a client for a render delay it chose, so it grows with buffer depth rather than with anything going wrong.
+Measure at the instant the client drew. Measured against the present, the figure charges a client for a render delay it chose, so it grows with buffer depth even when nothing is wrong.
 
 ## What the Measurements Settled
 
@@ -451,25 +451,25 @@ Asked at the instant the client drew, not against the present. Against the prese
 
 **A height filter stops being free when entities stack.** Thirty people on each of twenty-four floors sharing one footprint: the filter is still exact but examines 2.7x what a volumetric grid does, because a flat cell holds every floor at once and 72% of what it pulls out is thrown away. The same people on one floor put the two back level.
 
-**Priority plus rest took 901 cubes from 4.20 Mbit/sec to 0.25** under a 256 kbit budget, and adding delta encoding bought 206 cubes refreshed per tick instead of 46 inside that same budget. Derive the per-entity cost from your encoding: the guessed figure overran by 20%.
+**Priority plus rest took 901 cubes from 4.20 Mbit/sec to 0.25** under a 256 kbit budget and adding delta encoding bought 206 cubes refreshed per tick instead of 46 inside that same budget. Derive the per-entity cost from your encoding: the guessed figure overran by 20%.
 
 **A per-body speed test beats a solver's own sleep flag.** A solver sleeps an island, so one cube jostling in a heap holds the whole heap awake. Feeding a per-body test to `RestDetector` took cube_yard from 205 bodies claiming to be awake to 56, against 57 that had actually moved.
 
-**Culling simulation inputs changes the answer.** With 64 gravitational attractors, culling the distant ones by view distance cut the field's share from 280 to 33 KiB/s and multiplied the client's simulation error by 2.4x, because a hole you were not told about still bends every pellet you hold.
+**Culling simulation inputs changes the answer.** With 64 gravitational attractors, culling the distant ones by view distance cut the field's share from 280 to 33 KiB/s and multiplied the client's simulation error by 2.4x, because each attractor the client was not told about still pulls on every pellet it simulates.
 
-**Theta has a ceiling, not a dial.** At `1.2` the black hole example is worse than culling: a spurious concentration beats a missing force for damage. The crowd version is comfortable at `1.5`, because a drawing does not compound the approximation.
+**Theta has a ceiling.** At `1.2` the black hole example is worse than culling, because a spurious concentration does more damage than a missing force. The crowd version is comfortable at `1.5`, because a drawing does not compound the approximation.
 
-**Diffing against what was sent fails silently under loss.** At 25% loss: 185 corpses a client can never be told about, and render error at 73.7 px. Diffing against what was acknowledged put corpses into single digits, render error at 0.5 px and digest mismatches at zero, for roughly three times the bandwidth at that rate.
+**Diffing against what was sent fails silently under loss.** At 25% loss: 185 corpses a client can never be told about and render error at 73.7 px. Diffing against what was acknowledged put corpses into single digits, render error at 0.5 px and digest mismatches at zero, for roughly three times the bandwidth at that rate.
 
 **Taking the newest set bit rather than the contiguous run** made loss recovery statistically indistinguishable from no recovery at every loss rate.
 
 ## Error Handling
 
-Most of this crate returns values or `Option` rather than `Result`: an index that names nobody answers `None`, and a query with no hits returns an empty set.
+Most of this crate returns values or `Option` rather than `Result`: an index that names nobody answers `None` and a query with no hits returns an empty set.
 
-Two places refuse rather than degrade, and both do it loudly:
+Two places refuse instead of degrading:
 
-*   **A subscription over its limit is refused**, not truncated. Dropping an entry silently to fit is how a client ends up in a party it cannot fully see.
+*   **A subscription over its limit is refused** rather than truncated. Silently dropping an entry to fit leaves a client in a party it cannot fully see.
 *   **`InputSchedule` reports why an input was rejected**, rather than dropping it, so a client that is early, late or over its allowance can be told which.
 
-`DeltaBaseline` carries the counters that say a stream is degrading rather than failing: sequence gaps, staleness rebuilds and digest drift. A digest **detects** and cannot **diagnose**, so ship the ground truth beside it in a debug build and compare.
+`DeltaBaseline` carries the counters that say a stream is degrading rather than failing: sequence gaps, staleness rebuilds and digest drift. A digest shows that a mirror is wrong but not what is wrong with it, so in a debug build send the ground truth beside it and compare.

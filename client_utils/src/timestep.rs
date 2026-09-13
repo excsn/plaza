@@ -4,20 +4,20 @@
 //! A frame loop is handed however long the last frame took, and a simulation
 //! usually wants neither that number nor a count of frames: it wants to advance
 //! by a **fixed** amount, as many times as the elapsed time pays for, keeping the
-//! remainder for next frame. That is five lines, and this crate exists for the
-//! three things those five lines keep getting wrong.
+//! remainder for next frame. That is five lines and this module handles the
+//! three things those five lines usually get wrong.
 //!
-//! # Why a fixed step at all
+//! # Why a fixed step
 //!
-//! Two simulations that run the same rule at different step sizes are not the
-//! same simulation. Integration error depends on the step, so a client stepping
-//! by its frame delta while a server steps a fixed one will drift from it
-//! continuously, even with identical code and no packet loss, and the drift looks
-//! exactly like network jitter. In the example this was drawn from, the gap was
-//! 4%, which a convergent system would have absorbed and a divergent one did not.
-//! **Same rule is not enough; same timestep is required**, which is why
-//! [`Steps`] yields the step duration rather than leaving the caller to supply
-//! one.
+//! Two simulations that run the same rule at different step sizes drift apart,
+//! because integration error depends on the step. A client stepping by its
+//! frame delta while a server steps a fixed one will drift from it
+//! continuously, even with identical code and no packet loss. The drift looks
+//! like network jitter. In the example this was drawn from the gap was
+//! 4%, which a convergent system would have absorbed but a divergent one did
+//! not.
+//! **Both sides must also use the same timestep**, which is why [`Steps`]
+//! yields the step duration rather than leaving the caller to supply one.
 //!
 //! # Agreeing with the driver on the other end
 //!
@@ -28,11 +28,10 @@
 //! expressions to each other. The internals are integer nanoseconds, so no
 //! accumulation of float error can reintroduce a gap. What still differs is a
 //! stall: `TickDriver` caps catch-up at `MAX_STEPS_PER_WAKE` whole steps where
-//! this caps it at [`with_max_frame_ms`] of elapsed time. Benign for a
-//! predicted client, because corrections flow from the server, but a
-//! difference to know about.
+//! this caps it at [`with_max_frame_ms`] of elapsed time. That is harmless for
+//! a predicted client, because corrections flow from the server.
 //!
-//! # The clamp, which is the actual reason this is a type
+//! # The catch-up clamp
 //!
 //! A backgrounded browser tab, a laptop resuming from sleep, or a breakpoint in a
 //! debugger all return an enormous delta on the next frame. Uncapped, the loop
@@ -42,15 +41,15 @@
 //! a bounded amount of catch-up ([`with_max_frame_ms`]).
 //!
 //! Time discarded that way is real time the simulation will never run, so it is
-//! counted ([`dropped_ms`]) rather than silently dropped. A simulation that
-//! quietly falls behind wall time is a thing worth being able to see.
+//! counted ([`dropped_ms`]) rather than silently dropped, which lets you see a
+//! simulation falling behind wall time.
 //!
 //! # Carrying the remainder
 //!
 //! Subtracting the step keeps the leftover, so the average rate is exact. Setting
-//! the accumulator to zero instead is a tempting simplification and it makes
-//! every period slightly too long, because it throws away whatever had built up.
-//! The error is small per frame, it is one-directional, and it accumulates.
+//! the accumulator to zero instead makes every period slightly too long, because
+//! it throws away whatever had built up. The error is small per frame but
+//! one-directional, so it accumulates.
 //!
 //! [`with_max_frame_ms`]: FixedTimestep::with_max_frame_ms
 //! [`dropped_ms`]: FixedTimestep::dropped_ms
@@ -111,8 +110,8 @@ impl FixedTimestep {
   /// The same expression `plaza::TickDriver::from_hz` uses, so a simulation
   /// stepped from here and one driven by that agree on what a rate means,
   /// whether or not it divides a round number: 60 Hz is a step of 16.666667 ms
-  /// here and there both. An integer-millisecond step would make 16 of it and
-  /// run 4.2% fast against the driver, which reads as a permanent correction.
+  /// on both sides. An integer-millisecond step would round it to 16 and run
+  /// 4.2% fast against the driver, which shows up as a constant correction.
   ///
   /// # Panics
   /// Panics if `hz` is zero.
@@ -134,8 +133,8 @@ impl FixedTimestep {
 
   /// Caps catch-up in whole steps rather than elapsed time.
   ///
-  /// The cap `TickDriver` speaks (`MAX_STEPS_PER_WAKE`), and the right one for
-  /// a **slow tick over a fast driver**, a 600ms game tick fed by a 50ms wake,
+  /// The cap `TickDriver` uses (`MAX_STEPS_PER_WAKE`). It is the right one
+  /// for a **slow tick over a fast driver**, a 600ms game tick fed by a 50ms wake,
   /// because a cap in steps follows the step length when the step length is a
   /// live dial and a cap in milliseconds does not. When it fires, everything
   /// still owed is dropped and counted in [`dropped_ms`](Self::dropped_ms):
@@ -154,9 +153,9 @@ impl FixedTimestep {
   ///
   /// The accumulator is drained here rather than as the iterator is consumed, so
   /// the time is spent whether or not the caller runs every step. Each item is
-  /// the step duration, which is the value the simulation must advance by:
-  /// taking it from the iterator is what stops a caller from accidentally
-  /// stepping by the frame delta instead.
+  /// the step duration, which is the value the simulation must advance by.
+  /// Taking it from the iterator stops a caller from accidentally stepping by
+  /// the frame delta instead.
   pub fn advance(&mut self, elapsed_ms: u64) -> Steps {
     let elapsed_nanos = elapsed_ms.saturating_mul(1_000_000);
     if elapsed_nanos > self.max_frame_nanos {
@@ -222,8 +221,8 @@ impl FixedTimestep {
   ///
   /// For rendering between fixed steps: interpolating the drawn state by this
   /// fraction removes the stutter a fixed step otherwise shows when the step rate
-  /// and the refresh rate disagree. Optional, and worth knowing exists, because
-  /// the usual first diagnosis of that stutter is that the step rate is too low.
+  /// and the refresh rate disagree. It is optional. That stutter is often
+  /// misdiagnosed as the step rate being too low.
   pub fn alpha(&self) -> f32 {
     self.accumulated_nanos as f32 / self.step_nanos as f32
   }
@@ -249,7 +248,7 @@ impl FixedTimestep {
 
 /// The default catch-up cap: a quarter of a second, or fifteen steps at 60 Hz.
 ///
-/// Enough that an ordinary hitch is caught up smoothly, small enough that a
+/// Large enough to catch up an ordinary hitch smoothly and small enough that a
 /// resumed tab skips ahead instead of grinding through the minutes it was
 /// asleep.
 pub const DEFAULT_MAX_FRAME: Duration = Duration::from_millis(250);
@@ -404,8 +403,8 @@ mod rate_tests {
 
   #[test]
   fn a_rate_that_does_not_divide_a_thousand_is_exact_anyway() {
-    // Pinned in nanoseconds, because this number disagreeing with the server's
-    // driver is the defect this module used to document instead of fix.
+    // Pinned in nanoseconds, because this number once disagreed with the
+    // server's driver.
     assert_eq!(FixedTimestep::from_hz(60).step(), Duration::from_secs_f64(1.0 / 60.0));
     assert_eq!(FixedTimestep::from_hz(60).step().as_nanos(), 16_666_667);
     assert_eq!(FixedTimestep::from_hz(50).step(), Duration::from_millis(20));
@@ -431,9 +430,8 @@ mod rate_tests {
 
   #[test]
   fn a_simulation_delta_taken_from_the_step_cannot_disagree_with_it() {
-    // The failure this prevents: deriving the interval from a rate one way and
-    // the delta from the same rate another. The delta is defined as a reading
-    // of the step, so the two cannot be mixed from different derivations.
+    // The delta is defined as a reading of the step, so the interval and the
+    // delta cannot be derived from the same rate in two different ways.
     let step = FixedTimestep::from_hz(60);
     assert_eq!(step.step_secs(), step.step().as_secs_f32());
     assert!((step.step_secs() - 1.0 / 60.0).abs() < 1e-7);
@@ -455,9 +453,9 @@ mod tests {
 
   #[test]
   fn a_step_yields_the_duration_to_advance_by() {
-    // The value, not just a count. Two simulations running the same rule at
-    // different step sizes are not the same simulation, and the drift reads as
-    // network jitter, so taking the step from here is what keeps them equal.
+    // The value as well as the count. Two simulations running the same rule at
+    // different step sizes drift apart and the drift reads as network jitter,
+    // so both should take the step from here.
     let mut t = FixedTimestep::from_hz(60);
     assert_eq!(t.step(), Duration::from_secs_f64(1.0 / 60.0));
     let steps: Vec<Duration> = t.advance(50).collect();
@@ -467,9 +465,9 @@ mod tests {
 
   #[test]
   fn the_remainder_carries_so_the_average_rate_is_exact() {
-    // Zeroing the accumulator instead is the tempting simplification, and it
-    // makes every period slightly too long. The error is one-directional, so it
-    // accumulates rather than averaging out.
+    // Zeroing the accumulator instead makes every period slightly too long.
+    // The error is one-directional, so it accumulates rather than averaging
+    // out.
     let mut t = FixedTimestep::from_step_ms(16);
     let mut steps = 0;
     for _ in 0..600 {
@@ -481,8 +479,8 @@ mod tests {
 
   #[test]
   fn a_backgrounded_tab_cannot_dump_a_burst_of_steps_on_resume() {
-    // The reason this is a type. A tab that was asleep for a minute returns an
-    // enormous delta; uncapped, the loop tries to pay for all of it in one frame,
+    // A tab that was asleep for a minute returns an enormous delta; uncapped,
+    // the loop tries to pay for all of it in one frame,
     // which takes longer than a frame, which makes the next delta larger still.
     let mut t = FixedTimestep::from_step_ms(16).with_max_frame_ms(100);
     let steps = t.advance(60_000).len();
@@ -502,8 +500,8 @@ mod tests {
 
   #[test]
   fn alpha_is_the_fraction_of_a_step_left_over() {
-    // For interpolating the drawn state between fixed steps, which is the real
-    // answer to the stutter usually blamed on the step rate.
+    // For interpolating the drawn state between fixed steps, which fixes the
+    // stutter usually blamed on the step rate.
     let mut t = FixedTimestep::from_step_ms(20);
     t.advance(30);
     assert!((t.alpha() - 0.5).abs() < 1e-6, "alpha was {}", t.alpha());
@@ -537,15 +535,14 @@ mod tests {
 
   #[test]
   fn simulated_time_tracks_wall_time_when_nothing_stalls() {
-    // The property a simulation clock depends on: summing the steps must equal
-    // the elapsed time, or a timestamp on a packet stops describing when its
-    // state is from. Frame times that do not divide the step are the case that
-    // breaks a naive accumulator.
+    // Summing the steps must equal the elapsed time. Otherwise a timestamp on
+    // a packet stops describing when its state is from. Frame times that do not
+    // divide the step are the case that breaks a naive accumulator.
     let mut t = FixedTimestep::from_step_ms(16);
     let mut simulated = Duration::ZERO;
     let mut wall = Duration::ZERO;
     for frame in 0..1000u64 {
-      // A jittery but honest frame time, never long enough to be clamped.
+      // A jittery frame time, never long enough to be clamped.
       let dt = 14 + frame % 7;
       wall += Duration::from_millis(dt);
       simulated += t.advance(dt).sum::<Duration>();
@@ -575,9 +572,9 @@ mod tests {
 
   #[test]
   fn landing_exactly_on_the_cap_keeps_the_remainder() {
-    // The cap is for a world that fell behind, not a tax on a full catch-up:
-    // dropping the sub-step remainder here would bleed time on every busy
-    // frame and the average rate would quietly run slow.
+    // The cap is for a world that fell behind. Dropping the sub-step remainder
+    // on a full catch-up would lose time on every busy frame and the average
+    // rate would run slow.
     let mut t = FixedTimestep::from_step_ms(100).with_max_steps(3).with_max_frame_ms(1000);
     assert_eq!(t.advance(320).len(), 3);
     assert_eq!(t.pending_ms(), 20, "exactly at the cap is not over it");

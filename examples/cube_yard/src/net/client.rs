@@ -1,8 +1,7 @@
 //! A client on the real wire, shared by the desktop window and the wasm page.
 //!
-//! There is no simulation here at all. The server owns the solver, this draws
-//! what arrives and counts what it cost, which is the whole measurement the
-//! example exists to produce.
+//! There is no simulation here. The server owns the solver; this draws what
+//! arrives and counts what it cost, which is what the example measures.
 
 use std::collections::VecDeque;
 
@@ -37,9 +36,9 @@ fn smooth_interval(held: u64, gap: u64) -> u64 {
 /// answers with the newest one, so a decision that flips frame to frame swings
 /// every cube back and forth by whatever it travels in that delay. With a raw
 /// gap and a single threshold at the tick interval it flipped on a repeating
-/// three-frame cycle, which at 15 units a second is half a unit of shake, and
-/// worst under `--encoding delta` where sparse samples put the two answers
-/// furthest apart.
+/// three-frame cycle, which at 15 units a second is half a unit of shake. It
+/// was worst under `--encoding delta`, where sparse samples put the two
+/// answers furthest apart.
 fn should_interpolate(interval_ms: u64, currently: bool) -> bool {
   if currently {
     // Held until the rate is clearly back at tick speed.
@@ -114,10 +113,10 @@ impl Meter {
 
   /// Kibibytes a second over the whole run.
   ///
-  /// The pair answers two questions: **recent** responds to what just changed
-  /// and settles when the world does, **session** is what a configuration
-  /// actually cost. Session sits below recent while it is still climbing
-  /// toward it, which is a property of an average rather than of the traffic.
+  /// **Recent** responds to what just changed and settles when the world does.
+  /// **Session** is what a configuration actually cost. Session sits below
+  /// recent while it is still climbing toward it, which comes from the
+  /// averaging rather than from the traffic.
   pub fn session_kib_per_sec(&self, now_ms: u64) -> f32 {
     let Some(since) = self.since_ms else {
       return 0.0;
@@ -152,13 +151,13 @@ pub struct NetClient {
   /// Position samples per cube, blended in a **straight line** when the send
   /// rate is low enough to leave gaps.
   ///
-  /// Deliberately not `HermiteView`, and the measurement is in
+  /// Deliberately not `HermiteView`, for the reason measured in
   /// `tests/baseline.rs`: across 300 of these cubes at 10Hz the spline came out
   /// 13x worse than the chord, because it left the segment its own samples
-  /// bracket on half of all frames. Velocity at a sample is a promise about the
-  /// path to the next one, and a pile of colliding cubes breaks that promise
-  /// after the packet has left. A chord cannot leave the segment, which is
-  /// exactly the property this scene needs.
+  /// bracket on half of all frames. The velocity at a sample predicts the path
+  /// to the next one, but in a pile of colliding cubes a collision after the
+  /// packet has left makes that prediction wrong. A chord cannot leave the
+  /// segment and this scene needs that.
   views: Vec<SnapshotBuffer<u64, Vec3>>,
   /// Where the render clock is pointed: the newest stamp seen, less a delay of
   /// two send intervals so two real samples bracket it.
@@ -168,13 +167,13 @@ pub struct NetClient {
   last_stamp: Option<u64>,
   /// Where each cube was drawn before its last correction, minus where it is
   /// now, bled off over the following frames. Under a budget a cube can go
-  /// several ticks without an update and then move a long way at once, and a
-  /// snap that size is exactly what a viewer notices.
+  /// several ticks without an update and then move a long way at once and a
+  /// viewer notices a snap that size.
   pub offsets: Vec<[f32; 3]>,
   decay: AdaptiveDecay,
   /// The quantised state this client is known to hold, which is what a delta
-  /// frame is measured against. Both ends keep it identically, which the TCP
-  /// transport is what makes safe.
+  /// frame is measured against. Both ends keep it identically, which is safe
+  /// because the transport is TCP.
   baseline: Vec<Option<pack::Quantized>>,
   /// Frames whose packed payload would not read back. Must stay zero: it means
   /// the layout and its reader have drifted apart.
@@ -301,7 +300,7 @@ impl NetClient {
         Some(cubes) => self.cubes = cubes,
         None => self.unreadable += 1,
       },
-      // A budgeted frame is a patch, not a world: whatever it does not mention
+      // A budgeted frame patches part of the yard: whatever it does not mention
       // is still whatever this client last heard about it.
       Cubes::Subset(payload) => match pack::unpack_subset(payload.as_slice()) {
         Some(patch) => self.apply(patch),
@@ -383,7 +382,7 @@ impl NetClient {
   /// Whether the send rate is low enough that interpolating is worth it.
   ///
   /// At the tick rate a chord is 16ms and a straight line is invisible; the
-  /// spline only earns its keep once the gaps are long enough to corner.
+  /// spline only helps once the gaps are long enough for a cube to turn.
   pub fn interpolating(&self) -> bool {
     self.interpolating
   }
@@ -391,18 +390,18 @@ impl NetClient {
   /// Advances the render clock. Call once per rendered frame.
   ///
   /// The target trails the newest stamp by two send intervals so two real
-  /// samples bracket it, which is the same trade every remote entity makes:
-  /// a fixed, small staleness in exchange for motion assembled from real
-  /// states rather than guessed ones.
+  /// samples bracket it, which is the same trade every remote entity makes: a
+  /// small fixed delay in exchange for motion built from real states rather
+  /// than guessed ones.
   pub fn advance_render_clock(&mut self) {
     let delay = self.send_interval_ms * 2;
     self.render_at = self.stamp.saturating_sub(delay);
     self.interpolating = should_interpolate(self.send_interval_ms, self.interpolating);
   }
 
-  /// Sends the held direction, and only when it changes: a level repeats on the
-  /// server until replaced, so resending it every frame is pure noise on a link
-  /// this example is trying to measure.
+  /// Sends the held direction only when it changes: a level repeats on the
+  /// server until replaced, so resending it every frame would be wasted traffic
+  /// on a link this example is trying to measure.
   pub fn drive(&mut self, drive: Drive) {
     if self.sent == Some(drive) {
       return;

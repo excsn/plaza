@@ -62,7 +62,7 @@ async fn serve(args: &[String]) -> std::io::Result<()> {
   let factory: AgentFactory<WatcherId> = Arc::new(move |_| Agent::new_human(next.fetch_add(1, Ordering::Relaxed)));
   // A whole pane leaves in one tick as hundreds of datagrams from one task,
   // so the per-client queue must hold a tick's burst or the overflow policy
-  // (drop) eats the panel's Stats op along with the cells.
+  // (drop) discards the panel's Stats op along with the cells.
   let options = SessionOptions {
     queues: Queues {
       outbound: 4096,

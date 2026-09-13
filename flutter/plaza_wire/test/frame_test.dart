@@ -59,7 +59,8 @@ void main() {
       expect(const ProtocolVersion(7).agreesWith(const ProtocolVersion(8)), isFalse);
     });
 
-    /// A peer that declares nothing is the pre-handshake case, not a wrong one.
+    /// A peer that declares nothing is the pre-handshake case rather than a
+    /// wrong one.
     test('unknown on either side counts as agreement', () {
       expect(ProtocolVersion.unknown.agreesWith(const ProtocolVersion(7)), isTrue);
       expect(const ProtocolVersion(7).agreesWith(ProtocolVersion.unknown), isTrue);

@@ -1,16 +1,16 @@
 //! Two armies on a board: the scripted run, no window and no socket.
 //!
-//! What no other example has, and this one is for: a phase that **contains**
-//! several actors. Within `Command(Blue)` every commander of that army orders
-//! their own squad, in any order they like, each unit marching at most once
-//! and acting at most once, and the phase ends when the army's set of unspent
+//! This example covers a phase that contains several actors, which no other
+//! example has. Within `Command(Blue)` every commander of that army orders
+//! their own squad in any order they like, each unit marching at most once
+//! and acting at most once. The phase ends when the army's set of unspent
 //! units is empty or a commander ends it. `flow_control` has no shape for that
-//! set, which is the finding: the activation ledger is hand-written, and the
-//! README says what that answers about the deferred turn-policy question.
+//! set, so the activation ledger is hand-written. The README says what that
+//! answers about the deferred turn-policy question.
 //!
-//! The arc: a muster countdown, a refused out-of-phase order, knights through
+//! The run: a muster countdown, a refused out-of-phase order, knights through
 //! the forests, a duel with counterstrikes, a healer's mend, a deadline ending
-//! an idle phase, a forfeit, and a redeploy against the bot with the sides
+//! an idle phase, a forfeit and a redeploy against the bot with the sides
 //! swapped.
 //!
 //! To command by hand, `cargo run -p plaza_example_field_orders` opens the

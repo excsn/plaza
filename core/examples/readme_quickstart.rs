@@ -1,4 +1,4 @@
-//! The program from README.md, kept compilable so the docs cannot rot.
+//! The program from README.md, kept compilable so the docs stay correct.
 //!
 //! `cargo run -p plaza --example readme_quickstart`
 

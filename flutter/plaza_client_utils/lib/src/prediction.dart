@@ -36,8 +36,8 @@ class ClientInputBuffer<Op, S> {
   /// How many inputs were dropped because the buffer was full.
   ///
   /// Not in the Rust original, which logs a warning instead. A Dart library has
-  /// no logger to reach for, and a counter is more useful anyway: a non-zero
-  /// value means replay is already incomplete.
+  /// no logger, so this is a counter: a non-zero value means replay is already
+  /// incomplete.
   int overflowed = 0;
 
   /// [stateBeforeOp] is the predicted state immediately before [op] was applied
@@ -83,7 +83,7 @@ class ClientInputBuffer<Op, S> {
 ///
 /// The loop is: apply an input locally and remember it, then when the server
 /// acknowledges a sequence, snap to what it said and replay everything it had
-/// not yet seen. What survives is the prediction the player is looking at.
+/// not yet seen. The result is the prediction the player sees.
 ///
 /// Ported from `plaza_client_utils::prediction::PredictedEntity`.
 class PredictedEntity<S, Op> {

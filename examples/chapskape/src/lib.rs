@@ -4,27 +4,26 @@
 //! rocks to mine, shoals to fish, a fire to cook on, a pack to carry it in and
 //! brutes that hit back, on a tick slow enough to see.
 //!
-//! The claim is the far end of an axis the rest of this tree has walked.
-//! spacemo absorbs no latency at all and must predict every frame. gow_3d
-//! absorbs a cast bar's worth and gets away with sending nothing back. poketo
-//! absorbs everything by being discrete. This one asks what is left when **the
-//! input itself is a destination**: one op, once, covering the next several
-//! seconds of walking, expanded on both ends by a rule neither of them sent.
+//! Compared with the rest of this tree: spacemo absorbs no latency and must
+//! predict every frame, gow_3d absorbs a cast bar's worth and sends nothing
+//! back and poketo absorbs everything by being discrete. Here **the input is a
+//! destination**: one op covers the next several seconds of walking and both
+//! ends expand it with the same rule, which is never sent.
 //!
-//! What follows from that is most of the example:
+//! Most of the example follows from that:
 //!
-//! - There is nothing to reconcile, because a client never asserted a position.
-//!   It asked, and the answer was a route it could work out for itself.
-//! - A queued action does not hide a round trip, it makes one free: the walk to
-//!   the tree is longer than the network, every time.
-//! - The world is mostly **still**, and a still world is a different relevance
-//!   problem from a moving one. Two thousand props against a few dozen walkers,
+//! - There is nothing to reconcile, because a client never claims a position.
+//!   It asks to go somewhere and can work out the route itself.
+//! - A queued action covers the round trip: the walk to the tree always takes
+//!   longer than the network does.
+//! - The world is mostly **still**, which needs different relevance from a
+//!   moving world. There are two thousand props against a few dozen walkers
 //!   and the props change twice a minute.
-//! - An audience can be a **game rule**. A dropped item belongs to whoever
-//!   dropped it for a minute and to everybody afterwards, which is neither a
-//!   distance nor a subscription.
-//! - A pack is a stream that exists for exactly one client, and the interesting
-//!   instant is the drop, where private state becomes world state.
+//! - An audience can be set by a **game rule**. A dropped item belongs to
+//!   whoever dropped it for a minute and to everybody afterwards, which is
+//!   neither a distance nor a subscription.
+//! - A pack is a stream for exactly one client. Dropping an item turns private
+//!   state into world state.
 
 pub mod path;
 pub mod protocol;
@@ -47,8 +46,8 @@ pub fn bots_default() -> usize {
 
 pub mod controls;
 pub mod pack;
-// Not server-only: the world's rules are what the client predicts against, and
-// this crate compiles to wasm.
+// Not server-only: the client predicts against the world's rules and this
+// crate compiles to wasm.
 pub mod zone;
 
 #[cfg(feature = "server")]

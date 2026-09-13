@@ -64,11 +64,12 @@ pub struct BattleState {
 
   pub tick: u64,
   pub timeouts: PhasedScheduler<BattleEvent>,
-  /// Fields rather than the constants: the scripted run wants windows it can
-  /// reach on purpose, a person wants ones they can think inside.
+  /// Fields rather than the constants, because the scripted run needs short
+  /// windows and a person needs ones long enough to think in.
   pub side_ticks: u64,
   pub muster_ticks: u64,
-  /// What one tick lasts, only so phase notices carry an honest hint.
+  /// What one tick lasts, only so phase notices carry an accurate duration
+  /// hint.
   pub tick_interval: Duration,
 }
 

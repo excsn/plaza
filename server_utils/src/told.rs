@@ -1,14 +1,14 @@
-//! What each viewer has been told, so a still world costs nothing to keep
-//! describing.
+//! What each viewer has been told, so nothing is re-sent for a world that is
+//! not changing.
 //!
-//! A frame that repeats everything in view every tick is the right shape for
-//! movers and pure waste for anything that holds still: a depleted resource, a
-//! door, a spawn announced once. The alternative every example built by hand
-//! is a per-viewer memory of what was already said, diffed against what is now
-//! true. This is that memory, with the three cases the hand-rolled copies had
-//! to discover one bug at a time:
+//! A frame that repeats everything in view every tick suits movers and wastes
+//! bandwidth on anything that holds still: a depleted resource, a door, a spawn
+//! announced once. Every example built the alternative by hand: a per-viewer
+//! memory of what was already said, diffed against what is now true. This is
+//! that memory, with the three cases the hand-rolled copies found one bug at a
+//! time:
 //!
-//! - a key the viewer does not hold, or holds with another value, is **said**;
+//! - a key the viewer does not hold or holds with another value is **said**;
 //! - a key they hold that is no longer in their view is **handed back to the
 //!   caller**, because "no longer true" and "no longer visible" arrive as the
 //!   same absence and only the application knows which it was: a prop that
@@ -18,17 +18,16 @@
 //!   also what lets a reused slot be re-announced instead of inheriting its
 //!   predecessor's entry.
 //!
-//! The change-only stream this produces has a hard prerequisite: **a stable
-//! state to diff against**. A value that jitters is said every tick and the
-//! saving evaporates; measure with a `RateMeter` before assuming.
+//! The change-only stream this produces needs **a stable value to diff
+//! against**. A value that jitters is said every tick and the saving is lost;
+//! measure with a `RateMeter` before assuming.
 //!
-//! This is the **state half** of a private channel: true until it isn't,
-//! repeated whenever it moves. The transcript half, "what just happened, said
-//! once to its one audience", is deliberately not a block, because it is a
-//! `Vec` drained into the frame; what matters is having both, since a
-//! transcript on a shared channel makes "who is this for" a field somebody
-//! forgets, and a state on the transcript is an event the client has to
-//! remember for ever.
+//! This is the **state half** of a private channel: facts that stay true for a
+//! while, repeated whenever they change. The transcript half ("what just
+//! happened", said once to its one audience) is a `Vec` drained into the frame,
+//! so it is not a block. A channel needs both: a transcript on a shared channel
+//! makes "who is this for" a field somebody forgets and a state on the
+//! transcript is an event the client has to remember for ever.
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -54,16 +53,17 @@ impl<Viewer: Eq + Hash, K: Eq + Hash + Ord + Copy, V: PartialEq> Told<Viewer, K,
   }
 
   /// Diffs what `viewer` now sees against what they were last told, updates
-  /// the record, and hands each difference to `say`.
+  /// the record and hands each difference to `say`.
   ///
   /// `say(key, Some(value))` is a key to put on the wire: new to this viewer,
   /// or changed since they heard of it. `say(key, None)` is a key they hold
-  /// that `current` no longer contains; whether that goes on the wire is the
-  /// caller's question to answer, and the record forgets it either way, so a
-  /// return is a fresh introduction.
+  /// that `current` no longer contains; the caller decides whether that goes
+  /// on the wire and the record forgets it either way, so a returning key is
+  /// announced from scratch.
   ///
-  /// The `None` keys arrive sorted, so a run produces the same wire twice:
-  /// they come out of a map whose order would otherwise decide the bytes.
+  /// The `None` keys arrive sorted, so two identical runs produce identical
+  /// wire output: they come out of a map whose order would otherwise decide the
+  /// bytes.
   pub fn diff(
     &mut self,
     viewer: Viewer,
@@ -87,9 +87,9 @@ impl<Viewer: Eq + Hash, K: Eq + Hash + Ord + Copy, V: PartialEq> Told<Viewer, K,
     *known = next;
   }
 
-  /// Forgets one viewer entirely: on departure, or when switching them to a
-  /// repeat-everything stream, where a memory would turn the first change-only
-  /// frame after switching back into a lie.
+  /// Forgets one viewer entirely: on departure or when switching them to a
+  /// repeat-everything stream, where a stale memory would make the first
+  /// change-only frame after switching back wrong.
   pub fn forget(&mut self, viewer: &Viewer) {
     self.known.remove(viewer);
   }
@@ -152,9 +152,9 @@ mod tests {
 
   #[test]
   fn a_key_that_leaves_is_handed_back_and_returns_as_new() {
-    // "No longer true" and "no longer visible" are the same absence here, and
-    // only the caller knows which; the record forgets either way, so a return
-    // is a fresh introduction rather than an inherited entry.
+    // "No longer true" and "no longer visible" are the same absence here and
+    // only the caller knows which; the record forgets either way, so a
+    // returning key is announced again rather than inheriting its old entry.
     let mut told = Told::new();
     said(&mut told, 5, &[(1, 7), (2, 9)]);
     let (updated, gone) = said(&mut told, 5, &[(1, 7)]);

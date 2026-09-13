@@ -2,10 +2,9 @@
 //!
 //! Two measurements, over the offline harness so a run repeats exactly:
 //!
-//! 1. The derived half against the streamed half, per bullet. The comparison
-//!    the example exists to make.
-//! 2. The share of outbound bytes that is the names of enum variants, which is
-//!    the number `IMPROVEMENTS` gates the wire-encoding primitives on.
+//! 1. The derived half against the streamed half, per bullet.
+//! 2. The share of outbound bytes that is the names of enum variants, which
+//!    `IMPROVEMENTS` makes the wire-encoding primitives depend on.
 //!
 //! Run with `cargo run -p curtain_fire --release --example curtain_report`.
 

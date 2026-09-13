@@ -2,8 +2,7 @@
 //!
 //! `Workload` derives depths and policies, and the depths are measured in
 //! `benches/saturation.rs`. What is left is the behaviour those policies buy,
-//! which is a claim about outcomes rather than about numbers: a preset whose
-//! label cannot be asserted is decoration.
+//! which is a claim about outcomes rather than about numbers.
 
 #![cfg(feature = "tcp")]
 
@@ -59,8 +58,8 @@ fn ops_frame(payload: usize) -> Vec<u8> {
   buf
 }
 
-/// Sends until the socket stops accepting, which under backpressure is the
-/// point of the exercise, so it is bounded by a timeout rather than a count.
+/// Sends until the socket stops accepting, which is what backpressure should
+/// cause, so it is bounded by a timeout rather than a count.
 async fn push_until_stalled(client: &mut Framed<TcpStream, LengthDelimitedCodec>, frame: Vec<u8>, count: usize) {
   let _ = tokio::time::timeout(Duration::from_secs(2), async {
     for _ in 0..count {

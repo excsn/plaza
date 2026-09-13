@@ -107,37 +107,33 @@ where
 
     let time_since_receipt_ms: u64 = target_client_render_time_ms - self.client_receipt_time_ms;
 
-    // Cap the *duration*, do not discard the extrapolation.
+    // Cap the *duration* rather than discarding the extrapolation.
     //
-    // Returning the un-extrapolated state past the limit is the obvious reading
-    // of "clamp", and it is a discontinuity: at the limit the entity has coasted
-    // `velocity * max_ms` forward, and one millisecond later it is drawn back at
-    // the raw sample. That is a jump of the entire extrapolation window, in the
-    // wrong direction, and jitter around the boundary makes it flicker back and
-    // forth. Capping the duration instead means the entity coasts to the limit
-    // and stops there, which is continuous.
+    // Returning the un-extrapolated state past the limit causes a
+    // discontinuity: at the limit the entity has coasted `velocity * max_ms`
+    // forward and one millisecond later it is drawn back at the raw sample.
+    // That jumps the whole extrapolation window backwards and jitter around the
+    // boundary makes it flicker. With the duration capped the entity coasts to
+    // the limit and stops there.
     let capped_ms = time_since_receipt_ms.min(max_extrapolation_duration_ms);
 
     if time_since_receipt_ms > max_extrapolation_duration_ms {
       self.over_extrapolations.set(self.over_extrapolations.get() + 1);
-      // Deliberately `warn`, and deliberately saying what it usually means.
-      //
-      // Holding is a legitimate outcome, so the temptation is to call this
-      // routine and quieten it. That is wrong: reaching this branch *steadily*
-      // is almost never a starved link, it is a **render target computed the
-      // wrong way**. A target derived from an absolute clock estimate sits ahead
-      // of the newest sample by the whole link delay, so the view never
-      // interpolates at all and every entity is drawn held or dead reckoned. The
-      // symptom on screen is remote entities that stutter or overshoot, and this
-      // line is the only place it announces itself.
+      // A `warn` even though holding is a legitimate outcome, because reaching
+      // this branch *steadily* almost always means a **render target computed
+      // the wrong way** rather than a starved link. A target derived from an
+      // absolute clock estimate sits ahead of the newest sample by the whole
+      // link delay, so the view never interpolates at all and every entity is
+      // drawn held or dead reckoned. On screen remote entities stutter or
+      // overshoot and this line is the only direct report of it.
       //
       // Steer the render clock toward the stream instead (see
       // [`InterpolationClock::resync`]) so the target trails the newest sample
       // by a couple of send intervals. Then this fires only on real starvation,
       // which is bursty and rare and worth hearing about. For remote entities
-      // specifically, the standard answer is not to extrapolate at all: render
-      // in the past far enough that two real snapshots always bracket the
-      // target, which is Gambetta's entity interpolation and what
+      // the standard approach is to not extrapolate at all: render in the past
+      // far enough that two real snapshots always bracket the target, which is
+      // Gambetta's entity interpolation and what
       // `RenderOpts { extrapolate: false }` selects.
       //
       // [`InterpolationClock::resync`]: crate::interpolation::InterpolationClock::resync
@@ -165,10 +161,10 @@ where
   /// How many extrapolations were asked to reach further past receipt than the cap
   /// allowed, and were held at the cap instead.
   ///
-  /// Holding is a legitimate outcome, so this is not an error count. It is a rate:
-  /// climbing steadily means the render target is being computed ahead of the
-  /// newest sample rather than trailing it, and the entity is being dead reckoned
-  /// every frame instead of interpolated. See the note in
+  /// Holding is a legitimate outcome, so read this as a rate rather than an
+  /// error count: climbing steadily means the render target is being computed
+  /// ahead of the newest sample rather than trailing it, so the entity is being
+  /// dead reckoned every frame instead of interpolated. See the note in
   /// [`get_extrapolated_state`](Self::get_extrapolated_state) for the fix.
   pub fn over_extrapolations(&self) -> u64 {
     self.over_extrapolations.get()
@@ -194,9 +190,9 @@ mod tests {
   fn crossing_the_extrapolation_limit_does_not_move_the_entity_backwards() {
     // The limit used to return the *un-extrapolated* state, so an entity coasted
     // `velocity * max_ms` forward and then, one millisecond later, was drawn back
-    // at the raw sample. A jump of the whole window, in the wrong direction, and
-    // jitter around the boundary made it flicker. Capping the duration instead
-    // means it coasts to the limit and stops there.
+    // at the raw sample. That jumped the whole window backwards and jitter
+    // around the boundary made it flicker. With the duration capped it coasts
+    // to the limit and stops there.
     let base = ExtrapolationBase::new(Pos(0.0), 100.0, 0u64, 0);
     let max_ms = 120;
     let at = |t: ClientTimeMs| base.get_extrapolated_state(t, max_ms, |ms| ms as f32 / 1000.0).unwrap();

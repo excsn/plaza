@@ -1,14 +1,14 @@
 //! The floor's rules. The only place `DuelState` changes.
 //!
-//! # The claim, and where it lives
+//! # The sub-tick claim
 //!
-//! An input here names a tick **and a place inside it**, and the server floors
+//! An input here names a tick **and a place inside it** and the server floors
 //! that claim against the link's measured one-way exactly as it floors the
 //! tick: you cannot name a moment your own latency says your press could not
 //! have reached. Every contest is then resolved twice, once by the declared
-//! stamps and once by plain arrival order, and the daylight between the two is
-//! the number this example exists to produce. The sub-tick winner is the one
-//! that scores; the arrival winner rides along as the comparison.
+//! stamps and once by plain arrival order, and the example counts how often
+//! the two disagree. The sub-tick winner scores. The arrival winner is kept
+//! for comparison.
 
 use async_trait::async_trait;
 use plaza::agent::Agent;
@@ -210,7 +210,7 @@ fn start_contest(state: &mut DuelState, ctx: &mut Ctx) {
     ctx,
     DrawOp::PhaseChanged,
     Some("steady...".into()),
-    // Deliberately no duration hint: the hold is the game.
+    // Deliberately no duration hint, so the signal cannot be anticipated.
     None,
   );
   ctx
@@ -226,10 +226,10 @@ fn start_contest(state: &mut DuelState, ctx: &mut Ctx) {
 
 /// A press, judged.
 ///
-/// The claim is `tick * TICK_US + offset`, and the floor is the same treatment
-/// the tick gets in `InputSchedule`, one resolution finer: it is clamped into
+/// The claim is `tick * TICK_US + offset` and the floor works like the tick
+/// floor in `InputSchedule`, one resolution finer: the claim is clamped into
 /// `[arrival - one_way - slack, arrival]`, so a claim the link could not have
-/// carried is bounded, and a dishonest one gains at most the slack.
+/// carried is bounded and a dishonest one gains at most the slack.
 fn fire(state: &mut DuelState, player: PlayerId, tick: u64, offset_us: u32, logic: &DuelLogic, ctx: &mut Ctx) -> bool {
   if !state.is_duelist(player) || state.entry_of(player).is_some() {
     return false;
@@ -510,8 +510,8 @@ fn harness_step(state: &mut DuelState) -> u64 {
     let eff_b = claim_b.clamp(arrival_b.saturating_sub(wb + FLOOR_SLACK_US), arrival_b);
 
     let a_by_arrival = (arrival_a, 0u8) < (arrival_b, 1u8);
-    // A tied stamp breaks by seat, never by arrival, or the tie would let the
-    // link back into the rule the mill exists to keep it out of.
+    // A tied stamp breaks by seat, never by arrival, or link latency would
+    // decide ties again.
     let a_by_subtick = (eff_a, 0u8) < (eff_b, 1u8);
 
     let stats = &mut state.harness;
@@ -616,10 +616,10 @@ mod tests {
 
   #[tokio::test]
   async fn the_declared_order_beats_arrival_order_and_scores() {
-    // Both shots land on the same server tick, which is exactly the window
-    // arrival order decides today: A's arrives first claiming 175ms, B's
-    // second claiming 165ms. Arrival names A; the declared stamps name B, the
-    // verdict says so, and B is the one who scores.
+    // Both shots land on the same server tick, where arrival order decides
+    // today: A's arrives first claiming 175ms, B's second claiming 165ms.
+    // Arrival names A and the declared stamps name B. The verdict records
+    // both and B scores.
     let mut state = camp().await;
     to_signal(&mut state).await;
     to_after_signal(&mut state, 180_000).await;
@@ -642,7 +642,7 @@ mod tests {
   async fn the_floor_bounds_a_claim_to_what_the_link_allows() {
     // A fires 300ms after the signal claiming 1ms after it. With no measured
     // one-way to excuse the gap, the claim is clamped to arrival minus the
-    // slack, and the honest 200ms press beats it.
+    // slack and the honest 200ms press beats it.
     let mut state = camp().await;
     to_signal(&mut state).await;
 
@@ -729,8 +729,8 @@ mod tests {
     assert_eq!(*state.phase.current(), DuelPhase::Steady);
   }
 
-  /// The falsifier, as a test: delaying one side's **sending** moves the
-  /// arrival column and must not move the declared one.
+  /// Delaying one side's **sending** moves the arrival column and must not
+  /// move the declared one.
   #[tokio::test]
   async fn delaying_one_link_moves_arrival_wins_and_not_declared_wins() {
     async fn mill(b_one_way_ms: u32) -> crate::protocol::HarnessStats {

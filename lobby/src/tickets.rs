@@ -18,40 +18,40 @@
 //!
 //! # Which store
 //!
-//! [`TicketStore`] is the seam. Two implementations ship, and they differ in who
-//! drives expiry rather than in what they promise:
+//! [`TicketStore`] is the trait. Two implementations ship; they make the same
+//! guarantees and differ in what drives expiry:
 //!
 //! - [`MapTicketRegistry`] is a `HashMap` behind a mutex, with no dependency
 //!   beyond what the crate already has. Expiry is swept from `issue`, which is
 //!   the operation that grows the map.
 //! - [`CachedTicketRegistry`] (feature `cache`) is `fibre_cache`, whose janitor
 //!   sweeps on its own and whose shards replace the single mutex. Off by
-//!   default, so nothing downstream pays for it unasked.
+//!   default, so nothing downstream pays for it unless it enables the feature.
 //!
-//! A third belongs to whoever needs a room in another process: verify a signed
-//! token and build the [`Ticket`] from its claims, storing nothing. That case
-//! is why this is a trait, since it cannot be a mode of either type here.
+//! A room in another process needs a third: verify a signed token and build
+//! the [`Ticket`] from its claims, storing nothing. That case is why this is a
+//! trait rather than a mode of either type here.
 //!
-//! # This is placement, not authentication
+//! # Tickets and authentication
 //!
 //! [`issue`](TicketStore::issue) mints a counter, which is guessable in one try.
-//! It is enough to stop a client *naming* another player, which is the failure
-//! this closes, and it is not a credential. Anything facing untrusted clients
+//! It stops a client *naming* another player, which is what it is for, but it
+//! is not a credential. Anything facing untrusted clients
 //! should mint its own signed, expiring value and hand it to
 //! [`issue_with`](TicketStore::issue_with); no implementation here cares what
 //! the string is.
 //!
-//! Plaza has no authentication story for this to be consistent with, which is
-//! why the crate provides the bookkeeping and not the secret.
+//! Plaza has no authentication scheme for this to fit into, so the crate
+//! provides the bookkeeping and leaves the secret to the application.
 //!
-//! # Expiry does not stand alone
+//! # Ticket and reservation expiry
 //!
 //! A ticket outliving its [`SeatReservations`](crate::reservations) entry lands
-//! a placed player as a spectator with a spent ticket, and the reverse orphans a
+//! a placed player as a spectator with a spent ticket and the reverse orphans a
 //! seat. Redemption is two steps in two places, the route spending the ticket
 //! and the room's logic consuming the reservation, so a window here must be
 //! **shorter** than the reservation's by at least the time a session takes to
-//! come up. Equal windows look right and are not.
+//! come up.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -76,7 +76,7 @@ pub struct Ticket<ID: AgentId> {
 /// once against whichever store a deployment picked.
 pub trait TicketStore<ID: AgentId>: Send + Sync {
   /// Mints a ticket with a generated token. See the module docs: the token is a
-  /// counter, not a secret.
+  /// counter and is not secret.
   fn issue(&self, player: ID, room: RoomId) -> String;
 
   /// Records a ticket under a token you minted, for anything that needs a real
@@ -84,12 +84,12 @@ pub trait TicketStore<ID: AgentId>: Send + Sync {
   fn issue_with(&self, token: String, player: ID, room: RoomId);
 
   /// Spends a ticket for `room`, or `None` if it was never issued, has been
-  /// used, has expired, or was issued for somewhere else.
+  /// used, has expired or was issued for somewhere else.
   ///
   /// One use, so a token that leaks cannot be replayed into a second connection
   /// alongside the one that already holds it.
   ///
-  /// **The room is checked before the ticket is spent**, not after. Spending
+  /// **The room is checked before the ticket is spent.** Spending
   /// first and comparing afterwards burns a ticket that the room had no claim
   /// on, so under a guessable token anyone could destroy anyone's placement by
   /// presenting it at the wrong door.
@@ -99,9 +99,8 @@ pub trait TicketStore<ID: AgentId>: Send + Sync {
   /// cancelled.
   fn revoke(&self, token: &str) -> bool;
 
-  /// Tickets handed out, not yet dialled, and not yet expired. A number that
-  /// climbs rather than hovering means placements are being issued and
-  /// abandoned.
+  /// Tickets handed out and not yet dialled or expired. A count that keeps
+  /// climbing means placements are being issued and abandoned.
   ///
   /// A diagnostic rather than a hot path: both shipped implementations walk
   /// their contents to answer it.
@@ -287,7 +286,7 @@ mod cached {
     /// Forces the expiry pass the janitor would otherwise run on its own
     /// schedule.
     ///
-    /// Deterministic, so a test does not have to sleep past the window and hope.
+    /// Deterministic, so a test does not have to sleep past the window.
     pub fn run_maintenance(&self) {
       self.held.run_maintenance();
     }
@@ -480,8 +479,8 @@ mod tests {
 
   #[test]
   fn a_store_is_usable_behind_a_trait_object() {
-    // The property the cross-host implementation depends on: a route can be
-    // written against the seam rather than against a concrete registry.
+    // A cross-host implementation depends on this: a route can be written
+    // against the trait rather than a concrete registry.
     let tickets: std::sync::Arc<dyn TicketStore<u32>> = std::sync::Arc::new(MapTicketRegistry::new());
     let room = Uuid::new_v4();
     let token = tickets.issue(7, room);

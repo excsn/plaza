@@ -49,9 +49,9 @@ class TableView {
 
 /// How long each kind of op is worth watching, in seconds.
 ///
-/// A card landing wants to be seen; a phase change does not. These live here
-/// rather than in [OpSequencer] because the sequencer has no idea what an op is,
-/// which is what keeps it reusable.
+/// A card landing needs time on screen; a phase change does not. These live
+/// here rather than in [OpSequencer] because the sequencer has no idea what an
+/// op is, which keeps it reusable.
 class TablePacing {
   const TablePacing({this.cardPlayed = 0.45, this.trickWon = 0.9, this.settled = 1.5});
 
@@ -62,10 +62,9 @@ class TablePacing {
 
 /// A card game across two connections.
 ///
-/// **The lobby socket stays open.** It is tempting to close it once `Placed`
-/// arrives and the table endpoint is in hand, and that is exactly wrong: the
-/// server reads a closed lobby socket as the player giving up, withdraws the
-/// reservation it just issued, and the table seats them as a spectator. The two
+/// **The lobby socket stays open.** Do not close it once `Placed` arrives and
+/// the table endpoint is in hand: the server reads a closed lobby socket as the
+/// player giving up and withdraws the reservation it just issued. The table then seats them as a spectator. The two
 /// sockets have separate lifetimes and the first one gates the second.
 class ParlourGame extends FlameGame with PlazaGame {
   ParlourGame({
@@ -162,8 +161,8 @@ class ParlourGame extends FlameGame with PlazaGame {
       url: endpoint,
       connect: connect,
       // The table speaks compact MessagePack where the lobby speaks JSON: the
-      // generated types carry the field order, which is what makes compact safe
-      // to read and write here.
+      // generated types carry the field order, so compact is safe to read and
+      // write here.
       codec: const MsgPackCodec(),
       protocol: protocol,
       backoff: Backoff(initial: const Duration(milliseconds: 400)),
@@ -176,8 +175,7 @@ class ParlourGame extends FlameGame with PlazaGame {
     _tableEvents = client.events.listen((e) {
       plazaStats.apply(e, client.status);
       if (e is Connected && e.resumed) {
-        // Fresh state is coming; a queued backlog would animate a world that
-        // has already moved on.
+        // Fresh state is coming; a queued backlog would animate stale state.
         sequencer.clear();
       }
       onPlazaEvent(e);
@@ -213,8 +211,7 @@ class ParlourGame extends FlameGame with PlazaGame {
   /// Applies one op and says how long it is worth watching.
   ///
   /// A snapshot arrives on a deal and a resolved trick and nothing in between,
-  /// so the rest of the round is narrated as ops and this is the half of that
-  /// bargain the client owes.
+  /// so the rest of the round is narrated as ops.
   double applyTableOp(Object? op) {
     final v = view;
     switch (TableOp.fromWire(op)) {
@@ -292,8 +289,8 @@ class ParlourGame extends FlameGame with PlazaGame {
   void lifecycleStateChange(AppLifecycleState state) {
     super.lifecycleStateChange(state);
     if (state == AppLifecycleState.resumed) {
-      // The lobby's own resume is the mixin's. The table is this game's, and it
-      // needs the same treatment for the same reason.
+      // The mixin resumes the lobby. The table belongs to this game and needs
+      // the same treatment for the same reason.
       sequencer.clear();
       unawaited(_table?.resume());
     }

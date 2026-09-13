@@ -7,29 +7,28 @@
 //! that to a handful of messages while the player is walking in a straight line,
 //! which is most of the time.
 //!
-//! # The separation this rests on
+//! # Transmitting versus simulating
 //!
-//! What is *transmitted* is a bandwidth decision. What is *integrated* is a
-//! simulation decision. They are allowed to differ, and keeping them separate is
-//! what makes coalescing safe: the local prediction advances every tick whatever
-//! the wire is doing, so a quiet wire is not a stuttering player.
+//! Transmitting an input is a bandwidth decision and integrating it is a
+//! simulation decision. Keeping the two separate makes coalescing safe: the
+//! local prediction advances every tick whatever the wire is doing, so a quiet
+//! wire does not make the player stutter.
 //!
 //! It is also why coalescing pairs with [`HeldInputPredictor`] and not with
 //! [`PredictedPlayer`]. A server that consumes one input per simulation step
 //! needs every one of them, so dropping the repeats there drops actual movement.
 //!
-//! # The keepalive is not optional
+//! # The keepalive
 //!
 //! Sending purely on change has a failure that only appears under loss. The
 //! server holds the last direction it received, so a *dropped* direction change
-//! is not a missing update, it is a wrong state that persists: the player keeps
-//! gliding in the old direction until they happen to press something else. It
-//! reads as the controls sticking, it is intermittent, and it looks nothing like
-//! packet loss.
+//! leaves a wrong state that persists: the player keeps gliding in the old
+//! direction until they happen to press something else. It looks like the
+//! controls sticking, it is intermittent and it looks nothing like packet loss.
 //!
 //! A periodic resend of the held input bounds that to the keepalive interval. It
-//! costs a message every so often per player and it is the difference between an
-//! optimisation and a bug.
+//! costs one message every so often per player. Do not coalesce without a
+//! keepalive.
 //!
 //! [`HeldInputPredictor`]: crate::HeldInputPredictor
 //! [`PredictedPlayer`]: crate::PredictedPlayer
@@ -55,11 +54,10 @@ pub struct InputCoalescer<Input> {
 impl<Input: Clone + PartialEq> InputCoalescer<Input> {
   /// Coalescing on, resending the held input at least every `keepalive_ms`.
   ///
-  /// Pick the interval against how long a wrong direction is tolerable rather
-  /// than against bandwidth: it is the worst case a dropped change persists for.
-  /// A little over a hundred milliseconds is a reasonable starting point, being
-  /// short enough to feel like nothing and long enough to still be a large
-  /// saving.
+  /// Pick the interval by how long a wrong direction is tolerable rather than
+  /// by bandwidth, since it is the longest a dropped change can persist. A
+  /// little over a hundred milliseconds is a reasonable starting point: short
+  /// enough that players do not notice and long enough to still save a lot.
   pub fn new(keepalive_ms: u64) -> Self {
     Self {
       last_sent: None,
@@ -71,9 +69,8 @@ impl<Input: Clone + PartialEq> InputCoalescer<Input> {
 
   /// Turns coalescing off, so every input is transmitted.
   ///
-  /// Worth exposing as a toggle rather than a constant: the two policies differ
-  /// only in bandwidth until the wire starts dropping things, and being able to
-  /// switch between them live is how that gets demonstrated instead of argued.
+  /// The two policies differ only in bandwidth until the wire starts dropping
+  /// packets, so switching between them live shows that difference on screen.
   pub fn set_enabled(&mut self, enabled: bool) {
     self.enabled = enabled;
   }
@@ -120,7 +117,8 @@ mod tests {
 
   #[test]
   fn an_unchanged_input_is_not_retransmitted() {
-    // The whole saving: walking in a straight line is most of the time.
+    // This is where the saving comes from: a player walks in a straight line
+    // most of the time.
     let mut policy = InputCoalescer::new(1000);
     assert!(policy.should_send(&1, 0));
     let sent = (1..60).filter(|frame| policy.should_send(&1, frame * 16)).count();
@@ -139,10 +137,10 @@ mod tests {
 
   #[test]
   fn the_keepalive_bounds_how_long_a_dropped_change_can_persist() {
-    // Without this, a dropped direction change is not a missing update but a
-    // wrong state that lasts until the player presses something else: the server
-    // holds the last direction it received, so the player keeps gliding. It reads
-    // as the controls sticking and looks nothing like packet loss.
+    // Without this, a dropped direction change leaves a wrong state that lasts
+    // until the player presses something else: the server holds the last
+    // direction it received, so the player keeps gliding. It reads as the
+    // controls sticking and looks nothing like packet loss.
     let mut policy = InputCoalescer::new(120);
     policy.should_send(&1, 0);
     assert!(!policy.should_send(&1, 100), "not yet due");

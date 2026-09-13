@@ -29,104 +29,102 @@
 //! - **`smoothing::ErrorSmoother`**: eases a reconciliation correction over a few frames
 //!   instead of snapping it.
 //! - **`timestep::FixedTimestep`** and **`Periodic`**: turning however long the
-//!   last frame took into whole fixed steps, or into "is it time yet". Two
-//!   simulations running the same rule at different step sizes are not the same
-//!   simulation, and the drift reads as network jitter, so both sides taking the
-//!   step from here is what keeps them equal.
-//! - **`meter::RateMeter`**: what the wire cost, as a windowed rate rather than a
-//!   session average that creeps for ever toward a level it never reaches.
-//!   `plaza_server_utils` re-exports it, so both ends quote the same arithmetic.
+//!   last frame took into whole fixed steps or into "is it time yet". Two
+//!   simulations running the same rule at different step sizes drift apart and
+//!   the drift reads as network jitter, so both sides should take the step from
+//!   here.
+//! - **`meter::RateMeter`**: what the wire cost, as a windowed rate. A session
+//!   average would keep creeping toward a new level without reaching it.
+//!   `plaza_server_utils` re-exports it, so both ends use the same arithmetic.
 //! - **`determinism`**: the draws, noise and hashes a shared rule derives its
 //!   world from, identical on wasm and native and pinned by test, plus
-//!   **`digest::StateDigest`** for hearing about a divergence before the screen
-//!   shows it.
+//!   **`digest::StateDigest`** for detecting a divergence before it shows on
+//!   screen.
 //! - **`rollback`**: the other netcode family, peer-to-peer deterministic lockstep.
-//!   `StateHistory`, `InputTimeline`, and the `RollbackSession` bundle predict a
+//!   `StateHistory`, `InputTimeline` and the `RollbackSession` bundle predict a
 //!   missing remote input and roll back to re-simulate when the guess is disproved.
 //!
-//! # Four principles worth knowing before you predict or render anything
+//! # Four principles
 //!
-//! None is enforceable by a type, and between them they account for every
-//! netcode bug found while building the playground examples. They prevent
-//! bugs, where everything else in this crate only recovers from them.
-//! The first two are about simulation, the last two about rendering, and the
-//! examples' `LEARNINGS.md` records what each one cost to learn.
+//! No type can enforce these. Between them they account for every netcode bug
+//! found while building the playground examples. The rest of this crate can
+//! only recover from those bugs after they happen. The first two are about
+//! simulation and the last two about rendering. The examples' `LEARNINGS.md`
+//! records the bugs behind each one.
 //!
 //! **1. A shared rule must be shared code, not code written twice.** The `apply`
-//! you hand [`PredictedPlayer`] or [`HeldInputPredictor`] is meant to *be* the
-//! server's step function, not a client approximation of it. Anything the server
-//! does that your copy leaves out arrives as a permanent correction: it looks
-//! like network jitter, it is largest exactly when it is most visible, and it is
-//! extremely expensive to find later. Measured across two examples, every entity
-//! whose rule lived in one function both sides called was correct and stayed
-//! correct, and every entity whose rule was written twice drifted.
+//! you hand [`PredictedPlayer`] or [`HeldInputPredictor`] should be the server's
+//! own step function rather than a client approximation of it. Anything the
+//! server does that your copy leaves out shows up as a constant correction. It
+//! looks like network jitter, it is largest when it is most visible and it is
+//! very hard to track down. Across two examples, every entity whose rule lived
+//! in one function both sides called stayed correct and every entity whose rule
+//! was written twice drifted.
 //!
 //! If your client's rule needs the world to run (gravity, wind, a moving
-//! platform), that is what the context parameter is for. Being unable to pass
-//! the world in is exactly what pushes people into writing the second, lesser
-//! rule, so it is a deficiency in the API rather than a reason to fork the rule.
+//! platform), pass it through the context parameter. Without a way to pass the
+//! world in, people end up writing a second, simpler rule. Treat that as a gap
+//! in the API to fix and keep the one rule.
 //!
 //! **2. Prediction is presentation; shared rules consume authoritative state.**
-//! Feeding a locally predicted position into a rule that *both* sides run
-//! creates a second, divergent world, and every packet then fights the local
-//! one. Prediction drives the camera and the local player's own marker. The
-//! rules both sides run read the authoritative state, even though it is older.
-//! This is counterintuitive, because using the freshest local data looks like an
-//! improvement.
+//! Feeding a locally predicted position into a rule that both sides run makes
+//! the client compute a different world from the server's and every packet then
+//! pulls it back. Prediction drives the camera and the local player's own
+//! marker. The rules both sides run read the authoritative state, even though
+//! it is older. This is easy to get wrong, because using the freshest local
+//! data looks like an improvement.
 //!
 //! **3. One instant per frame.** A client that renders in the past picks a
-//! single instant T for the whole frame, and everything is evaluated at T: not
-//! only where entities are drawn, but everything a behaviour rule reads while
-//! producing the frame, aim targets and chase context included. An entity
-//! simulated to T while reading a target from the newest packet is two
-//! timelines in one scene, and the seam between them is a bug whether or not
-//! it is visible yet. [`interpolation::InterpolationClock`] supplies T; the
-//! discipline of feeding *every* read from it is yours.
+//! single instant T for the whole frame and evaluates everything at T. That
+//! covers where entities are drawn and also everything a behaviour rule reads
+//! while producing the frame, such as aim targets and chase context. An entity
+//! simulated to T that reads its target from the newest packet mixes two
+//! timelines in one scene, which is a bug even before it becomes visible.
+//! [`interpolation::InterpolationClock`] supplies T; making every read use it
+//! is up to you.
 //!
 //! **4. The timeline comes from declaration, not arrival.** Transport facts,
 //! round trips and jitter and arrival times, may size buffers and admit or
 //! refuse connections. They never decide which moment is on screen or when an
 //! input executes; those are declared numbers the server chooses and
 //! publishes. A render clock steered by packet arrival hides bad links instead
-//! of reporting them, lets every client pick a different "now", and quietly
-//! makes ping an input to the game.
+//! of reporting them and lets every client pick a different "now". It also
+//! lets each player's ping change what happens in the game.
 //!
 //! # The resume contract
 //!
-//! Every long-lived client eventually stops reading: a browser tab goes to the
-//! background, a laptop sleeps, a frame loop stalls. The socket keeps
-//! receiving the whole time, so what a resumed client faces is not a slow
-//! stream but a *lump*: minutes of packets, delivered at once, describing
-//! moments it can never play. The recovery that works is built from one
-//! invariant, stated here because each half lives in a different crate:
+//! Every long-lived client eventually stops reading, for example when a
+//! browser tab goes to the background, a laptop sleeps or a frame loop stalls.
+//! The socket keeps receiving the whole time, so a resumed client gets a
+//! *lump*: minutes of packets delivered at once, describing moments it can no
+//! longer play. Recovery rests on one invariant, stated here because each half
+//! lives in a different crate:
 //!
 //! **A client may discard any stretch of the stream unread, provided it also
 //! drops the state derived from it, because an acknowledgement carrying the
 //! digest of nothing obligates the server to answer with a full baseline.**
 //!
-//! That is the digest-and-rebuild machinery of `server_utils::DeltaBaseline`
-//! and [`mirror::DeltaMirror`], read as a permission. It is why there is no
-//! "resync request" message anywhere: dropping the mirror *is* the request.
-//! On top of it, resume is three verdicts at three layers, each owned by a
-//! block:
+//! The digest-and-rebuild machinery of `server_utils::DeltaBaseline` and
+//! [`mirror::DeltaMirror`] makes that discard safe. There is no "resync
+//! request" message; dropping the mirror acts as the request. Resume handling
+//! is split across three layers:
 //!
 //! - the **transport** discards the backlog before parsing it
-//!   (`plaza_ws::trim_backlog`), because none of it survives what follows;
+//!   (`plaza_ws::trim_backlog`), because all of it would be dropped anyway;
 //! - the **playout queue** treats the gap as a discontinuity and restarts
 //!   once, keeping only the newest packet ([`PlayoutBuffer`]);
 //! - the **server** stops streaming to a subscriber that has provably stopped
 //!   reading (`DeltaBaseline::with_flow`), so the lump never grows to
 //!   megabytes in the first place.
 //!
-//! The application's remaining job is small and cannot be taken from it: on
+//! The application has one job left: on
 //! [`playout::Admission::TimelineLost`], drop the mirror and re-anchor the
 //! render clock on what just arrived.
 //!
 //! # Which predictor
 //!
-//! The two differ by how the *server* consumes input, not by how the client
-//! feels. Choosing wrong is silent, and shows up as a prediction that is always
-//! slightly behind.
+//! Pick between the two by how the *server* consumes input. A wrong choice
+//! raises no error; it shows up as a prediction that is always slightly behind.
 //!
 //! | the server | use |
 //! |---|---|
@@ -139,7 +137,7 @@
 //!
 //! # Philosophy
 //!
-//! `plaza_client_utils` aims to provide foundational building blocks, not a complete
+//! `plaza_client_utils` provides building blocks rather than a complete
 //! client-side framework. The application developer is responsible for:
 //! - Defining their `StateType` and `ClientOp` types.
 //! - Implementing the client-side game logic (how an `Op` affects `StateType`).

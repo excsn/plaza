@@ -1,7 +1,7 @@
 //! The game, with no sockets and no window in it.
 //!
-//! [`curtain`] is the file to read first: it is the whole enemy half of the
-//! game, it holds no state, and nothing in it is ever sent.
+//! Start with [`curtain`]: it is the whole enemy half of the game, holds no
+//! state and none of it is ever sent.
 
 pub mod client;
 pub mod curtain;

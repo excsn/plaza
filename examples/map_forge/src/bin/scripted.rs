@@ -1,8 +1,8 @@
 //! The bench, scripted: no window, no socket. Two editors work the shipped
 //! vocabularies end to end: a lock granted and denied, paints under it, a
-//! roster ordered and re-ordered, presence relayed, and the crossing: a
-//! playtest whose bomb_grid bombs carve the wall that was just painted, after
-//! which the bench still holds the authored map.
+//! roster ordered and re-ordered, presence relayed and a playtest whose
+//! bomb_grid bombs carve the wall that was just painted. Afterwards the bench
+//! still holds the authored map.
 
 use std::sync::Arc;
 use std::time::Duration;

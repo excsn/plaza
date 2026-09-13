@@ -2,7 +2,7 @@
 
 **License:** Mozilla Public License 2.0 (MPL-2.0) · **Status:** Experimental
 
-The controller loop and the traits you implement around it. This is the crate you start with; [`plaza_session`](../session/), [`plaza_lobby`](../lobby/), and [`plaza_client_utils`](../client_utils/) build on top. `plaza` itself depends on no other crate in the workspace.
+The controller loop and the traits you implement around it. This is the crate you start with; [`plaza_session`](../session/), [`plaza_lobby`](../lobby/) and [`plaza_client_utils`](../client_utils/) build on top. `plaza` itself depends on no other crate in the workspace.
 
 How to use it: [README.USAGE.md](README.USAGE.md). Full surface: [API_REFERENCE.md](API_REFERENCE.md). For the concepts and why they are shaped this way, see the [workspace README](../README.md).
 
@@ -16,7 +16,7 @@ async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
 ```
 
-`plaza` has no feature flags. It needs a Tokio runtime, `async-trait` for the traits you implement, and `serde` on any type that crosses a network.
+`plaza` has no feature flags. It needs a Tokio runtime, `async-trait` for the traits you implement and `serde` on any type that crosses a network.
 
 ## What it gives you
 
@@ -31,7 +31,7 @@ serde = { version = "1", features = ["derive"] }
 | Asking a running controller a question without copying the world | `query_with`, `query_state` |
 | Watching the loop's health | `ControllerStats` |
 | The whole loop with no sockets, for tests and local play | `InProcessSession` |
-| Disconnect grace, timers and meaning left to you | `common::reconnect::ReconnectTracker` |
+| Disconnect grace bookkeeping, with the timers and what expiry means left to you | `common::reconnect::ReconnectTracker` |
 | Turns, rounds and phases | `game_common::flow_control` |
 | The server half of client-side prediction | `game_common::reconciliation` |
 | Real sockets | [`plaza_session`](../session/) |

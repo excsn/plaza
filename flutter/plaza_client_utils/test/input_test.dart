@@ -57,8 +57,8 @@ void main() {
       expect(t.tickFor(1000), (1000 + 100) ~/ 50);
     });
 
-    /// The rule the floor exists for: a clock trailing the stream aims behind
-    /// what the server has already written, and every input is dropped.
+    /// Without the floor, a clock trailing the stream aims behind what the
+    /// server has already written and every input is dropped.
     test('the newest stamp lifts an aim that trails the stream', () {
       final t = TickNamer(stepMs: 50, playoutDelayMs: 100);
       t.observeStamp(5000);

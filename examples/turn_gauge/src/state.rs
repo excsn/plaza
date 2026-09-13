@@ -45,7 +45,7 @@ pub struct GaugeState {
   /// Advanced whenever whose-turn-it-is moves on; stale clocks check it.
   pub ask: Situation,
   /// The initiative regime's walker, one per round; `None` under the delay
-  /// regime, which is the point being demonstrated.
+  /// regime, which needs no manager.
   pub turns: Option<RoundRobinTurnManager<GaugeOp, PlayerId, UnitId>>,
   /// The standing round's order as data, for the snapshot a joiner baselines
   /// from.

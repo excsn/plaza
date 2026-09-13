@@ -4,9 +4,8 @@
 //! The whole stack is [`plaza_session::host::SimHost`], on
 //! [`measured`](SimHost::measured) rather than the fixed-step default: this
 //! sim integrates over elapsed time and clients absorb the difference as
-//! corrections, which is the one shape that mode exists for. What is left
-//! here is the part that is actually this arena's: which state, which logic,
-//! and at what tick rate.
+//! corrections, which is the case that mode is for. What is left here is
+//! specific to this arena: which state, which logic and at what tick rate.
 
 use std::sync::Arc;
 
@@ -18,8 +17,8 @@ use crate::sim::protocol::PROTOCOL;
 use crate::sim::types::Controls;
 
 /// The tick rate the simulation is advanced at. Distinct from the *send* rate,
-/// which is `Controls::sync_hz` and is usually far lower: simulating often and
-/// sending rarely is the whole reason this example exists.
+/// which is `Controls::sync_hz` and is usually far lower. This example is about
+/// simulating often and sending rarely.
 const TICK_HZ: u32 = 60;
 
 /// The browser client artifact, the one asset that must never be served stale.

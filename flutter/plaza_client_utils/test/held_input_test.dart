@@ -41,7 +41,7 @@ class HeldServer {
 
 /// Transliterated from `client_utils/src/held_input.rs`.
 void main() {
-  /// The whole promise: when the client runs the server's rule on the same held
+  /// The main guarantee: when the client runs the server's rule on the same held
   /// input, there is nothing to correct, however rarely input is transmitted.
   test('dead reckoning a held input matches the server exactly', () {
     final me = predictor(0.25)..hold(10.0);
@@ -64,8 +64,8 @@ void main() {
     );
   });
 
-  /// The bug this primitive is shaped to prevent, reproduced next to the fix: a
-  /// slow systematic drift, corrected two different ways.
+  /// A slow systematic drift, corrected two ways: a threshold snap and a
+  /// continuous blend.
   test('a threshold snap sawtooths where a continuous blend does not', () {
     const driftPerPacket = 6.0;
     const threshold = 24.0;

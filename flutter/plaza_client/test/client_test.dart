@@ -10,8 +10,8 @@ class FakeServer {
   int failNext = 0;
 
   /// Frames delivered the instant the socket exists, before the client can
-  /// possibly have subscribed. A real server does exactly this: it speaks first,
-  /// and its `Hello` is on the wire before the connect future has even returned.
+  /// possibly have subscribed. A real server does this: it speaks first and its
+  /// `Hello` is on the wire before the connect future has even returned.
   List<String> speakFirst = <String>[];
 
   LoopbackSocket get latest => sockets.last;
@@ -117,7 +117,7 @@ void main() {
     });
 
     /// The rule the Rust side applies: a peer that declares nothing is the
-    /// pre-handshake case, not a wrong one.
+    /// pre-handshake case rather than a wrong one.
     test('an unknown version on either side is not a mismatch', () async {
       final server = FakeServer();
       final client = makeClient(server, protocol: 42);

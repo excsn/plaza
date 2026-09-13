@@ -1,19 +1,18 @@
 //! How wrong a client's screen was, asked at the instant it was drawing.
 //!
-//! The distinction this module exists to enforce. A client rendering behind the
-//! server is *supposed* to be behind: that is what a render delay is for. So
-//! comparing what it drew against where the server has things **now** charges
-//! it for a delay it chose, and the figure grows with the buffer depth rather
-//! than with anything going wrong. Three separate playgrounds wrote that
-//! comparison by hand and two of them wrote it that way.
+//! A client rendering behind the server is *supposed* to be behind: that is
+//! what a render delay is for. Comparing what it drew against where the server
+//! has things **now** charges it for a delay it chose and the figure grows with
+//! the buffer depth even when nothing is wrong. Three separate playgrounds
+//! wrote that comparison by hand and two of them made that mistake.
 //!
 //! [`render_error_at`] takes the instant as a required argument and reads truth
-//! from a [`HistoricalStateBuffer`], so the dishonest version is not the
-//! convenient one. The buffer is usually already there: it is the same history
+//! from a [`HistoricalStateBuffer`], so measuring against the present has to be
+//! done on purpose. The buffer is usually already there: it is the same history
 //! a server keeps to rewind a shot.
 //!
-//! This is a **host or harness** measurement and it cannot be anything else. It
-//! needs truth, and a joiner never has truth. Nothing in `client_utils` can
+//! This is a **host or harness** measurement, because it needs the true
+//! positions and a joiner never has them. Nothing in `client_utils` can
 //! answer this question.
 //!
 //! ```ignore
@@ -29,7 +28,7 @@ use plaza_client_utils::interpolation::{Interpolatable, ToF32};
 
 use crate::history::HistoricalStateBuffer;
 
-/// An accumulated render error: a mean, a worst case, and how many samples
+/// An accumulated render error: a mean, a worst case and how many samples
 /// stand behind them.
 ///
 /// Holds the sum rather than the mean so results from several clients or
@@ -90,9 +89,9 @@ impl RenderError {
 /// Compares what a client drew against where the server had things **at the
 /// instant that client was drawing**.
 ///
-/// `at` is the client's render target, not the present. It is a required
-/// argument specifically so that the honest form is the one that falls out of
-/// calling this: passing `now` is possible and has to be typed on purpose.
+/// `at` is the client's render target rather than the present. It is required
+/// so the plain call measures at the render instant; passing `now` is possible
+/// but has to be typed on purpose.
 ///
 /// `distance` is supplied by the caller because a state type has no metric this
 /// crate can assume, the same reason [`Correction`] hands back two states
@@ -100,11 +99,10 @@ impl RenderError {
 ///
 /// Entities absent from the history are skipped rather than counted as zero
 /// error: a client drawing something the server never recorded is a different
-/// fault, and folding it in here would flatter the average. Entities whose
+/// fault and folding it in here would flatter the average. Entities whose
 /// samples have aged past the buffer's retention are skipped for the same
 /// reason: scoring against the oldest retained state charges the client for a
-/// position the server no longer knows, and the figure would be a guess wearing
-/// a number's face.
+/// position the server no longer knows.
 ///
 /// [`Correction`]: plaza_client_utils::Correction
 pub fn render_error_at<Id, State, Time, D>(
@@ -157,8 +155,8 @@ mod tests {
 
   #[test]
   fn a_client_drawing_the_past_correctly_has_no_error_at_its_own_instant() {
-    // The whole point. This client is 100 ms behind and drawing exactly the
-    // right thing for where it is, and the honest figure says so.
+    // A client 100 ms behind drawing exactly the right thing for where it is,
+    // which measuring at the render instant reports as correct.
     let history = moving();
     let now = 39 * 16;
     let at = now - 100;
@@ -169,8 +167,8 @@ mod tests {
 
   #[test]
   fn the_same_client_measured_against_the_present_is_charged_for_its_delay() {
-    // The figure this module exists to replace, reproduced deliberately so the
-    // difference is a test rather than an assertion in prose.
+    // The comparison against the present, reproduced so the difference is
+    // pinned by a test.
     let history = moving();
     let now = 39 * 16;
     let at = now - 100;
@@ -184,8 +182,8 @@ mod tests {
 
   #[test]
   fn a_real_error_still_shows_up_at_the_render_instant() {
-    // The complement, and the one whose absence would be silent: a metric that
-    // reports zero for everything is not an honest metric, it is a broken one.
+    // A metric that reports zero for everything would pass the tests above, so
+    // a real error has to show up.
     let history = moving();
     let at = 20 * 16;
     let error = render_error_at(&history, at, [(1u8, P(at as f32 + 12.0))], distance);

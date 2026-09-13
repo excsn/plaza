@@ -10,7 +10,8 @@ use crate::protocol::{Occupant, Physics, PlayerId};
 use crate::sim::{PaddleInput, World, SEATS};
 
 /// How far behind an input may name its tick and still buffer, and how far
-/// ahead. Tight on the late side: a rink rewards presence, not history.
+/// ahead. Tight on the late side, because a late input is worth little in a
+/// rink.
 pub const WINDOW: InputWindow = InputWindow {
   max_late: 6,
   max_early: 30,

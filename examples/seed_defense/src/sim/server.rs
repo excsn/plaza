@@ -1,15 +1,14 @@
-//! The authority, which is authoritative over remarkably little.
+//! The authority.
 //!
-//! It owns the seed, the wave schedule, the tick a build lands on, and the
-//! verdict on whether a build is legal. It does **not** own the enemies in the
-//! sense the other examples' servers do: it simulates them, and so does every
-//! client, from the same code and the same numbers. Nothing it computes about
-//! an enemy is ever sent.
+//! It owns the seed, the wave schedule, the tick a build lands on and the
+//! decision on whether a build is legal. It does not own the enemies the way
+//! the other examples' servers do: it simulates them and so does every client,
+//! from the same code and the same numbers. Nothing it computes about an enemy
+//! is ever sent.
 //!
-//! That makes its regular output almost nothing, and it makes the one thing it
-//! does send regularly, a digest, the load-bearing message. A server that sent
-//! positions could be wrong about them and nobody would find out for long; this
-//! one is *checked*, every half second, by every client independently.
+//! Its only regular output is a digest every half second, which every client
+//! checks independently. A server that sent positions could be wrong about them
+//! for a long time before anyone noticed.
 
 use plaza_server_utils::{InputSchedule, InputWindow};
 
@@ -29,9 +28,9 @@ const WINDOW: InputWindow = InputWindow {
 
 /// The seed the arena runs from.
 ///
-/// One constant, and it is the entire content of a session's enemies. Changing
-/// it changes every wave; a client that is handed a different one plays a
-/// different game and finds out within half a second.
+/// Every enemy in a session comes from this one constant. Changing it changes
+/// every wave. A client handed a different one plays a different game and
+/// finds out within half a second.
 pub const WORLD_SEED: u64 = 0x5EED_DEFE_0001;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,9 +63,9 @@ pub struct Server {
   /// A wave announced but not yet laid out.
   ///
   /// Laid out at the *start* of its tick, exactly where a client lays it out,
-  /// rather than at the end of the tick it was announced on. Those two are one
-  /// tick apart, and one tick apart is a digest mismatch on the very first
-  /// comparison of every wave.
+  /// rather than at the end of the tick it was announced on. Those are one tick
+  /// apart, which would cause a digest mismatch on the first comparison of
+  /// every wave.
   pending_wave: Option<(u32, u64)>,
   last_digest_tick: u64,
   /// When the overrun board makes way for a fresh field, set on entering
@@ -77,8 +76,8 @@ pub struct Server {
   pub builds_refused: u64,
   pub snapshots_sent: u64,
   pub digests_sent: u64,
-  /// Bytes actually sent, and what the same session would have cost if the
-  /// field went out at the send rate instead. The example's headline pair.
+  /// Bytes actually sent and what the same session would have cost if the
+  /// field went out at the send rate instead.
   pub bytes_sent: u64,
   pub bytes_if_streamed: u64,
 }
@@ -159,8 +158,8 @@ impl Server {
   ///
   /// A client that connects during a prep phase never heard the announcement,
   /// and the field in its welcome does not contain the wave yet because the
-  /// wave has not been laid out. Without this it would sit through the whole
-  /// wave holding nothing, agreeing with no one.
+  /// wave has not been laid out. Without this it would run the whole wave with
+  /// an empty field and every digest would disagree.
   pub fn pending_wave_op(&self) -> Option<Op> {
     self.pending_wave.map(|(wave, start_tick)| Op::Wave { wave, start_tick })
   }
@@ -173,13 +172,12 @@ impl Server {
     }
   }
 
-  /// Takes a build request, and answers with the op every machine will apply.
+  /// Takes a build request and answers with the op every machine will apply.
   ///
-  /// The tick is named here rather than by the client, and the reason is
-  /// sharper than in the other examples: a client naming its own tick could
-  /// name one in the past, and since every machine applies the op by
-  /// *simulating* it, a build in the past is not a small unfairness, it is a
-  /// state no other machine can reach.
+  /// The server names the tick, not the client. A client naming its own tick
+  /// could name one in the past. Every machine applies the op by *simulating*
+  /// it, so a build in the past would create a state no other machine can
+  /// reach.
   pub fn want_build(&mut self, seat: usize, seq: u64, cell: Cell, kind: TowerKind, upgrade: bool, controls: &Controls) -> Vec<Op> {
     let build = Build {
       player: seat as PlayerId,
@@ -189,9 +187,8 @@ impl Server {
     };
 
     // Legality is checked against the field as it is *now*, which is not quite
-    // the field the build will land on. That is deliberate: the alternative is
-    // simulating forward to the landing tick to check, and a check that runs
-    // the world forward is a second implementation of the world.
+    // the field the build will land on. Checking the landing tick would mean
+    // simulating forward, which would be a second implementation of the world.
     let mut trial = self.field.clone();
     if !rules::apply_build(&mut trial, build) {
       self.builds_refused += 1;
@@ -207,7 +204,7 @@ impl Server {
     vec![Op::Ack { seq }, Op::Built { tick: at, build }]
   }
 
-  /// Advances by whole ticks, and says what to send.
+  /// Advances by whole ticks and says what to send.
   pub fn advance(&mut self, dt_ms: u64, controls: &Controls) -> Tickout {
     let mut out = Tickout::default();
     let steps = (dt_ms / SIM_STEP_MS).min(16);
@@ -250,7 +247,7 @@ impl Server {
 
     // What the same tick would have cost if the field were streamed instead.
     // Counted every send interval rather than every tick, because a streaming
-    // server would not send more often than it sends.
+    // server only sends once per interval.
     let interval_ticks = (controls.sync_interval_ms() / SIM_STEP_MS).max(1);
     if self.field.tick % interval_ticks == 0 {
       self.bytes_if_streamed += crate::sim::protocol::field_cost(&self.field) as u64 * self.seats.len() as u64;
@@ -260,8 +257,8 @@ impl Server {
   /// Lays out a fresh field for the next run, keeping the clock.
   ///
   /// Sent as a `Snapshot` rather than as a new op, because that is already the
-  /// message meaning "stop computing and adopt this", and every client handles
-  /// it. The tick keeps running: it is the session's clock, and resetting it
+  /// message meaning "stop computing and adopt this" and every client handles
+  /// it. The tick keeps running: it is the session's clock and resetting it
   /// would invalidate every tick-keyed thing in flight.
   fn restart(&mut self, out: &mut Tickout) {
     let tick = self.field.tick;
@@ -292,9 +289,9 @@ impl Server {
     match self.phase {
       // Announced the moment the tick is known, which is a whole prep phase
       // ahead rather than one tick ahead. A client must have the announcement
-      // *before* the tick it names, because laying a wave out late is a state
-      // no other machine will ever hold; anything less than seconds of lead is
-      // a design that only works on a fast link.
+      // *before* the tick it names, because laying a wave out late produces a
+      // state no other machine has. Less than a few seconds of lead only works
+      // on a fast link.
       Phase::Prep { until_tick } if self.pending_wave.is_none() => {
         let wave = self.field.wave + 1;
         self.pending_wave = Some((wave, until_tick));

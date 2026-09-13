@@ -1,16 +1,14 @@
 //! How a racer moves, as one function that everything runs.
 //!
-//! Everything means more than usual here. The player's own machine runs it to
-//! drive. Every other client runs it to draw a ghost. The server runs it to
-//! decide whether a submitted time is real. Those are three different reasons
-//! to want the same answer, and the third is the interesting one: the server is
-//! not simulating a race, it is **checking a claim by reconstructing it**.
+//! The player's own machine runs it to drive, every other client runs it to
+//! draw a ghost and the server runs it to decide whether a submitted time is
+//! real. The server is **checking a claim by reconstructing it** rather than
+//! simulating a race.
 //!
-//! Which makes this file part of the contract in the same sense the message
-//! shapes are, and it is hashed into the wire version by `build.rs` for exactly
-//! that reason. A ghost recorded before a handling change is a ghost that
-//! drives differently, and a version that moves when the handling does is what
-//! turns that from a mystery into a refusal.
+//! This file is therefore part of the protocol just as the message shapes are,
+//! so `build.rs` hashes it into the wire version. A ghost recorded before a
+//! handling change would drive differently. Because the version changes with
+//! the handling, such a ghost is refused instead of silently drifting.
 
 use plaza_client_utils::fixed::{Fx, P};
 
@@ -18,16 +16,16 @@ use crate::sim::types::*;
 
 /// Advances one racer by one tick under one input.
 ///
-/// Deliberately has no access to a clock, a random number, or any other racer.
+/// Deliberately has no access to a clock, a random number or any other racer.
 /// A function that could reach any of those would make a replay depend on
-/// something the log does not carry, and the log is all a ghost has.
+/// something the log does not carry, since a ghost is only its log.
 /// How fast a racer turns this tick.
 ///
 /// One function so the grip power-up cannot end up applying its turn at a
 /// different point in the tick from the ordinary one, which is what the first
 /// version did: it stepped with no steering and turned afterwards, so a
 /// gripping racer moved on last tick's heading and an ordinary one on this
-/// tick's. Half a degree, every tick, in a game about cornering.
+/// tick's. That was half a degree every tick.
 fn turn_rate(charge: bool) -> u16 {
   if charge { TURN_RATE + CHARGE_TURN_BONUS } else { TURN_RATE }
 }
@@ -51,17 +49,17 @@ fn step_at_rate(racer: &mut Racer, input: Input, track: &Track, rate: u16, top: 
     top
   };
 
-  // Closing on the target at a fixed rate, up or down. Not a proportional
-  // approach: multiplying by a fraction every tick is a place where one
-  // rounding choice compounds over a whole lap.
+  // Closes on the target at a fixed rate, up or down, rather than
+  // proportionally: multiplying by a fraction every tick lets one rounding
+  // choice compound over a whole lap.
   if racer.speed < target {
     racer.speed = (racer.speed + ACCEL).min(target);
   } else {
     racer.speed = (racer.speed - BRAKE).max(target);
   }
 
-  // Charging is the trade the game is about: slower, but it turns harder and it
-  // buys a boost. Releasing spends whatever was wound up.
+  // Charging is the game's main trade: slower, but it turns harder and builds
+  // a boost. Releasing spends whatever was wound up.
   if input.charge {
     racer.charge = (racer.charge + 1).min(CHARGE_MAX);
   } else if racer.charge >= CHARGE_MIN {
@@ -113,9 +111,9 @@ fn step_at_rate(racer: &mut Racer, input: Input, track: &Track, rate: u16, top: 
 
 /// Advances the ring counter if the racer is inside the one it is looking for.
 ///
-/// **In order, and one at a time.** Being inside the ring after next does not
-/// count, which is the whole of the checkpoint rule: a lap that skipped a
-/// corner is not a lap, and the ordering is the part a replay can verify.
+/// Rings count in order and one at a time. Being inside the ring after next
+/// does not count. The order is all the checkpoint rule checks, so a lap that
+/// skipped a corner does not count. A replay can verify the order.
 fn take_ring(racer: &mut Racer, track: &Track) {
   let target = track.ring(racer.next_ring);
   if racer.pos.dist_sq(target) > RING_RADIUS.mul(RING_RADIUS) {
@@ -132,13 +130,13 @@ pub fn finished(racer: &Racer) -> bool {
   racer.lap >= LAPS
 }
 
-/// Everything on the circuit at once: the racers, and the pickups they are
+/// Everything on the circuit at once: the racers and the pickups they are
 /// fighting over.
 ///
 /// A trial is this with one racer in it. There is no separate single-player
 /// path, because a ghost recorded in a trial has to replay under exactly the
-/// rules a trial ran, and "exactly" stops being checkable the moment there are
-/// two implementations of the step.
+/// rules a trial ran and that cannot be checked once there are two
+/// implementations of the step.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct World {
   pub tick: u32,
@@ -207,17 +205,17 @@ impl World {
 
 /// How good a CPU racer is, by seat.
 ///
-/// Fixed per seat rather than drawn from anywhere, so a race is the same race
-/// every time it is replayed. The field is deliberately uneven: one that drives
-/// perfectly is a wall, and one that drives badly is scenery, and a race wants
-/// both plus something in between.
+/// Fixed per seat rather than random, so a race is the same every time it is
+/// replayed. The field is deliberately uneven: a perfect driver cannot be
+/// passed and a bad one is no competition, so a race has both plus one in
+/// between.
 #[derive(Clone, Copy, Debug)]
 pub struct Skill {
   /// How far off line it tolerates before correcting. Wide is sloppy.
   pub deadband: u16,
   /// How often it stops paying attention, out of a hundred.
   pub lapse_pct: u32,
-  /// How long each lapse lasts, and how long it charges for.
+  /// How long each lapse lasts and how long it charges for.
   pub charge_ticks: u32,
 }
 
@@ -249,17 +247,16 @@ pub fn skill(seat: usize) -> Skill {
 
 /// Deterministic noise from a tick and a seat.
 ///
-/// **A hash, not a generator.** There is no random state anywhere in this
-/// example, because a ghost is a bet that a run can be reproduced from its
-/// inputs, and a generator is a piece of hidden state the log does not carry. A
-/// pure function of the tick is reproducible from nothing at all.
+/// A hash rather than a random generator. There is no random state anywhere in
+/// this example, because a ghost depends on reproducing a run from its inputs
+/// and a generator is hidden state the log does not carry. A hash of the tick
+/// needs nothing else to reproduce.
 ///
-/// It is sampled in *chunks* of ticks rather than per tick, which is worth a
-/// word: a bot whose mind changed every tick would drive like a bang-bang
-/// controller, and in race mode its inputs are not recorded so it would cost
-/// nothing, but in a trial the player is copying the same shape of driving. A
-/// mistake that lasts a moment reads as a mistake; one that lasts a tick reads
-/// as a twitch.
+/// It is sampled in *chunks* of ticks rather than per tick. A bot whose mind
+/// changed every tick would drive like a bang-bang controller. In race mode its
+/// inputs are not recorded, so that would cost nothing, but in a trial the
+/// player is copying the same shape of driving. A mistake that lasts one tick
+/// looks like a twitch rather than a mistake.
 fn noise(chunk: u32, seat: usize) -> u32 {
   let mut x = (chunk as u64) << 8 | seat as u64;
   x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -272,12 +269,11 @@ const CHUNK: u32 = 14;
 
 /// What a CPU racer holds this tick.
 ///
-/// **Part of the rules, and hashed into the wire version with them.** In race
-/// mode the opponents are a pure function of the world, which is what lets one
-/// player's input log reproduce a whole four-way race: the other three are not
-/// recorded because they do not need to be. Change how a bot drives and every
-/// stored race log becomes a recording of a different race, which is exactly
-/// what the version stamp is for.
+/// **Part of the rules and hashed into the wire version with them.** In race
+/// mode the opponents are a pure function of the world, so one player's input
+/// log reproduces a whole four-way race without recording the other three.
+/// Changing how a bot drives would turn every stored race log into a recording
+/// of a different race and the version stamp is what catches that.
 pub fn bot_input(racer: &Racer, track: &Track, tick: u32, seat: usize) -> Input {
   let skill = skill(seat);
   let chunk = tick / CHUNK;
@@ -295,20 +291,20 @@ pub fn bot_input(racer: &Racer, track: &Track, tick: u32, seat: usize) -> Input 
     -1
   };
 
-  // A lapse: it holds the wrong thing for a moment. Sometimes that is standing
-  // the wheel up through a corner, sometimes it is turning the wrong way, which
-  // is the difference between drifting wide and making a real mess of it.
+  // A lapse holds the wrong input for a moment: either a straight wheel
+  // through a corner (which drifts wide) or a turn the wrong way (which is
+  // worse).
   if roll % 100 < skill.lapse_pct {
     steer = if roll % 3 == 0 { -steer } else { 0 };
   }
 
-  // Charging on its own cadence, so a field does not move as one block, and
-  // the sloppier ones waste it in the middle of corners.
+  // Each bot charges on its own cadence so a field does not move as one block
+  // and the sloppier ones waste it in the middle of corners.
   let charge = (tick % (CHUNK * 12)) < skill.charge_ticks;
   Input::new(steer, charge)
 }
 
-/// The inputs for a whole field: the player's, and the bots' derived from the
+/// The inputs for a whole field: the player's and the bots' derived from the
 /// world they are in.
 pub fn field_inputs(world: &World, track: &Track, mine: Input, seat: usize) -> Vec<Input> {
   world
@@ -327,12 +323,11 @@ pub fn field_inputs(world: &World, track: &Track, mine: Input, seat: usize) -> V
 
 /// Advances the whole circuit by one tick, under one input per racer.
 ///
-/// The ordering rules are the interesting part, and they are the same lesson
-/// `seed_defense` wrote down: a rule that depends on the order a collection
-/// happens to be walked in is a rule two machines are entitled to disagree
-/// about. So a pickup goes to the racer with the lowest index of those touching
-/// it, and the shoves are all computed from the state *before* any of them are
-/// applied, rather than resolved pair by pair as they are found.
+/// The ordering rules follow `seed_defense`: a rule that depends on the order a
+/// collection happens to be walked in can give different results on two
+/// machines. So a pickup goes to the racer with the lowest index of those
+/// touching it and the shoves are all computed from the state *before* any of
+/// them are applied, rather than resolved pair by pair as they are found.
 pub fn step_world(world: &mut World, inputs: &[Input], track: &Track) {
   world.tick += 1;
   let tick = world.tick;
@@ -356,7 +351,7 @@ pub fn step_world(world: &mut World, inputs: &[Input], track: &Track) {
 
 /// One racer, one tick, with the grip timer folded in.
 fn step_with(racer: &mut Racer, input: Input, track: &Track, tick: u32) {
-  // The two timed handling power-ups are opposites, and both are expressed as a
+  // The two timed handling power-ups are opposites. Both are expressed as a
   // turn rate and a top speed handed to the same step rather than as branches
   // inside it. Grip is the charge trade inverted: the sharp turn without the
   // speed cost. Slick is the trade taken further the other way: pace bought
@@ -373,9 +368,10 @@ fn step_with(racer: &mut Racer, input: Input, track: &Track, tick: u32) {
 
 /// Hands out any pickup a racer is standing on.
 ///
-/// Lowest index wins a contested one. Not "whoever was closest", which would
-/// need a distance comparison that two builds could round differently, and not
-/// "whoever the loop reached first", which is the same thing said carelessly.
+/// Lowest index wins a contested one. "Whoever was closest" would need a
+/// distance comparison that two builds could round differently. "Whoever the
+/// loop reached first" gives the same answer here but describes the loop
+/// rather than the game.
 fn take_pickups(world: &mut World, tick: u32) {
   let radius_sq = PICKUP_RADIUS.mul(PICKUP_RADIUS);
   for index in 0..world.pickups.len() {
@@ -404,19 +400,17 @@ fn take_pickups(world: &mut World, tick: u32) {
 
 /// Racers shove each other apart.
 ///
-/// **Every impulse is computed from the state before any of them lands**, and
+/// **Every impulse is computed from the state before any of them lands** and
 /// then they are all applied. Resolving each pair as it is found makes the
-/// result depend on the order the pairs come up in, which is a rule about the
-/// container rather than about the game, and it is the exact shape of bug the
-/// determinism examples in this repository keep finding.
+/// result depend on the order the pairs come up in. That is a rule about the
+/// container rather than about the game and the determinism examples in this
+/// repository keep finding bugs of that kind.
 fn shove(world: &mut World) {
   let radius_sq = BUMP_RADIUS.mul(BUMP_RADIUS);
-  // **A finished racer is not on the track any more.** It has stopped moving,
-  // so leaving it in the collision set turns the finish line into a wall of
-  // parked cars, and a late finisher's time would then depend on how many
-  // people beat them to it. That is a real unfairness rather than an untidy
-  // picture: the thing a race is measuring would be partly decided by the
-  // result of the race.
+  // **A finished racer is taken out of the collision set.** It has stopped
+  // moving, so leaving it in would turn the finish line into a wall of parked
+  // cars and a late finisher's time would depend on how many people beat them
+  // to it.
   let racing: Vec<bool> = world.racers.iter().map(|r| r.finished_tick.is_none()).collect();
   let before: Vec<P> = world.racers.iter().map(|r| r.pos).collect();
   let mut pushes: Vec<P> = vec![P::default(); world.racers.len()];
@@ -452,9 +446,9 @@ fn shove(world: &mut World) {
   let tick = world.tick;
   for (i, racer) in world.racers.iter_mut().enumerate() {
     if !hit[i] || racer.shielded(tick) {
-      // A shield takes nothing. It still *gives*, because the impulses were
-      // all computed above from the state before any of them landed, so
-      // everyone it touched has already been pushed.
+      // A shielded racer takes no push. It still *gives* one, because the
+      // impulses were all computed above from the state before any of them
+      // landed, so everyone it touched has already been pushed.
       continue;
     }
     racer.pos = P::new(racer.pos.x + pushes[i].x, racer.pos.y + pushes[i].y);
@@ -520,7 +514,7 @@ mod tests {
   #[test]
   fn a_tap_of_charge_is_not_worth_a_boost() {
     // Otherwise the optimal input is to mash the button every other tick, which
-    // is not a game, it is a macro.
+    // turns the game into a macro.
     let track = Track::circuit();
     let mut racer = Racer::at_start(&track);
     drive(&mut racer, &track, Input::default(), 40);

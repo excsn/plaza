@@ -129,7 +129,8 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
 
   // Everything this transport does not have to write itself: probe schedule and
   // correlation, impairment both ways, and the deadlines either of them wants.
-  // Built here in a crate that cannot see `pub(crate)`, which is the point.
+  // Built here, in a crate that cannot see `pub(crate)`, to show none of it
+  // needs private access.
   let Some(mut driver) = LinkDriver::new(&manager, conn_id, codec) else {
     return;
   };

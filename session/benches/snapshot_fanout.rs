@@ -43,7 +43,7 @@ type Session = Arc<TransportSession<Snapshot, Seat, JsonCodec>>;
 fn session_with(recipients: usize, runtime: &tokio::runtime::Runtime) -> (Session, Vec<Seat>, Vec<impl Sized>) {
   // Inside the runtime, not merely beside it: the constructor spawns the
   // deserialize bridge, so building one outside a runtime context panics from
-  // tokio. Exactly what §1 of the API reference now warns about.
+  // tokio. §1 of the API reference warns about this.
   let session: Session = runtime.block_on(async { TransportSession::new("bench", JsonCodec, 256) });
   let manager = session.manager().clone();
 

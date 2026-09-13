@@ -1,7 +1,7 @@
 //! Golden wire vectors, so the Dart mirror can be checked against this crate
 //! rather than against someone's reading of it.
 //!
-//! Each fixture is written twice: `.msgpack` is what a client actually receives,
+//! Each fixture is written twice: `.msgpack` is what a client actually receives
 //! and `.json` is the same value in a form a human can read and a Dart test can
 //! compare against without trusting its own MessagePack decoder to bootstrap
 //! itself.
@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 
 /// One of each variant shape serde produces, because the shapes are what a
 /// hand-written client gets wrong: a unit variant is a bare string and every
-/// other is a one-entry map, and a client that only checks for a property drops
+/// other is a one-entry map, so a client that only checks for a property drops
 /// the first kind entirely.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 enum FixtureOp {
@@ -92,9 +92,8 @@ fn emit<T: Serialize>(name: &str, value: &T) {
 /// Digest values, so the Dart port is checked against this arithmetic rather
 /// than against a reading of it.
 ///
-/// A digest that disagrees is the worst failure available: both sides would
-/// blame the world for a bug that was only ever in the hashing, and the
-/// recovery machinery would fire for ever.
+/// If the ports disagreed on the digest, both sides would blame the world for
+/// a bug in the hashing and the recovery machinery would fire for ever.
 #[test]
 fn set_digest_values_are_pinned() {
   use plaza_client_utils::SetDigest;

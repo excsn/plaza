@@ -1,19 +1,18 @@
 //! A [`WireCodec`] that writes serde types into a bit stream.
 //!
-//! The other half of [`crate::bits`]. Where that module is for a layout you
-//! write by hand, this one takes any `Serialize` type and packs it without you
-//! writing anything: a `bool` costs one bit instead of eight, every integer is a
-//! nibble varint, an `Option` is one bit, and an enum tag is a varint rather
-//! than a string. Nothing is self-describing, so field names never reach the
-//! wire at all.
+//! [`crate::bits`] is for a layout you write by hand. This takes any
+//! `Serialize` type and packs it with nothing written by hand: a `bool` costs
+//! one bit instead of eight, every integer is a nibble varint, an `Option` is
+//! one bit and an enum tag is a varint rather than a string. Nothing is
+//! self-describing, so field names never reach the wire.
 //!
-//! **What it cannot do**, and the reason [`crate::bits`] exists beside it:
-//! serde's data model has no place to put a bound. A field is an `f32`, not "an
-//! f32 within ±256 that renders at 2mm", so this codec has to spend the full 32
-//! bits on it. Quantising a position to 18 bits is the single largest saving in
-//! a state-sync packet and it is exactly the one a derive cannot reach. Pack the
+//! **What it cannot do**, which is why [`crate::bits`] exists beside it:
+//! serde's data model has no way to express a bound. A field is an `f32` rather
+//! than "an f32 within ±256 that renders at 2mm", so this codec has to spend
+//! the full 32 bits on it. Quantising a position to 18 bits is the single
+//! largest saving in a state-sync packet and a derive cannot do it. Pack the
 //! hot array by hand with [`crate::bits`], keep this or MessagePack for the
-//! envelope around it, and read the numbers in `wire/tests/packing.rs` before
+//! envelope around it and read the numbers in `wire/tests/packing.rs` before
 //! deciding either is worth it.
 //!
 //! Being non-self-describing has the usual consequence: reader and writer must
@@ -27,7 +26,7 @@ use std::fmt::{self, Display};
 use crate::bits::{BitError, BitReader, BitWriter};
 use crate::WireCodec;
 
-/// Bit-packed wire format: compact, and readable only by a peer that knows the
+/// Bit-packed wire format: compact and readable only by a peer that knows the
 /// exact types.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BitCodec;

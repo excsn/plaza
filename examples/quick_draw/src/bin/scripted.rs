@@ -1,6 +1,7 @@
 //! The duel, scripted: no window, no socket. Wren faces the bot for a few
-//! contests, a false start and a clean draw both get ruled, and the mill's
-//! numbers are printed at the end, cheat engaged, so the floored count moves.
+//! contests and both a false start and a clean draw get ruled. The mill runs
+//! with the cheat engaged so the floored count moves. Its numbers are printed
+//! at the end.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -48,8 +49,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let wren = Agent::new_human(1);
   let (_conn, inbox) = session.connect(wren.clone()).await?;
 
-  // Wren's hand: fires ~170ms after each signal, claiming the moment the
-  // signal's own stamp names. The second contest jumps the gun on purpose.
+  // Wren fires ~170ms after each signal, claiming the moment the signal's own
+  // stamp names. The second contest jumps the gun on purpose.
   let hand_session = session.clone();
   let hand = tokio::spawn(async move {
     let mut contests_seen = 0u32;

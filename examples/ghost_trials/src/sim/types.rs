@@ -1,16 +1,16 @@
-//! The track, the racer, and the numbers a replay depends on.
+//! The track, the racer and the numbers a replay depends on.
 //!
 //! Every value here is integer or fixed point, for the reason `seed_defense`
-//! spells out at length: a wire that carries causes rather than state has to
-//! reproduce arithmetic exactly. What is different here is *who* has to agree.
-//! There, two machines had to agree with each other now. Here a machine has to
-//! agree with **a recording made somewhere else, at some other time**, and the
-//! recording cannot be asked to compromise.
+//! explains: a wire that carries inputs rather than state has to reproduce
+//! arithmetic exactly. In `seed_defense` two machines have to agree with each
+//! other at the same time. Here a machine has to agree with **a recording made
+//! somewhere else at some other time**, which is fixed and cannot be adjusted
+//! to match.
 //!
 //! That is why the angles go through a table of integers rather than through
 //! `sin`. A library trigonometric function is not specified to the last bit
-//! across platforms or versions, and a ghost is a bet that today's arithmetic
-//! matches the arithmetic that recorded it.
+//! across platforms or versions. A ghost only replays correctly if today's
+//! arithmetic matches the arithmetic that recorded it.
 
 use plaza_client_utils::fixed::{Fx, P};
 use serde::{Deserialize, Serialize};
@@ -27,15 +27,15 @@ pub const ARENA_H: i32 = 40;
 
 /// A full turn, in the units the racer's heading is kept in.
 ///
-/// A power of two, so wrapping is a mask rather than a modulo, and so the
+/// A power of two, so wrapping is a mask rather than a modulo and the
 /// quarter-table lookup below is a shift.
 pub const BRADS: u16 = 1024;
 
 /// One quarter turn of `sin`, scaled by [`ONE`], as literal integers.
 ///
-/// Generated once and pasted in, deliberately. Computing it at startup would
-/// put a floating-point `sin` back on the path that every replay depends on,
-/// which is the one thing this module exists to keep off it.
+/// Generated once and pasted in. Computing it at startup would put a
+/// floating-point `sin` back on the path that every replay depends on, which
+/// is what this module exists to avoid.
 const SIN_Q: [i32; 257] = [
   0, 2, 3, 5, 6, 8, 9, 11,
   13, 14, 16, 17, 19, 20, 22, 24,
@@ -91,8 +91,8 @@ pub fn cos(angle: u16) -> Fx {
 
 /// What a player is holding this tick.
 ///
-/// One byte, and the whole of what a ghost is made of. Everything else on
-/// screen is derived from a sequence of these.
+/// One byte. A ghost is a sequence of these and everything else on screen is
+/// derived from them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(into = "u8", from = "u8")]
 pub struct Input {
@@ -133,7 +133,7 @@ pub struct Racer {
   pub pos: P,
   pub heading: u16,
   pub speed: Fx,
-  /// How much boost has been wound up, and how much is being spent.
+  /// How much boost has been wound up and how much is being spent.
   pub charge: u16,
   pub boost: u16,
   /// The ring this racer must pass through next.
@@ -174,11 +174,11 @@ impl Racer {
   pub fn on_grid(track: &Track, slot: usize, field: usize) -> Self {
     let mut racer = Self::at_start(track);
     // A square-ish block, **centred on the line in both directions**. A field of
-    // thirty-two in one row is wider than the small circuit's arena, and thirty
+    // thirty-two in one row is wider than the small circuit's arena and thirty
     // two rows deep runs off the back of it, so the grid grows in both and sits
     // around the start rather than behind it. Some cars therefore begin a
-    // fraction ahead, which is a real and deliberate unfairness in a race and
-    // means nothing in a trial, where the field is one.
+    // fraction ahead. That is an accepted unfairness in a race and makes no
+    // difference in a trial, where the field is one.
     let field = field.max(1);
     let per_row = grid_row(field);
     let rows = field.div_ceil(per_row);
@@ -221,7 +221,7 @@ impl Racer {
 ///
 /// A search over the table rather than an `atan2`, for the same reason the
 /// table exists. It is called once, when a racer is placed, so the cost is
-/// nothing and the determinism is total.
+/// negligible and the result is exactly reproducible.
 pub fn angle_between(a: P, b: P) -> u16 {
   let dx = b.x - a.x;
   let dy = b.y - a.y;
@@ -252,7 +252,7 @@ pub const TURN_RATE: u16 = 11;
 /// into a corner rather than down a straight.
 pub const CHARGE_TURN_BONUS: u16 = 7;
 
-/// Ticks of charge for a full boost, and how long a full boost lasts.
+/// Ticks of charge for a full boost and how long a full boost lasts.
 pub const CHARGE_MAX: u16 = 90;
 pub const CHARGE_MIN: u16 = 12;
 pub const BOOST_PER_CHARGE_NUM: u16 = 2;
@@ -264,19 +264,18 @@ pub const RING_RADIUS: Fx = Fx::ratio(23, 10);
 /// The laps a trial is.
 pub const LAPS: u16 = 2;
 
-/// Which game is being played, and therefore which authority model.
+/// Which game is being played and therefore which authority model.
 ///
-/// The two modes are the same track, the same rules and the same op log, run
-/// under opposite arrangements, which is the comparison this example exists to
-/// draw. See the README.
+/// The two modes share the track, the rules and the op log under different
+/// arrangements. See the README.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(into = "u8", try_from = "u8")]
 pub enum Mode {
   /// Alone against the clock and against recordings. Nothing to arbitrate, so
-  /// the client owns the feel completely and the server checks afterwards.
+  /// the client runs all of the driving and the server checks afterwards.
   Trial,
-  /// Everybody at once. Now there is contention, so inputs are addressed to a
-  /// tick and executed on it, and everyone pays the playout delay for it.
+  /// Everybody at once. There is contention, so inputs are addressed to a tick
+  /// and executed on it. Everyone pays the playout delay for that.
   Race,
 }
 
@@ -308,11 +307,11 @@ impl TryFrom<u8> for Mode {
 
 /// What a pickup gives you.
 ///
-/// Two, and each changes a *rule* rather than a number, which is the test
-/// `pellet_maze` settled on: a coefficient is a tuning value, a rule change is
-/// a decision. Turbo hands you the boost you would otherwise have had to slow
-/// down to earn. Grip gives you the charge turn without the charge speed, which
-/// inverts the trade the whole game is built on for a few seconds.
+/// Two, each changing a *rule* rather than a number, which is the test
+/// `pellet_maze` settled on for telling a pickup from a tuning value. Turbo
+/// hands you the boost you would otherwise have had to slow down to earn. Grip
+/// gives you the charge turn without the charge speed, which inverts the
+/// game's main trade for a few seconds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(into = "u8", try_from = "u8")]
 pub enum Power {
@@ -373,7 +372,7 @@ impl TryFrom<u8> for Power {
   }
 }
 
-/// What a turbo hands over, and how long the timed ones last.
+/// What a turbo hands over and how long the timed ones last.
 pub const TURBO_BOOST: u16 = 55;
 pub const GRIP_TICKS: u16 = 180;
 pub const SHIELD_TICKS: u16 = 220;
@@ -387,10 +386,9 @@ pub const PICKUP_RADIUS: Fx = Fx::ratio(18, 10);
 
 /// One pickup on the circuit.
 ///
-/// Its position is fixed and its kind is fixed, so a pickup is not a random
-/// event: it is part of the track. That is what lets a run be reproduced from
-/// its inputs alone, and it is why there is no random number generator in this
-/// example at all.
+/// Its position and kind are fixed, so a pickup is part of the track rather
+/// than a random event. That lets a run be reproduced from its inputs alone and
+/// is why there is no random number generator in this example at all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Pickup {
   pub at: P,
@@ -407,7 +405,7 @@ impl Pickup {
 
 /// How close two racers have to be to shove each other.
 pub const BUMP_RADIUS: Fx = Fx::ratio(11, 10);
-/// What a shove costs the pair of them, and how hard it pushes.
+/// What a shove costs the pair of them and how hard it pushes.
 pub const BUMP_SPEED_LOSS: Fx = Fx::ratio(6, 100);
 pub const BUMP_PUSH: Fx = Fx::ratio(35, 100);
 
@@ -417,9 +415,9 @@ pub const MAX_FIELD: usize = 32;
 /// How many start side by side before the grid steps back a row.
 ///
 /// The smallest square that holds the field, so a grid grows in both directions
-/// instead of running off the end of the arena. Integer, and computed by
-/// counting rather than by a square root: this decides starting positions, and
-/// starting positions are part of what a log reproduces.
+/// instead of running off the end of the arena. Integer and computed by
+/// counting rather than by a square root, because this decides starting
+/// positions and starting positions are part of what a log reproduces.
 pub fn grid_row(field: usize) -> usize {
   let mut k = 1;
   while k * k < field.max(1) {
@@ -429,8 +427,8 @@ pub fn grid_row(field: usize) -> usize {
 }
 
 /// Which circuit. Three fixed layouts rather than a generator, because a lap
-/// time only means anything against other laps of the same track, and a track
-/// that varied would make every recorded run incomparable with every other.
+/// time is only comparable with other laps of the same track and a track that
+/// varied would make every recorded run incomparable with every other.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(into = "u8", try_from = "u8")]
 pub enum TrackSize {
@@ -503,8 +501,7 @@ impl Track {
   ///
   /// A track is **never sent**. Both ends build it from the size, which is one
   /// byte in a log, for the same reason a wave in `seed_defense` is two
-  /// integers: it is a constant, and a constant is a thing both ends already
-  /// have rather than a thing one of them has to describe.
+  /// integers: it is a constant that both ends already have.
   pub fn of(size: TrackSize) -> Self {
     let (rings, pickups): (&[(i32, i32)], &[((i32, i32), Power)]) = match size {
       TrackSize::Small => (
@@ -607,10 +604,10 @@ pub struct Controls {
   pub jitter_ms: u64,
   pub loss_pct: f32,
   /// What a lost packet costs, which is a property of the link rather than of
-  /// this simulation. The transport underneath is a WebSocket, so the truthful
-  /// answer is a retransmission: the frame is late and nothing is missing. The
-  /// netcode above is written for the other answer, where the packet is gone,
-  /// which is the one worth demonstrating here.
+  /// this simulation. The transport underneath is a WebSocket, so a real loss
+  /// is retransmitted: the frame is late and nothing is missing. The netcode
+  /// above is written for a link where the packet is gone, which is the case
+  /// this demonstrates.
   pub datagram_link: bool,
   /// Draw the ghosts at all.
   pub show_ghosts: bool,
@@ -642,7 +639,7 @@ impl Default for Controls {
   }
 }
 
-/// Milliseconds, as `m:ss.mmm`, for a time that is the whole point of the game.
+/// Milliseconds, as `m:ss.mmm`, for the lap times the game is scored on.
 pub fn format_ms(ms: u64) -> String {
   format!("{}:{:02}.{:03}", ms / 60_000, (ms / 1000) % 60, ms % 1000)
 }

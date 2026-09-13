@@ -1,25 +1,25 @@
-//! What crosses a real wire, once there is one.
+//! What crosses a real wire.
 //!
 //! Everything else in `sim` predates networking: the server took the local
 //! player's input as a *function argument* and applied it to authoritative state
 //! at 60 Hz with no latency and no loss. That made every measurement in this
-//! example about enemies and rivals, never about your own movement, which is the
-//! part a player feels most.
+//! example about enemies and rivals and none about your own movement, which is
+//! the part a player feels most.
 //!
 //! One flat enum for both directions, because a `plaza` [`Session`] is generic
 //! over a single `Op` type and carries it either way. Which variants travel
 //! which way is a convention, documented below and enforced by the server
 //! ignoring anything a client had no business sending.
 //!
-//! Two asymmetries are deliberate and worth naming.
+//! Two asymmetries are deliberate.
 //!
-//! **A client sends an intent, never a position.** [`Op::Input`] is a direction
-//! and a dash request; the server decides where that puts you. A client that
+//! A client sends an intent, never a position: [`Op::Input`] is a direction and
+//! a dash request and the server decides where that puts you. A client that
 //! could send a position could put itself anywhere.
 //!
-//! **A client never says who it is.** Nothing sent upstream carries a player id:
-//! `plaza_session` attaches the `Agent` from the connection, because identity is
-//! the server's fact and not the client's claim.
+//! A client never says who it is. Nothing sent upstream carries a player id:
+//! `plaza_session` attaches the `Agent` from the connection, so the server
+//! decides identity.
 //!
 //! [`Session`]: https://docs.rs/plaza
 
@@ -31,14 +31,14 @@ use crate::sim::types::{Packet, PlayerId, SyncMode};
 /// define it (see `build.rs`), so it cannot drift out of date the way a manual
 /// constant does.
 ///
-/// The point is a browser client that is a build product: it does not rebuild
-/// when the server does, so a page from before a wire change is the normal state
-/// of affairs rather than an exotic one. Without a version the failure is silent
-/// in the worst way, because the page loads, the game appears to run, and only
-/// the messages whose shape changed are rejected, which reads as a netcode bug
-/// and is a deployment one. With it the client is told to reload.
+/// This matters because the browser client is a build product: it does not
+/// rebuild when the server does, so a page from before a wire change is the
+/// normal state of affairs rather than an exotic one. Without a version the
+/// failure is silent: the page loads and the game appears to run while only the
+/// messages whose shape changed are rejected, which looks like a netcode bug
+/// but is a deployment problem. With it the client is told to reload.
 ///
-/// Two limits worth knowing. It cannot rescue a client older than the handshake
+/// It has two limits. It cannot rescue a client older than the handshake
 /// itself, which is the bootstrapping floor every protocol version has. And it
 /// changes when those files change at all, including their comments, so it errs
 /// toward asking for a reload that was not strictly needed.
@@ -64,8 +64,8 @@ pub enum Op {
   /// otherwise have to guess.
   Welcome { player: PlayerId, policy: ServerPolicy },
   /// One send interval's worth of world, exactly the [`Packet`] the offline sim
-  /// already produced. Reusing it rather than inventing a wire type is the
-  /// point: the networked and offline paths run the same client code.
+  /// already produced. It is reused rather than given a new wire type so the
+  /// networked and offline paths run the same client code.
   Frame(Packet),
   /// The newest input this player's state accounts for.
   ///

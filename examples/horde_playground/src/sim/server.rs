@@ -1,11 +1,11 @@
 //! The authoritative server: owns every enemy, simulates them at full rate, runs
-//! the combat, and sends each player only what is relevant to them, far less
+//! the combat and sends each player only what is relevant to them, far less
 //! often than it simulates.
 //!
 //! Entities live in **recycled slots**. A dead enemy frees its slot and bumps its
 //! generation, so a handle naming the previous occupant is distinguishable from
-//! one naming the new. Whether that generation actually earns its keep is
-//! something this example measures rather than assumes.
+//! one naming the new. Whether that generation is actually needed is something
+//! this example measures.
 
 use plaza_client_utils::{FixedTimestep, Periodic, SlotAllocator, SlotKey};
 use std::collections::BTreeSet;
@@ -31,16 +31,16 @@ const NEAR_TIER: TierBoundary = TierBoundary::new(VIEW_RADIUS * 1.3, VIEW_RADIUS
 
 /// How many players are in one squad.
 ///
-/// Small on purpose, and the reason the second channel is affordable: a
-/// subscription set is a handful of long-lived entries where a grid query is a
-/// constantly changing many.
+/// Small, which keeps the second channel affordable: a subscription set is a
+/// handful of long-lived entries while a grid query returns a large set that
+/// changes constantly.
 pub const SQUAD_SIZE: usize = 4;
 
 /// Everyone divided into squads, which is what a raid roster is.
 ///
 /// Assigned rather than chosen, because this example has no interface for
 /// choosing and the measurement does not need one: what is being priced is the
-/// channel, not the social feature on top of it.
+/// channel rather than the social feature on top of it.
 fn squads_of(player_count: usize) -> Subscriptions<PlayerId> {
   let mut squads = Subscriptions::new(SQUAD_SIZE);
   for group in (0..player_count as PlayerId).collect::<Vec<_>>().chunks(SQUAD_SIZE) {
@@ -74,9 +74,8 @@ pub struct Server {
   pub players: Vec<Vec2>,
   /// Which slots are occupied, and by which generation. The pool hands out
   /// [`SlotKey`]s in the same key space the digest hashes and `DeltaBaseline`
-  /// diffs in, which is the point of taking it from here: an identity invented
-  /// locally would have to agree with those by convention instead of by
-  /// construction.
+  /// diffs in. Taking it from here makes them agree by construction; an identity
+  /// invented locally would have to agree with those by convention.
   pool: SlotAllocator,
   /// The enemies themselves, indexed by slot. Deliberately parallel to the pool
   /// rather than owned by it: `VisibilitySet` wants dense indices and so does
@@ -97,9 +96,9 @@ pub struct Server {
   /// Who each player has chosen to care about, wherever they are.
   ///
   /// The second channel, beside the spatial one. A squad is a handful of
-  /// entries with a lifetime of a whole session, where a grid query is a fresh
-  /// answer every round over a set that never stops changing, and neither
-  /// expresses the other.
+  /// entries with a lifetime of a whole session, while a grid query is a fresh
+  /// answer every round over a set that keeps changing. Neither can express the
+  /// other.
   squads: Subscriptions<PlayerId>,
   /// How many of each recipient's relevant players are there only because they
   /// were subscribed to, for the panel.
@@ -186,9 +185,9 @@ pub struct Server {
   /// to send next.
   ///
   /// The block is set-theoretic and knows nothing about enemies, which is why
-  /// it lives in `server_utils`: every game gets the same two bugs fixed for
-  /// free, a joiner sent a difference against a baseline it never held, and a
-  /// mirror that drifts and can never recover.
+  /// it lives in `server_utils`: every game gets the same two bugs fixed, a
+  /// joiner sent a difference against a baseline it never held and a mirror
+  /// that drifts and can never recover.
   baselines: Vec<DeltaBaseline>,
   /// Currency on the ground, and what each player has banked and bought.
   pub coins: Vec<Coin>,
@@ -483,7 +482,7 @@ impl Server {
   /// Touching an enemy costs one discrete hit, harder as the difficulty ramps,
   /// and then a brief invulnerability so a whole pile lands one hit per window
   /// rather than one per tick. Being reduced to zero refills health and grants a
-  /// longer shield in place: a continuous sandbox, not a game over. In place
+  /// longer shield in place: a continuous sandbox with no game over. In place
   /// rather than teleporting, so the player's position (and the enemy dynamics
   /// every proximity readout measures) stays continuous; the shield is what lets
   /// you walk out of the pile that got you.
@@ -812,7 +811,7 @@ impl Server {
   ///
   /// `digest` is the client's own view of its mirror. The block compares it to
   /// the state it believes the client reached and forces a clean rebuild when
-  /// they disagree, which is the only cure for a mirror that has drifted: a
+  /// they disagree, which is the only fix for a mirror that has drifted: a
   /// drifted entity stays in view, is only ever sampled, and a sample for an
   /// entity you do not hold is discarded.
   pub fn receive_ack(&mut self, player: usize, newest: u64, mask: u64, digest: u64) {
@@ -880,9 +879,9 @@ impl Server {
     }
   }
 
-  /// Offers an input naming a tick. The server owns time: the accepting
-  /// window, the reject-not-correct rule (the lag-switch defence) and the
-  /// clamp against reordering are all [`InputSchedule`]'s; see its docs.
+  /// Offers an input naming a tick. The server decides when it runs: the
+  /// accepting window, the reject-not-correct rule (the lag-switch defence) and
+  /// the clamp against reordering are all [`InputSchedule`]'s; see its docs.
   pub fn submit_input(&mut self, seat: usize, tick: u64, dir: Vec2, controls: &Controls) -> bool {
     if seat >= self.input_schedules.len() {
       return false;
@@ -933,7 +932,7 @@ impl Server {
 
   /// The tick the server is currently simulating. What a client aims at.
   ///
-  /// **Derived from the clock, never counted alongside it.** A separate counter
+  /// Derived from the clock rather than counted alongside it. A separate counter
   /// has to be kept in step with `clock_ms` through every path that touches
   /// either, and rebuilding the world is such a path: it preserves the clock so
   /// a client's packet-age estimate does not jump, and it reset the counter to
@@ -958,7 +957,7 @@ impl Server {
 
   /// Takes this tick's player frames, one per recipient, if the stream was due.
   ///
-  /// **Per recipient, not one broadcast.** Everyone used to get the same frame
+  /// Per recipient rather than one broadcast. Everyone used to get the same frame
   /// listing every player, on the reasoning that players are few. That holds at
   /// four and fails at scale: it is `O(players^2)`, and measured at 128 it was
   /// the largest single line in the whole bandwidth budget. Each recipient now
@@ -1054,8 +1053,8 @@ impl Server {
     near.dedup();
 
     // The union of the two channels, and the count the second one actually
-    // costs: `added` is the squadmates distance missed, and nothing at all for
-    // the ones standing beside you.
+    // costs: `added` is the squadmates the distance query missed. Squadmates
+    // already in range cost nothing extra.
     let empty = Subscriptions::new(SQUAD_SIZE);
     let chosen = if controls.squads { &self.squads } else { &empty };
     let audience = Audience::of(&near, chosen, &(c as PlayerId));
@@ -1185,8 +1184,8 @@ impl Server {
       self.recompute_relevant_players(p, controls);
 
       // The pool's own key, not one packed here: the digest, the delta baseline
-      // and the client's mirror all key on `SlotKey::encode`, and a second
-      // packing that agrees today is a disagreement waiting to happen.
+      // and the client's mirror all key on `SlotKey::encode`; a second packing
+      // that agrees today could drift out of agreement later.
       let cur_keys: BTreeSet<u64> = self
         .cur_vis[p]
         .iter()
@@ -1227,10 +1226,10 @@ impl Server {
 
       for key in &plan.left {
         let slot = SlotKey::decode(*key);
-        // Dead if the slot has moved on, gone out of view if it has not. Naming
-        // the generation from the *key* rather than from the slot is the whole
-        // point: a refilled slot must not have its new occupant retracted in
-        // place of the corpse the client is actually holding.
+        // Dead if the slot has moved on, gone out of view if it has not. The
+        // generation is named from the *key* rather than from the slot because a
+        // refilled slot must not have its new occupant retracted in place of the
+        // corpse the client is actually holding.
         //
         // Deaths need no separate out-of-band announcement now. Diffing in a key
         // space that carries the generation means a slot that died and was
@@ -1251,7 +1250,7 @@ impl Server {
         let target = (enemy.target != self.announced_target[idx as usize]).then_some(enemy.target);
         // A target change rides immediately whatever the rotation says:
         // `announced_target` is cleared globally after this round, so a
-        // deferred one would not just arrive late, it would never arrive.
+        // deferred one would never arrive at all.
         if target.is_none() && (idx as u64 + seq) % sample_phases != 0 {
           continue;
         }
@@ -1286,9 +1285,9 @@ impl Server {
         }
       }
 
-      // Coins near enough to race for: a coin you cannot see is one you cannot
-      // contest, so partial knowledge would cost more in confusion than the
-      // bytes save.
+      // Coins near enough to race for: a client cannot contest a coin it cannot
+      // see, so partial knowledge would cost more in confusion than the bytes
+      // save.
       if controls.coins {
         packet.coins = self.coins.iter().filter(|c| c.pos.dist(eye) <= VIEW_RADIUS * 1.2).copied().collect();
         // Wallets for the players this client needs, and only the ones that
@@ -1304,9 +1303,9 @@ impl Server {
       }
 
       // Shots that *started* near this player, and the ones that ended early.
-      // Events, not the live set: the flight itself is an equation both sides
-      // solve, so re-sending a position for it every packet pays for arithmetic
-      // twice and still cannot be evaluated between packets.
+      // Events rather than the live set: the flight is an equation both sides
+      // solve, so re-sending a position every packet duplicates the arithmetic
+      // and still cannot be evaluated between packets.
       packet.shots_fired = self
         .shots_fired_since_send
         .iter()
@@ -1379,8 +1378,8 @@ fn player_start(p: usize, count: usize, spread: bool) -> Vec2 {
   } else {
     // One knot in the middle, so the horde converges on a single place. A grid
     // rather than a row, and one whose spacing tightens once the default would
-    // spread it further than anybody can see: a cluster whose members are not
-    // in each other's view is not a cluster, and the setting stops meaning
+    // spread it further than anybody can see: if the members are out of each
+    // other's view the players are not clustered and the setting stops meaning
     // anything. A row of four at the usual spacing spans well inside a view, so
     // the small counts keep the exact layout they always had.
     const ROW: usize = 4;
@@ -1460,9 +1459,9 @@ mod tests {
 
   #[test]
   fn what_the_second_channel_costs_against_the_far_tier() {
-    // The trade this example did not have a way to state: a far tier is a
-    // broadcast wearing relevance's clothes, and it costs every player on
-    // every frame it is due. A subscription costs the handful you chose.
+    // The trade this example did not have a way to state: a far tier is still
+    // a broadcast and costs every player on every frame it is due. A
+    // subscription costs the handful you chose.
     println!("\n  one client's player frame, standing alone:\n");
     println!("{:>10} {:>14} {:>14} {:>12}", "players", "far tier B", "squad only B", "ratio");
     let mut costs = Vec::new();
@@ -1489,7 +1488,7 @@ mod tests {
     println!("  a second channel is not free and does not pay at every size.\n");
 
     // The claim, at both ends. A small arena is cheaper to broadcast; a large
-    // one is not, and the whole point is that only one of the two grows.
+    // one is not, because only the broadcast's cost grows with the arena.
     let (_, small_far, small_squad) = costs[0];
     let (_, big_far, big_squad) = costs[costs.len() - 1];
     assert!(
@@ -1527,7 +1526,7 @@ mod tests {
 
   #[test]
   fn the_four_player_layout_is_exactly_what_it_always_was() {
-    // The generalisation has to be a superset, not a replacement: every
+    // The generalisation has to be a superset rather than a replacement: every
     // measurement in the README was taken in the four-player arena, and a
     // layout change would quietly invalidate all of them.
     for spread in [true, false] {

@@ -4,8 +4,7 @@
 //! A client that renders in the past does not apply packets on arrival: it
 //! queues them and plays each one out when the render clock reaches the
 //! instant it describes. That queue is fed by a remote peer and drained by a
-//! local clock, and the two disagree in exactly three ways, each of which this
-//! type answers:
+//! local clock. The two disagree in three ways, each handled here:
 //!
 //! - **A packet arrives a little late.** Its instant has already been drawn,
 //!   so it can never play at the right moment. Counted as an *underrun*, the
@@ -15,21 +14,21 @@
 //! - **A packet arrives absurdly ahead of the render instant, or the queue
 //!   overflows.** The local clock stopped while the world kept going: a
 //!   backgrounded browser tab, a machine that slept, a stalled frame loop.
-//!   Playing out of that is hopeless, because the packets describe moments
+//!   Playing that out is not possible, because the packets describe moments
 //!   reachable only by simulating through all of them at once. This is a
-//!   **discontinuity**, and the rule for discontinuities is the same as for a
-//!   teleporting position: snap, never ease. The buffer drops everything but
+//!   **discontinuity** and it is handled like a teleporting position: snap
+//!   rather than ease. The buffer drops everything but
 //!   the newest packet and reports [`Admission::TimelineLost`]; the caller
 //!   restarts its timeline from what just arrived and drops whatever mirror
 //!   state the discarded packets would have built. See the crate docs on the
 //!   resume contract for why that drop is always safe.
 //! - **The transport already knows the timeline is lost** (it discarded a
 //!   resume backlog unread). [`timeline_lost`](PlayoutBuffer::timeline_lost)
-//!   is that verdict arriving from outside: one deliberate restart, instead of
-//!   the queue bound tripping over and over as the backlog plays in.
+//!   reports that from outside: one deliberate restart, instead of the queue
+//!   bound tripping repeatedly as the backlog plays in.
 //!
-//! Two counting rules were each learned from a misleading panel, and are the
-//! reason counting lives here rather than in each application:
+//! Two counting rules, each learned from a misleading panel, are why counting
+//! lives here rather than in each application:
 //!
 //! **An underrun is jitter-scale lateness only.** A packet late by more than
 //! the discontinuity threshold belongs to a lost timeline, which
@@ -88,7 +87,7 @@ pub struct PlayoutBuffer<T> {
 
 impl<T> PlayoutBuffer<T> {
   /// `max_queued` bounds the queue absolutely: size it several times past what
-  /// an honest buffer holds at the deepest render delay and fastest send rate,
+  /// a healthy buffer holds at the deepest render delay and fastest send rate,
   /// so reaching it means something is wrong rather than merely slow.
   /// `lost_ahead` is the discontinuity threshold: how far past the render
   /// instant an arrival may reach before the client is lost rather than
@@ -134,8 +133,8 @@ impl<T> PlayoutBuffer<T> {
     None
   }
 
-  /// The transport's verdict that the timeline is lost, arriving from outside:
-  /// a resume backlog was discarded unread, a reconnect happened. Drops
+  /// Tells the buffer from outside that the timeline is lost: a resume backlog
+  /// was discarded unread or a reconnect happened. Drops
   /// everything but the newest packet, which is what the caller's restarted
   /// clock anchors on.
   pub fn timeline_lost(&mut self) {
@@ -152,7 +151,7 @@ impl<T> PlayoutBuffer<T> {
   }
 
   /// Packets that arrived after the instant they describe had been drawn, by a
-  /// margin jitter produces. The number that says the render delay is too
+  /// margin jitter produces. A rising count means the render delay is too
   /// small for this link.
   pub fn underruns(&self) -> u64 {
     self.underruns

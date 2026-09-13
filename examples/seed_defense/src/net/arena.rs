@@ -1,10 +1,10 @@
-//! The authoritative arena, as `plaza` core wants it.
+//! The authoritative arena in the shape `plaza` core expects.
 //!
-//! Structurally the same wrapper as `bomb_grid`'s and `pellet_maze`'s, and
-//! deliberately so: once a simulation is shaped for this, the netcode layer is
-//! boilerplate. What is different here is how little goes through it. There is
-//! no frame. The regular outbound traffic is one digest every half second, and
-//! everything else is an event that happened because somebody did something.
+//! It is the same wrapper as `bomb_grid`'s and `pellet_maze`'s: once a
+//! simulation is shaped for this, the netcode layer is boilerplate. The
+//! difference is how little goes through it. There is no frame. The regular
+//! outbound traffic is one digest every half second and everything else is
+//! sent in response to an event.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -38,8 +38,8 @@ pub struct HostView {
   pub builds_refused: u64,
   pub snapshots_sent: u64,
   pub digests_sent: u64,
-  /// The headline pair: what actually went out, against what the same session
-  /// would have cost if the field were streamed at the send rate.
+  /// What actually went out and what the same session would have cost if the
+  /// field were streamed at the send rate.
   pub bytes_sent: u64,
   pub bytes_if_streamed: u64,
   pub seats_taken: usize,
@@ -185,10 +185,10 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
             // Declared rather than merely sent: a datagram link can lose it,
             // and nothing else in this protocol would mention the seat again.
             let mut ops = vec![state.pending.declare(key, welcome, now)];
-            // A joiner during a prep phase never heard the wave announcement,
+            // A joiner during a prep phase never heard the wave announcement
             // and the field in its welcome does not hold the wave yet, because
-            // the wave has not been laid out. Without this it would sit out the
-            // whole wave agreeing with nobody.
+            // the wave has not been laid out. Without this its digests would
+            // disagree for the whole wave.
             if let Some(op) = state.sim.pending_wave_op() {
               ops.push(op);
             }
@@ -211,10 +211,10 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         let Some(key) = source.id_cloned() else {
           return Ok(LogicOutput::none());
         };
-        // A client that is talking has plainly received whatever let it talk, so
-        // this is the acknowledgement and no ack op has to exist. Before the
-        // seat gate: a seatless client's traffic confirms its `NoSeat` too, and
-        // that verdict is just as unrepeatable as a welcome.
+        // A client that is sending ops has received whatever let it send them,
+        // so this serves as the acknowledgement and no ack op is needed. It runs
+        // before the seat gate, so a seatless client's traffic confirms its
+        // `NoSeat` too, which is sent once just like a welcome.
         state.pending.confirm(&key);
         let Some(seat) = state.seat_of(&key) else {
           return Ok(LogicOutput::none());
@@ -224,15 +224,14 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         for op in ops {
           match op {
             Op::Want { seq, cell, kind, upgrade } => {
-              // A build request that the link lost never arrives here at all.
-              // The player sees nothing happen and asks again, which is the
-              // honest behaviour: there is no state to reconcile, only a cause
-              // that did or did not occur.
+              // A build request that the link lost never arrives here. The
+              // player sees nothing happen and asks again. There is no state to
+              // reconcile, only a cause that did or did not occur.
               let answers = state.sim.want_build(seat, seq, cell, kind, upgrade, &controls);
               let now = state.sim.now_ms();
               for answer in answers {
                 match answer {
-                  // A `Built` is not a reply, it is a cause: every machine has
+                  // A `Built` is a cause rather than a reply: every machine has
                   // to apply it, so it goes to every seat through the impaired
                   // link like any other outbound op.
                   built @ Op::Built { .. } => {
@@ -343,10 +342,10 @@ mod tests {
     }
   }
 
-  /// The other half of the contract, and the half whose absence is silent: a
-  /// welcome that is never confirmed is repeated into a client that treats it
-  /// as a fresh start, so the first seconds of play rebuild the world over and
-  /// over. The guard above only asserts that repeats happen.
+  /// A missing confirmation fails silently: a welcome that is never confirmed
+  /// is repeated into a client that treats it as a fresh start, so the first
+  /// seconds of play rebuild the world over and over. The test above only
+  /// asserts that repeats happen.
   #[test]
   fn traffic_from_a_client_stops_the_repeats() {
     let controls = Controls { datagram_link: true, ..quiet() };
@@ -366,9 +365,9 @@ mod tests {
     assert_eq!(repeats, 0, "confirmed, so nothing is repeated");
   }
 
-  /// What the arena still owns of impairment: turning the panel's numbers into
-  /// a link profile, once, and only when they change. Holding the frames back
-  /// is the session's, and is tested where that happens.
+  /// The arena's only part in impairment is turning the panel's numbers into a
+  /// link profile, once and only when they change. Holding frames back is the
+  /// session's job and is tested there.
   #[test]
   fn the_sliders_are_published_to_the_link_rather_than_applied_here() {
     let controls = Controls { latency_ms: 200, jitter_ms: 40, loss_pct: 25.0, ..quiet() };

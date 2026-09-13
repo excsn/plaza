@@ -40,7 +40,7 @@ use serde::Serialize;
 use crate::{CloseReason, Event, Socket, State, WsError};
 
 /// How often a probe goes out. One a second answers "is the link alive" and
-/// feeds the clock fit faster than it drifts, for a cost of nothing.
+/// feeds the clock fit faster than it drifts, at negligible cost.
 pub const PING_INTERVAL_MS: u64 = 1000;
 
 /// Something the application has to act on. Everything the session could
@@ -88,8 +88,8 @@ pub fn mismatch_message(ours: u32, theirs: u32) -> String {
 /// are read from here: [`rtt_ms`](Self::rtt_ms), [`server_time_ms`](Self::server_time_ms),
 /// [`timeline`](Self::timeline). Everything sent and received is counted
 /// ([`bytes_sent`](Self::bytes_sent), [`bytes_received`](Self::bytes_received)),
-/// so an application metering its wire diffs the totals instead of taping a
-/// counter to every call site.
+/// so an application metering its wire diffs the totals instead of counting at
+/// every call site.
 pub struct FramePump<C: WireCodec> {
   socket: Box<dyn Socket>,
   wire: C,
@@ -232,7 +232,7 @@ impl<C: WireCodec> FramePump<C> {
         None
       }
       // A server speaking a newer protocol may send kinds this build has never
-      // heard of; the rule is skip, not fail.
+      // heard of; they are skipped rather than treated as failures.
       _ => None,
     }
   }

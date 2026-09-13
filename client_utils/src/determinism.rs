@@ -1,26 +1,26 @@
-//! The same number from the same inputs, on both ends and in every build.
+//! Draws, noise and hashes that give the same number from the same inputs on
+//! both ends and in every build.
 //!
-//! A shared rule is only shared if everything it draws from is too. Four
-//! examples each wrote their own seeded generator and lattice hash on the way
-//! to that, and one of them found the hazard this module's docs exist to name:
-//! **iteration order is an input**. A `HashMap` walked while feeding a shared
-//! random stream hands each entity a different draw on each run, so the same
-//! tick run twice stops being the same tick, with no float, no clock and no
-//! wire involved. Sort the keys before drawing, or key the draw on the entity
-//! ([`mix64`] of its id and the tick) so order stops mattering at all.
+//! A shared rule also needs everything it draws from to be shared. Four
+//! examples each wrote their own seeded generator and lattice hash. One of
+//! them found that **iteration order affects the result**. A `HashMap` walked
+//! while feeding a shared random stream hands each entity a different draw on
+//! each run, so the same tick run twice gives different results, even with no
+//! float, clock or wire involved. Sort the keys before drawing or key the draw
+//! on the entity ([`mix64`] of its id and the tick) so order does not matter.
 //!
 //! Everything here is integer arithmetic, dependency-free and identical on
-//! wasm and native. The values are pinned by tests, because two builds
-//! agreeing is the entire point and a "cleanup" that changes a constant would
-//! silently regenerate every world derived from it.
+//! wasm and native. The values are pinned by tests, because the two builds
+//! must agree and a "cleanup" that changes a constant would silently
+//! regenerate every world derived from it.
 
 /// The 64-bit finalizer mix, for turning coordinates, ids and salts into
 /// independent draws.
 ///
-/// Statelessness is the reason to reach for this over [`XorShift`]: a value
-/// keyed on `(seed, x, y)` needs no generator to carry, no order to agree on,
-/// and no state two ends could let drift. It is the murmur3 finalizer, whose
-/// job is exactly this: nearby inputs land far apart.
+/// Reach for this over [`XorShift`] when you want a stateless draw: a value
+/// keyed on `(seed, x, y)` needs no generator to carry, no order to agree on
+/// and no state two ends could let drift. It is the murmur3 finalizer, which
+/// spreads nearby inputs far apart.
 pub fn mix64(x: u64) -> u64 {
   let mut x = x;
   x ^= x >> 33;
@@ -31,12 +31,13 @@ pub fn mix64(x: u64) -> u64 {
   x
 }
 
-/// A deterministic stream, so a tick replayed is a tick repeated.
+/// A deterministic stream, so replaying a tick reproduces its draws exactly.
 ///
 /// Small enough to write rather than depend on, which is the rule for anything
-/// that has to reach wasm; shared so nobody writes it a fifth time. One stream
-/// serves one simulation: give parallel consumers their own, seeded apart with
-/// [`mix64`], rather than interleaving draws whose order nothing pins.
+/// that has to reach wasm. It lives here so the examples share one copy. One
+/// stream serves one simulation: give parallel consumers their own, seeded
+/// apart with [`mix64`], rather than interleaving draws whose order nothing
+/// pins.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct XorShift(u64);
 
@@ -56,7 +57,7 @@ impl XorShift {
     x
   }
 
-  /// A draw in `0..bound`, and zero when the bound is.
+  /// A draw in `0..bound`. Zero when `bound` is zero.
   pub fn below(&mut self, bound: u32) -> u32 {
     if bound == 0 {
       return 0;
@@ -129,7 +130,7 @@ mod tests {
   fn the_values_are_pinned_because_agreement_is_the_point() {
     // A world is derived from these numbers on both ends of a wire. A build
     // that changes one silently regenerates every such world, so the exact
-    // values are the contract rather than an implementation detail.
+    // values are part of the API.
     assert_eq!(mix64(0), 0);
     assert_eq!(mix64(1), 0x5f49_31e5_1b58_8313);
     assert_eq!(mix64(0xDEAD_BEEF), 0xa376_9b68_a0c4_0fcc);
@@ -165,7 +166,7 @@ mod tests {
   #[test]
   fn noise_is_continuous_across_a_lattice_edge() {
     // The eased blend must meet the corner value exactly at the corner, or the
-    // lattice shows as creases: the defect the smoothstep exists to prevent.
+    // lattice shows as creases.
     let noise = ValueNoise::new(99);
     let at_corner = noise.octave(12.0 * 5.0, 4.0 * 5.0, 5.0, 0);
     assert!((at_corner - noise.corner(12, 4, 0)).abs() < 1e-6);

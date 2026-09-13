@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Drives the Dart client against a real plaza server over a real socket.
 #
-# Everything else is tested against LoopbackSocket, which proves the lifecycle
-# and never the wire.
+# Everything else is tested against LoopbackSocket, which covers the lifecycle
+# but not the wire.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -28,9 +28,8 @@ cd "$here/plaza_ws"
 dart pub get >/dev/null
 dart test --tags e2e
 
-# The example runs against the same server, because an example nothing executes
-# is documentation that compiles rather than an example that works. Its exit codes
-# are the assertion: 0 played, 2 refused on a version skew.
+# The example runs against the same server. Its exit codes are the assertion:
+# 0 played, 2 refused on a version skew.
 echo "== example/lobby_client.dart"
 dart run example/lobby_client.dart --seconds 1 >/dev/null
 
@@ -44,11 +43,10 @@ if [ "$skew" -ne 2 ]; then
 fi
 echo "   both paths behaved"
 
-# A second server and a second suite, because the two clients prove different
-# things. lobby_world proves the handshake and one JSON socket; parlour_game
-# proves the handoff to a *second* socket on a different codec, which is the
-# only place compact MessagePack written by `rmp_serde` is read by Dart's
-# generated types over a real wire.
+# A second server and a second suite. lobby_world covers the handshake and one
+# JSON socket; parlour_game covers the handoff to a second socket on a
+# different codec, which is the only place compact MessagePack written by
+# `rmp_serde` is read by Dart's generated types over a real wire.
 echo "== parlour_client against examples/parlour_game"
 cd "$root/examples"
 CARGO_TARGET_DIR="$root/target" cargo build -q -p plaza_example_parlour_game

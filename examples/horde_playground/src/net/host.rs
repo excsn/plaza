@@ -2,11 +2,11 @@
 //! from the same port.
 //!
 //! The HTTP side of that (the port, the served directory, the version stamping
-//! that keeps a browser from running yesterday's bundle against today's server,
+//! that keeps a browser from running yesterday's bundle against today's server
 //! and leaving signals to the process) is [`plaza_session::host::Host`]. It is
-//! the same in every listen server, and was the same in this repository twice
-//! over. What is left here is the part that is actually this arena's: which
-//! state, which logic, and at what tick rate.
+//! the same in every listen server and this repository used to have two copies
+//! of it. This module keeps the parts specific to this arena: which state,
+//! which logic and what tick rate.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -33,8 +33,7 @@ use crate::sim::types::Controls;
 type ArenaSession = ActixWsPlazaSession<Op, PlayerKey, MsgPackCodec>;
 
 /// The tick rate the simulation is advanced at. Distinct from the *send* rate,
-/// which is `Controls::sync_hz` and is usually far lower: simulating often and
-/// sending rarely is the whole reason this example exists.
+/// which is `Controls::sync_hz` and is usually far lower.
 /// The arena's simulation rate. Public so a readout can say what the tick budget
 /// *is* rather than hard-coding a second copy of it.
 pub const TICK_HZ: u32 = 60;

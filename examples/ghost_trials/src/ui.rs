@@ -1,4 +1,4 @@
-//! The panel: what a ghost is made of, and what it cost.
+//! The panel: what a ghost is made of and what it cost.
 
 use egui_macroquad::egui;
 

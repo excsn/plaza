@@ -24,7 +24,7 @@ class Diverged extends Agreement {
 ///
 /// A digest detects a divergence and cannot diagnose one, so anything shipping a
 /// digest wants a mode that ships the ground truth beside it. Which side the
-/// difference falls on names the bug: [missing] means something was lost or never
+/// difference falls on points to the bug: [missing] means something was lost or never
 /// sent, [extra] means a removal never landed or was rejected.
 class Divergence {
   const Divergence({required this.extra, required this.missing});
@@ -81,8 +81,8 @@ class DeltaMirror<E> {
   ///
   /// Call once per packet, before applying anything in it. A full baseline is the
   /// server's repair for a mirror it can no longer reach by deltas, so the old
-  /// contents must go rather than be merged with: merging is what leaves the
-  /// drift that prompted the rebuild.
+  /// contents must be dropped rather than merged, since merging keeps the drift
+  /// that prompted the rebuild.
   void begin(int seq, {required bool fullBaseline}) {
     // Every frame is numbered and the link is ordered, so a jump of more than
     // one means the wire lost what was between. This is the direct measure, and
@@ -98,8 +98,8 @@ class DeltaMirror<E> {
 
   /// Files an entity under a key, replacing whatever was in the slot.
   ///
-  /// A fresh occupant of a reused slot is exactly this: the previous tenant is
-  /// gone and the generation recorded is the new one.
+  /// A fresh occupant of a reused slot is filed this way too: the previous
+  /// tenant is gone and the generation recorded is the new one.
   void insert(SlotKey key, E entity) {
     final k = _normalise(key);
     _held[k.index] = _Held<E>(k.generation, entity);
@@ -107,9 +107,9 @@ class DeltaMirror<E> {
 
   /// Removes an occupant, if this key names the one actually held.
   ///
-  /// A generation mismatch counts as a stale reference and removes nothing, which
-  /// is the entire point: without the check this deletes a live entity that
-  /// merely inherited the slot.
+  /// A generation mismatch counts as a stale reference and removes nothing.
+  /// Without that check this would delete a live entity that merely inherited
+  /// the slot.
   E? remove(SlotKey key) {
     final k = _normalise(key);
     final held = _held[k.index];
@@ -132,8 +132,8 @@ class DeltaMirror<E> {
   /// The occupant this key names, counting a generation mismatch as a stale
   /// reference.
   ///
-  /// For applying a sample. Returning null rather than the current occupant is
-  /// what keeps a position meant for a dead entity off a live one.
+  /// For applying a sample. Returning null rather than the current occupant
+  /// keeps a position meant for a dead entity off a live one.
   E? forUpdate(SlotKey key) {
     final k = _normalise(key);
     final held = _held[k.index];
@@ -163,9 +163,9 @@ class DeltaMirror<E> {
   /// Closes a packet: recomputes the digest and compares it to the server's.
   ///
   /// Everything in the packet has been applied by now, so the mirror must match
-  /// what the server said it should be. This is the check a lost or malformed
-  /// removal cannot hide from, because it is over the whole set rather than over
-  /// the messages that happened to arrive.
+  /// what the server said it should be. A lost or malformed removal cannot
+  /// escape this check, because it covers the whole set rather than only the
+  /// messages that happened to arrive.
   Agreement settle(int expected) {
     _digest = computeDigest();
     if (_digest == expected) return const Agreed();

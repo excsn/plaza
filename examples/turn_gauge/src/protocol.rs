@@ -58,8 +58,8 @@ pub const CTB_SCALE: u64 = 100_000;
 /// How far ahead the act list projects.
 pub const PROJECT: usize = 8;
 
-/// A human commander's turn clock; past it the server acts for them, because a
-/// turn-based battle with a vacant chair is a stalled battle.
+/// A human commander's turn clock; past it the server acts for them, because
+/// otherwise a vacant chair stalls the battle.
 pub const TURN_LIMIT_MS: u64 = 12_000;
 /// The bot pauses this long so a turn is watchable rather than instant.
 pub const BOT_THINK_MS: u64 = 700;
@@ -95,7 +95,7 @@ pub enum BattlePhase {
   Ended,
 }
 
-/// A unit's kit is its class, and its class is its slot on the roster.
+/// A unit's slot on the roster sets its class, which sets its kit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Class {
   /// Slow, heavy, and able to brace.
@@ -115,7 +115,8 @@ pub fn class_of(id: UnitId) -> Class {
 }
 
 /// One combatant, as both ends hold it. `next_at` only means anything under
-/// [`Regime::Ctb`]; it rides everywhere so a snapshot is a complete baseline.
+/// [`Regime::Ctb`]; it is carried everywhere so a snapshot is a complete
+/// baseline.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Unit {
   pub id: UnitId,
@@ -133,11 +134,11 @@ pub struct Unit {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Move {
-  /// Everyone's light hit: cheap in time, cheap in damage.
+  /// Everyone's light hit: low time cost and low damage.
   Jab { target: UnitId },
   /// The bruiser's heavy hit. Under the delay queue it costs real time; under
-  /// initiative a round-slot is a round-slot, which is the regimes pricing
-  /// heaviness differently and is the point.
+  /// initiative it takes one round-slot like any other move, so the two
+  /// regimes charge differently for heavy moves.
   Smash { target: UnitId },
   /// The bruiser braces: a shield absorbed before hp.
   Guard,
@@ -315,7 +316,7 @@ pub enum GaugeOp {
   YouCommand { team: u8 },
 
   /// The dial. Any client may turn it; switching restarts the battle, because
-  /// half a fight under each machine is a comparison of nothing.
+  /// a battle split between the two regimes would not compare them.
   SetRegime(Regime),
 
   /// A commander's order for the unit whose turn it is.
@@ -325,7 +326,7 @@ pub enum GaugeOp {
   /// from, gauges seeded, speeds, shields and charges reset.
   BattleStarted { battle: u64, regime: Regime, units: Vec<Unit> },
 
-  /// The initiative regime's boundary: re-roll, re-sort, walk again. Sent
+  /// The initiative regime's boundary, where the order is re-rolled. Sent
   /// before the first turn notice of the round, so a client re-derives the
   /// order it is about to be audited against.
   RoundStarted { round: u32 },

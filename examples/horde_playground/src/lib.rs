@@ -1,9 +1,7 @@
 //! The many-entity case: a bullet-heaven horde, networked.
 //!
 //! Thousands of enemies, several players standing in different parts of a world
-//! far larger than one screen, and a bandwidth budget. This is the example the
-//! backlog kept deferring, and it exists to settle questions by measurement
-//! rather than argument:
+//! far larger than one screen and a bandwidth budget. It measures:
 //!
 //! - what per-player relevance actually saves, and whether it still pays when
 //!   players cluster together instead of spreading out;

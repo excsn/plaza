@@ -30,9 +30,9 @@
 //! schedulers ([`common::scheduler`]), finite state machines ([`common::fsm`]),
 //! participant tracking ([`common::participants`]), turn/round/phase control
 //! and scorekeeping ([`game_common`]), client prediction and lag compensation
-//! ([`game_common::reconciliation`]), and op payloads for collaborative apps:
-//! locking, presence, ordered collections ([`app_common`]). Use what fits;
-//! none of it is required.
+//! ([`game_common::reconciliation`]) and op payloads for collaborative apps:
+//! locking, presence, ordered collections ([`app_common`]). All of them are
+//! optional.
 
 pub mod agent;
 pub mod app_common;

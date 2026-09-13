@@ -2,7 +2,7 @@
 
 ## 1. Introduction & Core Concepts
 
-`plaza_wire` is the Dart mirror of the Rust [`plaza_wire`](../../wire/) crate: the [frame](#3-framing) tag and protocol version, the [`WireCodec`](#abstract-class-wirecodec) interface with JSON and MessagePack implementations, a [MessagePack](#6-messagepack) reader and writer, and the [helpers](#5-serde-enums) that read serde's externally tagged enum shapes.
+`plaza_wire` is the Dart mirror of the Rust [`plaza_wire`](../../wire/) crate: the [frame](#3-framing) tag and protocol version, the [`WireCodec`](#abstract-class-wirecodec) interface with JSON and MessagePack implementations, a [MessagePack](#6-messagepack) reader and writer and the [helpers](#5-serde-enums) that read serde's externally tagged enum shapes.
 
 The Rust crate is authoritative. This package does not decide the format; where the two could disagree, `flutter/fixtures/` holds golden bytes written by Rust tests and replayed here.
 
@@ -24,7 +24,7 @@ There is no package-wide error type. Three things throw:
 | [`MsgPackError`](#class-msgpackerror) | [`msgPackEncode`](#function-msgpackencode), [`msgPackDecode`](#function-msgpackdecode) | Malformed bytes, a truncated buffer, trailing bytes after a complete value, or a Dart value with no MessagePack representation. |
 | `ArgumentError` | [`buildFrame`](#function-buildframe), [`asBytes`](#function-asbytes) | A body that is neither a `String` nor a `List<int>`. This is a programming error rather than a wire condition. |
 
-Two things deliberately do **not** throw. [`splitFrame`](#function-splitframe) returns null for an empty or unrecognised message, and [`Kind.fromByte`](#static-method-fromByte) returns null for a tag this build does not know. Both are conditions a running client meets in normal operation, and both mean *skip this frame*.
+Two things deliberately do **not** throw. [`splitFrame`](#function-splitframe) returns null for an empty or unrecognised message and [`Kind.fromByte`](#static-method-fromByte) returns null for a tag this build does not know. Both are conditions a running client meets in normal operation and both mean *skip this frame*.
 
 ## 3. Framing
 
@@ -53,7 +53,7 @@ static Kind? fromByte(int byte)
 
 The kind for `byte`, or **null if this build has never heard of it**.
 
-Null means skip the frame, not fail the connection. A server speaking a newer protocol may send kinds this client does not know, and refusing them turns every additive change into a break. The rule exists from the start because it cannot be added later: a client already deployed cannot learn to tolerate a new frame kind.
+Null means skip the frame rather than fail the connection. A server speaking a newer protocol may send kinds this client does not know and refusing them turns every additive change into a break. The rule exists from the start because it cannot be added later: a client already deployed cannot learn to tolerate a new frame kind.
 
 ### Class `Frame`
 
@@ -74,7 +74,7 @@ A received frame split into its tag and its body.
 
 #### Property `body`
 
-`Object`. The encoded body, still encoded. A `List<int>` for a binary frame, a `String` for a text one. **Which it is follows the codec, not the frame**, so pass it straight to [`WireCodec.decode`](#method-decode) rather than testing its type.
+`Object`. The encoded body, still encoded. A `List<int>` for a binary frame, a `String` for a text one. **Which one depends on the codec**, so pass it straight to [`WireCodec.decode`](#method-decode) rather than testing its type.
 
 #### Property `kind`
 
@@ -88,7 +88,7 @@ Frame? splitFrame(Object message)
 
 Splits a received message into its kind byte and body.
 
-Accepts what a WebSocket hands over: a `String` for a text frame, a `List<int>` for a binary one. Returns **null for an empty frame**, which is malformed rather than merely unknown, and null for anything that is neither type.
+Accepts what a WebSocket hands over: a `String` for a text frame, a `List<int>` for a binary one. Returns **null for an empty frame**, which is malformed rather than merely unknown and null for anything that is neither type.
 
 ### Function `buildFrame`
 
@@ -113,7 +113,7 @@ class ProtocolVersion {
 
 What a peer says it speaks, sent as the body of a [`Kind.hello`](#enum-kind) frame.
 
-**Consumed, never computed.** The Rust side derives this by hashing the type definitions that make up the wire format, from a `build.rs` calling `plaza_wire::build::emit`. A Dart client cannot hash Rust sources, so the constant is published by that build and declared here.
+The Dart side never computes this. The Rust side derives it by hashing the type definitions that make up the wire format, from a `build.rs` calling `plaza_wire::build::emit`. A Dart client cannot hash Rust sources, so the constant is published by that build and declared here.
 
 Value equality, so two versions compare with `==` and work as map keys.
 
@@ -129,9 +129,9 @@ bool agreesWith(ProtocolVersion other)
 
 Whether two peers agree well enough to talk.
 
-**An unknown version on either side counts as agreement.** A peer that declares nothing is the pre-handshake case rather than a wrong one, and refusing it would break every client built before the frame existed. So this is true when either side is zero, and otherwise when the two are equal.
+**An unknown version on either side counts as agreement.** A peer that declares nothing is the pre-handshake case rather than a wrong one and refusing it would break every client built before the frame existed. So this is true when either side is zero and otherwise when the two are equal.
 
-Plaza *reports* a disagreement and keeps serving. Deciding what to do about one is the application's; [`plaza_client`](../plaza_client/) surfaces it as an `Outdated` event.
+Plaza reports a disagreement and keeps serving. What to do about it is up to the application; [`plaza_client`](../plaza_client/) surfaces it as an `Outdated` event.
 
 ## 4. Codecs
 
@@ -158,7 +158,7 @@ Encodes and decodes frame bodies. Mirrors the Rust `WireCodec` trait.
 
 `bool`. Whether this codec's output is text rather than bytes.
 
-This decides the WebSocket frame type, and it matters. A text frame arrives as a string a JSON parser takes directly; a binary frame arrives as bytes the receiver has to decode itself, having first remembered to set `binaryType`. Sending JSON as binary is legal and makes every client harder to write than it needs to be.
+This decides the WebSocket frame type. A text frame arrives as a string a JSON parser takes directly; a binary frame arrives as bytes the receiver has to decode itself, having first remembered to set `binaryType`. Sending JSON as binary is legal and makes every client harder to write than it needs to be.
 
 #### Method `encode`
 
@@ -174,7 +174,7 @@ Serializes a value to a frame body: a `String` when [`isText`](#property-istext)
 Object? decode(Object body)
 ```
 
-Deserializes a frame body. Accepts either a `String` or a `List<int>` where the format allows it, so a codec is not defeated by a server that framed its output the other way.
+Deserializes a frame body. Accepts either a `String` or a `List<int>` where the format allows it, so a codec still works when a server framed its output the other way.
 
 ### Class `JsonCodec`
 
@@ -200,11 +200,11 @@ class MsgPackCodec implements WireCodec {
 
 `name` is `'msgpack'`, `isText` is `false`.
 
-**Note which shape the server uses.** Plaza's Rust `MsgPackCodec` encodes a struct **compactly**, as an array of its fields in declaration order, so field order is part of the contract and the protocol version is what guards it. Its `MsgPackNamedCodec` sends maps keyed by field name instead, the same shape JSON gives, and is the one to ask a server for when this client's models are hand-written rather than generated from the Rust types.
+**Note which shape the server uses.** Plaza's Rust `MsgPackCodec` encodes a struct **compactly**, as an array of its fields in declaration order, so decoding depends on field order and the protocol version guards it. Its `MsgPackNamedCodec` sends maps keyed by field name instead, the same shape JSON gives and is the one to ask a server for when this client's models are hand-written rather than generated from the Rust types.
 
-This codec decodes either, which is why there is one class here and not two; it is the shape your own types expect that has to match. The protocol version does not police the codec choice and does not need to, because that mismatch fails on the first frame rather than decoding into something plausible.
+This codec decodes either, so there is one class here rather than two; your own types have to match whichever shape the server sends. The protocol version does not cover the codec choice, because a codec mismatch fails on the first frame rather than decoding into something plausible.
 
-`decode` throws `FormatException` on a text frame, and says specifically that the server is probably speaking JSON, because that is what a text frame reaching a MessagePack client almost always means.
+`decode` throws `FormatException` on a text frame and says specifically that the server is probably speaking JSON, because that is what a text frame reaching a MessagePack client almost always means.
 
 ### Function `asBytes`
 
@@ -218,7 +218,7 @@ For the places that need bytes regardless of codec, such as writing a fixture or
 
 ## 5. Serde enums
 
-Serde's default (externally tagged) representation has **two shapes**, and missing the second is a bug that looks exactly like the server not sending:
+Serde's default (externally tagged) representation has **two shapes** and missing the second is a bug that looks exactly like the server not sending:
 
 - a **unit** variant is a bare string, `"QueueLeft"`
 - every other variant is a one-entry map, `{"Placed": {...}}`
@@ -241,7 +241,7 @@ Object? variantBody(Object? value)
 
 The variant's payload. An **empty map for a unit variant**, so a caller can index it without a null check.
 
-A struct variant gives its fields as a map, a newtype variant gives its single value, and a tuple variant gives a list. Under compact MessagePack a struct variant also gives a list, because that is what the Rust encoder wrote.
+A struct variant gives its fields as a map, a newtype variant gives its single value and a tuple variant gives a list. Under compact MessagePack a struct variant also gives a list, because that is what the Rust encoder wrote.
 
 Null for anything that is not an externally tagged enum value.
 
@@ -263,7 +263,7 @@ Object variant(String name, [Object? fields])
 
 Builds a value in the shape serde expects.
 
-**Pass null `fields` for a unit variant**, which then goes as a bare string. This is not a shortcut: a unit variant sent as `{"LeaveQueue": {}}` fails to deserialize on the Rust side.
+**Pass null `fields` for a unit variant**, which then goes as a bare string. A unit variant sent as `{"LeaveQueue": {}}` fails to deserialize on the Rust side.
 
 ```dart
 variant('LeaveQueue')                 // "LeaveQueue"
@@ -272,9 +272,9 @@ variant('Join', {'room': 3})          // {"Join": {"room": 3}}
 
 ## 6. MessagePack
 
-Written out rather than taken as a dependency: it is a few hundred lines of a format that has not changed in a decade, against a dependency that would have to stay wasm-safe for as long as this package lives.
+Written here rather than taken as a dependency: it is a few hundred lines for a format that has not changed in a decade and a dependency would have to stay wasm-safe for as long as this package exists.
 
-**The core spec only**: nil, bool, int, float, str, bin, array, map. No extension types, because plaza's wire never emits one and a decoder that pretended to handle ext would be claiming a compatibility it has not been tested for.
+**The core spec only**: nil, bool, int, float, str, bin, array, map. No extension types, because plaza's wire never emits one and a decoder that accepted ext would claim a compatibility nobody has tested.
 
 Type mapping, in both directions:
 
@@ -292,7 +292,7 @@ Type mapping, in both directions:
 
 A Rust struct under plaza's compact codec arrives as an **array**, not a map; under the named codec it arrives as a map. A Rust enum arrives as described in [section 5](#5-serde-enums).
 
-All-string maps are typed `Map<String, Object?>` so they cast exactly like a `jsonDecode` result. Without that, `body['link'] as Map<String, Object?>` would pass under JSON and throw under MessagePack, which is the worst way to learn the two differ.
+All-string maps are typed `Map<String, Object?>` so they cast exactly like a `jsonDecode` result. Without that, `body['link'] as Map<String, Object?>` would pass under JSON and throw under MessagePack, so the difference would only show up at runtime.
 
 ### Function `msgPackEncode`
 
@@ -308,7 +308,7 @@ Encodes a Dart value. Throws [`MsgPackError`](#class-msgpackerror) for a value w
 Object? msgPackDecode(List<int> bytes)
 ```
 
-Decodes one complete value. **Throws on trailing bytes**, naming how many, because a buffer with something left over means the frame was not what the sender thought it was, and silently ignoring the remainder hides that.
+Decodes one complete value. **Throws on trailing bytes**, naming how many, because a buffer with something left over means the frame was not what the sender thought it was and silently ignoring the remainder hides that.
 
 ### Class `MsgPackError`
 

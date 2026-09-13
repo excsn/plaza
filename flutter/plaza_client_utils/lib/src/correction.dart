@@ -2,9 +2,9 @@ import 'dart:math' as math;
 
 /// A correction, as the two states it moved between.
 ///
-/// No distance metric is imposed: that would put a constraint on every user for
-/// the benefit of the ones that want telemetry. The caller knows its own units,
-/// so the subtraction is its business.
+/// No distance metric is imposed, since that would constrain every user for the
+/// benefit of those that want telemetry. The caller knows its own units and
+/// does the subtraction itself.
 class Correction<S> {
   const Correction({required this.seen, required this.settled});
 
@@ -19,14 +19,14 @@ class Correction<S> {
 /// A running picture of prediction error, and an adaptive test for what counts
 /// as abnormal.
 ///
-/// There is no fixed normal. A thirty-pixel correction is unremarkable at one
-/// send rate and alarming at another, and the same holds across latency settings
-/// and across how much contact the simulation is in. A constant threshold
-/// reports whatever it was tuned against, so it goes quiet exactly when
-/// conditions change and noisy for reasons unrelated to any bug.
+/// A thirty-pixel correction is unremarkable at one send rate and alarming at
+/// another and the same holds across latency settings and across how much
+/// contact the simulation is in. A constant threshold only fits the conditions
+/// it was tuned for, so when conditions change it goes quiet or fires for
+/// reasons unrelated to any bug.
 ///
 /// So this tracks the mean and variance of what it is fed and flags a correction
-/// that stands out from *those*, which keeps its meaning as conditions move.
+/// that stands out from those, which stays meaningful as conditions change.
 ///
 /// Ported from `plaza_client_utils::correction::CorrectionMonitor`.
 class CorrectionMonitor {
@@ -45,8 +45,8 @@ class CorrectionMonitor {
   final double _sigma;
   final double _floor;
 
-  /// How many samples to learn from before flagging anything. A monitor without
-  /// one is loudest at the moment it knows least.
+  /// How many samples to learn from before flagging anything. Without a warmup
+  /// the monitor flags the most while its baseline is least reliable.
   final int warmup;
 
   double _mean = 0;
@@ -62,16 +62,16 @@ class CorrectionMonitor {
   /// The sample is clamped to the threshold before it updates the baseline.
   /// Without that, one respawn-sized correction lifts the mean and variance so
   /// far that genuine problems hide underneath for the next thousand packets.
-  /// Clamping still lets a *sustained* shift move the baseline, which is what you
-  /// want: a run that is simply harder to predict should re-centre what normal
-  /// means rather than alarm for ever.
+  /// Clamping still lets a *sustained* shift move the baseline, so a run that is
+  /// simply harder to predict re-centres what normal means rather than alarming
+  /// for ever.
   bool record(double magnitude) {
     if (!magnitude.isFinite) return false;
     final m = magnitude < 0 ? 0.0 : magnitude;
     final warming = _samples < warmup;
     final abnormal = !warming && m > threshold;
 
-    // Two things differ while warming up, and both matter. Nothing is flagged,
+    // Two things differ while warming up. Nothing is flagged,
     // because a baseline starting at zero says every correction is enormous. And
     // the baseline is averaged exactly rather than exponentially, because an
     // exponential average approaches the truth from zero and would still be far
@@ -98,10 +98,10 @@ class CorrectionMonitor {
 
   /// The band above the mean, never below the floor.
   ///
-  /// The floor is worth setting. A spell of near-perfect prediction drives the
-  /// variance toward zero, and without a floor the band collapses with it and
-  /// every pixel of ordinary jitter reads as an outlier. It answers "how large a
-  /// correction do I not care about, ever".
+  /// Set the floor. A spell of near-perfect prediction drives the variance
+  /// toward zero and without a floor the band collapses with it and every pixel
+  /// of ordinary jitter reads as an outlier. Set it to the largest correction
+  /// you never care about.
   double get band => math.max(_sigma * math.sqrt(math.max(_var, 0.0)), _floor);
 
   /// What "normal" currently means.

@@ -127,8 +127,8 @@ async fn a_flood_is_shed_at_the_burst_and_the_connection_stays() {
 
 #[tokio::test]
 async fn a_shed_frame_never_reaches_the_controller() {
-  // The whole point of judging before the shared queue: not that the flooder is
-  // punished, but that the ops behind it are not.
+  // Judging before the shared queue exists to keep the flooder from costing the
+  // ops behind it, rather than to punish the flooder.
   let session = session_limited_to(Rate::per_second(1.0).burst(2)).await;
   let presence = session.on_presence_change();
   let incoming = session.subscribe_to_incoming_messages();
@@ -158,7 +158,7 @@ async fn a_disconnecting_rate_ends_the_connection_that_exceeded_it() {
   let mut client = connect(&session).await;
   let _conn_id = joined(&presence).await;
 
-  // The socket may close under the writer part way through, which is the point.
+  // The socket may close under the writer part way through; that is expected.
   for n in 0..40 {
     if client.send(op_frame(n)).await.is_err() {
       break;
@@ -173,8 +173,8 @@ async fn a_disconnecting_rate_ends_the_connection_that_exceeded_it() {
 
 #[tokio::test]
 async fn one_connection_flooding_does_not_spend_another_s_budget() {
-  // A per-connection bucket is the difference between a rate limit and a
-  // session-wide throttle that the loudest client sets for everybody.
+  // Each connection has its own bucket, so the loudest client cannot throttle
+  // everybody else.
   let session = session_limited_to(Rate::per_second(4.0).burst(8)).await;
   let presence = session.on_presence_change();
   let _incoming = session.subscribe_to_incoming_messages();

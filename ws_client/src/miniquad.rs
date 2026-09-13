@@ -5,7 +5,7 @@
 //! `mq_js_bundle.js` and before `load()`.
 //!
 //! **No dependencies, by choice.** The obvious crates for this job are all
-//! `wasm-bindgen` underneath and cannot work here (see the crate docs), and the
+//! `wasm-bindgen` underneath and cannot work here (see the crate docs) and the
 //! two crates that do use miniquad's plugin mechanism, `sapp-jsutils` and
 //! `quad-net`, are barely maintained. The mechanism itself is a handful of
 //! `extern "C"` declarations, so we use the mechanism and skip the dependency.
@@ -54,8 +54,7 @@ pub extern "C" fn plaza_ws_crate_version() -> u32 {
 /// The WebSocket URL for the page this wasm was served from.
 ///
 /// What a browser client should almost always connect to: the host that served
-/// it. Hardcoding `127.0.0.1` works only on the machine doing the hosting, which
-/// is the one case that did not need a network.
+/// it. Hardcoding `127.0.0.1` works only on the machine doing the hosting.
 pub fn page_url() -> String {
   // Safety: the length is asked for first and JS writes exactly that many bytes
   // into a buffer with capacity for them.

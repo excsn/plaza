@@ -73,8 +73,8 @@ pub async fn serve(
       tracing::error!("StateController exited with error: {}", e);
     }
   });
-  // The host wakes far more often than the world moves, so the game tick can be
-  // a dial the panel turns rather than the rate this driver was built with.
+  // The host wakes far more often than the world moves, so the panel can set
+  // the game tick length instead of it being fixed by this driver's rate.
   tokio::spawn(TickDriver::new(std::time::Duration::from_millis(DRIVER_MS)).run(commands));
 
   tracing::info!(bind, "ChapsKape listening (WebSocket at /ws)");

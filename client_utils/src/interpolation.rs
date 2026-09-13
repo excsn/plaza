@@ -263,9 +263,9 @@ where
 ///
 /// Interpolating a remote entity means rendering it slightly in the past, so
 /// there are always two snapshots to blend between. That requires an estimate of
-/// the server's clock and a fixed delay behind it. Every interpolating client
-/// otherwise hand-rolls this: hold an estimate, advance it by frame time,
-/// subtract the delay. This is that bookkeeping, once.
+/// the server's clock and a fixed delay behind it. Without this, every
+/// interpolating client writes the same bookkeeping by hand: hold an estimate,
+/// advance it by frame time, subtract the delay.
 ///
 /// It is unit-agnostic: `T` is whatever timeline the snapshots use, `u64`
 /// milliseconds or ticks, or a [`Duration`](std::time::Duration).
@@ -363,7 +363,7 @@ impl InterpolationClock<u64> {
     });
   }
 
-  /// The rate-based cousin of [`resync`](Self::resync): instead of nudging the
+  /// The rate-based alternative to [`resync`](Self::resync): instead of nudging the
   /// estimate's *position* toward the newest server time each packet (a small
   /// jump in the render target), this adjusts the estimate's *speed* so it
   /// glides into alignment, time dilation. Pair it with

@@ -24,7 +24,7 @@ use crate::types::{PartyOp, FLOOD_OPS, FLOOD_WINDOW_MS};
 pub type Party = TcpPlazaSession<PartyOp, u64>;
 
 /// The whole party: the shipped TCP transport with the host's tools reading
-/// the manager. No transport is written here, which is the point.
+/// the manager. No transport is written here, on purpose.
 pub async fn party(afk: Duration) -> (Arc<Party>, Arc<Host>) {
   let next_key = Arc::new(AtomicU64::new(1));
   let factory: AgentFactory<u64> = Arc::new(move |_peer| {

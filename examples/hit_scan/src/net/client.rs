@@ -1,19 +1,19 @@
 //! A client on a real wire.
 //!
 //! It wraps the same [`sim::Client`] the offline harness uses, so the
-//! prediction and the drawing are unchanged. What it adds is everything a
-//! shared clock and a function argument were standing in for:
+//! prediction and the drawing are unchanged. It adds what the harness gets
+//! for free from a shared clock and direct function calls:
 //!
-//! - **The clock is estimated, not shared.** Every input names a *tick*, and a
-//!   tick is computed from this estimate. An estimate that trails the stream
-//!   names ticks the server has already closed, and every input is silently
-//!   refused: a player who cannot move while the panel looks healthy.
-//! - **The clock is floored at what the stream has proven, carried forward.**
-//!   The newest server timestamp received is a lower bound needing no
-//!   synchronisation to trust, because the server wrote it, and it advances at
-//!   wall rate from the moment it landed.
-//! - **The connection is a state, not an assumption.** Connecting, refused, no
-//!   seat and dropped are things a player has to be told about.
+//! - **Clock estimation.** Each client estimates the server clock. Every input
+//!   names a *tick* computed from this estimate. An estimate that trails the
+//!   stream names ticks the server has already closed and every input is
+//!   silently refused, so the player cannot move while the panel looks
+//!   healthy.
+//! - **A floor under the clock.** The newest server timestamp received is a
+//!   lower bound that needs no synchronisation, because the server wrote it.
+//!   The floor advances at wall rate from the moment that stamp arrived.
+//! - **Connection state.** Connecting, refused, no seat and dropped are all
+//!   shown to the player.
 //!
 //! [`sim::Client`]: crate::sim::client::Client
 
@@ -27,17 +27,15 @@ use crate::sim::protocol::{Op, PROTOCOL, ServerPolicy};
 use crate::sim::types::{Controls, Dir8, PlayerId, SIM_STEP_MS, V2, Weapon};
 
 /// One codec for the whole client, matching the one the host is built with.
-/// Naming it once is the point: two ends cannot drift onto different formats if
-/// there is only one name for the format.
+/// Named once so the two ends cannot drift onto different formats.
 const WIRE: MsgPackCodec = MsgPackCodec;
 
 /// Resend the held direction at least this often.
 ///
-/// A walk is a **level**, not an edge: the server holds the last direction it
-/// was told, so sending only on change means a *dropped* change is not a missing
-/// update but a wrong state that persists. The keepalive bounds that to one
-/// interval. A shot is never resent, because a shot is an event and firing it
-/// twice is worse than losing it.
+/// The server holds the last direction it was told, so if the client only sent
+/// on change, a dropped change would leave the server with the wrong direction
+/// until the next press. The keepalive limits that to one interval. A shot is
+/// never resent, because firing it twice is worse than losing it.
 const INPUT_KEEPALIVE_MS: u64 = 150;
 
 const BACKLOG_TRIGGER: usize = 128;
@@ -111,14 +109,12 @@ impl NetClient {
 
   /// This client's best estimate of server time now.
   ///
-  /// The fitted clock, **floored by the newest stamp carried forward at wall
-  /// rate** ([`Timeline::server_time_ms`]). A stamp the server wrote is a
-  /// lower bound needing no synchronisation to trust, so a cold fit cannot
-  /// drag this below what the stream has already proven. And it has to
-  /// *advance*: a floor pinned at the last stamp freezes between frames, and
-  /// this clock decides when this client runs its own scheduled inputs, so a
-  /// frozen one parks every input in the client's own future where it never
-  /// runs at all.
+  /// The fitted clock, floored by the newest stamp carried forward at wall rate
+  /// ([`Timeline::server_time_ms`]). A stamp the server wrote is a lower bound
+  /// that needs no synchronisation, so a cold fit cannot drag this below it.
+  /// The floor has to advance: this clock decides when this client runs its
+  /// own scheduled inputs, so a floor pinned at the last stamp would freeze
+  /// between frames and leave every input scheduled in the future, never run.
   ///
   /// [`Timeline::server_time_ms`]: plaza_client_utils::Timeline::server_time_ms
   pub fn server_time_ms(&self) -> u64 {
@@ -132,8 +128,7 @@ impl NetClient {
   /// How many ticks ahead of the newest arrived frame the last input aimed.
   ///
   /// At or below zero the input names a tick the server has closed and is
-  /// dropped, which plays as a player who cannot move while everything else
-  /// looks healthy.
+  /// dropped, so the player cannot move while everything else looks healthy.
   pub fn input_aim_ticks(&self) -> i64 {
     self.last_input_tick as i64 - (self.pump.timeline().newest_stamp_ms() / SIM_STEP_MS) as i64
   }
@@ -146,7 +141,7 @@ impl NetClient {
     )
   }
 
-  /// Transmits this frame's direction, and schedules it locally for the tick it
+  /// Transmits this frame's direction and schedules it locally for the tick it
   /// named.
   pub fn send_walk(&mut self, dir: Dir8) {
     if !self.is_playing() || !self.send_policy.should_send(&dir, self.now_ms) {
@@ -178,9 +173,8 @@ impl NetClient {
     self.now_ms = now_ms;
     let mut events = std::mem::take(&mut self.events);
     self.pump.drain(now_ms, &mut events);
-    // A resumed tab hands over minutes of traffic at once, none of which
-    // describes a moment worth acting on. Dropped on message lengths alone,
-    // before any of it is parsed.
+    // A resumed tab delivers minutes of stale traffic at once. It is dropped on
+    // message lengths alone, before any of it is parsed.
     if self.frames_seen > 0 && plaza_ws::trim_backlog(&mut events, BACKLOG_TRIGGER, BACKLOG_KEEP).is_some() {
       self.resume_drops += 1;
       // A probe sent before the freeze and answered after it measures the
@@ -310,10 +304,10 @@ mod tests {
 
   #[test]
   fn the_clock_carries_forward_between_frames_rather_than_freezing() {
-    // A floor pinned at the last stamp stops advancing, and this clock decides
-    // when the client runs its own scheduled inputs. Frozen, every input is
-    // parked in the client's own future and never runs locally at all, which
-    // the player reports as the controls sticking.
+    // A floor pinned at the last stamp stops advancing and this clock decides
+    // when the client runs its own scheduled inputs. If it freezes, every input
+    // stays scheduled in the client's future and never runs locally, which the
+    // player sees as the controls sticking.
     let (mut c, socket) = client();
     framed(&socket, &[welcome()]);
     c.poll(0, &Controls::default());
@@ -334,8 +328,8 @@ mod tests {
 
   #[test]
   fn a_held_direction_is_resent_on_the_keepalive_and_a_shot_is_never_resent() {
-    // The asymmetry that matters: a lost direction leaves the server holding a
-    // wrong one for ever, and a resent shot fires twice.
+    // A lost direction leaves the server holding the wrong one for ever and a
+    // resent shot fires twice.
     let (mut c, socket) = client();
     framed(&socket, &[welcome()]);
     c.poll(0, &Controls::default());

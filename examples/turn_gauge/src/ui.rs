@@ -1,5 +1,5 @@
-//! The side panel: the regime dial, the audit's verdict and the log. The
-//! orders themselves live on the battlefield, where a player actually looks.
+//! The side panel: the regime dial, the audit's result and the log. The orders
+//! themselves are given on the battlefield, where a player actually looks.
 
 use turn_gauge::net::client::{NetClient, Status};
 use turn_gauge::protocol::Regime;
@@ -53,7 +53,7 @@ pub fn draw_panel(client: &mut NetClient, url: &str) -> Actions {
           "series {} - {}   (first to 3)",
           view.series[0], view.series[1]
         ));
-        // The number the example exists for.
+        // The audit result.
         let mirror = &client.mirror;
         ui.label(format!("turns audited {}", mirror.checked));
         if mirror.diverged == 0 {

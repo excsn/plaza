@@ -1,7 +1,7 @@
 //! The field drawn and played: click your unit, then a highlighted cell to
 //! march or a sighted enemy to shoot; the watch order and the offer's FIRE and
-//! HOLD are buttons big enough to find under a clock. What is not drawn is
-//! the point: an enemy your side cannot see is nowhere on this screen.
+//! HOLD are buttons big enough to find under a clock. An enemy your side
+//! cannot see is not drawn anywhere on this screen.
 
 use macroquad::prelude::*;
 use held_fire::net::client::NetClient;
@@ -130,7 +130,8 @@ pub fn draw_scene(client: &NetClient, effects: &Effects, hud: &Hud, now_ms: u64)
     }
   }
 
-  // Bodies: yours whole, theirs only as served. The absence is the fog.
+  // Bodies: yours whole, theirs only as served. Unseen enemies are not in the
+  // view, so they are not drawn.
   for unit in &view.yours {
     draw_body(unit.id, unit.side, unit.at, unit.hp, unit.alive, size, now_ms);
     if unit.alive && unit.stance == Stance::Watching {

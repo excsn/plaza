@@ -38,7 +38,7 @@ class AckWindow {
     }
     if (seq > _newest) {
       final shift = seq - _newest;
-      // A shift of exactly the window is the boundary worth care: every old bit
+      // A shift of exactly the window needs care: every old bit
       // falls out, but the old newest lands in the last slot and must survive.
       // Using one threshold for both the shift and the too-far test loses it.
       final shifted = shift >= 64 ? 0 : _mask << shift;
@@ -74,7 +74,7 @@ class AckWindow {
   ///
   /// Clamped to the window, so a peer that has fallen far behind asks for a
   /// bounded amount of work. Past the window the data is beyond recovery and the
-  /// caller should be resynchronising, not backfilling.
+  /// caller should be resynchronising rather than backfilling.
   Iterable<int> missingSince(int oldest) sync* {
     if (!_started) return;
     var floor = _newest - ackWindow;
@@ -86,14 +86,14 @@ class AckWindow {
 
   /// The newest sequence such that **everything** from [first] up to it arrived.
   ///
-  /// Not the same as [newest], and the difference is load-bearing. A protocol
-  /// that retransmits wants the mask. A protocol that *re-derives* wants a state
-  /// the peer provably reached, and receiving N+1 after losing N does not put a
-  /// peer in the state N+1 implies: whatever N announced and N+1 had no reason
-  /// to repeat is gone. Taking the newest set bit hands the sender a state that
-  /// never existed, and the resulting divergence is permanent and close to
-  /// invisible. Measured, it made loss recovery statistically indistinguishable
-  /// from no recovery at every loss rate.
+  /// This can differ from [newest]. A protocol that retransmits wants the mask.
+  /// One that *re-derives* wants a state the peer provably reached and
+  /// receiving N+1 after losing N does not put a peer in the state N+1 implies:
+  /// whatever N announced and N+1 had no reason to repeat is gone. Taking the
+  /// newest set bit hands the sender a state that never existed and the
+  /// resulting divergence is permanent and close to invisible. When measured,
+  /// using the newest set bit made loss recovery statistically
+  /// indistinguishable from no recovery at every loss rate.
   ///
   /// Null when the run is empty, covering two cases a caller treats alike:
   /// [first] did not arrive, or it is older than the window can speak about.

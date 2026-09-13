@@ -3,8 +3,8 @@
 //! One field per strategy is deliberately not what happens here: the field is
 //! rebuilt each tick under whichever strategy the host has dialled, so the
 //! panel can move between them and watch the bandwidth follow. That is the
-//! same shape cube_yard's encoding dial arrived at, for the same reason: a
-//! ratio you can only see by running twice is a ratio nobody sees.
+//! same shape cube_yard's encoding dial arrived at, for the same reason: nobody
+//! sees a ratio that takes two runs to show.
 
 use std::collections::HashMap;
 
@@ -276,9 +276,9 @@ mod tests {
 
   #[test]
   fn a_lock_is_held_rather_than_recomputed() {
-    // A lock re-derived from the cone every tick is a spatial query wearing a
-    // mechanic's name: turn your head and it is gone, so nothing can be
-    // subscribed to it and no player can aim with it.
+    // A lock re-derived from the cone every tick is only a spatial query: turn
+    // your head and it is gone, so nothing can be subscribed to it and no
+    // player can aim with it.
     let mut state = SpaceState::new();
     state.space.spawn(0);
     state.space.spawn(1);
@@ -332,7 +332,7 @@ mod tests {
 
   #[test]
   fn altitude_is_only_respected_by_the_strategies_that_look_at_it() {
-    // The example's whole claim, at the smallest scale that shows it: two
+    // The example's claim, at the smallest scale that shows it: two
     // ships at the same (x, z) and far apart in y.
     for (strategy, expect) in [
       (Strategy::Flat, 2),

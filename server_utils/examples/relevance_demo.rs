@@ -1,7 +1,7 @@
 //! Relevance demo: why a multiplayer world with many entities needs interest
-//! management, and how the `relevance` building blocks provide it.
+//! management and how the `relevance` building blocks provide it.
 //!
-//! A world larger than one screen holds more entities than fit on the wire, and
+//! A world larger than one screen holds more entities than fit on the wire and
 //! its players stand in different places. Sending every entity to every player is
 //! `players x entities` per tick and does not scale. This runs a field of static
 //! entities with several moving players and, each tick, sends each player only
@@ -12,9 +12,9 @@
 //! cargo run --example relevance_demo -p plaza_server_utils
 //! ```
 //!
-//! It reports the bandwidth the relevance filter saves over the naive broadcast,
-//! and the per-player spawn/despawn stream as players move, exactly what a horde
-//! game (thousands of short-lived entities) leans on.
+//! It reports the bandwidth the relevance filter saves over the naive broadcast
+//! and the per-player spawn/despawn stream as players move, which is what a
+//! horde game (thousands of short-lived entities) depends on.
 
 use plaza_server_utils::relevance::{GridQuantizer, SpatialGrid, VisibilitySet};
 

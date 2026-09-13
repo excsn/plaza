@@ -11,18 +11,18 @@
 //! away. Real clocks run at slightly different rates, so over a long session the
 //! true offset ramps, and a fitted line tracks that ramp where an average lags it.
 //!
-//! **One honest limit.** A round trip measures total delay, not each leg. When
-//! the network is asymmetric (upload slower than download, or the reverse), the
-//! one-way offset is genuinely *unrecoverable* from RTT alone, no estimator fixes
-//! that without an external time source. Regression buys you the drift *rate*
-//! cleanly; it does not buy you the asymmetric constant. Size your interpolation
-//! buffer to absorb the residual.
+//! **Asymmetric delay.** A round trip measures total delay rather than each
+//! leg. When the network is asymmetric (upload slower than download or the
+//! reverse), the one-way offset cannot be recovered from RTT alone and no
+//! estimator fixes that without an external time source. Regression recovers
+//! the drift *rate* cleanly but not the asymmetric constant. Size your
+//! interpolation buffer to absorb the residual.
 //!
 //! Times are `f64`: these are absolute clock readings rather than durations,
 //! and a millisecond timestamp outgrows `f32`'s integer precision after about
 //! 4.6 hours, so the fit needs the headroom.
 //!
-//! **The unit is yours, and both ends must mean the same one.** Nothing here
+//! **You pick the unit; both ends must use the same one.** Nothing here
 //! names a unit; feed local and remote readings in whatever the two ends
 //! agreed on out of band. Unlike [`crate::rtt::RttEstimator`], which only ever
 //! subtracts two of your own readings, this one compares your clock against

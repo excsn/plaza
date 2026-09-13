@@ -84,9 +84,8 @@ void main() {
       expect(missing.first, greaterThanOrEqualTo(1000 - ackWindow));
     });
 
-    /// The doctest from `ack.rs`. Not the same as `newest`, and the difference
-    /// is the whole point: 5 arrived but 4 did not, so the newest state the
-    /// peer provably reached is the one after 3.
+    /// The doctest from `ack.rs`. It differs from `newest`: 5 arrived but 4 did
+    /// not, so the newest state the peer provably reached is the one after 3.
     test('contiguousBase stops at the first gap', () {
       final w = AckWindow();
       for (final s in [1, 2, 3, 5]) {

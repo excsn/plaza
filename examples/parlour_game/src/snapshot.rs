@@ -21,11 +21,10 @@ pub struct TableSnapshotter;
 /// One player's view, as a function.
 ///
 /// Public so a bot can be handed exactly what a browser is handed. A bot that
-/// read `TableState` would see every hand at the table, which is the one thing
-/// this example exists to say cannot happen.
+/// read `TableState` would see every hand at the table, which no client may do.
 ///
-/// `me` is `None` for a spectator and for the uniform pass, and both want the
-/// same answer: no hand at all.
+/// `me` is `None` for a spectator and for the uniform pass. Both get no hand at
+/// all.
 pub fn player_view(state: &TableState, me: Option<PlayerId>) -> PlayerView {
   let my_hand = me
     .as_ref()

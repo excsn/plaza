@@ -6,12 +6,13 @@
 //! | which round it is | [`RoundManager`] | [`SequentialRoundManager`] |
 //! | what phase play is in | none | [`Phased`], which holds the phase and announces changes |
 //!
-//! The traits are the contract: swap in your own implementation without giving
-//! up the rest.
+//! You can swap in your own implementation of either trait and keep using the
+//! rest.
 //!
-//! Phases get no trait because *when* a phase changes varies too much between
-//! games for one shape to fit; *that a change reaches clients* does not, so
-//! [`Phased`] owns the field and makes changing it silently inexpressible.
+//! Phases have no trait because when a phase changes varies too much between
+//! games for one shape to fit. Every game needs each change to reach clients,
+//! so [`Phased`] owns the field and gives no way to change it without emitting
+//! a notice.
 //!
 //! All three emit notice ops through an [`FsmContext`](crate::common::fsm::FsmContext);
 //! [`OpsQueue`](crate::common::fsm::OpsQueue) is the minimal one to pass in. A

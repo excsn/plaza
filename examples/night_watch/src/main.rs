@@ -1,19 +1,19 @@
 //! A village with a wolf in it: the scripted run.
 //!
-//! What the other examples cannot show, and this one is for:
+//! What this example covers that the others do not:
 //!
-//! - `Phased` where the phase is the **rule set**: at night one role may act,
-//!   by day everyone may, and the same op is legal or refused depending on
-//!   where the sun is.
+//! - `Phased` where the phase is the rule set: at night one role may act and
+//!   by day everyone may, so the same op is accepted or refused depending on
+//!   the phase.
 //! - `SequentialRoundManager::new(None, ..)`, the unbounded mode, driven for
 //!   the first time: the game ends when a side wins, never on a count.
 //! - Collect-then-resolve: ballots are gathered all day and nothing happens
 //!   until dusk, when they resolve at once.
 //! - The epoch guarding a phase deadline: a day that closes early because
-//!   everyone voted leaves its deadline scheduled, and the deadline discovers
-//!   it is stale rather than firing into the night.
-//! - Per-recipient secrecy with an inversion: each player sees only their own
-//!   role, and **the dead see everything**.
+//!   everyone voted leaves its deadline scheduled. The epoch keeps it from
+//!   firing into the night.
+//! - Per-recipient secrecy: each player sees only their own role, except the
+//!   dead, who see every role.
 //!
 //! To play it yourself, `cargo run -p plaza_example_night_watch --bin serve`
 //! and open five browser tabs.
@@ -40,8 +40,8 @@ type VillageSession = InProcessSession<VillageOp, PlayerId>;
 
 const TICK: Duration = Duration::from_millis(20);
 
-/// Logs what one villager receives. Run it for the wolf and for a victim and
-/// the difference between their snapshots is the example.
+/// Logs what one villager receives. Run it for the wolf and for a victim to
+/// see how their snapshots differ.
 fn spawn_listener(name: &'static str, inbox: ClientInbox<VillageOp, PlayerId>) -> tokio::task::JoinHandle<()> {
   tokio::spawn(async move {
     while let Ok(msg) = inbox.recv().await {
@@ -98,8 +98,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let tick_tx = controller_tx.clone();
   let ticker = tokio::spawn(async move { TickDriver::new(TICK).run(tick_tx).await });
 
-  // Five villagers. The first to be seated is the first game's wolf, which the
-  // village knows and they do not.
+  // Five villagers. The first to be seated is the first game's wolf. The
+  // server knows this and the players do not.
   let names = ["Ada", "Bea", "Cal", "Dee", "Eve"];
   let mut tasks = Vec::new();
   info!("--- villagers arriving; the deal happens at five");

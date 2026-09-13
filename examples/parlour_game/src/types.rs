@@ -23,10 +23,10 @@ use crate::wallets::WalletRegistry;
 /// vocabulary included. Both sessions declare it, so the lobby and a table
 /// cannot drift apart even though they carry different op enums.
 ///
-/// It does not cover which codec is in use, and does not need to: the lobby
-/// speaks JSON and a table speaks named MessagePack in this very example, and a
-/// codec mismatch fails on the first frame rather than decoding into something
-/// plausible.
+/// It does not cover which codec is in use. A codec mismatch fails on the first
+/// frame instead of decoding into something plausible, so it does not need to.
+/// In this example the lobby speaks JSON and a table speaks compact
+/// MessagePack.
 pub const PROTOCOL: u32 = WIRE_PROTOCOL;
 
 include!(concat!(env!("OUT_DIR"), "/wire_protocol.rs"));
@@ -125,7 +125,8 @@ pub struct TableCard {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LobbyOp {
   ListTables,
-  /// Be paired rather than choose. What a card game's lobby is mostly for.
+  /// Asks to be paired rather than choosing a table, which is what a card
+  /// game's lobby is mostly for.
   QuickMatch,
   LeaveQueue,
   Join { room_id: RoomId },
@@ -165,7 +166,7 @@ pub enum LobbyOp {
 
 /// What one player is allowed to see.
 ///
-/// The difference between `my_hand` and `opponents` is the whole reason
+/// The difference between `my_hand` and `opponents` is why
 /// `SnapshotProvider` receives a `target_agent`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PlayerView {
@@ -187,8 +188,8 @@ pub struct PlayerView {
   pub seats_total: u32,
   pub spectators: u32,
   /// Seats the queue filled because nobody came for them. A table of three
-  /// humans and a table of one plus two bots are different games, and the
-  /// player is entitled to know which they are at.
+  /// humans plays differently from one human and two bots, so the player is
+  /// told which they are at.
   pub bots: u32,
 }
 
@@ -240,9 +241,9 @@ pub enum TableOp {
 
 /// Work scheduled against one occupancy of a phase.
 ///
-/// The `epoch` is the whole point: by the time this fires, the round may have
-/// ended, the player may have played, or someone may have disconnected. The
-/// token says whether the world it was scheduled in still exists.
+/// The `epoch` handles staleness: by the time this fires, the round may have
+/// ended, the player may have played or someone may have disconnected. The
+/// epoch says whether the phase occupancy it was scheduled in is still current.
 #[derive(Clone, Debug)]
 pub enum TableEvent {
   /// Play for whoever is sitting on their turn.
@@ -264,16 +265,16 @@ pub struct Occupancy {
 /// `Clone` throughout, which is what lets [`TableState::best_play_for`] evaluate
 /// a move by simulating it.
 ///
-/// `Default` exists only to satisfy `RoomFactory::GameStateType`, and what it
-/// produces is not a usable table: no name, no stake, and a `WalletRegistry`
+/// `Default` exists only to satisfy `RoomFactory::GameStateType` and what it
+/// produces is not a usable table: no name, no stake and a `WalletRegistry`
 /// shared with nobody. The factory always builds this from the room's settings.
-/// This is the bound asking for a constructor it cannot name, and it is the
-/// second example in this workspace to work around it the same way.
+/// The bound asks for a constructor that has no settings to build from. This is
+/// the second example in this workspace to work around it the same way.
 ///
-/// Note it cannot even be derived: none of `Phased`, `RoundRobinTurnManager` or
-/// `SequentialRoundManager` is `Default`, all three for the same good reason,
-/// that they are constructed with the op variants they wrap. So the workaround
-/// is a hand-written impl whose only caller is a trait bound.
+/// It cannot be derived either: none of `Phased`, `RoundRobinTurnManager` or
+/// `SequentialRoundManager` is `Default`, because each is constructed with the
+/// op variants it wraps. So the workaround is a hand-written impl whose only
+/// caller is a trait bound.
 #[derive(Debug, Clone)]
 pub struct TableState {
   pub name: String,
@@ -429,9 +430,9 @@ impl TableState {
 
   /// Which card to play, decided by cloning the state and trying each one.
   ///
-  /// A real game would search deeper; the point here is that it can search at
-  /// all. Nothing in `TableState` holds a timer, a channel, or a boxed closure,
-  /// so a simulation costs a `clone` and runs the same code the live game does.
+  /// A real game would search deeper. Nothing in `TableState` holds a timer, a
+  /// channel or a boxed closure, so a simulation costs a `clone` and runs the
+  /// same code the live game does.
   pub fn best_play_for(&self, player: &PlayerId) -> Option<Card> {
     let hand = self.hands.get(player)?;
 

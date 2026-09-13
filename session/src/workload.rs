@@ -47,8 +47,8 @@ pub const MIN_OUTBOUND_CAPACITY: usize = 4;
 
 /// Floor under a derived controller-facing depth.
 ///
-/// **Not measured.** `ops_per_player_per_tick: 0` is a claim about intent, not
-/// a guarantee: a client can always send, and a queue derived to depth one
+/// **Not measured.** `ops_per_player_per_tick: 0` states intent rather than a
+/// guarantee: a client can always send and a queue derived to depth one
 /// refuses the second frame that arrives in a tick. These hold small items on
 /// one server rather than bytes per connection, so the floor is cheap.
 pub const MIN_CONTROLLER_CAPACITY: usize = 8;
@@ -274,14 +274,14 @@ impl Queues {
 impl Overflow {
   /// What each queue does when it is full, from [`Workload::priority`].
   ///
-  /// [`LossFree`](Priority::LossFree) waits wherever a producer can wait, and
+  /// [`LossFree`](Priority::LossFree) waits wherever a producer can wait and
   /// ends a connection it cannot deliver to rather than discarding the frame:
   /// where ops do not supersede each other, a client that missed one holds a
-  /// view the server never authored, and disconnecting says so.
+  /// view the server never authored, so it is disconnected.
   ///
   /// [`LatencyFirst`](Priority::LatencyFirst) drops everywhere. The next frame
-  /// replaces the lost one, and nothing waiting is what keeps a wedged peer
-  /// from becoming everybody's problem.
+  /// replaces the lost one and not waiting keeps one wedged peer from stalling
+  /// everybody else.
   pub fn for_workload(workload: &Workload) -> Self {
     match workload.priority {
       Priority::LossFree => Self {
@@ -308,10 +308,10 @@ pub const RATE_HEADROOM: f64 = 4.0;
 
 /// Floor under a derived inbound rate.
 ///
-/// **Not measured.** A workload claiming `ops_per_player_per_tick: 0` is
-/// describing an audience, not promising silence: a spectator still says hello,
-/// asks for a resync, and leaves. Deriving zero from that would refuse the
-/// first thing it ever said.
+/// **Not measured.** A workload claiming `ops_per_player_per_tick: 0`
+/// describes an audience rather than promising silence: a spectator still says
+/// hello, asks for a resync and leaves. Deriving zero from that would refuse
+/// the first thing it ever sent.
 pub const MIN_INBOUND_RATE: f64 = 5.0;
 
 impl Rate {
@@ -324,10 +324,10 @@ impl Rate {
   /// [`MIN_INBOUND_RATE`], with a burst of one second's worth.
   ///
   /// **Not applied by [`SessionOptions::workload`], on purpose**, unlike every
-  /// other derivation in this file. Those size a queue, where being wrong costs
-  /// memory; this one refuses traffic, where being wrong costs a player their
-  /// move. So the arithmetic is here to be asked for and the decision to enforce
-  /// it stays a line the application writes:
+  /// other derivation in this file. Those size queues and a wrong size only
+  /// wastes memory. This one refuses traffic and a rate set too low drops a
+  /// player's input. So the arithmetic is available here and enforcing it stays
+  /// a line the application writes:
   ///
   /// ```rust,ignore
   /// SessionOptions::with_protocol(ProtocolVersion(PROTOCOL))

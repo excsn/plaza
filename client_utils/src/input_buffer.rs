@@ -178,9 +178,9 @@ where
   ///
   /// Non-zero means a reconciliation can no longer replay everything the server
   /// has not acknowledged, so the prediction is wrong by whatever those inputs
-  /// did. The `warn!` beside it says so once per event into a log; this is the
-  /// number to put on a HUD or an alert, because what matters is whether it is
-  /// climbing, not that it happened.
+  /// did. The `warn!` beside it logs each event; this count is for a HUD or an
+  /// alert, because what matters is whether it is climbing rather than that it
+  /// happened once.
   ///
   /// Size the buffer at input rate times worst round trip and this stays zero.
   pub fn overflowed(&self) -> u64 {
@@ -248,10 +248,9 @@ mod tests {
 
   #[test]
   fn overflow_is_counted_because_replay_is_no_longer_complete() {
-    // The count is the useful form: past this point a reconciliation cannot replay
-    // everything the server has not acknowledged, so the prediction is wrong by
-    // whatever the dropped inputs did, and what matters is whether it keeps
-    // climbing rather than that it happened once.
+    // Past this point a reconciliation cannot replay everything the server has
+    // not acknowledged, so the prediction is wrong by whatever the dropped
+    // inputs did. A count shows whether it keeps climbing.
     let mut buffer = ClientInputBuffer::<TestOp, TestState>::new(2);
     assert_eq!(buffer.overflowed(), 0);
     for seq in 1..=5 {

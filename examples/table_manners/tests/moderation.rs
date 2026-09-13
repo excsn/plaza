@@ -152,8 +152,8 @@ async fn a_flood_gets_the_flooder_removed_and_nobody_else() {
 #[tokio::test]
 async fn a_clumsy_burst_costs_its_own_frames_and_keeps_its_seat() {
   // The verdict the party could not express while removal was the only one it
-  // had. A guest whose packets arrive in a clump is over the rate and is not a
-  // griefer, and the difference is worth a seat.
+  // had. A guest whose packets arrive in a clump is over the rate but is not a
+  // griefer, so it keeps its seat.
   let (session, host) = party(patient()).await;
   let addr = session.local_addr().to_string();
   let clumsy = Guest::arrive(&addr, Some(0)).await.expect("connect");

@@ -178,8 +178,8 @@ async fn inbound_absorption_drained(inbound: usize, decoded: usize, drain: bool)
   .await;
   let addr = session.local_addr();
 
-  // Counted, not assumed: how many the drainer removes depends on how long the
-  // client's send takes, which varies run to run. Inferring absorption from the
+  // Counted rather than assumed: how many the drainer removes depends on how
+  // long the client's send takes, which varies run to run. Inferring absorption from the
   // accepted total left that term in the reading, and repeating the run only
   // shrank its spread.
   let taken = Arc::new(AtomicU64::new(0));
@@ -263,8 +263,7 @@ async fn conditioner_absorption(depth: usize) -> u64 {
 /// formulas that compute a depth from a [`Workload`] are worth the parameters
 /// they read: the load is built from the workload rather than from the depth,
 /// and run at the derived depth and at a fraction of it. A parameter whose
-/// derived depth does not sit on the knee is a parameter that does not earn
-/// its place.
+/// derived depth does not sit on the knee is not worth having.
 ///
 /// Returns drops at the derived depth and at successive fractions of it. The
 /// first should be zero and one of the rest should not: halving alone lands
@@ -383,7 +382,7 @@ async fn outbound_formula(tick_rate: u32, stall: Duration, payload: usize) -> (u
 /// Resident kibibytes for this process.
 ///
 /// Shelled out rather than taken through `libc`, because a dependency added to
-/// read one number in a bench is a dependency the crate carries.
+/// read one number in a bench would still be a dependency of the crate.
 fn resident_kib() -> u64 {
   let pid = std::process::id().to_string();
   let out = std::process::Command::new("ps")

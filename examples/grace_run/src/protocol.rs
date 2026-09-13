@@ -27,7 +27,7 @@ pub const CHEST_KEYS: u8 = 2;
 pub const ROOM_COINS: u32 = 5;
 
 /// How long a dropped seat is held before the run stops waiting, in ms.
-/// A dial, not a constant: the trade is the example.
+/// A dial rather than a constant, because the example is about that trade.
 pub const DEFAULT_GRACE_MS: u64 = 10_000;
 
 /// How long the completed run stays up before the next delve.

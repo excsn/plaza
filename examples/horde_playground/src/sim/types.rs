@@ -1,6 +1,6 @@
 //! The shared vocabulary: geometry, the entities, the behaviour rules both sides
-//! run, the packets that cross the wire, and the byte accounting that makes
-//! bandwidth claims measurable rather than asserted.
+//! run, the packets that cross the wire and the byte accounting that bandwidth
+//! figures are measured with.
 
 use plaza_client_utils::extrapolation::Extrapolatable;
 use plaza_client_utils::interpolation::Interpolatable;
@@ -62,7 +62,7 @@ pub const NOVA_RING_SECS: f32 = 0.45;
 /// New enemies arrive in waves, just outside somebody's view.
 pub const WAVE_INTERVAL_MS: u64 = 500;
 
-// The player as a target rather than an invulnerable camera.
+// Player health, damage and invulnerability.
 /// Full health. Kept small and integer so it rides the wire as one byte per
 /// player and a bar is easy to read.
 pub const PLAYER_MAX_HEALTH: f32 = 100.0;
@@ -115,10 +115,10 @@ pub type PlayerId = u8;
 /// | 4 | 6 ms | 136 KiB/s |
 /// | 128 | 76 ms | 2.1 MiB/s |
 ///
-/// Almost all of that second row is now the enemies, which is the honest shape:
-/// per-player traffic used to go to everybody on both streams and was 81% of
-/// the total, and relevance applies to players as well as enemies now, so the
-/// `O(players^2)` term is gone. What is left grows because 128 viewers each see
+/// Almost all of that second row is now the enemies, which is the expected
+/// shape: per-player traffic used to go to everybody on both streams and was
+/// 81% of the total. Relevance applies to players as well as enemies now, so
+/// the `O(players^2)` term is gone. What is left grows because 128 viewers each see
 /// their own slice of a 3000-strong horde.
 ///
 /// Re-run it before moving this. The hard limit above it is the wire, where
@@ -149,7 +149,7 @@ impl Extrapolatable<Vec2, f32> for Vec2 {
 ///
 /// The generation is what makes a recycled slot detectable. Without it, a packet
 /// still in flight that refers to slot 5 will be applied to whatever now lives in
-/// slot 5, which is the whole reason this type is not just an index.
+/// slot 5, which is why this type carries more than an index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(into = "u64", from = "u64")]
 pub struct Handle {
@@ -180,14 +180,14 @@ impl Handle {
   }
 }
 
-/// The wire handle and the library's key are the same pair, so this is a
-/// widening and never a decision.
+/// The wire handle and the library's key are the same pair, so this conversion
+/// loses nothing.
 ///
 /// Worth having as a conversion rather than an open-coded shift at each call
 /// site: the client's mirror and the server's baseline both key on
-/// `SlotKey::encode`, and two hand-written packings that agree today are a
-/// disagreement waiting to happen. It would present as a digest mismatch over a
-/// world both sides actually hold identically, which is a genuinely bad afternoon.
+/// `SlotKey::encode`; two hand-written packings that agree today could drift
+/// apart later. That would show up as a digest mismatch over a world both sides
+/// actually hold identically, which is hard to diagnose.
 impl From<Handle> for SlotKey {
   fn from(handle: Handle) -> Self {
     SlotKey::new(handle.idx as u32, handle.generation)
@@ -381,14 +381,14 @@ impl Shot {
 }
 
 /// **The shared movement rule for a player.** The server integrates a held
-/// direction every tick, and a client predicting its own player runs exactly
+/// direction every tick and a client predicting its own player runs exactly
 /// this, so the two cannot disagree.
 ///
-/// Sharing it is the point. This rule lived in two places for a while, the
-/// server's `step` and the client's local prediction, and every divergence bug
-/// in this example was in an entity whose rule was written twice rather than
-/// called twice. A player is *unforced*, nothing pushes it but its own input, so
-/// this really is the whole of it and a client running it is exact.
+/// It lived in two places for a while, the server's `step` and the client's
+/// local prediction. Every divergence bug in this example was in an entity
+/// whose rule was written out twice instead of shared. A player is *unforced*:
+/// nothing pushes it but its own input, so this rule is complete and a client
+/// running it is exact.
 pub fn step_player(pos: &mut Vec2, dir: Vec2, dt: f32) {
   pos.x = (pos.x + dir.x * PLAYER_SPEED * dt).clamp(0.0, ARENA_W);
   pos.y = (pos.y + dir.y * PLAYER_SPEED * dt).clamp(0.0, ARENA_H);
@@ -408,16 +408,16 @@ pub fn step_enemy(enemy: &mut Enemy, target_pos: Vec2, repel_radius: Option<f32>
     //
     // The first version was a permanent aura with a hard sign flip at a fixed
     // radius, and it produced a perfect motionless ring of enemies at exactly
-    // that radius. Not a bug in the netcode, an equilibrium in the rule: step
-    // inward and you are pushed out, step outward and you are pulled in, so
-    // everything converges there and stops. It also made the player invulnerable
-    // and quietly flattered every accuracy readout, because stationary entities
-    // are trivially easy to predict.
+    // that radius. The cause was an equilibrium in the rule rather than a
+    // netcode bug: step inward and you are pushed out, step outward and you are
+    // pulled in, so everything converges there and stops. It also made the
+    // player invulnerable and made every accuracy readout look better than it
+    // was, because stationary entities are trivially easy to predict.
     //
-    // Pulsing removes the equilibrium rather than softening it. Between pulses
-    // there is no outward force at all, so nothing can settle at a radius, and
-    // the push being weaker than the chase means a pulse buys distance rather
-    // than a wall.
+    // Pulsing removes the equilibrium. Between pulses there is no outward force
+    // at all, so nothing can settle at a radius. The push is weaker than the
+    // chase, so a pulse gains the player some distance without walling the
+    // enemies off.
     //
     // This is still the coupling the coin feature exists for: whether a player
     // owns the upgrade is a *discrete, purchased* fact feeding the rule every
@@ -436,15 +436,15 @@ pub const REPULSOR_PULSE_MS: u64 = 700;
 /// A pulse reaches somewhere in this range, chosen per pulse.
 pub const REPULSOR_MIN_RADIUS: f32 = 28.0;
 pub const REPULSOR_MAX_RADIUS: f32 = 95.0;
-/// How hard it pushes, as a fraction of an enemy's chase speed. Below 1 on
-/// purpose: a pulse should buy you room, not a wall.
+/// How hard it pushes, as a fraction of an enemy's chase speed. Below 1 so a
+/// pulse gains you room without walling the enemies off.
 pub const REPULSOR_STRENGTH: f32 = 0.6;
 
 /// The active pulse radius at `now_ms`, or `None` between pulses.
 ///
-/// The radius is random per pulse and **derived**, not sampled. Both the server
-/// and every client evaluate this same function against their own clock, so a
-/// shared rule with a random parameter stays a shared rule. Drawing from a local
+/// The radius is random per pulse and **derived** rather than sampled. Both the server
+/// and every client evaluate this same function against their own clock, so the
+/// random parameter does not break the shared rule. Drawing from a local
 /// RNG instead would give each side a different radius, and the two simulations
 /// would diverge for reasons no correction stream could explain.
 ///
@@ -468,12 +468,12 @@ pub type CoinId = u32;
 
 /// Currency, dropped where an enemy died.
 ///
-/// Deliberately currency and not score. A score is monotonic and write-only, so
-/// a client that briefly believes the wrong number is harmlessly corrected by the
-/// next packet. A balance you *spend* has neither property: drift up and a
-/// purchase that looked affordable fails, drift down and the player is being
-/// denied money they earned, and neither resolves on its own because the error
-/// only surfaces at the transaction.
+/// Currency rather than score. A score is monotonic and write-only, so a client
+/// that briefly believes the wrong number is harmlessly corrected by the next
+/// packet. A balance you *spend* has neither property: drift up and a purchase
+/// that looked affordable fails, drift down and the player is being denied
+/// money they earned. Neither resolves on its own because the error only
+/// surfaces at the transaction.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Coin {
   pub id: CoinId,
@@ -498,9 +498,9 @@ pub const COIN_DROP_IN: u32 = 6;
 /// A coin left uncollected eventually disappears, so the field does not silt up.
 pub const COIN_TTL_MS: u64 = 12_000;
 
-/// What currency buys. Both change a rule the client runs locally, which is the
-/// point: an upgrade that only changed a server-side number could not corrupt a
-/// client's simulation, and corrupting it is the behaviour worth demonstrating.
+/// What currency buys. Both change a rule the client runs locally. An upgrade
+/// that only changed a server-side number could not corrupt a client's
+/// simulation and that corruption is what this example demonstrates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(into = "u8", try_from = "u8")]
 pub enum Upgrade {
@@ -548,7 +548,7 @@ impl Upgrade {
 
 /// How long a collected coin takes to reach the player it was awarded to.
 ///
-/// A **fixed duration**, not a fixed speed, which is why the flight cannot be a
+/// A **fixed duration** rather than a fixed speed, which is why the flight cannot be a
 /// constant-velocity move: at constant speed the arrival time would grow with the
 /// distance, and a coin taken from the far edge of the pickup radius would lag
 /// behind one taken from under your feet. Fixed time against a target that is
@@ -557,9 +557,8 @@ impl Upgrade {
 ///
 /// Long enough to be watchable. The first version ran for 320 ms with a cubic
 /// ease-in and read as no motion at all: nineteen frames, of which the first ten
-/// covered 15% of the distance and the last nine covered the rest. An
-/// acceleration nobody can see is indistinguishable from a teleport, which is
-/// what it looked like.
+/// covered 15% of the distance and the last nine covered the rest. Nobody
+/// could see the acceleration, so it looked like a teleport.
 pub const COIN_FLIGHT_MS: f32 = 900.0;
 
 /// Every player draws coins in a little, upgrade or not.
@@ -569,16 +568,16 @@ pub const COIN_FLIGHT_MS: f32 = 900.0;
 /// that reaches 46 is a source four times wider than its sink. Measured before
 /// this existed, 35% of all coins expired where they fell and an average of 112
 /// sat on the ground at any moment, which made the magnet upgrade compulsory
-/// rather than optional. An upgrade should widen a rule that already works.
+/// rather than optional. With the base pull in place, the magnet only has to
+/// widen a rule that already works.
 pub const COIN_ATTRACT_RADIUS: f32 = 200.0;
 /// Above [`PLAYER_SPEED`] on purpose. A pull slower than a player is one you
-/// outrun: the coin falls behind, leaves the radius, and stops where it was
+/// outrun: the coin falls behind, leaves the radius and stops where it was
 /// abandoned. Measured at 115 against a player speed of 190, that alone left 18%
 /// of coins expiring where they fell.
 pub const COIN_ATTRACT_SPEED: f32 = 235.0;
 /// What the magnet upgrade widens it to. Mostly *reach*, since the base pull
-/// already keeps up: an upgrade should extend a rule that works rather than
-/// rescue one that does not.
+/// already keeps up and the upgrade only has to extend it.
 pub const MAGNET_RADIUS: f32 = 400.0;
 pub const MAGNET_SPEED: f32 = 300.0;
 
@@ -632,7 +631,7 @@ pub struct Spawn {
 pub struct Sample {
   pub handle: Handle,
   pub pos: Vec2,
-  /// Sent only when it changed: the intent, not the output.
+  /// Sent only when it changed. It is the intent rather than the output.
   pub target: Option<PlayerId>,
 }
 
@@ -671,7 +670,7 @@ impl TryFrom<u8> for LeaveReason {
 /// This is the third answer to "what does this client need to know about that
 /// entity?", after sending it and dropping it. Relevance culling is binary, so
 /// beyond the view radius a client knows nothing at all and any map it draws is
-/// either blank or a lie borrowed from the server. A summary costs six bytes for
+/// either blank or copied from the server. A summary costs six bytes for
 /// an arbitrary number of enemies and is enough to draw a crowd.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct Crowd {
@@ -695,12 +694,12 @@ pub struct PlayerFrame {
   /// It used to be everybody, to everybody, on this stream *and* inside every
   /// entity packet. That is `O(players^2)`, and measured at 128 players it was
   /// 81% of all downstream traffic while the three thousand enemies, which do
-  /// get relevance, were 9%. The one thing this example never applied its own
-  /// technique to was the thing that dominated it.
+  /// get relevance, were 9%. The example had applied relevance to everything
+  /// except the player stream, which was the largest cost.
   ///
   /// A player is needed here if this recipient can see them, or if an enemy the
-  /// recipient holds is chasing them: `step_enemy` aims at a player, so a target
-  /// the client cannot place is a rule it cannot run.
+  /// recipient holds is chasing them: `step_enemy` aims at a player, so the
+  /// client cannot run the rule for an enemy whose target it cannot place.
   pub players: Vec<(PlayerId, Vec2)>,
   /// Health and shield for the same set, paired with the id rather than
   /// positional, because the set is a subset now.
@@ -735,7 +734,7 @@ pub struct PlayerFrame {
 /// One byte per axis over a 3000 unit arena is about 12 units a step, which is
 /// under a single pixel on a minimap of any usual size. The quantisation is
 /// therefore invisible where it is used and would be unacceptable anywhere
-/// else, which is exactly the point of a tier.
+/// else, which is why it is a separate tier.
 pub fn quantize_far(pos: Vec2) -> (u8, u8) {
   let q = |v: f32, span: f32| ((v / span).clamp(0.0, 1.0) * 255.0).round() as u8;
   (q(pos.x, ARENA_W), q(pos.y, ARENA_H))
@@ -807,7 +806,7 @@ pub struct Packet {
   pub nova_at_ms: Option<u64>,
   /// Shots that **started** near this player since the last packet.
   ///
-  /// An event, not a live set. The set was re-sent in full every packet for the
+  /// An event rather than a live set. The set was re-sent in full every packet for the
   /// whole 1.4 s flight, which is one entry in roughly twenty packets per shot,
   /// and it is sending the output of an equation both sides can solve: a shot is
   /// an origin, a velocity and a time, and a client can evaluate that at any
@@ -817,15 +816,15 @@ pub struct Packet {
   /// real and is fixed by [`Packet::shots_ended`]: without it a shot flies on
   /// through the enemy it killed. The second, that the client draws shots in the
   /// past while its enemy mirror holds the present, stopped being true when the
-  /// whole scene moved to one render instant, and it is why this is worth
-  /// revisiting rather than a decision being re-litigated.
+  /// whole scene moved to one render instant, which is why it was worth
+  /// revisiting.
   #[serde(default)]
   pub shots_fired: Vec<Shot>,
   /// Shots that ended **early**, because they hit something.
   ///
   /// Expiry is not in here: a client can compute that from the fire time and the
-  /// fixed lifetime, so saying it again would be paying twice for a fact both
-  /// sides already hold. Only a hit is information the client cannot derive.
+  /// fixed lifetime, so sending it would repeat a fact both sides already hold.
+  /// Only a hit is information the client cannot derive.
   #[serde(default)]
   pub shots_ended: Vec<ShotId>,
   /// An order-independent digest of exactly what this client should hold once it
@@ -898,8 +897,8 @@ pub enum ClientMsg {
   /// `digest` is the client's view of its own mirror, so the server can catch a
   /// mirror that has silently drifted from the state it acknowledges.
   Ack { newest: u64, mask: u64, digest: u64 },
-  /// A purchase *request*. Naming it a request rather than a purchase is the
-  /// whole protocol: the client proposes, and only the server can spend.
+  /// A purchase *request*. It is a request rather than a purchase because the
+  /// client only proposes and only the server can spend.
   Buy(Upgrade),
 }
 
@@ -968,8 +967,8 @@ impl Packet {
 
   /// Where the bytes actually go: (samples, spawns, despawns, shots, per-player).
   /// Worth having, because it is easy to optimise a stream that turns out to be a
-  /// rounding error of the packet, and because the reverse happened here: the
-  /// per-player slot was the whole story at scale and nobody had looked.
+  /// rounding error of the packet and because the reverse happened here: the
+  /// per-player slot was most of the cost at scale and nobody had looked.
   pub fn bytes_breakdown(&self) -> [usize; 5] {
     [
       self.samples.len() * SAMPLE_BYTES,
@@ -1049,8 +1048,8 @@ pub struct Controls {
   pub jitter_ms: u64,
   /// Packets dropped on the way down.
   ///
-  /// Worth its own note, because adding this slider is what exposed the flaw the
-  /// rest of this example had been carrying. A delta-relevance stream assumes
+  /// Adding this slider exposed a flaw the rest of this example had been
+  /// carrying. A delta-relevance stream assumes
   /// every packet arrives: the server diffs against what it *last sent*, so one
   /// dropped packet leaves the client permanently missing whatever that packet
   /// carried, and nothing in the stream ever mentions it again.
@@ -1058,7 +1057,7 @@ pub struct Controls {
   /// What a lost packet costs, which is a property of the link rather than of
   /// this simulation.
   ///
-  /// The transport underneath is a WebSocket, so the truthful answer is a
+  /// The transport underneath is a WebSocket, so the accurate answer is a
   /// retransmission: the frame is late and everything behind it waits, and
   /// nothing is ever missing. The netcode above is written for the *other*
   /// answer, where the packet is gone and the delta stream has to re-derive
@@ -1073,11 +1072,11 @@ pub struct Controls {
   /// Predict your own balance and pickups locally instead of waiting for the
   /// server to confirm them.
   ///
-  /// Off by default, and that default is the recommendation rather than an
-  /// oversight. Nobody is frame-sensitive about a counter, so the honest design
-  /// is to show the coin vanish immediately (a local cosmetic) and let the number
-  /// arrive a round trip later. Turning this on makes the number instant and buys
-  /// a correction that cannot be eased: you cannot smoothly un-collect a coin.
+  /// Off by default, which is the recommended setting. Nobody is
+  /// frame-sensitive about a counter, so the better design is to show the coin
+  /// vanish immediately (a local cosmetic) and let the number arrive a round
+  /// trip later. Turning this on makes the number instant and brings a
+  /// correction that cannot be eased: you cannot smoothly un-collect a coin.
   pub predict_balance: bool,
   /// Buy whatever is affordable, so the purchase path runs without a human.
   pub auto_buy: bool,
@@ -1102,8 +1101,8 @@ pub struct Controls {
   pub sample_hz: u32,
   /// How often the **player** stream goes out, separately and much faster.
   ///
-  /// Two knobs rather than one because they answer different questions, and
-  /// collapsing them is what makes a low entity rate look far worse than it is.
+  /// Two knobs rather than one, because collapsing them makes a low entity rate
+  /// look far worse than it is.
   /// Enemy positions can be stale, because every client runs the enemies' own
   /// rule locally and only needs correcting. Player positions cannot, because
   /// they are the **input** to that rule: an enemy aims at where it thinks a
@@ -1111,13 +1110,12 @@ pub struct Controls {
   /// heading at once, every time the stream ticks. Players are also a handful of
   /// entities rather than thousands, so sending them often is nearly free.
   ///
-  /// This is the case study's own principle applied honestly: sync the input to
-  /// the behaviour, not just the behaviour's output.
+  /// This applies the case study's own principle to the players: sync the input
+  /// to the behaviour as well as the behaviour's output.
   pub player_sync_hz: u32,
   /// How long the server holds an input before executing it, in ms.
   ///
-  /// The playout buffer, and the reason it exists is fairness rather than
-  /// smoothness. Applied on arrival, an input from a 20 ms player lands on the
+  /// The playout buffer. It exists for fairness rather than smoothness. Applied on arrival, an input from a 20 ms player lands on the
   /// tick after they pressed it and one from a 200 ms player lands nine ticks
   /// later, so any outcome decided by who was where first (a contested pickup)
   /// is decided by ping. Scheduling every input to execute at the moment it was
@@ -1130,8 +1128,9 @@ pub struct Controls {
   pub playout_delay_ms: u64,
   /// How far behind the server's clock every client displays the world.
   ///
-  /// A property of the timeline, not of anybody's link: the same instant is on
-  /// every screen, so the server can reason about what a client has yet to play.
+  /// One value for the whole timeline, independent of anybody's link: the same
+  /// instant is on every screen, so the server can reason about what a client
+  /// has yet to play.
   /// It must cover `one_way + jitter + one send interval`, because the newest
   /// sample a client holds is already a trip old; short of that, T sits ahead of
   /// every sample and peers snap to the raw newest instead of interpolating.
@@ -1145,7 +1144,7 @@ pub struct Controls {
   ///
   /// The accepting window, and a setting rather than a constant because it is a
   /// genre decision. Tight is what a competitive shooter wants: a closed tick
-  /// stays closed, and a player who cannot reach the window loses inputs and
+  /// stays closed and a player who cannot reach the window loses inputs and
   /// rubber-bands. Loose forgives a jittery link at the cost of letting a
   /// slightly stale input take effect. Widening it is also what a lag switch
   /// wants, so it should be sized from what honest links actually do.
@@ -1156,7 +1155,7 @@ pub struct Controls {
   /// honest client aims. Beyond it, a client is parking inputs in the future.
   pub input_max_early_ticks: u64,
   /// Whether to use the playout buffer at all. Off is the naive behaviour,
-  /// apply-on-arrival, kept so the difference is measurable rather than argued.
+  /// apply-on-arrival, kept so the difference can be measured.
   pub input_playout: bool,
   pub relevance: bool,
   /// Whether the second channel is on: a squad you are told about wherever
@@ -1164,9 +1163,9 @@ pub struct Controls {
   pub squads: bool,
   /// Whether the far tier is on: everybody else, quantised, on a slow clock.
   ///
-  /// Separate switches on purpose, because the point is the comparison. The
-  /// far tier is a broadcast wearing relevance's clothes, and it costs every
-  /// player on every frame it is due; a squad costs the handful you chose.
+  /// Separate switches on purpose, so the two can be compared. The far tier is
+  /// still a broadcast and costs every player on every frame it is due; a squad
+  /// costs the handful you chose.
   pub far_tier: bool,
   pub mode: RemoteMode,
   pub smooth: bool,
@@ -1241,8 +1240,8 @@ impl Default for Controls {
       // marker, off the timeline. It shipped at the exact fit (150) for a
       // while, and played as slightly iffy movement: with zero margin, every
       // jitter spike at the tail of the distribution puts the newest sample
-      // behind the target, and the marker holds then jumps. The margin buys
-      // out the tail. Checked by `the_shipped_defaults_cover_each_other`.
+      // behind the target and the marker holds then jumps. The margin covers
+      // the tail. Checked by `the_shipped_defaults_cover_each_other`.
       render_delay_ms: 180,
       input_playout: true,
       // Roughly the playout depth in 16 ms steps, plus slack for jitter.

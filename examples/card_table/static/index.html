@@ -58,10 +58,10 @@
         }
 
         // A snapshot here is per-recipient, so the server sends one only when the
-        // whole view changes: a deal, a resolved trick. Everything between is
-        // narrated, and a client that waited for the next snapshot to learn
+        // whole view changes: a deal, a resolved trick. Everything between
+        // arrives as ops. A client that waited for the next snapshot to learn
         // whose turn it is would sit out its own turn until the timeout played
-        // for it. So the notices are applied to the view, not merely logged.
+        // for it, so the notices are applied to the view as well as logged.
         function handleOp(op) {
             if (op.Snapshot) {
                 view = op.Snapshot;
@@ -129,8 +129,7 @@
                 ? `${view.phase} — round ${view.round} of ${view.total_rounds}`
                 : view.phase;
 
-            // Opponents: a count, never a rank. This tab was never told what
-            // they hold, so there is nothing here to accidentally reveal.
+            // Opponents: a count only. This tab was never told what they hold.
             const opps = el('opponents');
             opps.innerHTML = '';
             (view.opponents || []).forEach(([player, count]) => {

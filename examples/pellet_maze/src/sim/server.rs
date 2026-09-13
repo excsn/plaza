@@ -1,19 +1,18 @@
-//! The authority: owns the maze, the pellets, and who has been caught.
+//! The authority: owns the maze, the pellets and who has been caught.
 //!
-//! Two things are worth reading even if the rest is ordinary.
+//! Two parts are worth reading.
 //!
 //! **Time is spent in whole ticks** ([`Server::advance`]). A tick driver hands
-//! over the *measured* elapsed time, and advancing a simulation by that makes
-//! its rate a property of the host's scheduler, which no client can reproduce.
-//! `bomb_grid` paid for that lesson at two snaps per hundred frames; this
-//! example was built with it from the first commit.
+//! over the *measured* elapsed time and advancing a simulation by that ties
+//! its rate to the host's scheduler, which no client can reproduce.
+//! `bomb_grid` found this at a cost of two snaps per hundred frames; this
+//! example stepped in whole ticks from the first commit.
 //!
 //! **A turn is scheduled by tick and executed by place.** The schedule
 //! ([`plaza_server_utils::InputSchedule`]) decides *when a turn request becomes
-//! eligible*, which is the fairness half. The maze then decides *where it is
-//! taken*, which is the half no schedule can help with, and is what
-//! [`crate::sim::turn_queue`] exists for. Both delays are real and only one of
-//! them is a number anybody chose.
+//! eligible*, which keeps it fair. The maze then decides *where it is taken*,
+//! which no schedule can help with; that part is [`crate::sim::turn_queue`].
+//! Both are delays and only the first is a configured number.
 
 use plaza_server_utils::{InputSchedule, InputWindow};
 
@@ -42,16 +41,15 @@ pub enum Seat {
 /// What one tick produced.
 #[derive(Clone, Debug, Default)]
 pub struct Tickout {
-  /// **One frame per seat**, not one broadcast.
+  /// **One frame per seat** rather than one broadcast.
   ///
-  /// The price of hiding a player properly: what each recipient may know is
-  /// different, so the frame is a different message for each of them. Cheap
-  /// here (four players, a few hundred cells) and the only honest way to keep a
-  /// secret, since a client handed a position it should not see has already
-  /// lost it.
+  /// Each recipient may know different things, so the frame is a different
+  /// message for each of them. It is cheap here (four players, a few hundred
+  /// cells) and it is the only reliable way to keep a secret, since a client
+  /// handed a position it should not see has already lost it.
   pub frames: Vec<(PlayerId, Frame)>,
-  /// Turns taken this tick, with the cell each was taken at. The measurement
-  /// the whole example rests on.
+  /// Turns taken this tick, with the cell each was taken at. Clients compare
+  /// these against their own turns.
   pub turns: Vec<TurnTaken>,
   /// Pellets eaten this tick, and who may be told.
   pub eaten: Vec<PelletsEaten>,
@@ -71,7 +69,7 @@ pub struct Tickout {
 /// A frame can keep a hidden player secret by leaving them out. An *event*
 /// cannot: `Op::Eaten` names the exact cell a pellet went from, which is a
 /// better position report than a frame is, and broadcasting it while its actor
-/// is invisible undoes the vanish completely. So an event carries its audience,
+/// is invisible undoes the vanish completely. So an event carries its audience
 /// and the ones that name a hidden player's cell go only to that player until
 /// the vanish ends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -137,8 +135,8 @@ pub struct Server {
   ///
   /// A seat rather than a player id, because the id is identity: a client is
   /// told which id is theirs once, at join, and rotating ids would silently
-  /// hand them somebody else's player. Rotating the seat rotates the role,
-  /// which is the thing that was meant to move.
+  /// hand them somebody else's player. Rotating the seat rotates the role and
+  /// leaves identities alone.
   runner_seat: usize,
 
   seats: Vec<Seat>,
@@ -270,8 +268,8 @@ impl Server {
     let taken: Vec<Cell> = self.players.iter().map(|p| p.cell).collect();
     self.pellets = self.maze.corridors().into_iter().filter(|c| !taken.contains(c)).collect();
 
-    // Power-ups scattered deterministically from the seed, so a round is the
-    // same board twice and a replay is a replay.
+    // Power-ups scattered deterministically from the seed, so a seed lays out
+    // the same board every time and a replay matches.
     self.powerups.clear();
     let corridors = self.maze.corridors();
     let wanted = (corridors.len() / POWERUP_DENSITY).max(2);
@@ -424,9 +422,9 @@ impl Server {
 
   /// The frame **for one recipient**.
   ///
-  /// A hidden runner is left out of everybody else's copy. Not dimmed, not
-  /// flagged: absent. That is the difference between a secret and a request
-  /// that the client please not look.
+  /// A hidden runner is left out of everybody else's copy entirely rather than
+  /// dimmed or flagged. A client that received the position could read it
+  /// whatever it was asked to draw.
   pub fn frame_for(&self, recipient: PlayerId) -> Frame {
     let now = self.clock_ms;
     Frame {
@@ -456,8 +454,8 @@ impl Server {
   /// The pickups this recipient still believes are on the board.
   ///
   /// One taken by an invisible player is put back for everybody else, because
-  /// a pickup disappearing is a cell and a moment, which is the whole of what
-  /// the vanish is meant to hide.
+  /// a pickup disappearing gives away a cell and a moment, which is exactly
+  /// what the vanish is meant to hide.
   fn powerups_for(&self, recipient: PlayerId) -> Vec<PowerupState> {
     let mut visible = self.powerups.clone();
     for item in &self.withheld {
@@ -505,9 +503,9 @@ impl Server {
           out.round_start = Some(self.begin_match());
         } else if self.match_round >= self.match_rounds() {
           // The table gets an interval of its own rather than one frame
-          // between two countdowns. It is what the rounds were for,
-          // and the next round's `RoundStart` is what clears it from a client,
-          // so sending both together shows it for no time at all.
+          // between two countdowns. The next round's `RoundStart` clears it
+          // from a client, so sending both together shows it for no time at
+          // all.
           out.match_over = Some((self.standings(), MATCH_END_MS));
           self.awaiting_new_match = true;
           self.round_ends_at_ms = Some(self.clock_ms + MATCH_END_MS);
@@ -644,10 +642,10 @@ impl Server {
 
   /// Tells everybody what was held back, once its actor is visible again.
   ///
-  /// The events go out late rather than never: a client that never heard them
-  /// would draw pellets that are gone and pickups that were taken, for the rest
-  /// of the round. Late is honest, because by the time it arrives the position
-  /// it reveals is one the player has already left.
+  /// The events are sent late because a client that never heard them would
+  /// draw pellets that are gone and pickups that were taken for the rest of the
+  /// round. Sending them late is safe because by the time they arrive the
+  /// positions they reveal are ones the player has already left.
   fn reveal_withheld(&mut self, out: &mut Tickout) {
     if self.withheld.is_empty() {
       return;
@@ -708,7 +706,7 @@ impl Server {
 
   /// What happens when a pursuer and the runner share a cell.
   ///
-  /// **Which way this goes is the energizer's whole point**, and it is a timed,
+  /// **The energizer decides which way this goes.** It is a timed,
   /// server-authoritative inversion: for a few seconds contact means the runner
   /// eats the pursuer instead of the other way round. A client predicting its
   /// movement across the moment the timer runs out will disagree with the
@@ -785,8 +783,7 @@ impl Server {
 
   /// A fresh maze, everybody home, the roles rotated.
   ///
-  /// Rotating is the point of having roles at all: being hunted and hunting are
-  /// different games, and a player who only ever does one has seen half of it.
+  /// Roles rotate so every player both hunts and is hunted.
   fn begin_round(&mut self) -> RoundStart {
     self.round += 1;
     self.seed = self.seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
@@ -799,7 +796,7 @@ impl Server {
     self.withheld.clear();
     self.round_begins_at_ms = self.clock_ms + ROUND_START_MS;
 
-    // Rotate the role, not the identity. Ids stay put so a client keeps
+    // Rotate the role and leave the identity. Ids stay put so a client keeps
     // controlling the player it was told about at join.
     if self.seats.len() > 1 {
       self.runner_seat = (self.runner_seat + 1) % self.seats.len();
@@ -823,11 +820,11 @@ impl Server {
     self.round_start()
   }
 
-  /// The house players: pursuers hunt, and a bot runner flees.
+  /// The house players: pursuers hunt and a bot runner flees.
   ///
-  /// Deliberately simple, and deliberately *through the same queue a human
-  /// uses*: a bot that set its heading directly would bypass the mechanism this
-  /// example is about and the maze would look better behaved than it is.
+  /// Deliberately simple and driven *through the same queue a human uses*: a
+  /// bot that set its heading directly would bypass the turn queue and the
+  /// maze would look better behaved than it is.
   fn drive_bots(&mut self, tick: u64, controls: &Controls) {
     if !controls.bots {
       return;
@@ -850,8 +847,8 @@ impl Server {
       };
       let dir = match self.players[seat].role {
         Role::Pursuer => rules::pursuit_dir(at, heading, target, &self.maze),
-        // A runner has two jobs and only one of them is fleeing. Maximising
-        // distance at every cell is a bot that looks busy and never eats.
+        // A runner has to eat as well as flee. A bot that maximises distance
+        // at every cell never eats.
         Role::Runner => {
           let threat = self
             .players
@@ -939,9 +936,9 @@ mod tests {
 
   #[test]
   fn an_irregular_tick_driver_produces_the_same_world_as_a_regular_one() {
-    // The lesson `bomb_grid` paid for: a tick driver delivers measured elapsed
-    // time, and a simulation advanced by that is a function of the host's
-    // scheduler, which no client can reproduce.
+    // Found in `bomb_grid`: a tick driver delivers measured elapsed time and a
+    // simulation advanced by that is a function of the host's scheduler, which
+    // no client can reproduce.
     let c = controls();
     let mut regular = Server::new(2, MAZE_SEED);
     let mut jittery = Server::new(2, MAZE_SEED);
@@ -972,8 +969,8 @@ mod tests {
 
   #[test]
   fn a_turn_request_is_taken_at_a_place_and_reported_with_it() {
-    // The example's whole subject: the server says *where*, because that is the
-    // thing a client can get wrong in a way no tick can express.
+    // The server says *where*, because that is the thing a client can get wrong
+    // in a way no tick can express.
     let c = controls();
     let mut server = started(&c);
     // Whichever way the runner is not already going.
@@ -1101,11 +1098,10 @@ mod tests {
 
   #[test]
   fn the_role_rotates_for_a_given_seat_while_its_identity_does_not() {
-    // Two things that must move in opposite ways. The **role** rotates, or a
-    // player only ever sees half the game. The **id** does not, because a client
-    // is told which id is theirs once, at join: rotating ids would silently hand
-    // them somebody else's player, and the seat that was always index zero was
-    // always the runner regardless.
+    // The **role** rotates, or a player only ever plays one side. The **id**
+    // does not, because a client is told which id is theirs once, at join:
+    // rotating ids would silently hand them somebody else's player and the seat
+    // that was always index zero was always the runner regardless.
     let c = Controls { players: 3, ..controls() };
     let mut server = Server::new(3, MAZE_SEED);
     let first = server.runner_seat();
@@ -1158,9 +1154,7 @@ mod tests {
     run(&mut server, 45_000, &c);
     // Measured: a runner that seeks food while it evades clears about 165 in
     // this window. One that only flees managed 59, and one that never steered
-    // at all managed 52. The threshold sits well clear of both, because the
-    // point is the difference between a bot with a job and a bot that looks
-    // busy.
+    // at all managed 52. The threshold sits well clear of both.
     assert!(
       server.pellets_eaten >= 120,
       "a runner with a purpose should clear a fair few: {}",
@@ -1185,8 +1179,8 @@ mod tests {
 
   #[test]
   fn a_bot_runner_still_runs_when_a_pursuer_is_close() {
-    // Eating is the job; not being caught is the constraint. A runner that only
-    // ate would walk into a pursuer standing on a pellet.
+    // A runner has to eat while avoiding capture. A runner that only ate would
+    // walk into a pursuer standing on a pellet.
     let c = Controls { bots: true, players: 2, ..controls() };
     let mut server = started(&c);
     // Put a pursuer right beside the runner and see that the gap opens.
@@ -1249,7 +1243,8 @@ mod tests {
     assert!(ate_in_secret > 0, "the test is worthless unless it ate something: {ate_in_secret}");
 
     // And the count in everybody else's frame did not move either, because a
-    // number that drops while nobody can see anything is still a report.
+    // count that drops while nobody can see anything still tells them something
+    // was eaten.
     let theirs = server.frame_for(other);
     let mine = server.frame_for(runner);
     assert_eq!(

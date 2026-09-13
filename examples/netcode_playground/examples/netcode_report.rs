@@ -16,7 +16,7 @@ fn wander(frame: usize) -> MoveInput {
 /// Mean error over the frames that are *actually* being dead reckoned, and what
 /// share of frames those are.
 ///
-/// Restricting to extrapolated frames is the whole reason this reads as anything.
+/// Restricting to extrapolated frames is what makes the number meaningful.
 /// Averaged over every frame the number is dominated by the interpolation delay,
 /// which both policies pay identically, and a real difference of a few pixels in
 /// the extrapolated minority vanishes into it.

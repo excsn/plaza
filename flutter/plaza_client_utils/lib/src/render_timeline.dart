@@ -3,10 +3,10 @@ import 'interpolation.dart';
 
 /// The render clock and the measurements that size it.
 ///
-/// A game loop has the one thing a client library does not: a `dt` every frame.
-/// This joins them, so the render target advances with the loop rather than with
-/// packet arrivals. Seconds because that is what every loop hands out, not
-/// because of any particular engine: nothing here knows what is driving it.
+/// A game loop supplies a `dt` every frame, which a client library does not
+/// have. This class joins the two, so the render target advances with the loop
+/// rather than with packet arrivals. Seconds, because that is what game loops
+/// supply; nothing here depends on a particular engine.
 ///
 /// The delay is not adapted automatically. A delay that follows the link hides
 /// bad links instead of reporting them, so [neededDelayMs] is a reading and

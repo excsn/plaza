@@ -12,14 +12,14 @@ use crate::vision::{can_see, visible_relics};
 
 /// Builds one player's world.
 ///
-/// The seam for hidden information, in its spatial form: `card_table` decides
-/// what a recipient may hold by asking whose hand it is, and this decides by
-/// asking where their eyes are. Same seam, and the query behind it is the only
-/// thing that changed.
+/// The per-recipient snapshot for hidden information, decided by position.
+/// `card_table` decides what a recipient may hold by whose hand a card is in
+/// and this decides by what their scouts can see. Both use the same trait with
+/// a different query behind it.
 ///
-/// **Nothing is filtered downstream of here.** A relic outside your vision is
-/// absent from your payload rather than flagged in it, so there is no field a
-/// modified client could read to learn what it was not sent.
+/// Nothing is filtered after this point. A relic outside your vision is left
+/// out of your payload, not flagged in it, so there is no field a modified
+/// client could read to learn what it was not sent.
 #[derive(Debug, Default)]
 pub struct FogSnapshotter;
 
@@ -99,10 +99,9 @@ impl SnapshotProvider<PlayerId, FogState, FogOp> for FogSnapshotter {
     target_agent: Option<&Agent<PlayerId>>,
     _context: Option<SnapshotContext>,
   ) -> Result<Option<FogOp>, SnapshotError<PlayerId>> {
-    // No recipient, no view. A uniform pass over this provider would be a
-    // world nobody is allowed to hold, so there is nothing sensible to return
-    // and returning the whole map "just for the join case" is how a leak gets
-    // written.
+    // Without a recipient there is no view. Nobody is allowed to hold the
+    // whole world, so a uniform pass returns nothing. Returning the whole map
+    // "just for the join case" would be a leak.
     let Some(player) = target_agent.and_then(|a| a.id_cloned()) else {
       return Ok(None);
     };

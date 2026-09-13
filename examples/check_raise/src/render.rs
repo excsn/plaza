@@ -1,5 +1,5 @@
 //! The table drawn: four chairs around the felt, the board and pot in the
-//! middle, your two cards large, and the three actions as buttons under a
+//! middle, your two cards large and the three actions as buttons under a
 //! clock when the ask is yours.
 
 use macroquad::prelude::*;

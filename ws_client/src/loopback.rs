@@ -2,15 +2,14 @@
 //!
 //! A listen-server has one player who is not on the network. Giving that player
 //! a different code path is how the two drift apart: the local one skips
-//! serialization, skips the ordering the wire imposes, and quietly becomes the
-//! only client that is never wrong. Handing it a [`Socket`] like everyone
-//! else's means the host is testing the same client the joiners run.
+//! serialization and the ordering the wire imposes, so it never shows the bugs
+//! a networked client would. Handing it a [`Socket`] like everyone else's means
+//! the host is testing the same client the joiners run.
 //!
-//! It is a real pipe, not a shortcut. Bytes are serialized and copied exactly as
-//! they would be over a socket, so a bug in encoding shows up locally instead of
-//! only after someone joins. What it does not have is latency, which is the
-//! point: impairment is a separate, deliberate choice rather than an accident of
-//! being local.
+//! It is a real pipe. Bytes are serialized and copied exactly as they would be
+//! over a socket, so a bug in encoding shows up locally instead of only after
+//! someone joins. It adds no latency on purpose; impairment is a separate
+//! setting chosen deliberately.
 //!
 //! ```
 //! use plaza_ws::{loopback, Event, Socket};
@@ -152,7 +151,7 @@ mod tests {
   fn open_is_announced_once_on_the_first_poll() {
     // A caller written against a real socket waits for `Open` before sending. If
     // the loopback were open at construction, that caller would work over the
-    // network and hang locally, or the reverse. Same sequence, both transports.
+    // network but hang locally (or the reverse).
     let (mut client, _host) = pair();
     assert_eq!(drain(&mut client), vec![Event::Open]);
     assert_eq!(drain(&mut client), vec![]);
@@ -213,8 +212,8 @@ mod tests {
 
   #[test]
   fn a_dropped_peer_reads_as_an_error_not_a_clean_close() {
-    // The distinction an application reconnects on. A peer that vanished is a
-    // failure; a peer that said goodbye is not.
+    // An application decides whether to reconnect on this: a peer that vanished
+    // is a failure and one that closed cleanly is not.
     let (mut client, host) = pair();
     drop(host);
     let events = drain(&mut client);

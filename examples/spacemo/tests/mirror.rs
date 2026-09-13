@@ -8,8 +8,8 @@
 //! one it had ever seen, drawn where it was last seen, for ever.
 //!
 //! Nothing short of running both sides for a while and looking at what the
-//! client is left holding can see that. It is not a decode error, not a
-//! divergence, and not a leak in either half on its own.
+//! client is left holding can see that. It is not a decode error or a
+//! divergence. Neither half leaks on its own.
 //!
 //! ```sh
 //! cargo test -p spacemo --test mirror -- --nocapture
@@ -152,7 +152,7 @@ async fn a_client_holds_no_more_than_the_server_has_after_a_long_fight() {
 ///
 /// A bound that stops covering the world clamps rather than errors, and a
 /// relative frame decoded against the wrong anchor lands somewhere plausible.
-/// Neither raises anything, and both look exactly like this test not existing.
+/// Neither raises anything, so without this test both go unnoticed.
 #[tokio::test]
 async fn a_client_lands_where_the_server_is_under_every_dial() {
   for packed in [false, true] {

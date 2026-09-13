@@ -1,6 +1,6 @@
 # grace_run
 
-Four seats delving through locked rooms, built for the half of session-keeping no example wore: **the held seat**, and the duplicate a resumed session must not spend twice. `table_manners` clears a seat on purpose; this one keeps it on purpose, and the two halves of `ReconnectTracker` deliberately live in different examples because telling a kick from a drop needs both.
+Four seats delving through locked rooms. It covers the part of session-keeping no other example used: the **held seat** and the duplicate op that a resumed session must not apply twice. `table_manners` clears a seat when its player leaves; this example keeps it. The two halves of `ReconnectTracker` are split across the two examples because telling a kick from a drop needs both.
 
 ```sh
 ./run-native.sh                          # desktop window; hosts and plays (--role host)
@@ -9,20 +9,20 @@ Four seats delving through locked rooms, built for the half of session-keeping n
 cargo run -p grace_run --bin scripted    # the whole arc, asserted
 ```
 
-Grab the coins, take a key, turn it in the door; the party walks through an open door by itself, but **never past a held seat**. Hirelings fill empty seats after a wait. The panel's buttons cut your own link, because the machinery only becomes visible when the link actually drops.
+Grab the coins, take a key, turn it in the door; the party walks through an open door by itself, but **not while a seat is held**. Hirelings fill empty seats after a wait. The panel's buttons cut your own link so you can see what happens when it drops.
 
 ## The held seat
 
-A drop calls `ReconnectTracker::on_disconnect` and nothing else: the seat keeps its keys and coins, the party stands at open doors, and the tracker is driven from the tick so an expiry is a decision the logic makes, not a callback the transport fires. A return inside the window (`on_reconnect` returning true, keyed by presenting the **same** agent id: `/ws?p=<id>`, an auth token's job in a deployment) reclaims everything. The transport never knows a quit from a drop (`lobby_world`'s finding), so every leave gets grace and only the window's expiry is final.
+A drop calls `ReconnectTracker::on_disconnect` and nothing else: the seat keeps its keys and coins, the party stands at open doors and the tracker is driven from the tick, so the game logic decides an expiry rather than a transport callback. A return inside the window (`on_reconnect` returning true, keyed by presenting the **same** agent id: `/ws?p=<id>`, an auth token's job in a deployment) reclaims everything. The transport never knows a quit from a drop (`lobby_world`'s finding), so every leave gets grace and only the window's expiry is final.
 
-**The window is a bet with a cost on both sides, so it is a dial with two meters.** Hold too long and the party stands at an open door: `waited_ms` prices that, accruing every tick a held seat keeps an open door shut. Hold too short and a hallway's worth of wifi costs somebody their run: `expiries` against `resumes` is that trade, counted. Drag the grace slider and make the bet yourself; the dial lands when no hold is running, so a window in flight keeps its terms.
+The grace window has a cost whichever way it is set, so each side has a meter. If the hold is too long, the party waits at an open door: `waited_ms` measures that, accruing every tick a held seat keeps an open door shut. If it is too short, a brief wifi drop costs a player their run: `expiries` against `resumes` counts that. The grace slider sets the window. A new value applies only when no hold is running, so a hold already in progress keeps its original window.
 
-## Exactly-once, spelled out as two halves
+## Exactly-once delivery
 
-Every acting op carries its seat's own sequence. The client keeps an **outbox** of everything unacked (the per-seat `acked_seq` in each snapshot is the ack), and after a resume it re-sends the outbox in full: at-least-once, the natural retry every client under a flaky link ends up writing. The server applies each sequence **at most once**: a sequence at or below the applied mark is a duplicate, suppressed and counted. Together: exactly-once across a drop.
+Every acting op carries its seat's own sequence. The client keeps an **outbox** of everything unacked (the per-seat `acked_seq` in each snapshot is the ack) and after a resume it re-sends the outbox in full: at-least-once, the retry most clients on a flaky link end up writing. The server applies each sequence **at most once**: a sequence at or below the applied mark is a duplicate, suppressed and counted. The two together give exactly-once delivery across a drop.
 
-The dedup has an off switch because the failure it prevents deserves to be seen rather than described: with it off, the resent `Unlock` finds the door it already opened, and the key burns. One door opened, two keys gone, visible in the game rather than in a log; `keys_burned` counts it, and IMPROVEMENTS' line that a duplicated op is the one staleness a resync cannot repair gets its demonstration.
+The dedup has an off switch so you can see the failure it prevents. With it off, the resent `Unlock` finds the door it already opened and the key burns. One door opens and two keys are gone and `keys_burned` counts it. This demonstrates the IMPROVEMENTS entry saying a duplicated op is the one kind of staleness a resync cannot repair.
 
 ## Structure
 
-Same listen-server shape as the other playgrounds: one crate builds the authoritative server, the desktop client, and the browser client (`--no-default-features --features web`, wrapped by `wasm-build.sh`); MessagePack with a build-derived protocol version. The scripted run walks the entire argument and asserts the meters: a suppressed resend, a held seat resumed with its loot, a key burned with the dedup off, and a window that ran out freeing the party.
+Same listen-server shape as the other playgrounds: one crate builds the authoritative server, the desktop client and the browser client (`--no-default-features --features web`, wrapped by `wasm-build.sh`); MessagePack with a build-derived protocol version. The scripted run covers each case and asserts the meters: a suppressed resend, a held seat resumed with its loot, a key burned with the dedup off and a window that ran out freeing the party.

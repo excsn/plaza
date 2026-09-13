@@ -3,9 +3,8 @@
 //!
 //! [`plaza_session::host::SimHost`] is the whole stack (session with the
 //! build's protocol and simulation clock, controller, fixed-step driver, the
-//! `/ws` route, and the HTTP side with its cache busting). What is left here is
-//! the part that is actually this arena's: which state, which logic, and at
-//! what tick rate.
+//! `/ws` route and the HTTP side with its cache busting). What is left here is
+//! specific to this arena: which state, which logic and what tick rate.
 
 use std::sync::Arc;
 use std::time::Duration;

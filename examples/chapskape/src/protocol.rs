@@ -1,12 +1,12 @@
-//! Everything that crosses the wire, and nothing that does not.
+//! Everything that crosses the wire.
 //!
 //! Three things make this different from the other examples in the tree.
 //!
-//! **The input is a place.** [`SkapeOp::WalkTo`] carries a destination, not a
-//! direction and not a position. One of them covers seconds of walking, both
-//! ends expand it with the same pathfinder over the same derived map, and
-//! there is nothing to reconcile afterwards because the client never asserted
-//! where it was.
+//! **The input is a place.** [`SkapeOp::WalkTo`] carries a destination rather
+//! than a direction or a position. One covers seconds of walking and both ends
+//! expand it with the same pathfinder over the same derived map. There is
+//! nothing to reconcile afterwards because the client never claimed where it
+//! was.
 //!
 //! **The world's contents are derived and only their state is sent.** Every
 //! tree, rock and fishing spot in the world is a function of its tile, so the
@@ -14,10 +14,9 @@
 //! travels is that one of them is out until a named tick.
 //!
 //! **A state that is stable can be sent once.** [`ObjectState::ready_at`] is an
-//! absolute tick rather than a countdown, and that single choice is what makes
-//! [`Relevance::OnChange`] possible at all: a countdown is different on every
-//! tick, so a client that wanted one would have to be told every tick whether
-//! anything had happened or not.
+//! absolute tick rather than a countdown, which makes [`Relevance::OnChange`]
+//! possible: a countdown changes every tick, so it would have to be sent every
+//! tick.
 
 use serde::{Deserialize, Serialize};
 
@@ -34,14 +33,13 @@ pub type Seat = u16;
 
 /// How long a game tick is by default, in milliseconds.
 ///
-/// Slow enough that a player can see it, count it and act against it, which is
-/// the opposite of what every other example in this tree does with its tick.
+/// Slow enough that a player can see it and time actions against it. Every
+/// other example in this tree hides its tick.
 pub const TICK_MS: u64 = 600;
 
 /// How often the host actually wakes, in milliseconds.
 ///
-/// Finer than a game tick so the tick length can be a runtime dial: the
-/// interesting reading is what stops mattering as it shortens.
+/// Finer than a game tick so the tick length can be changed at runtime.
 pub const DRIVER_MS: u64 = 50;
 
 /// A square of the world.
@@ -93,8 +91,8 @@ impl Item {
 
 /// What an actor is doing, which is what a client draws.
 ///
-/// State rather than event: it lasts across ticks and is true until it is not,
-/// so repeating it costs a byte and losing a frame costs nothing.
+/// State rather than event: it lasts across ticks, so repeating it costs a byte
+/// and losing a frame costs nothing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Doing {
   #[default]
@@ -137,7 +135,8 @@ pub struct Seen {
   pub facing: u8,
   /// How many times this body has been put somewhere it did not walk to.
   ///
-  /// The same counter `You` carries, for the same reason and one bug later: a
+  /// The same counter `You` carries, added for the same reason after a second
+  /// bug: a
   /// relocation and a step look identical on the wire, so a client with only
   /// the new tile interpolates between them. A foe revives at its **home**
   /// rather than where it fell, so without this it glides from its corpse
@@ -149,7 +148,7 @@ pub struct Seen {
 ///
 /// The id **is** the tile index, so nothing here says where it is: both ends
 /// derive the props from the map. `ready_at` is an absolute tick rather than a
-/// countdown, which is what lets it be sent once instead of every tick.
+/// countdown, so it can be sent once instead of every tick.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObjectState {
   pub id: u32,
@@ -169,10 +168,10 @@ pub struct Fire {
 
 /// An item lying on the ground.
 ///
-/// The audience for one is decided by a **rule rather than a distance**: it
-/// belongs to whoever dropped it until its timer runs out, and then it belongs
-/// to whoever is standing there. Nothing in plaza's relevance or subscription
-/// blocks expresses that, which is the point of it being here.
+/// Who is told about one is decided by a **game rule rather than a distance**:
+/// it belongs to whoever dropped it until its timer runs out and then to
+/// whoever is standing there. Neither plaza's relevance block nor its
+/// subscription block expresses that, so it is handled here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Lying {
   pub id: u32,
@@ -186,14 +185,14 @@ pub struct Lying {
 
 /// Something that happened once in the world, and is never mentioned again.
 ///
-/// The half of the wire that is a transcript rather than a state. A client that
-/// misses one has missed it: no later frame repeats a hit, and the health it
-/// changed has already moved on.
+/// The transcript half of the wire, as opposed to state. A client that misses
+/// one never sees it: no later frame repeats a hit and the health it changed
+/// has already moved on.
 ///
-/// Everything here is a **shared** event, which is a stricter test than it
-/// sounds: a blow is worth telling everyone near enough to watch it land, and
-/// nothing else in this game passes that. What one body gathered and what it
-/// learned by gathering it are [`Yours`], because they are nobody else's.
+/// Everything here is a **shared** event. A blow is worth telling everyone near
+/// enough to see it land and nothing else in this game qualifies. What one body
+/// gathered and the experience it earned are [`Yours`], because nobody else
+/// needs them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Happened {
   /// Somebody landed a blow on somebody.
@@ -204,16 +203,14 @@ pub enum Happened {
 
 /// Something that happened once, to you, and to nobody else.
 ///
-/// The transcript half of the private channel, and the half that is easy to
-/// forget exists. [`Private`] is the state half: a pack and five totals, true
-/// until they are not, sent again whenever they move. This is what *just
-/// changed*, said once, and no later frame mentions it.
+/// The transcript half of the private channel. [`Private`] is the state half: a
+/// pack and five totals, sent again whenever they change. This is what *just
+/// changed*, sent once and never repeated.
 ///
-/// Putting these on the shared event list instead is a defect with two faces.
-/// The wire one is that everybody within sight pays for every body's
-/// experience. The visible one is worse: `Earned` and `Levelled` carried no
-/// seat at all, so a client had no way to tell its own from anyone else's and
-/// announced every passing woodcutter's level as its own.
+/// These used to go on the shared event list, which caused two problems.
+/// Everybody within sight paid for every body's experience. Worse, `Earned`
+/// and `Levelled` carried no seat, so a client could not tell its own from
+/// anyone else's and announced every passing woodcutter's level as its own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Yours {
   /// A gathering action produced something.
@@ -226,10 +223,10 @@ pub enum Yours {
 
 /// What the pack and the skill sheet hold.
 ///
-/// A stream of its own, and the only thing in this example that exists for
-/// exactly one client. fog_skirmish filters a shared world per viewer; nothing
-/// here is filtered, because nobody else's world contains it. Sent only when it
-/// moves, so standing still costs nothing.
+/// A stream of its own and the only thing in this example that exists for
+/// exactly one client. fog_skirmish filters a shared world per viewer; a pack
+/// is not filtered, because it is in nobody else's world. Sent only when it
+/// changes, so standing still costs nothing.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Private {
   pub pack: Vec<Option<Item>>,
@@ -250,9 +247,8 @@ pub enum Queued {
 
 /// Why the last thing you asked for did nothing.
 ///
-/// Named rather than swallowed, because a refusal a player cannot read is
-/// indistinguishable from a broken key, and that is the defect gow_3d shipped
-/// before anyone played it.
+/// Named rather than dropped silently, because a refusal a player cannot read
+/// looks like a broken key. gow_3d shipped that defect before anyone played it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Refusal {
   NoRoute,
@@ -268,9 +264,9 @@ pub enum Refusal {
 
 /// Everything the local player needs about themselves.
 ///
-/// Its own block rather than an entry in the audience list, for the reason
-/// gow_3d found by shipping the bug: a client never appears in its own list, so
-/// a client that read itself out of one read nothing at all.
+/// Its own block rather than an entry in the audience list. gow_3d shipped the
+/// bug this avoids: a client never appears in its own list, so a client that
+/// looked for itself there found nothing.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct You {
   pub seat: Seat,
@@ -287,9 +283,9 @@ pub struct You {
   pub private: Option<Private>,
   /// What just happened to you, said once.
   ///
-  /// Beside `private` rather than inside it, because the two are different
-  /// kinds of thing on different schedules: a pack is repeated whenever it
-  /// moves and a transcript is said once and never again.
+  /// Beside `private` rather than inside it, because the two are sent on
+  /// different schedules: a pack is repeated whenever it changes and a
+  /// transcript is sent once.
   pub happened: Vec<Yours>,
   pub refused: Option<Refusal>,
   /// How many times you have been put somewhere you did not walk to.
@@ -301,16 +297,15 @@ pub struct You {
 
 /// How the still half of the world reaches the wire.
 ///
-/// The comparison this example exists to make. Both modes live in one build and
-/// switch at runtime, because two builds and two sessions compare two memories
-/// of how something felt.
+/// Both modes are in one build and switch at runtime, because separate builds
+/// would mean comparing two sessions from memory.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Relevance {
   /// Everything depleted in view, every tick, the way a visibility diff over
   /// movers works.
   EveryTick,
-  /// A baseline when a viewer first sees an object and a message when it
-  /// changes, and silence in between.
+  /// A baseline when a viewer first sees an object, a message when it changes
+  /// and nothing in between.
   #[default]
   OnChange,
 }
@@ -336,7 +331,7 @@ impl Relevance {
 pub struct Frame {
   pub tick: u64,
   /// How long a tick is right now, so a client can pace its own drawing
-  /// against the server rather than against a constant it hopes still holds.
+  /// against the server rather than a constant that may be out of date.
   pub tick_ms: u16,
   pub you: Option<Box<You>>,
   pub actors: Vec<Seen>,
@@ -358,15 +353,14 @@ pub enum SkapeOp {
 
   /// Client to server: I would like to be there.
   ///
-  /// The whole argument of this example in one op. It is a request rather than
-  /// a report, it covers seconds of walking rather than a frame of it, and the
-  /// rule that expands it into a path lives on both ends, so the client can
-  /// draw the answer before the server has heard the question.
+  /// A request rather than a report, covering seconds of walking rather than a
+  /// frame of it. The rule that expands it into a path lives on both ends, so
+  /// the client can draw the route before the server has received the op.
   WalkTo { tile: Tile },
   /// Client to server: walk to that tree and chop it.
   ///
-  /// Two things in one op, and the second is what makes the round trip free:
-  /// the player has committed to the walk before the interaction can begin.
+  /// A walk and an action in one op. The walk covers the round trip, because
+  /// the player is already walking before the interaction can begin.
   Interact { object: u32 },
   Attack { seat: Seat },
   Take { ground: u32 },

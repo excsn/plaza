@@ -48,16 +48,16 @@ where
   /// score that was discarded.
   ///
   /// **Call this from your own rules, never from a disconnect.** A scorekeeper
-  /// is never told a socket closed, and could not read one correctly if it were:
-  /// only the application can tell "gone" from "the same player, one second
-  /// later". This is [`SeatReservations::withdraw`](https://docs.rs/plaza_lobby)
-  /// from the other end of the same lesson.
+  /// is not told when a socket closes and could not tell a drop from a
+  /// departure if it were: only the application can tell "gone" from "the same
+  /// player, one second later". [`SeatReservations::withdraw`](https://docs.rs/plaza_lobby)
+  /// follows the same rule.
   ///
-  /// Whether a departed player should be forgotten is the game's to decide, not
-  /// this trait's. A room that lives for one match usually keeps them, so the
-  /// board does not reshuffle mid-game, and discards the lot when the room dies.
-  /// A standing room cycling players for hours has to forget, or its leaderboard
-  /// fills with entries at zero for people who left.
+  /// The game decides whether a departed player should be forgotten. A room
+  /// that lives for one match usually keeps them so the board does not
+  /// reshuffle mid-game, then discards everything when the room ends. A
+  /// standing room cycling players for hours has to forget them or its
+  /// leaderboard fills with entries at zero for people who left.
   fn forget_player(&mut self, player_id: &ID) -> Option<ScoreType>;
 
   /// Resets all scores to the default value for `ScoreType`, keeping the roster.

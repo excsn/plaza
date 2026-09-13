@@ -1,4 +1,4 @@
-//! Everything between "I have a `StateLogic`" and "it is listening".
+//! Everything needed to take a `StateLogic` to a listening server.
 //!
 //! Every listen-server example stood up the same stack by hand: a session
 //! speaking a named codec with the build's protocol version and a simulation
@@ -6,8 +6,8 @@
 //! WebSocket route numbering its connections, and a [`Host`] serving the
 //! browser client next to it. [`SimHost`] is that stack written once.
 //!
-//! It is a prescription built from blocks, and every choice in it is one the
-//! blocks let you unmake by using them directly:
+//! It is built from public blocks. Each choice it makes can be undone by using
+//! those blocks directly:
 //!
 //! - **Joiners get no snapshot.** This stack is for worlds streamed as deltas
 //!   on a cadence, where a joiner is caught up by the stream itself. A world

@@ -5,7 +5,7 @@
 /// though. This tracks how *confident* it is and weights each measurement
 /// against that, so it settles quickly then rejects jitter once settled.
 ///
-/// Two knobs, and they are the point of a building block:
+/// It has two knobs:
 ///
 /// - **process noise** (Q): how much the true value is expected to wander
 ///   between samples. Higher trusts new measurements more, faster and jumpier.

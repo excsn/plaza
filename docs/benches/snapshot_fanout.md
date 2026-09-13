@@ -2,7 +2,7 @@
 
 `cargo bench -p plaza_session --bench snapshot_fanout`
 
-What a snapshot pass pays for addressing recipients one at a time, M4 Pro. `per_recipient` is what a per-recipient `send_snapshots` pass does: one `encode_message` and one `MessageTarget::Agent` fan-out per recipient. `uniform` is the same pass when the provider's answer does not depend on who is asking: one encode, one `MessageTarget::Agents`, and a refcounted frame per recipient. It is what `SnapshotRequest::uniform` runs, and this measurement is why that request exists.
+What a snapshot pass pays for addressing recipients one at a time, M4 Pro. `per_recipient` is what a per-recipient `send_snapshots` pass does: one `encode_message` and one `MessageTarget::Agent` fan-out per recipient. `uniform` is the same pass when the provider's answer does not depend on who is asking: one encode, one `MessageTarget::Agents` and a refcounted frame per recipient. It is what `SnapshotRequest::uniform` runs and this measurement is why that request exists.
 
 Twelve of the eighteen shipped snapshot providers take `_target_agent` and never read it, so for those the N payloads are identical.
 
@@ -18,10 +18,10 @@ Twelve of the eighteen shipped snapshot providers take `_target_agent` and never
 | 40 KiB | 64 | 713.51 µs | 13.348 µs | 53x |
 | 40 KiB | 256 | 2.8740 ms | 19.829 µs | 145x |
 
-**The figure that matters is 2.87ms, not the ratio.** A 60Hz tick is 16.7ms, so a pass to 256 players holding 40 KiB views spends 17% of the tick budget building 255 copies of one payload. `horde_playground` is that shape, and its provider ignores the recipient.
+**The 2.87ms matters more than the ratio.** A 60Hz tick is 16.7ms, so a pass to 256 players holding 40 KiB views spends 17% of the tick budget building 255 copies of one payload. `horde_playground` is that shape and its provider ignores the recipient.
 
-The `uniform` arm barely moves with payload size, 7.175 µs to 19.829 µs across a 160x range, because it is almost entirely the fan-out `benches/broadcast.rs` already priced at ~37ns per named agent. Everything above that line in the other arm is duplicate encoding.
+The `uniform` arm barely moves with payload size, 7.175 µs to 19.829 µs across a 160x range, because it is almost entirely the fan-out `benches/broadcast.rs` already measured at ~37ns per named agent. Everything above that line in the other arm is duplicate encoding.
 
-Two predictions this refuted. That a small payload would make the duplicate encodes noise next to the fan-out: it does not, and 256 B still costs 3.4x to 7.2x. And that the gap would widen with payload rather than with recipient count: it widens with both, and more steeply with recipients.
+It disproved two predictions. First, that a small payload would make the duplicate encodes noise next to the fan-out: it does not and 256 B still costs 3.4x to 7.2x. Second, that the gap would widen with payload rather than with recipient count: it widens with both and more steeply with recipients.
 
 Load was 3.09 at the start against this machine's usual 1.5, so these absolutes are not comparable with the other pages here. Both arms ran under the same conditions, so the ratios are.

@@ -1,14 +1,14 @@
 //! Two simulations behind one seam.
 //!
-//! [`crate::sim`] is the reference: fixed point, owned outright, and the thing
-//! the digest claim was written about. The `rapier` feature adds a second
-//! backend running the same rink on a real physics engine, and both are
+//! [`crate::sim`] is the reference backend: fixed point, written in this crate
+//! and the one the digest check was designed around. The `rapier` feature adds
+//! a second backend running the same rink on a real physics engine. Both are
 //! reachable in one build so the same input trace can be pushed through each
 //! and measured the same way.
 //!
 //! The seam is [`Simulate`]. A backend owns integration and contact; the rink's
-//! *rules* (half-fencing, the goal mouth, the shot-speed top-up, the carry, the
-//! speed cap, the drag, and every bot) are not physics and stay shared.
+//! rules (half-fencing, the goal mouth, the shot-speed top-up, the carry, the
+//! speed cap, the drag and every bot) are not physics and stay shared.
 
 pub mod fx;
 #[cfg(feature = "rapier")]
@@ -23,11 +23,11 @@ use crate::sim::{PaddleInput, World, SEATS};
 pub trait Simulate: Clone + std::fmt::Debug + Sized + 'static {
   /// Whether [`Self::view`] carries the whole state.
   ///
-  /// When it does, every frame is a complete baseline and a joining client is
-  /// whole one tick after arriving. When it does not, the difference is the
-  /// part a solver carries between frames (contact manifolds, islands, sleep),
-  /// and a client seeded from a view diverges on its first contact, so it has
-  /// to be handed a [`Self::snapshot`] instead.
+  /// When it does, every frame is a complete baseline and a joining client has
+  /// the complete state one tick after arriving. When it does not, the
+  /// difference is the part a solver carries between frames (contact
+  /// manifolds, islands, sleep). A client seeded from a view then diverges on
+  /// its first contact, so it has to be handed a [`Self::snapshot`] instead.
   const VIEW_IS_COMPLETE: bool;
 
   fn step(&self, inputs: &[PaddleInput]) -> Self;
@@ -37,7 +37,7 @@ pub trait Simulate: Clone + std::fmt::Debug + Sized + 'static {
   fn view(&self) -> World;
 
   /// Over the backend's own state, not over [`Self::view`]: a view quantised
-  /// to `Fx` would hide exactly the divergence a digest exists to catch.
+  /// to `Fx` would hide the divergence the digest is there to catch.
   fn digest(&self) -> u64;
 
   fn seed(view: &World) -> Self;
@@ -55,8 +55,8 @@ fn advance<S: Simulate>(state: &S, inputs: &[PaddleInput]) -> S {
 }
 
 /// Whether this build can run what the wire is asking for. `Physics::Rapier`
-/// carries the exact rapier build that produced it, because two peers agreeing
-/// on "rapier" is not agreement: determinism holds same-version-only.
+/// carries the exact rapier build that produced it, because two peers both
+/// saying "rapier" is not enough: determinism holds same-version-only.
 pub fn supported(physics: Physics) -> bool {
   match physics {
     Physics::Fx => true,

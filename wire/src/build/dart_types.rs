@@ -1,22 +1,21 @@
 //! The Dart type emitter: the wire's resolved definitions, as Dart classes
 //! whose encoded shape provably matches what serde produces.
 //!
-//! This is what makes compact MessagePack safe from a Dart client. Under the
-//! compact codec a struct is an array and field order is the whole contract; a
-//! hand-written model reads that order from memory, and these classes read it
-//! from the Rust definitions at build time instead. Every generated type
+//! This makes compact MessagePack safe from a Dart client. Under the compact
+//! codec a struct is an array and field order is what identifies each field. A
+//! hand-written model has to get that order right by hand; these classes take
+//! it from the Rust definitions at build time. Every generated type
 //! carries `toWire({bool named})`, emitting compact arrays or named maps to
-//! match the connection's codec, and `fromWire`, which accepts either shape.
+//! match the connection's codec, plus `fromWire`, which accepts either shape.
 //!
-//! **The contract is deliberately narrow and loud.** Serde-derived structs and
-//! enums; unit, newtype, tuple and struct variants; `Option`, `Vec`, maps,
-//! sets, `Box`, tuples, `Duration` (as the generated `WireDuration`), `Uuid`
-//! as a string with its caveat documented on [`Wire::dart_types`]; generics
-//! monomorphised per instantiation, plaza's vocabulary included via the
-//! embedded sources. Any serde attribute other than `bound`, any unsupported
-//! type form, and any unresolvable name **fails the build naming the spot**,
-//! because a generator that guesses produces exactly the silent wrong-order
-//! corruption it exists to kill.
+//! **Supported:** serde-derived structs and enums; unit, newtype, tuple and
+//! struct variants; `Option`, `Vec`, maps, sets, `Box`, tuples, `Duration` (as
+//! the generated `WireDuration`), `Uuid` as a string with its caveat documented
+//! on [`Wire::dart_types`]; generics monomorphised per instantiation, plaza's
+//! vocabulary included via the embedded sources. Any serde attribute other
+//! than `bound`, any unsupported type form and any unresolvable name **fails
+//! the build naming the spot**, because a generator that guessed would produce
+//! the silent wrong-order corruption it exists to prevent.
 //!
 //! [`Wire::dart_types`]: super::Wire::dart_types
 

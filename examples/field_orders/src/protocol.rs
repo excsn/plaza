@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 
 /// The wire format's version, derived at build time from this file (see
 /// `build.rs`). A wasm bundle is a build product that does not rebuild when the
-/// server does; without this the stale page decodes garbage silently, with it
-/// the handshake tells it to reload.
+/// server does. Without this a stale page silently decodes garbage; with it the
+/// handshake tells the page to reload.
 pub const PROTOCOL: u32 = WIRE_PROTOCOL;
 
 // Written by `plaza_wire::build` from `build.rs`, as an already-parsed `u32`.
@@ -51,7 +51,7 @@ pub const INTERMISSION_TICKS: u64 = 250;
 /// may duel on the Xlarge field, but nine squads cannot squeeze onto Small.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum MapSize {
-  /// 1v1, the artisanal board.
+  /// 1v1, the hand-authored board.
   Small,
   /// Up to 2v2.
   Medium,
@@ -90,7 +90,7 @@ impl MapSize {
     }
   }
 
-  /// A bigger field with more squads earns a longer phase.
+  /// A bigger field with more squads gets a longer phase.
   pub fn side_ticks(self, base: u64) -> u64 {
     match self {
       MapSize::Small => base,
@@ -194,12 +194,12 @@ impl Terrain {
   }
 }
 
-/// Where a unit is in its activation. The ledger `flow_control` has no shape
-/// for: within a side's phase every commander of that army orders their own
-/// units **in any order**, each moving at most once and acting at most once,
-/// and the phase ends when every unit of the army is done. No turn manager
-/// applies, because there is no turn order; there is a set of things not yet
-/// done, and on the biggest field that set is sixty-four units wide.
+/// Where a unit is in its activation. `flow_control` has no shape for this:
+/// within a side's phase every commander of that army orders their own units
+/// in any order, each moving at most once and acting at most once. The phase
+/// ends when every unit of the army is done. No turn manager applies, because
+/// there is no turn order; there is a set of things not yet done and on the
+/// biggest field that set is sixty-four units wide.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Activation {
   /// May still march, and may still act.
@@ -215,7 +215,7 @@ pub struct Unit {
   pub id: u8,
   pub army: Army,
   /// The commander whose squad this unit belongs to; the guard admits orders
-  /// from the owner alone, teammates included out.
+  /// from the owner alone and refuses teammates.
   pub owner: PlayerId,
   pub class: Class,
   pub at: Cell,
@@ -257,9 +257,9 @@ pub struct UnitOrders {
 }
 
 /// What everyone is told. Uniform: a battle is open information, so one view
-/// serves the room and the controller builds it once. Which squad is *yours*
-/// travels in [`BattleOp::YouAre`] and each unit's public `owner`, not in the
-/// view, precisely so the view can stay uniform.
+/// serves the room and the controller builds it once. Which squad is yours
+/// travels in [`BattleOp::YouAre`] and each unit's public `owner` rather than
+/// in the view, so the view can stay uniform.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BattleView {
   pub phase: BattlePhase,
@@ -300,7 +300,7 @@ pub enum BattleOp {
   /// and the survivor answers back if the attacker stands at *its* reach.
   Strike { unit: u8, target: u8 },
   /// Mend a wounded ally at the healer's reach. Ends the unit's activation;
-  /// nothing answers a bandage.
+  /// a mend draws no counterstrike.
   Heal { unit: u8, target: u8 },
   /// End a unit's activation without acting.
   Hold { unit: u8 },
@@ -311,7 +311,7 @@ pub enum BattleOp {
   /// The host's field pick, in the lobby before the countdown; `None` is
   /// auto.
   SetMapSize(Option<MapSize>),
-  /// The host starts the countdown. Settings lock here, like any lobby.
+  /// The host starts the countdown. Settings lock here.
   StartMuster,
 
   /// Sent once, to one client, on being seated.

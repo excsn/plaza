@@ -28,8 +28,8 @@ impl WalletRegistry {
     *entry
   }
 
-  /// For leaving the lobby. Arenas must not call this: surviving a room is the
-  /// point of the registry.
+  /// For leaving the lobby. Arenas must not call this: the registry exists so a
+  /// balance survives leaving a room.
   pub fn forget(&self, player: PlayerId) {
     self.balances.lock().remove(&player);
   }

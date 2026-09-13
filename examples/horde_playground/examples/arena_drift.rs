@@ -2,7 +2,7 @@
 //!
 //! Every earlier attempt to answer this drove `Server` directly with bot seats.
 //! That is the wrong instrument: it skips the impairment link, the real
-//! acknowledgement round trip, and the seat bookkeeping, which is most of what
+//! acknowledgement round trip and the seat bookkeeping, which is most of what
 //! separates a measurement from what a host actually reports. This drives
 //! [`ArenaLogic`] itself, with a client on the other end of the packets, and
 //! prints what the panel would show.
@@ -57,9 +57,9 @@ fn main() {
   let mut client = Client::new(0, PLAYERS);
   let mut seat: Option<u8> = None;
 
-  // One sample a second, kept in full. A trend is a claim about a series, and a
-  // handful of readings cannot support or refute one: every wrong explanation
-  // in this investigation came from reasoning about two or three numbers.
+  // One sample a second, kept in full, because a handful of readings cannot
+  // show a trend: every wrong explanation in this investigation came from
+  // reasoning about two or three numbers.
   let mut now_series: Vec<f64> = Vec::new();
   let mut session_series: Vec<f64> = Vec::new();
   let mut alive_series: Vec<u64> = Vec::new();
@@ -140,9 +140,9 @@ fn main() {
     );
   }
 
-  // Least squares over the second half, where any ramp has finished. The
-  // question "is it increasing" is exactly the sign of this slope, and a slope
-  // is the one thing a pair of screenshots can never show.
+  // Least squares over the second half, where any ramp has finished. The sign
+  // of this slope answers "is it increasing", which a pair of screenshots
+  // cannot show.
   let slope = |xs: &[f64]| {
     let n = xs.len() as f64;
     let mean_x = (n - 1.0) / 2.0;

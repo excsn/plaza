@@ -153,7 +153,7 @@ impl World {
   /// Per bullet-*tick* rather than per bullet, because the numerator is
   /// cumulative and a denominator sampled at one instant is not comparable to
   /// it. Getting that wrong once made the ratio read as five orders of
-  /// magnitude, which was flattering and meaningless.
+  /// magnitude.
   ///
   /// `None` for a half that never existed, rather than a number divided by a
   /// nominal one: a run in which nobody fired has no streamed bullets to price
@@ -192,17 +192,17 @@ impl World {
 
   /// Whether every client derived exactly the field the server did.
   ///
-  /// The property the whole design rests on, and the only one nothing on the
-  /// wire would ever reveal: if two machines disagree about a curtain neither
-  /// of them describes, nobody finds out.
+  /// The design depends on this and nothing on the wire would reveal a failure:
+  /// if two machines disagree about a curtain neither of them sends, nobody
+  /// finds out.
   /// Compared per wave, not in total.
   ///
   /// A wave announcement takes a one-way trip like anything else, so a client
   /// legitimately has fewer waves than the server for a moment after each one
-  /// starts. The claim is not that the two fields are always identical, it is
-  /// that **for every wave a client knows about, its bullets are exactly the
-  /// server's**: agreement is per cause, and the causes arrive when they
-  /// arrive.
+  /// starts. The check is that **for every wave a client knows about, its
+  /// bullets are exactly the server's**. The two fields are not always
+  /// identical. Agreement is checked per cause because each cause arrives after
+  /// its own one-way delay.
   pub fn curtains_agree(&self) -> bool {
     let truth = self.server.curtain();
     self.clients.iter().all(|client| {
@@ -247,9 +247,9 @@ mod tests {
 
   #[test]
   fn every_client_derives_exactly_the_curtain_the_server_has() {
-    // The property the whole design rests on, and the only one nothing on the
-    // wire would ever reveal: two machines that disagree about a field neither
-    // of them describes disagree in silence.
+    // The design depends on this and nothing on the wire would reveal a
+    // failure: two machines that disagree about a field neither of them sends
+    // would never find out.
     let controls = Controls { latency_ms: 120, jitter_ms: 30, ..base() };
     let mut world = World::new(&controls, SEED);
     for _ in 0..500 {
@@ -261,9 +261,9 @@ mod tests {
 
   #[test]
   fn latency_never_changes_the_curtain_by_one_bullet() {
-    // Because it is a function of the tick, and a tick is not a wall clock.
-    // The comparison seed_defense could not make, because it had no half that
-    // *was* affected to compare against.
+    // The curtain is a function of the tick, not of when anything arrived.
+    // seed_defense could not make this comparison, because it had no half that
+    // *was* affected by latency to compare against.
     let quick = Controls { latency_ms: 0, jitter_ms: 0, ..base() };
     let slow = Controls { latency_ms: 300, jitter_ms: 60, ..base() };
 
@@ -281,9 +281,8 @@ mod tests {
 
   #[test]
   fn the_derivable_half_is_cheaper_per_bullet_tick_than_the_streamed_half() {
-    // The headline comparison. Both halves are on the same wire in the same
-    // game, so this is like for like rather than two examples quoted at each
-    // other.
+    // Both halves are on the same wire in the same game, so this compares like
+    // for like instead of comparing two examples.
     let controls = base();
     let mut world = World::new(&controls, SEED);
     world.run_playing(10_000, &controls);
@@ -316,12 +315,11 @@ mod tests {
 
   #[test]
   fn the_client_always_knows_first_and_the_rule_only_decides_if_it_may_act() {
-    // Not the claim this example was planned around, and a better one. A
-    // derivable curtain means the client computed the same field the server
-    // did and saw the contact on the same tick, so nobody is ever the last to
-    // find out. What `ServerOnly` costs is not knowledge, it is permission:
-    // the player watches themself keep flying for a round trip after they
-    // already know they are dead, which is worse than not knowing.
+    // This example was planned around a different claim. A derivable curtain
+    // means the client computes the same field the server does and sees the
+    // contact on the same tick. `ServerOnly` withholds permission to act, not
+    // knowledge: the player keeps flying for a round trip after they already
+    // know they are dead, which is worse than not knowing.
     let slow = Controls {
       latency_ms: 200,
       playout_delay_ms: 250,
@@ -344,17 +342,15 @@ mod tests {
     assert!(waited > 0, "nobody spent a tick flying a ship they knew was hit");
     assert!(acted < waited, "acting on your own contact cost {acted} ticks against {waited} waiting");
 
-    // Both clients saw the contact. That is the part worth pinning: the
-    // difference is never who knew.
+    // Both clients saw the contact; the rules differ only in who may act on it.
     let seen_told: u64 = told.clients.iter().map(|c| c.stats.contacts_seen).sum();
     assert!(seen_told > 0, "the server-only client saw its own contacts too");
   }
 
   #[test]
   fn a_ship_that_stops_declaring_is_immortal_and_obvious() {
-    // Both halves of the answer to "how cheatable is letting the ship decide".
-    // Completely, and completely visible, because the server derives the same
-    // curtain and can count the contacts nobody owned up to for free.
+    // Letting the ship decide is completely cheatable, but the server derives
+    // the same curtain and can count the undeclared contacts for free.
     let controls = Controls {
       death_rule: DeathRule::ClientDeclares,
       silent_seat: true,
@@ -374,9 +370,8 @@ mod tests {
 
   #[test]
   fn an_honest_ship_is_not_accused_of_going_quiet() {
-    // The other half, and the one whose absence would be silent: a detector
-    // that fires on honest play is not a detector, it is a false-positive
-    // generator with a plausible name.
+    // A detector that also fired on honest play would only produce false
+    // positives.
     let controls = Controls {
       death_rule: DeathRule::ClientDeclares,
       silent_seat: false,
@@ -399,9 +394,9 @@ mod tests {
 
   #[test]
   fn a_declaration_the_curtain_disagrees_with_is_refused() {
-    // The rule that is both fair and checkable, and it is only checkable
-    // because the curtain is a function of the tick: the server recomputes the
-    // exact field the client dodged, at the tick that was named.
+    // This rule is fair and checkable. It is only checkable because the curtain
+    // is a function of the tick: the server recomputes the exact field the
+    // client dodged, at the tick that was named.
     let controls = Controls {
       death_rule: DeathRule::ServerConfirms,
       ..base()
@@ -445,9 +440,9 @@ mod tests {
 
   #[test]
   fn a_joiner_gets_the_waves_already_in_flight() {
-    // The one failure mode a derived field has that a streamed one does not:
-    // a client told only about future waves flies through a curtain it cannot
-    // see, and nothing about the frames it is receiving would say so.
+    // A client told only about future waves flies through a curtain it cannot
+    // see and nothing in the frames it receives would show it. A streamed field
+    // cannot fail this way.
     let controls = base();
     let mut world = World::new(&controls, SEED);
     world.run(4000, &controls);

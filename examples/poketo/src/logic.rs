@@ -1,10 +1,10 @@
 //! The tick that drives both regimes.
 //!
-//! One loop, two rhythms. The overworld goes out every tick because a trainer
-//! that stops being described stops moving on screen; a battle goes out only
-//! when something happens, because nothing in it decays. That difference is not
-//! an optimisation, it is what the two regimes *are*: a state has to be
-//! repeated to stay true and a transcript does not.
+//! One loop runs two rhythms. The overworld goes out every tick because a
+//! trainer that stops being described stops moving on screen; a battle goes out
+//! only when something happens, because nothing in it decays. The two regimes
+//! differ in kind rather than by optimisation: a state has to be repeated to
+//! stay true and a transcript does not.
 
 use async_trait::async_trait;
 use plaza::agent::Agent;
@@ -147,8 +147,8 @@ fn apply(state: &mut PoketoState, player: PlayerId, seat: usize, op: PoketoOp, c
   match op {
     PoketoOp::Resume { token } => {
       let Some(parked) = state.claim(token) else {
-        // Unknown or aged out, so this is a first join wearing a resume, and
-        // the client is already seated fresh. Nothing to say about it.
+        // Unknown or aged out, so this is effectively a first join and the
+        // client is already seated fresh. Nothing to say about it.
         return;
       };
       // Put back where it was, doing what it was doing, with what it had.
@@ -207,8 +207,8 @@ fn apply(state: &mut PoketoState, player: PlayerId, seat: usize, op: PoketoOp, c
       let outcome = battle.offer(seat as u16, turn, choice);
       match outcome {
         // Nothing changed, so nothing is sent. A resend after a dropped
-        // connection is silence rather than a correction, which is the whole
-        // benefit of a choice naming its turn.
+        // connection is silence rather than a correction, which is what a
+        // choice naming its turn buys.
         Offered::Stale { .. } | Offered::Ahead { .. } | Offered::NotYours | Offered::Finished => {}
         Offered::Waiting | Offered::Resolved => {
           // The wild side answers as soon as the player has, so a turn never
@@ -365,8 +365,8 @@ mod tests {
 
   #[tokio::test]
   async fn a_walking_client_is_told_every_tick_and_a_battling_one_is_not() {
-    // The two rhythms, which is the whole shape: a state has to be repeated to
-    // stay true, a transcript does not.
+    // The two rhythms: a state has to be repeated to stay true and a transcript
+    // does not.
     let mut state = PoketoState::new();
     run(&mut state, LogicInput::AgentJoined {
       agent: Agent::new_human(7),
@@ -682,10 +682,9 @@ mod tests {
 
   #[tokio::test]
   async fn losing_sends_you_back_to_the_start_whole() {
-    // A creature walked out on the one point it had left could only lose again,
-    // and the nearest spring is a region's walk through the grass that just
-    // beat it, so the only thing a player could do is the thing that cannot
-    // work.
+    // A creature walked out on the one point it had left could only lose again;
+    // the nearest spring is a region's walk through the grass that just
+    // beat it, so a beaten player's only option could not work.
     let mut state = PoketoState::new();
     run(&mut state, LogicInput::AgentJoined {
       agent: Agent::new_human(7),

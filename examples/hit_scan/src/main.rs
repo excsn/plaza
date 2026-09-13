@@ -1,4 +1,4 @@
-//! The window, and which of the four things this process is.
+//! The window and the choice of which of the four roles this process runs.
 
 mod render;
 mod ui;

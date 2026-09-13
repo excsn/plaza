@@ -1,15 +1,14 @@
 //! A client on a real wire.
 //!
 //! Thin, because the wire is not in the driving loop. It wraps the same
-//! [`sim::Client`] the harness runs, adds a socket and a clock estimate, and
+//! [`sim::Client`] the harness runs, adds a socket and a clock estimate and
 //! sends one message per finished run.
 //!
-//! The clock is here for the readouts rather than for the simulation, which is
-//! a real difference from every other playground. A run's tick count comes from
-//! the ticks it took, not from any wall clock, so a client with a badly fitted
-//! clock still records the same lap time. That is not slackness: it is what
-//! makes a recorded run comparable with one driven on another machine a week
-//! later.
+//! The clock is here for the readouts rather than for the simulation, unlike
+//! every other playground. A run's time comes from the ticks it took rather
+//! than from any wall clock, so a client with a badly fitted clock still
+//! records the same lap time. That makes a recorded run comparable with one
+//! driven on another machine a week later.
 //!
 //! [`sim::Client`]: crate::sim::client::Client
 
@@ -115,9 +114,9 @@ impl NetClient {
     if self.me.is_some() && plaza_ws::trim_backlog(&mut events, BACKLOG_TRIGGER, BACKLOG_KEEP).is_some() {
       self.resume_drops += 1;
       // A probe sent before the freeze and answered after it measures the
-      // freeze, not the network, and its origin still matches so the echo
-      // check waves it through. `on_resume` is what discards it, along with
-      // everything the estimators learned across a gap of unknown length.
+      // freeze rather than the network and its origin still matches, so the
+      // echo check accepts it. `on_resume` discards it along with everything
+      // the estimators learned across a gap of unknown length.
       self.pump.on_resume();
     }
     let mut arrivals = std::mem::take(&mut self.arrivals);
@@ -140,14 +139,13 @@ impl NetClient {
     let _ = controls;
   }
 
-  /// Advances the trial by whole ticks, under the input held this frame, and
+  /// Advances the trial by whole ticks under the input held this frame and
   /// sends the run if it just ended.
   ///
-  /// **Whole ticks, from carried wall time.** A racing example is the easiest
-  /// place in the world to advance by "however long the last frame took", and
-  /// it would make every recorded lap a function of the frame rate that
-  /// recorded it: a ghost from a 144 Hz machine would drive differently on a
-  /// 60 Hz one.
+  /// The ticks come from carried wall time. Advancing by "however long the last
+  /// frame took" would make every recorded lap a function of the frame rate
+  /// that recorded it: a ghost from a 144 Hz machine would drive differently on
+  /// a 60 Hz one.
   pub fn tick(&mut self, dt_ms: u64, input: Input, controls: &Controls) {
     if !self.is_playing() {
       return;
@@ -182,7 +180,7 @@ impl NetClient {
         } => {
           self.me = Some(player);
           // The track is built here rather than sent: it is a constant both
-          // ends already have, and the log names which one by a single byte.
+          // ends already have and the log names which one by a single byte.
           self.sim = SimClient::new(player, Track::circuit(), protocol);
           self.sim.on_ghosts(ghosts);
           self.status = Status::Playing;

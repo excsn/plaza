@@ -2,8 +2,8 @@
 //! wrap into an application's ops.
 //!
 //! They live here rather than beside the managers in `plaza` core because they
-//! cross the wire, and this crate is the wire vocabulary: a client names them
-//! without the server's runtime, and [`build`](crate::build)'s baked-in
+//! cross the wire and this crate is the wire vocabulary: a client names them
+//! without the server's runtime and [`build`](crate::build)'s baked-in
 //! vocabulary version covers their shape without any consumer listing another
 //! crate's source files. Core re-exports them at their old paths, so
 //! `plaza::game_common::flow_control::phases::op_payloads::*` keeps working.

@@ -153,8 +153,8 @@ impl StateLogic<GowOp, PlayerId, GowState> for GowLogic {
         let Some(player) = source.id_cloned() else {
           return Err(StateLogicError::InvalidOperation("ops from an unidentified agent".into()));
         };
-        // A player whose seat has gone is not an error, it is a packet that
-        // crossed a departure. Dropping it silently is the whole handling.
+        // An op from a player whose seat has gone is a packet that crossed a
+        // departure rather than an error, so it is dropped silently.
         if let Some(seat) = state.seat_of(player) {
           for op in ops {
             apply(state, player, seat, op, &mut ctx);
@@ -227,8 +227,8 @@ fn apply(state: &mut GowState, player: PlayerId, seat: Seat, op: GowOp, ctx: &mu
       }
     }
     GowOp::Unparty => state.zone.parties.leave(seat),
-    // Server-to-client ops arriving from a client are not a protocol error
-    // worth killing a connection over, they are noise.
+    // Server-to-client ops arriving from a client are ignored as noise rather
+    // than treated as a protocol error that kills the connection.
     GowOp::World(_) | GowOp::Cell(_) | GowOp::Seated { .. } | GowOp::Refused { .. } => {}
   }
 }
@@ -397,8 +397,8 @@ fn report(state: &mut GowState) {
     "zone"
   );
   // Reset the query counters only, because they describe a window and the
-  // others describe a session: a rate and a total read differently and mixing
-  // them is how a panel starts lying slowly.
+  // others describe a session: resetting both would make the totals restart
+  // every report while still being read as totals.
   zone.examined = 0;
   zone.returned = 0;
 }
@@ -407,9 +407,9 @@ fn report(state: &mut GowState) {
 /// per-client remainder.
 ///
 /// Public so `examples/zone_scale.rs` times the frame the server really builds
-/// rather than a second copy of it: a measurement that reconstructs its subject
-/// stops measuring the moment a field moves. `published` is the tick's
-/// [`Publication`]; building it once and assembling per client is the shape.
+/// rather than a second copy of it, which would go stale as soon as a field
+/// changed. `published` is the tick's [`Publication`], built once and then
+/// assembled per client.
 pub fn frame_for(
   state: &mut GowState,
   published: &Publication,
@@ -433,9 +433,8 @@ pub fn frame_for(
 /// The body blob every viewer standing in `cell` receives.
 ///
 /// **Assembled once per occupied viewer-cell rather than once per viewer**,
-/// which is the whole of this layer's redundancy: two viewers in one cell touch
-/// the same cells, earn the same width for each, and are owed byte-identical
-/// bytes. What varies per viewer is `you`, the extras and the landings, and
+/// because two viewers in one cell touch the same cells, earn the same width
+/// for each and are owed byte-identical bytes. What varies per viewer is `you`, the extras and the landings, and
 /// those are still built per viewer because they genuinely differ.
 pub fn assemble_for_cell(state: &GowState, published: &Publication, cell: usize) -> crate::protocol::Packed {
   let zone = &state.zone;
@@ -530,8 +529,7 @@ fn frame_from(
 /// the defect this fixes: a client drew its own body from its own position and
 /// read everything else out of the list of other people, so its cast bar, its
 /// mana and its cooldown were never read at all and every key press was
-/// silent. What a player must know about themselves is not a subset of what
-/// they are told about anyone else.
+/// silent. A player needs fields about themselves that nobody else is sent.
 fn you_of(state: &GowState, seat: Seat, now: Ms) -> Option<You> {
   let character = state.zone.characters.get(&seat)?;
   Some(You {
@@ -582,10 +580,9 @@ mod tests {
 
   #[tokio::test]
   async fn both_delivery_modes_describe_the_same_world() {
-    // The whole reason both ship: they are two ways to move the same bodies,
-    // so a client must not be able to tell which one it was sent. Anything
-    // that drifts between them is a bug in one of them, and this is the test
-    // that would say so.
+    // Both ship as two ways to move the same bodies, so a client must not be
+    // able to tell which one it was sent. Anything that drifts between them is
+    // a bug in one of them, and this is the test that would say so.
     async fn world(delivery: Delivery) -> Vec<crate::protocol::Seen> {
       let logic = GowLogic::new().with_bots(24);
       let mut state = GowState::new();
@@ -712,7 +709,7 @@ mod tests {
   async fn a_cell_op_goes_to_everyone_watching_that_cell_and_nobody_else() {
     // What `MessageTarget::Agents` buys, and the property that makes it worth
     // a protocol change: one encode reaches every viewer of a cell. If each
-    // op named one recipient this would be a per-client frame with extra steps.
+    // op named one recipient it would be no cheaper than a per-client frame.
     let logic = GowLogic::new();
     let mut state = GowState::new();
     state.delivery = Delivery::Cells;
@@ -851,9 +848,8 @@ mod tests {
   #[tokio::test]
   async fn the_zone_reports_on_a_tick_boundary_and_resets_only_the_window() {
     // A counter that describes a window and one that describes a session read
-    // differently, and resetting both together is how a log starts lying
-    // slowly: the totals would restart every ten seconds while claiming to be
-    // totals.
+    // differently. Resetting both together would make the log wrong: the
+    // totals would restart every ten seconds while claiming to be totals.
     let logic = GowLogic::new();
     let mut state = GowState::new();
     seated(&mut state, 1);

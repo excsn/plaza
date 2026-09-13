@@ -1,20 +1,20 @@
-//! The authority: owns the board, the bombs, and who is alive.
+//! The authority: owns the board, the bombs and who is alive.
 //!
-//! Two things here are worth reading even if the rest is ordinary.
+//! Two parts of this file matter most.
 //!
-//! **The cascade** ([`Server::detonate`]). A bomb going off can fire another,
-//! which fires another, and the arms of each are cut by walls that earlier arms
+//! **The cascade** ([`Server::detonate`]). A bomb going off can set off another,
+//! which sets off another. The arms of each are cut by walls that earlier arms
 //! in the same instant have just removed. Resolving that as "each bomb explodes
 //! when its own fuse ends" gives a different board depending on the order the
 //! bombs happen to be stored in. So it is a breadth-first sweep to a fixed
-//! point, and the whole cascade is one event with one timestamp.
+//! point and the whole cascade is one event with one timestamp.
 //!
-//! **Inputs are scheduled, not applied on arrival** ([`plaza_server_utils::InputSchedule`]).
+//! **Inputs are scheduled rather than applied on arrival** ([`plaza_server_utils::InputSchedule`]).
 //! Every input names the tick it is meant for and executes on that tick, so two
 //! players who pressed at the same instant are resolved in the order they
 //! pressed rather than in the order their packets landed. In a continuous game
-//! that buys fairness in contested pickups; here it also decides who reaches the
-//! only escape cell, which is the difference between a round won and lost.
+//! that makes contested pickups fair; here it also decides who reaches the only
+//! escape cell, which can decide the round.
 
 use plaza_server_utils::{InputSchedule, InputWindow};
 
@@ -81,8 +81,8 @@ pub struct Server {
   /// One tick-addressed input queue per seat.
   schedules: Vec<InputSchedule<Intent>>,
   /// The direction each seat is holding, which persists until changed: a walk
-  /// is a level, not an edge, so a player keeps going while the key is down
-  /// even if no input arrives for a few ticks.
+  /// is a level rather than an edge, so a player keeps going while the key is
+  /// down even if no input arrives for a few ticks.
   held: Vec<Dir>,
   /// Bots' next decision time, so they do not re-plan every tick.
   bot_next_ms: Vec<u64>,
@@ -91,15 +91,15 @@ pub struct Server {
   pub kills: u64,
   pub walls_destroyed: u64,
   pub bombs_placed: u64,
-  /// The largest cascade seen, in bombs. The number that says whether chain
-  /// resolution is doing anything worth its complexity.
+  /// The largest cascade seen, in bombs. Shows whether chain resolution is
+  /// doing anything worth its complexity.
   pub longest_chain: usize,
 }
 
 impl Clone for Server {
   /// `plaza` requires `Clone` on its state for the query command. Nothing on the
   /// hot path clones a `Server`; the schedules are rebuilt empty because a
-  /// half-drained input queue is not a thing worth copying.
+  /// half-drained input queue is not worth copying.
   fn clone(&self) -> Self {
     Self {
       grid: self.grid.clone(),
@@ -225,8 +225,8 @@ impl Server {
       return false;
     };
     if !controls.input_playout {
-      // The naive path, kept so the difference is measurable rather than
-      // argued: whatever arrives takes effect on the next tick.
+      // The naive path, kept so the difference can be measured: whatever
+      // arrives takes effect on the next tick.
       return match intent {
         Intent::Walk(dir) => {
           self.held[seat] = dir;
@@ -290,26 +290,26 @@ impl Server {
 
   /// Advances the world by `dt_ms`, in **whole ticks**.
   ///
-  /// The elapsed time is accumulated and spent in fixed [`SIM_STEP_MS`] steps,
-  /// never applied raw, and that is a correctness requirement rather than
-  /// tidiness: a tick driver hands over the *measured* elapsed time, so a 62 Hz
-  /// driver delivers 16, 17, 16, 16, 17 and so on. Advancing the world by that
-  /// directly makes the simulation's rate a property of the host's scheduler.
+  /// The elapsed time is accumulated and spent in fixed [`SIM_STEP_MS`] steps
+  /// and never applied raw. This is required for correctness: a tick driver
+  /// hands over the *measured* elapsed time, so a 62 Hz driver delivers 16, 17,
+  /// 16, 16, 17 and so on. Advancing the world by that directly makes the
+  /// simulation's rate a property of the host's scheduler.
   ///
-  /// Nothing can predict that. A client stepping in exact 16 ms ticks and a
+  /// No client can predict that. A client stepping in exact 16 ms ticks and a
   /// server stepping in measured ones accumulate a walk at different rates and
   /// cross each cell boundary a tick apart, which on a lattice is a whole cell
   /// of disagreement at every crossing. It cost 2.2 snaps per hundred frames on
-  /// a link with no loss, no jitter worth the name, and every input accepted on
-  /// time, which is a bug that looks exactly like a network problem.
+  /// a link with no loss, negligible jitter and every input accepted on time,
+  /// so the bug looked exactly like a network problem.
   ///
   /// So the authority advances in the same quantum its clients predict in. The
-  /// clock then only ever holds whole multiples of the step, which is also what
-  /// keeps [`Server::tick`] exact.
+  /// clock then only ever holds whole multiples of the step, which also keeps
+  /// [`Server::tick`] exact.
   pub fn advance(&mut self, dt_ms: u64, controls: &Controls) -> Tickout {
     // A long stall (a debugger, a suspended host) must not be repaid as a
-    // hundred steps in one call. The world falls behind instead, which is
-    // visible, rather than freezing while it catches up, which is not.
+    // hundred steps in one call. Instead the world falls behind, which players
+    // can see, rather than freezing while it catches up.
     self.accumulated_ms += dt_ms.min(MAX_CATCH_UP_MS);
     let mut out = Tickout::default();
     while self.accumulated_ms >= SIM_STEP_MS {
@@ -382,9 +382,9 @@ impl Server {
   fn execute_due(&mut self, _controls: &Controls) {
     let current = self.clock_ms / SIM_STEP_MS;
     for seat in 0..self.schedules.len() {
-      // Drained per *step*, not per network frame: consuming the queue once a
-      // frame would collapse everything that arrived between two ticks onto
-      // whichever tick happened to run next.
+      // Drained per *step* rather than per network frame: consuming the queue
+      // once a frame would collapse everything that arrived between two ticks
+      // onto whichever tick happened to run next.
       let due: Vec<Intent> = self.schedules[seat].drain_due(current).collect();
       for intent in due {
         match intent {
@@ -431,11 +431,11 @@ impl Server {
   /// Resolves one cascade to a fixed point.
   ///
   /// Breadth-first over bombs rather than a pass per bomb, because a chained
-  /// bomb fires *now* and its own arms can reach a third, and because each arm
+  /// bomb fires *now* and its own arms can reach a third and because each arm
   /// is cut by walls the cascade itself is removing. Evaluating that in storage
   /// order would make the outcome depend on which bomb happened to be pushed
-  /// first, which is exactly the kind of thing that reproduces once in fifty
-  /// rounds and cannot be debugged from a report.
+  /// first, which is the kind of bug that reproduces once in fifty rounds and
+  /// cannot be debugged from a report.
   fn detonate(&mut self, seeds: &[Cell]) -> BlastEvent {
     let mut event = BlastEvent {
       at_ms: self.clock_ms,
@@ -520,7 +520,7 @@ impl Server {
     event
   }
 
-  /// Whether a destroyed wall was hiding something, and what.
+  /// Whether a destroyed wall was hiding something and what.
   ///
   /// Deterministic in the cell and the seed, so two builds of this example
   /// reveal the same pickups from the same board. A running counter would make
@@ -590,7 +590,7 @@ impl Server {
     Some((winner, ROUND_END_MS))
   }
 
-  /// A fresh board, everyone back in a corner, upgrades surrendered.
+  /// A fresh board: everyone back in a corner and upgrades reset.
   fn begin_round(&mut self) -> RoundStart {
     self.round += 1;
     self.seed = self.seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
@@ -614,10 +614,10 @@ impl Server {
   }
 
   /// The house players. Deliberately simple: walk somewhere legal, drop a bomb
-  /// near a wall now and then, and run from fire.
+  /// near a wall now and then and run from fire.
   ///
-  /// They exist so a single joiner has a game, not to be good. What they must
-  /// not do is stand still in fire, because a bot that never dies makes every
+  /// They exist so a single joiner has a game rather than to play well. They
+  /// must not stand still in fire, because a bot that never dies makes every
   /// round a draw by timeout and the round machinery would never be exercised.
   fn drive_bots(&mut self, controls: &Controls) {
     if !controls.bots {
@@ -737,7 +737,7 @@ mod tests {
 
   #[test]
   fn a_bomb_in_the_blast_chains_rather_than_waiting_for_its_own_fuse() {
-    // The property the cascade exists for. Two bombs two cells apart, the
+    // What the cascade is for. Two bombs two cells apart, the
     // second dropped later so its own fuse is nowhere near ending.
     let mut server = Server::new(2, B0MB_SEED);
     let c = controls();
@@ -902,16 +902,15 @@ mod tests {
 
   #[test]
   fn an_irregular_tick_driver_produces_the_same_world_as_a_regular_one() {
-    // `TickDriver` hands over the *measured* elapsed time, not the nominal
-    // interval, so a 62 Hz driver delivers 16, 17, 16, 16, 17 and so on.
-    // Advancing the world by that directly would make the simulation's rate a
-    // property of the host's scheduler, and nothing can predict that: a client
+    // `TickDriver` hands over the *measured* elapsed time rather than the
+    // nominal interval, so a 62 Hz driver delivers 16, 17, 16, 16, 17 and so
+    // on. Advancing the world by that directly would make the simulation's rate
+    // a property of the host's scheduler and nothing can predict that: a client
     // stepping in exact ticks and a server stepping in measured ones cross each
     // cell boundary a tick apart, which on a lattice is a whole cell.
     //
     // It cost 2.2 snaps per hundred frames on a link with no loss and every
-    // input accepted on time, which is a bug wearing a network problem's
-    // clothes.
+    // input accepted on time, which makes the bug look like a network problem.
     let c = controls();
     let mut regular = Server::new(2, B0MB_SEED);
     let mut jittery = Server::new(2, B0MB_SEED);
@@ -938,8 +937,8 @@ mod tests {
 
   #[test]
   fn the_clock_only_ever_holds_whole_ticks() {
-    // What keeps `tick()` exact, and therefore what keeps a client's named tick
-    // meaning the same thing on both sides.
+    // This keeps `tick()` exact and so keeps a client's named tick meaning the
+    // same thing on both sides.
     let c = controls();
     let mut server = Server::new(2, B0MB_SEED);
     for dt in [7u64, 13, 29, 4, 51, 16, 17] {

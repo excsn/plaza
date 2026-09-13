@@ -1,15 +1,14 @@
-//! The map, the pieces, and the numbers that define a wave.
+//! The map, the pieces and the numbers that define a wave.
 //!
-//! Everything here is integer or fixed point. That is not a style preference:
-//! this example's whole claim is that a wave can be reproduced from a seed on
-//! machines that never exchange a single position, and a float in any of these
-//! structures would be a place two machines are allowed to differ.
+//! Everything here is integer or fixed point, because a wave has to be
+//! reproduced from a seed on machines that never exchange a position. A float
+//! in any of these structures would be a place two machines could differ.
 //!
-//! The other rule the layout follows is that **the path is axis aligned**. A
-//! diagonal leg would need a unit vector, which needs a division and a square
-//! root, and while both are exact here they are exact by construction rather
-//! than by nature. Axis-aligned legs make an enemy's position a waypoint plus a
-//! distance along one axis, which is addition and nothing else.
+//! The path is also axis aligned. A diagonal leg would need a unit vector,
+//! which needs a division and a square root. Both would be exact here only
+//! because of the values chosen, not in general. Axis-aligned legs make an
+//! enemy's position a waypoint plus a distance along one axis, which needs
+//! only addition.
 
 use serde::{Deserialize, Serialize};
 
@@ -23,8 +22,8 @@ pub const MAP_H: i32 = 12;
 
 /// The simulation's quantum, on both sides. 40 Hz.
 ///
-/// Every client runs the whole wave, so this is not a server detail: it is part
-/// of the shared rule, and a client stepping at a different size reproduces a
+/// Every client runs the whole wave, so this is part of the shared rule rather
+/// than a server detail. A client stepping at a different size reproduces a
 /// different wave from the same seed.
 pub const SIM_STEP_MS: u64 = 25;
 
@@ -39,8 +38,8 @@ pub const STARTING_LIVES: i32 = 20;
 
 /// How long the overrun screen stays up before the field is laid out fresh.
 ///
-/// A run ends, a session does not. Everyone at the arena would otherwise be
-/// looking at a board that will never change again.
+/// The session continues after a run ends. Everyone at the arena would
+/// otherwise be looking at a board that will never change again.
 pub const RESTART_AFTER_TICKS: u64 = 200;
 pub const STARTING_GOLD: i32 = 260;
 
@@ -240,8 +239,8 @@ impl TowerKind {
     }
   }
 
-  /// Damage per second, which is the number that actually compares two towers.
-  /// Neither damage nor fire rate says anything on its own.
+  /// Damage per second, which is the number to compare two towers by. Damage
+  /// or fire rate alone does not tell you which is stronger.
   pub fn dps(self, level: u8) -> i32 {
     let cooldown = self.cooldown_ms(level).max(1);
     self.damage(level) * 1000 / cooldown
@@ -288,8 +287,8 @@ pub const SLOW_MS: u64 = 900;
 pub const SLOW_NUM: i32 = 55;
 pub const SLOW_DEN: i32 = 100;
 
-/// One enemy. Its **position is derived**, from the leg of the path it is on
-/// and how far along that leg it has walked.
+/// One enemy. Its position is derived from the leg of the path it is on and
+/// how far along that leg it has walked.
 ///
 /// Storing a position instead would mean re-deriving a direction every tick and
 /// accumulating the error of that derivation. Here the only accumulated value
@@ -415,30 +414,29 @@ pub fn in_bounds(cell: Cell) -> bool {
 
 /// The dials the panel edits.
 ///
-/// Three of these deliberately **break determinism**, which is the
-/// demonstration rather than a debug aid: the claim is that plaza notices and
-/// recovers, and a claim like that is worth nothing without a way to make it
-/// happen on demand. Each acts on the real simulation path, not on a readout.
+/// Three of these deliberately break determinism, to show that plaza notices
+/// and recovers. That needs a way to cause divergence on demand. Each acts on
+/// the real simulation path, not on a readout.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Controls {
   pub latency_ms: u64,
   pub jitter_ms: u64,
   pub loss_pct: f32,
-  /// What a lost packet costs, which is a property of the link rather than of
-  /// this simulation. The transport underneath is a WebSocket, so the truthful
-  /// answer is a retransmission: the frame is late and nothing is missing. The
-  /// netcode above is written for the other answer, where the packet is gone,
-  /// which is the one worth demonstrating here.
+  /// What a lost packet costs. That is a property of the link, not of this
+  /// simulation. The transport underneath is a WebSocket, so on the real wire
+  /// a loss is a retransmission: the frame is late and nothing is missing. The
+  /// netcode above is written for a link where the packet is gone, which is
+  /// the case this example demonstrates.
   pub datagram_link: bool,
-  /// Whether a client simulates the wave at all. Off, it draws only what a
-  /// snapshot told it, which is the bandwidth comparison made visible.
+  /// Whether a client simulates the wave at all. When off, it draws only what
+  /// a snapshot told it, which shows the bandwidth comparison on screen.
   pub simulate_locally: bool,
   pub digest_checks: bool,
-  /// Ask for a full snapshot when a digest disagrees. Off, a divergence is
-  /// permanent, which is what makes the recovery half worth watching.
+  /// Ask for a full snapshot when a digest disagrees. When off, a divergence
+  /// is permanent.
   pub resync_on_mismatch: bool,
 
-  /// Accumulate enemy movement in `f32` instead of fixed point on this client.
+  /// Work out enemy speeds in `f32` instead of fixed point on this client.
   pub break_with_floats: bool,
   /// Target the first enemy in range rather than the one furthest along, so the
   /// rule is replaced by whatever order the container happens to yield.

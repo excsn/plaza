@@ -7,17 +7,15 @@
 //! of impairment, the probe schedule, and the deadline arithmetic that decides
 //! when either of them wants attention.
 //!
-//! **It is a convenience, not a ceiling.** Nothing here reaches for anything a
-//! transport outside this crate cannot reach for, which is the property that
-//! makes it worth having rather than privileged: an adapter that needs
-//! different behaviour uses the parts and writes its own, and loses nothing by
-//! doing so. A transport whose link genuinely reorders is the case to expect,
-//! since the conditioner below releases monotonically on the assumption that a
-//! byte stream does not.
+//! **Using it is optional.** It uses nothing a transport outside this crate
+//! cannot also use, so an adapter that needs different behaviour can take the
+//! parts and write its own loop without losing anything. The likely case is a
+//! transport whose link really reorders frames, since the conditioner releases
+//! frames in order on the assumption that a byte stream never reorders.
 //!
-//! The socket stays yours. So does framing, and so does enforcing
-//! [`Limits::max_frame_bytes`](crate::manager::Limits::max_frame_bytes): those
-//! are what a transport *is*.
+//! The socket, the framing and enforcing
+//! [`Limits::max_frame_bytes`](crate::manager::Limits::max_frame_bytes) stay
+//! yours, since those are the transport's own job.
 //!
 //! ```rust,ignore
 //! let mut driver = LinkDriver::new(&manager, conn_id, codec.clone());
@@ -175,10 +173,10 @@ impl<ID: AgentId, C: WireCodec> LinkDriver<ID, C> {
   /// connections, and this one should be closed.
   ///
   /// A held frame is judged when the link releases it rather than when it
-  /// arrived, so this is what [`due`](Self::due) has no way to return: it hands
-  /// back what the socket is owed, and a close is not a frame. The direct path
-  /// needs no flag, since [`inbound`](Self::inbound) returns
-  /// [`Eject`](Inbound::Eject) to its caller.
+  /// arrived. [`due`](Self::due) only returns frames for the socket, so it
+  /// cannot report a close; this flag does. The direct path needs no flag,
+  /// since [`inbound`](Self::inbound) returns [`Eject`](Inbound::Eject) to its
+  /// caller.
   pub fn ejected(&self) -> bool {
     self.ejected
   }

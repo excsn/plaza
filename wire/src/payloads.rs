@@ -1,8 +1,8 @@
 //! The payload vocabulary a server and its clients exchange for prediction,
-//! reconciliation, and lag compensation.
+//! reconciliation and lag compensation.
 //!
 //! These are pure serde structs, generic over the application's state, input,
-//! entity-id, time, and (for remote snapshots) vector/rotation types. They carry
+//! entity-id, time and (for remote snapshots) vector/rotation types. They carry
 //! no math dependency: you name the position and rotation types yourself, so the
 //! wire vocabulary does not mandate a math library.
 //!
@@ -23,7 +23,7 @@ pub struct SequencedClientInput<InputData: Clone + Debug> {
   pub input_data: InputData,
 }
 
-/// Server to client: the authoritative state of the recipient's own entity, and
+/// Server to client: the authoritative state of the recipient's own entity and
 /// the last input sequence the server had applied to reach it. The client snaps
 /// to this and replays any newer inputs.
 #[derive(Serialize, Deserialize, Debug, Clone)]

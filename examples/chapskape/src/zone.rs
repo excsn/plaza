@@ -12,8 +12,7 @@
 //! world's contents cost nothing to hold and nothing to join; what is stored is
 //! the small set that is currently out, and what it is stored as is the tick it
 //! comes back on rather than how long it has left. An absolute tick is the same
-//! answer every tick, and a state that does not change is a state you can send
-//! once.
+//! answer every tick, so it only has to be sent once.
 //!
 //! And a third thing that is neither: an item on the ground, whose **audience
 //! is a rule**. It belongs to whoever dropped it until a timer runs out and to
@@ -573,7 +572,7 @@ impl Zone {
       .collect();
     people.sort_unstable();
 
-    // Sorted, and this is not tidiness. Every body below draws from one random
+    // Sorted because the order matters. Every body below draws from one random
     // stream, so an order that came out of a hash map is an order that decides
     // who wanders where, and the same tick run twice stops being the same tick.
     let mut wandering: Vec<Seat> = self
@@ -900,8 +899,7 @@ impl Zone {
   ///
   /// The audience is a rule rather than a distance: within sight **and** either
   /// yours or nobody's yet. A viewer who cannot take it is not told it is
-  /// there, which is the whole of what makes the ownership timer a thing that
-  /// happens rather than a label.
+  /// there, which is what gives the ownership timer an effect beyond a label.
   pub fn ground_in_view(&self, middle: Tile, viewer: Seat) -> Vec<Lying> {
     let mut lying: Vec<Lying> = self
       .ground
@@ -1067,8 +1065,8 @@ mod tests {
 
   #[test]
   fn a_depleted_prop_comes_back_on_the_tick_it_said_it_would() {
-    // Absolute rather than counted down, which is the whole reason a viewer
-    // can be told once instead of every tick.
+    // Absolute rather than counted down, which is why a viewer can be told
+    // once instead of every tick.
     let mut zone = Zone::new();
     let tile = nearest_prop(world::the_green(), Prop::Tree);
     let id = world::prop_id(tile);
@@ -1221,8 +1219,8 @@ mod tests {
 
   #[test]
   fn a_tick_is_the_same_tick_when_it_is_run_again() {
-    // Nothing here is replayed over the wire, but a world whose own randomness
-    // came from a hash map's order is a world nobody can reason about.
+    // Nothing here is replayed over the wire, but randomness drawn in a hash
+    // map's order would make the world impossible to reason about.
     let run = |ticks: u64| {
       let mut zone = Zone::new();
       let tile = a_person(&mut zone, 1);

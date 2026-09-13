@@ -1,17 +1,16 @@
-//! What the transport dropped, which it otherwise only whispers into a log.
+//! What the transport dropped, which it otherwise only reports in a log line.
 //!
 //! Every fan-out here uses `try_send` rather than `send`, deliberately: a wedged
-//! client must not stall the controller, and a connection task must not block on
-//! a controller that has not started. That is the right policy and it has a hole
-//! in it, because the drop is announced with `warn!` and nothing else. A log line
-//! is for a human reading afterwards; it cannot be read by the server that wanted
-//! to shed load deliberately instead of degrading quietly.
+//! client must not stall the controller and a connection task must not block on
+//! a controller that has not started. The drop is announced only with `warn!`,
+//! which a human reads afterwards and the server cannot read at all, so a
+//! server that wants to shed load deliberately has nothing to act on.
 //!
-//! So the same events are counted here. Nothing about the policy changes; what
-//! changes is that the application can see it happening.
+//! This module counts the same events so the application can see them. The
+//! policy is unchanged.
 //!
-//! Shares its shape with `plaza::stats::ControllerStats` and deliberately not its
-//! type. The two have different owners, and making `plaza_session` depend on
+//! It has the same shape as `plaza::stats::ControllerStats` but is a separate
+//! type. The two have different owners and making `plaza_session` depend on
 //! core's struct to save a few atomics would couple a transport to a controller
 //! for no gain.
 
@@ -20,15 +19,13 @@ use std::sync::Arc;
 
 /// Live counters for one transport, shared with whoever asks.
 ///
-/// Read at any moment from any thread, with no lock and nothing to block on,
-/// which is the point: these numbers matter most when the system is busy, and a
-/// reading that has to queue behind the traffic it describes is unavailable
-/// exactly then.
+/// Read at any moment from any thread, with no lock and nothing to block on.
+/// These numbers matter most when the system is busy; a reading that had to
+/// queue behind the traffic it describes would be unavailable exactly then.
 ///
 /// Every field counts a **drop**, except the two that count what got through.
-/// That asymmetry is intentional. A rate is only meaningful against a
-/// denominator, and a drop count alone cannot tell "nothing is being dropped"
-/// from "nothing is being sent".
+/// A rate is only meaningful against a denominator and a drop count alone
+/// cannot tell "nothing is being dropped" from "nothing is being sent".
 #[derive(Debug, Default)]
 pub struct TransportStats {
   inbound: AtomicU64,
@@ -105,13 +102,13 @@ impl TransportStats {
     self.presence_dropped.load(Ordering::Relaxed)
   }
 
-  /// Connections turned away at the door, before anything was registered,
-  /// announced, or encoded for them.
+  /// Connections turned away before anything was registered, announced or
+  /// encoded for them.
   pub fn refused(&self) -> u64 {
     self.refused.load(Ordering::Relaxed)
   }
 
-  /// What a transport calls when it turns a socket away at the door.
+  /// What a transport calls when it turns a socket away before registering it.
   pub fn record_refused(&self) {
     self.refused.fetch_add(1, Ordering::Relaxed);
   }
@@ -144,9 +141,8 @@ mod tests {
 
   #[test]
   fn a_drop_count_needs_its_denominator() {
-    // Why the totals are kept alongside the drops. Zero drops out of zero sends
-    // is a silent transport, not a healthy one, and the two are indistinguishable
-    // from the drop counter alone.
+    // Zero drops out of zero sends could be a silent transport or a healthy
+    // one; the drop counter alone cannot tell which.
     let stats = TransportStats::new();
     assert_eq!((stats.inbound(), stats.inbound_dropped()), (0, 0), "an idle transport");
 
@@ -157,9 +153,9 @@ mod tests {
 
   #[test]
   fn presence_drops_are_counted_apart_from_traffic() {
-    // Losing a frame costs a frame; losing a join costs the controller a client
-    // it will never hear of again. Collapsing them into one health number is how
-    // a correctness failure hides behind an acceptable-looking rate.
+    // A lost join leaves the controller with a client it never hears of again.
+    // Folded into one number with traffic drops, that correctness failure would
+    // hide behind an acceptable-looking rate.
     let stats = TransportStats::new();
     stats.record_outbound(100, 40, 6_400);
     stats.record_presence_dropped();

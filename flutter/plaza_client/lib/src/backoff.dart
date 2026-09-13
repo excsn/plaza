@@ -3,9 +3,10 @@ import 'dart:math';
 /// How long to wait before trying again.
 ///
 /// Exponential with a ceiling and jitter, which is roast_republic's reconnect
-/// service generalised. The jitter matters more than the curve: without it a
-/// server that drops every client at once gets them all back in the same
-/// millisecond, which is how a recoverable blip becomes an outage.
+/// service generalised. The jitter is more important than the shape of the
+/// curve: without it a server that drops every client at once gets them all
+/// back in the same millisecond and that burst can turn a recoverable blip into
+/// an outage.
 class Backoff {
   Backoff({
     this.initial = const Duration(seconds: 1),

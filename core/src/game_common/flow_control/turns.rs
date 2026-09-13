@@ -9,13 +9,11 @@ use std::time::Duration;
 
 /// What one advance did to the order.
 ///
-/// The variant carries the fact a caller would otherwise have to reconstruct,
-/// and reconstruct wrongly: whether the order just completed a pass over its
-/// roster. The manager is the only thing that knows, because *how* a pass ends
-/// is the thing implementations differ about. Round-robin wraps; a snake
-/// reverses and hands the same actor two turns in a row, so a caller comparing
-/// the new actor against the old gets the opposite of the truth exactly at the
-/// boundary.
+/// The variant says whether the order just completed a pass over its roster,
+/// which a caller cannot reliably work out itself. Only the manager knows,
+/// because implementations differ in how a pass ends. Round-robin wraps; a
+/// snake reverses and hands the same actor two turns in a row, so a caller
+/// comparing the new actor against the old gets the boundary wrong.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Advanced<TurnActorId> {
   /// The order moved on inside the current pass.
@@ -44,25 +42,23 @@ impl<TurnActorId> Advanced<TurnActorId> {
   }
 }
 
-/// Whose turn it is, and how that moves.
+/// Whose turn it is and how the turn moves on.
 ///
 /// - `Op`: The application's operation type.
 /// - `AppID`: The application's `AgentId` type.
 /// - `TurnActorId`: whose turn it is (a `PlayerId`, a `TeamId`, a unit).
 ///
-/// # This is a conformance target, not a dispatch mechanism
+/// # What the trait is for
 ///
-/// Nothing in this workspace holds a `dyn TurnManager`, and probably nothing
-/// will: a game knows which order it plays in. What the trait is for is the
-/// question "I am writing initiative order of my own, what must it provide?",
-/// and it is sized to answer that rather than to be called through.
+/// Nothing in this workspace holds a `dyn TurnManager`, since a game knows
+/// which order it plays in. The trait lists what an order of your own, such as
+/// initiative order, must provide.
 ///
-/// It was sized wrongly until [`draft_board`] wrote the second implementation
-/// and found out. For a long time this held two methods while every consumer
-/// called five, so a conforming manager could be written that no application
-/// could actually seat, restart, or change the roster of. Seating and roster
-/// are not optional; a manager that cannot do them is not usable, and the trait
-/// now says so.
+/// It held two methods until [`draft_board`] wrote the second implementation,
+/// while every consumer called five, so a conforming manager could be written
+/// that no application could seat, restart or change the roster of. Seating
+/// and roster changes are on the trait because a manager without them is not
+/// usable.
 ///
 /// [`draft_board`]: https://github.com/excsn/plaza/tree/main/examples/draft_board
 pub trait TurnManager<Op, AppID: AgentId, TurnActorId> {
@@ -74,9 +70,8 @@ pub trait TurnManager<Op, AppID: AgentId, TurnActorId> {
 
   /// Returns to the start of the order and counts from one again.
   ///
-  /// What "the start" costs is the implementation's business: round-robin moves
-  /// a cursor, a snake also resets its direction. Same intent, different
-  /// mechanics, which is what a trait method is for.
+  /// What "the start" involves depends on the implementation: round-robin
+  /// moves a cursor, a snake also resets its direction.
   fn restart(&mut self, context: &mut dyn FsmContext<Op, AppID>) -> Option<TurnActorId>;
 
   /// Adds an actor to the order without disturbing the current turn.
@@ -84,10 +79,10 @@ pub trait TurnManager<Op, AppID: AgentId, TurnActorId> {
 
   /// Removes an actor, e.g. one who disconnected. Returns whether it was there.
   ///
-  /// Where the turn lands afterwards is the implementation's business too, and
-  /// the two shipped answers genuinely differ: round-robin wraps to the first
-  /// seat, a snake pulls back to the last, because a snake at the end of its
-  /// roster is about to turn around rather than start over.
+  /// Where the turn lands afterwards also depends on the implementation.
+  /// Round-robin wraps to the first seat; a snake pulls back to the last,
+  /// because a snake at the end of its roster is about to turn around rather
+  /// than start over.
   fn remove_actor(&mut self, actor: &TurnActorId) -> bool;
 
   /// Ends the current turn and moves the order on, emitting a
@@ -96,8 +91,9 @@ pub trait TurnManager<Op, AppID: AgentId, TurnActorId> {
   /// Returns [`Advanced`], which says whether a pass closed as well as who is
   /// now on turn. `Err` if the roster is empty or no turn has begun.
   ///
-  /// **The next actor may be the same actor.** This promises the next turn, not
-  /// a different holder of it, and a snake depends on the difference.
+  /// **The next actor may be the same actor.** This returns whoever holds the
+  /// next turn, which can be the actor who just played. A snake order relies
+  /// on that.
   fn end_current_turn_and_advance(
     &mut self,
     context: &mut dyn FsmContext<Op, AppID>,
@@ -106,9 +102,8 @@ pub trait TurnManager<Op, AppID: AgentId, TurnActorId> {
 
 /// Round-robin [`TurnManager`] over an ordered roster.
 ///
-/// One implementation of the trait, not the only one: write your own for
-/// initiative order, bidding, or anything else, and the rest of `flow_control`
-/// still applies.
+/// One implementation of the trait. Write your own for initiative order,
+/// bidding or anything else; the rest of `flow_control` still applies.
 ///
 /// Because a manager cannot know your `Op` type, you supply the constructor that
 /// wraps a [`TurnChangedNoticePayload`](op_payloads::TurnChangedNoticePayload)
@@ -120,8 +115,8 @@ pub trait TurnManager<Op, AppID: AgentId, TurnActorId> {
 /// turns.end_current_turn_and_advance(&mut ctx)?; // hand off, emitting a notice
 /// ```
 ///
-/// That is a plain `fn` pointer rather than a boxed closure, deliberately: a
-/// boxed closure would cost this type `Clone`. A non-capturing closure such as
+/// That is a plain `fn` pointer rather than a boxed closure because a boxed
+/// closure would cost this type `Clone`. A non-capturing closure such as
 /// `|n| MyOp::TurnChanged(n)` coerces to one, so the only thing ruled out is
 /// capturing state, which is what writing your own [`TurnManager`] is for.
 pub struct RoundRobinTurnManager<Op, AppID: AgentId, TurnActorId: Clone + Debug> {
@@ -388,9 +383,8 @@ mod tests {
 
   #[test]
   fn the_wrap_is_reported_as_a_closed_pass() {
-    // The fact two examples were reconstructing by counting: only the manager
-    // knows where its pass ends, because how a pass ends is what implementations
-    // differ about.
+    // Two examples were working this out by counting. Only the manager knows
+    // where its pass ends, because implementations differ in how a pass ends.
     let mut turns = manager(vec![1, 2, 3]);
     let mut ctx = Ctx::new();
     turns.begin(&mut ctx);
@@ -540,9 +534,9 @@ mod tests {
   #[test]
   fn a_clone_advances_independently_of_the_original() {
     // A game that searches ahead clones its state and re-runs turns in
-    // simulation. This is why the notice constructor is a `fn` pointer and not
-    // a boxed closure: the boxed version was not `Clone`, so this was
-    // impossible to write at all.
+    // simulation. This is why the notice constructor is a `fn` pointer rather
+    // than a boxed closure: a boxed closure is not `Clone`, so this test could
+    // not be written.
     let mut live = manager(vec![1, 2, 3]);
     let mut ctx = Ctx::new();
     live.begin(&mut ctx);

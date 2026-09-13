@@ -1,12 +1,11 @@
-//! Drawing the maze, and drawing the thing you cannot otherwise see.
+//! Drawing the maze and two things you could not otherwise see.
 //!
-//! Two of those. A **queued turn** is invisible by construction: you pressed a
-//! key and nothing happened, and whether that is the game ignoring you or the
-//! game waiting for a corner is the difference between a bug and a mechanic. So
-//! the pending turn is drawn as an arrow on the player.
+//! A **queued turn** is otherwise invisible: you pressed a key, nothing happened
+//! and you cannot tell whether the game ignored you or is waiting for a corner.
+//! So the pending turn is drawn as an arrow on the player.
 //!
-//! And a **wrong junction** is over before you can see it, so the corner where
-//! the two sides disagreed is marked and faded out.
+//! A **wrong junction** is over before you can see it, so the corner where the
+//! two sides disagreed is marked and faded out.
 
 use macroquad::prelude::*;
 
@@ -67,8 +66,8 @@ pub fn draw_maze(board: &Board, maze: &Maze) {
   }
 }
 
-/// Power-ups, drawn as rings so they read as different from a pellet at a
-/// glance rather than after squinting.
+/// Power-ups, drawn as rings so they are easy to tell from a pellet at a
+/// glance.
 pub fn draw_powerups(board: &Board, powerups: &[PowerupState], now_ms: u64) {
   for pickup in powerups {
     let (px, py, w, h) = board.cell_rect(pickup.cell);
@@ -94,15 +93,15 @@ pub fn draw_pellets(board: &Board, pellets: &[Cell]) {
 /// One player, with the direction they are heading and any turn they are
 /// waiting to take.
 ///
-/// `mine` draws the ring and the caret that say which one is you. Four coloured
-/// shapes in a maze are four coloured shapes, and reading the panel to find out
-/// which is yours is a thing you do once and then forget under pressure.
+/// `mine` draws the ring and the caret that show which one is you. Without them
+/// the players are four coloured shapes and the panel is the only way to find
+/// yours, which is easy to forget under pressure.
 ///
 /// `inversion` is when the round's energizer runs out, if a runner is holding
 /// one. It is passed to every player rather than read off this one, because
-/// the state that changed is the **round's**: a pursuer is not itself
-/// energized, it is prey, and the only way it can look like prey is if the
-/// drawing knows about somebody else.
+/// the state that changed is the **round's**: a pursuer becomes prey without
+/// being energized itself, so it can only look like prey if the drawing knows
+/// about somebody else.
 pub fn draw_player(
   board: &Board,
   player: &PlayerState,
@@ -133,9 +132,8 @@ pub fn draw_player(
   let energized = player.energized(now_ms);
   let eaten = player.eaten(now_ms);
   let hidden = player.hidden(now_ms);
-  // Prey: a pursuer while somebody else is energized. The whole point of the
-  // power-up is that the round has reversed, and a reversal only one of the
-  // four players can see is a reversal nobody plays around.
+  // Prey: a pursuer while somebody else is energized. Every player has to see
+  // it or the pursuers cannot play around it.
   let prey_until = inversion.filter(|until| *until > now_ms && player.role == Role::Pursuer && !eaten);
   let body = if eaten {
     Color::new(colour.r * 0.35, colour.g * 0.35, colour.b * 0.35, 0.8)
@@ -143,7 +141,7 @@ pub fn draw_player(
     Color::new(1.0, 0.75, 0.35, 1.0)
   } else if let Some(until) = prey_until {
     // White, flashing back toward their own colour over the last stretch, so
-    // running is a decision with a deadline rather than a surprise.
+    // the pursuers can see the end coming.
     let left = until - now_ms;
     let flashing = left < INVERSION_WARNING_MS && (left / 140) % 2 == 0;
     if flashing {
@@ -167,9 +165,9 @@ pub fn draw_player(
     // rather than from the scoreboard: the roles rotate every round.
     Role::Pursuer => {
       draw_rectangle(centre.x - w * 0.30, centre.y - w * 0.30, w * 0.60, w * 0.60, body);
-      // Their own colour stays on as an outline: four white squares are four
-      // white squares, and which one is chasing you still matters while they
-      // are the ones running.
+      // Their own colour stays on as an outline. Which one is chasing you still
+      // matters while they are the ones running; four plain white squares would
+      // hide it.
       if prey_until.is_some() {
         draw_rectangle_lines(centre.x - w * 0.30, centre.y - w * 0.30, w * 0.60, w * 0.60, 3.0, colour);
       }
@@ -194,8 +192,7 @@ pub fn draw_player(
   );
 
   // The pending turn. Without this a player who pressed into a wall cannot tell
-  // "the game ignored me" from "the game is waiting for a corner", and those
-  // are a bug and a mechanic respectively.
+  // whether the game ignored them or is waiting for a corner.
   if let Some(dir) = queued {
     let (qx, qy) = dir.delta();
     let tip = Vec2::new(centre.x + qx as f32 * w * 0.62, centre.y + qy as f32 * w * 0.62);

@@ -1,39 +1,33 @@
-//! An input whose execution point is a **place**, not a time.
+//! An input that takes effect at a **place** rather than on a tick.
 //!
-//! This is the file the example exists for.
-//!
-//! # The problem tick-addressing does not solve
+//! # Tick addressing and queued turns
 //!
 //! Every other playground here keys an input to a tick: the client says which
-//! tick the input is meant for, the server runs it on that tick or refuses it,
-//! and both sides therefore run the same input at the same moment. That answers
-//! *when*.
+//! tick the input is meant for, the server runs it on that tick or refuses it
+//! and both sides therefore run the same input at the same moment.
 //!
-//! A queued turn does not have a when. "Left" pressed halfway down a corridor
-//! is not a request to turn left now, because there is no left to turn into. It
-//! is a request to turn left **at the next place where that is possible**, and
-//! which place that is depends on where the player is, which is exactly the
-//! thing the two sides can disagree about.
+//! "Left" pressed halfway down a corridor cannot mean turn left now, because
+//! there is no left to turn into. It means turn left **at the next place where
+//! that is possible** and which place that is depends on where the player is,
+//! which the two sides can disagree about.
 //!
-//! So the two sides can agree perfectly about the tick and still take the turn
-//! at different intersections. And unlike a mispredicted cell, which is one cell
-//! wrong and then corrected, a turn taken at the wrong junction sends the player
-//! down a **different corridor**: the error compounds instead of settling, and a
-//! correction arriving a moment later has to undo a route rather than a step.
+//! So the two sides can agree about the tick and still take the turn at
+//! different intersections. A mispredicted cell is one cell wrong and then
+//! corrected. A turn taken at the wrong junction sends the player down a
+//! **different corridor**: the error keeps growing and a correction arriving a
+//! moment later has to undo a route rather than a step.
 //!
-//! # Why a place-trigger still needs a time bound
+//! # Expiry
 //!
-//! The obvious implementation, "hold the turn until it becomes legal", is
-//! wrong, and wrong in a way players feel rather than see. A turn held
-//! indefinitely fires at the next junction *however far away it is*, so a press
-//! from two seconds and four corners ago takes a corner nobody meant. The
-//! buffer exists so that pressing slightly **early** into a corner works; it is
-//! not a promise to remember forever.
+//! The obvious implementation holds the turn until it becomes legal. A turn
+//! held indefinitely fires at the next junction *however far away it is*, so a
+//! press from two seconds and four corners ago takes a corner nobody meant.
+//! The buffer only needs to cover pressing slightly **early** into a corner.
 //!
-//! So a queued turn carries the tick it was asked for and expires. That makes it
-//! a hybrid: a *place* decides where it fires and a *time* decides whether it
-//! still may. Both bounds are needed and they fail differently, which is why
-//! [`TurnQueue`] counts the two outcomes separately.
+//! So a queued turn carries the tick it was asked for and expires. The place
+//! decides where it fires and the time decides whether it still may. The two
+//! bounds fail differently, so [`TurnQueue`] counts the two outcomes
+//! separately.
 
 use serde::{Deserialize, Serialize};
 
@@ -109,9 +103,9 @@ impl TurnQueue {
 
   /// Decides what a player arriving at `cell` does with their pending turn.
   ///
-  /// Called **at a cell boundary and nowhere else**, which is what makes this a
-  /// place trigger. `heading` is what they are doing now, and is returned
-  /// unchanged when nothing is taken.
+  /// Called **at a cell boundary and nowhere else**, which makes this a place
+  /// trigger. `heading` is what they are doing now and is returned unchanged
+  /// when nothing is taken.
   ///
   /// A reversal is deliberately allowed anywhere, not only at a junction:
   /// turning back the way you came is legal in any corridor and is the one

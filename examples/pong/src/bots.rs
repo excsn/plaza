@@ -1,9 +1,8 @@
 //! An opponent for whoever is waiting alone.
 //!
 //! Pong needs two, so one tab is a game that never starts. A bot takes the
-//! second seat after a wait rather than immediately, because a bot appearing
-//! the instant you open the page is worse than no bot: two people opening two
-//! tabs should get each other.
+//! second seat after a wait and not immediately, so two people opening two
+//! tabs get each other.
 //!
 //! It never has to be evicted. `reseat` prefers a person to a bot every tick,
 //! so an arriving player takes the seat and the bot spectates until it is
@@ -26,8 +25,8 @@ const WAIT: Duration = Duration::from_secs(8);
 const POLL: Duration = Duration::from_millis(500);
 /// How often the bot moves its paddle.
 const THINK: Duration = Duration::from_millis(25);
-/// Pixels per think, which is what makes it beatable: `MovePaddle` is absolute,
-/// so a bot that simply sent the ball's y would be a wall.
+/// Pixels per think, which keeps it beatable: `MovePaddle` is absolute, so a
+/// bot that sent the ball's y would never miss.
 const STEP: f32 = 11.0;
 
 /// A fixed id, so the bot is the same agent every time it is seated.

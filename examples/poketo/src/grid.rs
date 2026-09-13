@@ -2,12 +2,13 @@
 //!
 //! Every bandwidth figure in this tree is measured against **continuous**
 //! motion: horde's floats, cube_yard's quantised metres, spacemo's ships. A
-//! world where movement is a step from one tile to the next is not a smaller
-//! version of that, it is a different arithmetic. A position is an index rather
+//! world where movement is a step from one tile to the next uses different
+//! arithmetic rather than a smaller version of the same. A position is an index
+//! rather
 //! than a measurement, so it needs no bounds, no quantiser and no precision
 //! argument: on a 1024 by 1024 map it is twenty bits, exactly, for ever.
 //!
-//! **The size is not the point, and measuring it said so.** Against a naive
+//! **The size saving is small, as measuring it showed.** Against a naive
 //! wire of two floats and an angle a tile is 2.9x smaller; against what every
 //! other example here actually sends, a quantised position, it is 1.4x. That is
 //! a modest saving and an honest one.
@@ -16,8 +17,8 @@
 //! has no bounds to outgrow, no quantiser, no precision to argue about, and two
 //! machines comparing positions can use `==`. cube_yard shipped a bug that
 //! cannot exist here, by widening its world past the range its quantiser
-//! covered and freezing everything that wandered out. The saving is a side
-//! effect; not needing the apparatus is the result.
+//! covered and freezing everything that wandered out. The main result is not
+//! needing that apparatus; the byte saving is a side effect.
 
 use serde::{Deserialize, Serialize};
 

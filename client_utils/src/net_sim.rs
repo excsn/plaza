@@ -48,11 +48,10 @@ impl Rng {
 
 /// Whether the simulated wire may deliver packets out of send order.
 ///
-/// This is not a detail. Impairment tooling that can produce failures the real
-/// transport cannot is worse than no tooling, because the failures are credible
-/// enough to spend a day chasing, and because it quietly hides that the real
-/// system has stronger guarantees than the tests assume. Pick the one that
-/// matches the transport being stood in for.
+/// Impairment tooling that can produce failures the real transport cannot is
+/// worse than no tooling. The failures are credible enough to spend a day
+/// chasing and they hide that the real system has stronger guarantees than the
+/// tests assume. Pick the ordering that matches the transport being simulated.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Ordering {
   /// Jitter delays a packet, possibly past its successors, but never ahead of
@@ -62,8 +61,8 @@ pub enum Ordering {
   Ordered,
   /// Jitter may reorder freely, so a later packet can arrive first. What raw
   /// UDP and unordered datagram channels do. Choose this deliberately: a
-  /// delta stream that assumes ordering will diverge under it, which is a real
-  /// finding on a datagram transport and a phantom on an ordered one.
+  /// delta stream that assumes ordering will diverge under it. On a datagram
+  /// transport that is a real finding; on an ordered one it cannot happen.
   Unordered,
 }
 
@@ -185,8 +184,8 @@ mod tests {
   fn an_ordered_link_delays_but_never_reorders() {
     // A WebSocket or TCP stream cannot deliver out of order, so jitter has to
     // show up as lateness and never as shuffling. Getting this wrong invents a
-    // failure mode the real transport cannot produce, and a delta stream will
-    // dutifully diverge under it, which is a day spent chasing nothing.
+    // failure mode the real transport cannot produce. A delta stream will
+    // diverge under it and someone will spend a day chasing that.
     let mut link: LatencyLink<u64> = LatencyLink::new();
     let mut rng = Rng::new(7);
     for seq in 0..40u64 {

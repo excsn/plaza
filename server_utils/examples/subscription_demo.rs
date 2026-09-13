@@ -1,16 +1,16 @@
 //! Subscription demo: what the second relevance channel actually costs.
 //!
-//! [`relevance`] answers *who is near me*. This answers *who have I chosen to
-//! care about, wherever they are*, and the reason it is a separate block is
-//! that neither shape expresses the other: a party as a relevance radius is an
-//! infinite radius, and a grid query as a subscription is resubscribing
-//! everybody every tick.
+//! [`relevance`] answers who is near a client. Subscriptions answer who a
+//! client has chosen to follow wherever they are. They are separate blocks
+//! because neither can stand in for the other: a party expressed as a relevance
+//! radius needs an infinite radius and a grid query expressed as subscriptions
+//! means resubscribing everybody every tick.
 //!
-//! The worry about a second channel is that it doubles the work. It does not,
-//! and this is the measurement of why: the union means a subscription costs
-//! only the members the distance query **missed**, so a party that stays
-//! together costs nothing at all. This walks a party from standing together to
-//! scattered across the world and prints what each step costs.
+//! A second channel might be expected to double the work. It does not, because
+//! of the union: a subscription costs only the members the distance query
+//! **missed**, so a party that stays together costs nothing extra. This walks a
+//! party from standing together to scattered across the world and prints what
+//! each step costs.
 //!
 //! ```sh
 //! cargo run --example subscription_demo -p plaza_server_utils
@@ -43,7 +43,7 @@ fn main() {
   );
 
   // The viewer stands in the middle; the crowd never moves. What changes is
-  // where the party is standing, which is the only variable that matters.
+  // where the party is standing, which is the only variable.
   let viewer: u32 = 0;
   let viewer_at = (WORLD / 2.0, WORLD / 2.0);
 
@@ -96,8 +96,7 @@ fn main() {
   println!("  second one costs is exactly what the first one dropped, which is");
   println!("  nothing at all while the party stays together.\n");
 
-  // What the labels are for, and the reason `Because` belongs on the wire
-  // rather than staying here.
+  // What the labels are for and why `Because` has to reach the wire.
   let mut subs: Subscriptions<u32> = Subscriptions::new(4);
   subs.group(0, 1);
   let audience = Audience::of(&[0, 1, 2], &subs, &0);
@@ -114,7 +113,7 @@ fn main() {
     "\n  a client that cannot tell those apart drops a party member the\n  moment they leave view, which is the interface the subscription\n  existed for.\n"
   );
 
-  // The other half of the block, and the reason the reverse index exists.
+  // The other half of the block, which the reverse index exists for.
   let told = subs.remove(&1);
   println!("  when seat 1 leaves, {} client(s) have to be told: {told:?}", told.len());
   println!("  found without scanning a single subscriber who did not care.\n");

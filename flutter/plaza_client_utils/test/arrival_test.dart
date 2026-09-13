@@ -15,8 +15,8 @@ void main() {
     expect(m.jitterMs, lessThan(1.0), reason: 'a steady link has no spread');
   });
 
-  /// The lesson the jitter term encodes: delay shifts the timeline, only
-  /// irregularity eats the buffer.
+  /// The jitter term is built on this: a steady delay shifts the timeline
+  /// without using up the buffer. Only irregularity uses it up.
   test('a constant delay needs no more buffer than a small one', () {
     final slow = ArrivalMonitor(0.2);
     final fast = ArrivalMonitor(0.2);
@@ -41,7 +41,7 @@ void main() {
     expect(bursty.neededDelayMs, greaterThan(steady.neededDelayMs + 10.0));
   });
 
-  /// Zero is a legitimate mean, not an unseeded sentinel. Treating it as
+  /// Zero is a legitimate mean rather than an unseeded sentinel. Treating it as
   /// unseeded re-seeds on every packet and freezes the jitter.
   test('a loopback stream with zero lateness still measures its jitter', () {
     final m = ArrivalMonitor(0.2);

@@ -1,8 +1,8 @@
 //! The rink's authority. One job per tick: gather what each seat holds (the
-//! schedule for a human, the chase for a bot), step the shared simulation
-//! once, and broadcast the world **with the inputs that made it**. That echo
-//! is the whole contract with the clients' rollback sessions: the server is
-//! the input orderer, the step is the same code, and the digest proves it.
+//! schedule for a human, the chase for a bot), step the shared simulation once
+//! and broadcast the world **with the inputs that made it**. That echo is the
+//! contract with the clients' rollback sessions: the server orders the inputs,
+//! both ends run the same step code and the digest checks that they agree.
 
 use async_trait::async_trait;
 use plaza::agent::Agent;

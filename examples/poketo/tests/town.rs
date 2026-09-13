@@ -79,7 +79,7 @@ fn what_a_view_radius_costs_in_a_town() {
 /// world of measurements that gap is where join protocols, baselines and
 /// catch-up schemes come from.
 ///
-/// Here there is no gap to speak of, and that is the finding. A tile world's
+/// The finding is that here there is no gap to speak of. A tile world's
 /// steady state is already a full description: every trainer in view, complete,
 /// every tick. There is nothing a joiner needs that a resident is not already
 /// being sent, so arriving costs exactly one ordinary frame.
@@ -141,9 +141,9 @@ fn arriving_in_a_populated_zone_costs_one_ordinary_frame() {
 /// the town's own wanderers across every zone, and a client standing in one of
 /// them is told about the ones sharing its map and about none of the rest.
 ///
-/// The zone rule is the whole of that saving and it costs nothing to apply. It
-/// is not a distance check that happens to exclude them, it is that somebody on
-/// another map is **absent**, so they are never considered at any radius.
+/// The zone rule accounts for all of that saving and costs nothing to apply. No
+/// distance check excludes them: somebody on another map is **absent**, so they
+/// are never considered at any radius.
 #[test]
 fn what_the_towns_own_wanderers_cost_a_client() {
   let mut world = World::new();
@@ -194,8 +194,8 @@ fn a_step_is_the_same_length_however_the_wire_carries_it() {
     phases.push(world.walkers[0].trainer.phase);
   }
 
-  // Rising through the step and back to zero on arrival, which is the whole
-  // signal: a client seeing phase zero and a new tile knows a step ended.
+  // Rising through the step and back to zero on arrival. That is the signal: a
+  // client seeing phase zero and a new tile knows a step ended.
   assert!(
     phases.windows(2).take(STEP_TICKS as usize - 2).all(|w| w[1] > w[0]),
     "a phase should climb: {phases:?}"

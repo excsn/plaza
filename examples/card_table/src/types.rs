@@ -28,8 +28,8 @@ pub const ROUNDS: u32 = 3;
 /// in ticks. Short enough that the example actually reaches it.
 pub const TURN_TIMEOUT_TICKS: u64 = 12;
 
-/// How long the standings stay up before the table deals again. A match ending
-/// is an intermission, not a terminus: nobody has to reload to play a second one.
+/// How long the standings stay up before the table deals again. Nobody has to
+/// reload to play a second match.
 pub const INTERMISSION_TICKS: u64 = 250;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -41,8 +41,8 @@ impl fmt::Display for PlayerId {
   }
 }
 
-/// A card is just its rank. The game is trivial on purpose: what this example
-/// is showing is the plaza wiring, not the rules.
+/// A card is just its rank. The game is trivial on purpose so the example can
+/// focus on the plaza wiring.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Card(pub u8);
 
@@ -103,9 +103,10 @@ pub struct RoundSummary {
 
 /// Work scheduled against one occupancy of a phase.
 ///
-/// The `epoch` is the whole point: by the time one of these fires, the round may
-/// have ended, the player may have played, or someone may have disconnected. The
-/// token says whether the world it was scheduled in still exists.
+/// The `epoch` is the important field. By the time one of these fires, the
+/// round may have ended, the player may have played or someone may have
+/// disconnected. The token says whether the phase occupancy it was scheduled
+/// in is still current.
 #[derive(Clone, Debug)]
 pub enum TableEvent {
   /// Play for whoever is sitting on their turn.
@@ -121,7 +122,7 @@ pub enum TableEvent {
 /// same reason.
 #[derive(Clone, Debug)]
 pub struct TableState {
-  /// The phase, and the guarantee clients hear about every change.
+  /// The phase. Clients are told about every change.
   pub phase: Phased<TablePhase>,
   pub turns: RoundRobinTurnManager<CardOp, PlayerId, PlayerId>,
   pub rounds: SequentialRoundManager<CardOp, PlayerId, RoundSummary>,
@@ -141,7 +142,7 @@ pub struct TableState {
   pub timeouts: PhasedScheduler<TableEvent>,
   /// How long a player may sit on their turn. A field rather than the constant
   /// because the two binaries want different answers: the scripted run wants a
-  /// timeout short enough to reach in a few seconds, and a person choosing a
+  /// timeout short enough to reach in a few seconds and a person choosing a
   /// card in a browser wants one long enough to choose in.
   pub turn_timeout_ticks: u64,
 }
@@ -209,9 +210,9 @@ impl TableState {
 
   /// Which card to play, decided by cloning the state and trying each one.
   ///
-  /// A real game would search deeper; the point here is that it can search at
-  /// all. Nothing in `TableState` holds a timer, a channel, or a boxed closure,
-  /// so a simulation costs a `clone` and runs the same code the live game does.
+  /// A real game would search deeper. Nothing in `TableState` holds a timer, a
+  /// channel or a boxed closure, so a simulation costs a `clone` and runs the
+  /// same code the live game does.
   pub fn best_play_for(&self, player: &PlayerId) -> Option<Card> {
     let hand = self.hands.get(player)?;
 
@@ -237,8 +238,8 @@ impl Default for TableState {
 
 /// What one player is allowed to see.
 ///
-/// The difference between `my_hand` and `opponents` is the whole reason
-/// `SnapshotProvider` receives a `target_agent`.
+/// `SnapshotProvider` receives a `target_agent` so that `my_hand` and
+/// `opponents` can differ per recipient.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PlayerView {
   pub phase: TablePhase,

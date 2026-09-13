@@ -1,8 +1,6 @@
-//! The authority, and the question it answers three different ways.
-//!
-//! [`Server::judge_deaths`] is the file's reason to exist. Everything above it
-//! keeps two things true: the curtain is never stored, and every ship's recent
-//! position is, because a declaration names a tick in the past.
+//! The authority. [`Server::judge_deaths`] applies the death rule. The rest of
+//! the file keeps two things true: the curtain is never stored and every ship's
+//! recent position is, because a declaration names a tick in the past.
 
 use plaza_server_utils::{HistoricalStateBuffer, InputSchedule, InputWindow};
 
@@ -52,12 +50,11 @@ pub struct Stats {
   pub declared_confirmed: u64,
   /// Declarations the recomputed curtain disagreed with.
   pub declared_refused: u64,
-  /// Contacts the server saw and nobody ever owned up to.
+  /// Contacts the server saw that no ship declared.
   ///
-  /// The number that answers "how cheatable is letting the ship decide". The
-  /// answer is completely, and also completely visible, because a shared
-  /// curtain means the server can take this count for the price of the
-  /// evaluation it was doing anyway.
+  /// This shows how cheatable letting the ship decide is. It is completely
+  /// cheatable, but the server can see the cheating: a shared curtain means it
+  /// gets this count from the evaluation it was already doing.
   pub undeclared: u64,
   pub deaths: u64,
   /// Total ticks between a contact and the server acting on it.
@@ -68,7 +65,7 @@ pub struct Stats {
   /// The same traffic with numeric variant tags, for the share measurement.
   pub bytes_numerically_tagged: u64,
   pub bytes_total: u64,
-  /// Peak enemy bullets alive at once, none of which was ever described.
+  /// Peak enemy bullets alive at once, none of which was ever sent.
   pub peak_curtain: usize,
   /// Bullet-ticks: one bullet alive for one tick.
   ///
@@ -127,8 +124,8 @@ pub struct Server {
   next_wave: WaveId,
   next_bullet: u32,
 
-  /// A held direction is a level. A shot and a declaration are events, and a
-  /// dropped declaration is a life.
+  /// A held direction is a level input. A shot and a declaration are event
+  /// inputs; a dropped declaration is a death that never happens.
   moves: Vec<InputSchedule<Dir8>>,
   events: Vec<InputSchedule<Intent>>,
 
@@ -398,8 +395,8 @@ impl Server {
     }
     self.bullets.retain(|b| b.pos.y > -8.0);
 
-    // Player fire against emitters: the one place the two halves meet, and the
-    // reason the curtain is not purely a function of the tick.
+    // Player fire against emitters, the one place the two halves meet. This is
+    // why the curtain is not purely a function of the tick.
     let tick = self.tick;
     let mut hits: Vec<(WaveId, u8)> = Vec::new();
     let waves = &self.waves;
@@ -438,11 +435,11 @@ impl Server {
     }
   }
 
-  /// Who says a ship was hit.
+  /// Applies the death rule.
   ///
-  /// Three answers, and the difference between them is never the curtain. Both
-  /// ends compute the identical field from the identical closed form. What they
-  /// disagree about is **where the ship was**, and that is the whole of it.
+  /// The three rules never differ about the curtain: both ends compute the
+  /// identical field from the identical closed form. They only disagree about
+  /// **where the ship was**.
   fn judge_deaths(&mut self, controls: &Controls, out: &mut Tickout) {
     let tick = self.tick;
     let now = self.clock_ms;
@@ -460,8 +457,8 @@ impl Server {
       self.stats.server_found += 1;
       match controls.death_rule {
         // Against the ship position the server holds, which is a round trip
-        // old. The player watched the bullet miss and dies anyway, and there is
-        // no easing a death.
+        // old. The player watched the bullet miss and dies anyway. A death
+        // cannot be eased.
         DeathRule::ServerOnly => self.kill(ship, tick, tick, DeathVerdict::ServerFound, out),
         // Recorded and waited on. If nobody owns up inside the window it
         // becomes a count rather than a death.
@@ -473,8 +470,8 @@ impl Server {
       }
     }
 
-    // A contact nobody claimed. Under `ClientDeclares` this is exactly what a
-    // ship that has stopped declaring looks like, and it costs nothing to see.
+    // A contact nobody declared. Under `ClientDeclares` this is what a ship that
+    // has stopped declaring looks like and it costs nothing to detect.
     let cutoff = tick.saturating_sub(SILENCE_TICKS);
     let mut silent = 0;
     self.unowned.retain(|p| {
@@ -503,10 +500,10 @@ impl Server {
     }
 
     let verdict = match controls.death_rule {
-      // Trusted. What shipped co-op shmups do, and it feels perfect because it
-      // is judged against exactly what the player saw.
+      // Trusted. Shipped co-op shmups do this and it feels right because it is
+      // judged against exactly what the player saw.
       DeathRule::ClientDeclares => DeathVerdict::Confirmed,
-      // Checked, and checkable only because the curtain is a function of the
+      // Checked. This is only possible because the curtain is a function of the
       // tick: the server recomputes the same field the client dodged, at the
       // tick that was named, against where this ship actually was then.
       DeathRule::ServerConfirms => {
@@ -588,9 +585,9 @@ impl Server {
       }
       return;
     }
-    // Dodges the nearest bullet, which is enough to keep a bot alive long
-    // enough to be a target and deliberately no cleverer: a bot good enough to
-    // be interesting would make every number a fact about the bot.
+    // Dodges the nearest bullet, which keeps a bot alive long enough to be a
+    // target. A smarter bot would make the numbers measure the bot instead of
+    // the netcode.
     for seat in 0..self.ships.len() {
       if self.human.get(seat).copied().unwrap_or(false) || !self.ships[seat].alive {
         continue;

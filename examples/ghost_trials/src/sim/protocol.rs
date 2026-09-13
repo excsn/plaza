@@ -1,14 +1,13 @@
 //! What crosses the wire, which is logs and almost nothing else.
 //!
 //! There is no frame here and no state stream. A trial is one player against
-//! the clock, so the only things worth saying are "here is a run I drove" and
-//! "here is a run somebody else drove". Both are the same message shape,
-//! because a ghost and a submission are the same object seen from two ends.
+//! the clock, so the only messages needed are "here is a run I drove" and "here
+//! is a run somebody else drove". Both use the same message shape, because a
+//! ghost and a submission are the same data sent in opposite directions.
 //!
-//! The asymmetry is the usual one, sharpened. A client sends the **inputs**, and
-//! the time it thinks they produce. The server does not take its word for the
-//! time: it replays the inputs and reads the time off the replay. So the claim
-//! is only ever a checksum on the log, and the log is the evidence.
+//! A client sends the **inputs** and the time it thinks they produce. The
+//! server does not trust the time: it replays the inputs and reads the time off
+//! the replay. The claimed time is only checked against that result.
 
 use serde::{Deserialize, Serialize};
 
@@ -17,9 +16,9 @@ use crate::sim::types::PlayerId;
 
 /// The version of the rules and the messages together.
 ///
-/// Derived at build time from `protocol.rs`, `types.rs` **and `rules.rs`**,
-/// which is the unusual part: a change to how a racer handles invalidates
-/// every recorded log exactly as surely as a change to a message shape would.
+/// Derived at build time from `protocol.rs`, `types.rs` **and `rules.rs`**.
+/// Including `rules.rs` is unusual: a change to how a racer handles invalidates
+/// every recorded log just as a change to a message shape would.
 pub const PROTOCOL: u32 = WIRE_PROTOCOL;
 
 include!(concat!(env!("OUT_DIR"), "/wire_protocol.rs"));
@@ -27,12 +26,12 @@ include!(concat!(env!("OUT_DIR"), "/wire_protocol.rs"));
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Op {
   // ---- client to server ----
-  /// A finished run: the inputs, and the time the client believes they take.
+  /// A finished run: the inputs and the time the client believes they take.
   ///
-  /// The time is not authoritative and is not trusted. It is here so that a
+  /// The time is not authoritative and is not trusted. It is sent so that a
   /// disagreement between the client's simulation and the server's is caught
   /// and reported rather than silently resolved in the server's favour, which
-  /// would look to the player like the game stealing tenths.
+  /// would look to the player like the game adding tenths to their time.
   Submit {
     log: Box<InputLog>,
     claimed_ms: u64,
@@ -52,7 +51,7 @@ pub enum Op {
     /// Where it landed on the board.
     place: u32,
   },
-  /// A run the server refused, and why.
+  /// A run the server refused and the reason.
   Refused {
     why: Rejection,
   },
@@ -61,10 +60,10 @@ pub enum Op {
   },
 }
 
-/// A verified run: who drove it, how long it took, and how to watch it.
+/// A verified run: who drove it, how long it took and how to watch it.
 ///
-/// The time is stored beside the log for convenience, and it is *derived* from
-/// the log rather than reported with it. Nothing in here is taken on trust.
+/// The time is stored beside the log for convenience and it is *derived* from
+/// the log rather than reported with it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Ghost {
   pub id: u32,

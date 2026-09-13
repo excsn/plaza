@@ -1,10 +1,10 @@
 //! What phase play is in: [`Phased`] to hold it, payloads to announce it.
 //!
-//! Two questions get confused here, and separating them is the whole design.
+//! The module separates deciding phases from announcing them.
 //!
-//! **Which phases exist, when they change, and what is legal is yours.** This
-//! module ships no controller, because every shape for one fails against real
-//! games:
+//! **Which phases exist, when they change and what is legal are up to the
+//! application.** This module ships no controller, because every design for
+//! one fails for some real games:
 //!
 //! - The guard that matters is usually compound, "this phase *and* this
 //!   player's turn", so a controller that does not know turn order cannot
@@ -15,18 +15,17 @@
 //! - End conditions tend to be polled at every mutation point, with different
 //!   early-return behaviour at each, rather than guarding one edge.
 //! - Games that search ahead clone their state and re-run transitions in
-//!   simulation, so phase logic has to stay pure, synchronous, and cheaply
-//!   clonable. A controller owning timers or channels breaks that outright,
-//!   which is also why [`StateMachine`](crate::common::fsm::StateMachine) is
-//!   not a drop-in answer here: it holds boxed trait objects and is not `Clone`.
+//!   simulation, so phase logic has to stay pure, synchronous and cheaply
+//!   clonable. A controller owning timers or channels breaks that, which is
+//!   also why [`StateMachine`](crate::common::fsm::StateMachine) is not a
+//!   drop-in answer here: it holds boxed trait objects and is not `Clone`.
 //!
-//! **That the change reaches clients is not yours, it is arithmetic.** A phase
-//! that moves without a notice going out is a client whose view has silently
-//! diverged, and the reliable fix is to make the field unreachable except
-//! through something that does both. That is [`Phased`], and it is the same
-//! invariant [`turns`](super::turns) and [`rounds`](super::rounds) enforce for
-//! their own state. It decides nothing: no transition table, no legality rules,
-//! no timers, no knowledge of turn order.
+//! **Announcing each change to clients is mechanical, so plaza does it.** If
+//! the phase moves without a notice, the client's view silently diverges.
+//! [`Phased`] prevents that by making the field reachable only through a call
+//! that also emits the notice, the same invariant [`turns`](super::turns) and
+//! [`rounds`](super::rounds) enforce for their own state. It has no transition
+//! table, legality rules, timers or knowledge of turn order.
 
 use crate::agent::AgentId;
 use crate::common::fsm::FsmContext;
@@ -39,9 +38,9 @@ use op_payloads::PhaseChangedNoticePayload;
 /// A token identifying one occupancy of a phase.
 ///
 /// Work scheduled inside a phase often resumes after the world has moved: a
-/// think-delay finishes, a timeout fires, a task wakes. Re-deriving "is this
-/// still relevant" from whatever fields are in scope is the pattern that gets
-/// written slightly differently at every call site, and wrong at one of them.
+/// think-delay finishes, a timeout fires, a task wakes. Re-deriving whether it
+/// is still relevant from whatever fields are in scope tends to get written
+/// slightly differently at every call site and wrong at one of them.
 ///
 /// Capture an `Epoch` when scheduling, compare it on resume. Because every
 /// transition goes through [`Phased`], the counter cannot fall behind.
@@ -60,22 +59,20 @@ use op_payloads::PhaseChangedNoticePayload;
 /// }
 /// ```
 ///
-/// A stale token means only "the phase has changed since". What that implies,
-/// dropping the work, re-queueing it, or treating it as a forfeit, is
-/// application policy and plaza does not decide it.
+/// A stale token only means the phase has changed since. Whether to drop the
+/// work, re-queue it or treat it as a forfeit is up to the application.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Epoch(u64);
 
-/// The current phase, and the guarantee that clients hear about every change.
+/// The current phase. Every change to it emits a notice to clients.
 ///
-/// Holds a phase and an [`Epoch`]. It knows nothing about turn order, timers,
-/// or transition rules, and takes no position on any of them; see the [module
-/// docs](self) for where that line falls and why.
+/// Holds a phase and an [`Epoch`]. It knows nothing about turn order, timers
+/// or transition rules; see the [module docs](self) for why.
 ///
-/// `Clone` whenever `P` is, deliberately: games that search ahead clone their
-/// whole state and re-run transitions in simulation, so nothing here stores a
-/// closure, a timer, or a channel. The notice constructor is a plain function
-/// pointer passed per call for the same reason.
+/// `Clone` whenever `P` is, because games that search ahead clone their whole
+/// state and re-run transitions in simulation. Nothing here stores a closure,
+/// a timer or a channel. The notice constructor is a plain function pointer
+/// passed per call for the same reason.
 ///
 /// # Holding one
 ///
@@ -109,16 +106,16 @@ pub struct Epoch(u64);
 ///
 ///   if let LogicInput::AgentOps { source, ops } = input {
 ///     for op in ops {
-///       // The guard stays yours: it is compound, mixing phase with whose turn
-///       // it is. `Phased` never sees it.
+///       // The guard is the application's: it mixes phase with whose turn it
+///       // is. `Phased` never sees it.
 ///       match (state.phase.current(), &op) {
 ///         (GamePhase::PlayerTurn, GameOp::PlayCard(card))
 ///           if Some(&state.current_player) == source.id() =>
 ///         {
 ///           state.play(card, &mut ctx);
 ///
-///           // One call: assigns, bumps the epoch, emits the notice.
-///           // Forgetting the broadcast is not expressible.
+///           // One call assigns, bumps the epoch and emits the notice,
+///           // so the broadcast cannot be skipped.
 ///           state.phase.transition_to(GamePhase::Resolving, &mut ctx, GameOp::PhaseChanged);
 ///         }
 ///         _ => return Err(StateLogicError::Rejected("not your turn".into())),
@@ -141,7 +138,7 @@ pub struct Epoch(u64);
 ///
 /// # Simulating ahead
 ///
-/// Nothing here allocates, locks, or holds a callback, so a search can clone the
+/// Nothing here allocates, locks or holds a callback, so a search can clone the
 /// whole state and drive transitions at the same cost as live play:
 ///
 /// ```ignore
@@ -188,7 +185,7 @@ impl<P> Phased<P> {
   /// Whether `epoch` still refers to the occupancy in effect.
   ///
   /// `false` means the phase has changed since the token was taken. What to do
-  /// about that is yours.
+  /// about that is up to the application.
   pub fn is_current(&self, epoch: Epoch) -> bool {
     self.epoch == epoch.0
   }
@@ -226,9 +223,9 @@ impl<P: Clone + Debug + PartialEq> Phased<P> {
   /// );
   /// ```
   ///
-  /// A `duration_hint` is a hint. Enforcing it is the application's job, the
-  /// same division [`RoundRobinTurnManager::with_time_limit`](super::turns::RoundRobinTurnManager::with_time_limit)
-  /// draws: pair it with a scheduler.
+  /// A `duration_hint` is only informational. Enforcing it is the application's
+  /// job, as with [`RoundRobinTurnManager::with_time_limit`](super::turns::RoundRobinTurnManager::with_time_limit):
+  /// pair it with a scheduler.
   pub fn transition_with<Op, AppID: AgentId>(
     &mut self,
     next: P,
@@ -314,8 +311,8 @@ mod tests {
 
   #[test]
   fn changing_the_phase_without_announcing_it_is_not_expressible() {
-    // The point of the type: every path that moves the phase emits a notice,
-    // so a client cannot silently diverge from the server.
+    // Every path that moves the phase emits a notice, so a client cannot
+    // silently diverge from the server.
     let mut phase = Phased::new(Phase::Setup);
     let mut ctx = Ctx::new();
 
@@ -362,8 +359,8 @@ mod tests {
 
   #[test]
   fn returning_to_an_earlier_phase_does_not_revive_stale_work() {
-    // Epochs count occupancies, not phases: a token from the first Playing
-    // must not validate against the second.
+    // Epochs count occupancies rather than phases: a token from the first
+    // Playing must not validate against the second.
     let mut phase = Phased::new(Phase::Playing);
     let mut ctx = Ctx::new();
     let first = phase.epoch();

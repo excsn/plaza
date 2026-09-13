@@ -75,7 +75,7 @@ class _TableOverlayState extends State<TableOverlay> {
   void initState() {
     super.initState();
     // The game mutates in its own loop, so the widget layer polls rather than
-    // being pushed to. Cheap, and it keeps the game free of Flutter.
+    // being pushed to. Polling is cheap and keeps the game free of Flutter.
     _tick();
   }
 

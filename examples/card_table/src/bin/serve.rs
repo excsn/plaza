@@ -1,11 +1,10 @@
-//! The card table over real WebSockets, so the hidden information is visible
-//! as an absence rather than asserted in a log.
+//! The card table over real WebSockets, so you can see in a browser what your
+//! tab is not sent.
 //!
 //! Open http://127.0.0.1:8081 in three tabs: the table deals once three seats
 //! are filled. Each tab shows its own three cards by rank and everyone else's
 //! as a count, because [`TableSnapshotter`] builds a different payload per
-//! recipient. That is the whole point of this example, and a page is the only
-//! place it can be seen rather than taken on trust.
+//! recipient. The page lets you check this directly.
 //!
 //! Stall on your turn and the table plays for you: the turn timeout is the same
 //! `Epoch`-guarded scheduler the scripted run in `main.rs` exercises.

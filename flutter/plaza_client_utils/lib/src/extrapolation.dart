@@ -37,12 +37,13 @@ class ExtrapolationBase<S, V> {
   /// How many calls to [at] asked for a time past [clientReceiptTimeMs] by more
   /// than the cap they were given.
   ///
-  /// The Rust original logs a warning here, and says at length what it usually
-  /// means: reaching this *steadily* is almost never a starved link, it is a
-  /// **render target computed the wrong way**. A target derived from an absolute
-  /// clock estimate sits ahead of the newest sample by the whole link delay, so
-  /// the view never interpolates and every entity is drawn held or dead reckoned.
-  /// The symptom on screen is remote entities that stutter or overshoot.
+  /// The Rust original logs a warning here and says at length what it usually
+  /// means: when this climbs *steadily*, the cause is almost always a
+  /// **render target computed the wrong way** rather than a starved link. A
+  /// target derived from an absolute clock estimate sits ahead of the newest
+  /// sample by the whole link delay, so the view never interpolates and every
+  /// entity is drawn held or dead reckoned. The symptom on screen is remote
+  /// entities that stutter or overshoot.
   int overExtrapolations = 0;
 
   /// The state extrapolated to [targetClientRenderTimeMs], capped at
@@ -58,13 +59,13 @@ class ExtrapolationBase<S, V> {
 
     final elapsedMs = targetClientRenderTimeMs - clientReceiptTimeMs;
 
-    // Cap the *duration*, do not discard the extrapolation.
+    // Cap the duration rather than discarding the extrapolation.
     //
     // Returning the un-extrapolated state past the limit is the obvious reading of
-    // "clamp", and it is a discontinuity: at the limit the entity has coasted
-    // `velocity * max_ms` forward, and one millisecond later it is drawn back at
-    // the raw sample. That is a jump of the entire extrapolation window, in the
-    // wrong direction, and jitter around the boundary makes it flicker back and
+    // "clamp" and it is a discontinuity: at the limit the entity has coasted
+    // `velocity * max_ms` forward and one millisecond later it is drawn back at
+    // the raw sample. That is a jump of the entire extrapolation window in the
+    // wrong direction and jitter around the boundary makes it flicker back and
     // forth. Capping the duration instead means the entity coasts to the limit and
     // stops there, which is continuous.
     final cappedMs = elapsedMs < maxExtrapolationDurationMs ? elapsedMs : maxExtrapolationDurationMs;

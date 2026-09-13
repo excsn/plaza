@@ -1,9 +1,9 @@
-//! May this player act at all, in this phase, in this role?
+//! Checks whether a player may act at all, in this phase and in this role.
 //!
-//! One auditable place, run by the controller ahead of [`VillageLogic`]: seat,
-//! liveness, phase and role gate every act before any handler touches state.
-//! Target validity stays in the rules, because whether a named victim is
-//! huntable is the act's content, not the actor's standing.
+//! The controller runs it ahead of [`VillageLogic`]: seat, liveness, phase and
+//! role are checked for every act before any handler touches state. Target
+//! validity stays in the rules, because it depends on what the act names and
+//! not on who sent it.
 //!
 //! [`VillageLogic`]: crate::logic::VillageLogic
 

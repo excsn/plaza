@@ -1,33 +1,32 @@
-//! Hierarchical aggregation: standing in for a distant crowd with a single
-//! summary, and only paying full detail for what is close.
+//! Hierarchical aggregation: replacing a distant crowd with a single summary
+//! and sending full detail only for what is close.
 //!
 //! [`relevance`](crate::relevance) answers "who does this client need to know
-//! about?", and its answer is binary: in the set or out of it. That is right for
-//! things a client merely *draws*, and wrong for anything it has to *compute*
-//! with, because dropping an input silently changes the answer. The measured
-//! version of that in `blackhole_playground`: culling distant attractors by view
-//! distance cut bandwidth by a third and multiplied the client's simulation error
-//! by 2.4x, because gravity is long range and a hole you were not told about
-//! still bends every pellet you hold.
+//! about?" with a yes or no. That works for things a client only *draws*. For
+//! anything it has to *compute* with, dropping an input silently changes the
+//! answer. In `blackhole_playground`, culling distant attractors by view
+//! distance cut bandwidth by a third and multiplied the client's simulation
+//! error by 2.4x, because gravity is long range and each attractor the client
+//! is not told about still pulls on every pellet it simulates.
 //!
-//! Aggregation is the third option between sending everything and sending
-//! nothing: **keep the distant contribution, drop only its resolution**. Sixty
-//! bodies on the far side of the arena pull almost exactly as one body of their
-//! combined weight sitting at their centre of mass, and the further away they
-//! are, the better that approximation gets. So the far half of the world
-//! collapses to a handful of summaries while the near half stays exact.
+//! Aggregation sits between sending everything and sending nothing: it keeps
+//! the distant contribution at lower resolution. Sixty bodies on the far side
+//! of the arena pull almost exactly as one body of their combined weight
+//! sitting at their centre of mass and the approximation improves with
+//! distance. So the far half of the world collapses to a handful of summaries
+//! while the near half stays exact.
 //!
-//! This is the Barnes-Hut construction, and the classic opening-angle criterion
-//! is what decides where the line falls: a node standing `d` away with a cell
+//! This is the Barnes-Hut construction. The classic opening-angle criterion
+//! decides where the line falls: a node standing `d` away with a cell
 //! width of `s` may be summarized when `s / d < theta`. Small `theta` opens more
 //! nodes and approaches exactness; large `theta` summarizes aggressively. It
 //! costs O(n log n) to build and yields O(log n) summaries per viewpoint, so the
 //! per-viewer wire cost and the per-item compute cost both stop tracking the
 //! crowd size.
 //!
-//! Nothing here knows what a weight *is*. It is mass for a gravity field, but it
-//! is equally a crowd's headcount for an LOD impostor, a cluster's threat for an
-//! AI's target selection, or an accumulated noise level. The tree only requires
+//! The tree does not interpret the weight. It can be mass for a gravity field, a
+//! crowd's headcount for an LOD impostor, a cluster's threat for an AI's target
+//! selection or an accumulated noise level. The tree only requires
 //! that the quantity be additive and that a distant group be adequately described
 //! by its weighted centroid.
 //!
@@ -67,8 +66,8 @@ impl WeightedPoint {
 
 /// What a walk emits: either one input point, or a stand-in for a group of them.
 ///
-/// `count == 1` means this is an exact member and nothing was approximated, which
-/// is what lets a caller send the real entity rather than a summary of it. The
+/// `count == 1` means this is an exact member and nothing was approximated, so a
+/// caller can send the real entity rather than a summary of it. The
 /// members are recoverable through [`AggregateTree::members`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Summary {
@@ -113,10 +112,10 @@ pub struct AggregateTree {
 impl AggregateTree {
   /// Builds over `points`, deriving a square bounding cell from their extent.
   ///
-  /// `max_depth` bounds the recursion, which matters because coincident points
-  /// would otherwise subdivide forever. A leaf that hits the depth limit holds
-  /// several points and is summarized as a group, which is the correct outcome:
-  /// points that close together are not distinguishable at any useful distance.
+  /// `max_depth` bounds the recursion, because coincident points would
+  /// otherwise subdivide forever. A leaf that hits the depth limit holds several
+  /// points and is summarized as a group, since points that close together are
+  /// not distinguishable at any useful distance.
   pub fn build(points: &[WeightedPoint], max_depth: u8) -> Self {
     if points.is_empty() {
       return Self::default();
@@ -139,14 +138,13 @@ impl AggregateTree {
   /// Prefer this whenever the world has known bounds and the tree is rebuilt every
   /// tick over moving points. [`build`](Self::build) fits the cell to the current
   /// extent, so one entity wandering outward rescales and re-centres the entire
-  /// subdivision: cluster membership then changes for reasons that have nothing to
-  /// do with the entity being clustered, and a consumer integrating the summaries
-  /// sees the field twitch every rebuild. A fixed cell makes the partition depend
-  /// only on where things are, so a summary moves when its members move and at no
-  /// other time.
+  /// subdivision: cluster membership then changes for reasons unrelated to the
+  /// entities being clustered and a consumer integrating the summaries sees the
+  /// field twitch every rebuild. With a fixed cell the partition depends only on
+  /// where things are, so a summary moves only when its members move.
   ///
-  /// Points outside the cell are still included, and are sorted into the quadrant
-  /// they fall toward; the tree stays correct, it just stops being balanced.
+  /// Points outside the cell are still included and are sorted into the quadrant
+  /// they fall toward; the tree stays correct but is no longer balanced.
   pub fn build_in(points: &[WeightedPoint], center: (f32, f32), size: f32, max_depth: u8) -> Self {
     if points.is_empty() {
       return Self::default();
@@ -162,8 +160,8 @@ impl AggregateTree {
   ///
   /// A node is accepted when its cell width over its distance falls below
   /// `theta`; otherwise the walk descends into it. `theta <= 0.0` accepts nothing
-  /// and therefore returns every input exactly, which is the useful off switch:
-  /// the same code path with aggregation disabled, not a different one.
+  /// and therefore returns every input exactly. That is the off switch: the same
+  /// code path with aggregation disabled rather than a separate one.
   ///
   /// `out` is cleared first and reused, so a per-frame walk allocates nothing
   /// after the first call.
@@ -255,8 +253,8 @@ fn build_node(nodes: &mut Vec<Node>, order: &mut [u32], points: &[WeightedPoint]
     return index;
   }
 
-  // Group the indices by quadrant so each child owns a contiguous run, which is
-  // what makes `members` a slice rather than a gather.
+  // Group the indices by quadrant so each child owns a contiguous run and
+  // `members` can return a slice rather than gathering.
   order.sort_unstable_by_key(|&i| quadrant(&points[i as usize], cx, cy));
 
   let quarter = size * 0.25;
@@ -316,8 +314,8 @@ mod tests {
 
   #[test]
   fn total_weight_is_conserved_at_every_angle() {
-    // The whole justification for aggregating rather than culling: the distant
-    // contribution is kept, only its resolution is dropped.
+    // Aggregating keeps the distant contribution and drops only its resolution,
+    // which is why it is used instead of culling.
     let points = grid(8, 10.0, 500.0);
     let total: f32 = points.iter().map(|p| p.weight).sum();
     let tree = AggregateTree::build(&points, 10);
@@ -333,9 +331,9 @@ mod tests {
 
   #[test]
   fn distance_decides_the_detail() {
-    // The property that makes it useful for netcode: the same tree yields a small
-    // summary set to a distant viewer and a detailed one to a close viewer, so per
-    // recipient cost tracks what they can actually resolve.
+    // The same tree yields a small summary set to a distant viewer and a
+    // detailed one to a close viewer, so per recipient cost tracks what they
+    // can actually resolve.
     let points = grid(8, 12.0, 1000.0);
     let tree = AggregateTree::build(&points, 10);
     let (mut near, mut far) = (Vec::new(), Vec::new());
@@ -347,8 +345,8 @@ mod tests {
 
   #[test]
   fn a_summary_sits_at_the_weighted_centroid() {
-    // Not the geometric centre: a heavy member pulls the stand-in toward itself,
-    // which is what makes the approximation good rather than merely cheap.
+    // A heavy member pulls the stand-in toward itself, so the summary sits at
+    // the weighted centroid rather than the geometric centre.
     let points = vec![WeightedPoint::new(0.0, 0.0, 1.0), WeightedPoint::new(100.0, 0.0, 9.0)];
     let tree = AggregateTree::build(&points, 10);
     let mut out = Vec::new();
@@ -372,7 +370,7 @@ mod tests {
   #[test]
   fn coincident_points_terminate_at_the_depth_limit() {
     // Subdivision cannot separate identical positions, so without the bound the
-    // build would recurse forever. They come back as one group, which is right.
+    // build would recurse forever. They come back as one group.
     let points = vec![WeightedPoint::new(5.0, 5.0, 1.0); 32];
     let tree = AggregateTree::build(&points, 6);
     let mut out = Vec::new();
@@ -392,8 +390,7 @@ mod tests {
 
   #[test]
   fn the_summary_count_grows_slowly_with_the_crowd() {
-    // The scaling claim. Doubling the crowd should not double what a viewer is
-    // told about it, or aggregation has bought nothing.
+    // Doubling the crowd should not double what a viewer is told about it.
     let mut counts = Vec::new();
     for n in [4u32, 8, 16] {
       let points = grid(n, 30.0, 0.0);

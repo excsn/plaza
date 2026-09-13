@@ -84,7 +84,7 @@ fn windowed(options: role::Options) {
 
 /// The turn being asked for this frame, if any.
 ///
-/// `None` means "no new request", **not** "stop": there is no standing still
+/// `None` means "no new request" rather than "stop". There is no standing still
 /// here, so releasing every key leaves the last request in place rather than
 /// cancelling the player's motion.
 fn read_turn(pad: Option<Way>) -> Option<Dir> {
@@ -201,8 +201,8 @@ async fn frame_loop(options: role::Options) {
       render::draw_pellets(&board, &client.sim.pellets);
       let now = client.server_time_ms();
       render::draw_powerups(&board, &client.sim.powerups, now);
-      // The round's inversion, not any one player's: while a runner holds an
-      // energizer, every pursuer is prey and is drawn as one.
+      // The inversion belongs to the round rather than one player: while a
+      // runner holds an energizer, every pursuer is prey and is drawn as one.
       let inversion = client
         .sim
         .players
@@ -212,7 +212,7 @@ async fn frame_loop(options: role::Options) {
         .max();
 
       // The server's truth for your own player, hollow under your belief about
-      // it. Only a host has this; a joiner legitimately cannot.
+      // it. Only a host has this; a joiner has no way to know it.
       // Not while paused: between a catch and the next `RoundStart` the server
       // may already hold the next round's spawns, and a ghost drawn from them
       // is a comparison across two different rounds.
@@ -250,8 +250,8 @@ async fn frame_loop(options: role::Options) {
         let w = measure_text(&text, None, 34, 1.0).width;
         draw_text(&text, (screen_width() - w) * 0.5, 56.0, 34.0, Color::new(1.0, 0.85, 0.4, 1.0));
       }
-      // The match table outranks the round banner: it is the thing the last
-      // five rounds were for.
+      // The match table is drawn over the round banner, since it shows the
+      // result of the whole match.
       if let Some(standings) = &client.last_standings {
         draw_standings(standings, client.me);
       }
@@ -302,8 +302,8 @@ async fn frame_loop(options: role::Options) {
 /// The scoreboard, under the maze.
 /// The final table, over the board.
 ///
-/// Cumulative score decides the match, not who survived the last round, so this
-/// is the only screen where the whole match is visible at once.
+/// The match is decided by cumulative score rather than by who survived the
+/// last round, so this is the only screen that shows the whole match at once.
 fn draw_standings(standings: &[(PlayerId, u32)], me: Option<PlayerId>) {
   draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.0, 0.0, 0.0, 0.65));
 

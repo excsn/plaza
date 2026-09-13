@@ -7,11 +7,11 @@
 //! differ is a property of the machine rather than of the algorithm. So this
 //! times both on one scene and reports nanoseconds per query.
 //!
-//! Kept out of the test suite deliberately. A timing number that runs on every
-//! `cargo test` is a number nobody reads and a suite that fails on a busy
-//! machine, and a measurement taken without knowing the machine's state is
-//! worth nothing. **Check the power mode before trusting the output**, which is
-//! what the header prints.
+//! Kept out of the test suite deliberately. A timing number printed on every
+//! `cargo test` goes unread and makes the suite fail on a busy machine. A
+//! measurement taken without knowing the machine's state cannot be trusted.
+//! **Check the power mode before trusting the output**, which is what the
+//! header prints.
 //!
 //! ```sh
 //! pmset -g | grep powermode      # 2 is high power, which is the one to use

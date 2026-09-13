@@ -9,35 +9,31 @@
 //! being shared.
 //!
 //! What a process *is* (headless, observer, host, joiner) is deliberately not
-//! here. That vocabulary is needed by the browser client too, and a wasm bundle
-//! must not inherit an HTTP server and an async runtime to learn the name of its
-//! own role. The examples keep it in a dependency-free crate of their own; the
-//! parsing around it is an opinion that any real application will already have.
+//! here. The browser client needs that vocabulary too and a wasm bundle must
+//! not inherit an HTTP server and an async runtime to learn the name of its own
+//! role. The examples keep it in a dependency-free crate of their own; any real
+//! application already parses its own arguments.
 //!
 //! # One port
 //!
-//! It matters more than it sounds. A joiner is given a single URL, the page and
-//! the socket come from the same origin, so there is no CORS story and no second
-//! thing to configure. It is also what makes hosting a thing you can tell a
-//! friend over a chat message.
+//! A joiner is given a single URL that can be sent in a chat message. The page
+//! and the socket come from the same origin, so there is no CORS setup and
+//! nothing else to configure.
 //!
-//! # Why the cache busting is not optional
+//! # Cache busting
 //!
 //! A browser client is a build product. It does not rebuild when the server
-//! does, so a browser holding a bundle from before a wire change is the normal
-//! state of affairs, and it fails in the least obvious way available: the page
-//! loads, the application runs, and only the messages whose shape changed are
-//! rejected. That reads as a protocol bug for as long as it takes somebody to
-//! suspect the cache.
+//! does, so browsers holding a bundle from before a wire change are normal. The
+//! page loads and the application runs, but the messages whose shape changed
+//! are rejected. It looks like a protocol bug until somebody suspects the cache.
 //!
-//! [`Host::cache_bust`] answers it by stamping the asset's URL with its own
-//! modification time, read per request rather than at startup, so rebuilding the
-//! client reaches an already-running host without restarting it. A stamped URL
-//! rather than cache headers alone, because a stamp is the only part of this
-//! that survives an intermediary with its own opinions, and a deployed host sits
-//! behind exactly that. The headers still matter, but on the *referencing* page:
-//! a cached index would keep quoting the old stamp, which is the trap that makes
-//! cache busting look like it does not work.
+//! [`Host::cache_bust`] stamps the asset's URL with its own modification time,
+//! read per request rather than at startup, so rebuilding the client reaches an
+//! already-running host without restarting it. It uses a stamped URL rather
+//! than cache headers alone because a deployed host usually sits behind an
+//! intermediary that applies its own caching policy. Only a changed URL gets
+//! past it. The headers still matter on the *referencing* page: a cached
+//! index keeps quoting the old stamp and cache busting then appears not to work.
 //!
 //! Pair it with a protocol version derived at build time (see
 //! `plaza_wire::build`) so that a client which slips through anyway is told to

@@ -18,7 +18,7 @@ That entry point re-exports the whole of `plaza_client`, which in turn re-export
 
 [`PlazaClient`](../plaza_client/API_REFERENCE.md#class-plazaclient) catches it: a factory that throws produces a [`Disconnected`](../plaza_client/API_REFERENCE.md#class-disconnected) event and a scheduled retry, not an exception out of `start`.
 
-After a socket is open, nothing throws. A stream error and a clean close are the same thing to a client that is going to reconnect either way, so both close [`messages`](../plaza_client/API_REFERENCE.md#property-messages) and complete [`done`](../plaza_client/API_REFERENCE.md#property-done). Sending on a closed socket is a silent no-op, because [`PlazaClient.sendOps`](../plaza_client/API_REFERENCE.md#method-sendops) has already checked [`state`](../plaza_client/API_REFERENCE.md#enum-socketstate) and returned false to its caller.
+After a socket is open, nothing throws. A client reconnects after either a stream error or a clean close, so both close [`messages`](../plaza_client/API_REFERENCE.md#property-messages) and complete [`done`](../plaza_client/API_REFERENCE.md#property-done). Sending on a closed socket is a silent no-op, because [`PlazaClient.sendOps`](../plaza_client/API_REFERENCE.md#method-sendops) has already checked [`state`](../plaza_client/API_REFERENCE.md#enum-socketstate) and returned false to its caller.
 
 ## 3. Core API
 
@@ -47,7 +47,7 @@ class ChannelSocket implements PlazaSocket {
 
 A [`PlazaSocket`](../plaza_client/API_REFERENCE.md#abstract-class-plazasocket) over a `WebSocketChannel`. No public constructor; use one of the two statics.
 
-[`messages`](../plaza_client/API_REFERENCE.md#property-messages) is **single-subscription**, as the contract requires, so frames that arrive before the first listener are buffered rather than dropped. The server speaks first, so this is what keeps the `Hello` from being lost.
+[`messages`](../plaza_client/API_REFERENCE.md#property-messages) is **single-subscription**, as the contract requires, so frames that arrive before the first listener are buffered rather than dropped. The server speaks first, so this keeps the `Hello` from being lost.
 
 Anything on the channel that is neither a `String` nor a `List<int>` is discarded rather than forwarded.
 
@@ -57,9 +57,9 @@ Anything on the channel that is neither a `String` nor a `List<int>` is discarde
 static Future<ChannelSocket> connect(Uri url, {Iterable<String>? protocols})
 ```
 
-Connects, and **does not return until the handshake has completed**.
+Connects and **does not return until the handshake has completed**.
 
-Waiting matters: `WebSocketChannel.connect` returns immediately, and a frame sent before the socket is open is dropped silently on some platforms, which would lose the `Hello`.
+`WebSocketChannel.connect` on its own returns immediately and a frame sent before the socket is open is dropped silently on some platforms, which would lose the `Hello`.
 
 `protocols` is passed through as the WebSocket subprotocol list.
 
@@ -73,4 +73,4 @@ Wraps a channel you already have, for a server-side harness or a test that suppl
 
 #### Inherited surface
 
-[`send`](../plaza_client/API_REFERENCE.md#method-send), [`state`](../plaza_client/API_REFERENCE.md#property-state), [`done`](../plaza_client/API_REFERENCE.md#property-done), [`closeCode`](../plaza_client/API_REFERENCE.md#property-closecode) and [`close`](../plaza_client/API_REFERENCE.md#method-close) behave as `PlazaSocket` specifies. `closeCode` is taken from the underlying `WebSocketChannel` at the moment the socket finishes, so it is set by the time [`done`](../plaza_client/API_REFERENCE.md#property-done) completes and stays readable afterwards. `state` starts at `SocketState.open`, because `connect` has already waited for it, and moves to `closed` once, on the first of a stream error, a stream close, a sink close, or [`close`](../plaza_client/API_REFERENCE.md#method-close).
+[`send`](../plaza_client/API_REFERENCE.md#method-send), [`state`](../plaza_client/API_REFERENCE.md#property-state), [`done`](../plaza_client/API_REFERENCE.md#property-done), [`closeCode`](../plaza_client/API_REFERENCE.md#property-closecode) and [`close`](../plaza_client/API_REFERENCE.md#method-close) behave as `PlazaSocket` specifies. `closeCode` is taken from the underlying `WebSocketChannel` at the moment the socket finishes, so it is set by the time [`done`](../plaza_client/API_REFERENCE.md#property-done) completes and stays readable afterwards. `state` starts at `SocketState.open`, because `connect` has already waited for it and moves to `closed` once, on the first of a stream error, a stream close, a sink close or [`close`](../plaza_client/API_REFERENCE.md#method-close).

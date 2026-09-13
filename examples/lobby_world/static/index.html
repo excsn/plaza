@@ -213,7 +213,7 @@ function handleLobbyOp(op) {
 }
 
 // Counts down to the moment the queue gives up and fills the seats with bots,
-// which is the number that makes the patience visible rather than a surprise.
+// so the player sees the wait coming instead of being surprised by it.
 function drawQueue() {
   if (queuedAt === null) return;
   const waited = Date.now() - queuedAt;

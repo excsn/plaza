@@ -1,6 +1,6 @@
 # Usage Guide: plaza_wire
 
-How to speak plaza's wire: choosing a codec, writing frames, measuring a round trip, deriving a protocol version at build time, generating a Dart client's types, and packing a hot array by hand when a derive has run out of room.
+How to speak plaza's wire: choosing a codec, writing frames, measuring a round trip, deriving a protocol version at build time, generating a Dart client's types and packing a hot array by hand when a derive has run out of room.
 
 ## Table of Contents
 
@@ -37,7 +37,7 @@ How to speak plaza's wire: choosing a codec, writing frames, measuring a round t
 ## Core Concepts
 
 *   **Frame**: one kind byte, then the codec-encoded body. Nothing else is on the wire.
-*   **`Kind`**: the tag byte. `Ops`, `Hello`, `Ping`, `Pong`, and whatever a later version adds.
+*   **`Kind`**: the tag byte. `Ops`, `Hello`, `Ping`, `Pong` and whatever a later version adds.
 *   **`WireCodec`**: how a value becomes bytes. Stateless, cheap to clone, one per session shared across every connection.
 *   **`ProtocolVersion`**: a `u32` hashed from the type definitions your wire reaches, announced in a `Hello`.
 *   **Root**: a type tagged `/// plaza-wire: root`, where the resolver starts walking.
@@ -92,7 +92,7 @@ match Kind::from_byte(tag) {
 0[{"AssignPlayer":{"player_id":"...","side":"Left"}}]
 ```
 
-For `Kind::Ops` the body is the ops array itself. There is no envelope struct, no sender field, and no serde enum wrapping the payload.
+For `Kind::Ops` the body is the ops array itself. There is no envelope struct, no sender field and no serde enum wrapping the payload.
 
 **There is no `from` on the wire.** Who sent a message is the server's own bookkeeping, attached by the transport from the connection. An application that needs to say who did something puts that in its own op, at the width it actually needs, which is usually a seat index rather than a 64-bit identity.
 
@@ -105,7 +105,7 @@ let Some(kind) = Kind::from_byte(tag) else {
 };
 ```
 
-`from_byte` returns `None` rather than erroring, and every transport drops such a frame and continues. The rule exists from the start because it cannot be added later: a client already deployed cannot learn to tolerate a new frame kind.
+`from_byte` returns `None` rather than erroring and every transport drops such a frame and continues. The rule exists from the start because it cannot be added later: a client already deployed cannot learn to tolerate a new frame kind.
 
 ### Framing on a Byte Stream
 
@@ -137,7 +137,7 @@ MsgPackCodec        // compact: structs as arrays, field order is the schema
 MsgPackNamedCodec   // structs as maps, for a peer that decodes by name
 ```
 
-`MsgPackCodec` means a peer **must be built from the same struct definitions, in the same order**. That is what the protocol version and the `Hello` handshake police.
+`MsgPackCodec` means a peer **must be built from the same struct definitions, in the same order**. The protocol version and the `Hello` handshake check this.
 
 ### Text or Binary
 
@@ -215,14 +215,14 @@ pub struct Ping { pub origin: u64 }
 pub struct Pong { pub origin: u64, pub responder: Option<u64> }
 ```
 
-*   **`origin`** is opaque to the responder: it comes back exactly as it went out, and nothing but the sender interprets it. Works whatever you stamped, milliseconds or nanoseconds or a frame counter.
-*   **`responder`** is the other end's clock, and the field easy to leave out. Echoing the origin alone gives a round trip, which measures the *distance* to the responder without ever locating it. A client rendering on the responder's timeline needs the clock too, which is what `ClockSyncEstimator::observe_exchange` fits an offset from. It is `Option` because a responder with no clock installed must be distinguishable from one whose clock reads zero.
+*   **`origin`** is opaque to the responder: it comes back exactly as it went out and nothing but the sender interprets it. Works whatever you stamped, milliseconds or nanoseconds or a frame counter.
+*   **`responder`** is the other end's clock and the field easy to leave out. Echoing the origin alone gives a round trip, which measures the *distance* to the responder but says nothing about its clock. A client rendering on the responder's timeline needs the clock too, which is what `ClockSyncEstimator::observe_exchange` fits an offset from. It is `Option` because a responder with no clock installed must be distinguishable from one whose clock reads zero.
 
-**The unit is out of band and plaza has no opinion about it.** Nothing here converts, defaults, or names a unit. Both ends have to mean the same one. A simulation clock is usually right, because it is the timeline the client is drawing on; wall time is right only if that is also what stamps your snapshots.
+**The unit is agreed out of band.** Plaza does not convert, default or name a unit, so both ends have to use the same one. A simulation clock is usually right, because it is the timeline the client is drawing on; wall time is right only if that is also what stamps your snapshots.
 
 ## Deriving a Protocol Version
 
-A wire format only agrees if both ends were built from the same definition of it, and the ends are separate builds. A browser client especially: it does not rebuild when the server does, so a page from before a wire change is the normal state of affairs.
+Both ends of a wire format have to be built from the same definition and they are separate builds. A browser client does not rebuild when the server does, so a page from before a wire change is common.
 
 ### Tagging Your Roots
 
@@ -238,7 +238,7 @@ pub enum TableOp { ... }
 struct DebugDump { ... }        // silences the untagged-root warning
 ```
 
-A serde type unreachable from every root gets a warning naming it and both tags, because a forgotten tag is the one miss no resolver can catch.
+A serde type unreachable from every root gets a warning naming it and both tags, because the resolver has no other way to notice a forgotten tag.
 
 ### Emitting the Version
 
@@ -260,9 +260,9 @@ include!(concat!(env!("OUT_DIR"), "/wire_protocol.rs"));
 pub const PROTOCOL: u32 = WIRE_PROTOCOL;
 ```
 
-The resolver parses `src/`, starts from the tagged roots, and walks field types transitively with generic arguments included, so the version hashes exactly the types on the wire: an off-wire neighbour sharing a file moves nothing, and a payload two files away counts.
+The resolver parses `src/`, starts from the tagged roots and walks field types transitively with generic arguments included, so the version hashes exactly the types on the wire: an off-wire neighbour sharing a file moves nothing and a payload two files away counts.
 
-Plaza's own vocabulary is covered by a constant baked into this crate, so it is never yours to list.
+Plaza's own vocabulary is covered by a constant baked into this crate, so you never list it.
 
 ### Widening the Walk
 
@@ -288,9 +288,9 @@ The older file-list `emit(&[paths])` remains underneath. The two derive *differe
 
 A client announces `PROTOCOL` on connect and a server speaking a different one can reply "reload" rather than flooding its log with per-message decode warnings.
 
-It errs toward asking for a reload that was not strictly needed: the cost is a page load, and the opposite mistake is a silent half-working session. It cannot rescue a client older than the handshake itself, which is the bootstrapping floor every protocol version has.
+It errs toward asking for a reload that was not strictly needed, which costs a page load; the opposite mistake is a silent half-working session. It cannot help a client older than the handshake itself, which is a limit every protocol version has.
 
-The other half of that failure is caching, and it lives in [`plaza_session::host::Host`](../session/): a browser serving the page from cache cannot quote a new version however well you derived it.
+Caching causes the same failure and is handled in [`plaza_session::host::Host`](../session/): a browser serving the page from cache cannot report the new version however it was derived.
 
 ## Generating a Dart Client
 
@@ -303,7 +303,7 @@ plaza_wire::build::Wire::detect()
 
 Every generated type carries `toWire({bool named})` and `fromWire`, which accepts either shape, so one file serves JSON, named and compact connections. Generics are monomorphised per instantiation.
 
-The contract is narrow and loud: serde structs and enums, unit/newtype/tuple/struct variants, `Option`/`Vec`/maps/sets/`Box`/tuples, `Duration` as the generated `WireDuration`, and `Uuid` as a string. Keep `Uuid` off compact wires, since binary serde writes it as bytes. Any other serde attribute than `bound`, and anything unresolvable, fails the build naming the spot.
+The generator supports serde structs and enums, unit/newtype/tuple/struct variants, `Option`/`Vec`/maps/sets/`Box`/tuples, `Duration` as the generated `WireDuration` and `Uuid` as a string. Keep `Uuid` off compact wires, since binary serde writes it as bytes. Any serde attribute other than `bound` fails the build naming the spot and so does anything unresolvable.
 
 The Dart file is committed because a Dart build cannot run a cargo build script, so pin it with a test:
 
@@ -316,7 +316,7 @@ fn dart_matches() {
 
 ## Packing Bits by Hand
 
-MessagePack spends a byte on a `bool` and five on a large `u32`. Right for an envelope, wrong for the hot array in a state-sync packet where the same field appears once per entity per tick against a budget.
+MessagePack spends a byte on a `bool` and five on a large `u32`. That is fine for an envelope but costly for the hot array in a state-sync packet, where the same field appears once per entity per tick against a budget.
 
 ### Letting the Derive Do It
 
@@ -326,11 +326,11 @@ use plaza_wire::BitCodec;
 let bytes = BitCodec.encode(&snapshot)?;
 ```
 
-One bit per `bool`, nibble varints for integers, one bit for an `Option`, a varint for an enum tag, and no field names on the wire. One line, and lossless.
+One bit per `bool`, nibble varints for integers, one bit for an `Option`, a varint for an enum tag and no field names on the wire. It takes one line and is lossless.
 
 ### Writing a Layout Yourself
 
-**Serde's data model has no place to put a bound.** A field is an `f32`, not "an f32 within ±256 that renders at 2 mm", so a derive must spend the full 32 bits. Quantising is the largest single saving in a state-sync packet and exactly the one a derive cannot reach.
+**Serde's data model has no way to express a bound.** A field is an `f32` rather than "an f32 within ±256 that renders at 2 mm", so a derive must spend the full 32 bits. Quantising is the largest single saving in a state-sync packet and a derive cannot do it.
 
 ```rust,ignore
 use plaza_wire::bits::{BitWriter, BitReader};
@@ -352,7 +352,7 @@ let mut r = BitReader::new(&packed);
 let count = r.varint()?;
 ```
 
-You write the reader too, and it must mirror the writer exactly. The usual shape is to pack only the hot array and leave the envelope on MessagePack.
+You write the reader too and it must mirror the writer exactly. The usual shape is to pack only the hot array and leave the envelope on MessagePack.
 
 ### Carrying a Packed Payload
 
@@ -370,7 +370,7 @@ A `Vec<u8>` field reaches the outer codec through `serialize_seq`, so every byte
 
 ## What the Measurements Settled
 
-**The tag belongs outside the codec.** A serde enum expresses the same thing, but then the codec decides what the tag costs: a quoted string under JSON, an array element under MessagePack, a field number under protobuf. A byte ahead of the body costs exactly one byte in every format, and the decoder reads it without parsing anything. On the same message: 39 bytes against 42, and 113ns to decode against 180ns, rising to 239ns for the version that keeps the tag inside the document and still dispatches on it.
+**A tag byte outside the codec is smaller and faster.** A serde enum expresses the same thing, but then the codec decides what the tag costs: a quoted string under JSON, an array element under MessagePack, a field number under protobuf. A byte ahead of the body costs exactly one byte in every format and the decoder reads it without parsing anything. On the same message: 39 bytes against 42 and 113ns to decode against 180ns, rising to 239ns for the version that keeps the tag inside the document and still dispatches on it.
 
 **Compact MessagePack against named**, on a ten-op message: named came out at 67% of JSON, compact at 40%. Picking the wrong one silently costs most of the benefit.
 
@@ -378,7 +378,7 @@ A `Vec<u8>` field reaches the outer codec through `serialize_seq`, so every byte
 
 **Sizing the buffer from the last frame** is worth 2.7x on JSON and 3.0x on MessagePack, because a `Vec` growing from empty reallocates and copies four or five times before even a one-op frame is done.
 
-**A derive buys 1.4x; a hand layout buys 5.0x.** On 901 cubes, one snapshot at 60 Hz:
+**A derive saves 1.4x and a hand layout 5.0x.** On 901 cubes, one snapshot at 60 Hz:
 
 | strategy | bytes | Mbit/sec | vs msgpack |
 |---|---:|---:|---:|
@@ -386,15 +386,15 @@ A `Vec<u8>` field reaches the outer codec through `serialize_seq`, so every byte
 | `BitCodec` (derive) | 37674 | 18.08 | 1.4x |
 | `bits`, hand-packed | 10396 | 4.99 | 5.0x |
 
-The remaining 3.6x costs a hand-written layout **and** a matching reader per packed type, and is lossy by construction where the derive is lossless.
+The remaining 3.6x costs a hand-written layout **and** a matching reader per packed type and is lossy by construction where the derive is lossless.
 
-**A packed payload in a `Vec<u8>` field costs 15502 bytes to carry 10396**, handing back half the win. Declared as bytes it travels in 10411. Reproduce it all with `cargo test -p plaza_wire --features msgpack --test packing -- --nocapture`.
+**A packed payload in a `Vec<u8>` field costs 15502 bytes to carry 10396**, giving back half the saving. Declared as bytes it travels in 10411. Reproduce it all with `cargo test -p plaza_wire --features msgpack --test packing -- --nocapture`.
 
 ## Error Handling
 
 `WireCodec::encode` and `decode` return `Box<dyn Error + Send + Sync>`, so a codec is free to surface its own library's error unchanged.
 
-**A malformed frame must return `Err` rather than panic.** The transports treat a decode failure as a per-message problem: it is logged and dropped, and the connection stays open.
+**A malformed frame must return `Err` rather than panic.** The transports treat a decode failure as a per-message problem: it is logged and dropped and the connection stays open.
 
 ```rust,ignore
 match codec.decode::<Vec<Op>>(body) {
@@ -409,4 +409,4 @@ match codec.decode::<Vec<Op>>(body) {
 
 `BitWriter::bits` **panics** if the width is 0 or above 64, because a width is part of a layout rather than input.
 
-Build-time failures are loud on purpose: a reference the resolver cannot place fails the build naming both ends, and two definitions sharing one bare name is an error, because the index is by name.
+Build-time problems fail the build: a reference the resolver cannot place fails the build naming both ends and two definitions sharing one bare name is an error, because the index is by name.

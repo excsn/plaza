@@ -1,8 +1,8 @@
 //! The tri-state slot map: which key holds which seat, counting seats kept
 //! for someone who left. [`SeatTable`](super::SeatTable)'s sibling with one
-//! more state, and one of the two blocks [`Roster`](super::Roster) is composed
-//! of. Public for the same reason every prescription's blocks are: a seating
-//! policy `Roster` does not express is built from these directly.
+//! more state and one of the two blocks [`Roster`](super::Roster) is composed
+//! of. It is public so a seating policy `Roster` does not express can be built
+//! from these directly.
 
 use std::collections::HashMap;
 use std::hash::Hash;

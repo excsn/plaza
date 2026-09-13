@@ -5,8 +5,8 @@ import 'package:test/test.dart';
 
 /// Transliterated from `client_utils/src/trajectory.rs`.
 void main() {
-  /// Degrading by sample count rather than refusing matters: a caller should not
-  /// need a special case for the first two packets of every entity's life.
+  /// It degrades by sample count rather than refusing, so a caller does not need
+  /// a special case for the first two packets of every entity's life.
   test('it answers from the first sample and sharpens as they arrive', () {
     final p = TrajectoryPredictor(damping: 1.0, maxHorizonMs: 1000);
     expect(p.predict(100), isNull);
@@ -34,8 +34,8 @@ void main() {
     expect(p.predict(1000), closeTo(100.0, 0.01));
   });
 
-  /// The whole point of the coefficient: a dial from "coast on velocity" to "trust
-  /// the fitted curve", not a switch.
+  /// The coefficient ranges continuously from coasting on velocity to trusting
+  /// the fitted curve.
   test('damping sits between first and second order', () {
     const samples = [(0, 0.0), (100, 1.0), (200, 4.0)];
     final none = TrajectoryPredictor(damping: 0.0, maxHorizonMs: 5000);
@@ -55,7 +55,7 @@ void main() {
   });
 
   /// A quadratic diverges quadratically, so an unbounded projection over a dead
-  /// stream is not a smaller error than freezing, it is a much larger one.
+  /// stream is a much larger error than freezing.
   test('the horizon holds instead of running away', () {
     final p = TrajectoryPredictor(damping: 1.0, maxHorizonMs: 200)
       ..observe(0, 0.0)
@@ -80,8 +80,7 @@ void main() {
     expect(p.predict(300), closeTo(before, 0.001), reason: 'the straggler changed nothing');
   });
 
-  /// The case that motivates the whole primitive. A target on a circular path,
-  /// sampled at 10Hz, coasted through a 100ms gap: first order leaves along the
+  /// A target on a circular path, sampled at 10Hz, coasted through a 100ms gap: first order leaves along the
   /// tangent, second order follows the curve.
   test('a turn is tracked far better than a tangent', () {
     double sample(int tMs) => math.sin(tMs / 1000.0 * 2.0) * 100.0;
@@ -95,8 +94,8 @@ void main() {
     final truth = sample(700);
     final eFirst = (first.predict(700)! - truth).abs();
     final eSecond = (second.predict(700)! - truth).abs();
-    // Three samples fit the curvature approximately, not exactly, so the bound is
-    // what the fit actually delivers rather than what the idea promises.
+    // Three samples fit the curvature approximately rather than exactly, so the
+    // bound reflects what the fit actually achieves.
     expect(eSecond, lessThan(eFirst * 0.6), reason: 'second order should cut it substantially');
   });
 

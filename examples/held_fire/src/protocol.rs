@@ -1,13 +1,12 @@
 //! Everything that crosses the wire, compiled into both the server and the
 //! browser client.
 //!
-//! Two properties are the example, and both are wire properties. A march
-//! resolves **over time**, one cell per step window, and the overwatch
-//! decision lives inside that window, so a held shot is indistinguishable on
-//! the mover's wire from no watcher at all. And the view is **per side**: an
-//! enemy outside your sight is absent from your payload, not flagged in it,
-//! which is what makes reaction fire from an unseen unit an ambush rather
-//! than a notification.
+//! The example depends on two wire properties. A march resolves **over
+//! time**, one cell per step window, and the overwatch decision fits inside
+//! that window, so on the mover's wire a held shot looks the same as no
+//! watcher at all. The view is also **per side**: an enemy outside your sight
+//! is left out of your payload rather than flagged in it, so the mover gets
+//! no warning before reaction fire from an unseen unit.
 
 use plaza::game_common::flow_control::phases::op_payloads::PhaseChangedNoticePayload;
 use serde::{Deserialize, Serialize};
@@ -35,10 +34,9 @@ pub const BOT_WAIT_MS: u64 = 5000;
 
 pub const TICK_MS: u64 = 50;
 
-/// One march step per window, and the overwatch decision fits inside it. One
-/// number on purpose: a decision window longer than the cadence would make a
-/// held shot a visible stutter on the mover's screen, and the whole point is
-/// that holding reveals nothing.
+/// One march step per window and the overwatch decision fits inside it. The
+/// two share one number because a decision window longer than the cadence
+/// would show a held shot as a visible stutter on the mover's screen.
 pub const STEP_MS: u64 = 1200;
 
 /// A commander's clock for picking an activation; past it the server acts.
@@ -50,20 +48,20 @@ pub const NEXT_BATTLE_MS: u64 = 3500;
 
 pub const MAX_HP: i32 = 2;
 pub const MOVE_RANGE: u8 = 4;
-/// Sight and active rifle reach are one number: what you can see, you can
-/// shoot.
+/// Sight and active rifle reach are one number, so a unit can shoot anything
+/// it can see.
 pub const SIGHT: u8 = 5;
 /// A watcher covers farther than walking eyes see: it is aimed down a lane
-/// and waiting. The band between [`SIGHT`] and this is where an ambush lives,
-/// because a symmetric sight cannot produce one at all: whoever sees you is
-/// seen.
+/// and waiting. Ambushes happen in the band between [`SIGHT`] and this. With
+/// symmetric sight there could be none, since a unit that sees you is also
+/// seen by you.
 pub const WATCH_REACH: u8 = 7;
 
 pub const MAP_W: u8 = 13;
 pub const MAP_H: u8 = 9;
 
-/// Rocks: block movement and sight both. A fixed layout, so every skirmish
-/// argues about the same ground.
+/// Rocks block both movement and sight. The layout is fixed, so every
+/// skirmish is fought on the same ground.
 pub const ROCKS: [(u8, u8); 9] = [
   (3, 2),
   (3, 6),
@@ -125,8 +123,8 @@ impl Order {
   }
 }
 
-/// What the panel counts. The offer numbers are the example's deliverable:
-/// the priced cost of the decision window.
+/// What the panel counts. The offer numbers measure what the decision window
+/// costs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Panel {
   pub battles: u64,
@@ -163,9 +161,8 @@ pub struct OfferView {
   pub mover_at: Cell,
 }
 
-/// The battle as one side may know it. Your units ride whole, stance
-/// included; enemies ride only while seen, and their stance never rides at
-/// all.
+/// The battle as one side may know it. Your units are sent whole, stance
+/// included. Enemies are sent only while seen and their stance is never sent.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FieldView {
   pub phase: BattlePhase,
@@ -196,8 +193,8 @@ pub enum WatchOp {
   YouAre { side: u8 },
 
   Act(Order),
-  /// The defender's answer to the standing offer. `fire: false` holds, and
-  /// holding is also what silence buys when the window lapses.
+  /// The defender's answer to the standing offer. `fire: false` holds. A
+  /// window that lapses with no answer also holds.
   Answer { watcher: UnitId, fire: bool },
 
   /// A unit stepped one cell. Audience-filtered: the mover's side always,
@@ -213,8 +210,8 @@ pub enum WatchOp {
     felled: bool,
     overwatch: bool,
   },
-  /// Your own unit took the watching stance. Never sent to the enemy side,
-  /// which is most of the point.
+  /// Your own unit took the watching stance. Never sent to the enemy side, so
+  /// the enemy cannot tell a unit is watching.
   NowWatching { unit: UnitId },
   /// The standing offer opened, defender's eyes only. It closes with the
   /// next step window, answered or not.

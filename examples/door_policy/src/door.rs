@@ -29,8 +29,8 @@ pub struct Ledger {
   /// client is asserted from the client's side; the server cannot watch its
   /// own farewell land.
   pub reasons_sent: AtomicU64,
-  /// Ops accepted from a connection after it was told to leave. Zero is the
-  /// claim; anything else means the close did not close.
+  /// Ops accepted from a connection after it was told to leave. This should
+  /// stay at zero; anything else means the close did not close.
   pub ops_after_close: AtomicU64,
 }
 

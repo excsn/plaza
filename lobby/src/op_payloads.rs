@@ -56,9 +56,9 @@ pub struct RoomFilters {
   /// Hide rooms this connection could not play in, given its measured one-way
   /// delay in milliseconds.
   ///
-  /// The useful half of a latency limit: a player with a slow link is shown the
-  /// rooms they can actually play rather than the ones they will be refused
-  /// from. Refusal is what is left when nothing fits.
+  /// A player with a slow link is shown the rooms they can play in rather than
+  /// the ones that would refuse them. A player is refused only when nothing
+  /// fits.
   pub playable_at_one_way_ms: Option<u32>,
 }
 

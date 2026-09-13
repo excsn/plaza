@@ -1,22 +1,19 @@
-//! The client, which runs the whole game and is told almost nothing.
+//! The client, which runs the whole game from very little input.
 //!
-//! In every other playground here the client's simulation is a *prediction*: a
-//! guess about the near future, continuously corrected by a server that knows
-//! better. This one is not a prediction at all. It is the same simulation, run
-//! from the same inputs, and its correctness does not decay with time or with
-//! latency. A client on a 400 ms link produces exactly the same wave as the
-//! server, because nothing it computes depends on when it heard anything.
+//! In every other playground here the client's simulation is a *prediction* of
+//! the near future, continuously corrected by the server. This one is the same
+//! simulation as the server's, run from the same inputs. It does not drift
+//! with time or latency. A client on a 400 ms link produces exactly the same
+//! wave as the server, because nothing it computes depends on when it heard
+//! anything.
 //!
-//! What it does depend on is applying every op **on the tick that op names**.
-//! That is the one fragile point, and it is fragile in a way worth watching:
-//! an op that arrives after its tick has passed cannot be applied late, because
-//! late means simulating a different history. So a client in that position has
-//! only one honest move, which is to admit it and ask for the state.
+//! It does depend on applying every op **on the tick that op names**. An op
+//! that arrives after its tick has passed cannot be applied late, because that
+//! would simulate a different history. The client reports it and asks for the
+//! state.
 //!
-//! Hence the two counters this file exists to produce: **mismatches**, meaning
-//! a digest disagreed, and **resyncs**, meaning the client gave up and asked.
-//! An example with zero of the first is an example that has proved nothing, so
-//! the panel can cause both on demand.
+//! This file keeps two counters. **Mismatches** counts digests that disagreed.
+//! **Resyncs** counts snapshot requests. The panel can cause both on demand.
 
 use std::collections::VecDeque;
 
@@ -43,9 +40,8 @@ pub struct Client {
   pub policy: ServerPolicy,
   /// Builds waiting for the tick they named.
   pending_builds: Vec<(u64, Build)>,
-  /// Waves waiting for the tick they begin on. A wave announcement can arrive
-  /// before its start tick, which is the normal case and the point of naming a
-  /// tick at all.
+  /// Waves waiting for the tick they begin on. A wave announcement normally
+  /// arrives before its start tick, which is why it names a tick.
   pending_waves: Vec<(u32, u64)>,
   /// This client's own digest at each recent tick, so a server digest that
   /// arrives a few hundred milliseconds later can still be answered.
@@ -54,8 +50,8 @@ pub struct Client {
   ///
   /// They arrive early whenever the client is running behind the server, which
   /// on a real link is most of the time. Comparing one against the newest state
-  /// instead of waiting would report a mismatch on every message: the client
-  /// would not be wrong, it would be *earlier*.
+  /// instead of waiting would report a mismatch on every message even though
+  /// the client is only *earlier*.
   incoming: VecDeque<(u64, u64, u32)>,
 
   pub ticks_run: u64,
@@ -115,7 +111,7 @@ impl Client {
     self.adopt(field);
   }
 
-  /// Replaces the whole field. The expensive path, and the only one that ever
+  /// Replaces the whole field. This is the expensive path and the only one that
   /// moves state across the wire.
   pub fn adopt(&mut self, field: &Field) {
     // A field with lives in it is not an overrun field, which is how a client
@@ -136,7 +132,7 @@ impl Client {
   ///
   /// The countdown between waves comes from here rather than from a message of
   /// its own: the announcement already names the tick, and a separate timer
-  /// would be a second opinion about the same moment.
+  /// could disagree with it.
   pub fn next_wave(&self) -> Option<(u32, u64)> {
     self.pending_waves.iter().min_by_key(|(_, at)| *at).copied()
   }
@@ -161,13 +157,14 @@ impl Client {
     self.pending_builds.push((tick, build));
   }
 
-  /// Takes a server digest. **Held until this client has simulated that tick.**
+  /// Takes a server digest and holds it until this client has simulated that
+  /// tick.
   ///
   /// The comparison is made at the server's tick, never at the newest one, for
   /// the same reason the lattice examples compare a correction against what the
   /// client believed at the frame's own timestamp: a client running behind is
-  /// not wrong, it is earlier, and comparing across the gap reports a mismatch
-  /// on every single message.
+  /// only earlier, so comparing across the gap reports a mismatch on every
+  /// message.
   pub fn on_digest(&mut self, tick: u64, digest: u64, enemies: u32, controls: &Controls) {
     if !controls.digest_checks {
       return;
@@ -214,11 +211,10 @@ impl Client {
 
   /// Advances the local simulation to `target_tick`.
   ///
-  /// Driven by a tick rather than by elapsed time, and the reason is the one
-  /// `bomb_grid` paid four bugs to learn: a simulation both sides run must
-  /// advance in the same quantum, and a caller must not be able to influence
-  /// how fast it goes. Here the stakes are higher still, because there is no
-  /// correction to hide a difference.
+  /// Driven by a tick instead of by elapsed time. `bomb_grid` found this through
+  /// four bugs: a simulation both sides run must advance in the same quantum
+  /// and a caller must not be able to change how fast it goes. It matters more
+  /// here, because there is no correction to hide a difference.
   pub fn run_to(&mut self, target_tick: u64, controls: &Controls) {
     if !controls.simulate_locally {
       return;
@@ -416,9 +412,9 @@ mod tests {
     }
 
     assert!(resyncs > 0, "it never asked");
-    // The state right after a snapshot is by construction identical, so the
-    // interesting assertion is the one about cost: a broken client is expensive
-    // rather than wrong, which is the trade the whole design makes.
+    // The state right after a snapshot is identical by construction, so this
+    // test checks the cost instead: a broken client costs some snapshots but
+    // does not resync on every digest.
     assert!(
       resyncs < 60_000 / DIGEST_INTERVAL_MS as usize,
       "it resynced on every single digest, which is a broken recovery rather than a working one"

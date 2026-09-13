@@ -1,16 +1,15 @@
-//! Drawing the board, and drawing the disagreement.
+//! Drawing the board and the disagreement.
 //!
-//! The second half is the point. A snap is over in one frame, which is exactly
-//! long enough for a player to feel it and not long enough to see it, so the
-//! renderer holds a marker at the cell the client was corrected *from* and fades
-//! it out. Without that, the panel's snap counter is a number nobody can connect
-//! to anything that happened on screen.
+//! A snap is over in one frame, which a player can feel but not see, so the
+//! renderer holds a marker at the cell the client was corrected *from* and
+//! fades it out. Without that, nobody could connect the panel's snap counter to
+//! anything that happened on screen.
 
 use macroquad::prelude::*;
 
 use bomb_grid::sim::types::*;
 
-/// Where the board sits on screen, and how big a cell is.
+/// Where the board sits on screen and how big a cell is.
 #[derive(Clone, Copy, Debug)]
 pub struct Board {
   pub origin: Vec2,
@@ -91,22 +90,22 @@ pub fn draw_powerups(board: &Board, powerups: &[PowerupState]) {
 }
 
 /// Bombs, with a fuse that shrinks against the **declared** fire time rather
-/// than a countdown of the client's own. A chained bomb fires early, and a local
+/// than a countdown of the client's own. A chained bomb fires early and a local
 /// countdown would keep drawing a fuse for a bomb that has already gone off.
 pub fn draw_bombs(board: &Board, bombs: &[BombState], server_now_ms: u64, phantom: &[Cell]) {
   for bomb in bombs {
     let (px, py, w, h) = board.cell_rect(bomb.cell);
     let left = bomb.fires_at_ms.saturating_sub(server_now_ms) as f32 / FUSE_MS as f32;
     let centre = Vec2::new(px + w * 0.5, py + h * 0.5);
-    // Pulses faster as the fuse runs out, which is the one piece of urgency a
-    // static circle cannot carry.
+    // Pulses faster as the fuse runs out, since a static circle shows no
+    // urgency.
     let pulse = 1.0 - (left * 8.0).cos() * 0.06 * (1.0 - left);
     let radius = w * 0.32 * pulse;
     let unconfirmed = phantom.contains(&bomb.cell);
     let body = if unconfirmed {
       // Drawn hollow while the server has not confirmed it: an optimistic bomb
-      // is a claim, and a claim that looks identical to a fact is how a player
-      // learns to distrust the screen.
+      // may still be refused. If it looked identical to a confirmed one, the
+      // player would stop trusting what the screen shows.
       Color::new(0.85, 0.85, 0.90, 0.55)
     } else {
       Color::new(0.12, 0.12, 0.14, 1.0)
@@ -131,8 +130,8 @@ pub fn draw_fire(board: &Board, cells: &[Cell]) {
   }
 }
 
-/// One player. `ghost` draws them hollow, for the server's truth underneath a
-/// client's belief.
+/// One player. `ghost` draws them hollow, for the server's position underneath
+/// the client's predicted one.
 pub fn draw_player(board: &Board, player: &PlayerState, ghost: bool, label: Option<&str>) {
   if !player.alive {
     return;
@@ -156,8 +155,8 @@ pub fn draw_player(board: &Board, player: &PlayerState, ghost: bool, label: Opti
 /// The marker that makes a correction visible.
 ///
 /// A snap lasts one frame. Without something that outlives it, the panel's
-/// counter climbs and nothing on screen ever explains why, which is the exact
-/// shape of a readout nobody trusts.
+/// counter climbs and nothing on screen ever explains why, which makes the
+/// readout hard to trust.
 pub struct SnapMarker {
   from: Option<Cell>,
   to: Option<Cell>,

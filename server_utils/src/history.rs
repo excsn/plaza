@@ -3,11 +3,11 @@
 //! Because clients render remote entities in the past (entity interpolation),
 //! they aim at where a target *was*. To resolve a time-sensitive action such as
 //! a shot fairly, the server rewinds its authoritative world to the moment the
-//! client saw, and checks the hit there. [`HistoricalStateBuffer`] is that
+//! client saw and checks the hit there. [`HistoricalStateBuffer`] is that
 //! rewind: a short rolling history of each entity's state, queryable by time.
 //!
-//! It is pure bookkeeping, no timers, no I/O, so it runs anywhere the client
-//! crate does, including wasm, and it shares the client's
+//! It is pure bookkeeping with no timers or I/O, so it runs anywhere the client
+//! crate does, including wasm. It shares the client's
 //! [`Interpolatable`]/[`ToF32`] traits so one state type feeds both a client's
 //! `SnapshotBuffer` and a server's rewind.
 
@@ -174,8 +174,8 @@ mod tests {
   use super::*;
 
   /// The two cleanup calls nothing was exercising. A rewind buffer that never
-  /// forgets is a leak with a plausible excuse, and both of these are what an
-  /// application calls when an entity dies or a round ends.
+  /// forgets leaks memory. These are what an application calls when an entity
+  /// dies or a round ends.
   mod forgetting {
     use super::*;
 
@@ -202,8 +202,8 @@ mod tests {
 
     #[test]
     fn clearing_leaves_a_buffer_that_still_works() {
-      // A round ending is not the buffer ending: it has to keep recording
-      // afterwards, or the next round rewinds into nothing.
+      // The buffer has to keep recording after a round ends. Otherwise the next
+      // round rewinds into nothing.
       let mut buffer: HistoricalStateBuffer<u32, f32, u64> = HistoricalStateBuffer::new(8);
       buffer.record_state(1, 0, 1.0);
       buffer.record_state(2, 0, 2.0);
@@ -217,8 +217,8 @@ mod tests {
     }
   }
 
-  // Time is plain `u64` milliseconds: the `ToF32` bound exists so that no
-  // custom time type is needed, and this test is where that stays true.
+  // Time is plain `u64` milliseconds, which pins that the `ToF32` bound needs
+  // no custom time type.
   #[derive(Debug, Clone, PartialEq)]
   struct TestState {
     position: f32,

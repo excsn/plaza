@@ -1,11 +1,12 @@
 //! Second-order dead reckoning: coasting a remote entity through a gap in the
-//! packet stream using where it was *heading*, not just how fast it was going.
+//! packet stream using how its velocity was changing as well as the velocity
+//! itself.
 //!
 //! [`ExtrapolationBase`](crate::extrapolation::ExtrapolationBase) coasts on the
-//! velocity a snapshot carried, which is first order and therefore exactly wrong
-//! for anything turning: a target on a curve is projected straight off the
-//! tangent, and the longer the gap the further off it flies. Most things worth
-//! extrapolating are turning.
+//! velocity a snapshot carried, which is first order and so wrong for anything
+//! turning: a target on a curve is projected straight off the tangent and the
+//! longer the gap, the further off it goes. Most things worth extrapolating
+//! are turning.
 //!
 //! [`TrajectoryPredictor`] fits the next order up. It keeps the last three
 //! samples, takes velocity from the newest pair and acceleration from the change
@@ -90,8 +91,8 @@ impl TrajectoryPredictor {
   ///
   /// `None` until a sample has arrived. With one sample it holds that value; with
   /// two it is first order; with three it is the damped curve. Degrading by
-  /// sample count rather than refusing to answer is what lets a caller use it
-  /// from the first packet.
+  /// sample count rather than refusing to answer lets a caller use it from the
+  /// first packet.
   ///
   /// Times before the newest sample are answered by the same polynomial, so this
   /// interpolates as readily as it extrapolates.
@@ -171,8 +172,8 @@ mod tests {
 
   #[test]
   fn it_answers_from_the_first_sample_and_sharpens_as_they_arrive() {
-    // Degrading by sample count rather than refusing matters: a caller should not
-    // need a special case for the first two packets of every entity's life.
+    // A caller should not need a special case for the first two packets of
+    // every entity's life.
     let mut p = TrajectoryPredictor::new(1.0, 1000);
     assert_eq!(p.predict(100), None);
 
@@ -202,8 +203,8 @@ mod tests {
 
   #[test]
   fn damping_sits_between_first_and_second_order() {
-    // The whole point of the coefficient: a dial from "coast on velocity" to
-    // "trust the fitted curve", not a switch.
+    // The coefficient is a dial from "coast on velocity" to "trust the fitted
+    // curve" rather than a switch.
     let samples = [(0u64, 0.0f32), (100, 1.0), (200, 4.0)];
     let mut none = TrajectoryPredictor::new(0.0, 5000);
     let mut half = TrajectoryPredictor::new(0.5, 5000);
@@ -221,7 +222,7 @@ mod tests {
   #[test]
   fn the_horizon_holds_instead_of_running_away() {
     // A quadratic diverges quadratically, so an unbounded projection over a dead
-    // stream is not a smaller error than freezing, it is a much larger one.
+    // stream gives a much larger error than freezing.
     let mut p = TrajectoryPredictor::new(1.0, 200);
     for (t, v) in [(0u64, 0.0f32), (100, 1.0), (200, 4.0)] {
       p.observe(t, v);
@@ -247,9 +248,9 @@ mod tests {
 
   #[test]
   fn a_turn_is_tracked_far_better_than_a_tangent() {
-    // The case that motivates the whole primitive. A target on a circular path,
-    // sampled at 10 Hz, coasted through a 100 ms gap: first order leaves along the
-    // tangent, second order follows the curve.
+    // A target on a circular path, sampled at 10 Hz, coasted through a 100 ms
+    // gap: first order leaves along the tangent and second order follows the
+    // curve.
     let sample = |t_ms: u64| {
       let t = t_ms as f32 / 1000.0;
       (t * 2.0).sin() * 100.0
@@ -263,9 +264,9 @@ mod tests {
     let truth = sample(700);
     let e_first = (first.predict(700).unwrap() - truth).abs();
     let e_second = (second.predict(700).unwrap() - truth).abs();
-    // Measured at 2.04 against 3.72: a 45% cut, not the halving I first asserted.
-    // Three samples fit the curvature approximately, not exactly, so the bound is
-    // what the fit actually delivers rather than what the idea promises.
+    // Measured at 2.04 against 3.72, a 45% cut. Three samples fit the
+    // curvature only approximately, so the bound is set to what the fit
+    // measured.
     assert!(e_second < e_first * 0.6, "second order should cut it substantially: {e_second:.2} against {e_first:.2}");
   }
 

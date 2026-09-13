@@ -1,5 +1,5 @@
-//! The arena, the things standing in it, and the settings that decide who wins
-//! an argument about where they were.
+//! The arena, the players and rockets in it and the panel settings, including
+//! how far back the server rewinds when it judges a shot.
 
 use serde::{Deserialize, Serialize};
 
@@ -81,10 +81,10 @@ impl V2 {
 
   /// A unit vector from a whole number of degrees.
   ///
-  /// Degrees rather than radians because an aim crosses the wire on every
-  /// shot, and a whole degree is under a quarter of a player's width at the
-  /// far side of this arena: below what anybody can aim and above what the
-  /// wire should pay for.
+  /// Whole degrees because an aim crosses the wire on every shot and a whole
+  /// degree is under a quarter of a player's width at the far side of this
+  /// arena. Nobody can aim more finely than that, so more precision would only
+  /// cost bytes.
   pub fn from_degrees(deg: i16) -> V2 {
     let r = (deg as f32).to_radians();
     V2::new(r.cos(), r.sin())
@@ -98,9 +98,9 @@ impl V2 {
 
 /// Eight-way held movement.
 ///
-/// A direction rather than an analogue vector because movement is a *level*
-/// input, resent only when it changes, and eight values coalesce where a float
-/// pair never repeats.
+/// A direction instead of an analogue vector because movement is a level input
+/// resent only when it changes. With eight values consecutive inputs are
+/// usually equal and are not resent. A float pair would almost never repeat.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Dir8 {
   #[default]
@@ -153,12 +153,12 @@ impl Dir8 {
 pub enum Weapon {
   /// Resolved the instant it is fired, against a world the server rewinds to.
   Rifle,
-  /// A body the server owns and everybody watches arrive.
+  /// A body the server owns and every client watches travel.
   Rocket,
 }
 
-/// A piece of cover. Axis aligned, because a shooter needs to be able to read
-/// a sight line at a glance and argue with the result.
+/// A piece of cover. Axis aligned, so a shooter can judge a sight line at a
+/// glance and check the result.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Wall {
   pub x: f32,
@@ -183,11 +183,11 @@ impl Wall {
   }
 }
 
-/// The map, fixed rather than generated.
+/// The map, fixed and not generated.
 ///
-/// Point-symmetric about the centre on purpose: an asymmetric arena makes a
-/// seat's win rate a fact about the map, and this example's numbers are all
-/// comparisons between seats.
+/// Point-symmetric about the centre, because on an asymmetric map a seat's win
+/// rate depends on the map and this example's numbers are all comparisons
+/// between seats.
 pub const WALLS: [Wall; 8] = [
   Wall::new(140.0, 60.0, 24.0, 90.0),
   Wall::new(476.0, 250.0, 24.0, 90.0),
@@ -261,9 +261,9 @@ impl plaza_client_utils::interpolation::Interpolatable<u64> for PlayerSnap {
   fn interpolate(&self, other: &Self, t: f32, _a: u64, _b: u64) -> Self {
     Self {
       pos: self.pos.lerp(other.pos, t),
-      // Taken from the earlier sample rather than blended. A death is not a
-      // thing that is half true, and rewinding into the moment somebody died
-      // must resolve to them being alive: the shot was fired before it landed.
+      // Taken from the earlier sample instead of blended, since `alive` cannot
+      // be half true. Rewinding into the moment somebody died must find them
+      // alive, because the shot being judged was fired before that death.
       alive: self.alive,
     }
   }
@@ -290,14 +290,14 @@ pub struct RocketState {
 /// How far back the server is willing to look when it resolves a shot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Rewind {
-  /// Judge every shot against the world as it is now. The honest position of a
-  /// server that refuses to take anything away from the target, and the reason
-  /// a moving target on a slow link is unhittable.
+  /// Judge every shot against the world as it is now. Nothing is taken away
+  /// from the target, which is why a moving target is unhittable over a slow
+  /// link.
   Off,
   /// Look back as far as the shooter's own view, but no further than the cap.
   Capped,
-  /// Look back as far as the shooter's own view, however far that is. What a
-  /// lag switch is buying.
+  /// Look back as far as the shooter's own view, however far that is. This is
+  /// what a lag switch exploits.
   Uncapped,
 }
 
@@ -328,8 +328,8 @@ pub struct Controls {
   pub rewind: Rewind,
   pub rewind_cap_ms: u64,
   /// When false the server withholds any frame stamped past a client's own
-  /// render instant, so the unresolved window a ghost overlay reads does not
-  /// exist to be read.
+  /// render instant, so there is no unresolved window for a ghost overlay to
+  /// read.
   pub allow_ghost: bool,
 
   pub predict_self: bool,
@@ -380,9 +380,9 @@ impl Controls {
     match self.rewind {
       Rewind::Off => 0,
       Rewind::Capped => self.rewind_cap_ms,
-      // Bounded by what the history buffer actually retains rather than by
-      // nothing at all: past that the buffer clamps to its oldest sample and
-      // would answer a question it cannot know.
+      // Bounded by what the history buffer retains. Past that the buffer
+      // clamps to its oldest sample and would return a position it does not
+      // actually have.
       Rewind::Uncapped => HISTORY_MS,
     }
   }
@@ -390,7 +390,7 @@ impl Controls {
   /// The largest one-way delay whose inputs can still land inside the window.
   ///
   /// Past this a player's every input names a tick that has already closed, so
-  /// the fairness mechanism excludes the player it exists to protect.
+  /// lag compensation cannot work for that player.
   pub fn playable_one_way_ms(&self) -> u64 {
     self.playout_delay_ms + self.input_max_late_ticks * SIM_STEP_MS
   }
@@ -419,8 +419,8 @@ mod tests {
 
   #[test]
   fn rewinding_into_the_moment_of_a_death_finds_a_living_target() {
-    // The alternative, blending `alive`, has no meaning, and taking it from
-    // the later sample would make a shot fired before somebody died miss them.
+    // Blending `alive` has no meaning and taking it from the later sample
+    // would make a shot fired before somebody died miss them.
     use plaza_client_utils::interpolation::Interpolatable;
     let alive = PlayerSnap { pos: V2::new(0.0, 0.0), alive: true };
     let dead = PlayerSnap { pos: V2::new(10.0, 0.0), alive: false };

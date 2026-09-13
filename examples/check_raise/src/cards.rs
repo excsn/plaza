@@ -1,5 +1,5 @@
-//! Cards, the seeded deal, and the seven-card evaluator. Shared so a client
-//! could rank a showdown itself; the server's word still settles it.
+//! Cards, the seeded deal and the seven-card evaluator. Shared so a client
+//! could rank a showdown itself, though the server still settles it.
 
 /// 0..52: rank `card % 13` (0 is the deuce, 12 the ace), suit `card / 13`.
 pub type Card = u8;
@@ -42,7 +42,7 @@ pub fn shuffled(seed: u64) -> Vec<Card> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct HandRank(pub u8, pub [u8; 5]);
 
-/// The best five-of-seven. Small inputs, exhaustive logic, no cleverness.
+/// The best five-of-seven. The inputs are small, so it checks exhaustively.
 pub fn eval7(cards: &[Card]) -> HandRank {
   debug_assert!(cards.len() >= 5 && cards.len() <= 7);
 

@@ -2,7 +2,7 @@
 //!
 //! Everything here runs headless and is what the tests drive. [`rules`] is
 //! shared by both sides verbatim; [`server`] is the authority and owns every
-//! decision; [`client`] is a guess that gets corrected; [`world`] puts one of
+//! decision; [`client`] predicts and gets corrected; [`world`] puts one of
 //! each behind a simulated link so a claim can be measured without a network.
 
 pub mod client;

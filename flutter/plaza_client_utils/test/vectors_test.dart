@@ -87,7 +87,7 @@ void main() {
     });
 
     /// Rust saturates; Dart has no `saturating_sub` and had to clamp. A negative
-    /// round trip poisons a smoothed average for minutes.
+    /// round trip skews a smoothed average for minutes.
     test('a pong stamped after its own arrival clamps rather than going negative', () {
       final section = map(v['rtt_pong_stamped_after_arrival']);
       final rtt = RttEstimator(0.2)
@@ -143,9 +143,8 @@ void main() {
       }
     });
 
-    /// The winsorising rule, which is the whole reason this type exists: one
-    /// respawn-sized correction must not lift the baseline so far that the next
-    /// real problem hides under it.
+    /// The winsorising rule: one respawn-sized correction must not lift the
+    /// baseline so far that the next real problem hides under it.
     test('CorrectionMonitor flags the same samples', () {
       final section = map(v['correction_monitor']);
       final monitor = CorrectionMonitor(floor: d(section['floor']), warmup: i(section['warmup']));
@@ -392,8 +391,8 @@ void main() {
   });
 
   /// Everything here is compared exactly. A digest or a slot key that disagrees is
-  /// unrecoverable: both sides would blame the world for a bug that was only ever
-  /// in the arithmetic, and the recovery machinery would fire for ever.
+  /// unrecoverable: both sides would read an arithmetic bug as a disagreement
+  /// about the world and recovery would keep firing.
   group('bookkeeping', () {
     final v = load('vectors_bookkeeping');
 
@@ -420,8 +419,9 @@ void main() {
       expect(acks.missingSince(150).toList(), list(section['missing_since_150']).map(i).toList());
     });
 
-    /// The bit packing is the contract: `SetDigest` and the delta baselines are
-    /// keyed on the encoded value, so a different layout is a different key space.
+    /// Both sides depend on the bit packing: `SetDigest` and the delta baselines
+    /// are keyed on the encoded value, so a different layout is a different key
+    /// space.
     test('SlotKey encodes to the same integers', () {
       for (final entry in list(map(v['slot_key'])['encodings'])) {
         final e = map(entry);
@@ -540,8 +540,8 @@ void main() {
 
     /// Past this point a reconciliation cannot replay everything the server has not
     /// acknowledged, so the prediction is wrong by whatever the dropped inputs did.
-    /// The count is the difference between a prediction that is late and one that is
-    /// wrong, which is why it is a number and not only a log line.
+    /// The count tells a late prediction apart from a wrong one, which is why it
+    /// is a number and not only a log line.
     test('an overflowing input buffer drops and counts identically', () {
       final section = map(v['input_buffer_overflow']);
       final buffer = ClientInputBuffer<double, double>(i(section['max_size']));
@@ -653,8 +653,9 @@ void main() {
     });
   });
 
-  /// Integers throughout, so these are exact. That equality *is* the determinism
-  /// guarantee: two peers that re-simulate to different states have no netcode.
+  /// Integers throughout, so these are exact. Exact equality is the determinism
+  /// guarantee: two peers that re-simulate to different states are out of sync
+  /// for good.
   group('rollback', () {
     final v = load('vectors_rollback');
 
@@ -735,7 +736,7 @@ void main() {
   });
 
   /// The simulator's PRNG is what makes a scripted impairment scenario comparable
-  /// across the two languages at all. Dart's `>>` sign-extends where Rust shifts a
+  /// across the two languages. Dart's `>>` sign-extends where Rust shifts a
   /// `u64` logically, and a divergence here would mean the two sides were quietly
   /// testing different networks.
   group('net_sim', () {

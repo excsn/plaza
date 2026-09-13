@@ -1,18 +1,17 @@
-//! The authoritative arena, as `plaza` core wants it: one `StateType` that owns
-//! everything mutable, and one stateless `StateLogic` that acts on it.
+//! The authoritative arena in the shape `plaza` core expects: one `StateType`
+//! that owns everything mutable and one stateless `StateLogic` that acts on it.
 //!
-//! The adaptation is small because the simulation was already shaped for it.
-//! `sim::Server` never reads client state, its `advance_seats` is a tick
-//! function, and it already returns per-recipient packets. What this module adds
-//! is the part a function argument was standing in for: seats that fill and
-//! empty as people arrive, and inputs that arrive *between* ticks rather than
-//! with them.
+//! The adaptation is small because the simulation already fits. `sim::Server`
+//! never reads client state, its `advance_seats` is a tick function and it
+//! already returns per-recipient packets. This module adds what the offline
+//! loop passed as a function argument: seats that fill and empty as people
+//! arrive and inputs that arrive *between* ticks instead of with them.
 //!
 //! That last point is the one structural difference from the offline loop.
 //! Plaza delivers ops and time steps as **separate** inputs, so an input cannot
 //! be handed to `advance` as it arrives. It is buffered on the seat and drained
-//! when the tick comes, which is what a real server does anyway: inputs land
-//! whenever the network feels like it, and the simulation consumes them on its
+//! when the tick comes. A real server works the same way: inputs arrive
+//! whenever the network delivers them and the simulation consumes them on its
 //! own clock.
 
 use std::collections::HashMap;
@@ -41,7 +40,7 @@ pub type PlayerKey = u64;
 /// read by the host's UI and renderer.
 ///
 /// The host is the server *and* a client in one process, so unlike a joiner it
-/// legitimately has both sides: the authoritative truth here, and its own
+/// legitimately has both sides: the authoritative truth here and its own
 /// believed state in its [`NetClient`]. This is the truth half. It is cloned into
 /// a shared slot once per send round rather than per tick, because it carries the
 /// whole pellet field and a joiner-rate copy is plenty for a readout.
@@ -66,7 +65,7 @@ pub struct HostView {
   pub eliminations: u64,
   pub mass_drained: f32,
   /// Sum of `effective_mass` over the live holes: the real pull a client's field
-  /// is measured against, and the number culling quietly drops below.
+  /// is measured against. A culled field falls below it.
   pub truth_field_weight: f32,
 
   bytes: RateMeter,
@@ -80,17 +79,15 @@ impl HostView {
   }
 
   /// The same traffic averaged over the whole life of the meter, shown beside
-  /// the current rate rather than instead of it. A session mean sitting below
-  /// the current rate is still climbing toward it, which is a fact about the
-  /// average and not about the traffic, and reading one as the other cost this
-  /// project an afternoon.
+  /// the current rate. A session mean below the current rate is still climbing
+  /// toward it; that says something about the average, not about the traffic.
+  /// Mistaking one for the other cost this project an afternoon.
   pub fn lifetime_bytes_per_sec(&self) -> f64 {
     self.bytes.lifetime_per_sec()
   }
 
-  /// What share of the wire the field itself costs, which is the example's whole
-  /// question: sending a field instead of its consequences is only a win if the
-  /// field is small.
+  /// What share of the wire the field itself costs. Sending a field instead of
+  /// its consequences only pays off while the field is small.
   pub fn hole_bytes_share(&self) -> f64 {
     self.hole_bytes.share_of(&self.bytes)
   }
@@ -112,8 +109,8 @@ pub struct Arena {
   seats: SeatTable<PlayerKey>,
   /// The newest input for each seat, applied on the next tick.
   pending: Vec<Seat>,
-  /// Dash is an edge, not a level: it must fire once, on the tick after it is
-  /// asked for, or holding the key would be a permanent dash.
+  /// Dash is an edge input: it must fire once, on the tick after it is asked
+  /// for. Otherwise holding the key would be a permanent dash.
   dash_requests: Vec<bool>,
   /// The newest input sequence accepted per player, echoed back so a client can
   /// replay only what the server has not seen.
@@ -214,7 +211,7 @@ impl Arena {
   /// Seats a joiner, or refuses when the arena is full.
   ///
   /// Refusing is a real outcome rather than an assertion: the arena has a fixed
-  /// number of holes and a demo people can share is a demo people can overfill.
+  /// number of holes and a shared demo can draw more players than that.
   fn seat(&mut self, key: PlayerKey) -> Option<usize> {
     let seating = self.seats.seat(key);
     if let Seating::Fresh(seat) = seating {
@@ -227,8 +224,8 @@ impl Arena {
 
   fn unseat(&mut self, key: &PlayerKey) {
     if let Some(seat) = self.seats.unseat(key) {
-      // Handed back to the bots rather than left frozen, so a disconnect does
-      // not leave a statue in the arena.
+      // Handed back to the bots rather than left frozen, so a disconnected
+      // player does not leave a motionless hole in the arena.
       self.pending[seat] = Seat::Bot;
       self.dash_requests[seat] = false;
     }
@@ -336,10 +333,10 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         let Some(key) = source.id_cloned() else {
           return Ok(LogicOutput::none());
         };
-        // A client that is talking has plainly received whatever let it talk, so
-        // this is the acknowledgement and no ack op has to exist. Before the
-        // seat gate: a seatless client's traffic confirms its `NoSeat` too, and
-        // that verdict is just as unrepeatable as a welcome.
+        // A client that is sending ops has received whatever let it send them,
+        // so this serves as the acknowledgement and no ack op is needed. It runs
+        // before the seat gate, so a seatless client's traffic confirms its
+        // `NoSeat` too, which is sent once just like a welcome.
         state.unconfirmed.confirm(&key);
         let Some(seat) = state.seat_of(&key) else {
           return Ok(LogicOutput::none());
@@ -407,7 +404,7 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         let is_send_round = !packets.is_empty();
         let now = state.sim.now_ms();
         // Rates are over the simulation's own clock, not wall time, so a test
-        // that runs faster than real time still measures itself honestly.
+        // that runs faster than real time still measures correctly.
         for meter in state.meters() {
           meter.elapsed(now);
         }
@@ -464,7 +461,7 @@ mod tests {
   use std::time::Duration;
 
   /// Drives the async logic once. The tests never actually await anything, so a
-  /// bare current-thread runtime is enough to turn the crank.
+  /// bare current-thread runtime is enough.
   fn step(logic: &ArenaLogic, state: &mut Arena, input: LogicInput<Op, PlayerKey>) -> LogicOutput<Op, PlayerKey> {
     tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(logic.process_input(state, input)).unwrap()
   }
@@ -483,8 +480,8 @@ mod tests {
 
   #[test]
   fn the_host_view_fills_in_and_frames_reach_the_player() {
-    // The point of the whole change: the arena publishes the omniscient half a
-    // host reads, and a seated player gets frames.
+    // The arena publishes the omniscient half a host reads and a seated player
+    // gets frames.
     let controls = Controls { latency_ms: 0, jitter_ms: 0, sync_hz: 60, ..Controls::default() };
     let (cs, view) = slots(controls);
     let logic = ArenaLogic::new(cs, Some(view.clone()));
@@ -528,10 +525,10 @@ mod tests {
     }
   }
 
-  /// The other half of the contract, and the half whose absence is silent: a
-  /// welcome that is never confirmed is repeated into a client that treats it
-  /// as a fresh start, so the first seconds of play rebuild the world over and
-  /// over. The guard above only asserts that repeats happen.
+  /// A missing confirmation fails silently: a welcome that is never confirmed
+  /// is repeated into a client that treats it as a fresh start, so the first
+  /// seconds of play rebuild the world over and over. The test above only
+  /// asserts that repeats happen.
   #[test]
   fn traffic_from_a_client_stops_the_repeats() {
     let controls = Controls { datagram_link: true, ..Controls::default() };
@@ -551,10 +548,10 @@ mod tests {
     assert_eq!(repeats, 0, "confirmed, so nothing is repeated");
   }
 
-  /// What the arena still owns of impairment: turning the panel's numbers into
-  /// a link profile, once, and only when they change.
+  /// The arena's only part in impairment is turning the panel's numbers into a
+  /// link profile, once and only when they change.
   ///
-  /// Holding the frames back is the session's now, and so is the guarantee the
+  /// Holding frames back is now the session's job. So is the guarantee the
   /// deleted jitter test used to make here: that a jittered frame never
   /// overtakes an earlier one. Both are asserted in `plaza_session`'s
   /// conditioner, against the queue that actually does it.

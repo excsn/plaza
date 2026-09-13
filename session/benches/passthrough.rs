@@ -5,7 +5,7 @@
 //! from a `parking_lot` read guard over the whole thing; it now comes from one
 //! `AtomicBool` beside it, and the profile is read only when the answer is yes.
 //!
-//! `lock` below is the shape that was there, `atomic` the shape that is. Both
+//! `lock` below is the old shape and `atomic` the current one. Both
 //! ask the same question of the same data; the impaired arms exist to show what
 //! the flag costs when it does not save the read.
 //!

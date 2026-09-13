@@ -1,18 +1,17 @@
 //! Bots in the roster: real seats, no connection.
 //!
-//! The fact every example rediscovered separately: a bot must occupy a seat
-//! through the **same admission as a person**, so capacity, seat numbering and
-//! displacement stay one system, and must hold **no agent**, so it lives on
-//! the simulation path and never the send path. Half of each discovery was a
-//! near miss: a bot seated outside the roster double-books a seat the next
-//! joiner is given, and a bot with an agent is a client the server pays to
-//! frame for nobody.
+//! Every example found this separately: a bot must occupy a seat through the
+//! **same admission as a person**, so capacity, seat numbering and
+//! displacement stay one system. It must also hold **no agent**, so it lives
+//! on the simulation path and never the send path. A bot seated outside the
+//! roster double-books a seat the next joiner is given and a bot with an agent
+//! is a client the server pays to build frames for nobody.
 //!
 //! The keys are the caller's, usually carved from the top of the id space
 //! (`Id::MAX - index`), so a person's id can never collide with a bot's. The
-//! rank is the caller's too: people at 0 and bots at 1 is the classic, so a
-//! bot holds a seat only until a person wants one, and [`prune`](Crew::prune)
-//! is how the crew hears that it happened.
+//! caller also picks the rank: people at 0 and bots at 1 is the usual choice,
+//! so a bot holds a seat only until a person wants one. [`prune`](Crew::prune)
+//! tells the crew when that happened.
 
 use std::collections::BTreeMap;
 use std::hash::Hash;
@@ -64,9 +63,8 @@ impl<Key: Eq + Hash + Clone> Crew<Key> {
 
   /// The crew's seats, ascending.
   ///
-  /// Sorted is not tidiness: bot thinking usually draws from one shared random
-  /// stream, and an iteration order that came out of a hash map is an order
-  /// that decides who draws what.
+  /// Sorted because bot thinking usually draws from one shared random stream
+  /// and hash-map iteration order would then decide who draws what.
   pub fn seats(&self) -> impl Iterator<Item = usize> + '_ {
     self.seats.keys().copied()
   }
@@ -88,12 +86,12 @@ impl<Key: Eq + Hash + Clone> Crew<Key> {
     true
   }
 
-  /// Drops every bot the roster no longer seats, and says which seats went.
+  /// Drops every bot the roster no longer seats and says which seats went.
   ///
   /// A bot admitted at a worse rank than people is displaced when a person
-  /// wants its seat, at `resolve`, and the roster does that without asking.
+  /// wants its seat, at `resolve`, without the roster asking the crew.
   /// Call this after admissions and remove the departed bots from the
-  /// simulation, or the crew keeps steering a seat that now belongs to
+  /// simulation. Otherwise the crew keeps steering a seat that now belongs to
   /// somebody real. The pruned keys are also withdrawn from the roster,
   /// because a displaced key is requeued on the waitlist and would otherwise
   /// re-seat itself, as a stranger to the crew, the moment a seat opened.
@@ -150,7 +148,7 @@ mod tests {
   fn a_person_displaces_a_bot_and_prune_reports_it() {
     // The classic ranking: people at 0, bots at 1, so a bot holds a seat only
     // until a person wants one. The roster displaces at `resolve` without
-    // asking the crew; prune is how the crew finds out, and the simulation
+    // asking the crew; prune is how the crew finds out and the simulation
     // must then stand that bot down or it keeps steering somebody real.
     let mut roster: Roster<u32> = Roster::new(2).with_waitlist();
     let mut crew = Crew::new();

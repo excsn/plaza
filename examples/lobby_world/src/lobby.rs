@@ -1,7 +1,7 @@
 //! The lobby: measure the link, show what fits, place the player.
 //!
 //! A controller rather than an HTTP handler because admission needs a latency
-//! the server measured, and that only exists on a socket the transport pings.
+//! the server measured and that only exists on a socket the transport pings.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -182,11 +182,11 @@ impl LobbyLogic {
     }
   }
 
-  /// Seats a match the queue formed: humans get a reservation and an endpoint,
+  /// Seats a match the queue formed: humans get a reservation and an endpoint
   /// and the seats nobody came for get a bot.
   ///
-  /// Bots join by command rather than by connecting, which is the whole reason
-  /// `Agent::Bot` exists: they are participants the transport never sees, so a
+  /// Bots join by command rather than by connecting, which is why `Agent::Bot`
+  /// exists: they are participants the transport never sees, so a
   /// broadcast simply never matches them and nothing has to special-case one.
   async fn seat_formed(
     &self,
@@ -316,8 +316,8 @@ impl StateLogic<LobbyOp, PlayerId, LobbyState> for LobbyLogic {
       LogicInput::AgentLeft { agent_id } => {
         state.links.remove(&agent_id);
         state.queue.remove(&agent_id);
-        // The departure an arena cannot infer: a closing socket means nothing,
-        // but leaving the lobby means the seat will never be taken.
+        // An arena cannot infer this departure from a closing socket; leaving
+        // the lobby means the seat will never be taken.
         if let Some(room_id) = state.reserved_in.remove(&agent_id) {
           self
             .tell_arena(&room_id, "lobby departure", crate::types::RoomOp::Withdraw {
@@ -326,7 +326,7 @@ impl StateLogic<LobbyOp, PlayerId, LobbyState> for LobbyLogic {
             .await;
         }
         self.manager.handle_player_leaving_lobby(&agent_id).await;
-        // The world, not a room, so the wallet goes too.
+        // Leaving the lobby leaves the world, so the wallet goes too.
         self.wallets.forget(agent_id);
         info!(player = agent_id, "Player left the lobby.");
         Ok(LogicOutput::none())
@@ -448,7 +448,7 @@ impl StateLogic<LobbyOp, PlayerId, LobbyState> for LobbyLogic {
             }
 
             // Deliberately not `handle_join_room_request`: a spectator takes no
-            // seat, and a full arena is when spectating matters.
+            // seat and can watch a full arena.
             LobbyOp::Spectate { room_id } => {
               let reply = match self.manager.room(&room_id) {
                 Some(handle) => LobbyOp::Placed {

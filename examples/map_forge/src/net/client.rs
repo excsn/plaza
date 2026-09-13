@@ -1,10 +1,11 @@
 //! A client on the real wire, shared by the desktop window and the wasm page.
 //!
-//! The editor's half of the collaboration argument lives here: paints are
-//! applied **optimistically** into a local overlay the moment they are sent,
-//! confirmed when the snapshot carries them, and **reversed** when the server
-//! refuses them for want of a lock. The reversal counter is the panel's
-//! number: what optimism costs when the rule is on the other machine.
+//! This is the editor's side of the collaboration: paints are applied
+//! **optimistically** into a local overlay the moment they are sent,
+//! confirmed when the snapshot carries them and **reversed** when the server
+//! refuses them for want of a lock. The panel shows the reversal counter:
+//! how many optimistic paints came back off because the lock lives on the
+//! server.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -88,7 +89,8 @@ impl NetClient {
     self.pump.rtt_ms()
   }
 
-  /// The tile the screen should show: optimism over truth.
+  /// The tile the screen should show: the optimistic overlay first, then the
+  /// server's board.
   pub fn tile_at(&self, x: u8, y: u8) -> Option<&str> {
     let key = tile_key(x, y);
     self
@@ -105,8 +107,8 @@ impl NetClient {
     }
   }
 
-  /// An optimistic paint: on screen now, on the wire now, and reversed later
-  /// if the lock says no.
+  /// An optimistic paint: shown and sent now, reversed later if the lock says
+  /// no.
   pub fn paint(&mut self, x: u8, y: u8, tile: &str) {
     let key = tile_key(x, y);
     self.overlay.insert(key.clone(), tile.to_string());
@@ -238,7 +240,7 @@ impl NetClient {
           }
         }
         ForgeOp::Refused(Refusal::RegionNotLocked) => {
-          // The optimistic paint comes back off the screen, and is counted.
+          // The optimistic paint comes back off the screen and is counted.
           if let Some(key) = self.pending.pop_front() {
             self.overlay.remove(&key);
             self.reversed += 1;

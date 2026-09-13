@@ -1,8 +1,8 @@
-//! Fairness distilled: items drop, everyone grabs, the server awards each claim.
+//! Items drop, everyone grabs and the server awards each claim.
 //!
-//! The subject is the reply. Several items sit on the floor at once, so a client
-//! has several claims outstanding and "your last one was refused" answers
-//! nothing: every reply carries the `req` the client sent. See README.md.
+//! The example is about the reply. Several items sit on the floor at once, so a
+//! client has several claims outstanding and "your last one was refused" is
+//! not enough. Every reply carries the `req` the client sent. See README.md.
 
 mod logic;
 mod types;

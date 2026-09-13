@@ -279,7 +279,8 @@ mod tests {
 
   #[test]
   fn a_fitted_curve_only_pays_once_the_gaps_are_long() {
-    // The measured shape of the technique, and it is narrower than it sounds.
+    // The measured shape of the technique. It helps in a narrower range than it
+    // sounds.
     //
     // The acceleration term goes as dt squared, so over a short gap it is worth
     // thousandths of a pixel. At the demo's normal server rate the render target
@@ -302,18 +303,17 @@ mod tests {
     // when `ExtrapolationBase` stopped rewinding to the raw sample past its cap
     // and started holding at the cap instead. Most of this technique's apparent
     // advantage was an artifact of a discontinuity in what it was compared
-    // against. Recorded here because a comparative measurement is only ever as
-    // good as its baseline, and a bug in the baseline flatters the challenger.
+    // against.
     assert!(second < first * 0.99, "at 5 Hz the curve should still beat the tangent: {second:.2}px against {first:.2}px");
 
-    // And at a normal rate it is simply inert, which is the part worth pinning:
-    // it means the toggle cannot be sold as a general improvement.
+    // At a normal rate it does nothing, so the toggle is not a general
+    // improvement.
     let normal = Controls { server_hz: 30, ..slow };
     let n_first = mean_remote_error(&Controls { second_order: false, ..normal }, 900, 0xC0FFEE);
     let n_second = mean_remote_error(&Controls { second_order: true, ..normal }, 900, 0xC0FFEE);
     // Absolute rather than relative, because at 30 Hz the buffer does not starve
     // at all and both figures are zero. A ratio test cannot express "there was
-    // nothing here to improve", which is exactly the result.
+    // nothing here to improve".
     assert!(
       (n_second - n_first).abs() < 0.5,
       "at 30 Hz it should change essentially nothing: {n_second:.2}px against {n_first:.2}px"
@@ -322,11 +322,11 @@ mod tests {
 
   #[test]
   fn the_fit_does_not_hurt_when_the_stream_is_healthy() {
-    // The check that matters more than the win. A technique that helps under loss
-    // and costs accuracy the rest of the time is not worth switching on, because
-    // the rest of the time is most of the time: with packets arriving, the render
-    // target sits inside the buffer and interpolation handles it, so the curve
-    // should almost never be consulted.
+    // A technique that helps under loss and costs accuracy the rest of the time
+    // is not worth switching on, because that is most of the time: with packets
+    // arriving, the render target sits
+    // inside the buffer and interpolation handles it, so the curve should almost
+    // never be consulted.
     let healthy = Controls {
       latency_ms: 40,
       jitter_ms: 0,

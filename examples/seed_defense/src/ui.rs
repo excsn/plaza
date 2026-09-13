@@ -1,4 +1,5 @@
-//! The panel: what was sent, what it would have cost, and whether anyone noticed.
+//! The panel: what was sent, what it would have cost and whether the digests
+//! caught a divergence.
 
 use egui_macroquad::egui;
 

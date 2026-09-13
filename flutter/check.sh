@@ -18,7 +18,6 @@ echo "== plaza_flame"
 (cd "$here/plaza_flame" && flutter pub get >/dev/null && flutter test)
 
 # The example runs against LoopbackSocket, so it needs no server and no display.
-# An example nothing executes is documentation wearing a .dart extension.
 echo "== plaza_flame/example"
 (cd "$here/plaza_flame/example" && flutter pub get >/dev/null && flutter test)
 

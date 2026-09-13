@@ -16,9 +16,9 @@ class HeldInputConfig {
 /// every tick.
 ///
 /// The counterpart to [PredictedPlayer], which is for a server consuming one
-/// input per step. Which one is right is decided by the server, not by taste:
-/// sending repeats to a held-input server tells it nothing it does not know, and
-/// dropping repeats from a per-step server drops actual movement.
+/// input per step. The server's input model decides which one is right:
+/// sending repeats to a held-input server tells it nothing new and dropping
+/// repeats from a per-step server drops actual movement.
 ///
 /// There is no separate logical and render state here, unlike [PredictedPlayer]:
 /// the correction is applied continuously to the state itself, so there is no
@@ -63,8 +63,8 @@ class HeldInputPredictor<S, I, C> {
   bool _active = true;
 
   /// Sets the input the server is holding. Call whenever the player's intent
-  /// changes, independently of when it is transmitted: what is sent is a
-  /// bandwidth decision, what is integrated is a simulation one.
+  /// changes, independently of when it is transmitted. When to send is decided
+  /// separately, on bandwidth.
   void hold(I input) => _held = input;
 
   I get held => _held;
@@ -79,7 +79,7 @@ class HeldInputPredictor<S, I, C> {
   /// An authoritative packet describes the past by one one-way delay, so
   /// correcting straight to it would pull the entity backward by whatever it
   /// travelled in the meantime. Advancing it by its own age under the held input
-  /// is what makes the correction target *now*.
+  /// makes the correction aim at the present.
   ///
   /// Public so an application can measure the disagreement itself and decide what
   /// to do, instead of taking this type's policy.

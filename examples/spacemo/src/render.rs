@@ -113,7 +113,7 @@ impl Scene {
     let mut drawn = 0usize;
     for ship in ships {
       let tint = if struck.contains_key(&ship.seat) {
-        // A hit is the one thing here that happens rather than *is*, so it has
+        // A hit is an event rather than a state, so it has
         // to be drawn from the client's memory of the event: nothing in a later
         // frame will mention it again.
         Color::new(1.0, 0.35, 0.30, 1.0)

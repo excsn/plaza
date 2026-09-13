@@ -1,6 +1,6 @@
-//! The skirmish, scripted: no window, no socket. One human commander against
-//! the bot for a stretch, the human playing the same policy the bot does, and
-//! the run fails if the offers never happened or the battles never concluded.
+//! The skirmish, scripted: no window, no socket. One human commander plays
+//! the bot for a stretch using the same policy the bot does. The run fails if
+//! the offers never happened or the battles never concluded.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -48,11 +48,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let wren = Agent::new_human(1);
   let (_conn, inbox) = session.connect(wren.clone()).await?;
 
-  // Wren's hand: answer every offer (alternating fire and hold, so both
-  // paths run), and play her activations from the snapshots her side is
-  // served, through the same shared sight rules the window uses. A stale
-  // order is refused harmlessly, so she orders on every snapshot that says
-  // the floor is hers.
+  // Wren answers every offer (alternating fire and hold, so both paths run)
+  // and plays her activations from the snapshots her side is served, through
+  // the same shared sight rules the window uses. A stale order is refused
+  // harmlessly, so she orders on every snapshot that says it is her turn.
   let hand_session = session.clone();
   let hand = tokio::spawn(async move {
     use held_fire::protocol::Order;

@@ -1,4 +1,4 @@
-//! Standing the bench up behind a WebSocket, and serving the browser client
+//! Standing the bench up behind a WebSocket and serving the browser client
 //! from the same port.
 
 use std::sync::atomic::{AtomicU32, Ordering};

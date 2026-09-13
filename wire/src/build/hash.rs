@@ -1,4 +1,4 @@
-// The pure hashing core, dependency-free on purpose: plaza_wire's own build.rs
+// The pure hashing core, dependency-free because plaza_wire's own build.rs
 // includes this file textually to bake VOCAB_VERSION before the crate itself
 // exists, which is also why these are plain comments; an include!d file cannot
 // carry inner doc attributes.
@@ -10,9 +10,8 @@ const PRIME: u32 = 16_777_619;
 /// FNV-1a, written out rather than pulled in.
 ///
 /// `DefaultHasher` is explicitly documented as not guaranteed stable across
-/// releases, and this number has to mean the same thing in two separate
-/// compilations, possibly by two different toolchains. A hash whose value is an
-/// implementation detail is the one thing that cannot be used here.
+/// releases and this number has to mean the same thing in two separate
+/// compilations, possibly by two different toolchains.
 pub(crate) fn fnv1a(bytes: &[u8], mut hash: u32) -> u32 {
   for byte in bytes {
     hash ^= *byte as u32;
@@ -23,23 +22,22 @@ pub(crate) fn fnv1a(bytes: &[u8], mut hash: u32) -> u32 {
 
 /// Extracts the type definitions from Rust source, discarding everything else.
 ///
-/// This is what makes the version mean "the wire shape changed" rather than
-/// "the file changed". A server gets bug fixes, and a bug fix in a file that
-/// also happens to define a message used to bump the version and tell every
-/// client to reload. So do comments, formatting, and any helper function
-/// sharing the file.
+/// This makes the version change when the wire shape changes rather than
+/// whenever the file changes. A server gets bug fixes and a bug fix in a file
+/// that also defines a message used to bump the version and tell every client
+/// to reload. So did comments, formatting and any helper function sharing the
+/// file.
 ///
 /// Kept: `struct`, `enum` and `union` definitions, with their attributes, so a
-/// `#[serde(rename)]`, an explicit discriminant, a new field, a new variant, or
+/// `#[serde(rename)]`, an explicit discriminant, a new field, a new variant or
 /// a reordering all move the hash. Discarded: comments, `use`, `impl`, `fn`,
-/// `const`, and whitespace.
+/// `const` and whitespace.
 ///
-/// **The limit worth knowing.** This reads the text, it does not resolve types.
-/// If a field's type is defined in a file you did not list, changing that type
-/// does not move the version. List every file that defines part of your wire
-/// format, exactly as before; the narrowing here is about noise, not about
-/// letting you list fewer files. [`Wire`](super::Wire) resolves types and lifts
-/// the limit.
+/// **Limit.** This reads the text and does not resolve types. If a field's
+/// type is defined in a file you did not list, changing that type does not
+/// move the version. List every file that defines part of your wire format;
+/// hashing only definitions reduces spurious bumps but does not let you list
+/// fewer files. [`Wire`](super::Wire) resolves types and removes the limit.
 pub fn type_definitions(source: &[u8]) -> String {
   let text = String::from_utf8_lossy(source);
   let mut kept = String::new();
@@ -48,7 +46,7 @@ pub fn type_definitions(source: &[u8]) -> String {
   let mut capturing = false;
 
   for raw_line in text.lines() {
-    // Comments never affect the wire, and they are the biggest single source of
+    // Comments never affect the wire and they are the biggest single source of
     // spurious version bumps.
     let line = match raw_line.find("//") {
       Some(at) => &raw_line[..at],
@@ -127,7 +125,7 @@ pub(crate) fn strip_trailing_commas(text: &str) -> String {
 /// Carriage returns are stripped, so a checkout with CRLF line endings agrees
 /// with one without. Order matters: the same files hashed in a different order
 /// give a different version, which is harmless as long as one crate is
-/// consistent with itself, and it is, because the list is written once.
+/// consistent with itself, which it is because the list is written once.
 ///
 /// Zero is never returned. It is reserved for "unknown", so a peer that could
 /// not compute a version is never mistaken for one that agrees.

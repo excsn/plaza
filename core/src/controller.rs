@@ -48,8 +48,8 @@ pub enum ControllerCommand<Op, ID: AgentId, StateType> {
   /// a client asking to resync, a phase change that alters what players may see,
   /// or a spectator switching views.
   ///
-  /// Recipients are explicit because the roster lives in your state, not in the
-  /// controller: pass whoever should be updated:
+  /// Recipients are explicit because the roster lives in your state rather than
+  /// in the controller: pass whoever should be updated:
   ///
   /// ```ignore
   /// tx.send(ControllerCommand::SendSnapshots {
@@ -134,10 +134,10 @@ where
 {
   /// Sets the [`OpGuard`] screening agent ops ahead of `StateLogic`.
   ///
-  /// Per op, state read-only: a refused op never reaches the rules, its reply
-  /// (if any) goes back to the source as a system op, and the refusal counts
-  /// in [`ControllerStats::ops_refused`]. System submissions and time steps
-  /// are never screened. The default is [`NoGuard`].
+  /// Runs per op with the state read-only. A refused op never reaches the
+  /// rules, its reply (if any) goes back to the source as a system op and the
+  /// refusal counts in [`ControllerStats::ops_refused`]. System submissions
+  /// and time steps are never screened. The default is [`NoGuard`].
   ///
   /// ```ignore
   /// .guard(Arc::new(GuardFn(screen)))
@@ -229,10 +229,10 @@ where
 {
   /// Starts a builder for an application where joining carries no catch-up.
   ///
-  /// A chat relay, an event log, a client that rebuilds from the op stream: all
-  /// of them had to write a [`SnapshotProvider`] returning `Ok(None)` to say so.
-  /// This says it instead. Everything else about the controller is unchanged,
-  /// including `SendSnapshots`, which becomes a request that sends nothing.
+  /// For a chat relay, an event log or a client that rebuilds from the op
+  /// stream, which would otherwise each write a [`SnapshotProvider`] returning
+  /// `Ok(None)`. Everything else about the controller is unchanged, including
+  /// `SendSnapshots`, which becomes a request that sends nothing.
   ///
   /// ```ignore
   /// let (tx, controller) = StateControllerBuilder::without_snapshots(logic, session, state).build();
@@ -258,15 +258,14 @@ pub enum QueryError {
   ControllerGone,
 }
 
-/// Runs on the controller's task with the authoritative state in hand, and
-/// answers with whatever it takes from it.
+/// A closure that runs on the controller's task with the authoritative state
+/// and sends back whatever it reads from it.
 ///
-/// The state is **borrowed**, never handed over: a controller that gave its
-/// state away would have to clone it, which is why this carries the projection
-/// to the state rather than carrying the state to the caller. What comes back
-/// is whatever the closure sends, so asking for one score costs one `u32` where
-/// a copy of the world used to be the only option. It is also why `StateType`
-/// need not be `Clone`.
+/// The state is **borrowed** rather than handed over, since handing it over
+/// would mean cloning it. The closure runs where the state is and only its
+/// result travels back to the caller, so asking for one score copies one `u32`
+/// instead of the whole state. This is also why `StateType` need not be
+/// `Clone`.
 pub struct StateReader<StateType>(Box<dyn FnOnce(&StateType) + Send>);
 
 impl<StateType> StateReader<StateType> {
@@ -291,9 +290,8 @@ impl<StateType> Debug for StateReader<StateType> {
 
 /// Asks a running controller to compute something from its current state.
 ///
-/// The closure runs on the controller's task, so it must not block or await;
-/// take what you need and get out. Nothing is cloned unless the closure clones
-/// it:
+/// The closure runs on the controller's task, so it must not block or await.
+/// Nothing is cloned unless the closure clones it:
 ///
 /// ```ignore
 /// let players = query_with(&tx, |state| state.players.len()).await?;
@@ -321,10 +319,10 @@ where
 
 /// Asks a running controller for a copy of its current state.
 ///
-/// The whole-state case of [`query_with`], and the reason `Clone` is required
-/// here and nowhere else. On a large world this copies all of it on the
-/// controller's task while the tick waits; prefer `query_with` when a field or
-/// a count is what you actually want.
+/// The whole-state case of [`query_with`]. It is the only place `Clone` is
+/// required. On a large world this copies all of it on the controller's task
+/// while the tick waits; prefer `query_with` when a field or a count is what
+/// you actually want.
 ///
 /// ```ignore
 /// let state = query_state(&tx).await?;
@@ -440,11 +438,11 @@ where
     let session_presence_rx = self.session_presence_rx.take().expect("run called once");
     let session_incoming_ops_rx = self.session_incoming_rx.take().expect("run called once");
 
-    // Batch receives throughout, and not for throughput: `select!` cancels
-    // the losing branches every iteration, and fibre documents cancel-safety
-    // (a fulfilled-then-cancelled receive reinserts its item) for the batch
-    // receives alone. A loop that races receive futures forever must not
-    // race ones whose cancellation can cost an item.
+    // Batch receives throughout, for cancel-safety rather than throughput:
+    // `select!` cancels the losing branches every iteration; fibre documents
+    // cancel-safety (a fulfilled-then-cancelled receive reinserts its item)
+    // for the batch receives alone. A receive whose cancellation can lose an
+    // item cannot be raced in this loop.
     loop {
       tokio::select! {
 
@@ -673,8 +671,8 @@ where
   /// cost 85ms in sequence and 1.4ms this way. A provider that never awaits,
   /// which is every one that ships, is unaffected either way.
   ///
-  /// Calls therefore **interleave**, and a provider relying on one finishing
-  /// before the next begins cannot assume that. It already takes `&self`.
+  /// Calls therefore **interleave**: a provider cannot assume one call finishes
+  /// before the next begins. It already takes `&self`.
   async fn send_snapshots(&self, recipients: &[Agent<ID>], context: Option<SnapshotContext>) {
     let mut building = Vec::with_capacity(recipients.len());
     for (index, agent) in recipients.iter().enumerate() {
@@ -692,9 +690,9 @@ where
 
     let mut built = Vec::with_capacity(building.len());
     // One waker for the whole set, so any call waking re-polls all of them.
-    // Deliberately not `FuturesUnordered`: at the sizes a snapshot pass runs at,
-    // its per-future bookkeeping costs more than these repolls save, and this
-    // needs no dependency. It inverts somewhere past 64 recipients.
+    // Not `FuturesUnordered`: at the sizes a snapshot pass runs at, its
+    // per-future bookkeeping costs more than these repolls save and this needs
+    // no dependency. That reverses somewhere past 64 recipients.
     std::future::poll_fn(|cx| {
       let mut i = 0;
       while i < building.len() {

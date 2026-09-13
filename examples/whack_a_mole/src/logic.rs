@@ -61,7 +61,7 @@ impl StateLogic<MoleOp, PlayerId, MoleGameState> for MoleLogic {
 
                 state.current_mole_slot = None;
                 state.mole_spawn_tick = None;
-                // The transition is the cancel: the pending hide's token stops
+                // The transition cancels the pending hide: its token stops
                 // matching and `due` drops it.
                 state.phase.transition_to(MolePhase::Down, &mut ctx, MoleOp::PhaseChanged);
                 ctx.ops_q().push(TargetedOp::new_system_all(vec![MoleOp::MoleHidden {

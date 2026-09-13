@@ -1,7 +1,7 @@
 //! Everything that crosses the wire, compiled into both the server and the
 //! browser client. A duel is open information: no hands, no deck, one uniform
-//! view. What the example is about is *when* a spell may be spoken, and that
-//! is the priority machine, not a payload.
+//! view. The example is about *when* a spell may be spoken, which the
+//! priority machine decides; no payload carries it.
 
 use plaza::game_common::flow_control::phases::op_payloads::PhaseChangedNoticePayload;
 use serde::{Deserialize, Serialize};
@@ -28,8 +28,8 @@ pub const TICK_MS: u64 = 50;
 
 pub const LIFE: i32 = 16;
 /// Both pools refill to `min(turn, TEMPO_CAP)` at every turn's start, the
-/// responder's included: a counter war is only a war if the defender can
-/// afford to fight it.
+/// responder's included: otherwise the defender could not afford to fight a
+/// counter war.
 pub const TEMPO_CAP: u8 = 10;
 
 /// A responder's window; silence passes.

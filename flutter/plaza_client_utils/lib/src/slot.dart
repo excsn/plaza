@@ -9,10 +9,10 @@ import 'dart:collection';
 /// notice, because the index is valid and the message is well formed. A
 /// generation counter makes the mismatch visible at the point of use.
 ///
-/// **Both sides must encode the pair identically**, or their digests disagree
-/// about a world they hold identically and the recovery machinery fires for ever
-/// chasing arithmetic. That is why this is a type rather than two agreeing
-/// comments, and why [encode] is pinned by a conformance fixture.
+/// **Both sides must encode the pair identically** or their digests disagree
+/// about a world they hold identically and recovery keeps firing on an
+/// arithmetic bug. That is why this is a type and why [encode] is pinned by a
+/// conformance fixture.
 ///
 /// Ported from `plaza_client_utils::slot::SlotKey`, which `plaza_server_utils`
 /// re-exports so the two Rust sides cannot diverge.
@@ -35,9 +35,9 @@ class SlotKey {
 
   /// The same slot with its generation dropped.
   ///
-  /// For running deliberately without generations, which is how you demonstrate
-  /// what they are for: every reference then matches whatever is in the slot,
-  /// which is precisely the bug, made visible on demand.
+  /// For running deliberately without generations, to demonstrate what they
+  /// prevent: every reference then matches whatever is in the slot, which
+  /// reproduces the bug on demand.
   SlotKey ungenerational() => SlotKey(index, 0);
 
   /// Whether [other] names the same slot *and* the same occupant.
@@ -74,7 +74,7 @@ enum ReusePolicy {
 /// **It does not store your entities.** Keep them in a list indexed by
 /// [SlotKey.index], which is what the rest of these utilities expect.
 ///
-/// # The ceiling, stated out loud
+/// # The generation ceiling
 ///
 /// The generation is 16 bits, so a single slot freed 65,536 times wraps and a
 /// handle from exactly that many reuses ago aliases the current occupant.
@@ -120,9 +120,8 @@ class SlotAllocator {
   ///
   /// The generation is bumped **here**, on free, rather than when the slot is
   /// next taken. An outstanding handle should stop naming anything the moment its
-  /// subject dies, not whenever something happens to want the index. Between
-  /// those two moments is exactly the window a delta stream re-derives
-  /// retractions in.
+  /// subject dies rather than whenever something next takes the index. A delta
+  /// stream re-derives retractions in the window between those two moments.
   bool free(SlotKey key) {
     if (key.index < 0 || key.index >= _occupied.length) return false;
     if (!_occupied[key.index] || _generation[key.index] != key.generation) return false;
@@ -160,8 +159,8 @@ class SlotAllocator {
 
   /// How many indices exist, live or free.
   ///
-  /// The width application storage must cover, so this and not [length] is the
-  /// number to size a list by.
+  /// The width application storage must cover, so size a list by this rather
+  /// than by [length].
   int get indexSpace => _generation.length;
 
   /// Frees every slot, bumping each live generation so outstanding handles are

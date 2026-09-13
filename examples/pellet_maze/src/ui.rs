@@ -1,4 +1,4 @@
-//! The panel: every claim this example makes, as a number that moves.
+//! The panel: every claim this example makes, shown as a live number.
 
 use egui_macroquad::egui;
 
@@ -118,9 +118,9 @@ pub fn draw_net_ui(client: &pellet_maze::net::client::NetClient, url: &str, extr
             if me.eaten(now) {
               ui.label(egui::RichText::new("eaten: walking home, and harmless on the way").color(egui::Color32::GRAY));
             } else if me.role == Role::Pursuer {
-              // The other side of the inversion, and the side that has to be
-              // told: an energized runner can see its own timer, its prey can
-              // only see that everything went white.
+              // The pursuers have to be told too: an energized runner can see
+              // its own timer, but its prey can only see that everything went
+              // white.
               if let Some(until) = client
                 .sim
                 .players
@@ -147,9 +147,9 @@ pub fn draw_net_ui(client: &pellet_maze::net::client::NetClient, url: &str, extr
 
       section(ui, "what predicting a place costs", true, |ui| {
         let sim = &client.sim;
-        // The headline, and the reason it is counted apart from a snap: a cell
-        // correction is one jump and then over, where a turn taken at the wrong
-        // junction puts the two sides in different corridors and the gap grows.
+        // Counted apart from a snap because a cell correction is one jump and
+        // then done, while a turn taken at the wrong junction puts the two
+        // sides in different corridors and the gap grows.
         warn_line(
           ui,
           format!(

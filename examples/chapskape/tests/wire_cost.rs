@@ -1,19 +1,17 @@
-//! What a world costs per client, since this example claims a destination is
-//! the cheapest input there is.
+//! What a world costs per client. The example claims a destination is the
+//! cheapest input there is.
 //!
-//! Two different claims, measured separately because they are not the same
-//! kind of claim.
+//! Ops and bytes are measured separately.
 //!
 //! **Ops.** gow_3d sends a held direction thirty times a second and poketo
-//! sends a step whenever one is taken. This sends a place, and a place lasts as
-//! long as the walk does, so the figure worth having is ops a minute rather
-//! than bytes an op.
+//! sends a step whenever one is taken. This sends a place, which lasts as long
+//! as the walk does, so the useful figure is ops a minute rather than bytes an
+//! op.
 //!
-//! **Bytes.** A frame here carries a moving half that has to be repeated and a
-//! still half that does not, and the whole still-world argument is that the two
-//! belong on different channels. That is measurable, so it is measured, with
-//! the codec the example actually uses rather than counted by hand from field
-//! widths.
+//! **Bytes.** A frame carries a moving half that has to be repeated and a still
+//! half that does not. The example argues the two belong on different
+//! channels. This measures that with the codec the example actually uses
+//! rather than counting by hand from field widths.
 //!
 //! ```sh
 //! cargo test -p chapskape --test wire_cost -- --nocapture
@@ -105,9 +103,9 @@ async fn what_a_frame_costs_in_a_lived_in_world() {
       let out = one_tick(&logic, &mut state).await;
       for op in frames_for(&out, seat) {
         let SkapeOp::World(frame) = &op else { continue };
-        // What the props actually cost is the difference the same frame makes
-        // without them, not the size of a frame with everything else emptied
-        // out: an envelope counted as a prop is a saving nobody made.
+        // The props' cost is the difference between this frame and the same
+        // frame without them. Emptying out everything else instead would count
+        // the envelope as prop bytes and overstate the saving.
         let bare = SkapeOp::World(Box::new(chapskape::protocol::Frame {
           objects: Vec::new(),
           ..(**frame).clone()
@@ -131,9 +129,9 @@ async fn what_a_frame_costs_in_a_lived_in_world() {
 
 #[tokio::test]
 async fn what_the_tick_length_costs() {
-  // The slider, priced. Everything this example says about free round trips is
-  // said at six hundred milliseconds; at fifty it is an ordinary netcode
-  // problem with an ordinary netcode bill.
+  // Prices the tick-length slider. The free round trips this example relies on
+  // hold at six hundred milliseconds; at fifty it is an ordinary netcode
+  // problem with ordinary costs.
   println!("\n  one client, the same world, at each tick length:\n");
   println!("{:>10} {:>12} {:>14}", "tick ms", "bytes/frame", "bytes/second");
 
@@ -167,10 +165,10 @@ async fn what_the_tick_length_costs() {
 
 #[tokio::test]
 async fn what_a_journey_costs_against_a_held_key() {
-  // The headline, stated where it can go stale loudly.
+  // The README's main comparison, asserted so a change shows up as a failure.
   // A journey is as far as a player can see, because a click is something they
   // aimed at. Random point to random point across the whole map would measure
-  // a walk nobody ever takes and flatter the arithmetic by a factor of four.
+  // a walk nobody takes and make the comparison look four times better.
   let mut finder = chapskape::path::Pathfinder::new();
   let mut squares = 0usize;
   let journeys = 300;
@@ -218,9 +216,9 @@ async fn what_a_journey_costs_against_a_held_key() {
 
 #[tokio::test]
 async fn what_the_private_stream_costs() {
-  // A pack is twenty-eight squares and five totals, and it is sent when it
-  // moves. A player standing in a field pays nothing for it, which is the
-  // whole of why a private channel is affordable at all.
+  // A pack is twenty-eight squares and five totals and it is sent when it
+  // changes. A player standing in a field pays nothing for it, which keeps a
+  // private channel affordable.
   let (logic, mut state) = a_busy_world(Relevance::OnChange, 0).await;
   let seat = my_seat(&state);
 

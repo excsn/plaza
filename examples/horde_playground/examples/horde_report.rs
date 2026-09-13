@@ -256,8 +256,8 @@ pub fn coin_section() {
       predict_balance: predict,
       latency_ms: latency,
       // Players start together rather than spread, because a race needs two
-      // players near one coin. Spread across a 3000px arena they never contend
-      // and the whole question is invisible.
+      // players near one coin. Spread across a 3000px arena they never contend,
+      // so there is no race to measure.
       spread_players: false,
       ..Controls::default()
     };

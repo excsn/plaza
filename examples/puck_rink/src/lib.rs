@@ -1,9 +1,9 @@
 //! A body two teams are pushing at once. Every other example predicts what one
 //! player owns; a puck's next position depends on inputs you do not have,
-//! which is the case rollback exists for and the case no server-authoritative
-//! example had. The server is the input orderer and the authority; every
-//! client runs the same fixed-point simulation inside a `RollbackSession`, and
-//! the digest on every frame proves the machines still agree.
+//! which is the case rollback is for. No server-authoritative example had
+//! covered it. The server is the input orderer and the authority; every client
+//! runs the same fixed-point simulation inside a `RollbackSession` and the
+//! digest on every frame checks that the machines still agree.
 
 pub mod physics;
 pub mod protocol;

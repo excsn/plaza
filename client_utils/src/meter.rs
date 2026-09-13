@@ -1,12 +1,11 @@
-//! Counting what crosses the wire, so a claim about bandwidth is a number
-//! rather than an assertion.
+//! Counting what crosses the wire, so bandwidth can be shown as a measured
+//! number.
 //!
 //! An example that says relevance streaming is cheaper than sending everything
-//! is only interesting if it can show the two figures side by side, and a
-//! measurement nobody can see is a measurement nobody checks. This is the small
-//! amount of arithmetic that turns running totals into rates, in one place,
-//! including the divide-by-zero guard that is the whole reason a hand-rolled
-//! version is worth replacing.
+//! needs to show the two figures side by side, where people can check them.
+//! This is the small amount of arithmetic that turns running totals into
+//! rates, in one place, including the divide-by-zero guard that every
+//! hand-rolled version has to remember.
 //!
 //! It lives in the client crate and `plaza_server_utils` re-exports it, because
 //! a client panel needs it as much as a server does and a wasm bundle must not
@@ -28,21 +27,20 @@ const BUCKET_MS: u64 = 500;
 /// - [`total`](Self::total) and [`samples`](Self::samples): the raw figures.
 ///
 /// The clock is supplied rather than read, so a simulation that runs on its own
-/// time (or faster than real time in a test) measures itself honestly.
+/// time (or faster than real time in a test) measures itself correctly.
 ///
-/// # A rate is over a window, not over the session
+/// # Window and lifetime figures
 ///
 /// `per_sec` and `mean` describe **recent** traffic, from a rolling window;
 /// `total` and `samples` are for the whole life of the meter.
 ///
-/// That distinction is the entire reason this doc section exists. These were
-/// once lifetime averages, `total / elapsed`, and a lifetime average chasing a
-/// steady state that has risen converges to it *asymptotically*: it climbs by
-/// less and less, but it climbs, for as long as the session runs. On screen
-/// that reads as bandwidth slowly increasing and never settling, which is a
-/// bug report that took three rounds of investigation to trace back to the
-/// meter rather than to the thing being metered. It also makes a live panel
-/// useless for its actual purpose, since a slider you just moved is one second
+/// These were once lifetime averages, `total / elapsed`. A lifetime average
+/// chasing a steady state that has risen converges to it *asymptotically*: it
+/// climbs by less and less but keeps climbing for as long as the session runs.
+/// On screen that reads as bandwidth slowly increasing and never settling,
+/// which is a bug report that took three rounds of investigation to trace back
+/// to the meter rather than to the thing being metered. It also makes a live
+/// panel useless for tuning, since a slider you just moved is one second
 /// against twenty minutes of history and barely shifts the number.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RateMeter {
@@ -60,8 +58,8 @@ pub struct RateMeter {
   /// does not restart when a meter does. Without this, a meter reset twenty
   /// minutes into a session divides its fresh total by the whole twenty
   /// minutes: the lifetime rate reads a fraction of the truth and then creeps
-  /// up toward it for hours. That is not a rounding error, it is the readout
-  /// being wrong by a factor of two after every settings change.
+  /// up toward it for hours. After every settings change the readout is wrong
+  /// by a factor of two.
   started_ms: Option<u64>,
 }
 
@@ -79,7 +77,7 @@ impl RateMeter {
     self.bucket_samples[slot] += 1;
   }
 
-  /// Records one sample of nothing, keeping the denominator honest.
+  /// Records one sample of nothing, so it still counts toward the mean.
   ///
   /// A packet that carried no entities is still a packet, and dropping it from
   /// the count inflates every average that divides by it.
@@ -113,10 +111,9 @@ impl RateMeter {
   ///
   /// Not simply the window, because the newest bucket is normally only part
   /// filled: dividing a not-quite-full window's traffic by a full window's
-  /// duration reads low by up to one bucket, which is a steady few percent of
-  /// understatement in a number whose whole job is to be trusted. And not
-  /// simply the elapsed time, because a meter older than the window has
-  /// forgotten the earlier part.
+  /// duration reads low by up to one bucket, a steady understatement of a few
+  /// percent. It is also not simply the elapsed time, because a meter older
+  /// than the window has forgotten the earlier part.
   fn window_span_ms(&self) -> u64 {
     let oldest_start = (self.head + 1).saturating_sub(BUCKETS as u64) * BUCKET_MS;
     self.elapsed_ms.saturating_sub(oldest_start)
@@ -171,8 +168,8 @@ impl RateMeter {
 
   /// This meter's total as a share of another's, in `0.0..=1.0`.
   ///
-  /// For "how much of the bandwidth was the crowd summary", which is the
-  /// question a breakdown is actually asked. Zero when the whole is zero.
+  /// For "how much of the bandwidth was the crowd summary". Zero when the
+  /// whole is zero.
   pub fn share_of(&self, whole: &RateMeter) -> f64 {
     if whole.total == 0 {
       return 0.0;
@@ -188,9 +185,9 @@ impl RateMeter {
 
   /// Forgets everything, for a world that has been rebuilt.
   ///
-  /// A rate is over the current world, not every world since launch. Keeping the
-  /// old totals across a rebuild is how a readout ends up describing a
-  /// configuration nobody is running any more.
+  /// The rate should cover only the current world. Keeping the old totals
+  /// across a rebuild makes the readout describe a configuration nobody is
+  /// running any more.
   pub fn reset(&mut self) {
     *self = Self::default();
   }
@@ -214,7 +211,7 @@ mod tests {
 
   #[test]
   fn nothing_measured_yet_reads_as_zero_rather_than_dividing_by_zero() {
-    // The guard is the entire reason this is a type. Every hand-rolled copy of
+    // The guard is the main reason this is a type. Every hand-rolled copy of
     // this arithmetic had to remember it, and a readout showing `NaN` or `inf` on
     // the first frame looks like the thing being measured is broken.
     let meter = RateMeter::new();
@@ -235,8 +232,8 @@ mod tests {
   #[test]
   fn an_empty_sample_still_counts_against_the_average() {
     // Half the packets carrying ten entities and half carrying none averages
-    // five, not ten. Dropping the empties is how a mean quietly measures only the
-    // interesting cases.
+    // five, not ten. Dropping the empties makes the mean measure only the
+    // non-empty packets.
     let mut meter = RateMeter::new();
     for _ in 0..5 {
       meter.add(10);
@@ -257,13 +254,13 @@ mod tests {
 
   #[test]
   fn a_rate_settles_instead_of_creeping_toward_a_risen_steady_state() {
-    // The bug this window exists for, as the shape a player actually reported:
-    // "bandwidth keeps going up little by little and never stabilises".
+    // A player reported "bandwidth keeps going up little by little and never
+    // stabilises".
     //
     // A lifetime average chasing a steady state it has not reached converges
-    // asymptotically, so it climbs for ever, by less and less. It is the most
-    // convincing possible false positive: nothing is wrong, the number rises
-    // every time you look, and every reading is arithmetically correct.
+    // asymptotically, so it climbs for ever, by less and less. Nothing is wrong
+    // and every reading is arithmetically correct, yet the number rises every
+    // time you look.
     let mut meter = RateMeter::new();
     let mut now = 0u64;
     // A slow first minute, then ten times the traffic for four more.
@@ -326,10 +323,9 @@ mod tests {
 
   #[test]
   fn the_readings_a_player_reported_are_reproduced_by_the_defect() {
-    // A defect is only diagnosed when it can reproduce the observation, so this
-    // replays what the old meter did and checks it against two readings taken
-    // from a running host, three minutes apart, with no setting touched between
-    // them: 127.6 KiB/s at tick 72394 and 143.9 KiB/s at tick 82039.
+    // This replays what the old meter did and checks it against two readings
+    // taken from a running host, three minutes apart, with no setting touched
+    // between them: 127.6 KiB/s at tick 72394 and 143.9 KiB/s at tick 82039.
     //
     // The old behaviour was two faults compounding. `per_sec` was the session
     // mean rather than a rate, and `reset` (which a settings change triggers)
@@ -338,8 +334,7 @@ mod tests {
     //
     // Nothing here is fitted to those readings. The rate is the one measured
     // independently by `examples/players.rs` at these settings, and the reset
-    // time is when the player count was changed. The readings are the
-    // prediction.
+    // time is when the player count was changed.
     const TRUE_RATE: f64 = 265.0 * 1024.0; // bytes per second, measured
     const RESET_AT_MS: u64 = 628_000;
     let old_per_sec = |total: f64, absolute_ms: u64| total / (absolute_ms as f64 / 1000.0) / 1024.0;

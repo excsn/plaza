@@ -151,8 +151,8 @@ void main() {
     await bad.stop();
   });
 
-  /// The handshake is the only thing standing between a stale build and a stream
-  /// of ops it will mis-decode one variant at a time. Everything else tests it
+  /// Without the handshake a stale build would mis-decode the ops one variant at
+  /// a time. Everything else tests it
   /// against `LoopbackSocket`, where both versions are whatever the test says
   /// they are; this is the server announcing its own.
   group('the protocol handshake', () {
@@ -190,15 +190,14 @@ void main() {
       expect(outdated.first.theirs, stale.serverProtocol);
       expect(stale.agreed, isFalse);
 
-      // Reported, not enforced. Whether a skew is fatal is the application's call,
-      // so the connection stays up and the ops keep arriving.
+      // The skew is reported without being enforced: whether it is fatal is the
+      // application's call, so the connection stays up and the ops keep arriving.
       expect(stale.status, PlazaStatus.open);
       await stale.stop();
     });
 
     /// Both clients above talked to the same server, so the version each of them
-    /// saw has to be the same number. A handshake that reported a different
-    /// version per connection would be worse than none.
+    /// saw has to be the same number.
     test('every connection is told the same version', () async {
       await client.start();
       await waitFor(ops, 'Welcome');

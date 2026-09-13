@@ -1,17 +1,17 @@
 //! A client on the real wire, shared by the desktop window and the wasm page.
 //!
-//! The heart is a [`RollbackSession`] running the same fixed-point `sim::step`
+//! The core is a [`RollbackSession`] running the same fixed-point `sim::step`
 //! the server runs. Every server frame echoes the inputs it applied, so the
-//! session confirms remote inputs against a single ordered truth, rolls back
-//! when a guess is disproved, and re-simulates to the present. The digest on
-//! every frame is checked against this client's own re-simulation of the same
-//! frame: the machines proving, continuously, that they still agree.
+//! session confirms remote inputs against a single ordered input stream, rolls
+//! back when a guess is disproved and re-simulates to the present. The digest
+//! on every frame is checked against this client's own re-simulation of the
+//! same frame.
 //!
 //! The panel's comparison lives here too: **Interpolate** renders the puck
-//! from delayed server frames (the standard remote-entity treatment), and
+//! from delayed server frames (the standard remote-entity treatment) and
 //! **Rollback** renders the session's present. Both record what they showed
-//! per frame, and when the authoritative world for that frame arrives, the
-//! gap between shown and true is the number the example exists to produce.
+//! per frame. When the authoritative world for that frame arrives, the gap
+//! between the shown and authoritative positions is recorded as the error.
 
 use std::collections::VecDeque;
 
@@ -46,20 +46,19 @@ pub enum Status {
 
 /// How the puck reaches the screen. Everything else is always the predicted
 /// present with corrections eased, so the screen holds one timeline and a
-/// bounce lands where the paddles are drawn; splitting the paddles onto
-/// delayed frames made the puck carom off empty ice their drawn past had not
-/// reached yet.
+/// bounce lands where the paddles are drawn; drawing the paddles from delayed
+/// frames made the puck bounce off paddles that had not been drawn there yet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
   /// The session's present: predicted inputs, rolled back on every disproof.
   Rollback,
-  /// Delayed server frames, blended: the treatment every *owned-by-someone-
-  /// else* entity gets, worn by a body nobody owns.
+  /// Delayed server frames, blended: the standard treatment for an entity
+  /// someone else owns, applied to a body nobody owns.
   Interpolate,
 }
 
 /// What a rollback rewrote, kept on screen and bled off over ~100ms so a
-/// correction reads as a nudge rather than a teleport. Presentation only:
+/// correction shows as a small nudge rather than a jump. Presentation only:
 /// nothing here feeds back into the session or an input.
 #[derive(Default)]
 pub struct VisualEase {
@@ -89,7 +88,7 @@ impl VisualEase {
   }
 }
 
-/// A running mean, hand-rolled: two words and no divide-by-zero to forget.
+/// A hand-rolled running mean that handles the zero-sample case.
 #[derive(Default)]
 pub struct Meter {
   sum: f64,
@@ -137,14 +136,15 @@ pub struct NetClient {
 
   pub digest_ok: u64,
   pub digest_bad: u64,
-  /// Shown-versus-truth puck error, by the mode that showed it.
+  /// Shown-versus-authoritative puck error, by the mode that showed it.
   pub err_rollback: Meter,
   pub err_interp: Meter,
   /// Correction size when a rollback rewrote the present.
   pub snap_px: Meter,
   pub corrections: u64,
   pub resim_frames: u64,
-  /// What the join cost on this backend: zero when a frame was baseline enough.
+  /// What the join cost on this backend: zero when a frame alone was a
+  /// complete baseline.
   pub baseline_bytes: usize,
   pub ease: VisualEase,
   pub moments: Vec<Moment>,
@@ -396,8 +396,8 @@ impl NetClient {
     }
   }
 
-  /// Records what the screen showed for the present frame, so the truth can
-  /// be compared against it when it arrives.
+  /// Records what the screen showed for the present frame, so the
+  /// authoritative frame can be compared against it when it arrives.
   pub fn note_shown(&mut self, puck_px: (f32, f32)) {
     let Some(session) = self.session.as_ref() else {
       return;

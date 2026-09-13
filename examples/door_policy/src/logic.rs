@@ -2,7 +2,7 @@
 //!
 //! Deliberately small. Every rule the door enforces guards something this
 //! holds: a seat is scarce, a wallet is per account, and a credit buys time.
-//! The game exists so the door has something to be the door of.
+//! The game exists only to give the door something to guard.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -83,8 +83,8 @@ impl ArcadeState {
 /// are the manager's, and every index the old build kept has a library reader.
 /// But a `Hello` arrives as an op, ops have a single consumer, and the
 /// controller is it: so ban, capacity and duplicate login are judged inside
-/// the game's rules, and the arcade still knows what a ban is. Governance
-/// wants a seat between the socket and the game; there still is none.
+/// the game's rules, and the arcade still knows what a ban is. There is still
+/// no place between the socket and the game for governance to run.
 #[derive(Debug)]
 pub struct ArcadeLogic {
   pub door: Arc<Door>,

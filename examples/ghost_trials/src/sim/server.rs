@@ -1,19 +1,19 @@
 //! The authority, which never watches anybody race.
 //!
-//! It holds the track, the leaderboard, and the rules version. What it does not
-//! hold is a simulation of the current runs: a time trial has nothing to
-//! arbitrate between players, and the thing that actually needs deciding, "is
-//! this time real", is decided **after** the fact by reconstruction.
+//! It holds the track, the leaderboard and the rules version. It does not
+//! simulate the current runs: a time trial has nothing to arbitrate between
+//! players and the one thing that needs deciding, whether a time is real, is
+//! decided **after** the run by replaying it.
 //!
-//! That is a different shape of authority from every other example here, and it
-//! is the shape event sourcing buys you. The server is not a referee watching
-//! the match. It is a court that replays the evidence.
+//! No other example here has an authority like this. It relies on event
+//! sourcing: instead of simulating the match, the server replays the submitted
+//! inputs afterwards.
 
 use crate::sim::log::{self, InputLog, Rejection};
 use crate::sim::protocol::{Ghost, Op, PROTOCOL};
 use crate::sim::types::*;
 
-/// How many ghosts to keep and hand out. A leaderboard, not an archive.
+/// How many ghosts to keep and hand out. Slower runs are dropped.
 pub const KEPT_GHOSTS: usize = 6;
 
 #[derive(Clone, Debug)]
@@ -30,7 +30,7 @@ pub struct Server {
   pub refused: u64,
   pub last_refusal: Option<Rejection>,
   /// Ticks replayed while verifying, so the cost of checking by reconstruction
-  /// is a number rather than a worry.
+  /// is measured.
   pub ticks_replayed: u64,
   pub bytes_in: u64,
   pub bytes_out: u64,
@@ -99,11 +99,11 @@ impl Server {
     self.board.first().map(|g| g.time_ms)
   }
 
-  /// Takes a submission, and decides it by replaying it.
+  /// Takes a submission and decides it by replaying it.
   ///
-  /// The claimed time is compared, never adopted. A client that sends a time
-  /// its own log does not produce is either broken or lying, and the two look
-  /// identical from here, so both get the same answer.
+  /// The claimed time is only compared against the replay and never used. A
+  /// client that sends a time its own log does not produce is either broken or
+  /// cheating. The two look identical from here, so both get the same answer.
   pub fn submit(&mut self, seat: usize, log: InputLog, claimed_ms: u64) -> Vec<Op> {
     self.submissions += 1;
     self.bytes_in += 12 + log.wire_cost() as u64;
@@ -238,9 +238,8 @@ mod tests {
 
   #[test]
   fn verifying_by_replay_costs_one_run_of_the_rules() {
-    // Worth having as a number: "the server replays every submission" sounds
-    // expensive until you notice it is a couple of thousand ticks of integer
-    // maths, once, at the end of a run somebody spent thirty seconds driving.
+    // Replaying every submission costs a couple of thousand ticks of integer
+    // maths, once, at the end of a run that took about thirty seconds to drive.
     let mut server = Server::new(1);
     let (log, time) = a_run(server.rules_version);
     let ticks = log.ticks() as u64;

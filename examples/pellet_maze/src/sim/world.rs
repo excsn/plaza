@@ -1,9 +1,8 @@
 //! Server and clients in one process, with an impaired link between them.
 //!
-//! The harness every claim in this example is measured on. As in `bomb_grid`,
-//! the one thing it structurally cannot model is a client *estimating* the
-//! clock: here the two halves share one, which is exactly what a real client
-//! does not have.
+//! Every claim in this example is measured on this harness. As in `bomb_grid`,
+//! it cannot model a client *estimating* the clock: here the two halves share
+//! one, which a real client does not have.
 
 use plaza_client_utils::net_sim::{LatencyLink, Rng};
 
@@ -19,7 +18,8 @@ pub struct World {
   pub clients: Vec<Client>,
   /// What each seat was actually handed on the last step, so a test can assert
   /// about what crossed the wire rather than about what the state ended up as.
-  /// Secrecy is a property of what is *sent*, and it is only testable here.
+  /// Secrecy depends on what is *sent* and this is the only place that can be
+  /// tested.
   pub delivered: Vec<Vec<Op>>,
   down: Vec<LatencyLink<Op>>,
   up: LatencyLink<(usize, u64, Dir)>,
@@ -117,8 +117,8 @@ impl World {
       for (_, op) in private.iter().filter(|(id, _)| *id as usize == seat) {
         link.send(now, op.clone(), controls.latency_ms, controls.jitter_ms, controls.loss_pct, &mut self.rng);
       }
-      // The frame is **this seat's**, not everybody's: a hidden runner is
-      // absent from the others' copies.
+      // The frame is **this seat's** own: a hidden runner is absent from the
+      // others' copies.
       if let Some((_, frame)) = out.frames.iter().find(|(id, _)| *id as usize == seat) {
         link.send(now, Op::Frame(Box::new(frame.clone())), controls.latency_ms, controls.jitter_ms, controls.loss_pct, &mut self.rng);
       }
@@ -326,11 +326,10 @@ mod tests {
 
   #[test]
   fn a_turn_that_expires_expires_on_both_sides() {
-    // The buffer is a *server* setting for exactly this reason. A client with a
-    // longer buffer than the server would take a turn the server had already
-    // forgotten, and then run down a corridor the server never entered: a
-    // wrong junction manufactured out of a mismatched constant rather than out
-    // of the network.
+    // The buffer is a *server* setting for this reason. A client with a longer
+    // buffer than the server would take a turn the server had already
+    // forgotten and then run down a corridor the server never entered. That is
+    // a wrong junction caused by a mismatched constant with no network cause.
     let c = Controls {
       turn_buffer_ms: 120,
       ..quiet()

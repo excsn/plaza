@@ -59,8 +59,8 @@ pub enum PresenceEvent<ID: AgentId> {
 /// Who should receive a message.
 ///
 /// `PartialEq` compares structurally, so `Agents([1, 2])` and `Agents([2, 1])`
-/// are unequal despite naming one set. That only costs a coalescing opportunity
-/// in [`LogicOutput::coalesce`], never a wrong delivery.
+/// are unequal despite naming one set. The only cost is a missed coalescing
+/// opportunity in [`LogicOutput::coalesce`]; delivery is still correct.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MessageTarget<ID: AgentId> {
   /// Every connected agent.
@@ -123,8 +123,8 @@ impl<Op, ID: AgentId> TargetedOp<Op, ID> {
 /// actually needs, which is a seat index rather than a 64-bit identity.
 ///
 /// It sits here beside [`MessageTarget`], [`PresenceEvent`] and [`TargetedOp`]
-/// for the same reason they do: routing and plumbing, not vocabulary a client
-/// shares.
+/// for the same reason they do: they are server-side routing types rather than
+/// types a client shares.
 #[derive(Debug, Clone)]
 pub struct SessionMessage<Op, ID: AgentId> {
   /// Inbound, the client the transport attached. Outbound, whoever caused the
@@ -169,8 +169,8 @@ pub trait Session<Op: Send + 'static, ID: AgentId>: Send + Sync + 'static {
   /// # One consumer
   ///
   /// These three streams deliver each item to exactly one receiver, so a session
-  /// feeds exactly one controller, which is already the architecture, since one
-  /// controller owns the state. Calling this twice splits the stream between the
+  /// feeds exactly one controller, the one that owns the state. Calling this
+  /// twice splits the stream between the
   /// two receivers rather than duplicating it; for a second observer (metrics, a
   /// replay log), tee the messages inside your `StateLogic` instead.
   fn subscribe_to_incoming_messages(&self) -> SessionReceiver<SessionMessage<Op, ID>>;

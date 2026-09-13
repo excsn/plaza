@@ -1,31 +1,31 @@
 # ChapsKape
 
-A square of countryside you click at: trees to chop, rocks to mine, shoals to fish, a fire to cook on, a pack to carry it in, and brutes that hit back, on a tick slow enough to see.
+A square of countryside you click at: trees to chop, rocks to mine, shoals to fish, a fire to cook on, a pack to carry it in and brutes that hit back, on a tick slow enough to see.
 
 ```sh
-./run-native.sh            # play it, and host it, in one window
+./run-native.sh            # play it and host it, in one window
 ./wasm-serve.sh            # the same thing in a browser, on port 8302
 cargo test -p chapskape    # the findings, as assertions
 ```
 
-**Click somewhere to go there.** Click a tree, a rock or a shoal to walk over and work it; click a brute to fight it; click something lying about to pick it up. **R** runs, **space** stops, and clicking a square of your pack uses it while shift-clicking drops it. Right-drag or the arrow keys swing the camera. `--bots N` sets how many of the world's own it seats, ninety by default.
+**Click somewhere to go there.** Click a tree, a rock or a shoal to walk over and work it; click a brute to fight it; click something lying about to pick it up. **R** runs, **space** stops and clicking a square of your pack uses it while shift-clicking drops it. Right-drag or the arrow keys swing the camera. `--bots N` sets how many of the world's own it seats, ninety by default.
 
-The world is 4037 props over 192x192 squares, and 196 bodies live in it before you arrive: ninety of the world's own chopping, fishing, cooking and fighting, and a hundred and six hens and brutes between them. Two minutes into a headless run with nobody connected, a joiner arrives to **21 bodies in view and 22 things lying on the ground**.
+The world is 4037 props over 192x192 squares and 196 bodies live in it before you arrive: ninety of the world's own chopping, fishing, cooking and fighting and a hundred and six hens and brutes between them. Two minutes into a headless run with nobody connected, a joiner arrives to **21 bodies in view and 22 things lying on the ground**.
 
-The thing worth doing is dropping something and watching the ring around it. It is yours alone for fifty ticks, and **nobody else is even told it is there** until the timer runs out.
+The thing worth doing is dropping something and watching the ring around it. It is yours alone for fifty ticks and **nobody else is even told it is there** until the timer runs out.
 
 ## What it is for
 
-Set this beside `spacemo`, which absorbs no latency at all and must predict every frame, and `gow_3d`, which absorbs a cast bar's worth and gets away with sending nothing back. This one asks what is left when the input itself is a **destination**.
+Set this beside `spacemo`, which absorbs no latency at all and must predict every frame and `gow_3d`, which absorbs a cast bar's worth and gets away with sending nothing back. This one asks what is left when the input itself is a **destination**.
 
 | | the input is | what a round trip costs |
 | --- | --- | --- |
 | spacemo | a stick, 60 times a second | a prediction and a reconciler |
 | gow_3d | a held direction, 30 times a second | nothing, the cast bar is longer |
 | poketo | one step, when you take it | nothing, the step has a duration |
-| chapskape | a place, when you decide to go there | nothing, and there is nothing to reconcile either |
+| chapskape | a place, when you decide to go there | nothing and there is nothing to reconcile either |
 
-## A destination is the cheapest input there is
+## What a destination costs
 
 `cargo test -p chapskape --test wire_cost -- --nocapture`
 
@@ -40,11 +40,11 @@ Set this beside `spacemo`, which absorbs no latency at all and must predict ever
 
 A journey here is as far as a player can see, because a click is something they aimed at.
 
-The byte count is the small half. The large half is that **a destination cannot be wrong the way a claimed position can.** gow_3d spends a validator, a tolerance constant and a rejection counter to police a client that says where it is. This spends none of them, because the client never asserted a position: it asked, and the answer was a route it could work out for itself.
+The byte count matters less than this: **a destination cannot be wrong the way a claimed position can.** gow_3d spends a validator, a tolerance constant and a rejection counter to police a client that says where it is. This spends none of them, because the client never asserted a position: it asked and the answer was a route it could work out for itself.
 
 ## The client draws the route before the server has heard the click
 
-Terrain, walkability and every prop in the world are derived from one seed on both ends, so the pathfinder runs on both ends too. Click, and the body sets off on the frame the mouse went down. The server hears about it a round trip later and expands the same square with the same rule.
+Terrain, walkability and every prop in the world are derived from one seed on both ends, so the pathfinder runs on both ends too. Click and the body sets off on the frame the mouse went down. The server hears about it a round trip later and expands the same square with the same rule.
 
 `cargo test -p chapskape --test two_ends -- --nocapture`
 
@@ -59,21 +59,21 @@ Which concentrates the whole determinism surface into one place: **the tie-break
 - Every table in the search is a dense array indexed by square. **There is no hash map in the search**, so there is no iteration order to depend on.
 - Neighbours are visited in one fixed order, cardinals before diagonals, which is also what makes a route look like something a person would walk.
 
-`the_tie_break_is_pinned_rather_than_incidental` asserts *which* of several equal routes comes out, on purpose. If the neighbour order or the open set's ordering changes, it fails, which is the point: both are part of the protocol in everything but name.
+`the_tie_break_is_pinned_rather_than_incidental` asserts *which* of several equal routes comes out, on purpose. If the neighbour order or the open set's ordering changes, it fails on purpose, because both are part of the protocol in everything but name.
 
-## The check is a route check, not a position check
+## The route check
 
-The client acts on a click immediately and the server acts on it a tick and a round trip later, so the two are permanently out of phase by design. Asking whether they are on the same square right now would count that phase offset as an error and bury the thing the counter is for. Asking whether the server is walking **the squares the client already drew** is the question with a right answer, and the answer is yes every time.
+The client acts on a click immediately and the server acts on it a tick and a round trip later, so the two are permanently out of phase by design. Asking whether they are on the same square right now would count that phase offset as an error and bury the thing the counter is for. Asking whether the server is walking **the squares the client already drew** is the question with a right answer and the answer is yes every time.
 
-`route diverged` on the panel should read zero for a whole session. A number climbing there means the rule stopped being one rule.
+`route diverged` on the panel should read zero for a whole session. A number climbing there means the two ends are no longer running the same rule.
 
-**A shared rule only buys a free prediction when both ends start from the same state**, and that turned out to be narrower than it first looks. A click taken while standing still is that moment: the server has confirmed the square the body is on and nothing is outstanding, so both ends expand the same destination from the same place and get the same route, square for square.
+**A shared rule only buys a free prediction when both ends start from the same state** and that turned out to be narrower than it first looks. A click taken while standing still is that moment: the server has confirmed the square the body is on and nothing is outstanding, so both ends expand the same destination from the same place and get the same route, square for square.
 
-A click taken **mid-walk** is not, and no amount of shared rule fixes it. By the time the op lands the server is a square or two behind, it re-routes from where it is, and the two walk different lines to the same place. A chase is not either, because the target keeps moving. So neither is checked, neither is counted, and, most importantly, **neither snaps the body**. That last part is what the first version got wrong: it counted a re-click as divergence and corrected to the server's square, which is a correction for something that was never wrong and reads on screen as the world undoing your input.
+A click taken **mid-walk** is not and no amount of shared rule fixes it. By the time the op lands the server is a square or two behind, it re-routes from where it is and the two walk different lines to the same place. A chase is not either, because the target keeps moving. So neither is checked or counted and, most importantly, **neither snaps the body**. That last part is what the first version got wrong: it counted a re-click as divergence and corrected to the server's square, which is a correction for something that was never wrong and reads on screen as the world undoing your input.
 
 Reconciliation happens once, when the walking is over and there is nothing left to walk, which is when the two ends agree anyway. `clicking_again_mid_walk_does_not_snap_the_body_back` and `a_chase_is_not_a_divergence` pin both halves.
 
-## A still world is a different relevance problem from a moving one
+## Relevance for a still world
 
 Four thousand props exist and perhaps one changes a tick. Every relevance path in this tree is built for movers: a grid query rebuilt every tick and a diff that pays for the whole set whether or not anything in it moved.
 
@@ -93,23 +93,23 @@ Measured on a frame, in a lived-in world:
    on change        692         1154           6.9
 ```
 
-Two things make the cheap mode possible, and neither is the diff.
+Two things make the cheap mode possible and neither is the diff.
 
 **A prop's id is its square.** Nothing ever sends where a tree is, because both ends derive the props from the map. What travels is that one of them is out.
 
-**A stable state can be sent once.** `ready_at` is an absolute tick rather than a countdown. A countdown differs on every tick, so a client that wanted one would have to be told every tick whether anything had happened or not, and there would be no change-only mode to have.
+**A stable state can be sent once.** `ready_at` is an absolute tick rather than a countdown. A countdown differs on every tick, so a client that wanted one would have to be told every tick whether anything had happened or not and there would be no change-only mode to have.
 
 The dial is on the panel and both modes live in one build, because the comparison is the deliverable rather than either mode on its own.
 
-**What the cheap mode costs is a second piece of client code.** Under `every tick` a frame is the whole visible set, so absence means a prop is standing again. Under `on change` absence means nothing happened, and a prop coming back has to be said out loud with a zero, or a client draws a stump for the rest of the session. `a_prop_that_comes_back_is_said_out_loud_in_either_mode` runs both.
+**What the cheap mode costs is a second piece of client code.** Under `every tick` a frame is the whole visible set, so absence means a prop is standing again. Under `on change` absence means nothing happened and a prop coming back has to be said out loud with a zero, or a client draws a stump for the rest of the session. `a_prop_that_comes_back_is_said_out_loud_in_either_mode` runs both.
 
-## An audience can be a game rule
+## Dropped items and their audience
 
-Drop something and it is yours alone for fifty ticks, then it belongs to whoever walks past. The audience of that entity is decided by a **deadline**: not by distance, which `plaza_server_utils::relevance` answers, and not by a chosen set, which `subscription` answers.
+Drop something and it is yours alone for fifty ticks, then it belongs to whoever walks past. The audience of that entity is decided by a **deadline**: not by distance, which `plaza_server_utils::relevance` answers and not by a chosen set, which `subscription` answers.
 
-The rule is enforced where it matters rather than where it is easy. A client who may not take an item **is not told it is there**, so there is nothing on screen to click and be refused about. `a_dropped_item_reaches_its_owner_and_nobody_else` runs two clients and checks both sides of that.
+The rule is enforced in what gets sent. A client who may not take an item **is not told it is there**, so there is nothing on screen to click and be refused about. `a_dropped_item_reaches_its_owner_and_nobody_else` runs two clients and checks both sides of that.
 
-## A pack is a stream that exists for one client
+## The pack as a private stream
 
 `fog_skirmish` filters a shared world per viewer, which is a different thing: the fog hides something that is there for everybody. Nothing in a pack is filtered, because nobody else's world contains it.
 
@@ -119,13 +119,13 @@ The rule is enforced where it matters rather than where it is easy. A client who
   sent 2 times in 40 ticks
 ```
 
-Sent when it moves, so standing in a field is free. The instant worth watching is the crossing: a drop turns private state into world state, and a pickup turns it back.
+Sent when it moves, so standing in a field is free. The instant worth watching is the crossing: a drop turns private state into world state and a pickup turns it back.
 
-**A private channel needs both halves, and forgetting the second one is a bug you can see.** `Private` is the state half: a pack and five totals, true until they are not, repeated whenever they move. `Yours` is the transcript half: what *just* changed, said once, never mentioned again. Experience arriving and a level going up are transcript, and they first went out on the **shared** event list, which is wrong twice over. Everybody within sight paid for every body's experience, worth 89 bytes a frame in a lived-in world. And they carried no seat, so a client had no way to tell its own from anyone else's and announced every passing woodcutter's level as the player's own. Both faults have one fix, and it is not a seat field: an event nobody else needs goes where nobody else can read it.
+**A private channel needs both halves. Leaving out the second causes a visible bug.** `Private` is the state half: a pack and five totals, true until they are not, repeated whenever they move. `Yours` is the transcript half: what *just* changed, said once, never mentioned again. Experience arriving and a level going up are transcript and they first went out on the **shared** event list, which is wrong twice over. Everybody within sight paid for every body's experience, worth 89 bytes a frame in a lived-in world. And they carried no seat, so a client had no way to tell its own from anyone else's and announced every passing woodcutter's level as the player's own. A seat field would not fix both faults. Moving these events to the private channel does, since nobody else needs them.
 
-## The tick is vocabulary rather than something to hide
+## A tick the player can see
 
-Every other example in this tree spends effort concealing its tick from the person playing. At 600ms a player can see it, count it and act against it, and the interface shows it rather than smoothing it away. The panel drags it down to 50ms, which is where a design decision turns back into a netcode problem:
+Every other example in this tree spends effort concealing its tick from the person playing. At 600ms a player can see it, count it and act against it and the interface shows it rather than smoothing it away. The panel drags it down to 50ms, which is where a design decision turns back into a netcode problem:
 
 ```
    tick ms  bytes/frame   bytes/second
@@ -135,15 +135,15 @@ Every other example in this tree spends effort concealing its tick from the pers
         50          562          11240
 ```
 
-A shorter tick makes each frame a little smaller, because less happens in one, and the bill several times larger anyway. Everything this example says about free round trips is said at six hundred milliseconds.
+A shorter tick makes each frame a little smaller, because less happens in one and the bill several times larger anyway. Everything this example says about free round trips is said at six hundred milliseconds.
 
 The host wakes every 50ms regardless and a game tick is a **budget drawn down** rather than a wake-up answered, which is what makes the length a dial instead of a constant.
 
-## The world is a rule, and so is the pathfinder over it
+## The derived world and its pathfinder
 
-Nothing about the landscape crosses the wire: heights, ground, walkability and props are all functions of a square. That is the same trick gow_3d plays with its hills and poketo with its tile map, and here it buys something neither of those needed, since the client can expand a destination before the server has heard the question.
+Nothing about the landscape crosses the wire: heights, ground, walkability and props are all functions of a square. That is the same trick gow_3d plays with its hills and poketo with its tile map and here it buys something neither of those needed, since the client can expand a destination before the server has heard the question.
 
-It is derived **once**, though, and that is arithmetic rather than principle. A search settles thousands of squares and asks each whether it can be walked on; asking three octaves of noise and four neighbours every time turns one click into a million hashes. Both ends build a table from the rule at startup and read it after that. The lib tests went from 70 seconds to 1 second on that change alone.
+It is derived **once**, though, for performance. A search settles thousands of squares and asks each whether it can be walked on; asking three octaves of noise and four neighbours every time turns one click into a million hashes. Both ends build a table from the rule at startup and read it after that. The lib tests went from 70 seconds to 1 second on that change alone.
 
 ## What the world does while nobody is watching
 
@@ -156,40 +156,40 @@ It is derived **once**, though, and that is arithmetic rather than principle. A 
 
 The world's own live the same loop a player does, through the same ops a client sends, so nothing downstream knows the difference. Chop until the pack is heavy, set light to the logs, catch fish, cook them on the fire, go and fight something, eat when it hurts, start again.
 
-That loop being **closed** is the discipline that keeps the content from running away. Every piece of it sits on the circle or it does not go in, which is a smaller world than five skills that each end in a number going up.
+Keeping that loop **closed** stops the content from growing without limit. Every piece of it sits on the circle or it does not go in, which makes a smaller world than five skills that each end in a number going up.
 
 ## Seams worth knowing about
 
 Every one of these is a place where both halves were individually correct.
 
-- **A click mid-walk is not a divergence.** Both ends expand the destination from the square they are on, and mid-walk those are different squares, so the routes differ honestly. Treating that as disagreement produced a body that jumped backward on every re-click, which is the commonest thing anybody does.
-- **A transcript is either shared or private, and guessing wrong shows.** A blow is worth telling everyone near enough to watch it land. What one body gathered, and what it learned by gathering it, is not, and putting it on the shared list meant a client heard every bot's level-up as its own. Adding a seat and filtering would have fixed the display and left the waste; moving it to the private stream fixed both, and the frame got 89 bytes smaller.
-- **A click changes where the body is going and nothing else.** The drawn point, the square being stepped into and the step clock all describe where it *is*, and rewriting any of them on a click is a jump: rebasing the crossing to a square's centre teleported the rest of a square, and granting an immediate free step let fast clicking outrun the server and be pulled back at rest, both of which read exactly like a server correction with no server involved. A body at rest sets off on the click; a walking one keeps its cadence and turns at the next square. `the_drawn_body_never_jumps_however_fast_the_clicks_come` polls at 50ms under click spam and holds the worst frame-to-frame movement to walking speed: 0.118 squares against the 1.0 the old code produced.
-- **The draw distance has to follow the camera.** A fixed radius is a disc of countryside floating in the sky the moment somebody zooms out, and a scene with an edge in it looks wrong all over rather than in one place. Following the camera is four times the ground at full zoom, which is only affordable because corner heights are a table: 8495 quads and 1435 prop boxes is 102630 indices, and computing every corner from three octaves of noise instead would be six hundred thousand hashes to draw one picture. The rim fades into the sky, so where it does end reads as weather.
-- **A walk cycle that never stopped.** A body is drawn between the two squares it was last on, and those two are only rewritten when it takes a step, so an arrived body holds two different squares for ever and walks on the spot until the next click. The fix is that the clock is half the question: you are walking if you have squares left **or** you are still crossing the last one. Everybody else was drawn from the same rule and had the same bug, which is the tell that it was a rule and not a slip.
-- **A hash map's order reached the random stream.** `think()` collected the wandering bodies straight out of a `HashMap`, and every one of them then drew from one shared xorshift, so the same tick run twice was not the same tick. The fix is a sort; the reason it is not tidiness is that the order decides who wanders where. `a_tick_is_the_same_tick_when_it_is_run_again` is what found it.
-- **A client is never in its own audience.** `You` exists for that reason, and gow_3d shipped the other way round: a client that read itself out of the list of other people read nothing at all, and every key press was silent.
-- **A refusal a player cannot read is a broken key.** Every one is named on the wire and said in words, once. `NeedsLevel` carries the skill and the level, because "nothing happened" and "you need woodcutting 8" look identical from the outside.
-- **A respawn is the one square that arrives rather than departs.** A counter rather than a flag, so the client applies the move exactly once however many frames repeat it, and a dropped frame is caught by the next.
+- **A click mid-walk is not a divergence.** Both ends expand the destination from the square they are on and mid-walk those are different squares, so the routes differ honestly. Treating that as disagreement produced a body that jumped backward on every re-click, which is the commonest thing anybody does.
+- **A transcript is either shared or private. Putting it in the wrong one is visible.** A blow is worth telling everyone near enough to watch it land. What one body gathered and what it learned by gathering it, is not and putting it on the shared list meant a client heard every bot's level-up as its own. Adding a seat and filtering would have fixed the display and left the waste; moving it to the private stream fixed both and the frame got 89 bytes smaller.
+- **A click changes where the body is going and nothing else.** The drawn point, the square being stepped into and the step clock all describe where it *is* and rewriting any of them on a click is a jump: rebasing the crossing to a square's centre teleported the rest of a square and granting an immediate free step let fast clicking outrun the server and be pulled back at rest, both of which read exactly like a server correction with no server involved. A body at rest sets off on the click; a walking one keeps its cadence and turns at the next square. `the_drawn_body_never_jumps_however_fast_the_clicks_come` polls at 50ms under click spam and holds the worst frame-to-frame movement to walking speed: 0.118 squares against the 1.0 the old code produced.
+- **The draw distance has to follow the camera.** A fixed radius is a disc of countryside floating in the sky the moment somebody zooms out and a scene with an edge in it looks wrong all over rather than in one place. Following the camera is four times the ground at full zoom, which is only affordable because corner heights are a table: 8495 quads and 1435 prop boxes is 102630 indices and computing every corner from three octaves of noise instead would be six hundred thousand hashes to draw one picture. The rim fades into the sky, so where it does end reads as weather.
+- **A walk cycle that never stopped.** A body is drawn between the two squares it was last on and those two are only rewritten when it takes a step, so an arrived body holds two different squares for ever and walks on the spot until the next click. The fix is that the clock is half the question: you are walking if you have squares left **or** you are still crossing the last one. Everybody else was drawn from the same rule and had the same bug, which is the tell that it was a rule and not a slip.
+- **A hash map's order reached the random stream.** `think()` collected the wandering bodies straight out of a `HashMap` and every one of them then drew from one shared xorshift, so the same tick run twice was not the same tick. The fix is a sort, which is needed because the order decides who wanders where. `a_tick_is_the_same_tick_when_it_is_run_again` is what found it.
+- **A client is never in its own audience.** `You` exists for that reason and gow_3d shipped the other way round: a client that read itself out of the list of other people read nothing at all and every key press was silent.
+- **An unexplained refusal looks like a broken key.** Every one is named on the wire and said in words, once. `NeedsLevel` carries the skill and the level, because "nothing happened" and "you need woodcutting 8" look identical from the outside.
+- **A respawn is the one square the client is put on rather than walking to.** A counter rather than a flag, so the client applies the move exactly once however many frames repeat it and a dropped frame is caught by the next.
 - **A diagonal needs both of its sides open**, or a body walks through the join of two walls. It is the one pathfinding bug a player notices immediately and cannot unsee.
-- **A walled-off click still means something.** The search returns the best partial route rather than nothing, because standing still is a worse answer than setting off, and *which* partial is decided by the same total order, so giving up is as reproducible as succeeding.
+- **A walled-off click still means something.** The search returns the best partial route rather than nothing, because standing still is a worse answer than setting off and *which* partial is decided by the same total order, so giving up is as reproducible as succeeding.
 - **A pack fills the first free square rather than the end**, or a player who eats from the middle watches their pack grow past its own last square and then refuse an item it plainly has room for.
-- **The draw batch is bounded by the buffer, asked at every push.** macroquad's batcher clamps at 10000 vertices and 5000 indices, warns once, and draws the front of the buffer, so a scene past it is quietly missing rather than broken. Counting bodies was gow_3d's bug and it is not repeated here.
+- **The draw batch is bounded by the buffer, asked at every push.** macroquad's batcher clamps at 10000 vertices and 5000 indices, warns once and draws the front of the buffer, so a scene past it is quietly missing rather than broken. Counting bodies was gow_3d's bug and it is not repeated here.
 
 ## Layout
 
 | file | what is in it |
 | --- | --- |
-| `world.rs` | the map, its props, and the table both ends build from the rule |
-| `path.rs` | the search, and the tie-break that is the whole determinism surface |
-| `skills.rs` | five skills, one closed loop, and the curve |
+| `world.rs` | the map, its props and the table both ends build from the rule |
+| `path.rs` | the search and the tie-break that is the whole determinism surface |
+| `skills.rs` | five skills, one closed loop and the curve |
 | `pack.rs` | twenty-eight squares that exist for one client |
-| `zone.rs` | the moving half, the still half, and the ground between them |
+| `zone.rs` | the moving half, the still half and the ground between them |
 | `bots.rs` | the world's own, living the loop |
-| `protocol.rs` | the wire, and nothing that is not on it |
-| `logic.rs` | the tick, and the frame it produces |
+| `protocol.rs` | the wire and nothing that is not on it |
+| `logic.rs` | the tick and the frame it produces |
 | `state.rs` | what each viewer has already been told about the still world |
 | `net/` | both ends of the wire |
-| `render.rs`, `ui.rs`, `main.rs` | the countryside, the pack, and the click |
+| `render.rs`, `ui.rs`, `main.rs` | the countryside, the pack and the click |
 | `tests/two_ends.rs` | both sides run together, which is where the route claim can be checked |
 | `tests/wire_cost.rs` | what a place costs against a held key |

@@ -1,15 +1,14 @@
-//! The curtain, as a function of the tick.
+//! The enemy curtain, computed from the tick.
 //!
 //! Nothing in this file is stored, stepped or sent. Every enemy bullet on the
 //! screen is computed from a wave announcement of about twenty bytes plus one
 //! small op for each emitter that has been shot down, and it is computed the
 //! same way on the server and on every client.
 //!
-//! That is the point of the example and it is also its one hard constraint:
-//! **no accumulation anywhere**. A bullet's position is `spawn + velocity *
-//! age`, evaluated fresh, never integrated. An integrated curtain would drift
-//! apart on two machines and there would be nothing to notice it with, because
-//! nothing about it is ever compared.
+//! The example's one hard constraint is that nothing here may accumulate. A
+//! bullet's position is `spawn + velocity * age`, evaluated fresh and never
+//! integrated. An integrated curtain would drift apart on two machines and
+//! nothing would notice, because nothing about it is ever compared.
 
 use serde::{Deserialize, Serialize};
 
@@ -23,9 +22,9 @@ const EMIT_PERIOD: u64 = 7;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Pattern {
-  /// One bullet per period, the angle advancing by a fixed step. The classic,
-  /// and the one where a small arithmetic difference is instantly visible as
-  /// an arm of the spiral bending.
+  /// One bullet per period, the angle advancing by a fixed step. A small
+  /// arithmetic difference shows up immediately as an arm of the spiral
+  /// bending.
   Spiral,
   /// A burst spread evenly around the circle.
   Ring,
@@ -45,9 +44,9 @@ impl Pattern {
   /// Bullets released at once.
   ///
   /// A ring that released one bullet per period would be a spiral. The first
-  /// draft did exactly that and produced a field of forty bullets, which is a
-  /// shooting gallery rather than a curtain, and every byte comparison in the
-  /// example was quietly measuring the wrong thing.
+  /// draft did that and produced a field of forty bullets, far too sparse for a
+  /// curtain, so every byte comparison in the example was measuring the wrong
+  /// thing.
   pub const fn salvo(self) -> u64 {
     match self {
       Pattern::Spiral => 2,
@@ -91,7 +90,7 @@ pub struct Wave {
 ///
 /// A kill depends on a player bullet, which depends on a human, so it cannot be
 /// derived. Naming the tick keeps everything downstream of it derivable anyway:
-/// both sides cut the same emitter's output at the same instant, and one small
+/// both sides cut the same emitter's output at the same instant and one small
 /// op replaces every bullet that would otherwise have to be described.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Downed {
@@ -136,9 +135,9 @@ fn angle_of(wave: &Wave, emitter: &Emitter, salvo: u64, slot: u64) -> f32 {
 /// Every enemy bullet alive at `tick`, appended to `out`.
 ///
 /// Takes the buffer rather than returning one: this is called every frame on
-/// the client and every step on the server, and allocating a thousand-element
-/// vector each time is the difference between the closed form being free and
-/// merely being cheap.
+/// the client and every step on the server, so allocating a thousand-element
+/// vector each time would add a real cost to an otherwise nearly free
+/// evaluation.
 pub fn curtain_at(waves: &[Wave], downed: &[Downed], tick: u64, out: &mut Vec<Bullet>) {
   out.clear();
   for wave in waves {
@@ -146,9 +145,9 @@ pub fn curtain_at(waves: &[Wave], downed: &[Downed], tick: u64, out: &mut Vec<Bu
       continue;
     }
     for emitter in &wave.emitters {
-      // The one piece of state, and it is a *cut-off* rather than a position:
-      // an emitter shot down at tick T contributes exactly the bullets it had
-      // already fired, on both machines, for ever.
+      // The one piece of state is a *cut-off*, not a position: an emitter shot
+      // down at tick T contributes exactly the bullets it had already fired, on
+      // both machines, from then on.
       let stop = downed
         .iter()
         .find(|d| d.wave == wave.id && d.arm == emitter.arm)
@@ -196,9 +195,9 @@ pub fn curtain_at(waves: &[Wave], downed: &[Downed], tick: u64, out: &mut Vec<Bu
 
 /// Whether a ship of radius `r` at `pos` is touching the curtain at `tick`.
 ///
-/// The whole reason the death question has three answers: both ends can call
-/// this, with the same arguments, and get the same result. What they disagree
-/// about is never the curtain, only where the ship was.
+/// Both ends can call this with the same arguments and get the same result,
+/// which is what makes all three death rules possible. The two ends only ever
+/// disagree about where the ship was.
 pub fn contact(waves: &[Wave], downed: &[Downed], tick: u64, pos: V2, r: f32, scratch: &mut Vec<Bullet>) -> bool {
   curtain_at(waves, downed, tick, scratch);
   let reach = r + ENEMY_BULLET_R;
@@ -267,14 +266,13 @@ mod tests {
 
   #[test]
   fn a_wave_costs_a_fixed_number_of_bytes_however_many_bullets_it_becomes() {
-    // The headline. The wire cost of the derivable half does not grow with the
-    // thing it describes, which is the property no amount of compressing
-    // positions can reach.
+    // The wire cost of the derivable half does not grow with the number of
+    // bullets it describes. Compressing positions cannot achieve that.
     //
     // Checked per pattern rather than once, because the three differ by an
     // order of magnitude in how much curtain the same handful of bytes buys,
-    // and a single sample would be a claim about whichever one it happened to
-    // pick.
+    // so a single sample would only say something about whichever pattern it
+    // picked.
     let mut out = Vec::new();
     let mut best = 0;
     for id in 0..3 {

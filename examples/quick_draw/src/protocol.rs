@@ -38,9 +38,9 @@ pub const SLEEP_LIMIT_MS: u64 = 1500;
 pub const NEXT_CONTEST_MS: u64 = 2200;
 
 /// How far below the physical floor (arrival minus measured one-way) a claim
-/// may still reach, absorbing clock jitter and tick quantisation. This is also
-/// the honest statement of what the floor cannot do: a dishonest claim gains
-/// at most this much.
+/// may still reach, absorbing clock jitter and tick quantisation. It is also
+/// the limit of what the floor can enforce: a dishonest claim gains at most
+/// this much.
 pub const FLOOR_SLACK_US: u64 = 30_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,8 +55,8 @@ pub enum DuelPhase {
   Verdict,
 }
 
-/// The lab's dials. Any client may set them; this is an instrument, not a
-/// tournament.
+/// The lab's dials. Any client may set them, since this is a lab instrument
+/// rather than a tournament.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Controls {
   /// The virtual opponent in the human game.
@@ -71,7 +71,7 @@ pub struct Controls {
   pub jitter_ms: u32,
   pub contests_per_sec: u32,
   /// A claims its press this much earlier than it happened: the cheat the
-  /// floor exists to bound.
+  /// floor bounds.
   pub a_claims_early_ms: u32,
 }
 
@@ -119,8 +119,8 @@ pub struct Verdict {
   pub contest: u64,
   pub ruling: Ruling,
   pub shots: Vec<Shot>,
-  /// Winner under the declared sub-tick stamp, the rule this example argues
-  /// for; this is the winner that scores.
+  /// Winner under the declared sub-tick stamp. This is the winner that
+  /// scores.
   pub winner_subtick: Option<PlayerId>,
   /// Winner under plain arrival order, kept beside it for the comparison.
   pub winner_arrival: Option<PlayerId>,
@@ -138,8 +138,8 @@ pub struct HarnessStats {
   pub same_tick: u64,
   /// Contests the two rules ruled differently.
   pub disagreed: u64,
-  /// A's wins under each rule. The falsifier readout: widen B's one-way and
-  /// the arrival column moves while this rule's column must not.
+  /// A's wins under each rule. Widening B's one-way moves the arrival column
+  /// and must not move the sub-tick column.
   pub a_wins_arrival: u64,
   pub a_wins_subtick: u64,
   /// Claims clamped by the floor.
@@ -165,14 +165,14 @@ pub struct DuelView {
   pub harness: HarnessStats,
 }
 
-/// What clients send, and what the floor broadcasts back.
+/// What clients send and what the floor broadcasts back.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum DrawOp {
   Snapshot(Box<DuelView>),
 
-  /// The trigger, addressed to a tick **and a place inside it**: the offset is
-  /// the whole example. Claimed on the client's estimate of server time and
-  /// floored by the server against the link's measured one-way.
+  /// The trigger, addressed to a tick **and a place inside it**. Claimed on
+  /// the client's estimate of server time and floored by the server against
+  /// the link's measured one-way.
   Fire { tick: u64, offset_us: u32 },
   /// Move a dial.
   SetControls(Controls),

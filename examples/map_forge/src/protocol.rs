@@ -1,7 +1,7 @@
 //! Everything that crosses the wire. The collaborative half is
-//! `plaza::app_common`'s payloads used verbatim, because the example exists to
-//! find out whether that shipped surface works; the simulation half reuses
-//! `bomb_grid`'s own types, because the artifact is a board that crate plays.
+//! `plaza::app_common`'s payloads used verbatim, to test whether that shipped
+//! surface works. The simulation half reuses `bomb_grid`'s own types, because
+//! the board being edited is one that crate plays.
 
 use std::collections::HashMap;
 
@@ -48,12 +48,12 @@ pub fn region_of(x: u8, y: u8) -> &'static str {
   }
 }
 
-/// The board object's id, and the spawn roster's collection key.
+/// The board object's id and the spawn roster's collection key.
 pub const BOARD_OBJECT: &str = "board";
 pub const SPAWN_LIST: &str = "spawns";
 
 /// A tile as a property value. Strings on purpose: the property vocabulary is
-/// schemaless, and the conversion to `bomb_grid::sim::types::Tile` happens at
+/// schemaless and the conversion to `bomb_grid::sim::types::Tile` happens at
 /// the playtest boundary.
 pub const TILE_EMPTY: &str = "empty";
 pub const TILE_SOFT: &str = "soft";
@@ -132,8 +132,8 @@ pub enum Refusal {
   WrongPhase,
 }
 
-/// What clients send, and what the bench broadcasts back. Every collaborative
-/// payload here is `plaza::app_common`'s type, not a local mirror.
+/// What clients send and what the bench broadcasts back. Every collaborative
+/// payload here is `plaza::app_common`'s own type rather than a local copy.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ForgeOp {
   Snapshot(Box<ForgeView>),
@@ -158,7 +158,7 @@ pub enum ForgeOp {
   Presence(UpdatePresencePayload<ForgePresence>),
   PresenceChanged(PresenceChangedNoticePayload<PlayerId, ForgePresence>),
 
-  // The playtest: the artifact crossing into bomb_grid's rules.
+  // The playtest: the authored board running under bomb_grid's rules.
   StartPlaytest,
   EndPlaytest,
   Walk(Dir),

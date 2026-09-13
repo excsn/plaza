@@ -1,4 +1,5 @@
-//! A colony too big to send, watched through panes that are not.
+//! A colony too big to send in full, watched by each client through a small
+//! pane.
 
 pub mod logic;
 pub mod pack;

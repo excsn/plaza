@@ -1,9 +1,9 @@
-//! Three abilities, which is enough to be a game and few enough to stay one.
+//! Three abilities, which is enough for a small game.
 //!
-//! Each is the genre's shape: a cost, a wait the design chose, a range checked
-//! once on the server at the instant it lands, and an effect that names a
-//! target rather than travelling toward one. Nothing here is predicted, and
-//! nothing here has to be agreed between two machines.
+//! Each follows the genre's pattern: a cost, a wait set by the design, a range
+//! checked once on the server when it lands and an effect that names a target
+//! instead of travelling toward one. Nothing here is predicted or has to be
+//! agreed between two machines.
 
 use crate::casting::Ms;
 
@@ -23,7 +23,7 @@ pub struct Ability {
   pub hostile: bool,
 }
 
-/// Strike: instant, cheap, short. What the global cooldown exists for.
+/// Strike: instant, cheap, short. The case the global cooldown covers.
 pub const STRIKE: Ability = Ability {
   name: "Strike",
   cast_ms: 0,
@@ -34,8 +34,8 @@ pub const STRIKE: Ability = Ability {
   hostile: true,
 };
 
-/// Bolt: the headline. A second and a half of bar, which is where the whole
-/// latency argument lives.
+/// Bolt: a second and a half of cast bar, the case the latency argument is
+/// about.
 pub const BOLT: Ability = Ability {
   name: "Bolt",
   cast_ms: 1500,
@@ -46,8 +46,8 @@ pub const BOLT: Ability = Ability {
   hostile: true,
 };
 
-/// Mend: the reason a party is worth having, and the only thing here that
-/// reaches somebody who is not in front of you.
+/// Mend: what makes a party useful and the only ability that reaches somebody
+/// who is not in front of you.
 pub const MEND: Ability = Ability {
   name: "Mend",
   cast_ms: 2000,
@@ -64,7 +64,7 @@ pub fn ability(index: u8) -> Option<Ability> {
   BAR.get(index as usize).copied()
 }
 
-/// What a beast swings, which is on the same rules so nothing is special-cased.
+/// What a beast swings. It uses the same rules, so nothing is special-cased.
 pub const CLAW: Ability = Ability {
   name: "Claw",
   cast_ms: 0,
@@ -90,9 +90,8 @@ mod tests {
 
   #[test]
   fn the_bar_covers_both_ends_of_the_latency_argument() {
-    // The point of shipping three rather than one: an instant press is all
-    // delay and a cast bar is a tenth of it, and a player feels both in the
-    // same session on the same connection.
+    // There are three so a player can feel both cases on one connection: an
+    // instant press is all delay and a cast bar is a tenth of it.
     let rtt = 150;
     let instant = press(STRIKE.cast_ms, rtt).share();
     let cast = press(BOLT.cast_ms, rtt).share();
@@ -109,8 +108,8 @@ mod tests {
 
   #[test]
   fn an_instant_still_owes_the_cooldown() {
-    // Otherwise Strike is a key you hold down, and the design has stopped
-    // absorbing anything.
+    // Otherwise Strike is a key you hold down and the design no longer absorbs
+    // any latency.
     const { assert!(STRIKE.cast_ms < GLOBAL_COOLDOWN_MS) };
   }
 

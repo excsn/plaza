@@ -49,8 +49,9 @@ pub async fn serve(bind: &str, static_dir: Option<String>, physics: Physics) -> 
 
   let logic = RinkLogic::new().with_clock(sim_clock);
   // The fixed-point backend's world goes out inside every Frame, so its
-  // provider returns nothing and a joiner is whole one tick after arriving. A
-  // solver-backed one cannot do that and hands over a snapshot instead.
+  // provider returns nothing and a joiner has the complete state one tick
+  // after arriving. A solver-backed one cannot do that and hands over a
+  // snapshot instead.
   let (commands, controller) = StateControllerBuilder::new(
     Arc::new(logic),
     session.clone(),

@@ -2,7 +2,7 @@
 
 **License:** Mozilla Public License 2.0 (MPL-2.0) · **Status:** Experimental
 
-One client-side WebSocket interface across a desktop, a browser, and in-process. [`plaza_session`](../session/) covers the server and is tokio/actix by construction, so it cannot help a client and least of all a browser one. This is the other half.
+One client-side WebSocket interface across a desktop, a browser and in-process. [`plaza_session`](../session/) covers the server and is tokio/actix by construction, so a client cannot use it (a browser client least of all). This crate covers the client side.
 
 How to use it: [README.USAGE.md](README.USAGE.md). Full surface: [API_REFERENCE.md](API_REFERENCE.md).
 
@@ -34,6 +34,6 @@ plaza_ws = { version = "0.6", features = ["native", "loopback"] }
 | `native` | desktop | `tungstenite` on a worker thread | `tungstenite` |
 | `miniquad` | browser, under macroquad | our own JS plugin | none |
 
-`connect` picks whichever real backend this build has for its target, and the choice is never ambiguous: `native` exists only off wasm and `miniquad` only on it, so enabling both (the normal shape for a crate shipping a desktop and a browser client) still leaves exactly one per target. `connect_boxed` is the same choice as a `Box<dyn Socket>`, and it exists in every build: with no backend it reports "no socket backend compiled in" at runtime, because an offline teaching build still has to compile its connect path.
+`connect` picks whichever real backend this build has for its target and the choice is never ambiguous: `native` exists only off wasm and `miniquad` only on it, so enabling both (the normal shape for a crate shipping a desktop and a browser client) still leaves exactly one per target. `connect_boxed` is the same choice as a `Box<dyn Socket>` and it exists in every build: with no backend it reports "no socket backend compiled in" at runtime, because an offline teaching build still has to compile its connect path.
 
-They compose. A listen-server that also plays enables `native` **and** `loopback` and talks to both through the same trait.
+The backends can be combined: a listen-server that also plays enables `native` **and** `loopback` and talks to both through the same trait.

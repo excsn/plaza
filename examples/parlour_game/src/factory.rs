@@ -2,8 +2,8 @@
 //! endpoint the lobby can hand out.
 //!
 //! Unlike `lobby_world`, nothing is pre-spawned. A table exists because a match
-//! formed, which is the shape a card game wants and the shape a client that
-//! dials a per-match endpoint needs.
+//! formed, which suits a card game and a client that dials a per-match
+//! endpoint.
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU32;
@@ -29,11 +29,9 @@ use crate::wallets::WalletRegistry;
 
 /// One per table: a session feeds exactly one controller.
 ///
-/// **Named MessagePack, where the lobby is JSON.** Nothing about plaza ties a
-/// deployment to one codec, because a codec belongs to a session and a session
-/// belongs to a controller. The table is the wire a shipped client speaks and
-/// the lobby is the one a browser tab reads, so they are encoded differently on
-/// purpose, from one binary, over one port.
+/// Compact MessagePack, where the lobby uses JSON. The codec is set per session
+/// and each session feeds one controller, so one deployment can use two codecs
+/// from one binary on one port.
 pub type TableSession = ActixWsPlazaSession<TableOp, PlayerId, MsgPackCodec>;
 
 /// Turn timeouts are counted in ticks, and nothing here is latency-sensitive.
@@ -44,9 +42,9 @@ pub struct TableEntry {
   pub session: Arc<TableSession>,
   /// The table's command channel, kept here rather than on its `RoomHandle`.
   ///
-  /// The seam the lobby holds names neither `TableOp` nor `TableState`, which is
-  /// what lets a room live somewhere else. An application that needs to speak
-  /// to its rooms in their own vocabulary built them, so it keeps them.
+  /// The `RoomHandle` the lobby holds names neither `TableOp` nor `TableState`,
+  /// so a room could live in another process. The application built its rooms
+  /// and sends them typed ops, so it keeps their command channels itself.
   pub commands: CommandSender<TableOp, PlayerId, TableState>,
   pub room: Arc<InProcessRoomHandle<TableOp, PlayerId, TableState, TableSettings>>,
   /// An atomic rather than a controller query: the lobby reads this on every

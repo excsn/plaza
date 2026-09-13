@@ -1,14 +1,14 @@
 //! More than one arena, differing in the thing a connection has to fit.
 //!
 //! An arena that schedules inputs ahead can only carry a connection whose delay
-//! fits inside the schedule, and one arena means one budget, so everybody past
-//! it is turned away. That is the door slam admission started as. Several
-//! arenas, at several depths, turn it into a placement: a slow link gets the one
-//! built for it and only a link past *every* budget is actually refused.
+//! fits inside the schedule. One arena means one budget, so everybody past it is
+//! turned away, which is how admission started. Several arenas at several depths
+//! turn it into a placement: a slow link gets the one built for it and only a
+//! link past *every* budget is actually refused.
 //!
-//! The rooms differ in exactly one setting on purpose. A deeper playout delay
-//! carries a worse connection and costs everybody in that room more input lag,
-//! so the table below is the trade written out three times rather than a set of
+//! The rooms differ in exactly one setting. A deeper playout delay carries a
+//! worse connection and costs everybody in that room more input lag, so the
+//! table below makes that one trade at three depths rather than being a set of
 //! unrelated presets.
 
 use crate::sim::types::{Controls, SIM_STEP_MS};
@@ -18,8 +18,8 @@ use crate::sim::types::{Controls, SIM_STEP_MS};
 pub struct Room {
   pub id: u32,
   pub name: &'static str,
-  /// How long this arena holds an input before executing it. The whole
-  /// difference between the rooms, and the reason they carry different links.
+  /// How long this arena holds an input before executing it. This is the only
+  /// setting the rooms differ in and the reason they carry different links.
   pub playout_delay_ms: u64,
 }
 
@@ -28,7 +28,7 @@ impl Room {
   ///
   /// Derived from the schedule rather than declared beside it: an input is named
   /// for `press + playout_delay` and rejected once it lands more than
-  /// `input_max_late_ticks` past it, so this *is* the condition, and it moves
+  /// `input_max_late_ticks` past it, so this *is* the condition and it moves
   /// with the settings instead of drifting out of step with them.
   pub fn budget_ms(&self, controls: &Controls) -> u32 {
     (self.playout_delay_ms + controls.input_max_late_ticks * SIM_STEP_MS) as u32
@@ -51,11 +51,10 @@ impl Room {
 /// Every arena this example knows how to run, **in the order they are worth
 /// adding**.
 ///
-/// Not sorted by depth, which would read better and mislead. The first is the
-/// arena that used to be the only one, so a default run is exactly what it was.
-/// The second to add is the *relaxed* one, because it is the one that rescues
-/// links that would otherwise be refused outright; a sharper room is a nicety
-/// for players who already had somewhere to play.
+/// Not sorted by depth. The first is the arena that used to be the only one, so
+/// a default run is exactly what it was. The second to add is the *relaxed* one,
+/// because it accepts links that would otherwise be refused outright. A sharper
+/// room only helps players who already had somewhere to play.
 const ALL: [Room; 3] = [
   Room {
     id: 0,
@@ -78,8 +77,8 @@ const ALL: [Room; 3] = [
 ///
 /// **One by default.** Each room is a whole simulation of thousands of enemies
 /// at 60 Hz, so a local run would pay three times over for a spread of latency
-/// that a single player on one machine does not have. Extra rooms earn their
-/// cost the moment real connections arrive, which is why this is an argument
+/// that a single player on one machine does not have. Extra rooms are worth
+/// their cost once real connections arrive, which is why this is an argument
 /// rather than a constant: see `--rooms`.
 pub fn active(count: usize) -> &'static [Room] {
   &ALL[..count.clamp(1, ALL.len())]
@@ -109,10 +108,9 @@ mod tests {
 
   #[test]
   fn the_second_room_worth_running_is_the_one_that_rescues_refusals() {
-    // Ordering the table by depth would read better and mislead. The point of a
-    // second arena is somewhere to put links that would otherwise be turned
-    // away, so it is the *deeper* one. A sharper room is a nicety for players
-    // who already had somewhere to play.
+    // A second arena exists to take links that would otherwise be turned away,
+    // so it is the *deeper* one. A sharper room only helps players who already
+    // had somewhere to play.
     let two = active(2);
     assert_eq!(two[1].name, "relaxed");
     assert!(two[1].playout_delay_ms > two[0].playout_delay_ms, "it carries worse connections, which is the whole point of adding it");
@@ -120,8 +118,8 @@ mod tests {
 
   #[test]
   fn a_budget_is_derived_from_the_schedule_that_enforces_it() {
-    // Not a constant sitting beside the schedule, which would drift out of step
-    // with it and start advertising a capacity the arena does not have.
+    // A constant beside the schedule would drift out of step with it and
+    // advertise a capacity the arena does not have.
     let controls = Controls::default();
     let deeper = ALL.iter().find(|r| r.name == "relaxed").unwrap();
     let tighter = ALL.iter().find(|r| r.name == "sharp").unwrap();

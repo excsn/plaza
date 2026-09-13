@@ -1,4 +1,4 @@
-//! One arena: a pot that refills, and whoever claims it keeps the coins.
+//! One arena: a pot that refills and whoever claims it keeps the coins.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -24,8 +24,8 @@ const POT_STEP: u64 = 5;
 const POT_CAP: u64 = 50;
 
 /// How long a bot waits between claims. Slow enough that a human who is paying
-/// attention beats it, which is the point: a filled seat should be an opponent,
-/// not a wall.
+/// attention beats it, so a filled seat is an opponent rather than something
+/// that takes every pot.
 const BOT_CLAIM_EVERY: Duration = Duration::from_secs(3);
 
 /// Per-arena only. The wallet lives in the shared registry: it outlives this room.
@@ -232,7 +232,7 @@ impl StateLogic<RoomOp, PlayerId, ArenaState> for ArenaLogic {
         // The reservation deliberately survives: a room hop closes the old
         // socket after the new seat is reserved. Only `Withdraw` cancels.
         state.publish_seat_count();
-        // Wallet untouched: surviving a room is the point.
+        // Wallet untouched: it has to survive leaving a room.
         Ok(LogicOutput::none().and_snapshot(SnapshotRequest::to(state.everyone())))
       }
 
@@ -246,7 +246,7 @@ impl StateLogic<RoomOp, PlayerId, ArenaState> for ArenaLogic {
           info!(player, arena = %state.arena, "Seat reservation lapsed unclaimed.");
         }
 
-        // Bots have nobody to play against once the last human seat empties, and
+        // Bots have nobody to play against once the last human seat empties and
         // an arena left alone would otherwise keep them for ever.
         if state.bots() > 0 && state.seated_humans() == 0 {
           for id in state.bot_ids() {
@@ -684,7 +684,7 @@ mod tests {
     assert_eq!(state.pot, 0);
   }
 
-  /// A bot has nobody to play against once the humans go, and an arena left
+  /// A bot has nobody to play against once the humans go and an arena left
   /// alone would otherwise accumulate them.
   #[tokio::test]
   async fn bots_are_cleared_when_the_last_human_leaves() {
@@ -748,7 +748,7 @@ mod tests {
     assert_eq!(state.pot, POT_CAP);
   }
 
-  /// Silent at the ceiling, rather than chattering at the tick rate.
+  /// A full pot sends nothing instead of a refresh every interval.
   #[tokio::test]
   async fn a_full_pot_announces_nothing() {
     let mut state = arena();

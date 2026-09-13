@@ -3,12 +3,12 @@ import 'package:plaza_client/plaza_client.dart';
 
 import 'stats.dart';
 
-/// A drop-in connection readout, in the playgrounds' tradition.
+/// A drop-in connection readout, like the playgrounds' readouts.
 ///
-/// Add it as a Flame overlay. It shows the things that are invisible from
-/// inside the game and that every netcode bug turns out to need: whether the
-/// two ends agree about the wire format, whether the link is flapping rather
-/// than down, and whether frames are arriving that this build cannot read.
+/// Add it as a Flame overlay. It shows what cannot be seen from inside the
+/// game: whether the two ends agree about the wire format, whether the link is
+/// flapping rather than down and whether frames are arriving that this build
+/// cannot read.
 ///
 /// ```dart
 /// GameWidget(
@@ -70,8 +70,8 @@ class PlazaDebugHud extends StatelessWidget {
             if (stats.reconnects > 0) _row('reconnects', '${stats.reconnects}'),
             if (stats.resumes > 0) _row('resumes', '${stats.resumes}'),
             // Climbing means the server speaks a kind this build has never
-            // heard of, which is additive change working as intended, but the
-            // count is how you find out it is happening.
+            // heard of. That is additive change working as intended; the
+            // count shows it is happening.
             if (stats.framesSkipped > 0)
               _row('frames skipped', '${stats.framesSkipped}', const Color(0xFFD9A441)),
             if (client?.serverProtocol != null)

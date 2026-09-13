@@ -1,23 +1,22 @@
-//! Choosing what fits in the packet, and remembering what did not.
+//! Choosing what fits in the packet and remembering what did not.
 //!
-//! [`crate::relevance`] answers *who can see what*, which is a yes or no. It
-//! does not answer the question that follows it: a hundred entities are
-//! relevant, the budget holds twenty, so which twenty go this tick? Sending the
-//! first twenty by id starves the tail forever. Sending the nearest twenty
-//! starves anything far away forever. Both are the same bug, and it is the one
-//! that turns a bandwidth budget into a bandwidth *outcome*, where the packet is
-//! whatever size the world happened to be.
+//! [`crate::relevance`] answers who can see what, as a yes or no. It does not
+//! say which relevant entities go in this packet: if a hundred are relevant and
+//! the budget holds twenty, something has to pick the twenty. Sending the first
+//! twenty by id starves the rest forever. Picking the nearest twenty instead
+//! starves anything far away. In both cases the budget no longer decides the
+//! outcome and the packet is whatever size the world happened to be.
 //!
 //! Glenn Fiedler's answer in [state synchronization](https://gafferongames.com/post/state_synchronization/)
-//! is an accumulator: every entity gains priority each tick, the highest go out,
-//! and **the ones that did not fit keep what they accumulated**, so waiting is
-//! itself what earns a slot. Nothing starves, the budget is respected exactly,
-//! and how fast a thing updates becomes a rate you choose per entity rather than
-//! a consequence of the sort order.
+//! is an accumulator: every entity gains priority each tick, the highest go out
+//! and **the ones that did not fit keep what they accumulated**, so they rank
+//! higher next tick. Nothing starves, the budget is respected exactly and how
+//! fast a thing updates becomes a rate you choose per entity rather than a
+//! consequence of the sort order.
 //!
-//! The per-tick priority is yours: distance, whether it is the player's own,
+//! You choose the per-tick priority: distance, whether it is the player's own,
 //! whether it is [at rest](crate::rest), how long since it last changed. This
-//! only does the accumulate, sort and fill.
+//! type only does the accumulate, sort and fill.
 //!
 //! ```
 //! use plaza_server_utils::priority::PriorityAccumulator;
@@ -78,9 +77,9 @@ impl PriorityAccumulator {
     self.scores[index] += priority;
   }
 
-  /// Drops an entity back to zero without sending it: what a despawn wants, and
-  /// what an entity that has become irrelevant wants, so it does not arrive
-  /// with a hoard of accumulated priority the moment it is visible again.
+  /// Drops an entity back to zero without sending it: for a despawn or for an
+  /// entity that has become irrelevant, so it does not come back with a large
+  /// accumulated score as soon as it is visible again.
   pub fn forget(&mut self, index: usize) {
     if let Some(score) = self.scores.get_mut(index) {
       *score = 0.0;
@@ -100,12 +99,11 @@ impl PriorityAccumulator {
   /// [`fill`](Self::fill) assumes everything it picks gets sent, which is only
   /// safe while the cost you hand it can never under-count. A caller that packs
   /// until the packet is full instead of planning against an estimate does not
-  /// know what it sent until afterwards, and clearing an entity that did not
-  /// travel is the starvation this type exists to prevent. Pair this with
-  /// [`sent`](Self::sent).
+  /// know what it sent until afterwards and clearing an entity that was not
+  /// sent starves it. Pair this with [`sent`](Self::sent).
   ///
   /// `out` is cleared first. Entities at zero or below are omitted, so a
-  /// negative score is still how you say "not this one".
+  /// negative score still excludes an entity.
   pub fn order(&mut self, out: &mut Vec<usize>) {
     out.clear();
     out.extend((0..self.scores.len()).filter(|&i| self.scores[i] > 0.0));
@@ -129,10 +127,10 @@ impl PriorityAccumulator {
   /// large one near the front cannot leave the rest of the packet empty. Its
   /// priority keeps climbing, so it wins outright before long.
   ///
-  /// Entities at zero or below are never chosen: a negative score is how you
-  /// say "not this one" without removing it.
+  /// Entities at zero or below are never chosen, so a negative score excludes
+  /// an entity without removing it.
   ///
-  /// `out` is cleared first, and returns the indices in the order they were
+  /// `out` is cleared first and holds the indices in the order they were
   /// chosen, which is highest priority first.
   pub fn fill(&mut self, budget: usize, cost: impl Fn(usize) -> usize, out: &mut Vec<usize>) {
     out.clear();

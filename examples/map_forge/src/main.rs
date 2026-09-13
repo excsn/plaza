@@ -1,4 +1,4 @@
-//! Frame loop: paint under locks, watch everyone's cursors, and hand the
+//! Frame loop: paint under locks, watch everyone's cursors and hand the
 //! board to bomb_grid's rules.
 
 #[cfg(all(feature = "client", feature = "websocket"))]
@@ -142,7 +142,7 @@ async fn frame_loop(options: role::Options) {
             ui::Tool::Spawn => client.add_spawn(x, y),
           }
         }
-        // Presence at 10Hz: a cursor stream, not a firehose.
+        // Presence is throttled to 10Hz.
         if clock_ms >= presence_due {
           presence_due = clock_ms + 100;
           let cx = (mx - board.origin.0) / board.cell;

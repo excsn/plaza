@@ -6,7 +6,7 @@
 //! mispredicted spot to the corrected one in a single frame. [`ErrorSmoother`]
 //! turns that teleport into a short visual glide.
 //!
-//! **It smooths only what you draw, never the logical state.** The predicted
+//! **It smooths only what you draw.** The predicted
 //! state must stay exact, because it is the basis for the next frame's
 //! prediction and the next reconciliation. So this holds the *visual* position
 //! where the eye currently is, and eases it toward the live logical state over a
@@ -45,12 +45,12 @@
 /// to end of the ease) to an eased progress. The default is [`linear`] (the
 /// identity).
 ///
-/// It is a plain `fn` pointer, not a closed `enum` of named curves, so any curve
-/// works, your own included, and it stays a zero-cost indirect call with no
-/// allocation and no dynamic dispatch. The built-in curves below are conveniences,
-/// not the only options. Curves normally map `[0, 1]` to `[0, 1]`; an overshoot
-/// curve (output beyond `1.0`) is allowed and lets the render briefly pass the
-/// target before the ease ends, use one deliberately.
+/// It is a plain `fn` pointer rather than a closed `enum` of named curves, so
+/// any curve works, including your own. It stays a zero-cost indirect call with
+/// no allocation and no dynamic dispatch. The built-in curves below are
+/// conveniences. Curves normally map `[0, 1]` to `[0, 1]`; an overshoot curve
+/// (output beyond `1.0`) is allowed and lets the render briefly pass the target
+/// before the ease ends, so use one deliberately.
 pub type Easing = fn(f32) -> f32;
 
 /// Linear easing: the identity, a constant-speed catch-up. The default.
@@ -237,8 +237,8 @@ impl<State: Clone> ErrorSmoother<State> {
   ///
   /// For a discontinuity, where the entity did not travel from where it was being
   /// drawn to where it now is: a teleport, a respawn, a level load. Easing across
-  /// one of those would slide the entity through everything in between, which is
-  /// a worse artefact than the snap the ease exists to avoid.
+  /// one of those would slide the entity through everything in between, which
+  /// looks worse than the snap.
   pub fn reset(&mut self) {
     self.from = None;
     self.elapsed = 0.0;
@@ -369,8 +369,8 @@ mod tests {
       assert!((ease_in_cubic(t) - (1.0 - ease_out_cubic(1.0 - t))).abs() < 1e-6, "mirror at {t}");
     }
     assert!(ease_in_cubic(0.5) < 0.5, "ease-in is behind linear at the midpoint");
-    // The reason both exist: cubic is dramatically lazier early, which is what
-    // makes it wrong for anything that has to look like it is moving throughout.
+    // Cubic is much lazier early, which makes it wrong for anything that has
+    // to look like it is moving throughout.
     assert!(ease_in_cubic(0.5) < ease_in_quad(0.5) * 0.6, "cubic is much lazier early than quad");
   }
 
@@ -405,15 +405,15 @@ mod tests {
 ///
 /// [`ErrorSmoother`] eases a correction over a fixed *duration*, so a large
 /// error and a small one both take the same time and the large one simply moves
-/// faster. That is the wrong way round. A small offset is invisible and can
-/// afford to linger; a large one is already visible, and every extra frame it
-/// survives is a frame the entity is somewhere it is not. Glenn Fiedler's
+/// faster. A small offset is invisible and can linger. A large one is already
+/// visible and every extra frame it survives draws the entity in the wrong
+/// place. Glenn Fiedler's
 /// [state synchronization](https://gafferongames.com/post/state_synchronization/)
-/// puts numbers on it: retain 0.95 of the error per frame under 25cm, and 0.85
-/// over a metre, so a big correction is *over sooner* rather than merely
-/// quicker.
+/// puts numbers on it: retain 0.95 of the error per frame under 25cm and 0.85
+/// over a metre, so a big correction finishes sooner instead of only moving
+/// faster.
 ///
-/// This is the rate, not the state. Keep your own offset, multiply it by
+/// It computes only the rate. Keep your own offset, multiply it by
 /// [`retain`](Self::retain) each frame, and add it to whatever you draw.
 ///
 /// ```

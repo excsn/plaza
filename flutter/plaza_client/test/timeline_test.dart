@@ -42,8 +42,8 @@ void main() {
       expect(t.clock.offsetAt(50), isNull);
     });
 
-    /// The whole point: a ping sent before a suspend and answered after it
-    /// measures the suspend, not the network.
+    /// The epoch exists for this: a ping sent before a suspend and answered
+    /// after it measures the suspend rather than the network.
     test('a probe spanning a resume is discarded', () {
       final t = Timeline();
       final probe = t.begin(1000);
@@ -117,8 +117,8 @@ void main() {
       await client.stop();
     });
 
-    /// The failure this is built to stop: a probe outstanding when the app is
-    /// suspended must not land as a several-minute round trip.
+    /// A probe outstanding when the app is suspended must not land as a
+    /// several-minute round trip.
     test('a probe outstanding across a suspend never reaches the estimator', () async {
       final server = _Server();
       final client = makeClient(server);

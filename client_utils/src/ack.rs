@@ -6,17 +6,17 @@
 //! nothing about the gaps behind it, so the sender is left choosing between
 //! resending everything (bandwidth it usually does not need) and resending
 //! nothing (a stall whenever a packet drops). Sending an explicit list of what
-//! arrived is precise and grows with the loss rate, which is exactly when there
-//! is least room for it.
+//! arrived is precise but grows with the loss rate, which is when there is
+//! least room for it.
 //!
 //! [`AckWindow`] is the standard third answer: one sequence number plus a bitmask
-//! of the 64 before it. Fixed size, so a link losing half its packets costs the
-//! same twelve bytes as a perfect one, and precise enough that a sender can
-//! resend exactly the gaps.
+//! of the 64 before it. It is fixed size, so a link losing half its packets
+//! costs the same twelve bytes as a perfect one. It is also precise enough that
+//! a sender can resend exactly the gaps.
 //!
-//! It is pure sequence arithmetic. It does not know what a packet is, does not
-//! allocate, and never touches a socket. The receiver records arrivals, the
-//! window is put on the wire as a pair of integers, and the sender reconstructs
+//! It is pure sequence arithmetic: it does not know what a packet is, does not
+//! allocate and never touches a socket. The receiver records arrivals, the
+//! window is put on the wire as a pair of integers and the sender reconstructs
 //! it to ask what is missing.
 //!
 //! ```
@@ -44,8 +44,8 @@ pub const WINDOW: u64 = 64;
 ///
 /// Bit `i` of the mask stands for `newest - 1 - i`, so bit 0 is the immediate
 /// predecessor. Anything older than the window falls out and is reported as
-/// neither received nor missing, which is the right answer: past the window a
-/// sender should give up rather than resend forever.
+/// neither received nor missing, because past the window a sender should give
+/// up rather than resend forever.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AckWindow {
   newest: u64,
@@ -84,10 +84,10 @@ impl AckWindow {
       // Shift the window forward. The old newest becomes a set bit, and anything
       // that scrolls past the end is forgotten.
       //
-      // A shift of exactly `WINDOW` is the boundary worth care: every old bit
-      // falls out, but the old newest lands in the last slot and must survive.
-      // Doing the shift and the "too far" test with the same threshold loses it,
-      // and the loss is invisible unless a test lands exactly here.
+      // A shift of exactly `WINDOW` needs care: every old bit falls out, but
+      // the old newest lands in the last slot and must be kept. Using the same
+      // threshold for the shift and the "too far" test loses it and only a test
+      // at exactly this boundary shows the loss.
       let shift = seq - self.newest;
       let shifted = if shift >= 64 { 0 } else { self.mask << shift };
       self.mask = if shift <= WINDOW { shifted | (1u64 << (shift - 1)) } else { 0 };
@@ -134,8 +134,8 @@ impl AckWindow {
   ///
   /// This is what a sender resends. Clamped to the window, so a peer that has
   /// fallen far behind asks for a bounded amount of work rather than the whole
-  /// history: past the window the data is beyond recovery anyway and a caller
-  /// should be resynchronising, not backfilling.
+  /// history. Past the window the data cannot be recovered anyway and the
+  /// caller should resynchronise instead of backfilling.
   pub fn missing_since(&self, oldest: u64) -> impl Iterator<Item = u64> + '_ {
     let floor = self.newest.saturating_sub(WINDOW).max(oldest);
     let end = if self.started { self.newest } else { 0 };
@@ -145,16 +145,16 @@ impl AckWindow {
   /// The newest sequence such that **everything** from `known` up to it arrived,
   /// with no gap anywhere in between.
   ///
-  /// This is what a delta-compressing protocol wants, and it is not
+  /// A delta-compressing protocol wants this rather than
   /// [`newest`](Self::newest). A protocol that *retransmits* needs to know which
   /// packets are missing, which is the mask. A protocol that *re-derives* needs a
-  /// state the peer provably reached, and receiving packet N+1 after losing N
-  /// does not put a peer in the state N+1 implies: whatever N announced and N+1
-  /// had no reason to repeat is simply gone. Taking the newest set bit as the
-  /// baseline hands the sender a state that never existed, and the resulting bug
-  /// is close to invisible, because the traffic looks correct and the divergence
-  /// is permanent. Measured, it made loss recovery statistically indistinguishable
-  /// from no recovery at every loss rate.
+  /// state the peer provably reached. Receiving packet N+1 after losing N does
+  /// not put a peer in the state N+1 implies: whatever N announced and N+1 had
+  /// no reason to repeat is gone. Taking the newest set bit as the baseline
+  /// gives the sender a state that never existed. The bug is hard to see,
+  /// because the traffic looks correct while the divergence is permanent. When
+  /// measured, it made loss recovery statistically indistinguishable from no
+  /// recovery at every loss rate.
   ///
   /// `first` is the oldest sequence not yet accounted for: one past the baseline
   /// a sender last settled on, or the oldest packet it still holds if it has
@@ -162,14 +162,13 @@ impl AckWindow {
   /// last one known, because a protocol numbering from zero has no representable
   /// "one before the first".
   ///
-  /// Returns `None` when the run is empty, which covers two cases a caller
-  /// treats identically: `first` did not arrive, or it is older than the window
-  /// can speak about after a reconnect or a long stall. Both mean the frontier
-  /// cannot advance, and neither is a reason to move it *backwards*, which is
-  /// the failure mode of the naive version: it sticks at an old base forever
-  /// instead of admitting the state is unreachable and resynchronising. Use
-  /// [`missing_since`](Self::missing_since) to tell the two apart when it
-  /// matters.
+  /// Returns `None` when the run is empty. That covers two cases a caller
+  /// treats the same way: `first` did not arrive or it is older than the window
+  /// can describe after a reconnect or a long stall. In both the frontier
+  /// cannot advance and it should not move *backwards* either. A naive version
+  /// sticks at an old base forever instead of treating the state as unreachable
+  /// and resynchronising. Use [`missing_since`](Self::missing_since) to tell
+  /// the two apart when it matters.
   ///
   /// Costs at most [`WINDOW`] steps, never a scan of history.
   ///
@@ -292,9 +291,8 @@ mod tests {
 
   #[test]
   fn the_cost_does_not_grow_with_the_loss_rate() {
-    // The property that makes this worth having over an explicit list: a link
-    // dropping most of its packets reports in the same twelve bytes as a perfect
-    // one, and it is precisely under heavy loss that there is no room for more.
+    // Unlike an explicit list, a link dropping most of its packets reports in
+    // the same twelve bytes as a perfect one.
     let mut clean = AckWindow::new();
     let mut awful = AckWindow::new();
     for seq in 0..64u64 {
@@ -311,9 +309,9 @@ mod tests {
 
   #[test]
   fn the_contiguous_base_stops_at_the_first_gap_not_the_newest_bit() {
-    // The distinction the whole method exists for. A retransmitting protocol
-    // wants the mask; a re-deriving one wants a state the peer provably reached,
-    // and 5 arriving after 4 was lost does not put the peer in state 5.
+    // A retransmitting protocol wants the mask. A re-deriving one wants a state
+    // the peer provably reached and 5 arriving after 4 was lost does not put
+    // the peer in state 5.
     let mut w = AckWindow::new();
     for seq in [1u64, 2, 3, 5, 6, 7] {
       w.observe(seq);
@@ -335,10 +333,10 @@ mod tests {
 
   #[test]
   fn a_protocol_numbering_from_zero_is_representable() {
-    // The reason this takes the first sequence to check rather than the last one
-    // known: with a `u64` there is no "one before sequence zero" to pass in, and
-    // a caller forced to invent one lands on zero, which reads as "zero already
-    // arrived" and quietly skips the first packet.
+    // This takes the first sequence to check rather than the last one known
+    // because a `u64` has no "one before sequence zero". A caller forced to
+    // invent one lands on zero, which reads as "zero already arrived" and skips
+    // the first packet.
     let mut w = AckWindow::new();
     for seq in [0u64, 1, 2] {
       w.observe(seq);
@@ -348,8 +346,8 @@ mod tests {
 
   #[test]
   fn a_filled_gap_lets_the_frontier_jump_past_it() {
-    // Reordering, not loss: the straggler arrives and the frontier should
-    // immediately cover everything it was blocking.
+    // Reordering rather than loss: once the straggler arrives the frontier
+    // should cover everything it was blocking.
     let mut w = AckWindow::new();
     for seq in [1u64, 2, 4, 5, 6] {
       w.observe(seq);
@@ -361,9 +359,8 @@ mod tests {
 
   #[test]
   fn a_base_older_than_the_window_is_reported_as_unknowable() {
-    // The failure mode a naive version gets wrong in the other direction, by
-    // sticking at an old base forever after a reconnect or a long stall. The
-    // honest answer is that contiguity cannot be established, so the caller
+    // A naive version sticks at an old base forever after a reconnect or a
+    // long stall. Contiguity cannot be established here, so the caller
     // resynchronises instead of backfilling.
     let mut w = AckWindow::new();
     w.observe(5);
@@ -382,8 +379,8 @@ mod tests {
 
   #[test]
   fn the_frontier_costs_at_most_a_window_regardless_of_the_gap() {
-    // It must never become a scan of history. `known` sitting exactly at the edge
-    // of the window is the worst case, and it is bounded.
+    // `known` sitting exactly at the edge of the window is the worst case and
+    // it is still bounded.
     let mut w = AckWindow::new();
     for seq in 0..=WINDOW {
       w.observe(seq);

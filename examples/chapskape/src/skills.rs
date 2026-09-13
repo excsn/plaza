@@ -2,14 +2,14 @@
 //! level.
 //!
 //! Not on the wire. A frame carries five experience totals and the client works
-//! out what level that is with this, which is the same bargain the map makes:
-//! anything both ends can derive is something nobody has to send. It is also
-//! why retuning the curve does not move the protocol version.
+//! out the levels with this. As with the map, anything both ends can derive is
+//! not sent. That is also why retuning the curve does not change the protocol
+//! version.
 //!
-//! The loop is deliberately closed rather than five separate numbers going up.
-//! Chop a tree for logs, set light to them, catch a fish, cook it on the fire,
-//! eat it to heal, go and get hit. A world where every activity ends in a
-//! counter is a world with nothing to walk between.
+//! The skills form one closed loop rather than five separate counters. Chop a
+//! tree for logs, set light to them, catch a fish, cook it on the fire, eat it
+//! to heal, go and get hit. If every activity just ended in a counter, there
+//! would be no reason to walk between them.
 
 /// What can be trained.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -73,9 +73,8 @@ pub const TOP: u8 = 40;
 /// Experience needed to reach a level.
 ///
 /// Quadratic and shallow at the bottom, so the first few arrive within a
-/// minute of picking up an axe. A curve that makes a player wait ten minutes
-/// for the first one is a curve that has decided the demonstration is about
-/// patience.
+/// minute of picking up an axe. A ten-minute wait for the first one would be too
+/// long for a demonstration.
 pub fn xp_for(level: u8) -> u32 {
   let steps = level.saturating_sub(1) as u32;
   8 * steps * steps + 12 * steps
@@ -123,8 +122,8 @@ mod tests {
 
   #[test]
   fn the_first_levels_arrive_while_somebody_is_still_watching() {
-    // A demonstration whose first reward is ten minutes away has decided it is
-    // about patience. Twelve experience is one tree.
+    // A first level ten minutes away would be too long for a demonstration.
+    // Twelve experience is one tree.
     assert!(xp_for(2) <= 24, "the second level costs {} , which is too many trees", xp_for(2));
     assert!(xp_for(5) <= 200);
     println!("\n  trees to each level, at 12 experience a tree:\n");
@@ -145,8 +144,8 @@ mod tests {
 
   #[test]
   fn every_skill_has_an_index_that_round_trips() {
-    // The wire carries an index rather than a name, so a mismatch here is a
-    // frame that credits the wrong skill and nothing that says so.
+    // The wire carries an index rather than a name, so a mismatch here would
+    // credit the wrong skill with no error.
     for (index, skill) in ALL.iter().enumerate() {
       assert_eq!(skill.index(), index);
       assert_eq!(Skill::from_index(index), Some(*skill));

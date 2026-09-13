@@ -3,17 +3,16 @@
 //! The host process contains the server, so these are shared memory rather than
 //! a wire message: one `Arc<Mutex<Controls>>` handed to both the panel and the
 //! logic, which is how [horde_playground](../../horde_playground/) does it.
-//! Being a client over the socket for game state does not constrain this, and
-//! the two are unrelated concerns.
+//! Being a client over the socket for game state does not constrain this; the
+//! two are unrelated.
 //!
-//! It matters more here than it looks. The example's headline result is a 94x
-//! drop between stage one and stage four, and with these as startup flags the
-//! only way to see it was to run the thing twice and compare two numbers from
-//! memory. Turning the dial shows 2917 KiB/s become 31 while the yard keeps
-//! moving, which is the same fact arriving as an observation.
+//! The example's main result is a 94x drop between stage one and stage four.
+//! With these as startup flags the only way to see it was to run the thing
+//! twice and compare two numbers from memory. Turning the dial shows 2917 KiB/s
+//! drop to 31 while the yard keeps moving.
 //!
-//! A joining client never has one of these. It is not a permission check, it is
-//! that the `Arc` exists only in the process that is also the server.
+//! A joining client never has one of these, because the `Arc` exists only in
+//! the process that is also the server. No permission check is involved.
 
 use crate::protocol::Encoding;
 

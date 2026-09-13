@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The zero-ceremony path: open the playground as a native desktop window. No wasm
-# target, no server, no browser. Same code as the wasm build.
+# Opens the playground as a native desktop window. It needs no wasm target,
+# server or browser and runs the same code as the wasm build.
 #
 # Usage: ./run-native.sh
 set -euo pipefail

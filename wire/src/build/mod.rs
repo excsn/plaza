@@ -4,17 +4,16 @@
 //! # The problem this solves
 //!
 //! A browser client is a build product. It does not rebuild when the server
-//! does, so a page built against an older wire format is the normal state of
-//! affairs rather than an exotic one, and it fails in the least obvious way
-//! available: the page loads, the game appears to run, and only the messages
-//! whose shape changed are rejected. That reads as a netcode bug for as long as
-//! it takes somebody to suspect the cache, which is a while.
+//! does, so a page built against an older wire format is common and it fails
+//! in a way that is hard to spot: the page loads, the game appears to run and
+//! only the messages whose shape changed are rejected. That looks like a
+//! netcode bug until somebody suspects the cache.
 //!
-//! A version number in a handshake fixes it, and a version number maintained by
-//! hand does not, because bumping it is exactly the step that gets skipped
-//! during the change that needed it. Hashing the files that define the messages
-//! makes the number a property of the code: two separate builds of the same
-//! crate agree, and a stale bundle does not.
+//! A version number in a handshake fixes it, as long as nobody maintains it by
+//! hand, because a manual bump tends to be forgotten during the change that
+//! needed it. Hashing the files that define the messages derives the number
+//! from the code: two separate builds of the same crate agree and a stale
+//! bundle does not.
 //!
 //! # Using it
 //!
@@ -42,23 +41,22 @@
 //! pub const PROTOCOL: u32 = WIRE_PROTOCOL;
 //! ```
 //!
-//! # Two limits worth knowing
+//! # Two limits
 //!
-//! It cannot rescue a client older than the handshake itself, which is the
-//! bootstrapping floor every protocol version has.
+//! It cannot help a client older than the handshake itself, which is a limit
+//! every protocol version has.
 //!
-//! And it hashes the **type definitions** in those files, not the files
-//! themselves. That distinction is the difference between a version that means
-//! something and one nobody can act on: a server gets bug fixes, and hashing
-//! whole files meant every fix bumped the version and told every client to
-//! reload, whether or not a message had changed shape. Comments, formatting,
+//! It also hashes the **type definitions** in those files rather than the
+//! whole files, because a server gets bug fixes. Hashing whole files meant
+//! every fix bumped the version and told every client to reload, whether or
+//! not a message had changed shape. Comments, formatting,
 //! `use`, `impl` and `fn` are all discarded; a field, a variant, an explicit
 //! discriminant, a `#[serde]` attribute or a reordering all move it.
 //!
 //! It reads text and does not resolve types, so a field whose type is defined
 //! in a file you did not list can change without moving the version. List every
-//! file that defines part of your wire format. The narrowing is about noise,
-//! not about listing fewer files.
+//! file that defines part of your wire format. Hashing only definitions reduces
+//! spurious bumps; it does not let you list fewer files.
 
 use std::path::Path;
 
@@ -76,8 +74,8 @@ pub use resolve::Wire;
 /// `wire/tests/vocab_sync.rs`, so the two cannot drift silently.
 ///
 /// Included types are covered by the derived version and emitted by
-/// [`Wire::dart_types`] like your own; a bundle you do not pass costs nothing
-/// and covers nothing, which is the point of on-demand.
+/// [`Wire::dart_types`] like your own. Bundles are opt-in: one you do not pass
+/// has no effect.
 pub mod vocab {
   /// `Vec2`, `Vec3`, `Quat`: `plaza::common::math`.
   pub const MATH: &[(&str, &str)] = &[("<plaza_vocab>/math.rs", include_str!("vocab/math.rs"))];
@@ -94,7 +92,7 @@ pub mod vocab {
 }
 
 /// The version contribution of plaza's own wire vocabulary: [`Agent`], the
-/// netcode payloads, and the flow-control notice payloads, hashed from this
+/// netcode payloads and the flow-control notice payloads, hashed from this
 /// crate's own sources when this crate was built.
 ///
 /// [`Wire`] mixes it into every derived version automatically, so an
@@ -109,9 +107,9 @@ pub const VOCAB_VERSION: u32 = include!(concat!(env!("OUT_DIR"), "/vocab_version
 ///
 /// Paths are relative to the crate root, the directory a build script runs in.
 /// A missing file panics rather than being skipped: a version silently computed
-/// over fewer files than intended would still look like a working version, and
-/// would agree with builds it should not agree with, which is the exact failure
-/// this is meant to catch.
+/// over fewer files than intended would still look like a working version and
+/// would agree with builds it should not agree with, which is the failure this
+/// is meant to catch.
 pub fn version_of<P: AsRef<Path>>(sources: &[P]) -> u32 {
   let contents: Vec<Vec<u8>> = sources
     .iter()
@@ -123,7 +121,7 @@ pub fn version_of<P: AsRef<Path>>(sources: &[P]) -> u32 {
   version_of_sources(contents)
 }
 
-/// The whole build-script side: watch the sources, hash them, and publish the
+/// The whole build-script side: watch the sources, hash them and publish the
 /// result.
 ///
 /// Publishes it two ways, so a crate can use whichever suits it:
@@ -172,10 +170,10 @@ pub(crate) fn publish(version: u32) {
 ///
 /// The generated file declares `const int wireProtocol` and is meant to be
 /// **committed**: a Dart build cannot run this build script, so the committed
-/// copy is what the Dart toolchain sees, and this function keeps it current.
+/// copy is what the Dart toolchain sees and this function keeps it current.
 /// The write is skipped when the content already matches, so an untouched wire
-/// leaves the file untouched; a hand edit is healed on the next build, because
-/// the file itself is watched. A missing parent directory panics rather than
+/// leaves the file untouched; a hand edit is overwritten on the next build,
+/// because the file itself is watched. A missing parent directory panics rather than
 /// being skipped, for [`version_of`]'s reason: a version silently not delivered
 /// still looks like a working version.
 ///
@@ -217,9 +215,9 @@ pub(crate) fn write_if_changed(path: &Path, content: &str) {
 ///
 /// The build script rewrites the file whenever the wire changes, so this can
 /// only fail when a wire change was committed without building the server,
-/// which is exactly the drift the handshake exists to catch. It is
-/// defence-in-depth, not the safety net: a stale client also self-announces at
-/// runtime through the `Hello` handshake.
+/// which is the drift the handshake is meant to catch. It is defence in depth
+/// rather than the main check: a stale client also announces itself at runtime
+/// through the `Hello` handshake.
 pub fn assert_dart_protocol(dart_path: impl AsRef<Path>, expected: u32) {
   let path = dart_path.as_ref();
   let dart = std::fs::read_to_string(path)
@@ -283,8 +281,8 @@ mod tests {
 
   #[test]
   fn the_same_sources_always_give_the_same_version() {
-    // The entire point: two separate compilations of the same code have to agree,
-    // or the handshake tells everybody to reload forever.
+    // Two separate compilations of the same code have to agree. Otherwise the
+    // handshake tells everybody to reload forever.
     let sources = [&b"enum Op { Ping }"[..], &b"struct Packet;"[..]];
     assert_eq!(version_of_sources(sources), version_of_sources(sources));
   }
@@ -319,8 +317,8 @@ mod tests {
 
   #[test]
   fn a_bug_fix_does_not_move_the_version() {
-    // The reason this hashes definitions rather than files. A server ships
-    // fixes; hashing whole files told every client to reload on each one.
+    // A server ships fixes; hashing whole files told every client to reload on
+    // each one.
     let before = version_of_sources([&b"enum Op { Ping }\nfn apply(x: u8) -> u8 { x + 1 }\n"[..]]);
     let after = version_of_sources([&b"enum Op { Ping }\nfn apply(x: u8) -> u8 { x.saturating_add(1) }\n"[..]]);
     assert_eq!(before, after, "a fix to a function sharing the file");
@@ -363,7 +361,7 @@ mod tests {
   #[test]
   fn every_source_in_the_list_counts() {
     // A version computed over fewer files than intended still looks like a
-    // working version, and agrees with builds it should not agree with.
+    // working version and agrees with builds it should not agree with.
     let one = version_of_sources([&b"struct A;"[..]]);
     let both = version_of_sources([&b"struct A;"[..], &b"struct B;"[..]]);
     assert_ne!(one, both);

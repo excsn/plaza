@@ -10,7 +10,7 @@
 //!
 //! A behaviour change therefore fails here first, in `cargo test`, with the
 //! regenerate command in the message. Regenerating then fails the Dart replay
-//! suite until the port is brought along. Neither side can move alone.
+//! suite until the port is brought along.
 //!
 //! Floats are compared with the tolerance each file declares, not exactly: Rust
 //! computes these in `f32` and Dart has only `double`, so the last bits differ by
@@ -179,7 +179,7 @@ fn estimator_vectors() {
     .collect();
 
   // A settled baseline, a respawn-sized spike, and the next real outlier after it.
-  // The winsorising is the whole point: the spike must not lift the norm so far
+  // The winsorising is what this checks: the spike must not lift the norm so far
   // that the outlier after it goes unnoticed.
   let mut correction = CorrectionMonitor::new().with_floor(1.0).with_warmup(32);
   let magnitudes: Vec<f32> = (0..300)
@@ -236,8 +236,8 @@ fn estimator_vectors() {
 
 #[test]
 fn timing_vectors() {
-  // The render clock: started by the stream, advanced by the loop, steered by
-  // resync. Never by arrivals, which is the property the vector pins.
+  // The render clock: started by the stream, advanced by the loop and steered
+  // by resync. The vector pins that arrivals never steer it.
   let mut clock: InterpolationClock<u64> = InterpolationClock::new(100);
   let mut clock_steps = Vec::new();
   clock.observe(1000);
@@ -266,7 +266,7 @@ fn timing_vectors() {
     .map(|&t| json!({ "target": t, "state": buffer.get_interpolated_state(t).map(f64::from) }))
     .collect();
 
-  // Dead reckoning across the cap. The boundary is the interesting part: the port
+  // Dead reckoning across the cap. The boundary matters: the port
   // first held the raw sample past the limit, which is a jump of the whole window
   // in the wrong direction.
   let base = ExtrapolationBase::new(Vec3::new(0.0, 0.0, 0.0), Vec3::new(10.0, 0.0, 0.0), 0u64, 0);
@@ -463,8 +463,8 @@ fn bookkeeping_vectors() {
     .collect();
   let missing: Vec<u64> = acks.missing_since(150).collect();
 
-  // Slot keys: the bit packing is the contract, because `SetDigest` and the delta
-  // baselines are keyed on the encoded value.
+  // Slot keys: the bit packing must not change, because `SetDigest` and the
+  // delta baselines are keyed on the encoded value.
   let key_encodings: Vec<Value> = [(0u32, 0u16), (1, 1), (41, 7), (0x0FFF_FFFF, 0xFFFF), (7, 65535)]
     .iter()
     .map(|&(index, generation)| {
@@ -501,8 +501,8 @@ fn bookkeeping_vectors() {
       let key = allocator.alloc();
       events.push(json!({ "op": "alloc", "encoded": key.encode(), "len": allocator.len() }));
     }
-    // A stale handle must stay detectable, which is the whole reason for the
-    // generation half of the key.
+    // A stale handle must stay detectable, which is what the generation half
+    // of the key is for.
     events.push(json!({ "op": "is_live_stale", "encoded": held[1].encode(), "live": allocator.is_live(held[1]) }));
     events.push(json!({ "op": "index_space", "value": allocator.index_space() as u64 }));
     policy_events.push(json!({

@@ -2,8 +2,8 @@
 //! time, and a sparse sorted set diffed only against what the query returned.
 //!
 //! The dense scan is O(population) per watcher per tick however small the
-//! pane; the sparse one is O(visible). `examples/vis_scale.rs` prices the two
-//! against each other, which is the crossing this example exists to find.
+//! pane; the sparse one is O(visible). `examples/vis_scale.rs` measures both
+//! to find the scale where one overtakes the other.
 
 use plaza_server_utils::relevance::VisibilitySet;
 

@@ -1,32 +1,31 @@
 //! An order-independent digest of a set of keys, for catching a mirror that has
 //! silently stopped matching the set it is supposed to hold.
 //!
-//! Shared by both sides deliberately. The server folds what it believes a client
-//! should hold, the client folds what it actually holds, and the two compare. If
-//! each computed its own fold, a disagreement in the arithmetic would be
-//! indistinguishable from a disagreement about the world, and the recovery
-//! machinery would fire forever chasing a bug that was only ever in the hashing.
-//! So there is one implementation, and it lives in the lower crate:
-//! `plaza_server_utils` re-exports it beside the relevance machinery.
+//! Both sides use this one implementation. The server folds what it believes a
+//! client should hold, the client folds what it actually holds and the two
+//! compare. If each computed its own fold, a difference in the arithmetic would
+//! look the same as a difference in the world and the recovery machinery would
+//! keep firing on a bug that was only in the hashing. The implementation lives
+//! in the lower crate and `plaza_server_utils` re-exports it beside the
+//! relevance machinery.
 
 /// An order-independent digest of a set of keys, maintainable incrementally.
 ///
 /// A delta-relevance stream has a silent failure mode: the client applies
-/// `entered`/`left` to keep a local mirror, and if one delta is lost, malformed,
-/// or misapplied, the mirror is wrong **for good**, with no symptom. Bandwidth
-/// looks normal, positions look normal, and the only evidence is on the screen.
-/// The cure is for both sides to summarise their set cheaply and compare.
+/// `entered`/`left` to keep a local mirror and if one delta is lost, malformed
+/// or misapplied, the mirror stays wrong **permanently** with no symptom.
+/// Bandwidth and positions look normal and the only evidence is on the screen.
+/// The fix is for both sides to summarise their set cheaply and compare.
 ///
-/// Order independence is the requirement that shapes this: two peers holding the
-/// same set may iterate it in different orders, so the digest must not depend on
-/// order. Summation gives that, and unlike XOR it does not silently cancel
-/// duplicates. Because the combine is addition, a key can be added or removed in
-/// O(1), so a client maintains the digest as entities enter and leave rather than
-/// rehashing everything each tick.
+/// Two peers holding the same set may iterate it in different orders, so the
+/// digest must not depend on order. Summation gives that and unlike XOR it
+/// does not silently cancel duplicates. Because the combine is addition, a key
+/// can be added or removed in O(1), so a client maintains the digest as
+/// entities enter and leave rather than rehashing everything each tick.
 ///
-/// The key is a `u64` you choose, which is the important flexibility: hash a bare
-/// index to check *membership*, or pack an index with a generation to check that
-/// both sides agree on the *occupant* too.
+/// The key is a `u64` you choose: hash a bare index to check *membership* or
+/// pack an index with a generation to check that both sides agree on the
+/// *occupant* too.
 ///
 /// ```ignore
 /// // Server, once per send: summarise what this client should now hold.
@@ -105,14 +104,14 @@ impl SetDigest {
 ///
 /// [`SetDigest`] answers "do we hold the same set"; this answers "is this the
 /// same world", and the two must not be swapped. A state has one canonical
-/// field order, so order dependence is free and buys sensitivity to position:
-/// the same values arranged differently are a different world.
+/// field order, so order dependence costs nothing and makes the digest
+/// sensitive to position: the same values in a different arrangement give a
+/// different digest.
 ///
 /// FNV-1a over little-endian bytes. Floats are folded by bit pattern, so
-/// `-0.0` and `0.0` disagree and NaN payloads count, which is deliberate: a
-/// divergence in bits is exactly what a rollback or lockstep simulation has to
-/// hear about before it becomes a divergence on screen, and only a digest ever
-/// says so.
+/// `-0.0` and `0.0` disagree and NaN payloads count. A rollback or lockstep
+/// simulation needs to detect a divergence in bits before it shows up on
+/// screen, which a digest can do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StateDigest(u64);
 
@@ -146,8 +145,8 @@ impl StateDigest {
     self.write(&value.to_le_bytes());
   }
 
-  /// The bit pattern, not the value: two floats that print alike but differ in
-  /// a low bit are the early warning this exists for.
+  /// Folds the bit pattern rather than the value, so two floats that print
+  /// alike but differ in a low bit still change the digest.
   pub fn write_f32(&mut self, value: f32) {
     self.write_u32(value.to_bits());
   }
@@ -164,7 +163,7 @@ mod state_tests {
   #[test]
   fn the_fold_is_fnv1a_and_pinned() {
     // The value crosses the wire and is compared across builds, so the exact
-    // fold is the contract. The vector is FNV-1a's published test value.
+    // fold must not change. The vector is FNV-1a's published test value.
     assert_eq!(StateDigest::new().finish(), 0xcbf2_9ce4_8422_2325, "the offset basis");
     let mut digest = StateDigest::new();
     digest.write(b"a");

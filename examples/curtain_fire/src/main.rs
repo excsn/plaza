@@ -1,4 +1,4 @@
-//! The window, and which of the four things this process is.
+//! The window and the choice of which of the four roles this process runs.
 
 mod render;
 mod ui;
@@ -184,9 +184,9 @@ async fn frame_loop(options: role::Options) {
       #[cfg(feature = "server")]
       if let Some(view) = &view {
         let v = view.lock();
-        // The host, and only the host, can put the two curtains on top of each
-        // other. A joiner has nothing to compare against: the field it draws is
-        // the only one it has ever been given.
+        // Only the host can draw the two curtains over each other. A joiner has
+        // nothing to compare against: the field it draws is the only one it
+        // has.
         render::draw_truth_curtain(&board, &v.curtain);
       }
 

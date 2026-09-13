@@ -1,9 +1,8 @@
-//! The authoritative server: integrates the field, decides who swallowed what,
+//! The authoritative server: integrates the field, decides who swallowed what
 //! and settles player collisions.
 //!
-//! Note what it is authoritative *for*. Pellet motion is not a decision, it is a
-//! consequence of the field, and every client can derive it. Swallowing and
-//! collisions are decisions, and only the server makes them.
+//! Pellet motion follows from the field, so every client can derive it.
+//! Swallowing and collisions are decisions and only the server makes them.
 
 use plaza_client_utils::{FixedTimestep, Periodic};
 use plaza_server_utils::aggregate::{AggregateTree, WeightedPoint};
@@ -217,7 +216,7 @@ impl Server {
         }
       }
       if let Some(h) = eaten_by {
-        // No ceiling: growth is damped by the curve, not stopped by a wall.
+        // No ceiling: the log curve damps growth instead.
         self.holes[h].mass += PELLET_MASS;
         self.scores[h] += 1;
         self.swallow_count += 1;
@@ -238,11 +237,11 @@ impl Server {
 
   /// The holes pull on each other exactly as they pull on pellets.
   ///
-  /// This is what makes a grapple a grapple: drift too close and the attraction
-  /// closes the rest of the distance for you, and keeps closing it while you are
+  /// This is what makes contact sticky: drift too close and the attraction
+  /// closes the rest of the distance and keeps it closed while you are
   /// draining. Walking away does not work, because the pull at contact is tuned
-  /// above walking speed; a dash outruns it briefly, and the pull starts eating
-  /// the gap back the moment the dash ends.
+  /// above walking speed. A dash outruns it briefly and the pull starts closing
+  /// the gap again the moment the dash ends.
   fn attract_holes(&mut self) {
     let snapshot = self.holes.clone();
     for (a, hole) in self.holes.iter_mut().enumerate() {
@@ -266,14 +265,13 @@ impl Server {
     }
   }
 
-  /// Contact between players: they press, they do not pass through.
+  /// Contact between players.
   ///
   /// Two holes never interpenetrate. Whatever overlap the pull would have created
-  /// is measured as *pressure* and then undone, leaving them exactly tangent, so
-  /// what you see is two bodies squeezing rather than two circles sliding through
-  /// one another. Both drain the whole time, harder the harder they are pressed,
-  /// and because draining shrinks their radii they stay in contact while getting
-  /// smaller. Merging happens only at the end, when one of them is finished.
+  /// is measured as *pressure* and then undone, leaving them exactly tangent.
+  /// Both drain the whole time, faster the harder they are pressed. Draining
+  /// shrinks their radii, so they stay in contact while getting smaller. Merging
+  /// happens only at the end, when one of them reaches zero mass.
   fn resolve_collisions(&mut self) {
     for slot in &mut self.contact_with {
       *slot = None;
@@ -295,8 +293,8 @@ impl Server {
         self.contact_with[a] = Some(b);
         self.contact_with[b] = Some(a);
 
-        // Pressure is the overlap that would have happened. Touching costs a
-        // little; leaning on someone costs a lot.
+        // Pressure is the overlap that would have happened. Touching drains a
+        // little and pressing hard drains a lot.
         let depth = (press / touch).clamp(0.0, 1.0);
         let drain = (CONTACT_DRAIN_BASE + CONTACT_DRAIN_PRESS * depth) * SIM_DT;
         for h in [a, b] {
@@ -337,7 +335,7 @@ impl Server {
       {
         self.respawn_at_ms[p] = None;
         // Not back onto the fixed start slot: by now other holes have drifted all
-        // over the arena, and the start slot is as likely as anywhere to be under
+        // over the arena and the start slot is as likely as anywhere to be under
         // one of them, so you would reappear inside the crowd that just ate you
         // and be grappled again before you could move. Land in open space
         // instead. Placed then marked alive, so several respawns on the same tick
@@ -547,7 +545,7 @@ impl Server {
 }
 
 /// A pellet enters at the arena edge with enough tangential speed to orbit
-/// rather than fall straight in, which is what makes the field interesting.
+/// rather than fall straight in.
 fn spawn_pellet(seed: u32) -> Pellet {
   let a = (seed.wrapping_mul(2_654_435_761) % 6283) as f32 / 1000.0;
   let r = 900.0 + ((seed.wrapping_mul(40_503) >> 3) % 500) as f32;

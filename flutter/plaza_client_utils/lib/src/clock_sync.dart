@@ -16,8 +16,8 @@ class _Sample {
 ///
 /// A round trip measures total delay, not each leg, so where the network is
 /// asymmetric the one-way offset is unrecoverable from RTT alone. Regression
-/// recovers the drift rate cleanly; it does not recover the asymmetric
-/// constant. Size the interpolation buffer to absorb the residual.
+/// recovers the drift rate but not the asymmetric constant. Size the
+/// interpolation buffer to absorb the residual.
 ///
 /// Ported from `plaza_client_utils::clock_sync::ClockSyncEstimator`, which is
 /// authoritative. Dart `double` is IEEE 754 binary64, matching the Rust `f64`.

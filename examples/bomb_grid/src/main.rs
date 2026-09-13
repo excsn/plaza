@@ -1,4 +1,4 @@
-//! Frame loop: walk the lattice, drop bombs, and watch what happens when the
+//! Frame loop: walk the lattice, drop bombs and watch what happens when the
 //! server disagrees about which cell you are in.
 
 mod render;
@@ -16,8 +16,9 @@ use render::SnapMarker;
 
 /// Reports a fatal misconfiguration.
 ///
-/// Never `process::exit` on wasm: there is no process to exit, the call traps,
-/// and a browser shows `RuntimeError: unreachable executed` with no reason.
+/// Never `process::exit` on wasm: there is no process to exit, so the call
+/// traps and a browser shows `RuntimeError: unreachable executed` with no
+/// reason.
 fn give_up(message: String) {
   if cfg!(target_arch = "wasm32") {
     println!("{message}");
@@ -84,8 +85,8 @@ fn windowed(options: role::Options) {
 
 /// What the keyboard is asking for this frame.
 ///
-/// One direction, not a vector: the lattice has no diagonals, so two keys at
-/// once must resolve to one answer rather than to a normalised blend.
+/// One direction rather than a vector: the lattice has no diagonals, so two
+/// keys at once must resolve to one answer rather than to a normalised blend.
 fn read_dir(pad: Option<Way>) -> Dir {
   if is_key_down(KeyCode::W) || is_key_down(KeyCode::Up) {
     Dir::Up
@@ -96,8 +97,8 @@ fn read_dir(pad: Option<Way>) -> Dir {
   } else if is_key_down(KeyCode::D) || is_key_down(KeyCode::Right) {
     Dir::Right
   } else {
-    // The pad answers the same question the keys do, and answers it the same
-    // way: one direction, because the lattice has no diagonals.
+    // The pad resolves to one direction the same way the keys do, because the
+    // lattice has no diagonals.
     match pad {
       Some(Way::Up) => Dir::Up,
       Some(Way::Down) => Dir::Down,
@@ -110,9 +111,10 @@ fn read_dir(pad: Option<Way>) -> Dir {
 
 #[cfg(any(feature = "server", all(feature = "client", feature = "websocket")))]
 async fn frame_loop(options: role::Options) {
-  // The controls the panel edits and the arena reads, and the truth the arena
-  // publishes for a host to draw. Both are shared across a thread boundary: the
-  // arena runs on its own runtime while the frame loop owns the main thread.
+  // The controls (edited by the panel, read by the arena) and the state the
+  // arena publishes for a host to draw. Both are shared across a thread
+  // boundary: the arena runs on its own runtime while the frame loop owns the
+  // main thread.
   let controls_slot = std::sync::Arc::new(parking_lot::Mutex::new(Controls::default()));
   #[cfg(feature = "server")]
   let view: Option<std::sync::Arc<parking_lot::Mutex<bomb_grid::net::arena::HostView>>> =
@@ -151,8 +153,8 @@ async fn frame_loop(options: role::Options) {
 
   #[cfg(all(feature = "client", feature = "websocket"))]
   let mut marker = SnapMarker::default();
-  // A bomb is an edge, not a level: held is not repeatedly pressed, so the
-  // button needs the same edge detection the key gets for free.
+  // A bomb drops on the press rather than while held, so the button needs the
+  // same edge detection the key already has.
   let mut bomb_held = false;
   // Assigned from the absolute clock on the first frame, so there is no
   // starting value to read.
@@ -161,11 +163,11 @@ async fn frame_loop(options: role::Options) {
 
   loop {
     let dt = get_frame_time().min(0.25);
-    // Read absolutely rather than accumulated. Adding a truncated frame time
-    // each frame runs the clock slow: 16.67ms counted as 16 loses 4% a second
-    // at 60fps and 13.6% at 144, and every rate measured against it reads high
-    // by the same amount. Truncating an absolute clock once is off by at most a
-    // millisecond, for ever.
+    // Read from the absolute clock rather than accumulated. Adding a truncated
+    // frame time each frame runs the clock slow: 16.67ms counted as 16 loses 4%
+    // a second at 60fps and 13.6% at 144 and every rate measured against it
+    // reads high by the same amount. Truncating the absolute clock is never off
+    // by more than a millisecond.
     clock_ms = (get_time() * 1000.0) as u64;
     perf.observe(dt);
 
@@ -191,7 +193,7 @@ async fn frame_loop(options: role::Options) {
       // Once per frame, whatever the frame rate is. The prediction catches up
       // to the current tick from the clock, so it cannot be made to run faster
       // by drawing faster: a client stepping on its own frame grid crosses cell
-      // boundaries at different moments from the server, and on a lattice that
+      // boundaries at different moments from the server and on a lattice that
       // is a whole cell of disagreement every time.
       client.tick(&controls);
       marker.observe(client.sim.snaps, was, client.sim.my_player().cell);
@@ -216,9 +218,9 @@ async fn frame_loop(options: role::Options) {
       render::draw_bombs(&board, &drawn, server_now, &phantom);
       render::draw_fire(&board, &client.sim.drawn_fire());
 
-      // The server's truth for your own player, drawn hollow under your belief
-      // about it, so the gap between them is a thing on screen and not only a
-      // number in a panel. Only a host has this: a joiner legitimately cannot.
+      // The server's position for your own player, drawn hollow under your
+      // predicted one, so the gap between them shows on screen as well as in
+      // the panel. Only a host has this; a joiner legitimately cannot.
       #[cfg(feature = "server")]
       if let Some(view) = &view {
         let truth = view.lock();
@@ -254,9 +256,8 @@ async fn frame_loop(options: role::Options) {
       draw_text(text, (screen_width() - w) * 0.5, screen_height() * 0.5, 28.0, GRAY);
     }
 
-    // Drawn over everything, and only on a device that has produced a touch:
-    // a thumb pad on a desktop window is clutter in the one place a player is
-    // looking.
+    // Drawn over everything and only on a device that has produced a touch,
+    // since a thumb pad on a desktop window would clutter the board.
     #[cfg(all(feature = "client", feature = "websocket"))]
     if playground_common::touch::seen_touch() {
       let pointers = Pointers::gather();
@@ -319,8 +320,8 @@ fn draw_scoreboard(players: &[PlayerState], board: &Board) {
 }
 
 /// Frame time, smoothed slowly enough to read, with the window's worst beside
-/// it. A per-frame reciprocal is biased toward fast frames and hides exactly
-/// the hitch it is meant to reveal.
+/// it. A per-frame reciprocal is biased toward fast frames and hides the
+/// hitches it is meant to show.
 struct Perf {
   mean_dt: f32,
   window: std::collections::VecDeque<f32>,

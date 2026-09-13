@@ -8,21 +8,21 @@ use plaza::snapshot::{SnapshotContext, SnapshotProvider};
 
 /// Builds one player's view of the table.
 ///
-/// This is the seam for hidden information. The controller calls this once per
-/// recipient and hands over `target_agent`, so the same state yields a different
-/// payload for each player: your own cards by rank, everyone else's by count.
+/// This is where hidden information is handled. The controller calls this once
+/// per recipient and hands over `target_agent`, so the same state yields a
+/// different payload for each player: your own cards by rank, everyone else's
+/// by count.
 ///
-/// Getting this wrong leaks the game. Note that nothing else in the example can
-/// leak a hand, because this is the only place a hand is turned into something
-/// a client receives.
+/// Nothing else in the example can leak a hand, because this is the only place
+/// a hand is turned into something a client receives.
 #[derive(Debug, Default)]
 pub struct TableSnapshotter;
 
 /// One player's view, as a function.
 ///
 /// Public so a bot can be handed exactly what a browser is handed. A bot that
-/// read `TableState` would see every hand at the table, which is the one thing
-/// this example exists to say cannot happen.
+/// read `TableState` would see every hand at the table, which this example
+/// says a client can never do.
 pub fn player_view(state: &TableState, me: Option<PlayerId>) -> PlayerView {
   let my_hand = me
     .as_ref()

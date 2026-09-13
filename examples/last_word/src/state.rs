@@ -9,8 +9,8 @@ use plaza::game_common::flow_control::{Mark, Phased, PhasedScheduler, Situation}
 use crate::protocol::{CastSpell, DuelPhase, DuelView, Panel, PlayerId, BOT, LIFE, SEATS, TICK_MS};
 
 /// Work scheduled against one occupancy of a phase. Priority clocks carry a
-/// [`Mark`] of the window they were scheduled in: the window moving on is
-/// what invalidates a clock.
+/// [`Mark`] of the window they were scheduled in: a clock goes stale when the
+/// window moves on.
 #[derive(Clone, Debug)]
 pub enum WordEvent {
   /// A lone human has waited long enough; the bot takes the other seat.

@@ -2,7 +2,7 @@
 
 **License:** Mozilla Public License 2.0 (MPL-2.0) · **Status:** Experimental
 
-The session lifecycle in Dart: the handshake, the ops, reconnect with backoff, and resume after a suspend. Transport-agnostic, so it is pure Dart with nothing to conditionally import.
+The session lifecycle in Dart: the handshake, the ops, reconnect with backoff and resume after a suspend. Transport-agnostic, so it is pure Dart with nothing to conditionally import.
 
 Full surface in [API_REFERENCE.md](API_REFERENCE.md).
 
@@ -47,27 +47,27 @@ await client.start();
 client.sendOp(variant('Join', {'room': 3}));
 ```
 
-`connect` is a [`SocketFactory`](API_REFERENCE.md#typedef-socketfactory) you supply, and it is called again on every reconnect. [`plaza_ws`](../plaza_ws/) is the usual answer; [`LoopbackSocket`](API_REFERENCE.md#class-loopbacksocket) covers tests with no server and no network.
+`connect` is a [`SocketFactory`](API_REFERENCE.md#typedef-socketfactory) you supply and it is called again on every reconnect. [`plaza_ws`](../plaza_ws/) is the usual answer; [`LoopbackSocket`](API_REFERENCE.md#class-loopbacksocket) covers tests with no server and no network.
 
 Ops arrive as decoded values, not as typed objects. Read them with `variantName` and `variantFields` rather than by checking for a property, or every unit variant is silently dropped.
 
-## One op per event, not one per frame
+## Streams
 
-`ops` emits each op separately. A frame carrying three of them is a detail of batching, and a server that starts coalescing should not change how a client reads its stream.
+`ops` emits each op separately. A frame carrying three of them is a detail of batching and a server that starts coalescing should not change how a client reads its stream.
 
-`ops` and `events` are **broadcast** streams, so more than one part of an app can listen and a late listener misses what came before. [`PlazaSocket.messages`](API_REFERENCE.md#property-messages) is the opposite, single-subscription and buffering, and a socket implementation has to honour that or it loses the `Hello`.
+`ops` and `events` are **broadcast** streams, so more than one part of an app can listen and a late listener misses what came before. [`PlazaSocket.messages`](API_REFERENCE.md#property-messages) is single-subscription and buffers; a socket implementation that does not buffer loses the `Hello`.
 
-## Sends are dropped when the socket is not open
+## Sending while closed
 
-`sendOps` returns false rather than queueing. A queue that survives a reconnect replays intent the player has moved on from: the tap that was meant for a lobby that has since started, the move for a turn that has passed. What to retry is a decision only the application can make, so it gets the false and makes it.
+`sendOps` returns false rather than queueing. A queue that survives a reconnect replays intent the player has moved on from: the tap that was meant for a lobby that has since started, the move for a turn that has passed. Only the application can decide what to retry, so `sendOps` returns false and leaves that to it.
 
-## Reconnect and resume are different events
+## Reconnect and resume
 
 A **reconnect** changed the socket, probably not the link. Measurements in flight are discarded and what has been learned is kept.
 
-A **resume** discards both. Arbitrary wall time passed, so a least-squares clock fit across a ten-minute gap produces a meaningless skew, and a ping sent before a suspend and answered after it measures the suspend rather than the network. One such sample poisons a smoothed estimator for minutes.
+A **resume** discards both. Arbitrary wall time passed, so a least-squares clock fit across a ten-minute gap produces a meaningless skew and a ping sent before a suspend and answered after it measures the suspend rather than the network. One such sample skews a smoothed estimator for minutes.
 
-Call [`resume`](API_REFERENCE.md#method-resume) on `AppLifecycleState.resumed`. Whatever queued while the process was frozen describes a world that has moved on, so it is dropped unread rather than played out, and the application hears about it as `Connected(resumed: true)`, which is where it should ask for a fresh snapshot instead of trying to catch up.
+Call [`resume`](API_REFERENCE.md#method-resume) on `AppLifecycleState.resumed`. Whatever queued while the process was frozen is out of date, so it is dropped unread rather than played out and the application hears about it as `Connected(resumed: true)`, which is where it should ask for a fresh snapshot instead of trying to catch up.
 
 ## Measuring the link
 
@@ -82,18 +82,18 @@ client.pongs.listen((pong) {
 
 The client answers the server's probes by itself, so a Flutter client shows up in `agent_link_rtt` without doing anything.
 
-The stamp's unit is yours; it comes back exactly as it went out and nothing on the server reads it. `responder` is the server's clock in whatever unit that end works in, which the two of you agree on out of band, and it is null when the server has no clock installed. The transport's own heartbeat still runs underneath this: that is the *server* measuring the client, and the two numbers answer different questions.
+The stamp's unit is yours; it comes back exactly as it went out and nothing on the server reads it. `responder` is the server's clock in whatever unit that end works in, which the two of you agree on out of band and it is null when the server has no clock installed. The transport's own heartbeat still runs underneath this: that is the *server* measuring the client, which is a separate number.
 
-`complete` returns false when the probe was discarded, which is the point of it: the epoch moves on a resume and on a reconnect, so anything in flight across either is thrown away rather than recorded.
+`complete` returns false when the probe was discarded. The epoch moves on a resume and on a reconnect, so anything in flight across either is thrown away rather than recorded.
 
-## The handshake is reported, never enforced
+## Version mismatch
 
-Both ends send their [`ProtocolVersion`](../plaza_wire/API_REFERENCE.md#class-protocolversion) unprompted, so neither waits for the other and a peer built before the frame existed simply never answers. A mismatch raises [`Outdated`](API_REFERENCE.md#class-outdated) and **the connection stays open**: plaza records the disagreement and keeps serving, and the ops keep arriving after the event.
+Both ends send their [`ProtocolVersion`](../plaza_wire/API_REFERENCE.md#class-protocolversion) unprompted, so neither waits for the other and a peer built before the frame existed simply never answers. A mismatch raises [`Outdated`](API_REFERENCE.md#class-outdated) and **the connection stays open**: plaza records the disagreement and keeps serving and the ops keep arriving after the event.
 
-Deciding what to do is yours. A browser client reloads. A shipped app cannot, so it has to say so, and continuing past the prompt means decoding against a definition the server no longer holds. [`plaza_ws/example/lobby_client.dart`](../plaza_ws/example/lobby_client.dart) picks a policy and argues for it, including the one answer that is always wrong: retrying, because the next connection reaches the same server with the same two versions.
+What to do next is up to the app. A browser client reloads. A shipped app cannot, so it has to say so and continuing past the prompt means decoding against a definition the server no longer holds. [`plaza_ws/example/lobby_client.dart`](../plaza_ws/example/lobby_client.dart) picks a policy and explains it. It also names the one answer that is always wrong: retrying, because the next connection reaches the same server with the same two versions.
 
-## Backoff jitter is the part that matters
+## Backoff
 
-Exponential with a ceiling, defaulting to one second, factor 1.8, capped at thirty. The jitter matters more than the curve: without it a server that drops every client at once gets them all back in the same millisecond, which is how a recoverable blip becomes an outage.
+Exponential with a ceiling, defaulting to one second, factor 1.8, capped at thirty. The jitter is more important than the shape of the curve: without it a server that drops every client at once gets them all back in the same millisecond and that burst can turn a recoverable blip into an outage.
 
 `maxAttempts` defaults to null, retrying for ever, which is right for a game a player leaves open. Set it and [`GaveUp`](API_REFERENCE.md#class-gaveup) fires when it runs out.

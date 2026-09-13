@@ -73,7 +73,7 @@ void main() {
 
     /// Not in the Rust original, which logs a warning instead. A dropped input
     /// means replay is already incomplete, which is worth a number rather than a
-    /// log line nobody reads.
+    /// log line that is easy to miss.
     test('a dropped input is counted', () {
       final buffer = ClientInputBuffer<Move, PlayerState>(2);
       for (var i = 1; i <= 5; i++) {

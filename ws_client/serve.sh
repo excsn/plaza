@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds the browser echo spike and serves it, plus a local echo server to talk
-# to. Two processes, one command, because the whole point is a round trip.
+# to. Two processes from one command, because the test is a round trip.
 #
 # Usage: ./serve.sh [page-port] [echo-port]   (defaults 8090 and 9001)
 set -euo pipefail
@@ -22,8 +22,8 @@ cp "$root/target/wasm32-unknown-unknown/release/examples/echo_web.wasm" "$here/s
 cp "$here/js/plaza_ws.js" "$here/static/"
 
 # Catch a name mismatch here rather than as a page that loads and does nothing:
-# miniquad stubs out imports nothing provides, so this is the only loud failure
-# available.
+# miniquad stubs out imports nothing provides, so this check is the only place
+# a mismatch produces an error.
 echo "==> checking the wasm's imports against the plugin"
 "$here/check_js_imports.py" "$here/static/echo_web.wasm" "$here/js/plaza_ws.js"
 

@@ -1,28 +1,26 @@
-//! Sub-byte encoding: the bits a byte-aligned format cannot give back.
+//! Sub-byte encoding, for fields smaller than a byte.
 //!
 //! MessagePack spends a byte on a bool and five on a `u32` that happens to be
-//! large. That is the right trade for an envelope and the wrong one for the hot
-//! array in a state-sync packet, where the same value appears once per entity
-//! per tick and the packet has a budget. A boolean flag at 1 bit instead of 8,
-//! a position quantised to the precision the game actually renders at, and an
-//! index encoded as a delta from the previous one are the three moves that turn
-//! megabits into kilobits.
+//! large. That is fine for an envelope but costly for the hot array in a
+//! state-sync packet, where the same value appears once per entity per tick
+//! and the packet has a budget. A boolean flag at 1 bit instead of 8, a
+//! position quantised to the precision the game actually renders at and an
+//! index encoded as a delta from the previous one take a packet from megabits
+//! to kilobits.
 //!
-//! Two things this deliberately is not. It is not a replacement for the codec:
-//! the envelope stays [`crate::WireCodec`] and only the payload that earns it
-//! gets packed, because a hand-written bit layout costs a hand-written reader to
-//! match. And it is not self-describing. A [`BitReader`] must be told exactly
-//! what a [`BitWriter`] was told, in the same order; there are no tags and no
-//! way to find out. That is the whole reason it is small, and the reason the
+//! It does not replace the codec: the envelope stays [`crate::WireCodec`] and
+//! only the hot payload gets packed, because a hand-written bit layout needs a
+//! hand-written reader to match. It is also not self-describing. A
+//! [`BitReader`] must be told exactly what a [`BitWriter`] was told, in the
+//! same order; there are no tags to inspect. That keeps it small and is why the
 //! layout belongs next to the type it encodes rather than spread across a
 //! codebase.
 //!
-//! One trap on the way out, worth more than it sounds. A packed payload
-//! travelling as a `Vec<u8>` field reaches the outer codec through
-//! `serialize_seq`, so every byte is encoded as its own integer: MessagePack
-//! spends two on anything above 127. In `wire/tests/packing.rs` that costs
-//! 15502 bytes to carry 10396, giving back half of what the packing just won.
-//! Declare the field as *bytes* (`serde_bytes`, or a newtype whose `Serialize`
+//! One trap: a packed payload travelling as a `Vec<u8>` field reaches the outer
+//! codec through `serialize_seq`, so every byte is encoded as its own integer:
+//! MessagePack spends two on anything above 127. In `wire/tests/packing.rs` that
+//! costs 15502 bytes to carry 10396, giving back half of the packing saving.
+//! Declare the field as *bytes* (`serde_bytes` or a newtype whose `Serialize`
 //! calls `serialize_bytes`) and the same payload travels in 10411.
 //!
 //! ```
@@ -93,7 +91,7 @@ pub fn unzigzag(value: u64) -> i64 {
 /// Maps `value` onto `bits` bits of the range `min..=max`.
 ///
 /// Out-of-range values clamp rather than wrap: a position outside the world is a
-/// bug worth surviving, and wrapping would teleport it to the far side.
+/// bug worth surviving and wrapping would teleport it to the far side.
 pub fn quantize(value: f32, min: f32, max: f32, bits: u32) -> u64 {
   debug_assert!(max > min, "quantize range must be non-empty");
   let steps = ((1u64 << bits) - 1) as f32;
@@ -169,7 +167,7 @@ impl BitWriter {
   /// A nibble varint: four data bits per group, each followed by a continuation
   /// bit.
   ///
-  /// `0..=15` costs five bits where MessagePack's smallest integer costs eight,
+  /// `0..=15` costs five bits where MessagePack's smallest integer costs eight
   /// and the numbers a packet is full of are small: entity index deltas, counts,
   /// enum tags. The trade is at the top, where a full `u64` costs 80 bits
   /// against MessagePack's 72, which is a good exchange for values that are
@@ -195,7 +193,7 @@ impl BitWriter {
   ///
   /// A value outside the range is written clamped, as `quantize` documents, and
   /// counted: see [`clamped`](Self::clamped). NaN counts too, since it
-  /// quantizes to 0 and is a worse bug than a mere overshoot.
+  /// quantizes to 0 and is a worse bug than an overshoot.
   pub fn quantized(&mut self, value: f32, min: f32, max: f32, bits: u32) {
     if !(value >= min && value <= max) {
       self.clamped += 1;
@@ -211,8 +209,8 @@ impl BitWriter {
   /// defect is invisible on the wire and on the reader: a clamped code is a
   /// legal code an honest edge value also produces, which is why the reader has
   /// no counterpart to this. A layout's test asserts zero over a run of the
-  /// real simulation; a live server reads the number instead of a bug report
-  /// saying the edge of the map looks frozen.
+  /// real simulation; a live server can read the number rather than wait for a
+  /// bug report that the edge of the map looks frozen.
   pub fn clamped(&self) -> u64 {
     self.clamped
   }
@@ -278,7 +276,7 @@ impl<'a> BitReader<'a> {
   ///
   /// [`BitWriter::finish`] pads its last byte, so **concatenated payloads are
   /// byte-aligned and a reader running through them is not**: after the last
-  /// record of one payload the cursor sits inside that padding, and the next
+  /// record of one payload the cursor sits inside that padding and the next
   /// payload's first field would be read from the wrong offset. Call this
   /// between payloads. Reading a single payload never needs it.
   pub fn align_to_byte(&mut self) {
@@ -367,10 +365,10 @@ mod tests {
 
   #[test]
   fn concatenated_payloads_need_realigning_between_them() {
-    // The defect this exists for: two independently finished payloads
-    // concatenate byte-aligned, but a reader running straight through lands
-    // inside the first one's padding and reads the second one's fields from
-    // the wrong offset. It does not error, it returns plausible rubbish.
+    // Two independently finished payloads concatenate byte-aligned, but a
+    // reader running straight through lands inside the first one's padding and
+    // reads the second one's fields from the wrong offset. It does not error;
+    // it returns plausible garbage.
     let mut a = BitWriter::new();
     a.bits(0b101, 3);
     let mut bytes = a.finish();
@@ -495,7 +493,7 @@ mod tests {
   #[test]
   fn nan_counts_as_a_clamp() {
     // NaN quantizes to 0, silently: a well-formed packet carrying garbage,
-    // which is exactly what the counter exists to surface.
+    // which the counter surfaces.
     let mut w = BitWriter::new();
     w.quantized(f32::NAN, 0.0, 1.0, 10);
     assert_eq!(w.clamped(), 1);
@@ -517,7 +515,7 @@ mod tests {
     // A quarter turn about X is the interesting case, since two components sit
     // exactly on the smallest-three bound. Named rather than typed out, because
     // a hand-written approximation of a known constant is what clippy reads as
-    // a mistake, and it is not one here.
+    // a mistake and it is not one here.
     const HALF_TURN: f32 = std::f32::consts::FRAC_1_SQRT_2;
     let quats = [
       [0.0, 0.0, 0.0, 1.0f32],

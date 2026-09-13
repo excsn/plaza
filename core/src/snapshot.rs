@@ -9,13 +9,13 @@ use async_trait::async_trait;
 /// What kind of snapshot is being asked for.
 ///
 /// Plaza never reads this. It travels from whoever asks for a snapshot to your
-/// [`SnapshotProvider`], which is free to interpret or ignore it: both ends are
-/// yours, and the controller only carries it.
+/// [`SnapshotProvider`], which can interpret or ignore it. Both ends are
+/// yours; the controller only carries it.
 ///
-/// The named variants are conveniences for common cases, not a vocabulary you
-/// are limited to. When your notion of "which snapshot" is anything else, a
-/// content hash, a vector clock, a Lamport timestamp, a typed view enum: use
-/// [`Custom`](Self::Custom) and downcast on the other side:
+/// The named variants are conveniences for common cases. When your notion of
+/// "which snapshot" is anything else (a content hash, a vector clock, a
+/// Lamport timestamp, a typed view enum), use [`Custom`](Self::Custom) and
+/// downcast on the other side:
 ///
 /// ```ignore
 /// #[derive(Clone)]
@@ -40,14 +40,12 @@ pub enum SnapshotContext {
   ///
   /// A convenience for the common case of a monotonic counter. If your versions
   /// are not `u64`, use [`Custom`](Self::Custom) rather than squeezing them into
-  /// one: plaza has no opinion on how you version state, and tracks nothing
-  /// itself.
+  /// one: plaza does not care how you version state and tracks nothing itself.
   DeltaFromVersion(u64),
   /// A named view, e.g. `"player"` or `"spectator"`.
   ///
   /// A convenience for the common case of a handful of named perspectives. Use
-  /// [`Custom`](Self::Custom) for a typed enum if stringly-typed views bother
-  /// you, which is reasonable.
+  /// [`Custom`](Self::Custom) for a typed enum if you prefer that to strings.
   ForPerspective(String),
   /// Anything else your application means by "which snapshot".
   ///
@@ -86,9 +84,10 @@ impl Debug for SnapshotContext {
 
 /// Produces the state a client is sent.
 ///
-/// This is the seam for hidden information. `target_agent` says who the snapshot
-/// is *for*, so one state can yield a different payload per recipient, a card
-/// game shows each player their own hand and only the count of everyone else's:
+/// This is where hidden information is handled. `target_agent` says who the
+/// snapshot is *for*, so one state can yield a different payload per
+/// recipient. For example, a card game shows each player their own hand and
+/// only the count of everyone else's:
 ///
 /// ```ignore
 /// // The snapshot variant is boxed: unboxed, every `Op` in every batch would
@@ -117,9 +116,9 @@ impl Debug for SnapshotContext {
 /// **Every call in a pass is started before any is awaited.** A provider that
 /// reads a database or a cache therefore overlaps its waits rather than
 /// serialising them, which matters because the controller is one task and a
-/// pass that awaits per agent stalls ticks and ops behind it. The consequence
-/// is that calls interleave: one relying on finishing before the next begins
-/// cannot assume it.
+/// pass that awaits per agent stalls ticks and ops behind it. As a result
+/// calls interleave: a provider cannot assume one call finishes before the
+/// next begins.
 #[async_trait]
 pub trait SnapshotProvider<ID: AgentId, StateType, Op>: Send + Sync + 'static {
   /// Builds a snapshot of the current authoritative state, as an `Op`.
@@ -147,12 +146,12 @@ pub trait SnapshotProvider<ID: AgentId, StateType, Op>: Send + Sync + 'static {
   ) -> Result<Option<Op>, SnapshotError<ID>>;
 }
 
-/// A [`SnapshotProvider`] that is just a view function.
+/// A [`SnapshotProvider`] built from a plain view function.
 ///
-/// Most providers are a pure function of the state and the recipient with an
-/// `async fn` and an `Ok(..)` wrapped around it. This is that wrapper, written
-/// once: hand it `fn view(state: &S, target: Option<&Agent<ID>>) -> Option<Op>`
-/// and it is a provider. Return `None` to send a recipient nothing.
+/// Most providers are a pure function of the state and the recipient; this
+/// supplies the `async fn` and the `Ok(..)` around it. Pass it
+/// `fn view(state: &S, target: Option<&Agent<ID>>) -> Option<Op>`. Return
+/// `None` to send a recipient nothing.
 ///
 /// ```ignore
 /// fn view(state: &Game, target: Option<&Agent<PlayerId>>) -> Option<GameOp> {

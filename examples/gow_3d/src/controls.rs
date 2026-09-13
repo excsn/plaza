@@ -1,8 +1,8 @@
-//! The dials that change who decides where you are, and how they are told.
+//! The dials for who decides where you are and how clients are told.
 //!
-//! Both settings of both live in one build and switch at runtime, because the
-//! comparison is the deliverable rather than any one mode on its own. Two
-//! builds and two sessions compare two memories of how something felt.
+//! Every setting is in one build and switches at runtime, so the modes can be
+//! compared in one session. Separate builds would mean comparing two sessions
+//! from memory.
 
 use std::sync::Arc;
 
@@ -13,12 +13,12 @@ pub use crate::protocol::{Authority, Delivery, Precision};
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Controls {
   pub authority: Authority,
-  /// How the spatial channel reaches clients. Measured rather than chosen:
-  /// `publish_costs` prices both against every density this zone can be run
-  /// at, and which one wins is a property of the world rather than of the code.
+  /// How the spatial channel reaches clients. `publish_costs` prices both at
+  /// every density this zone can run at; which one wins depends on the world
+  /// rather than the code.
   pub delivery: Delivery,
-  /// How positions inside a cell payload are written. Orthogonal to
-  /// `delivery`, and the one that moves bytes rather than CPU.
+  /// How positions inside a cell payload are written. Independent of
+  /// `delivery`. It changes bytes rather than CPU.
   pub precision: Precision,
 }
 

@@ -1,19 +1,18 @@
 //! Deciding which cubes fit, when they cannot all fit.
 //!
 //! Stages one and two sent the whole yard every tick and asked how few bits
-//! that could be. That has a floor: 905 cubes times the smallest honest
-//! encoding is still 4.2 Mbit/sec, and no amount of quantising reaches 256
-//! kbit. The remaining factor is not compression at all, it is **choosing**.
+//! that could be. That has a floor: 905 cubes at the smallest usable encoding
+//! is still 4.2 Mbit/sec, so no amount of quantising reaches 256 kbit. The
+//! remaining factor comes from **choosing** which cubes to send.
 //!
-//! A budget without a policy starves things. Take the first fifty by index and
-//! the tail never updates; take the nearest fifty and the far side never
-//! updates. [`PriorityAccumulator`] is the fix, and the part that makes it work
-//! is that a cube which did not fit **keeps what it accumulated**, so waiting is
-//! itself what earns a slot.
+//! A budget without a policy starves some cubes. Take the first fifty by index
+//! and the tail never updates; take the nearest fifty and the far side never
+//! updates. [`PriorityAccumulator`] fixes that because a cube which did not fit
+//! **keeps what it accumulated**, so the longer it waits the sooner it is sent.
 //!
-//! The per-tick priority is this game's to choose, and it is the whole design:
-//! an awake cube matters far more than a sleeping one, and a cube near the
-//! player matters more than one across the yard.
+//! The per-tick priority is chosen by this game: an awake cube matters far more
+//! than a sleeping one and a cube near the player matters more than one across
+//! the yard.
 
 use plaza_server_utils::{PriorityAccumulator, RestDetector};
 
@@ -23,16 +22,16 @@ use crate::protocol::CubeState;
 /// What the frame around the payload costs: the op tag, the tick, the server
 /// stamp and the byte-string header.
 ///
-/// The target is a number about the *wire*, so the thing the wire actually
-/// carries has to fit in it. Budgeting the payload alone quietly overshoots by
-/// this much, which at 60Hz is 12 kbit/sec.
+/// The target is a *wire* bandwidth, so everything the wire carries has to fit
+/// in it. Budgeting the payload alone overshoots by this much without any
+/// warning, which at 60Hz is 12 kbit/sec.
 pub const ENVELOPE_BITS: usize = 26 * 8;
 
 /// 256 kbit/sec is Fiedler's target, and at 60Hz it is this many bits a tick,
 /// less what the envelope takes.
 ///
 /// Counted in bits rather than bytes because the layout is: rounding each
-/// cube up to a byte would throw away most of what packing just bought.
+/// cube up to a byte would throw away most of what packing just saved.
 pub const BUDGET_BITS: usize = 256_000 / 60 - ENVELOPE_BITS;
 /// The same budget as the byte figure a packet is actually measured against.
 pub const BUDGET_BYTES: usize = BUDGET_BITS / 8;
@@ -84,8 +83,8 @@ impl Stream {
   /// Entering delta always starts from **nothing confirmed**, so every cube is
   /// written absolute until the other end has been told each one once. Carrying
   /// a baseline across the switch would measure deltas from values the client
-  /// was never sent under this encoding, which decodes somewhere else in
-  /// silence: exactly the failure `tests/agreement.rs` exists to price.
+  /// was never sent under this encoding, which decodes to the wrong place
+  /// without an error. `tests/agreement.rs` measures that failure.
   pub fn retune(&mut self, deltas: bool, cubes: usize) {
     self.baseline.clear();
     if deltas {
@@ -106,7 +105,7 @@ impl Stream {
     self.score_all(cubes, viewer);
 
     // Cost comes from the layout, so a yard full of sleeping cubes correctly
-    // fits more of them into the same budget, and a change to the layout moves
+    // fits more of them into the same budget and a change to the layout moves
     // the budget with it instead of silently overrunning.
     // With a baseline, a cube that has not moved costs its flags and nothing
     // else, so the same budget refreshes far more of a settled yard.
@@ -137,7 +136,7 @@ impl Stream {
   /// the packet is full and tells us what actually travelled.
   ///
   /// Preferred over [`pick`](Self::pick) once deltas are on, because a cube's
-  /// real cost is anywhere between eight bits and a full absolute, and no
+  /// real cost is anywhere between eight bits and a full absolute and no
   /// estimate covers that range without wasting most of the budget.
   pub fn rank(&mut self, cubes: &[CubeState], viewer: Option<[f32; 3]>) -> &[usize] {
     self.score_all(cubes, viewer);
@@ -166,7 +165,7 @@ impl Stream {
   /// Everything, for a joining client that holds nothing yet.
   pub fn seed(&mut self, cubes: usize) -> Vec<usize> {
     // A joiner is caught up in one message rather than over the seconds a
-    // budget would take, and its accumulated priority is cleared so it does not
+    // budget would take and its accumulated priority is cleared so it does not
     // immediately re-send what it just sent.
     for index in 0..cubes {
       self.priority.forget(index);

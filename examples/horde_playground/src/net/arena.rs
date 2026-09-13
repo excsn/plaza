@@ -2,10 +2,10 @@
 //! everything mutable, and one stateless `StateLogic` that acts on it.
 //!
 //! The horde server was already shaped for this. Its `advance_seats` is a tick
-//! function, it already produces per-recipient packets, and it already consumes
+//! function, it already produces per-recipient packets and it already consumes
 //! acknowledgements and purchase requests as separate upward messages. What this
 //! module adds is the part a function argument stood in for: seats that fill and
-//! empty as people arrive, and inputs (movement, acks, buys) that arrive
+//! empty as people arrive and inputs (movement, acks, buys) that arrive
 //! *between* ticks rather than with them.
 
 use std::collections::HashMap;
@@ -59,7 +59,7 @@ struct Admission;
 /// arena and read by the UI and renderer.
 ///
 /// The host is the server *and* a client in one process, so it legitimately has
-/// both sides: the authoritative truth here, and its own believed state in its
+/// both sides: the authoritative truth here and its own believed state in its
 /// [`NetClient`]. This is the truth half, cloned into a shared slot once per send
 /// round rather than per tick.
 ///
@@ -124,8 +124,8 @@ impl HostView {
   pub fn lifetime_bytes_per_sec(&self) -> f64 {
     self.bytes.lifetime_per_sec()
   }
-  /// What the same world would have cost sent the obvious way. The comparison is
-  /// the example's whole claim, so it is measured rather than argued.
+  /// What the same world would have cost sent the obvious way. The example's
+  /// main claim rests on this comparison, so it is measured here.
   pub fn naive_bytes_per_sec(&self) -> f64 {
     self.naive_bytes.per_sec()
   }
@@ -174,9 +174,8 @@ pub struct Arena {
   traced_second: u64,
 
 
-  /// What is actually going out, which is what makes the relevance claim
-  /// checkable rather than asserted. `naive` is the counterfactual: the same
-  /// world sent the obvious way.
+  /// What is actually going out, so the relevance claim can be checked.
+  /// `naive` is the counterfactual: the same world sent the obvious way.
   bytes: RateMeter,
   naive_bytes: RateMeter,
   crowd_bytes: RateMeter,
@@ -249,8 +248,8 @@ impl Arena {
       // The server has been advancing this seat's relevance baseline since
       // startup, occupied or not. Clear it so this fresh client's first frame is
       // a full dump rather than a delta against a world it never received. This
-      // is the whole reason `seat` reports freshness instead of an index: a
-      // rejoin must *not* do this, and the two are indistinguishable otherwise.
+      // is why `seat` reports freshness instead of an index: a rejoin must *not*
+      // do this and the two are otherwise indistinguishable.
       self.sim.reset_seat(seat);
     }
     seating.index()
@@ -265,7 +264,7 @@ impl Arena {
       // its former occupant pressed.
       self.sim.clear_input(seat);
       // Handed back to the bots rather than left frozen, so a disconnect does not
-      // leave a statue in the arena.
+      // leave a motionless player in the arena.
       self.pending[seat] = Seat::Bot;
     }
     self.input_acked.remove(key);
@@ -332,10 +331,9 @@ impl Arena {
   /// How many seats the arena will actually run: what the panel asked for, but
   /// **never fewer than the people already in them**.
   ///
-  /// Lowering the count is a decision about how full the arena may get, not
-  /// permission to throw somebody out of a game they are playing. So the request
-  /// takes effect as players leave, and until then the arena stays as large as
-  /// it has to be. The host sees this: the effective count is written back to
+  /// Lowering the count limits how full the arena may get. It does not throw
+  /// anybody out of a game they are playing, so the request takes effect as
+  /// players leave and until then the arena stays as large as it has to be. The host sees this: the effective count is written back to
   /// the panel, so the slider springs back rather than showing a number the
   /// world is not running.
   fn seat_target(&self, controls: &Controls) -> usize {
@@ -417,8 +415,8 @@ impl Arena {
 ///
 /// The **transport** measures it, by timing its own WebSocket ping, so no
 /// application message is involved and a client cannot understate it. This is
-/// just the arena's way of asking, and it is a closure rather than a session
-/// handle so the logic stays testable without a socket.
+/// the arena's way of asking. It is a closure rather than a session handle so
+/// the logic stays testable without a socket.
 ///
 /// Returns the minimum round trip seen and how many samples it rests on.
 pub type LatencySource = Arc<dyn Fn(&PlayerKey) -> Option<(Duration, u64)> + Send + Sync>;
@@ -426,8 +424,8 @@ pub type LatencySource = Arc<dyn Fn(&PlayerKey) -> Option<(Duration, u64)> + Sen
 /// Where a connection that does not fit *this* arena should go instead.
 ///
 /// Takes a measured one-way delay and returns the room that can carry it, or
-/// `None` when nothing can. Refusal is the `None` case rather than the primary
-/// behaviour, which is the whole reason placement is worth wiring at all.
+/// `None` when nothing can. Refusal only happens in the `None` case, which is
+/// why placement is worth wiring.
 pub type Router = Arc<dyn Fn(u32) -> Option<(u32, String, String)> + Send + Sync>;
 
 /// Publishes the panel's impairment sliders to the transport that owns the link.
@@ -565,9 +563,8 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
           clock.store(state.sim.now_ms(), Ordering::Relaxed);
         }
         // A lowered player count cannot evict anyone already playing, so it is
-        // held at the number of occupied seats and written back, which is what
-        // makes the slider spring back instead of reading as a promise the
-        // arena is quietly refusing to keep.
+        // held at the number of occupied seats and written back, so the slider
+        // springs back instead of showing a count the arena is not running.
         let target = state.seat_target(&live);
         if target != live.player_count {
           live.player_count = target;
@@ -668,7 +665,7 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         let is_send_round = !packets.is_empty();
         let now = state.sim.now_ms();
         // Rates are over the simulation's own clock, not wall time, so a test
-        // that runs faster than real time still measures itself honestly.
+        // that runs faster than real time still measures itself correctly.
         for meter in state.meters() {
           meter.elapsed(now);
         }
@@ -733,10 +730,9 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
 
         // A machine-readable trace of the numbers the panel shows, once a
         // second, when `HORDE_TRACE=1` is set. Screenshots of a live readout
-        // cannot settle an argument about a trend: they are two points, they
-        // arrive with no timeline, and every explanation offered for them so
-        // far has been a story fitted to two numbers. This is the raw series
-        // from the machine that is actually running the thing.
+        // are two points with no timeline, so they cannot show a trend; every
+        // explanation offered for them so far was fitted to two numbers. This
+        // prints the raw series from the machine running the arena.
         if is_send_round && std::env::var_os("HORDE_TRACE").is_some() {
           let second = now / 1000;
           if second > state.traced_second {
@@ -905,8 +901,8 @@ mod tests {
     // driven by bots have no client to acknowledge for them, so every packet
     // built for them was a complete re-send of a whole visible set, for ever.
     //
-    // It is invisible on the wire (nothing is connected to those seats) and
-    // loud in the readouts, which count every packet built: the arena reported
+    // It does not show on the wire (nothing is connected to those seats) but
+    // it inflates the readouts, which count every packet built: the arena reported
     // roughly eight times the spawns per packet that a well-behaved client
     // actually causes, and charged the bandwidth meter for all of it.
     let controls = Controls { player_count: 4, enemy_count: 400, ..small() };
@@ -928,8 +924,8 @@ mod tests {
     }
     assert!(spawns_early > 0, "the arena did fill, so there was something to spawn");
     // Not a larger factor, because the arena is genuinely still filling: waves
-    // keep arriving, and a real arrival is a real spawn. What matters is that
-    // the count falls at all, which it cannot do while a baseline stays empty.
+    // keep arriving and each arrival is a real spawn. The check is that the
+    // count falls at all, which it cannot do while a baseline stays empty.
     assert!(
       spawns_late * 3 < spawns_early,
       "once a seat's baseline is acknowledged its packets become deltas: {spawns_late} late against {spawns_early} early"
@@ -938,9 +934,9 @@ mod tests {
 
   #[test]
   fn lowering_the_player_count_does_not_throw_anyone_out_of_the_game() {
-    // The count is a decision about how full the arena may get, not permission
-    // to evict somebody mid-game, so it is floored at the number of seats
-    // actually occupied and takes effect as people leave.
+    // The count limits how full the arena may get and never evicts anybody
+    // mid-game, so it is floored at the number of seats actually occupied and
+    // takes effect as people leave.
     let controls = Controls { player_count: 4, ..small() };
     let (cs, _view) = slots(controls);
     let mut state = Arena::new(controls);
@@ -969,8 +965,9 @@ mod tests {
 
   #[test]
   fn a_seat_freed_by_a_leaver_lets_a_lowered_count_take_effect() {
-    // The other half: held, not ignored. Once the arena is no longer keeping a
-    // seat for somebody, the request the host already made applies.
+    // The other half: the request is held rather than ignored. Once the arena
+    // is no longer keeping a seat for somebody, the request the host already
+    // made applies.
     let controls = Controls { player_count: 4, ..small() };
     let (cs, _view) = slots(controls);
     let mut state = Arena::new(controls);
@@ -1027,7 +1024,7 @@ mod tests {
 
   #[test]
   fn a_healthy_connection_is_measured_and_then_seated() {
-    // The other half: admission must not become a wall.
+    // The other half: admission still seats a link that fits.
     let controls = small();
     let (cs, _view) = slots(controls);
     let logic = ArenaLogic::new(cs, None).with_latency(link(10, ADMIT_SAMPLES));
@@ -1038,10 +1035,10 @@ mod tests {
 
   #[test]
   fn a_link_this_arena_cannot_carry_is_placed_rather_than_refused() {
-    // Why placement is worth wiring at all. A room can only say yes or no, so a
-    // single arena turns everybody past its budget away. Given somewhere that
-    // can carry the link, the answer becomes an address instead of a door slam,
-    // and refusal is left for the links no arena can take.
+    // A room can only accept or refuse, so a single arena turns everybody past
+    // its budget away. Given somewhere that
+    // can carry the link, the answer is an address instead of a refusal; only
+    // the links no arena can take are refused.
     let controls = small();
     let (cs, _view) = slots(controls);
     let mut state = Arena::new(controls);
@@ -1071,8 +1068,8 @@ mod tests {
 
   #[test]
   fn a_link_no_arena_can_carry_is_still_refused() {
-    // Placement does not become a way to never say no. When the router finds
-    // nothing, the refusal is what is left, and it still carries both numbers.
+    // Placement can still refuse. When the router finds nothing, the arena
+    // refuses and the refusal still carries both numbers.
     let controls = small();
     let (cs, _view) = slots(controls);
     let mut state = Arena::new(controls);
@@ -1164,7 +1161,7 @@ mod tests {
     step(&logic, &mut state, LogicInput::AgentOps { source: Agent::new_human(1u64), ops: vec![Op::Buy(Upgrade::Repulsor)] });
     // A tick, because an op is held on the impaired uplink and acted on when its
     // delay expires rather than the instant it arrives. At zero latency that is
-    // the very next tick, which is the point: the path is the same either way.
+    // the very next tick, so the path is the same either way.
     step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
     assert_eq!(state.sim.denied_purchases, 1, "an empty wallet's purchase is refused by the server");
   }
@@ -1298,7 +1295,7 @@ mod tests {
     // than at zero.
     let mut recv = state.sim.now_ms();
     let mut peak = 0usize;
-    // The ack loop is load-bearing and its absence is invisible: without it the
+    // The ack loop is required and its absence is easy to miss: without it the
     // baseline never advances, every frame is a full rebuild carrying no samples,
     // and any measurement about samples reads zero for an unrelated reason.
     let mut pending_ack: Option<Op> = None;
@@ -1327,10 +1324,10 @@ mod tests {
 
   #[test]
   fn the_render_delay_is_the_servers_and_a_jittery_link_underruns_rather_than_hiding() {
-    // The point of fixing T on the server's timeline. Latency and jitter say when
-    // bytes arrive; the render delay says which moment is on screen. Letting the
-    // first move the second is what let a bad link quietly show one player an
-    // older world than everybody else, reporting nothing.
+    // Why T is fixed on the server's timeline. Latency and jitter say when bytes
+    // arrive; the render delay says which moment is on screen. When the first
+    // moved the second, a bad link quietly showed one player an older world than
+    // everybody else and nothing reported it.
     //
     // With T fixed, a declared delay wide enough for the link carries it, and one
     // too narrow produces a countable event instead of silent degradation.
@@ -1402,7 +1399,7 @@ mod tests {
     assert!(mismatches_at_mark > 0, "the injected drift went undetected");
     // The repair fired: the server sent a clean full baseline after the drift.
     assert!(rebuilt, "no full baseline was sent to repair the drifted mirror");
-    // And it healed: no new disagreement once the rebuild landed.
+    // And it stayed repaired: no new disagreement once the rebuild landed.
     assert_eq!(
       client.digest_mismatches(), mismatches_at_mark,
       "the mirror kept disagreeing after it should have been rebuilt"
@@ -1456,8 +1453,7 @@ mod wire_size {
   /// What the codec is worth on this game's real traffic.
   ///
   /// Every earlier figure in this project was measured on invented op types.
-  /// This one encodes the `Packet` the arena actually sends, so the claim is
-  /// about horde rather than about a benchmark's imagination.
+  /// This one encodes the `Packet` the arena actually sends.
   #[test]
   fn msgpack_against_json_on_a_real_frame() {
     let controls = Controls::default();
@@ -1509,7 +1505,7 @@ mod client_server_wire {
 
   /// The client's outbound bytes, decoded exactly the way the server's
   /// deserialize bridge does. A black screen in the browser is what happens
-  /// when these two disagree, so the agreement is a test rather than a hope.
+  /// when these two disagree, so a test checks that they agree.
   #[test]
   fn what_the_client_sends_is_what_the_server_reads() {
     for op in [

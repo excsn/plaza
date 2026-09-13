@@ -1,14 +1,14 @@
-//! Timing for the server-side primitives, so "this is cheap" is a number.
+//! Timing for the server-side primitives, so their cost is measured.
 //!
 //! ```sh
 //! cargo run --release -p plaza_server_utils --example server_perf
 //! ```
 //!
-//! Deliberately not a benchmark framework. These are whole-operation timings at
-//! sizes a real server would use, which is the question a consumer actually has
-//! (can I afford this per tick, for this many clients?), not a per-nanosecond
-//! comparison between implementations. Run it in release; a debug build is
-//! roughly an order of magnitude slower and says nothing.
+//! This is not a benchmark framework. These are whole-operation timings at
+//! sizes a real server would use, which answers the question a consumer has
+//! (can I afford this per tick, for this many clients?) rather than comparing
+//! implementations per nanosecond. Run it in release; a debug build is roughly
+//! an order of magnitude slower and its numbers are meaningless.
 
 use std::hint::black_box;
 use std::time::Instant;

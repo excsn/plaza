@@ -61,10 +61,10 @@ impl std::error::Error for Oversize {}
 
 /// The reading half of the contract: feed bytes as the stream delivers them,
 /// take frames as they complete. No I/O and no runtime, so it serves a tokio
-/// client, a blocking one, and a transport adapter alike.
+/// client, a blocking one and a transport adapter alike.
 ///
 /// The limit is required rather than defaulted: it is the reader's protection
-/// against a peer declaring a gigabyte, and how much to tolerate is policy.
+/// against a peer declaring a gigabyte and how much to tolerate is policy.
 /// `plaza_session`'s `Limits::max_frame_bytes` is the same number on the
 /// server side.
 #[derive(Clone, Debug)]
@@ -136,8 +136,8 @@ mod tests {
 
   #[test]
   fn boundaries_fall_wherever_the_stream_puts_them() {
-    // The reason the decoder exists: a read returns whatever the network
-    // coughed up, one byte at a time being the adversarial case.
+    // A read returns whatever the network delivered; one byte at a time is
+    // the worst case.
     let mut wire = Vec::new();
     delimit(b"split across reads", &mut wire);
 

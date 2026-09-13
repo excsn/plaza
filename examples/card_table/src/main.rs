@@ -1,7 +1,7 @@
-//! A turn-based, hidden-information game: the shape `flow_control` is for.
+//! A turn-based, hidden-information game, which is what `flow_control` is built
+//! for.
 //!
-//! Every other example is real-time and open-information, so this one covers
-//! what they cannot:
+//! Every other example is real-time and open-information. This one covers:
 //!
 //! - `Phased` holding the phase, so a change cannot reach the server without
 //!   reaching clients too
@@ -13,10 +13,10 @@
 //!   *count* of everyone else's
 //!
 //! The rules are deliberately trivial (highest card played wins the round) and
-//! the deal is fixed rather than shuffled, so the run is reproducible and what
-//! shows through is the plaza wiring.
+//! the deal is fixed rather than shuffled, so the run is reproducible and the
+//! log shows the plaza wiring.
 //!
-//! This binary is the scripted run: three players, fixed cards, and one
+//! This binary is the scripted run: three players, fixed cards and one
 //! scenario per round. To play it yourself, `cargo run -p
 //! plaza_example_card_table --bin serve` and open three browser tabs.
 
@@ -125,8 +125,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   // Round 2: Alice and Bob play, Carol sits on her turn. Her timeout fires and
   // the table chooses for her, ending the round. The timeouts still pending for
-  // this round are now stale, because resolving it moved the phase: nothing
-  // cancels them, their epoch simply stops matching.
+  // this round are now stale, because resolving it moved the phase. Nothing
+  // cancels them; their epoch no longer matches.
   info!("--- round 2: Carol stalls, so the table plays for her");
   play(&session, &alice, Card(3)).await;
   play(&session, &bob, Card(6)).await;

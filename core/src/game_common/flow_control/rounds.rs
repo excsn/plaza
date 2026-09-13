@@ -25,11 +25,9 @@ pub trait RoundManager<Op, AppID: AgentId> {
 
   /// Puts the count back to zero for a fresh match, keeping the configuration.
   ///
-  /// A round manager counts up and has no other way back, so both card examples
-  /// were replacing the whole manager to play again, restating the notice
-  /// constructors and the round limit at a call site that has no business
-  /// knowing them. Two consumers writing the same workaround is what this is
-  /// for.
+  /// Without it, both card examples replaced the whole manager to play again
+  /// and restated the notice constructors and the round limit at the call
+  /// site.
   fn reset(&mut self);
 
   /// Ends the current round explicitly.
@@ -43,8 +41,8 @@ pub trait RoundManager<Op, AppID: AgentId> {
 
 /// Counts rounds up to an optional maximum.
 ///
-/// One implementation of [`RoundManager`], not the only one: swap in your own
-/// for best-of-N, sudden death, or elimination brackets.
+/// One implementation of [`RoundManager`]. Write your own for best-of-N,
+/// sudden death or elimination brackets.
 ///
 /// As with turns, you supply the constructors wrapping the notice payloads into
 /// your `Op` type. `Summary` is whatever your game reports at the end of a round
@@ -56,8 +54,8 @@ pub trait RoundManager<Op, AppID: AgentId> {
 /// rounds.end_round_with(&mut ctx, "all players folded", Some(summary));
 /// ```
 ///
-/// Those are plain `fn` pointers rather than boxed closures, deliberately: a
-/// boxed closure would cost this type `Clone`. A non-capturing closure such as
+/// Those are plain `fn` pointers rather than boxed closures because a boxed
+/// closure would cost this type `Clone`. A non-capturing closure such as
 /// `|n| MyOp::RoundStarted(n)` coerces to one, so the only thing ruled out is
 /// capturing state, which is what writing your own [`RoundManager`] is for.
 pub struct SequentialRoundManager<Op, AppID: AgentId, Summary: Clone + Debug> {
@@ -326,9 +324,9 @@ mod tests {
   #[test]
   fn a_clone_advances_independently_of_the_original() {
     // A game that searches ahead clones its state and re-runs rounds in
-    // simulation. This is why the notice constructors are `fn` pointers and not
-    // boxed closures: the boxed version was not `Clone`, so this was impossible
-    // to write at all.
+    // simulation. This is why the notice constructors are `fn` pointers rather
+    // than boxed closures: a boxed closure is not `Clone`, so this test could
+    // not be written.
     let mut live = manager(Some(5));
     let mut ctx = Ctx::new();
     live.start_next_round(&mut ctx).unwrap();

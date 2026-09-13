@@ -1,9 +1,9 @@
 //! The panel.
 //!
-//! Two numbers on it are the example. **Granted by rewind** is how many hits
-//! only landed because the server looked back, and **deaths behind cover** is
-//! the same events counted from the other end. A panel that showed only hits
-//! would be reporting the shooter's experience and calling it fairness.
+//! The two main numbers are **granted by rewind** and **deaths behind cover**.
+//! The first counts hits that only landed because the server looked back. The
+//! second counts the same events from the target's side. Hits alone would only
+//! show the shooter's side.
 //!
 //! Everything is drawn inside one `egui_macroquad::ui` call: two calls in a
 //! frame processes every click twice.
@@ -71,10 +71,9 @@ pub fn draw_net_ui(client: &hit_scan::net::client::NetClient, url: &str, extras:
 
         section(ui, "what you are drawing", true, |ui| {
           if let Some((honest, naive)) = extras.and_then(|e| e.render_error) {
-            // The comparison this example exists to make possible. The naive
-            // figure charges a client for a render delay it chose; the honest
-            // one asks the truth history where everybody was at the instant
-            // being drawn.
+            // `naive` counts the client's chosen render delay as error.
+            // `honest` asks the truth history where everybody was at the
+            // instant being drawn.
             ui.label(format!("render error: {honest:.1} units honest, {naive:.1} against the present"));
             warn_line(
               ui,
@@ -155,7 +154,7 @@ pub fn draw_net_ui(client: &hit_scan::net::client::NetClient, url: &str, extras:
   });
 }
 
-/// The two halves of the trade, side by side. The reason the panel exists.
+/// The shooter's and the target's counts, side by side.
 fn draw_trade(ui: &mut egui::Ui, stats: &Stats, controls: Controls) {
   section(ui, "who bore the disagreement", true, |ui| {
     ui.label(format!("shots {}   hits {} ({:.0}%)", stats.shots_fired, stats.hits, stats.hit_rate() * 100.0));

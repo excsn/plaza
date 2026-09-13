@@ -1,9 +1,9 @@
-//! The rule, written once and called by both sides.
+//! The rules, written once and called by both sides.
 //!
 //! Nothing here reads a clock, a connection or a seat. Movement, sight lines
-//! and what a ray hits are the same function on the server, in a client's
-//! prediction, and in the offline harness, which is the only reason a client's
-//! guess is ever worth anything.
+//! and ray hits use the same functions on the server, in a client's prediction
+//! and in the offline harness. A client's prediction is only useful because it
+//! runs the same code.
 
 use crate::sim::types::{ARENA_H, ARENA_W, PLAYER_R, PlayerId, PlayerSnap, V2, WALLS, Wall};
 
@@ -41,9 +41,9 @@ fn push_out_y(mut p: V2, r: f32) -> V2 {
 /// Moves a circle by a delta, sliding along whatever it runs into.
 ///
 /// The two axes are resolved separately and in a fixed order. A single combined
-/// resolution has to choose a direction to push out of a corner, and the choice
-/// depends on floating point noise, which makes the same input produce
-/// different results on two machines that agree about everything else.
+/// resolution has to choose a direction to push out of a corner and the choice
+/// depends on floating point noise, so the same input can produce different
+/// results on two machines that agree about everything else.
 pub fn move_circle(from: V2, delta: V2, r: f32) -> V2 {
   let mut p = V2::new(from.x + delta.x, from.y);
   p = push_out_x(p, r);
@@ -121,9 +121,9 @@ pub struct RayHit {
 
 /// Casts a shot through a set of bodies, stopped by cover.
 ///
-/// The bodies are passed in rather than read from a world, because the whole
-/// point of this example is that the server calls this twice with two different
-/// sets: where the targets are now, and where the shooter last saw them.
+/// The bodies are passed in rather than read from a world, because the server
+/// calls this twice with two different sets: where the targets are now and
+/// where the shooter last saw them.
 pub fn cast(from: V2, aim: V2, range: f32, bodies: &[(PlayerId, PlayerSnap)]) -> RayHit {
   let dir = aim.normalized();
   if dir == V2::ZERO {
@@ -165,10 +165,10 @@ mod tests {
 
   /// The one horizontal line that crosses the whole map with nothing on it.
   ///
-  /// Named rather than written as a literal at each call site, because the
+  /// Named instead of written as a literal at each call site, because the
   /// first draft of these tests used y 100, which runs straight through both
-  /// left pillars, and every one of them failed for a reason that had nothing
-  /// to do with the code under test.
+  /// left pillars, so every one of them failed for a reason unrelated to the
+  /// code under test.
   const OPEN_LANE_Y: f32 = 162.0;
 
   #[test]

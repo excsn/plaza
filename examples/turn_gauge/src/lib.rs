@@ -1,4 +1,4 @@
-//! Two order regimes, one battle: per-round initiative, where speed is rolled
+//! Two order regimes in one battle: per-round initiative, where speed is rolled
 //! and the order re-sorted at each round boundary, against a continuous delay
 //! queue in the FFX style, where the next actor is whoever's gauge fills first
 //! and every action pushes its actor back by its cost. The order costs zero

@@ -1,4 +1,4 @@
-//! The panel: every claim this example makes, as a number that moves.
+//! The panel: every claim this example makes, shown as a live number.
 
 use egui_macroquad::egui;
 
@@ -75,7 +75,7 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls, host: bool) {
 /// A plain struct rather than a borrow of `HostView`, so this module does not
 /// depend on the arena type and therefore not on the `server` feature. A panel
 /// that named the arena's types could only be compiled into a build that has an
-/// arena, and a joiner has none.
+/// arena and a joiner has none.
 #[derive(Debug, Default, Clone)]
 pub struct HostExtras {
   pub round: u32,
@@ -90,10 +90,10 @@ pub struct HostExtras {
 
 /// The whole panel, in **one** `egui_macroquad::ui` call.
 ///
-/// One call, not one per window: `ui` runs a complete egui frame (begin, build,
-/// end) and replays the input queue into it, so calling it twice in a frame
-/// discards the first frame's output and processes every click twice. The crate
-/// says "must be called once per frame" and means it.
+/// One call rather than one per window: `ui` runs a complete egui frame (begin,
+/// build, end) and replays the input queue into it, so calling it twice in a
+/// frame discards the first frame's output and processes every click twice. The
+/// crate says it "must be called once per frame".
 #[cfg(all(feature = "client", feature = "websocket"))]
 pub fn draw_net_ui(client: &bomb_grid::net::client::NetClient, url: &str, extras: Option<&HostExtras>, controls: &mut Controls) {
   use bomb_grid::net::client::Status;
@@ -204,7 +204,7 @@ pub fn draw_net_ui(client: &bomb_grid::net::client::NetClient, url: &str, extras
           extras.kills, extras.walls_destroyed, extras.bombs_placed, extras.longest_chain
         ));
         ui.separator();
-        // The half a joiner structurally cannot compute: an input is
+        // What a joiner structurally cannot compute: an input is
         // acknowledged on arrival, before admission, so a refusal is invisible
         // from the client.
         let mut any = false;

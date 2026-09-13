@@ -191,7 +191,7 @@ pub fn draw_panel(client: &NetClient, url: &str) {
       client.meter.session_kib_per_sec(now),
       client.meter.kib_per_sec(now)
     ),
-    // The number the whole example is about: a battle is silence.
+    // The number this example is about: a battle sends nothing.
     if client.battling() {
       "in a battle: nothing arrives on a tick".to_owned()
     } else {

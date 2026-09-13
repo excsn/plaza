@@ -1,7 +1,7 @@
 //! The board, built once and sent to everyone.
 //!
 //! Uniform on purpose: a battle is open information, so a per-recipient build
-//! would cost a view per commander and buy nothing. Which army is *yours* is
+//! would cost a view per commander for no gain. Which army is *yours* is
 //! public knowledge carried in the view's `commanders` list; a client matches
 //! it against the id `YouAre` gave it.
 

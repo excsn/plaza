@@ -1,24 +1,24 @@
 //! A client on a real wire.
 //!
 //! It wraps the same [`sim::Client`] the offline harness uses, so the
-//! prediction, the snap counting and the board are unchanged. What it adds is
-//! everything a shared clock and a function argument were standing in for:
+//! prediction, the snap counting and the board are unchanged. It adds what the
+//! offline harness gets from a shared clock and a function argument:
 //!
-//! - **The clock is estimated, not shared.** The offline harness hands its
-//!   clients the server's own `now_ms`. Here that is [`FramePump`]'s timeline
-//!   over ping and pong, and it matters more than in a continuous game: every
-//!   input names a *tick*, and a tick is computed from this estimate. An
-//!   estimate that trails the stream names ticks the server has already
-//!   closed, and every input is silently refused.
-//! - **The clock is floored at what the stream has proven, carried forward.**
-//!   The newest server timestamp actually received is a lower bound that needs
-//!   no synchronisation to trust, because the server wrote it, and it is
-//!   advanced at wall rate from the moment it landed. One clock does both jobs:
-//!   naming the tick an input is for, and deciding when this client runs that
-//!   input itself. Two clocks there is a bug with two faces, a player who
-//!   cannot move and a player who will not stop.
-//! - **The connection is a state, not an assumption.** Connecting, no seat, and
-//!   dropped are things a player has to be told about.
+//! - **The clock is an estimate.** The offline harness hands its clients the
+//!   server's own `now_ms`. Here the clock is [`FramePump`]'s timeline over
+//!   ping and pong and it matters more than in a continuous game: every input
+//!   names a *tick* and a tick is computed from this estimate. An estimate that
+//!   trails the stream names ticks the server has already closed and every
+//!   input is silently refused.
+//! - **The clock never drops below the newest server timestamp, carried
+//!   forward.** The newest timestamp received is a lower bound that needs no
+//!   synchronisation to trust, because the server wrote it. It is advanced at
+//!   wall rate from the moment it landed. The same clock names the tick an
+//!   input is for and decides when this client runs that input itself. With
+//!   two clocks the bug shows up as a player who cannot move or a player who
+//!   will not stop.
+//! - **The connection has a state.** Connecting, no seat and dropped are things
+//!   a player has to be told about.
 //!
 //! [`sim::Client`]: crate::sim::Client
 
@@ -32,17 +32,16 @@ use crate::sim::protocol::{Op, ServerPolicy, PROTOCOL};
 use crate::sim::types::{Controls, Dir, PlayerId, SIM_STEP_MS};
 
 /// One codec for the whole client, matching the one the host is built with.
-/// Naming it once is the point: the two ends cannot drift onto different
-/// formats if there is only one name for the format.
+/// Naming it once means the two ends cannot drift onto different formats.
 const WIRE: MsgPackCodec = MsgPackCodec;
 
 /// Resend the held direction at least this often.
 ///
-/// A walk is a **level**, not an edge: the server holds the last direction it
-/// was told, so sending only on change means a *dropped* change is not a missing
-/// update but a wrong state that persists. The player keeps walking until they
-/// press something else, which reads as the controls sticking rather than as
-/// packet loss. The keepalive bounds that to one interval.
+/// The server holds the last direction it was told, so sending only on change
+/// means a *dropped* change leaves a wrong state that persists rather than a
+/// missing update. The player keeps walking until they press something else,
+/// which looks like the controls sticking rather than packet loss. The
+/// keepalive bounds that to one interval.
 const INPUT_KEEPALIVE_MS: u64 = 150;
 
 /// More payload messages than this in one poll means the frame loop was stopped
@@ -59,7 +58,7 @@ pub enum Status {
   /// Connected, but not seated yet.
   Waiting,
   Playing,
-  /// Connected and the arena was full. A real outcome, not an error.
+  /// Connected and the arena was full. This is an outcome rather than an error.
   NoSeat { seats: usize },
   Gone(String),
 }
@@ -136,20 +135,20 @@ impl NetClient {
   ///
   /// The fitted clock, **floored by the newest stamp carried forward at wall
   /// rate** ([`Timeline::server_time_ms`]). Two things make that floor
-  /// necessary rather than decorative.
+  /// necessary.
   ///
   /// A stamp the server wrote is a lower bound on server time that needs no
   /// synchronisation to trust, so a cold or disturbed fit cannot drag this
   /// below what the stream has already proven.
   ///
-  /// And it has to *advance*. A floor pinned at the last stamp freezes between
-  /// frames, and this clock is what decides when this client runs its own
+  /// The floor also has to *advance*. A floor pinned at the last stamp freezes
+  /// between frames and this clock decides when this client runs its own
   /// scheduled inputs: an input aimed at `now + playout` against a frozen clock
   /// is parked in the client's own future and never runs locally at all. The
   /// prediction then keeps walking under whatever direction last did run while
-  /// the server has long since stopped, which is what a player reports as the
-  /// controls sticking. Carrying the stamp forward at wall rate is what keeps
-  /// aiming and applying on one clock by construction.
+  /// the server has long since stopped, which a player reports as the controls
+  /// sticking. Carrying the stamp forward at wall rate keeps aiming and
+  /// applying on one clock.
   ///
   /// [`Timeline::server_time_ms`]: plaza_client_utils::Timeline::server_time_ms
   pub fn server_time_ms(&self) -> u64 {
@@ -165,7 +164,7 @@ impl NetClient {
   ///
   /// At or below zero the input names a tick the server has closed and is
   /// dropped, which plays as a player who cannot move while everything else
-  /// looks healthy. The floor in [`Self::aim_tick`] is what keeps it positive.
+  /// looks healthy. The floor in [`Self::aim_tick`] keeps it positive.
   pub fn input_aim_ticks(&self) -> i64 {
     self.last_input_tick as i64 - (self.pump.timeline().newest_stamp_ms() / SIM_STEP_MS) as i64
   }
@@ -190,15 +189,14 @@ impl NetClient {
     (self.server_time_ms() + depth) / SIM_STEP_MS
   }
 
-  /// Asks to turn, and predicts the request locally.
+  /// Asks to turn and predicts the request locally.
   ///
   /// Sent on change plus a keepalive: the server holds the last request it was
   /// told, so a dropped change is a wrong state that persists rather than a
   /// missing update.
   ///
-  /// What is **not** sent is where the turn should be taken. That is the
-  /// server's answer, and a client that could name the junction could name any
-  /// junction.
+  /// Where the turn should be taken is **not** sent. The server decides that
+  /// and a client that could name the junction could name any junction.
   pub fn send_turn(&mut self, dir: Dir, _controls: &Controls) {
     if !self.is_playing() || !self.send_policy.should_send(&dir, self.now_ms) {
       return;
@@ -226,8 +224,8 @@ impl NetClient {
     if self.frames_seen > 0 && plaza_ws::trim_backlog(&mut events, BACKLOG_TRIGGER, BACKLOG_KEEP).is_some() {
       self.resume_drops += 1;
       // A probe sent before the freeze and answered after it measures the
-      // freeze, not the network, and its origin still matches so the echo
-      // check waves it through. `on_resume` is what discards it, along with
+      // freeze rather than the network and its origin still matches, so the
+      // echo check lets it through. `on_resume` discards it, along with
       // everything the estimators learned across a gap of unknown length.
       self.pump.on_resume();
     }
@@ -261,9 +259,9 @@ impl NetClient {
           self.policy = Some(policy);
           self.sim = SimClient::new(player);
           self.sim.set_render_delay(policy.render_delay_ms);
-          // Adopted, never assumed: the buffer decides whether a turn is taken
-          // or forgotten, and a client that guessed would predict turns the
-          // server had already dropped.
+          // Adopted from the server rather than assumed: the buffer decides
+          // whether a turn is taken or forgotten. A client that guessed would
+          // predict turns the server had already dropped.
           self.sim.set_turn_buffer(policy.turn_buffer_ms);
           self.pump.timeline_mut().note_stamp(round.server_time_ms, self.now_ms);
           self.sim.on_round(&round);
@@ -379,7 +377,8 @@ mod tests {
       maze,
       server_time_ms,
       tick: server_time_ms / SIM_STEP_MS,
-      // Already started: these tests are about the wire, not the countdown.
+      // Already started: these tests are about the wire rather than the
+      // countdown.
       starts_at_ms: server_time_ms,
     }
   }
@@ -408,8 +407,8 @@ mod tests {
   #[test]
   fn the_turn_buffer_is_adopted_from_the_server_rather_than_assumed() {
     // A client with a longer buffer than the server takes turns the server has
-    // already forgotten, and then runs down a corridor the server never
-    // entered: a wrong junction manufactured out of a mismatched constant.
+    // already forgotten and then runs down a corridor the server never
+    // entered. That is a wrong junction caused by a mismatched constant alone.
     let socket = ScriptedSocket::new();
     let mut round = round_at(0);
     round.tick = 0;

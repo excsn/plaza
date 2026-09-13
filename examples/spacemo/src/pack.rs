@@ -1,10 +1,10 @@
 //! The visible ships, written by hand into bits.
 //!
 //! The same treatment cube_yard gives its cubes, on a different shape: there is
-//! no floor here, so the bounds are a cube rather than a slab, and a ship
-//! carries a seat id because a frame is a *subset* from the very first stage.
+//! no floor here, so the bounds are a cube rather than a slab and a ship
+//! carries a seat id because a frame is a *subset* from the first stage.
 //! In a volume the recipient never holds the whole world, so an index into a
-//! fixed array would be a lie.
+//! fixed array would not identify the ship.
 
 use plaza_wire::bits::{BitReader, BitWriter};
 
@@ -15,15 +15,15 @@ use crate::sim::VOLUME;
 ///
 /// A value outside these **clamps** rather than wrapping or erroring, so a ship
 /// beyond the edge would freeze on the client while flying perfectly well on
-/// the server. cube_yard shipped that bug once, by widening its floor and not
-/// these, and the outer ring of its field went still. Hence the margin, and
-/// hence [`crate::sim::confine`] existing at all.
+/// the server. cube_yard shipped that bug once by widening its floor and not
+/// these and the outer ring of its field went still. That is the reason for the
+/// margin and for [`crate::sim::confine`].
 const POS: (f32, f32) = (-(VOLUME + 10.0), VOLUME + 10.0);
 const POS_BITS: u32 = 16;
 
-/// Asserted rather than described, for the same reason cube_yard's are: a body
-/// outside these pins to the edge on the client while flying perfectly well on
-/// the server, and nothing raises anything.
+/// Asserted, for the same reason cube_yard's are: a body outside these pins to
+/// the edge on the client while flying normally on the server and nothing
+/// reports it.
 const _: () = assert!(POS.1 > crate::sim::VOLUME, "the wire bounds must cover the volume");
 const _: () = assert!(
   REL.1 > crate::max_view(),
@@ -55,14 +55,14 @@ const _: () = assert!(
 
 /// Wide enough for [`crate::sim::MAX_SHIPS`], which the bot population needs.
 ///
-/// Four bits more than the player seats alone would want, and worth naming as a
-/// cost rather than absorbing quietly: a populated volume is what makes the
-/// relevance dial visible, and it is paid for on every ship in every frame.
+/// Four bits more than the player seats alone would need. A populated volume is
+/// what makes the relevance dial visible and those bits are paid on every ship
+/// in every frame.
 const SEAT_BITS: u32 = 10;
 /// Enough for [`crate::sim::MAX_HEALTH`] and a zero.
 const HEALTH_BITS: u32 = 2;
 
-/// The same trap one field along: raising `MAX_HEALTH` past what these bits
+/// The same trap for health: raising `MAX_HEALTH` past what these bits
 /// hold would clamp every ship to three on the wire while the server tracked
 /// more, and nothing would say so.
 const _: () = assert!(
@@ -128,13 +128,13 @@ pub fn unpack(bytes: &[u8]) -> Option<Vec<ShipState>> {
 
 /// Bounds on an **offset from the observer**, rather than on a position.
 ///
-/// This is the stage-five idea and it falls out of relevance rather than being
-/// bolted on: a frame only ever carries what is inside the view radius, so the
-/// offset it has to encode is bounded by that radius no matter how large the
-/// world is. Absolute quantisation spends a fixed number of bits over the whole
-/// volume, so widening the world costs precision everywhere; cube_yard measured
-/// exactly that when its floor went from 0.0008 units of error to 0.0033 by
-/// growing four times. Relative encoding does not have the knob.
+/// This is the stage-five idea and it follows from relevance: a frame only ever
+/// carries what is inside the view radius, so the offset it has to encode is
+/// bounded by that radius no matter how large the world is. Absolute
+/// quantisation spends a fixed number of bits over the whole volume, so
+/// widening the world costs precision everywhere; cube_yard measured that when
+/// its floor went from 0.0008 units of error to 0.0033 by growing four times.
+/// Relative encoding does not depend on world size.
 ///
 /// The margin covers a ship that moved between the query and the encode.
 const REL: (f32, f32) = (-(crate::max_view() + 24.0), crate::max_view() + 24.0);
@@ -165,11 +165,11 @@ pub const fn ship_bits_relative() -> usize {
 pub fn pack_relative(ships: &[ShipState], observer: [f32; 3]) -> Vec<u8> {
   let mut w = BitWriter::with_capacity(ships.len() * ship_bits_relative() / 8 + 16);
   // **The anchor is not quantised.** Quantising it over the world puts the
-  // world's size back into the error, which is the whole thing this scheme
-  // exists to remove: measured, that made relative encoding very slightly
-  // *worse* than absolute at every world size, because the anchor's rounding
-  // dominated a bounded offset that was already accurate. Ninety-six bits once
-  // per frame amortises to nothing across the ships in it.
+  // world's size back into the error, which is what this scheme is meant to
+  // remove. Measured, that made relative encoding very slightly *worse* than
+  // absolute at every world size, because the anchor's rounding dominated a
+  // bounded offset that was already accurate. Ninety-six bits once per frame
+  // amortises to almost nothing across the ships in it.
   for axis in observer {
     w.bits(axis.to_bits() as u64, 32);
   }
@@ -238,12 +238,12 @@ pub fn unpack_relative(bytes: &[u8]) -> Option<Vec<ShipState>> {
 /// Worst error a relative offset can carry.
 ///
 /// The offset's rounding alone, because the anchor is exact. This number does
-/// not move when the world grows, which is the entire claim.
+/// not change when the world grows.
 pub fn relative_error() -> f32 {
   (REL.1 - REL.0) / ((1u32 << REL_BITS) - 1) as f32
 }
 
-/// What one bolt costs, which is what makes churn affordable at all.
+/// What one bolt costs. Keeping it small is what makes churn affordable.
 pub const fn bolt_bits() -> usize {
   (ID_BITS + 1 + LIFE_BITS + POS_BITS * 3 + VEL_BITS * 3) as usize
 }
@@ -252,9 +252,9 @@ pub const fn bolt_bits() -> usize {
 ///
 /// Twelve bits of index and eight of generation. Measured at the busiest the
 /// dial allows, 400 bots, the widest index in flight was 1077, so this fits
-/// with a bit to spare. The headroom is thinner than it looks and it is held up
-/// by something unrelated: bots fire on a one-in-five hash gate, and raising
-/// that alone would push the index past what this field can hold. Truncation
+/// with a bit to spare. The headroom depends on something unrelated: bots fire
+/// on a one-in-five hash gate and raising that alone would push the index past
+/// what this field can hold. Truncation
 /// here is silent and lands as two shots sharing an id, which a client keyed on
 /// that id resolves by drawing one of them.
 const ID_BITS: u32 = 20;
@@ -391,10 +391,9 @@ mod tests {
   /// The stage-five measurement: what each scheme costs as the world grows.
   ///
   /// Absolute quantisation spends a fixed number of bits over the whole volume,
-  /// so its error is a property of *how big the world is*. A relative offset is
-  /// bounded by the view radius, which does not change, so its error is a
-  /// property of how far you can see. Only one of those is a number the game
-  /// designer gets to choose.
+  /// so its error depends on *how big the world is*. A relative offset is
+  /// bounded by the view radius, which does not change, so its error depends on
+  /// how far you can see.
   #[test]
   fn absolute_error_grows_with_the_world_and_relative_error_does_not() {
     println!("\n  worst position error, ships within an 80-unit view:\n");
@@ -422,9 +421,9 @@ mod tests {
     let (_, small_abs, small_rel) = readings[0];
     let (_, big_abs, big_rel) = readings[readings.len() - 1];
     assert!(big_abs / small_abs > 100.0, "absolute error should track the world size");
-    // Asserted flat, not merely *slower*. The first version of this compared
-    // growth ratios and passed while relative was worse than absolute at every
-    // size, because a ratio hides which curve is higher.
+    // Asserted flat rather than merely slower-growing. The first version of
+    // this compared growth ratios and passed while relative was worse than
+    // absolute at every size, since a ratio does not show which curve is higher.
     assert_eq!(small_rel, big_rel, "relative error must not know how big the world is");
     assert!(
       big_rel < big_abs / 100.0,
@@ -437,7 +436,8 @@ mod tests {
   fn a_relative_frame_works_where_an_absolute_one_cannot_reach() {
     // Two hundred thousand units from the origin, which is far outside
     // anything `POS` can represent. The anchor is exact and the offsets are
-    // bounded by the view, so distance from the origin is simply not a term.
+    // bounded by the view, so distance from the origin does not affect the
+    // error.
     let observer = [200_000.0f32, -150_000.0, 90_000.0];
     let sent: Vec<ShipState> = (0..12)
       .map(|i| {
@@ -471,8 +471,7 @@ mod tests {
       }
     }
 
-    // And the same scene through the absolute path is nowhere near, which is
-    // the comparison rather than an insult to it.
+    // The same scene through the absolute path is far off.
     let clamped = unpack(&pack(&sent)).expect("it still decodes");
     let worst = sent
       .iter()
@@ -521,9 +520,9 @@ mod tests {
   fn a_shot_id_fits_its_field_at_the_busiest_the_dial_allows() {
     // Predicted from the firing cadence, this needed 21 bits and would have
     // aliased; measured, the busiest run reaches 19, because bots fire on a
-    // one-in-five gate rather than on every cooldown. The margin is real and
-    // it is held up by a constant that has nothing to do with packing, which
-    // is why the writer asserts rather than trusting the arithmetic.
+    // one-in-five gate rather than on every cooldown. The margin depends on a
+    // constant that has nothing to do with packing, which is why the writer
+    // asserts rather than trusting the arithmetic.
     let mut space = crate::sim::Space::new();
     space.set_bots(400);
     space.spawn(0);
@@ -595,8 +594,8 @@ mod tests {
         absolute.first_clamped_bit()
       );
 
-      // The anchor farthest from the crowd is the honest worst case for the
-      // relative arm: every offset is at its longest.
+      // The anchor farthest from the crowd is the worst case for the relative
+      // arm: every offset is at its longest.
       let anchor = ships
         .iter()
         .max_by(|a, b| {

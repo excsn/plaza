@@ -91,7 +91,7 @@ pub struct BoxState {
 ///
 /// Deliberately does *not* clamp to the arena. The server calls this and then
 /// clamps; the client calls only this. So a box pushed into a wall is predicted
-/// past it and reconciliation pulls it back, which is the whole demonstration.
+/// past it and reconciliation pulls it back, which is what the demo shows.
 /// The `_ctx` parameter is what a *forced* entity would read its world from
 /// (gravity, wind, platforms), so the client can run the server's rule rather
 /// than a lesser copy of it. A box pushed only by its own input has no such

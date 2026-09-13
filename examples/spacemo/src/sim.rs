@@ -37,8 +37,8 @@ pub const VOLUME: f32 = 400.0;
 const TICK: f32 = 1.0 / 60.0;
 /// Thrust in units per second squared.
 const THRUST: f32 = 42.0;
-/// Nothing stops in space, but a ship with no drag is a ship nobody can aim.
-/// This is a flight model, not a physics claim.
+/// Nothing stops in space, but nobody can aim a ship with no drag. This is a
+/// flight model rather than a physics claim.
 const DRAG: f32 = 0.35;
 pub(crate) const MAX_SPEED: f32 = 90.0;
 /// Hits a ship survives. Three, so a fight is an exchange rather than a
@@ -138,8 +138,8 @@ pub struct Bolt {
   /// straight, so its whole future is implied by where it started and how fast:
   /// a client could be told once and draw the rest itself. A missile's path
   /// depends on where its target moves next, which nobody knows in advance, so
-  /// there is no version of it that can be sent once. Two projectiles, opposite
-  /// wire profiles, one field apart.
+  /// there is no version of it that can be sent once. So the two projectiles
+  /// differ by one field and have opposite wire profiles.
   pub chasing: Option<u16>,
 }
 
@@ -188,8 +188,8 @@ pub struct Space {
   missile_cooldown: Vec<u16>,
   /// What each seat currently holds a lock on.
   ///
-  /// **Held, not re-derived.** A lock recomputed from the cone every tick is a
-  /// spatial query wearing a mechanic's name: it changes as fast as the ships
+  /// **Held, not re-derived.** A lock recomputed from the cone every tick is
+  /// only a spatial query: it changes as fast as the ships
   /// move, so nothing can subscribe to it and a client cannot rely on it for
   /// longer than a frame. Acquired from the cone once and kept until it breaks
   /// is the version a player can aim with, and the version that is a set worth
@@ -689,8 +689,8 @@ pub fn quaternion(yaw: f32, pitch: f32) -> [f32; 4] {
 
 /// Wraps at the boundary rather than bouncing.
 ///
-/// A wall in space is a lie either way, and wrapping keeps players in the same
-/// volume without pretending there is something to hit.
+/// Space has no walls to bounce off. Wrapping keeps players in the same volume
+/// without pretending there is something to hit.
 ///
 /// This began as a wire constraint and is now a **gameplay** one. With
 /// positions encoded relative to the observer the wire no longer cares where
@@ -775,9 +775,9 @@ mod tests {
 
   #[test]
   fn nothing_stops_dead_when_the_key_is_released() {
-    // The opposite of cube_yard's rule, and deliberately so: a driven cube is
-    // intent, a ship is momentum, and this example is the one that has to
-    // predict it.
+    // The opposite of cube_yard's rule, deliberately: a driven cube
+    // follows intent and a ship keeps its momentum. This example is the one
+    // that has to predict it.
     let mut space = Space::new();
     space.spawn(0);
     for _ in 0..60 {
@@ -1104,7 +1104,7 @@ mod tests {
   fn a_bot_is_slower_than_a_player_at_full_throttle_and_therefore_catchable() {
     // Bots and players share a flight model and a top speed, so a bot holding
     // full throttle cannot be caught at all: the chase becomes a fixed gap held
-    // for ever. Coasting part of the time is the whole of the fix.
+    // for ever. Coasting part of the time fixes that.
     let mut space = Space::new();
     space.set_bots(24);
     space.spawn(0);
@@ -1336,9 +1336,9 @@ mod tests {
   fn a_missile_whose_target_leaves_goes_out() {
     // This asserted the opposite until now: that it kept flying, on the
     // reasoning that a shot which quietly stops existing is one less event to
-    // deliver. It is also debris that still looks like a threat, and a homing
+    // deliver. It is also debris that still looks like a threat. A homing
     // shot is the one thing on this wire whose path has to be sent every frame,
-    // so flying on costs bandwidth to say nothing.
+    // so flying on spends bandwidth on a shot with no target.
     let mut space = Space::new();
     space.spawn(0);
     space.spawn(1);

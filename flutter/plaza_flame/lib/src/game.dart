@@ -9,10 +9,9 @@ import 'stats.dart';
 
 /// Owns a [PlazaClient] for the life of a Flame game.
 ///
-/// Deliberately thin. It connects when the game loads, closes when it is
-/// removed, and turns the two lifecycle events a mobile app actually has into
-/// the two calls the client wants. Anything thicker than that belongs in the
-/// game or in a utils package, not in glue.
+/// Kept small. It connects when the game loads, closes when it is removed and
+/// turns the two lifecycle events a mobile app has into the two calls the
+/// client needs. Anything more belongs in the game or in a utils package.
 ///
 /// ```dart
 /// class MyGame extends FlameGame with PlazaGame {
@@ -107,13 +106,13 @@ mixin PlazaGame on FlameGame {
     plazaTimeline.advance(dt);
   }
 
-  /// The suspended-tab problem wearing a mobile name.
+  /// Handles the mobile form of the suspended-tab problem.
   ///
-  /// Flame routes the platform lifecycle here, which is the one hook that makes
-  /// resume library behaviour instead of per-app folklore. On the way back the
+  /// Flame routes the platform lifecycle here, so this hook lets the library
+  /// handle resume instead of each app doing it. On the way back the
   /// client drops whatever queued while the process was frozen and reports a
   /// resumed connection, so the game asks for fresh state rather than replaying
-  /// a world that has moved on.
+  /// stale state.
   @override
   void lifecycleStateChange(AppLifecycleState state) {
     super.lifecycleStateChange(state);

@@ -1,7 +1,7 @@
 //! What survives a dropped connection, with both sides running.
 //!
-//! Every other test here drives one side. This example's whole reason to exist
-//! is the half of multiplayer nothing else in the tree exercises, delivery,
+//! Every other test here drives one side. This example exists for the half of
+//! multiplayer nothing else in the tree exercises, delivery,
 //! ordering and reconnection, and the failure its plan named is one no
 //! single-sided test can see: **an operation applied twice because a reconnect
 //! re-sent it.**

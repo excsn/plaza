@@ -1,10 +1,10 @@
 //! What crosses the wire.
 //!
 //! The arena's geometry does not: [`WALLS`] is a constant both builds compile
-//! in, and `build.rs` hashes this file and `types.rs` into the protocol
+//! in and `build.rs` hashes this file and `types.rs` into the protocol
 //! version, so moving a wall changes the number the handshake checks. A browser
-//! bundle holding yesterday's cover is told to reload rather than left to argue
-//! about sight lines nobody else can see.
+//! bundle built against an older map is told to reload instead of playing on a
+//! map nobody else has.
 //!
 //! [`WALLS`]: crate::sim::types::WALLS
 
@@ -18,10 +18,10 @@ pub const PROTOCOL: u32 = WIRE_PROTOCOL;
 
 /// Server settings a client cannot see but has to reason about.
 ///
-/// Sent rather than assumed, because a joiner that guessed the playout depth
-/// would name its input ticks wrong and have every one of them refused, and one
-/// that guessed the rewind rule would not know whether the shot it just lost
-/// was unfair or merely missed.
+/// Sent instead of assumed. A joiner that guessed the playout depth would name
+/// its input ticks wrong and have every one of them refused. One that guessed
+/// the rewind rule would not know whether the shot it just lost was unfair or
+/// simply missed.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ServerPolicy {
   pub sync_hz: u32,
@@ -34,21 +34,20 @@ pub struct ServerPolicy {
   /// Whether this server hands a client state stamped past the instant that
   /// client is rendering.
   ///
-  /// A permission rather than a preference, and the reason it is on the wire is
-  /// that the drawing switch was never the control that mattered: once a frame
-  /// is in a client's memory, a cheat client reads it whether or not the honest
-  /// renderer draws it. When this is false the server withholds instead, and
-  /// the client's extra slack goes with it.
+  /// It is a permission and is on the wire because a drawing switch does not
+  /// prevent anything: once a frame is in a client's memory, a cheat client
+  /// reads it whether or not the renderer draws it. When this is false the
+  /// server withholds those frames instead and the client loses that extra
+  /// slack.
   pub allow_ghost: bool,
   pub players: usize,
 }
 
 /// The world, whole, at one instant.
 ///
-/// Whole rather than delta on purpose: four players and a handful of rockets is
-/// a few hundred bytes, and relevance exists for an unbounded world. What this
-/// example spends its bytes on is *when* a frame is allowed to leave, not how
-/// small it is.
+/// Sent whole instead of as a delta: four players and a handful of rockets is a
+/// few hundred bytes and relevance filtering is for an unbounded world. This
+/// example is about *when* a frame is allowed to leave, not how small it is.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Frame {
   pub server_time_ms: u64,
@@ -70,8 +69,7 @@ pub struct ShotEvent {
   ///
   /// On the wire so a client can draw it. It is the only way anybody sees what
   /// lag compensation actually did: a hollow ring where the shooter was granted
-  /// their target, beside the solid body where that target really was. Without
-  /// it the mechanism is a paragraph in a readme.
+  /// their target, beside the solid body where that target really was.
   pub target_was: Option<V2>,
   pub fired_tick: u64,
   pub resolved_tick: u64,
@@ -81,21 +79,22 @@ pub struct ShotEvent {
   pub verdict: Verdict,
 }
 
-/// The half of a shot that is about who paid for it.
+/// Whether rewinding changed a shot's outcome and who it favoured.
 ///
-/// Four outcomes rather than hit and miss, because the two interesting ones are
-/// the shots where rewinding changed the answer. A panel that reports only hits
-/// reports the shooter's experience and nothing about the target's.
+/// Four outcomes instead of hit and miss, because the two that matter here are
+/// the shots where rewinding changed the answer. Counting only hits would
+/// report the shooter's side and nothing about the target's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Verdict {
   /// Hit in both worlds. Nobody was overruled.
   Plain,
   /// Missed against the present and hit once the server looked back. The
-  /// target had already moved, and the shooter's latency was charged to them.
+  /// target had already moved and was hit anyway because of the shooter's
+  /// latency.
   GrantedByRewind,
   /// Hit against the present and missed at the shooter's own instant. The
-  /// shooter aimed where the target was going to be and the rewind took it
-  /// back off them.
+  /// shooter aimed where the target was going to be and the rewind turned the
+  /// hit into a miss.
   DeniedByRewind,
   /// Missed in both worlds.
   Miss,
@@ -117,22 +116,21 @@ pub struct DeathEvent {
   /// True when the victim, at the instant the server resolved the shot, stood
   /// where the shooter could not see them.
   ///
-  /// The number this example exists to print. It is not a bug report: it is
-  /// what granting the shooter their own view costs, stated from the other
-  /// side.
+  /// This is the cost of granting the shooter their own view, measured from the
+  /// target's side. It is expected and is not a bug.
   pub behind_cover: bool,
   /// How far behind the victim's own present the fatal decision was made.
   ///
-  /// Peeker's advantage, measured rather than asserted: the sum of the
-  /// shooter's rewind and the delay the victim is rendering at.
+  /// Peeker's advantage: the sum of the shooter's rewind and the victim's
+  /// render delay.
   pub from_the_past_ms: u64,
 }
 
 /// One seat's inputs, as the schedules hold them.
 ///
-/// Two kinds, deliberately never mixed in one queue: a held direction is a
-/// *level* and the newest one for a tick wins, where a shot is an *event* and
-/// dropping one is a shot that never happened.
+/// Two kinds, never mixed in one queue. A held direction is a level input and
+/// the newest one for a tick wins. A shot is an event input and a dropped one
+/// is a shot that never happened.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Intent {
   Walk(Dir8),
@@ -160,15 +158,14 @@ pub enum Op {
   Shot(Box<ShotEvent>),
   Died(Box<DeathEvent>),
   InputAck { seq: u64 },
-  /// Said outright rather than left silent: a connection with no seat receives
-  /// no frames, which is indistinguishable from a broken server.
+  /// Sent explicitly, because a connection with no seat receives no frames and
+  /// that looks exactly like a broken server.
   NoSeat { seats: usize },
   /// Refused at the door because this link cannot reach the input window.
   ///
-  /// Both numbers, so the refusal is checkable rather than a verdict. A player
-  /// whose inputs would all name closed ticks is not slightly disadvantaged,
-  /// they are unable to act, and letting them in to discover that is worse
-  /// than saying so.
+  /// Carries both numbers so the player can check the refusal. A player whose
+  /// inputs would all name closed ticks cannot act at all, so they are told
+  /// instead of let in.
   Refused { measured_one_way_ms: u64, allowed_one_way_ms: u64 },
 }
 

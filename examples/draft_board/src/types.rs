@@ -24,8 +24,8 @@ include!(concat!(env!("OUT_DIR"), "/wire_protocol.rs"));
 
 pub type PlayerId = u32;
 
-/// Drafters at the board. Three, so a reversal is visible: with two, a snake and
-/// a round-robin are the same order and the example would prove nothing.
+/// Drafters at the board. Three, so a reversal is visible. With two, a snake
+/// and a round-robin give the same order.
 pub const SEATS: usize = 3;
 
 /// Passes over the roster. Each drafter ends with this many prospects.
@@ -134,8 +134,9 @@ pub enum Refusal {
 
 /// Work scheduled against one occupancy of a phase.
 ///
-/// The `epoch` is the whole point: by the time one of these fires, the pick may
-/// have been made, the drafter may have left, or the draft may have ended.
+/// The `epoch` is the important field. By the time one of these fires, the
+/// pick may have been made, the drafter may have left or the draft may have
+/// ended.
 #[derive(Clone, Debug)]
 pub enum BoardEvent {
   /// Take the best remaining prospect for whoever is out of time.
@@ -148,7 +149,7 @@ pub enum BoardEvent {
 #[derive(Clone, Debug)]
 pub struct DraftState {
   pub phase: Phased<DraftPhase>,
-  /// The example's whole reason for existing: a turn order that reverses.
+  /// A turn order that reverses.
   pub turns: SnakeTurnManager<DraftOp, PlayerId, PlayerId>,
   pub rounds: SequentialRoundManager<DraftOp, PlayerId, RoundSummary>,
   pub scores: HashMapScorekeeper<PlayerId, u32>,
@@ -199,8 +200,8 @@ impl DraftState {
   /// A fresh board, most valuable first.
   ///
   /// Deterministic, so the scripted run reads the same every time and the
-  /// snake's compensation is visible: picking last in a descending pool is a
-  /// real cost, and picking first next pass is what pays it back.
+  /// snake's compensation is visible: picking last in a descending pool costs
+  /// value and picking first in the next pass makes it back.
   pub fn rack() -> Vec<Prospect> {
     (0..POOL)
       .map(|i| Prospect {

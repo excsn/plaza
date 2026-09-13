@@ -1,36 +1,37 @@
-//! Prediction by shared rule: walk the route yourself, check the route, and
+//! Prediction by shared rule: walk the route yourself, check the route and
 //! settle only at rest.
 //!
 //! The other predictors in this crate re-run inputs against samples. This one
-//! is for the games where that is the wrong shape: the client runs the **same
+//! is for games where that does not fit: the client runs the **same
 //! deterministic rule** the server runs (a pathfinder, a step function over a
 //! derived map), so a click's whole journey is known on both ends the moment
-//! it happens, and one op covers a walk longer than any round trip. What is
-//! left to prediction is only presentation: a body that sets off now, crosses
-//! its squares on the local clock, and never jumps.
+//! it happens and one op covers a walk longer than any round trip. Prediction
+//! then only has to handle presentation: a body that sets off now, crosses its
+//! squares on the local clock and never jumps.
 //!
-//! Four invariants, each one a play-tested bug when it was missing:
+//! Four invariants, each found through a bug in play-testing:
 //!
-//! - **Check routes, not positions.** The two ends are a tick out of phase by
-//!   design; comparing squares directly reports that phase as an error and
-//!   buries the real signal. The server's positions are spent against the
-//!   *route* this client drew.
+//! - **Check routes.** The two ends are a tick out of phase by design, so
+//!   comparing squares directly reports that phase as an error and hides the
+//!   real signal. The server's positions are checked against the *route* this
+//!   client drew.
 //! - **Only check a journey both ends started together.** A click mid-walk
 //!   makes each end expand the route from wherever it currently is, which is
-//!   two different squares, and the honest verdict is "not comparable" rather
+//!   two different squares. The correct verdict is "not comparable" rather
 //!   than "diverged".
-//! - **A click changes where the body is going and never where it is.** The
-//!   crossing in progress keeps its continuous start point; granting a free
-//!   step per click lets spam outrun the server and be pulled back later,
-//!   which reads as rubber-banding nothing caused.
+//! - **A click changes only the destination.** The crossing in progress keeps
+//!   its continuous start point; granting a free step per click lets spam
+//!   outrun the server and be pulled back later, which looks like
+//!   rubber-banding with no cause.
 //! - **Reconcile only at rest.** Snapping a walking body to a square the
-//!   server happens to be on reads as a rollback and is wrong besides: both
+//!   server happens to be on looks like a rollback and is also wrong: both
 //!   ends are walking to the same place from different starts and will arrive
 //!   together. Waiting until the walking is over makes the usual case a no-op.
 //!
-//! The prerequisite is the crate's first principle at full strength: the rule
-//! must be **shared code over shared state**, deterministic on both ends, or
-//! every journey diverges and the notice is the only thing on screen.
+//! This requires the crate's first principle applied strictly: the rule must
+//! be **shared code over shared state** and deterministic on both ends.
+//! Otherwise every journey diverges and the divergence notice is the only
+//! thing on screen.
 
 use std::collections::VecDeque;
 
@@ -42,8 +43,8 @@ pub enum Heard {
   OnRoute,
   /// The server walked a different way. The check is over; the body finishes
   /// its own route and [`settle`](RoutePredictor::settle) takes the server's
-  /// square at rest. Worth a counter and a loud notice, because a shared rule
-  /// that diverges is a bug and not weather.
+  /// square at rest. Count it and show a notice, because a shared rule that
+  /// diverges is a bug rather than a network condition.
   Diverged,
   /// Nothing was being checked: the journey did not start from a shared
   /// square, or the route ran out mid-check. Not an error and not a
@@ -109,7 +110,7 @@ impl<P: Copy + PartialEq> RoutePredictor<P> {
   }
 
   /// Puts the body somewhere without walking there: the seat assignment, a
-  /// respawn, a teleport. The one move that is allowed to jump.
+  /// respawn, a teleport. This is the only move allowed to jump.
   pub fn jump_to(&mut self, at: P, now_ms: u64) {
     self.predicted = at;
     self.confirmed = at;
@@ -126,14 +127,14 @@ impl<P: Copy + PartialEq> RoutePredictor<P> {
     self.seeded
   }
 
-  /// Takes a route the shared rule produced, and touches nothing about where
-  /// the body *is*.
+  /// Takes a route the shared rule produced and does not change where the body
+  /// *is*.
   ///
   /// `checkable` marks a journey whose server twin expands from the same
   /// square this one does: at rest, nothing owed, confirmed and predicted
-  /// agreeing. A click mid-walk fails that and simply is not checked, because
-  /// each end expands from a different square and a comparison would report
-  /// the design as a bug. An op the rule answers differently per end (a chase
+  /// agreeing. A click mid-walk fails that and is not checked, because each end
+  /// expands from a different square and a comparison would report expected
+  /// behaviour as a bug. An op the rule answers differently per end (a chase
   /// of something moving) should pass `checkable = false` outright.
   pub fn set_out(&mut self, route: impl IntoIterator<Item = P>, checkable: bool, now_ms: u64) {
     let was_walking = !self.plan.is_empty() || self.crossing(now_ms);
@@ -156,15 +157,15 @@ impl<P: Copy + PartialEq> RoutePredictor<P> {
   }
 
   /// Walks the local clock forward, consuming up to `steps_per_tick` squares
-  /// each time a tick of it elapses. Two is a run; the rule is the server's.
+  /// each time a tick of it elapses. Two is a run, as the server's rule
+  /// defines it.
   pub fn advance(&mut self, now_ms: u64, steps_per_tick: u32) {
     if !self.seeded || self.plan.is_empty() {
       return;
     }
     while now_ms >= self.next_step_ms && !self.plan.is_empty() {
       // The next crossing starts wherever the body is drawn right now, which
-      // is what keeps the picture continuous whatever the route has been
-      // doing.
+      // keeps the picture continuous whatever the route has been doing.
       self.from = self.drawn(now_ms);
       for _ in 0..steps_per_tick.max(1) {
         if let Some(next) = self.plan.pop_front() {
@@ -189,10 +190,10 @@ impl<P: Copy + PartialEq> RoutePredictor<P> {
 
   /// Whether the body has squares left or is still crossing the last one.
   ///
-  /// The clock is the half that is easy to leave out, and leaving it out is a
-  /// walk cycle that never stops: the crossing's start is only rewritten on a
-  /// step, so an arrived body holds a stale one for ever and walks on the
-  /// spot until the next click.
+  /// The clock check is easy to leave out. Without it the walk cycle never
+  /// stops: the crossing's start is only rewritten on a step, so an arrived
+  /// body holds a stale one for ever and walks on the spot until the next
+  /// click.
   pub fn walking(&self, now_ms: u64) -> bool {
     !self.plan.is_empty() || self.crossing(now_ms)
   }
@@ -225,9 +226,10 @@ impl<P: Copy + PartialEq> RoutePredictor<P> {
 
   /// Checks the server's square against the route this client drew.
   ///
-  /// Not against the client's current square: the two are a tick out of phase
-  /// by design, and counting that as an error would bury the thing this is
-  /// for. `slack` is the most squares one report may advance, which is the
+  /// It does not check against the client's current square, because the two
+  /// are a tick out of phase by design and counting that as an error would
+  /// hide real divergences. `slack` is the most squares one report may
+  /// advance, which is the
   /// server's `steps_per_tick`: a run covers two squares a tick and the first
   /// of them is a square nothing ever reports.
   pub fn confirm(&mut self, at: P, slack: u32) -> Heard {
@@ -271,15 +273,15 @@ impl<P: Copy + PartialEq> RoutePredictor<P> {
   }
 
   /// Takes the server's square once the body has stopped and has nothing left
-  /// to walk. The whole of reconciliation, and deliberately not a per-tick
-  /// correction; returns whether anything moved, which is rare by design,
-  /// because by the time the walking is over the two ends agree.
+  /// to walk. This is the only reconciliation; there is no per-tick
+  /// correction. Returns whether anything moved, which is rare, because by the
+  /// time the walking is over the two ends agree.
   pub fn settle(&mut self, now_ms: u64) -> bool {
     if !self.seeded || self.walking(now_ms) || self.confirmed == self.predicted {
       return false;
     }
-    // Eased across a tick like any other step, because even the rare
-    // reconciliation must not look like one.
+    // Eased across a tick like any other step, so a reconciliation looks like
+    // an ordinary step.
     self.from = self.drawn(now_ms);
     self.predicted = self.confirmed;
     self.plan.clear();
@@ -329,8 +331,8 @@ mod tests {
   #[test]
   fn a_journey_the_ends_started_apart_is_not_checked() {
     // The second click lands mid-walk: each end expands the route from
-    // wherever it is, which is two different squares, and the honest verdict
-    // is "not comparable" rather than "diverged".
+    // wherever it is, which is two different squares. The correct verdict is
+    // "not comparable" rather than "diverged".
     let mut p = predictor();
     p.set_out(line((0, 0), 6), true, 0);
     p.advance(150, 1);

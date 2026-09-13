@@ -1,7 +1,7 @@
 //! The same rink on a real solver.
 //!
-//! Rapier owns integration, the boards, and every contact. The rink's rules do
-//! not move: half-fencing, the goal mouth, the shot-speed top-up, the carry,
+//! Rapier owns integration, the boards and every contact. The rink's rules are
+//! unchanged: half-fencing, the goal mouth, the shot-speed top-up, the carry,
 //! the speed cap and the drag are restated here against f32 because the types
 //! differ, but they read off the same constants in [`crate::sim`], so the two
 //! backends differ in physics rather than in tuning.
@@ -27,12 +27,12 @@ use crate::sim::{
 ///
 /// `PROTOCOL` cannot cover it: the wire version hashes this crate's type
 /// definitions, and neither a dependency bump nor a cargo feature changes one.
-/// So the pin rides on the frame instead, and a peer built against another
+/// So the pin is sent on the frame instead and a peer built against another
 /// rapier is refused rather than left to diverge quietly.
 ///
-/// The determinism feature is part of the identity, not a footnote to it: it
+/// The determinism feature is part of the identity: it
 /// changes what the solver computes, so a build with it and a build without it
-/// are two different simulations wearing the same version number.
+/// are two different simulations with the same version number.
 pub const PIN: u32 = pin_of(RAPIER_VERSION, DETERMINISM);
 
 const RAPIER_VERSION: &str = "0.35.1";
@@ -283,9 +283,9 @@ impl RapierWorld {
   }
 
   /// The part of a touch that is a rule rather than a collision: the solver has
-  /// already reflected the puck, this tops the outgoing normal up to shot speed
-  /// so a hit reads as a hit, and adds the paddle's carry. Seat order, as in
-  /// the reference, so a double touch resolves identically.
+  /// already reflected the puck; this tops the outgoing normal up to shot speed
+  /// and adds the paddle's carry. Seat order, as in the reference, so a double
+  /// touch resolves identically.
   fn apply_touches(&mut self, inputs: &[PaddleInput]) {
     let reach = (PADDLE_R + PUCK_R) as f32;
     let puck_handle = self.puck;
@@ -408,9 +408,9 @@ mod tests {
   /// [rapier#910](https://github.com/dimforge/rapier/issues/910): the BVH
   /// workspace fields that pick each frame's optimization were left out of the
   /// serialized state, so a restored world took a different code path and
-  /// diverged. Fixed in parry 0.26.1 and shipped in rapier 0.33; this holds it
-  /// fixed, because a rollback that cannot resume from bytes cannot hand a
-  /// joining client a running rink.
+  /// diverged. Fixed in parry 0.26.1 and shipped in rapier 0.33. This test
+  /// guards the fix, because a world that cannot resume from bytes cannot be
+  /// handed to a joining client as a running rink.
   #[test]
   fn a_serialised_snapshot_resimulates_to_the_same_world() {
     let inputs = [press(1, 1), press(0, 1), press(-1, 0), press(0, -1)];
@@ -428,8 +428,8 @@ mod tests {
     );
   }
 
-  /// A view is a projection, not a state: what it drops is exactly what a
-  /// solver carries between frames.
+  /// A view drops the state a solver carries between frames, so a world seeded
+  /// from one diverges from the world it was taken from.
   #[test]
   fn a_view_cannot_seed_a_running_world() {
     let inputs = [press(1, 1), press(0, 1), press(-1, 0), press(0, -1)];

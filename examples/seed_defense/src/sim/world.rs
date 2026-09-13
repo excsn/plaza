@@ -1,20 +1,17 @@
 //! A server and its clients in one process, with an impaired link between them.
 //!
-//! The harness every claim in this example is measured on, and the one place
-//! the interesting comparison can be made: what does **latency** cost a game
-//! that sends no state? In every other playground here the answer is
-//! corrections, and the whole design is about making them cheap. Here the
-//! answer should be *nothing at all*, at any depth, and that is a claim worth
-//! testing rather than asserting.
+//! Every claim in this example is measured on this harness. The main question
+//! is what **latency** costs a game that sends no state. In every other
+//! playground here latency causes corrections and the design is about making
+//! them cheap. Here it should cost nothing at any depth and the tests check
+//! that.
 //!
-//! Loss is different, and the difference is the point. A lost op is not a lost
-//! sample that the next one supersedes: it is a cause that never happened on
-//! one machine, and no amount of waiting recovers it. So loss costs a snapshot,
-//! which is exactly the trade this design makes and exactly what the counters
-//! report.
+//! Loss is different. A lost sample is replaced by the next one, but a lost op
+//! is a cause that never happened on one machine and waiting does not recover
+//! it. So loss costs a snapshot, which the counters report.
 //!
-//! As in the other harnesses, the one thing this structurally cannot model is a
-//! client *estimating* the clock: here the two halves share one.
+//! As in the other harnesses, this cannot model a client *estimating* the
+//! clock: here the two halves share one.
 
 use plaza_client_utils::net_sim::{LatencyLink, Rng};
 
@@ -106,8 +103,8 @@ impl World {
         link.send(now, op.clone(), controls.latency_ms, controls.jitter_ms, controls.loss_pct, &mut self.rng);
       }
       // A refusal or a snapshot goes to the one seat that asked. A `Built`
-      // goes to everybody, because everybody has to apply it: it is not a
-      // reply, it is a cause.
+      // goes to everybody, because everybody has to apply it: it is a cause
+      // rather than a reply.
       for (to, ops) in &answers {
         for op in ops {
           let broadcast = matches!(op, Op::Built { .. });
@@ -199,7 +196,7 @@ mod tests {
         jitter_ms: latency / 4,
         // The build lead has to clear the worst one-way delay, or an op cannot
         // reach a client before the tick it names. That is a real constraint
-        // rather than a test fixture, and it has its own test below.
+        // rather than a test fixture and it has its own test below.
         playout_delay_ms: latency * 2 + 150,
         ..quiet()
       };

@@ -2,21 +2,21 @@
 //!
 //! # Why the tag is not part of the encoded document
 //!
-//! A serde enum would express this too, and it is what the envelope used to be.
-//! The problem is that the *codec* then decides what the tag costs: under JSON a
-//! variant is a quoted string (`{"Ops":...}`, four bytes of structure), under
-//! MessagePack an array element, under protobuf a field number. A byte written
-//! ahead of the body costs exactly one byte in every format, and the decoder
-//! reads it without parsing anything.
+//! A serde enum would express this too and it is what the envelope used to be.
+//! The *codec* then decides what the tag costs: under JSON a variant is a quoted
+//! string (`{"Ops":...}`, four bytes of structure), under MessagePack an array
+//! element, under protobuf a field number. A byte written ahead of the body
+//! costs exactly one byte in every format and the decoder reads it without
+//! parsing anything.
 //!
-//! Measured against a serde enum tag on the same message: 39 bytes against 42,
+//! Measured against a serde enum tag on the same message: 39 bytes against 42
 //! and 113ns to decode against 180ns. The gap widens for the alternative that
 //! keeps the tag inside the document *and* dispatches on it, which needs a
 //! second parse of the body (239ns).
 //!
-//! # Forward compatibility is a decision, not a property
+//! # Skipping unknown kinds
 //!
-//! [`Kind::from_byte`] returns `None` for a tag this build does not know, and
+//! [`Kind::from_byte`] returns `None` for a tag this build does not know and
 //! the transports **skip such a frame and carry on**. That rule has to exist
 //! from the start: a client already deployed cannot learn to tolerate a new
 //! frame kind later, so adding one is only safe if every peer was already built
@@ -27,9 +27,9 @@
 //!
 //! # What belongs in [`Kind`]
 //!
-//! A kind is an instruction to the *session*, and [`Kind::Ops`] is the one
-//! whose body belongs to the application instead. The test for a proposed
-//! kind: if application code has to act on it, it is an op and not a kind.
+//! A kind is an instruction to the *session*; [`Kind::Ops`] is the one kind
+//! whose body belongs to the application. If application code has to act on a
+//! proposed kind, make it an op instead.
 //! `Hello` and `Ping` pass, because recording a version and echoing a value
 //! are things a session can finish by itself.
 
@@ -47,10 +47,10 @@ pub enum Kind {
   /// The protocol version this peer speaks. The body is a [`ProtocolVersion`].
   ///
   /// Sent once when a connection opens, by both ends, rather than on every
-  /// frame: it cannot change mid-connection, and carrying it per frame measured
+  /// frame: it cannot change mid-connection and carrying it per frame measured
   /// 53 bytes against 42 under JSON for no information gained.
   Hello = 1,
-  /// A latency probe. The body is a [`Ping`], and the receiving session answers
+  /// A latency probe. The body is a [`Ping`] and the receiving session answers
   /// it with a [`Kind::Pong`] without the application being involved.
   Ping = 2,
   /// The answer to a [`Kind::Ping`]. The body is a [`Pong`].
@@ -63,10 +63,10 @@ impl Kind {
     self as u8
   }
 
-  /// Reads a tag, or `None` if this build does not know it.
+  /// Reads a tag; `None` if this build does not know it.
   ///
-  /// `None` means *skip the frame*, not *fail the connection*: a peer speaking
-  /// a newer protocol may send kinds this one has never heard of, and refusing
+  /// `None` means *skip the frame* and keep the connection: a peer speaking a
+  /// newer protocol may send kinds this one has never heard of and refusing
   /// them turns every additive change into a break.
   pub const fn from_byte(byte: u8) -> Option<Self> {
     match byte {
@@ -94,7 +94,7 @@ impl ProtocolVersion {
   /// Whether two peers agree well enough to talk.
   ///
   /// An unknown version on either side is treated as agreement, because a peer
-  /// that declares nothing is the pre-handshake case rather than a wrong one,
+  /// that declares nothing is the pre-handshake case rather than a wrong one
   /// and refusing it would break every client built before this frame existed.
   pub const fn agrees_with(self, other: ProtocolVersion) -> bool {
     self.0 == 0 || other.0 == 0 || self.0 == other.0
@@ -103,12 +103,12 @@ impl ProtocolVersion {
 
 /// A latency probe, the body of a [`Kind::Ping`] frame.
 ///
-/// # Units are the sender's business
+/// # Units
 ///
 /// Plaza never reads `origin` as a quantity: it comes back in the [`Pong`]
-/// exactly as it went out, and only the sender ever interprets it. Stamp it
-/// with milliseconds, nanoseconds, a frame counter, or a sequence number, and
-/// document the choice wherever your application documents its protocol.
+/// exactly as it went out and only the sender ever interprets it. Stamp it with
+/// milliseconds, nanoseconds, a frame counter or a sequence number and document
+/// the choice wherever your application documents its protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Ping {
@@ -122,9 +122,9 @@ pub struct Pong {
   /// The probe's `origin`, echoed back unread.
   pub origin: u64,
   /// The responder's clock when the reply was built, in the responder's own
-  /// unit, or `None` if it has no clock to offer. Which clock this reads, and
-  /// in what unit, is agreed out of band: the two ends have to mean the same
-  /// one for an offset computed from it to mean anything.
+  /// unit; `None` if it has no clock to offer. Which clock this reads and in
+  /// what unit is agreed out of band: the two ends have to use the same one for
+  /// an offset computed from it to be meaningful.
   pub responder: Option<u64>,
 }
 
@@ -151,7 +151,7 @@ pub fn answer_ping<C: crate::WireCodec>(codec: &C, ping_body: &[u8], responder: 
 
 /// Encodes a batch of ops as one [`Kind::Ops`] frame: the kind byte, then
 /// the codec's one document. The body is the ops array itself; who sent it is
-/// the server's bookkeeping and does not ride the wire.
+/// the server's bookkeeping and is not on the wire.
 #[cfg(feature = "serde")]
 pub fn encode_ops<C: crate::WireCodec, Op: serde::Serialize>(
   codec: &C,
@@ -191,12 +191,13 @@ pub const PROBE_FRAME_HINT: usize = 64;
 
 /// Starts a frame: writes the tag, so the body can be appended after it.
 ///
-/// Writing the tag first is the whole reason [`crate::WireCodec::encode_into`]
-/// appends rather than returning a `Vec`. Inserting a byte at the front of an
+/// Writing the tag first is why [`crate::WireCodec::encode_into`] appends
+/// rather than returning a `Vec`. Inserting a byte at the front of an
 /// encoded body would shift every byte of it.
 ///
 /// Clears first, so a buffer being reused starts a frame rather than extending
-/// the last one. Capacity survives a clear, which is the point.
+/// the last one. Capacity survives a clear, so a reused buffer does not
+/// reallocate.
 pub fn begin(kind: Kind, buf: &mut Vec<u8>) {
   buf.clear();
   buf.push(kind.as_byte());
@@ -219,9 +220,8 @@ mod tests {
 
   #[test]
   fn an_unknown_kind_is_skippable_rather_than_fatal() {
-    // The property a future frame kind depends on. A peer built before that
-    // kind existed must be able to ignore it, and it can only do that if this
-    // returns None instead of erroring.
+    // A peer built before a new frame kind existed must be able to ignore it,
+    // which it can only do if this returns None instead of erroring.
     assert_eq!(Kind::from_byte(4), None, "the first unassigned byte");
     assert_eq!(Kind::from_byte(200), None);
     let frame = [200u8, 1, 2, 3];
@@ -232,8 +232,8 @@ mod tests {
 
   #[test]
   fn a_hello_dispatches_to_a_different_body_than_ops() {
-    // The reason the tag is worth its byte: the body type follows from the
-    // kind, so a protocol frame is not squeezed into the application's ops.
+    // The body type follows from the kind, so a protocol frame does not have
+    // to fit into the application's ops.
     assert_eq!(Kind::from_byte(Kind::Hello.as_byte()), Some(Kind::Hello));
     assert_ne!(Kind::Ops.as_byte(), Kind::Hello.as_byte());
   }
@@ -251,7 +251,7 @@ mod tests {
       assert_eq!(Kind::from_byte(tag), Some(kind), "{kind:?} round-trips its tag");
       assert_eq!(body, b"body");
     }
-    // And the tags are distinct, or dispatch is a coin flip.
+    // And the tags are distinct, otherwise dispatch is ambiguous.
     let bytes = [Kind::Ops, Kind::Hello, Kind::Ping, Kind::Pong].map(Kind::as_byte);
     assert_eq!(bytes, [0, 1, 2, 3], "wire values are pinned; renumbering breaks every peer");
   }
@@ -294,7 +294,7 @@ mod tests {
 
     #[test]
     fn a_responder_without_a_clock_offers_nothing() {
-      // Not zero: zero is a legitimate clock reading, and a responder that has
+      // Not zero: zero is a legitimate clock reading and a responder that has
       // no clock has to be distinguishable from one whose clock reads zero.
       let mut ping = Vec::new();
       begin(Kind::Ping, &mut ping);

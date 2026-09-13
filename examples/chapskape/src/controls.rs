@@ -1,8 +1,8 @@
-//! The two dials this example exists to turn.
+//! The example's two runtime dials.
 //!
-//! Both live in one build and change at runtime, because the comparison is the
-//! deliverable rather than either setting on its own. Two builds and two
-//! sessions compare two memories of how something felt.
+//! Both are in one build and change at runtime, so the settings can be compared
+//! in one session. Separate builds would mean comparing two sessions from
+//! memory.
 
 use std::sync::Arc;
 
@@ -12,10 +12,9 @@ pub use crate::protocol::Relevance;
 
 /// Tick lengths worth trying, longest first.
 ///
-/// The slider that turns a design decision back into a netcode problem. At
-/// 600ms the tick is vocabulary a player can count against; at 50ms it is
-/// something to hide, and everything this example says about free round trips
-/// stops being free.
+/// At 600ms a player can see the tick and time actions against it. At 50ms the
+/// tick has to be hidden as in any other example and the round trips this
+/// example gets for free stop being free.
 pub const TICKS_MS: [u64; 4] = [600, 300, 150, 50];
 
 #[derive(Clone, Copy, Debug)]

@@ -13,16 +13,16 @@ abstract class WireCodec {
 
   /// Whether this codec's output is text rather than bytes.
   ///
-  /// Decides the WebSocket frame type. It matters: a text frame arrives as a
-  /// string a JSON parser takes directly, while a binary frame arrives as bytes
-  /// the receiver has to decode itself.
+  /// Decides the WebSocket frame type: a text frame arrives as a string a JSON
+  /// parser takes directly, while a binary frame arrives as bytes the receiver
+  /// has to decode itself.
   bool get isText;
 
   Object encode(Object? value);
   Object? decode(Object body);
 }
 
-/// JSON. Human readable, and what a browser console can show you.
+/// JSON. Human readable and shown as text in a browser console.
 class JsonCodec implements WireCodec {
   const JsonCodec();
 
@@ -46,14 +46,14 @@ class JsonCodec implements WireCodec {
 /// MessagePack. What a shipped client should speak.
 ///
 /// Note which *shape* the server uses. Plaza's `MsgPackCodec` encodes a Rust
-/// struct compactly, as an array of its fields in declaration order, so field
-/// order is part of the contract and the protocol version is what guards it.
-/// Its `MsgPackNamedCodec` sends maps keyed by field name instead, which is the
+/// struct compactly, as an array of its fields in declaration order, so
+/// decoding depends on field order and the protocol version guards it. Its
+/// `MsgPackNamedCodec` sends maps keyed by field name instead, which is the
 /// shape JSON gives and the one to ask a server for when this client's models
 /// are written by hand rather than generated from the Rust types.
 ///
-/// This codec decodes either, so there is one class here and not two; it is the
-/// shape your own types expect that has to match the server's choice.
+/// This codec decodes either, so there is one class here rather than two; your
+/// own types have to match the server's choice.
 class MsgPackCodec implements WireCodec {
   const MsgPackCodec();
 

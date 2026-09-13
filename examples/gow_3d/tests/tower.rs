@@ -1,20 +1,19 @@
-//! Where spacemo's answer gets tested against the case it is worst at.
+//! spacemo's height-filter result, tested against a stacked crowd.
 //!
-//! spacemo asked whether a volumetric grid earns its place and answered no: a
-//! flat `(x, z)` grid with a height filter on what it returns is **exact at
-//! identical query cost**, because it touches the same cells and examines the
-//! same candidates, and only the per-candidate test differs.
+//! spacemo asked whether a volumetric grid is worth having and found it was
+//! not: a flat `(x, z)` grid with a height filter on what it returns is **exact
+//! at the same query cost**, because it touches the same cells and examines the
+//! same candidates; only the per-candidate test differs.
 //!
 //! That was measured in open space, where things are spread out. A tower is the
 //! opposite arrangement and the one a height filter should struggle with:
 //! thirty people on each of twenty-four floors sharing one footprint, so a flat
 //! cell holds every floor at once and the filter throws away almost all of it.
 //!
-//! The floor count is load bearing rather than decorative. The first version of
-//! this was eight floors against a thirty metre view, which is a building the
-//! volumetric grid cannot exclude anything from either, so both arms examined
-//! everyone and the comparison had no contrast. The scene now asserts it
-//! out-reaches the view.
+//! The floor count matters. The first version was eight floors against a
+//! thirty metre view, a building the volumetric grid cannot exclude anything
+//! from either, so both arms examined everyone and there was nothing to
+//! compare. The scene now asserts that it is taller than the view reaches.
 //!
 //! ```sh
 //! cargo test -p gow_3d --test tower -- --nocapture
@@ -112,10 +111,9 @@ fn volume(people: &[Person], from: (f32, f32, f32)) -> Work {
 #[test]
 fn a_height_filter_is_still_exact_in_a_tower_and_still_examines_everything() {
   const PER_FLOOR: usize = 30;
-  // Taller than anyone can see, which is what makes this a question at all: a
-  // building whose whole height fits inside the view radius is one the volume
-  // grid cannot exclude anything from either, and the first version of this
-  // scene was exactly that, eight floors of a thirty metre view.
+  // Taller than anyone can see. If the whole building fits inside the view
+  // radius the volume grid cannot exclude anything either; the first version
+  // of this scene was eight floors against a thirty metre view.
   const FLOORS: usize = 24;
   let people = tower(PER_FLOOR, FLOORS, 14.0);
   assert!(
@@ -151,16 +149,16 @@ fn a_height_filter_is_still_exact_in_a_tower_and_still_examines_everything() {
   let (_, flat_returned, flat_examined) = rows[0];
   let (_, vol_returned, vol_examined) = rows[1];
 
-  // Still exact, which is the half spacemo established and this does not
-  // disturb: a height filter answers the same question a volumetric grid does.
+  // Still exact, as spacemo found: a height filter returns the same people a
+  // volumetric grid does.
   assert!(
     (flat_returned - vol_returned).abs() < 0.01,
     "both answer the same question: {flat_returned} against {vol_returned}"
   );
 
-  // And this is the half a tower changes. In open space the two examined the
-  // same candidates, so the filter was free. Stacked, a flat cell holds every
-  // floor at once and the filter throws away most of what it pulled out.
+  // The cost is what a tower changes. In open space the two examined the same
+  // candidates, so the filter cost nothing extra. Stacked, a flat cell holds
+  // every floor at once and the filter throws away most of what it pulls out.
   println!(
     "\n  the filter examines {:.1}x what the volume grid does, against roughly\n  parity in open space: a flat cell holds every floor of the tower.\n",
     flat_examined / vol_examined.max(0.01)
@@ -173,9 +171,9 @@ fn a_height_filter_is_still_exact_in_a_tower_and_still_examines_everything() {
 
 #[test]
 fn one_floor_of_the_same_crowd_costs_the_filter_nothing() {
-  // The control, and the reason the result above is about geometry rather than
-  // about crowding: the same people on one floor put the two strategies back
-  // level, exactly as spacemo measured in open space.
+  // The control: the same people on one floor bring the two strategies back
+  // level, as spacemo measured in open space, so the result above comes from
+  // stacking rather than crowd size.
   let people = tower(720, 1, 14.0);
   let (mut flat, mut vol) = (0usize, 0usize);
   for person in people.iter().take(120) {
@@ -190,10 +188,10 @@ fn one_floor_of_the_same_crowd_costs_the_filter_nothing() {
 
 /// The same question asked of the running zone rather than a synthetic scene.
 ///
-/// The scene above is a model of two strategies. This runs the real `Zone`,
-/// with the grid the server queries every tick, and reads the counters it keeps
-/// while doing it. It was written expecting to reproduce the 72% waste and it
-/// does not, for a reason worth more than the agreement would have been.
+/// The scene above is a model of two strategies. This runs the real `Zone` with
+/// the grid the server queries every tick and reads the counters it keeps while
+/// doing it. It was written expecting to reproduce the 72% waste and it does
+/// not.
 #[cfg(feature = "server")]
 mod in_the_real_zone {
   use gow_3d::state::{spawn_at, GowState, MAX_CHARACTERS};
@@ -241,7 +239,7 @@ mod in_the_real_zone {
       );
     }
 
-    // Spread over the landscape, the grid is doing its job: a query of radius
+    // Spread over the landscape, the grid works: a query of radius
     // VIEW covers a fraction of a zone this size, so most of the world is
     // never looked at.
     assert!(

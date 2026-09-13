@@ -1,21 +1,21 @@
 //! What the controller's op path costs, and what `fibre` buys over tokio channels.
 //!
-//! # Two runtimes, because they answer different questions
+//! # Two runtimes
 //!
 //! Every measurement here runs on one of two runtimes, named in the benchmark id:
 //!
 //! - **`threaded`**, two workers, so the controller sits on a thread the producer
 //!   is not on and each message costs a real cross-thread wake. That wake is what
 //!   a deployment pays and it is large: `command_handoff/threaded` measures it
-//!   directly, and it is worth reading before anything else here, because it is
-//!   the term most of these figures are made of.
+//!   directly. Read it before anything else here, because most of these figures
+//!   are made of it.
 //! - **`inline`**, `current_thread`, where both sides share a thread and a wake is
 //!   a local task poll. This is where plaza's own work is visible.
 //!
 //! The op path is measured `inline` for exactly that reason. On `threaded` every
 //! row of it lands within noise of the wake cost, so a doubling of the work the
-//! controller does would not move the number, which is the opposite of what a
-//! regression guard is for. To get a deployed figure, add the handoff.
+//! controller does would not move the number, which makes it useless as a
+//! regression guard. To get a deployed figure, add the handoff.
 //!
 //! # Reading the op path
 //!
@@ -345,7 +345,7 @@ fn command_queue(c: &mut Criterion, threaded: &Runtime, inline: &Runtime) {
   group.finish();
 
   // The difference between these two rows is what a thread wake costs on this
-  // machine, and it is the term every threaded figure above is made of.
+  // machine; every threaded figure above includes it.
   let mut group = c.benchmark_group("command_handoff");
   group.bench_function("fibre/threaded", |b| {
     b.iter_custom(|iters| threaded.block_on(fibre_handoff(iters)))
@@ -563,8 +563,8 @@ fn coalesce(c: &mut Criterion) {
       BatchSize::SmallInput,
     )
   });
-  // Nothing merges, so this is what the pass costs when it buys nothing, which
-  // is the case that has to stay cheap.
+  // Nothing merges, so this is the pass's cost when it saves nothing. That
+  // cost has to stay low.
   group.bench_function("alternating_targets", |b| {
     b.iter_batched_ref(
       || LogicOutput::ops(alternating(OPS)),

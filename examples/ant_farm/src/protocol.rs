@@ -6,8 +6,8 @@ pub type WatcherId = u32;
 
 pub const TICK_HZ: u64 = 30;
 
-/// One datagram, one message: plaza's frame cannot be fragmented, so every
-/// outbound frame must fit a conservative path MTU.
+/// Each datagram carries one message. Plaza's frame cannot be fragmented, so
+/// every outbound frame must fit a conservative path MTU.
 pub const MTU: usize = 1200;
 
 /// What a `Cells` payload may spend of the MTU, leaving room for the frame
@@ -40,8 +40,8 @@ pub enum AntOp {
     sites: Vec<(f32, f32)>,
   },
   /// Server to client: concatenated cell records for the pane, whole cells
-  /// only, complete state each time. A lost datagram costs freshness, never
-  /// correctness.
+  /// only, complete state each time. A lost datagram leaves a cell out of
+  /// date until the next one, never wrong.
   Cells { tick: u32, bytes: Packed },
   /// Server to a coarse pane: `[cell u16][count u16]` pairs, a crowd per
   /// cell instead of every ant in it.

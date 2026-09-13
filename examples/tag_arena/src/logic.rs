@@ -156,8 +156,9 @@ impl StateLogic<ArenaOp, crate::types::PlayerId, ArenaState> for TagLogic {
         if state.runners.is_empty() {
           return Ok(LogicOutput::none());
         }
-        // The whole model in one line: every tick, everyone gets the same
-        // world. One provider call, one encode, however many runners.
+        // This line is the state-sync model: every tick, everyone gets the same
+        // world, with one provider call and one encode however many runners
+        // there are.
         let everyone = state.runners.values().map(|r| r.agent.clone()).collect();
         Ok(LogicOutput::none().and_snapshot(SnapshotRequest::uniform(everyone)))
       }

@@ -2,27 +2,22 @@
 //!
 //! The other playgrounds here share a rule so that a *correction* is small.
 //! This one shares a rule because there are no corrections: the wire carries a
-//! seed and a handful of build ops, and everything on screen after that is
-//! produced locally. Two implementations of this file would not drift, they
-//! would be two different games.
+//! seed and a handful of build ops and everything on screen after that is
+//! produced locally. Two implementations of this file would produce two
+//! different games.
 //!
-//! Three things follow, and they are all visible in the code rather than
-//! promised in a comment.
+//! [`step`] takes the whole field and advances it by one tick. The server and
+//! every client call it, so there is no separate client approximation.
 //!
-//! **The step is a pure function of the field.** [`step`] takes the whole world
-//! and advances it. The server calls it. Every client calls it. There is no
-//! "server does the real one and the client approximates".
+//! Every ordering is defined. Towers fire in placement order, targets are
+//! chosen by progress along the path with the id as the tie-break and the
+//! spawn schedule is a list built once from the seed. No rule depends on the
+//! order a collection happens to iterate in, because two builds are allowed to
+//! iterate differently.
 //!
-//! **Every ordering is defined.** Towers fire in placement order, targets are
-//! chosen by progress along the path with the id as the tie-break, and the
-//! spawn schedule is a list built once from the seed. Nowhere does a rule
-//! depend on the order a collection happens to iterate in, because two builds
-//! are entitled to iterate differently.
-//!
-//! **The ways to break it are here too**, as [`Quirks`]. The panel can turn
-//! each one on for one client, and each is a real change to the arithmetic
-//! rather than a fault injected into a readout. A determinism claim that cannot
-//! be falsified on demand is not a demonstration.
+//! [`Quirks`] holds the deliberate ways to break it. The panel can turn each
+//! one on for one client. Each changes the arithmetic itself, not a readout,
+//! so the panel can cause divergence on demand and show that detection works.
 
 use crate::sim::fixed::{Fx, P};
 use crate::sim::rand::Rand;
@@ -31,7 +26,7 @@ use crate::sim::types::*;
 /// Deliberate departures from the shared rule, for one client.
 ///
 /// Each is a mistake somebody has actually shipped: a constant worked out in
-/// floating point, an iteration order taken from a hash map, and a timestamp
+/// floating point, an iteration order taken from a hash map and a timestamp
 /// tidied to a round number.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Quirks {
@@ -98,12 +93,11 @@ impl Field {
 
   /// One number summarising the entire field.
   ///
-  /// Built from `plaza_client_utils::SetDigest`, which exists for exactly this
-  /// shape of problem: an order-independent fold, so two machines holding the
-  /// same set in a different order still agree, and additive, so it is cheap.
-  /// Everything that can differ goes in, including the gold and the tick, since
-  /// a client that has fallen a tick behind is a client whose next comparison
-  /// would be meaningless.
+  /// Built from `plaza_client_utils::SetDigest`, an additive order-independent
+  /// fold: two machines holding the same set in a different order still agree
+  /// and it is cheap to compute. Everything that can differ goes in, including
+  /// the gold and the tick, since a comparison against a client that has
+  /// fallen a tick behind would be meaningless.
   pub fn digest(&self) -> u64 {
     let mut d = plaza_client_utils::SetDigest::new();
     for enemy in &self.enemies {
@@ -132,9 +126,9 @@ pub struct StepEvents {
 
 /// The spawn schedule for a wave, from the seed and the wave number alone.
 ///
-/// This is the wire format. Everything the players will fight for the next
-/// thirty seconds is in these two integers, and a client that computes this
-/// list differently is a client playing another game.
+/// This is effectively the wire format: everything the players will fight for
+/// the next thirty seconds comes from these two integers. A client that
+/// computes this list differently is playing a different game.
 pub fn wave_schedule(seed: u64, wave: u32, start_tick: u64) -> Vec<(u64, EnemyKind)> {
   let mut rand = Rand::new(seed.wrapping_add(wave as u64));
   let count = 8 + (wave as i32 * 3).min(34);
@@ -163,7 +157,7 @@ pub fn wave_schedule(seed: u64, wave: u32, start_tick: u64) -> Vec<(u64, EnemyKi
 ///
 /// Shared for the same reason the movement is: the client charges what the
 /// server charges. If a client thought a tower cost ten gold less, its next
-/// affordability check would differ, and by the end of a wave the two would
+/// affordability check would differ and by the end of a wave the two would
 /// hold different towers.
 pub fn apply_build(field: &mut Field, build: Build) -> bool {
   if !in_bounds(build.cell) || on_path(build.cell) {
@@ -276,12 +270,12 @@ fn fire_towers(field: &mut Field, now: u64, quirks: Quirks, events: &mut StepEve
       r.mul(r)
     };
 
-    // The furthest along the path, with the id as an explicit tie-break: a
-    // *rule*, evaluated over the set, with no reference to how the set is
-    // stored. The quirk takes the first one in range instead, which is the
-    // classic version of this bug: it is perfectly deterministic on one machine
-    // and it silently encodes the container's iteration order into the game, so
-    // the day somebody changes how enemies are held, every client disagrees.
+    // The furthest along the path, with the id as an explicit tie-break. The
+    // rule is evaluated over the set and does not depend on how the set is
+    // stored. The quirk takes the first one in range instead. That is
+    // deterministic on one machine but makes the container's iteration order
+    // part of the game, so if somebody changes how enemies are stored, every
+    // client disagrees.
     let in_range = field.enemies.iter().filter(|e| e.pos().dist_sq(from) <= range_sq);
     let target = if quirks.target_order {
       in_range.take(1).map(|e| (e.id, e.pos())).next()
@@ -308,9 +302,9 @@ fn fire_towers(field: &mut Field, now: u64, quirks: Quirks, events: &mut StepEve
       if tower.kind == TowerKind::Frost {
         let until = now + SLOW_MS;
         enemy.slow_until_ms = if quirks.slow_rounding {
-          // The quirk that looks like housekeeping: a timestamp rounded to a
-          // tenth of a second. It changes when the slow ends, which changes
-          // where the enemy is, which changes what every tower targets after.
+          // A timestamp rounded to a tenth of a second, which looks like
+          // harmless tidying. It changes when the slow ends, so the enemy ends
+          // up somewhere else and every tower may target differently after.
           (until + 50) / 100 * 100
         } else {
           until
@@ -320,28 +314,28 @@ fn fire_towers(field: &mut Field, now: u64, quirks: Quirks, events: &mut StepEve
   }
 }
 
-/// An enemy's speed per tick, and the one place the float quirk lives.
+/// An enemy's speed per tick and the one place the float quirk lives.
 ///
-/// Worth reading, because two earlier versions of this quirk did **not** work
-/// and the reasons are the point of the module.
+/// Two earlier versions of this quirk did **not** diverge.
 ///
-/// Making the *movement* use `f32` diverges from nothing: the result is
-/// truncated back to 1/256 of a tile every tick, so the float error is
-/// quantised away before it can accumulate. Re-quantising every tick is a large
-/// part of why fixed point is robust, and it is why "we use floats but round
-/// the positions" is not the same protection.
+/// Making the *movement* use `f32` changes nothing: the result is truncated
+/// back to 1/256 of a tile every tick, which throws the float error away
+/// before it can accumulate. Re-quantising every tick is a large part of why
+/// fixed point is robust, so "we use floats but round the positions" does give
+/// most of the protection. What it does not cover is a float-derived constant
+/// that is multiplied by time, which is the case below.
 ///
 /// Making a *range* float diverges too rarely to demonstrate: it changes the
 /// radius by 1/256 of a tile, so it only matters in the fraction of a tick an
 /// enemy spends crossing that band while a tower happens to be off cooldown.
-/// Real, and unobservable in a minute of play.
+/// The difference is real but did not show up in a minute of play.
 ///
-/// A **constant that is multiplied by time** is where a float bites hard. A
-/// runner covers 4.2 tiles a second, which is `0.105` of a tile per 25 ms tick,
-/// which is `26.88` in 256ths. The integer ratio floors that to 26. Working it
-/// out in floating point and rounding gives 27. Four percent, applied every
-/// tick, for ever: after ten seconds the two machines' runners are a tile and a
-/// half apart, and each is being shot at by a different tower.
+/// A **constant that is multiplied by time** diverges quickly. A runner covers
+/// 4.2 tiles a second, which is `0.105` of a tile per 25 ms tick, which is
+/// `26.88` in 256ths. The integer ratio floors that to 26. Working it out in
+/// floating point and rounding gives 27. That is four percent too far on every
+/// tick, so after ten seconds the two machines' runners are a tile and a half
+/// apart and each is being shot at by a different tower.
 fn step_of(kind: EnemyKind, quirks: Quirks) -> Fx {
   if !quirks.floats {
     return kind.step();

@@ -267,8 +267,8 @@ fn tick(state: &mut RunState, ctx: &mut Ctx) -> bool {
   state.tick += 1;
   let mut changed = false;
 
-  // An open door with a held seat is the party standing and waiting; the
-  // meter is that time, priced.
+  // An open door with a held seat means the party is standing and waiting;
+  // the meter adds up that time.
   if !state.door_locked && !state.complete && state.any_seat_held() {
     state.meters.waited_ms += TICK_MS;
     if state.tick.is_multiple_of(50) {

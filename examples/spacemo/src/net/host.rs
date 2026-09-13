@@ -53,7 +53,7 @@ pub async fn serve(
 
   let logic = SpaceLogic::new().with_clock(sim_clock).with_controls(controls);
   // No snapshot provider: a joiner is told what it can see on the next tick,
-  // which in a volume is the whole of what it could be told anyway.
+  // which in a volume is everything it could be told anyway.
   let (commands, controller) = StateControllerBuilder::new(
     Arc::new(logic),
     session.clone(),

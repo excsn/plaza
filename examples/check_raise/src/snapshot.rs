@@ -1,6 +1,6 @@
-//! The table cut per recipient: your hole cards ride only in your view, and a
-//! spectator sees backs everywhere until a showdown turns the live hands face
-//! up for everyone.
+//! The table cut per recipient: your hole cards appear only in your view and
+//! a spectator sees backs everywhere until a showdown turns the live hands
+//! face up for everyone.
 
 use async_trait::async_trait;
 use plaza::agent::Agent;

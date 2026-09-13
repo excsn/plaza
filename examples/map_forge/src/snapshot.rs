@@ -1,6 +1,6 @@
-//! The bench, built once and sent to everyone: the board object, the roster,
-//! the locks. Presence deliberately does not ride here; it is a stream about
-//! now, relayed as it happens.
+//! The bench, built once and sent to everyone: the board object, the roster
+//! and the locks. Presence is deliberately left out; it is relayed as it
+//! happens.
 
 use async_trait::async_trait;
 use plaza::agent::Agent;

@@ -87,8 +87,8 @@ impl ToyServer {
   ///
   /// Bounded, because any queue fed by a peer and drained by a local clock has
   /// to be: a client that floods commands between two ticks (or a server that
-  /// stops ticking) must cost itself its own oldest inputs, not this process's
-  /// memory. Oldest dropped rather than newest, because with discrete inputs
+  /// stops ticking) must lose its own oldest inputs rather than cost this
+  /// process memory. Oldest dropped rather than newest, because with discrete inputs
   /// the newest intent is the one that still matters.
   pub fn receive(&mut self, cmd: ClientCmd) {
     const PENDING_CAP: usize = 256;

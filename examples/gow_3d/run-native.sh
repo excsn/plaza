@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# The zero-ceremony path: open 3DGoW as a native desktop window. With no
-# arguments this is `--role host`, which plays *and* stands up the zone, so it
-# also serves the browser page and prints an address others can join at. Pass
-# `--role client --connect <url>` to join someone else, or `--role headless` for
+# Opens 3DGoW as a native desktop window. With no arguments this is
+# `--role host`, which plays *and* stands up the zone, so it also serves the
+# browser page and prints an address others can join at. Pass
+# `--role client --connect <url>` to join someone else or `--role headless` for
 # the deployable server.
 #
-# Arrows or WASD walk, Q and E change floor, 1 casts, 2 parties with the nearest
-# character and 3 leaves. Walking two floors away from a party member is the
-# thing worth doing: their body leaves the world and their entry stays, with a
-# bearing and a floor offset, which is what the second relevance channel buys.
+# Arrows or WASD move, space jumps, tab cycles a beast to fight, 1 2 and 3 cast
+# Strike, Bolt and Mend, P parties with the nearest adventurer and O leaves.
+# Walk away from a party member until they drop out of view: their body leaves
+# the world and their party entry stays, through the second relevance channel.
 #
 # GOW_3D_FEATURES passes extra cargo features through, if you add any.
 #

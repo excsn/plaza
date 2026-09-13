@@ -99,8 +99,8 @@ where
 /// than its predecessor genuinely does arrive first. Using the bundle would
 /// have introduced a stall a real UDP link never produces.
 ///
-/// That the parts are public is what makes this an eleven-line answer rather
-/// than a reason to give up on the seam.
+/// Because the parts are public, this took eleven lines instead of giving up
+/// on the seam.
 #[derive(Default)]
 struct Reorderer {
   held: Vec<(Instant, Frame)>,

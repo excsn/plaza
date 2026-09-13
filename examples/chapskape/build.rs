@@ -1,8 +1,8 @@
-//! The wire is whatever `SkapeOp` reaches.
+//! The wire version covers every type `SkapeOp` reaches.
 //!
-//! Resolved rather than listed. The world's shape, its props and its
-//! pathfinder are deliberately outside it: none of them is serialized, so
-//! moving a lake must not disconnect a client.
+//! The types are resolved from the op instead of listed by file. The world's
+//! shape, its props and its pathfinder are outside it on purpose: none of them
+//! is serialized, so moving a lake must not disconnect a client.
 
 fn main() {
   plaza_wire::build::Wire::detect().emit();

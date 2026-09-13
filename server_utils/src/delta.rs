@@ -2,19 +2,19 @@
 //!
 //! [`relevance`](crate::relevance) answers *what* a subscriber should hold: run
 //! the grid query, fill a [`VisibilitySet`](crate::relevance::VisibilitySet).
-//! This answers the harder question that follows, which is what to actually
-//! *send* given that the subscriber holds something already, that packets are
-//! lost, and that either side may be wrong about what the other has.
+//! This module decides what to actually *send*, given that the subscriber
+//! already holds something, that packets are lost and that either side may be
+//! wrong about what the other has.
 //!
-//! It is deliberately set-theoretic and knows nothing about what a key means.
-//! Keys are `u64`, entering and leaving are the only events, and mapping a key
-//! back to a spawn payload or a despawn reason is the application's job. What
-//! lives here is the reliability, which is the part that is identical for every
-//! game and that every game gets wrong in the same two ways.
+//! It works only on sets and does not interpret keys. Keys are `u64`, entering
+//! and leaving are the only events and mapping a key back to a spawn payload or
+//! a despawn reason is the application's job. This module handles the
+//! reliability, which is the same for every game and which games get wrong in
+//! the same two ways.
 //!
 //! # The two failure modes this exists to prevent
 //!
-//! Both were shipped, in a real example, and both took days to find because the
+//! Both were shipped in a real example and both took days to find because the
 //! symptom was far from the cause.
 //!
 //! **A subscriber that joins mid-session.** Servers usually track relevance for
@@ -26,41 +26,39 @@
 //! the slot and the first packet is a full baseline instead.
 //!
 //! **A mirror that diverges for any reason at all.** Once the server believes a
-//! subscriber holds a key, that key is only ever sent as an update, and an
+//! subscriber holds a key, that key is only ever sent as an update and an
 //! update for something you do not have is discarded. There is no path back, so
 //! a single divergence is permanent no matter how much traffic follows. Carrying
 //! the subscriber's own digest on its acknowledgement (see
 //! [`observe_ack`](DeltaBaseline::observe_ack)) lets the server notice that the
 //! two disagree and rebuild from nothing.
 //!
-//! # The digest is also the resume story
+//! # Resyncing through the digest
 //!
-//! The drift check has a second reading that matters as much as the first: it
-//! is a **permission the client side builds on**. A client may discard any
+//! The drift check also lets a client resync. A client may discard any
 //! stretch of the stream unread (a backgrounded tab's backlog, most commonly)
 //! provided it also drops its mirror, because its next acknowledgement then
 //! carries the digest of nothing and this type answers with a full baseline.
-//! No resync-request message exists anywhere, and none is needed: dropping the
-//! mirror is the request. The client half of that bargain is
+//! No resync-request message exists: a client asks for a resync by dropping
+//! its mirror. The client side of this is
 //! `plaza_client_utils`' playout buffer and `plaza_ws`' backlog trim; the
 //! server half is this type plus [`with_flow`](DeltaBaseline::with_flow),
 //! which stops streaming full-rate full baselines to a subscriber that has
 //! provably stopped reading.
 //!
-//! # Two invariants, both load bearing
+//! # Two invariants
 //!
 //! **The key must be the key the digest hashes.** If the application digests
-//! `(index, generation)` pairs, that is what it must hand to this type, or the
-//! drift check compares two unrelated numbers and either never fires or always
-//! does. Encoding both into one `u64` is the usual answer.
+//! `(index, generation)` pairs, that is what it must hand to this type.
+//! Otherwise the drift check compares two unrelated numbers and either never
+//! fires or always does. Encoding both into one `u64` is the usual answer.
 //!
-//! **Acknowledge states, not packets.** The frontier this walks is the newest
-//! *contiguous* acknowledged sequence, not the newest bit set. Receiving packet
-//! N+1 after losing N does not put a subscriber in the state N+1 implies,
-//! because whatever N announced and N+1 had no reason to repeat is simply gone.
-//! That walk is [`AckWindow::contiguous_base`], not something re-derived here:
-//! it was re-derived here once, and wrongly, which is how the primitive came to
-//! exist.
+//! **The frontier is the newest contiguous acknowledged sequence**, rather than
+//! the newest bit set. Receiving packet N+1 after losing N does not put a
+//! subscriber in the state N+1 implies, because whatever N announced and N+1
+//! had no reason to repeat is gone. That walk is [`AckWindow::contiguous_base`]
+//! rather than something re-derived here: it was re-derived here once and got
+//! it wrong, which is how the primitive came to exist.
 //!
 //! [`AckWindow::contiguous_base`]: plaza_client_utils::ack::AckWindow::contiguous_base
 
@@ -73,13 +71,11 @@ use crate::relevance::SetDigest;
 /// How much of the reliability machinery to actually use.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecoveryPolicy {
-  /// Diff against the last state *sent*. Simple, and wrong the moment a packet
-  /// is lost: whatever it carried is never mentioned again, so the subscriber is
+  /// Diff against the last state *sent*. Wrong as soon as a packet is lost:
+  /// whatever it carried is never mentioned again, so the subscriber is
   /// permanently short of it while every readout looks healthy.
   ///
-  /// Selectable because it is worth being able to demonstrate. A block that only
-  /// knew how to be correct would make the failure it prevents invisible, and
-  /// the failure is the whole reason the rest of this type exists.
+  /// Selectable so the failure can be demonstrated.
   Naive,
   /// Diff against the newest state the subscriber has *acknowledged*, so a lost
   /// packet's contents are re-derived by the next difference rather than lost.
@@ -94,13 +90,13 @@ pub struct DeltaPlan {
   /// follows is the whole visible set rather than a difference from anything.
   ///
   /// Set when a subscriber is new, when its acknowledged baseline has aged out
-  /// of history, or when its digest proved the mirror had drifted. Applying a
-  /// full baseline onto an uncleared mirror would keep exactly the stale entries
-  /// the rebuild exists to remove.
+  /// of history or when its digest proved the mirror had drifted. Applying a
+  /// full baseline onto an uncleared mirror would keep the stale entries the
+  /// rebuild is meant to remove.
   pub full_baseline: bool,
-  /// The sequence this plan's differences were computed against, or `None` for a
-  /// difference from nothing. Worth putting on the wire: a subscriber that does
-  /// not hold this baseline cannot apply the packet at all.
+  /// The sequence this plan's differences were computed against; `None` for a
+  /// difference from nothing. Put it on the wire: a subscriber that does not
+  /// hold this baseline cannot apply the packet at all.
   pub baseline_seq: Option<u64>,
   /// Keys the subscriber does not hold and should.
   pub entered: Vec<u64>,
@@ -108,7 +104,7 @@ pub struct DeltaPlan {
   pub left: Vec<u64>,
 }
 
-/// The liveness half of flow control: when the subscriber last spoke, and when
+/// The liveness half of flow control: when the subscriber last spoke and when
 /// it was last probed. Opt-in via [`DeltaBaseline::with_flow`]; time is in
 /// whatever unit the application's clock uses.
 #[derive(Clone, Debug)]
@@ -123,7 +119,7 @@ struct FlowControl {
 }
 
 /// One subscriber's view of a streamed set: what it has been sent, what it has
-/// acknowledged, and therefore what to send next.
+/// acknowledged and therefore what to send next.
 ///
 /// One of these per subscriber. See the [module docs](self) for what it prevents
 /// and the invariants it depends on.
@@ -183,9 +179,8 @@ impl DeltaBaseline {
       last_sent_seq: None,
       history: history.max(1),
       policy: RecoveryPolicy::AckRecovery,
-      // A subscriber that has been sent nothing holds nothing, and the honest
-      // way to say that is a full baseline rather than a difference from a state
-      // it was never in.
+      // A subscriber that has been sent nothing holds nothing, so it gets a
+      // full baseline rather than a difference from a state it was never in.
       needs_full: true,
       full_rebuilds: 0,
       unacked: 0,
@@ -204,21 +199,22 @@ impl DeltaBaseline {
   /// to one send every `keepalive_every`, both in the application's own clock
   /// units, until it acknowledges again.
   ///
-  /// Why this belongs to the delta stream and not to the transport. Once a
+  /// This lives on the delta stream rather than the transport. Once a
   /// subscriber's acknowledged baseline ages out of history, **every** plan for
   /// it is a full baseline, so a reader that has stopped reading (a browser tab
   /// in the background: its socket keeps receiving while its frame loop does
   /// not run) is streamed the whole visible set at full rate, into a buffer it
   /// must pay for all at once on resume. Measured in the horde example that was
-  /// tens of megabytes a minute, and a several-second freeze on refocus. The
-  /// keepalive is what keeps the stream discoverable: the resumed client
-  /// applies it, acknowledges it, and full rate resumes on the next round.
+  /// tens of megabytes a minute and a several-second freeze on refocus. The
+  /// keepalive lets a resumed client pick the stream back up: it applies it,
+  /// acknowledges it and full rate resumes on the next round.
   ///
   /// Choosing `stalled_after`: match the client side's own discontinuity
   /// threshold (the point past which it restarts its timeline rather than
-  /// playing through), and keep it several times the acknowledgement interval,
+  /// playing through) and keep it several times the acknowledgement interval,
   /// so ordinary loss cannot trip it. A healthy subscriber acknowledges every
-  /// applied packet, so silence at this scale means stopped, not unlucky.
+  /// applied packet, so silence at this scale means it has stopped rather than
+  /// lost a few packets.
   pub fn with_flow(mut self, stalled_after: u64, keepalive_every: u64) -> Self {
     self.flow = Some(FlowControl {
       stalled_after,
@@ -230,9 +226,9 @@ impl DeltaBaseline {
   }
 
   /// Whether the subscriber has stopped acknowledging. Always `false` without
-  /// [`with_flow`](Self::with_flow), and during a fresh subscriber's grace
-  /// period (silence is measured from the first send decision, so a joiner is
-  /// not born stalled).
+  /// [`with_flow`](Self::with_flow) and during a fresh subscriber's grace
+  /// period (silence is measured from the first send decision, so a joiner does
+  /// not start out stalled).
   pub fn stalled(&self, now: u64) -> bool {
     let Some(flow) = &self.flow else {
       return false;
@@ -286,8 +282,8 @@ impl DeltaBaseline {
   /// subscriber connects the slot's baseline already describes most of the
   /// world. Sending a difference against that leaves the joiner holding almost
   /// nothing, converging only as pieces of the world happen to become newly
-  /// relevant, and it is invisible in every readout: the stream looks healthy
-  /// and the subscriber is simply missing most of the world.
+  /// relevant. Every readout still looks healthy while the subscriber is
+  /// missing most of the world.
   ///
   /// A slot nobody has ever acknowledged is covered anyway, because an
   /// unacknowledged baseline is treated as unknown and sent in full. The case
@@ -312,21 +308,18 @@ impl DeltaBaseline {
 
   /// Works out what to send, given the keys the subscriber should hold now.
   ///
-  /// `seq` numbers this packet, and must be what the subscriber acknowledges.
+  /// `seq` numbers this packet and must be what the subscriber acknowledges.
   pub fn plan(&mut self, current: &BTreeSet<u64>, seq: u64) -> DeltaPlan {
     let recovering = self.policy == RecoveryPolicy::AckRecovery;
     // A baseline older than the history cannot be re-derived from anything still
-    // known, so the only honest answer is to send the whole set. Not doing this
-    // is a quiet failure: the frontier steps over the gap and the subscriber
-    // stays short of that packet's contents forever.
+    // known, so the whole set has to be sent. Otherwise the frontier steps over
+    // the gap and the subscriber stays short of that packet's contents forever.
     let stale = recovering && self.baseline_is_stale();
-    // Under recovery, no acknowledged state means we genuinely do not know what
-    // the subscriber holds, and a difference against what we last *sent* is
-    // exactly the assumption this policy exists to avoid making. Anything lost
-    // before the first acknowledgement would otherwise never be mentioned again,
-    // which is the naive failure reappearing in the gap before recovery starts.
-    // Full sets for the first round trip, then incremental for the rest of the
-    // session.
+    // Under recovery, no acknowledged state means we do not know what the
+    // subscriber holds and a difference against what we last *sent* is the
+    // assumption this policy avoids. Anything lost before the first
+    // acknowledgement would otherwise never be mentioned again. Full sets for
+    // the first round trip, then incremental for the rest of the session.
     let unknown = recovering && self.acked.is_none();
     let rebuild = self.needs_full || stale;
     let full_baseline = rebuild || unknown;
@@ -335,21 +328,21 @@ impl DeltaBaseline {
     if rebuild {
       self.acked = None;
       self.assumed_held.clear();
-      // Forgetting this is how a rebuild becomes a no-op: with the acknowledged
-      // baseline dropped the code falls back to the naive diff, and diffing
-      // against a stale "what I last sent" emits nothing at all while the
-      // rebuild counter still ticks.
+      // Without this a rebuild is a no-op: with the acknowledged baseline
+      // dropped the code falls back to the naive diff and diffing against a
+      // stale "what I last sent" emits nothing while the rebuild counter still
+      // ticks.
       self.last_sent.clear();
-      // A rebuild starts a new epoch, and the sent history is part of the old
-      // one, twice over. A stale in-flight acknowledgement could name a
+      // A rebuild starts a new epoch and keeping the old sent history causes
+      // two problems. A stale in-flight acknowledgement could name a
       // pre-rebuild state as the baseline for a subscriber that is about to
       // hold something else entirely. And after a subscriber restart, its
       // acknowledgement window has a gap at the stall boundary that
       // `contiguous_base` can never cross, so with the old history in place
-      // the baseline stayed unknown, and unknown means a full set **every
-      // round**, until the gap aged out: measured at ~25 consecutive full
-      // baselines over 1.5 s. Cleared, the frontier restarts at the next
-      // packet and one acknowledgement round trip ends the full sets.
+      // the baseline stayed unknown and unknown means a full set **every
+      // round** until the gap aged out: measured at ~25 consecutive full
+      // baselines over 1.5 s. With it cleared, the frontier restarts at the
+      // next packet and one acknowledgement round trip ends the full sets.
       self.sent.clear();
       self.full_rebuilds += 1;
     }
@@ -361,8 +354,8 @@ impl DeltaBaseline {
 
     match (&self.acked, recovering) {
       (Some((acked_seq, acked)), true) => {
-        // Two baselines, built by opposite operations, because the two halves of
-        // a difference answer two different questions.
+        // Two baselines built by opposite operations, one for each half of the
+        // difference.
         //
         // What to **send** must assume the least: the acknowledged state minus
         // anything a later packet may have retracted. Assuming more claims the
@@ -393,8 +386,8 @@ impl DeltaBaseline {
       }
       _ => {
         // The naive policy: difference against what was last sent, which assumes
-        // every packet arrived. Wrong the moment one does not, and kept because
-        // being able to demonstrate that is the point.
+        // every packet arrived and is wrong as soon as one does not. Kept so that
+        // failure can be demonstrated.
         plan.baseline_seq = self.last_sent_seq;
         plan.entered = current.difference(&self.last_sent).copied().collect();
         plan.left = self.last_sent.difference(current).copied().collect();
@@ -418,18 +411,18 @@ impl DeltaBaseline {
   ///
   /// `digest` is the subscriber's own [`SetDigest`] over the keys it is actually
   /// holding. When it disagrees with the digest of the state we believe it
-  /// reached, the mirror has drifted and no amount of further differences can
-  /// repair it, so the next plan is a full rebuild. Pass the digest of an empty
-  /// set if the application does not compute one, and the check is skipped.
+  /// reached, the mirror has drifted and further differences cannot repair it,
+  /// so the next plan is a full rebuild. If the application does not compute a
+  /// digest, pass the digest of an empty set and the check is skipped.
   pub fn observe_ack(&mut self, newest: u64, mask: u64, digest: u64) {
     if self.policy != RecoveryPolicy::AckRecovery {
       return;
     }
     let window = AckWindow::from_encoded(newest, mask);
-    // Contiguous, not newest-set: see the module docs. Stopping at the first gap
-    // is the whole correctness of this, and it is `AckWindow`'s to get right
-    // rather than something re-derived here. It was re-derived here once, and
-    // wrongly, which is how the primitive came to exist.
+    // The contiguous frontier rather than the newest set bit: see the module
+    // docs. Correctness depends on stopping at the first gap, which `AckWindow`
+    // does rather than something re-derived here. It was re-derived here once
+    // and got it wrong, which is how the primitive came to exist.
     //
     // The first sequence not yet accounted for: one past the settled baseline, or
     // the oldest state still in history when nothing has been acknowledged yet.
@@ -439,26 +432,25 @@ impl DeltaBaseline {
       .map(|(seq, _)| *seq + 1)
       .or_else(|| self.sent.front().map(|(seq, _)| *seq));
     if let Some(first) = first
-      // `None` means the run is empty: either that packet never arrived, or the
+      // `None` means the run is empty: either that packet never arrived or the
       // subscriber has fallen so far behind that the window cannot speak about
-      // it. Both mean the frontier does not move, and the staleness check in
+      // it. Both mean the frontier does not move and the staleness check in
       // `plan` is what rebuilds from the second case.
       && let Some(base) = window.contiguous_base(first)
       && let Some((seq, state)) = self.sent.iter().find(|(seq, _)| *seq == base)
     {
       self.acked = Some((*seq, state.clone()));
     }
-    // The drift check, and it is deliberately not folded into the branch above:
-    // a subscriber that re-acknowledges the same sequence still reports what it
-    // is holding, and a mirror that lost something without losing a packet
-    // reports it exactly then. Checking only when the frontier advances misses
-    // precisely the case this exists to catch.
+    // The drift check is kept out of the branch above: a subscriber that
+    // re-acknowledges the same sequence still reports what it is holding and a
+    // mirror that lost something without losing a packet reports it exactly
+    // then. Checking only when the frontier advances misses that case.
     //
     // Only compared when the frontier has reached the newest packet the
-    // subscriber reports, which is to say when it has no gaps. With a gap its
-    // digest describes packets beyond the frontier, so a disagreement would mean
+    // subscriber reports, that is, when it has no gaps. With a gap its digest
+    // describes packets beyond the frontier, so a disagreement would mean
     // "further ahead than the state we are comparing against" rather than
-    // "wrong", and rebuilding on that would rebuild on ordinary packet loss.
+    // "wrong" and rebuilding on that would rebuild on ordinary packet loss.
     if let Some((acked_seq, acked)) = &self.acked
       && *acked_seq == newest
       && SetDigest::from_keys(acked.iter().copied()).digest() != digest
@@ -481,20 +473,20 @@ impl DeltaBaseline {
     };
   }
 
-  /// [`observe_ack`](Self::observe_ack), and the acknowledgement's arrival time
+  /// [`observe_ack`](Self::observe_ack), plus the acknowledgement's arrival time
   /// for flow control. Use this form whenever [`with_flow`](Self::with_flow) is
-  /// on; the timestamp records under **either** policy, because liveness is a
-  /// property of the subscriber, not of the recovery arithmetic.
+  /// on; the timestamp records under **either** policy, because liveness
+  /// concerns the subscriber rather than the recovery policy.
   ///
-  /// An ack from a subscriber currently stalled is **the resume signal**, and
-  /// it starts a fresh epoch instead of being folded in. Its window spans the
-  /// silence, and the keepalives inside the silence are sparse in the sequence
+  /// An ack from a subscriber currently stalled is **the resume signal** and it
+  /// starts a fresh epoch instead of being folded in. Its window spans the
+  /// silence and the keepalives inside the silence are sparse in the sequence
   /// space, so the contiguous walk pins the baseline at the first keepalive
-  /// and every plan after resume diffs against a state as old as the stall,
+  /// and every plan after resume diffs against a state as old as the stall
   /// until staleness notices a second time: measured as ~25 consecutive full
   /// baselines over 1.5 s. Resetting instead makes the next plan one full
   /// baseline in a clean epoch, which the subscriber acknowledges contiguously,
-  /// and the stream is deltas again after a single round trip.
+  /// so the stream is deltas again after a single round trip.
   pub fn observe_ack_at(&mut self, newest: u64, mask: u64, digest: u64, now: u64) {
     let resuming = self.stalled(now);
     if let Some(flow) = &mut self.flow {
@@ -510,14 +502,14 @@ impl DeltaBaseline {
     self.observe_ack(newest, mask, digest);
   }
 
-  /// Forces the next plan to be a full baseline. The application's own escape
-  /// hatch, for a divergence it detected by some other means.
+  /// Forces the next plan to be a full baseline, for a divergence the
+  /// application detected by some other means.
   pub fn request_full_baseline(&mut self) {
     self.needs_full = true;
   }
 
   /// How many times this subscriber has needed a full rebuild. The cost of
-  /// recovery, and the number that says whether the history window is long
+  /// recovery and the number that says whether the history window is long
   /// enough for the loss and latency actually being seen.
   pub fn full_rebuilds(&self) -> u64 {
     self.full_rebuilds
@@ -545,17 +537,17 @@ impl DeltaBaseline {
 mod tests {
   use super::*;
 
-  /// The two accessors nothing was exercising, and the surprise inside one of
+  /// The two accessors nothing was exercising and a side effect of one of
   /// them.
   mod what_nothing_was_calling {
     use super::*;
 
     #[test]
     fn changing_the_policy_throws_away_the_acknowledged_baseline() {
-      // Worth pinning because it is a side effect of a setter: the next plan
-      // after a policy change is a **full rebuild**, not a delta, and a server
-      // that flips policy per tick would send a baseline per tick while every
-      // number on its panel still said "delta".
+      // A side effect of a setter: the next plan after a policy change is a
+      // **full rebuild** rather than a delta, so a server that flips policy per
+      // tick would send a baseline per tick while every number on its panel
+      // still said "delta".
       let mut baseline = DeltaBaseline::new(8).with_policy(RecoveryPolicy::AckRecovery);
       let world = keys(&[1, 2, 3]);
       baseline.plan(&world, 1);
@@ -587,9 +579,8 @@ mod tests {
 
     #[test]
     fn unacked_counts_what_is_still_in_flight() {
-      // The number a panel would show for "how far behind is this client",
-      // and it has to fall when an acknowledgement arrives or it is a leak
-      // rather than a measurement.
+      // The number a panel would show for "how far behind is this client". It
+      // has to fall when an acknowledgement arrives.
       let mut baseline = DeltaBaseline::new(8);
       let world = keys(&[1, 2, 3]);
       for seq in 1..=3 {
@@ -640,7 +631,7 @@ mod tests {
   fn a_rebuild_starts_a_new_epoch_and_one_ack_round_trip_ends_the_full_sets() {
     // The resume churn. A restarted subscriber's ack window has a gap the
     // contiguous walk can never cross, so with the old sent history in place
-    // the baseline stayed unknown, and unknown means a full set every round
+    // the baseline stayed unknown and unknown means a full set every round
     // until the gap aged out of history: ~25 consecutive full baselines.
     let mut b = DeltaBaseline::new(24);
     let world = keys(&[1, 2, 3]);
@@ -668,7 +659,7 @@ mod tests {
 
   #[test]
   fn a_silent_subscriber_is_throttled_to_keepalives_and_one_ack_restores_it() {
-    // The hidden-tab pathology. Once the acknowledged baseline ages out of
+    // The hidden-tab case. Once the acknowledged baseline ages out of
     // history every plan is a full baseline, so without this a reader that has
     // stopped reading is streamed the whole visible set at full rate into a
     // buffer it pays for on resume.
@@ -701,7 +692,7 @@ mod tests {
 
     // One acknowledgement ends the throttle. It is also the resume signal, so
     // it opens a fresh epoch rather than being folded in: its window spans the
-    // silence, and the keepalives inside the silence are sparse in sequence
+    // silence and the keepalives inside the silence are sparse in sequence
     // space, so folding it in pins the baseline at the first keepalive and
     // every plan after resume is a full set until staleness fires again.
     b.observe_ack_at(seq, u64::MAX, digest, now);
@@ -727,7 +718,7 @@ mod tests {
   fn a_fresh_subscriber_is_not_born_stalled() {
     // Construction and reset have no clock, so silence is measured from the
     // first send decision: a joiner on a server whose clock reads an hour must
-    // not start life throttled.
+    // not start out throttled.
     let mut b = DeltaBaseline::new(24).with_flow(3_000, 1_000);
     assert!(b.should_send(3_600_000));
     assert!(!b.stalled(3_600_000));
@@ -762,12 +753,11 @@ mod tests {
 
   #[test]
   fn a_reused_slot_without_a_reset_hands_the_new_occupant_the_old_ones_state() {
-    // The failure that survives every other safeguard, kept as a test so it is
-    // written down rather than remembered.
+    // The failure every other safeguard misses.
     //
     // While nobody has ever acknowledged, this type sends full sets anyway, so a
     // never-occupied slot is safe by accident. A slot whose *previous* occupant
-    // acknowledged is not: that state looks like a perfectly good baseline, and
+    // acknowledged is not: that state looks like a perfectly good baseline and
     // the new subscriber is sent the difference from a world it has never seen.
     let world = keys(&[1, 2, 3, 4, 5]);
 
@@ -781,7 +771,7 @@ mod tests {
     joiner.apply(&b.plan(&world, 1));
     assert!(joiner.held.is_empty(), "this is the bug: the joiner is sent nothing at all");
 
-    // With the reset, which is the one line an application has to remember.
+    // With the reset.
     b.reset();
     let mut joiner = Mirror::default();
     joiner.apply(&b.plan(&world, 2));
@@ -807,8 +797,8 @@ mod tests {
 
   #[test]
   fn the_naive_policy_loses_a_lost_packets_contents_forever() {
-    // The teaching case, preserved deliberately. This is what the acknowledged
-    // baseline exists to prevent, and it has to stay demonstrable.
+    // The acknowledged baseline exists to prevent this and it has to stay
+    // demonstrable.
     let mut b = DeltaBaseline::new(24).with_policy(RecoveryPolicy::Naive);
     let mut mirror = Mirror::default();
     mirror.apply(&b.plan(&keys(&[1, 2]), 0));
@@ -831,8 +821,8 @@ mod tests {
     mirror.apply(&b.plan(&world, 0));
     b.observe_ack(0, 1, digest(&mirror.held));
 
-    // Something eats a key. The cause does not matter; the point is that the
-    // difference stream alone can never put it back.
+    // A key goes missing. Whatever the cause, the difference stream alone can
+    // never put it back.
     mirror.held.remove(&3);
     b.observe_ack(0, 1, digest(&mirror.held));
 
@@ -924,8 +914,8 @@ mod tests {
 
   #[test]
   fn a_long_lossy_run_still_converges() {
-    // The property that matters in aggregate: whatever the loss pattern, a
-    // subscriber that keeps acknowledging ends up holding exactly the right set.
+    // Whatever the loss pattern, a subscriber that keeps acknowledging ends up
+    // holding exactly the right set.
     let mut b = DeltaBaseline::new(16);
     let mut mirror = Mirror::default();
     let mut window = AckWindow::new();

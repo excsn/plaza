@@ -1,10 +1,9 @@
 //! The authoritative arena, as `plaza` core wants it.
 //!
-//! The thinnest of the playground arenas, and that is the finding rather than a
-//! shortcut. There is no `TimeStep` work at all beyond a clock: nothing is
-//! being simulated here, because a time trial has nothing to arbitrate between
-//! players. The arena exists to hold the leaderboard and to **replay evidence
-//! on demand**.
+//! The thinnest of the playground arenas. `TimeStep` only moves a clock:
+//! nothing is simulated here, because a time trial has nothing to arbitrate
+//! between players. The arena holds the leaderboard and **replays submitted
+//! logs** to verify them.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -50,15 +49,15 @@ pub struct Arena {
   seats: SeatTable<PlayerKey>,
   /// The impairment, on the real path.
   ///
-  /// It does not touch the lap, which is the example's whole claim. It decides
-  /// when a ghost turns up and when a verdict lands.
-  /// One-shot ops the client has not yet proved it heard.
+  /// It does not affect the lap, which is the main thing this example shows.
+  /// It decides when a ghost turns up and when a verdict lands.
+  /// One-shot ops the client has not yet confirmed.
   pending: OneShots<PlayerKey, Op>,
-  /// Frames the link ate, read back from the session that ate them.
+  /// Frames the link dropped, read back from the session that dropped them.
   ///
-  /// Frames rather than submissions, because the link cannot see an op: it
-  /// discards bytes before anything decodes them, which is exactly why this
-  /// has to be read from there rather than counted here.
+  /// Counted in frames rather than submissions, because the link discards
+  /// bytes before anything decodes them into ops. That is also why the count
+  /// is read from the session rather than kept here.
   pub frames_lost: u64,
 }
 
@@ -116,8 +115,8 @@ impl Arena {
 /// link. The arena states what the link should be and stops there.
 pub use plaza_session::LinkSink;
 
-/// Reads back what the link discarded. The arena cannot count this for itself:
-/// a lost frame never reaches it, which is the whole point of losing it.
+/// Reads back what the link discarded. The arena cannot count this for itself,
+/// because a lost frame never reaches it.
 pub type DropCount = Arc<dyn Fn() -> u64 + Send + Sync>;
 
 pub struct ArenaLogic {
@@ -162,8 +161,7 @@ impl ArenaLogic {
   /// Pushes the panel's link settings down to the transport when they change.
   fn publish_link(&self, controls: &Controls) {
     let Some(link) = &self.link else { return };
-    // One way, applied in each direction, which is what the slider has always
-    // meant here.
+    // The slider is one-way latency, applied in each direction.
     let one_way = DirectionProfile {
       delay: Duration::from_millis(controls.latency_ms),
       jitter: Duration::from_millis(controls.jitter_ms),
@@ -186,8 +184,9 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         let Some(key) = agent.id_cloned() else {
           return Ok(LogicOutput::none());
         };
-        // Declared rather than merely sent: a datagram link can lose either,
-        // and nothing else in this protocol would mention the seat again.
+        // Declared rather than just sent, because a datagram link can lose
+        // either op and nothing else in this protocol would mention the seat
+        // again.
         let now = state.sim.now_ms();
         let op = match state.seat(key) {
           Some(seat) => state.sim.welcome(seat),
@@ -206,10 +205,10 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         let Some(key) = source.id_cloned() else {
           return Ok(LogicOutput::none());
         };
-        // A client that is talking has plainly received whatever let it talk, so
-        // this is the acknowledgement and no ack op has to exist. Before the
-        // seat gate: a seatless client's traffic confirms its `NoSeat` too, and
-        // that verdict is just as unrepeatable as a welcome.
+        // A client that sends anything must have received its welcome, so its
+        // traffic is the acknowledgement and no ack op is needed. This runs
+        // before the seat gate so a seatless client's traffic confirms its
+        // `NoSeat` too, since nothing else would send that verdict again either.
         state.pending.confirm(&key);
         let Some(seat) = state.seat_of(&key) else {
           return Ok(LogicOutput::none());
@@ -218,14 +217,14 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         for op in ops {
           match op {
             Op::Submit { log, claimed_ms } => {
-              // A lost submission is a lap nobody recorded. There is no retry,
-              // deliberately: it costs the run and never the board, because the
-              // board only ever holds runs that were verified. Losing one is
-              // the link's doing now, so the count comes from there: what it
-              // ate never reached this arm to be counted here.
+              // A lost submission is a lap nobody recorded. There is
+              // deliberately no retry: losing one costs the run but not the
+              // board, because the board only holds verified runs. The link
+              // does the dropping, so the loss count is read from the session;
+              // a dropped submission never reaches this arm to be counted here.
               for answer in state.sim.submit(seat, *log, claimed_ms) {
-                // A verified run is everybody's: it is a ghost to race. A
-                // refusal belongs to the one client that sent the log.
+                // A verified run goes to everybody as a ghost to race. A
+                // refusal goes only to the client that sent the log.
                 let targets: Vec<PlayerKey> = match answer {
                   Op::Accepted { .. } => state.seats.by_seat().iter().map(|(_, k)| *k).collect(),
                   _ => vec![key],
@@ -256,7 +255,7 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         };
         // A tick moves the clock and delivers whatever the link is holding.
         // Nothing is simulated: the runs happen on the machines driving them
-        // and arrive as finished evidence.
+        // and arrive as finished logs.
         state.sim.advance(delta_time.as_millis() as u64);
         let now = state.sim.now_ms();
         let mut out: Vec<TargetedOp<Op, PlayerKey>> = state
@@ -340,8 +339,8 @@ mod tests {
 
   #[test]
   fn an_accepted_run_goes_to_every_seat_and_a_refusal_only_to_the_sender() {
-    // A ghost is for racing, so everybody needs it. A refusal is a private
-    // conversation with the client that sent the log.
+    // Everybody races a ghost, so everybody needs it. A refusal only goes to
+    // the client that sent the log.
     let logic = logic();
     let mut state = Arena::new(quiet());
     step(&logic, &mut state, LogicInput::AgentJoined { agent: Agent::new_human(1u64) });
@@ -404,10 +403,10 @@ mod tests {
     }
   }
 
-  /// The other half of the contract, and the half whose absence is silent: a
-  /// welcome that is never confirmed is repeated into a client that treats it
-  /// as a fresh start, so the first seconds of play rebuild the world over and
-  /// over. The guard above only asserts that repeats happen.
+  /// The other half of the contract, whose absence would go unnoticed: a
+  /// welcome that is never confirmed is repeated to a client that treats it as
+  /// a fresh start, so the first seconds of play rebuild the world over and
+  /// over. The test above only asserts that repeats happen.
   #[test]
   fn traffic_from_a_client_stops_the_repeats() {
     let controls = Controls { datagram_link: true, ..quiet() };
@@ -428,9 +427,9 @@ mod tests {
     assert_eq!(repeats, 0, "confirmed, so nothing is repeated");
   }
 
-  /// What the arena still owns of impairment: turning the panel's numbers into
-  /// a link profile, once, and only when they change. Holding the frames back
-  /// is the session's, and is tested where that happens.
+  /// The arena's part of impairment: turning the panel's numbers into a link
+  /// profile, once and only when they change. Holding the frames back is the
+  /// session's job and is tested there.
   #[test]
   fn the_sliders_are_published_to_the_link_rather_than_applied_here() {
     let controls = Controls { latency_ms: 200, loss_pct: 25.0, ..quiet() };
@@ -456,8 +455,8 @@ mod tests {
     let logic = logic();
     let mut state = Arena::new(quiet());
     step(&logic, &mut state, LogicInput::AgentJoined { agent: Agent::new_human(1u64) });
-    // The welcome is confirmed, so the one thing this arena legitimately says
-    // twice is out of the way and anything left is simulation.
+    // The welcome is confirmed, so the one op this arena legitimately repeats
+    // is out of the way and anything left is simulation.
     state.pending.confirm(&1u64);
     for _ in 0..50 {
       let out = step(
@@ -467,8 +466,8 @@ mod tests {
           delta_time: Duration::from_millis(SIM_STEP_MS),
         },
       );
-      // With nothing in flight a tick produces nothing. If this ever starts
-      // failing, something has grown a simulation that does not belong here.
+      // With nothing in flight a tick produces nothing. A failure here means
+      // something in the arena has started simulating.
       assert!(out.ops.is_empty());
     }
     assert!(state.sim.now_ms() > 0, "but the clock moved");

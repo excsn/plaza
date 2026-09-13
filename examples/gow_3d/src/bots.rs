@@ -1,13 +1,13 @@
 //! Characters the zone seats for itself.
 //!
-//! A zone with one person in it demonstrates nothing this example is about: the
-//! view radius culls nobody, the party frame has no members, and a cast bar
-//! runs against no target. These are seated through the same roster a player
-//! is, moved through the same `place`, and cast through the same `begin_cast`,
-//! so everything they exercise is the code a client exercises.
+//! A zone with one person in it shows none of what this example is about: the
+//! view radius culls nobody, the party frame has no members and a cast bar has
+//! no target. Bots are seated through the same roster as a player, moved
+//! through the same `place` and cast through the same `begin_cast`, so they
+//! exercise the same code a client does.
 //!
-//! They hold no `Agent`, which is what keeps them off the send path: a frame is
-//! built per entry in `GowState::agents`, and a bot is not one.
+//! They hold no `Agent`, which keeps them off the send path: a frame is built
+//! per entry in `GowState::agents` and a bot is not one.
 
 use crate::abilities::{BOLT, STRIKE};
 use crate::casting::Ms;
@@ -27,8 +27,8 @@ const THINK_SPAN_MS: Ms = 4200;
 const PATIENCE_MS: Ms = 900;
 
 /// Reproducible, so a headless zone replays the same way twice. Small enough
-/// to write rather than depend on, which is the rule this example follows for
-/// anything that has to reach wasm.
+/// to write rather than add as a dependency, as this example does for anything
+/// that has to reach wasm.
 struct XorShift(u64);
 
 impl XorShift {
@@ -118,9 +118,8 @@ impl Bots {
   ///
   /// Everything goes through the zone's own methods, so a bot obeys the
   /// cooldown, the mana cost, the reach check and the spatial index exactly as
-  /// a client does. They hunt beasts rather than each other, which is what
-  /// makes a zone read as a world with something happening in it rather than a
-  /// deathmatch.
+  /// a client does. They hunt beasts rather than each other, so the zone looks
+  /// like a world with things going on rather than a deathmatch.
   pub fn steer(&mut self, zone: &mut Zone, dt_ms: Ms) {
     let now = zone.now_ms;
     let step = RUN_SPEED * (dt_ms as f32 / 1000.0);
@@ -179,8 +178,8 @@ impl Bots {
         continue;
       };
       let gap = distance(zone.characters[&seat].tracked.at, quarry_at);
-      // The bar when it can afford the reach, the instant when it cannot,
-      // which is the same choice the ability bar asks a player to make.
+      // Bolt when it has the mana and the target is in range, otherwise
+      // Strike, which is the same choice a player makes.
       let index = if gap <= BOLT.range && me.mana >= BOLT.mana as f32 {
         1
       } else if gap <= STRIKE.range {
@@ -259,8 +258,8 @@ mod tests {
 
   #[test]
   fn bots_leave_each_other_alone() {
-    // The direct form of "they hunt beasts": with nothing hostile in the zone,
-    // a bot has nobody to aim at, so a world of adventurers stays peaceful.
+    // Bots only hunt beasts: with nothing hostile in the zone a bot has nobody
+    // to aim at, so a world of adventurers stays peaceful.
     let (mut state, mut bots) = zone_of(20, 0);
     run(&mut state, &mut bots, 1200);
     assert_eq!(bots.casts, 0, "somebody cast with no enemy in the zone");
@@ -274,9 +273,9 @@ mod tests {
 
   #[test]
   fn bots_fight_the_beasts() {
-    // The reason they exist: an empty zone draws no health bar moving, no
-    // flash and no cast bar over anyone's head. A test that only checked they
-    // walk would pass on a zone that is still silent.
+    // Without fighting the zone shows no moving health bar, no flash and no
+    // cast bar over anyone's head. A test that only checked they walk would
+    // pass on a zone where nothing happens.
     let (mut state, mut bots) = zone_of(16, 10);
     run(&mut state, &mut bots, 1200);
 
@@ -305,7 +304,7 @@ mod tests {
   #[test]
   fn the_steering_is_reproducible() {
     // A headless zone that replays differently cannot be compared against
-    // itself, which is the only baseline a demonstration has.
+    // itself and a demonstration has no other baseline.
     let mut ends = Vec::new();
     for _ in 0..2 {
       let (mut state, mut bots) = zone_of(12, 8);
@@ -322,8 +321,7 @@ mod tests {
 
   #[test]
   fn a_bot_spends_mana_and_falls_back_on_the_instant() {
-    // The choice the ability bar asks a player to make, made by a bot: it must
-    // not stand there silent once the pool is dry.
+    // A bot out of mana must fall back on Strike instead of standing idle.
     let (mut state, mut bots) = zone_of(4, 4);
     run(&mut state, &mut bots, 1500);
     let spent = bots

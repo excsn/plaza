@@ -39,7 +39,7 @@ class RttEstimator {
   /// The round trip is [nowMs] minus the origin time the ping carried.
   ///
   /// Saturating, so a reply stamped after its own arrival reads as zero rather
-  /// than as a negative round trip that then poisons the average.
+  /// than as a negative round trip that then skews the average.
   void observePong(int originTimeMs, int nowMs) => observe(saturatingSub(nowMs, originTimeMs));
 
   double? get rttMs => _smoothedMs;

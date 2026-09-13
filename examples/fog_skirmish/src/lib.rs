@@ -1,8 +1,8 @@
-//! Fog of war as relevance, where being generous is a cheat.
+//! Fog of war as relevance, where sending too much is a cheat.
 //!
-//! The game and its audit live here so the WebSocket host and the leak tests
-//! reach the same code: an example whose claim is "this never crossed the
-//! wire" has to let a test read the same wire a browser does.
+//! The game and its audit live in the library so the WebSocket host and the
+//! leak tests use the same code. That lets a test read the same wire a browser
+//! does.
 
 pub mod bots;
 pub mod logic;

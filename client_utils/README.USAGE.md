@@ -1,6 +1,6 @@
 # Usage Guide: plaza_client_utils
 
-How to build the client half of a networked game with `plaza_client_utils`: predicting your own entity, drawing everyone else, keeping a render clock, holding a streamed entity set, and measuring the link.
+How to build the client half of a networked game with `plaza_client_utils`: predicting your own entity, drawing everyone else, keeping a render clock, holding a streamed entity set and measuring the link.
 
 ## Table of Contents
 
@@ -49,12 +49,12 @@ How to build the client half of a networked game with `plaza_client_utils`: pred
 
 ## Core Concepts
 
-*   **Authoritative state**: what the server said, and the only thing a rule both sides run may read. Older than what you draw, and correct.
+*   **Authoritative state**: what the server said and the only thing a rule both sides run may read. It is older than what you draw, but it is correct.
 *   **Predicted state**: your own entity simulated ahead of the server so input feels instant. Presentation only.
 *   **Reconciliation**: folding an authoritative packet into the predicted state. `PredictedPlayer` replays the inputs the server had not seen; `HeldInputPredictor` eases toward the sample instead.
 *   **Sequence number**: `SequenceNumber`, one per input you send. The server echoes the last one it processed, which is what says how much to replay.
 *   **Render target**: the single instant `T` a frame is drawn at, produced by `InterpolationClock::target`. Everything a frame reads is evaluated at `T`.
-*   **Render delay**: how far behind estimated server time `T` sits. Large enough that two snapshots bracket it, small enough not to feel laggy.
+*   **Render delay**: how far behind estimated server time `T` sits. It must be large enough that two snapshots bracket it and small enough not to feel laggy.
 *   **Snapshot**: one timestamped state for an entity you do not control, pushed into a `RemoteView` or a `SnapshotBuffer`.
 *   **Correction**: what a reconciliation did, returned as `Correction { seen, settled }` for `CorrectionMonitor` to judge.
 *   **Mirror**: the client's copy of a server-streamed entity set, held by `DeltaMirror` and checked against the server's `SetDigest`.
@@ -71,7 +71,7 @@ The whole client-side job, against a server that consumes one input per step.
 use plaza_client_utils::{PredictedPlayer, PlayerConfig, RemoteView, RenderOpts, InterpolationClock};
 use std::collections::HashMap;
 
-// The rule the server runs. The same function, not a copy of it.
+// The rule the server runs: share this function with the server rather than copying it.
 fn apply_move(state: &mut Pos, input: &Move, _ctx: &()) {
   state.x += input.dx * SPEED;
   state.y += input.dy * SPEED;
@@ -148,24 +148,24 @@ debug_assert_eq!(session.state_at(old_frame), peer_reported_state);
 
 ### Which Predictor
 
-The two bundles differ by how the **server** consumes input, not by how the client feels. Choosing wrong is silent: it shows up as a prediction that is always slightly behind.
+Pick between the two bundles by how the **server** consumes input. A wrong choice raises no error; it shows up as a prediction that is always slightly behind.
 
 | the server | use |
 |---|---|
 | consumes one input per simulation step | `PredictedPlayer` (replay unacknowledged inputs) |
 | holds an input and integrates it every tick | `HeldInputPredictor` (dead reckon and ease) |
 
-Replaying inputs against a server of the second kind double counts, and gets worse the more you economise on bandwidth, because one coalesced input can cover a long stretch of simulation.
+Replaying inputs against a server of the second kind double counts and gets worse the more you economise on bandwidth, because one coalesced input can cover a long stretch of simulation.
 
 ### Drawing an Entity You Do Not Control
 
-Four options. The choice is a property of **the entity**, not of the game, and different entities in one scene legitimately sit on different rows.
+Four options. Choose per **entity** rather than per game: different entities in one scene can sit on different rows.
 
 | you know | draw it by | piece |
 |---|---|---|
-| its rule, and the inputs the rule reads | running that rule locally, corrected by samples | `HeldInputPredictor` |
+| its rule and the inputs the rule reads | running that rule locally, corrected by samples | `HeldInputPredictor` |
 | nothing but its past positions | interpolating between two real samples, in the past | `RemoteView` with `interpolate` |
-| its positions, and that its motion is constrained | dead reckoning along the last velocity, briefly | `RemoteView` with `extrapolate` |
+| its positions and that its motion is constrained | dead reckoning along the last velocity, briefly | `RemoteView` with `extrapolate` |
 | none of the above | holding the newest sample | `RemoteView`, both off |
 
 Take the highest row you have the data for. Dead reckoning a **player** is guessing at a human's intention, which nothing on the wire carries, so it overshoots every direction change; it is for entities with inertia and a turning limit.
@@ -233,11 +233,11 @@ draw(&me.render());           // eased: what the eye should see
 let exact = me.logical();     // exact: what the next prediction builds on
 ```
 
-Never feed `render()` back into a rule. It is presentation.
+Never feed `render()` back into a rule; it is only for drawing.
 
 ### Pausing, Freezing and Teleporting
 
-*   **The server is holding your entity still** (a respawn delay, a stun, a cutscene). Stop integrating, or you invent a correction stream of your own making:
+*   **The server is holding your entity still** (a respawn delay, a stun, a cutscene). Stop integrating; otherwise the client produces corrections of its own:
 
     ```rust,ignore
     me.set_active(false);
@@ -268,7 +268,7 @@ if coalescer.should_send(&mv, now_ms) {
 }
 ```
 
-The keepalive is the content, not a fallback: a *dropped* direction change is not a missing update but a wrong state that persists, because the server keeps applying the last direction it received.
+The keepalive is required. The server keeps applying the last direction it received, so a *dropped* direction change leaves a wrong state in place until the keepalive resends the input.
 
 ## Everyone Else
 
@@ -290,7 +290,7 @@ if let Some(state) = view.render(clock.target(), RenderOpts::default()) {
 let raw = RenderOpts { interpolate: false, extrapolate: false };
 ```
 
-Watch `view.over_extrapolations()`: climbing steadily means the render target is computed *ahead* of the newest sample rather than trailing it, so the entity is dead reckoned every frame and never interpolated. Fix the clock, not the cap.
+Watch `view.over_extrapolations()`: climbing steadily means the render target is computed *ahead* of the newest sample rather than trailing it, so the entity is dead reckoned every frame and never interpolated. Fix the clock rather than raising the cap.
 
 ### Low Send Rates
 
@@ -302,18 +302,18 @@ view.push(packet.server_time, state, velocity);
 if let Some(state) = view.render(target_ms) { draw(&state); }
 ```
 
-Only for motion that is smooth between samples. A straight line cannot leave the segment its two samples bracket; a spline can, whenever the recorded velocity mispredicts the path.
+Use it only for motion that is smooth between samples. A spline leaves the segment its two samples bracket whenever the recorded velocity mispredicts the path, which a straight line never does.
 
 ### Running an Entity's Own Rule
 
-`HeldInputPredictor` is not only for the entity you control. Hold an entity's *intent* and it becomes a locally simulated remote, which is the top row of the table above:
+`HeldInputPredictor` also works for an entity you do not control. Hold the entity's *intent* and it is simulated locally, which is the top row of the table above:
 
 ```rust,ignore
 let mut enemy = HeldInputPredictor::new(start, HeldInputConfig::default(), chase, lerp_pos);
 enemy.set_context(WorldCtx { player_positions });
 enemy.hold(Intent { target: player_id });
 
-// Each frame, and only a sample now and then from the server.
+// Each frame and only a sample now and then from the server.
 enemy.advance(dt_secs);
 enemy.reconcile(sample.state, sample_age_secs);
 ```
@@ -331,7 +331,7 @@ clock.advance(dt_ms);               // once a frame
 let target = clock.target();        // None before the first observe
 ```
 
-Every entity in a frame is rendered at that one target. Two entities drawn at two instants is a seam.
+Every entity in a frame is rendered at that one target. Drawing two entities at two different instants puts a seam between them.
 
 ### Keeping It Aligned
 
@@ -360,7 +360,7 @@ Every piece here takes a `dt` or a timestamp and is deliberately clock-agnostic,
 *   **Wall-clock time** drives anything about the network: `InterpolationClock`, `RttEstimator`, the `ErrorSmoother` ease. Network delay does not stop when your menu opens.
 *   **Game time** drives the simulation: `apply`, prediction. To pause locally, feed `dt = 0` to the game step and real `dt` to everything above.
 
-In an authoritative game the shared world keeps ticking, so a pause is a local overlay over a world that moves on.
+In an authoritative game the shared world keeps ticking while one client is paused, so a pause only affects that client.
 
 ## Corrections
 
@@ -386,7 +386,7 @@ Keep the duration **shorter than your send interval**, or corrections arrive fas
 let mut smoother = ErrorSmoother::at_rate(0.85);
 ```
 
-Snap rather than ease on a discontinuity. The distinction is by **cause**, not magnitude: ease continuous error, snap a spawn or a warp.
+Snap rather than ease on a discontinuity. Decide by **cause** rather than magnitude: ease continuous error and snap a spawn or a warp.
 
 ```rust,ignore
 if correction_distance > DESYNC {
@@ -396,7 +396,7 @@ if correction_distance > DESYNC {
 
 ### Decaying Big Errors Faster
 
-A fixed duration makes a large error and a small one take the same time, which is backwards: a small offset can afford to linger, a large one is already visible.
+A fixed duration makes a large error and a small one take the same time. A small offset can linger unnoticed, but a large one is already visible and should clear sooner.
 
 ```rust,ignore
 let decay = AdaptiveDecay::default();  // keep 0.95/frame under 0.25 units, 0.85 over 1.0
@@ -404,11 +404,11 @@ offset = offset * decay.retain(offset.length(), dt_secs);
 draw(&(logical + offset));
 ```
 
-It is the rate, not the state: keep your own offset. Framerate-independent, so a 30fps client and a 144fps one shed the same error over the same wall time.
+`AdaptiveDecay` only supplies the rate, so keep your own offset. It is framerate-independent: a 30fps client and a 144fps one shed the same error over the same wall time.
 
 ### Knowing Whether a Correction Was Abnormal
 
-There is no fixed normal. Thirty pixels is unremarkable at one send rate and alarming at another.
+What counts as a normal correction changes with conditions: thirty pixels is unremarkable at one send rate and alarming at another.
 
 ```rust,ignore
 let mut monitor = CorrectionMonitor::new().with_warmup(64);
@@ -420,11 +420,11 @@ if monitor.record(distance) {
 }
 ```
 
-`with_warmup` matters: a baseline initialised to zero calls every early correction enormous, so an unwarmed monitor alarms loudest at startup when it knows least.
+`with_warmup` matters: a baseline initialised to zero calls every early correction enormous, so a monitor without a warmup raises the most alarms at startup, before it has seen enough samples to judge.
 
 ## Fixed Steps and Periods
 
-Both sides stepping the same rule at different step sizes are not running the same simulation, and the drift reads as network jitter.
+Both sides stepping the same rule at different step sizes are not running the same simulation and the drift reads as network jitter.
 
 ```rust,ignore
 let mut ticker = FixedTimestep::from_step_ms(16).with_max_frame_ms(250);
@@ -435,7 +435,7 @@ for step_ms in ticker.advance(elapsed_ms) {
 let blend = ticker.alpha();               // for interpolating a render between two states
 ```
 
-`from_hz` is integer division, so a rate that does not divide 1000 truncates: 60 Hz is a 16 ms step running 62.5 times a second, which does **not** match a server on `plaza::TickDriver::from_hz` at an exact 16.667 ms. Pick a rate that divides 1000 when both sides matter.
+`from_hz` is exact to the nanosecond and uses the same expression as `plaza::TickDriver::from_hz`, so 60 Hz is a 16.666667 ms step on both sides.
 
 Watch `ticker.dropped_ms()`: real time the simulation never ran because the cap refused it.
 
@@ -468,7 +468,7 @@ if !agreement.agreed() {
 }
 ```
 
-**Apply every packet, whatever baseline it names.** These deltas carry absolute values, so applying them is idempotent and applying a superset is harmless, while discarding what you cannot rebase starves the mirror.
+**Apply every packet, whatever baseline it names.** These deltas carry absolute values, so applying them is idempotent and applying a superset is harmless, while discarding what you cannot rebase empties the mirror.
 
 ### Allocating Keys
 
@@ -484,7 +484,7 @@ slots.free(key);                          // the generation bumps here, not on a
 
 ### Diagnosing a Divergence
 
-A digest detects and cannot diagnose, so ship the ground truth beside it in a debug build:
+A digest tells you the sets differ but not which keys differ, so in a debug build ship the server's key list beside it:
 
 ```rust,ignore
 let d = mirror.divergence_from(&packet.all_keys);
@@ -493,7 +493,7 @@ error!(missing = ?d.missing, extra = ?d.extra, "mirror divergence");
 
 `missing` means something was lost or never sent. `extra` means a removal never landed.
 
-Read the three counters separately. `frames_lost()` is the wire, `stale_refs()` is a message naming an occupant you no longer hold, `divergences()` is the symptom neither predicts.
+Read the three counters separately. `frames_lost()` counts packets the wire lost, `stale_refs()` counts messages naming an occupant you no longer hold and `divergences()` counts digest mismatches, which neither of the other two predicts.
 
 ## Surviving a Resume
 
@@ -522,17 +522,17 @@ while let Some(packet) = playout.pop_due(render_at) {
 
 ### The Resume Contract
 
-A browser tab backgrounds, a laptop sleeps, a frame loop stalls. The socket keeps receiving, so a resumed client faces a *lump*: minutes of packets describing moments it can never play.
+When a browser tab backgrounds, a laptop sleeps or a frame loop stalls, the socket keeps receiving. A resumed client then gets a *lump*: minutes of packets describing moments it can no longer play.
 
-One invariant makes recovery work, and each half lives in a different crate: **a client may discard any stretch of the stream unread, provided it also drops the state derived from it, because an acknowledgement carrying the digest of nothing obligates the server to answer with a full baseline.** There is no resync request message anywhere; dropping the mirror *is* the request.
+Recovery depends on one invariant, with each half in a different crate: **a client may discard any stretch of the stream unread, provided it also drops the state derived from it, because an acknowledgement carrying the digest of nothing obligates the server to answer with a full baseline.** There is no resync request message; dropping the mirror acts as the request.
 
-Three layers each own a verdict:
+Three layers each handle one part:
 
 *   **Transport**: discards the backlog before parsing it (`plaza_ws::trim_backlog`).
 *   **Playout queue**: treats the gap as a discontinuity and restarts once, keeping the newest packet.
 *   **Server**: stops streaming to a subscriber that has provably stopped reading (`DeltaBaseline::with_flow`).
 
-What is left to you is one thing: on `Admission::TimelineLost`, drop the mirror and re-anchor the render clock on what just arrived.
+Your code handles one case: on `Admission::TimelineLost`, drop the mirror and re-anchor the render clock on what just arrived.
 
 ## Measuring the Link
 
@@ -586,7 +586,7 @@ if let Some((newest, mask)) = acks.encode() {
 }
 ```
 
-**Which answer you want depends on what your protocol does with it, and getting it wrong is silent.** A protocol that **retransmits** wants the mask:
+**Which answer you want depends on what your protocol does with it and a wrong choice raises no error.** A protocol that **retransmits** wants the mask:
 
 ```rust,ignore
 for seq in acks.missing_since(oldest_held) {
@@ -606,7 +606,7 @@ Receiving packet N+1 after losing N does not put a peer in the state N+1 implies
 
 ## Deterministic Arithmetic
 
-For a wire that carries causes rather than state, where nothing is ever corrected and `f32` cannot be relied on to match between a wasm build and a native one.
+For a wire that carries inputs rather than state, where nothing is ever corrected and `f32` cannot be relied on to match between a wasm build and a native one.
 
 ```rust,ignore
 use plaza_client_utils::fixed::{Fx, P};
@@ -638,19 +638,19 @@ for packet in link.drain_due(now_ms) {
 }
 ```
 
-`Ordering::Ordered` is the default because that is what TCP and WebSocket are. An unclamped queue reorders under jitter and manufactures a failure mode the real transport cannot produce.
+`Ordering::Ordered` is the default because that is what TCP and WebSocket are. An unclamped queue reorders under jitter and produces a failure the real transport cannot.
 
 ## Four Principles
 
-None is enforceable by a type. They *prevent* bugs, where everything else here only recovers from them.
+No type can enforce these. Breaking them causes bugs that the rest of this crate can only recover from after they happen.
 
-**A shared rule must be shared code, not code written twice.** The `apply` you hand a predictor is meant to *be* the server's step function. Anything the server does that your copy leaves out arrives as a permanent correction: it looks like network jitter, it is largest exactly when it is most visible, and it is expensive to find later. If your rule needs the world to run, that is what `set_context` is for.
+**A shared rule must be shared code, not code written twice.** The `apply` you hand a predictor should be the server's own step function. Anything the server does that your copy leaves out shows up as a constant correction: it looks like network jitter, it is largest when it is most visible and it is hard to track down later. If your rule needs the world to run, pass it with `set_context`.
 
-**Prediction is presentation; shared rules consume authoritative state.** Feeding a locally predicted position into a rule that *both* sides run creates a second, divergent world, and every packet then fights the local one. Prediction drives the camera and your own marker. The rules both sides run read `logical()` or the authoritative state, even though it is older.
+**Prediction is presentation; shared rules consume authoritative state.** Feeding a locally predicted position into a rule that both sides run makes the client compute a different world from the server's and every packet then pulls it back. Prediction drives the camera and your own marker. The rules both sides run read `logical()` or the authoritative state, even though it is older.
 
-**One instant per frame.** Pick a single `T` and evaluate everything at it: not only where entities are drawn, but everything a behaviour rule reads while producing the frame, aim targets and chase context included. An entity simulated to `T` while reading a target from the newest packet is two timelines in one scene.
+**One instant per frame.** Pick a single `T` and evaluate everything at it. That covers where entities are drawn and also everything a behaviour rule reads while producing the frame, such as aim targets and chase context. An entity simulated to `T` that reads its target from the newest packet mixes two timelines in one scene.
 
-**The timeline comes from declaration, not arrival.** Round trips and jitter and arrival times may size buffers and admit or refuse connections. They never decide which moment is on screen or when an input executes. A render clock steered by packet arrival hides bad links, lets every client pick a different "now", and quietly makes ping an input to the game.
+**The timeline comes from declaration, not arrival.** Round trips and jitter and arrival times may size buffers and admit or refuse connections. They never decide which moment is on screen or when an input executes. A render clock steered by packet arrival hides bad links and lets every client pick a different "now". It also lets each player's ping change what happens in the game.
 
 ## What the Measurements Settled
 
@@ -660,16 +660,16 @@ None is enforceable by a type. They *prevent* bugs, where everything else here o
 
 **The ease-versus-rate crossover.** Worst error 2.67 at one correction every 0.5 s, 15.00 at one every frame, against 11.33 for `at_rate(0.85)`. Below that crossover the duration wins.
 
-**Running the rule beats interpolating.** Over 3000 enemies in `horde_playground`, by 43 px of mean error at 1 Hz, and it still leads at 30 Hz, because an interpolated entity is always a send interval in the past.
+**Running the rule beats interpolating.** Over 3000 enemies in `horde_playground`, by 43 px of mean error at 1 Hz and it still leads at 30 Hz, because an interpolated entity is always a send interval in the past.
 
-**A spline is worth 484x, or 13x worse.** On a 10-unit circle at 10 Hz, worst error 0.0003 against linear's 0.1231. Across 300 solver-driven cubes at 10 Hz *with impacts*, it left the bracketing segment on half of all frames by up to 2.48 units and came out 13x worse than the chord it replaced.
+**A spline is 484x better on a smooth path and 13x worse with impacts.** On a 10-unit circle at 10 Hz, worst error 0.0003 against linear's 0.1231. Across 300 solver-driven cubes at 10 Hz *with impacts*, it left the bracketing segment on half of all frames by up to 2.48 units and came out 13x worse than the chord it replaced.
 
-**Second-order dead reckoning pays only at low send rates.** The correction goes as the gap squared. On a circular path at 10 Hz coasted through a 100 ms gap it cuts the error 45%; at a normal server rate it changes nothing measurable. It begins to pay below about 10 Hz.
+**Second-order dead reckoning helps only at low send rates.** The correction goes as the gap squared. On a circular path at 10 Hz coasted through a 100 ms gap it cuts the error 45%; at a normal server rate it changes nothing measurable. It starts to help below about 10 Hz.
 
-**Ack-driven resends against blind redundancy.** In `rollback_playground`, 28% cheaper on a clean link, 45% dearer at 50% loss, crossing over around 12%. Blind redundancy makes a fixed number of attempts; acks retry until acknowledged, and converged at 55% loss where blind did not.
+**Ack-driven resends against blind redundancy.** In `rollback_playground`, 28% cheaper on a clean link, 45% dearer at 50% loss, crossing over around 12%. Blind redundancy makes a fixed number of attempts; acks retry until acknowledged and converged at 55% loss where blind did not.
 
-**Discarding unrebaseable deltas starves the mirror.** An earlier `horde_playground` version discarded, and at 25% loss its mirror emptied out while every agreement check read perfect, because the checks only ran over what had been applied.
+**Discarding unrebaseable deltas empties the mirror.** An earlier `horde_playground` version discarded and at 25% loss its mirror emptied out while every agreement check read perfect, because the checks only ran over what had been applied.
 
-**Reuse order is a wire decision.** Under `ReusePolicy::Lifo` a burst of 233 despawns was 204 separate runs, mean run length 1.14, which is why run-length encoding lost decisively to delta-varint there.
+**Reuse order decides which despawn encoding wins.** Under `ReusePolicy::Lifo` a burst of 233 despawns was 204 separate runs, mean run length 1.14, which is why run-length encoding lost decisively to delta-varint there.
 
-**When a slot generation earns its keep.** Under ordered delivery with each death announced before the next diff, `horde_playground` recorded zero stale handle references across 413 kills with slots actively recycling. It became load-bearing again the moment loss recovery re-derived a retraction after a slot may have been recycled.
+**When a slot generation matters.** Under ordered delivery with each death announced before the next diff, `horde_playground` recorded zero stale handle references across 413 kills with slots actively recycling. It became necessary again once loss recovery re-derived a retraction after a slot may have been recycled.

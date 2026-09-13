@@ -9,10 +9,9 @@ use crate::types::{BoardView, DraftOp, DraftState, PlayerId};
 
 /// Uniform, because a draft has nothing to hide.
 ///
-/// The contrast with `card_table` is worth noticing: there a per-recipient
-/// provider is what keeps a hand secret, and the cost is one build and one
-/// encode per recipient. Every drafter here is entitled to the whole board, so
-/// paying that cost would buy nothing.
+/// `card_table` uses a per-recipient provider to keep hands secret, at the cost
+/// of one build and one encode per recipient. Every drafter here can see the
+/// whole board, so that cost is not needed.
 #[derive(Debug, Default)]
 pub struct BoardSnapshotter;
 

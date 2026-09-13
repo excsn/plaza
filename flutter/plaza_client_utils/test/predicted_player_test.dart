@@ -64,10 +64,10 @@ void main() {
     expect(me.render().v, closeTo(0.0, 1e-3), reason: 'render arrives at the logical state');
   });
 
-  /// The lesson a real game paid for: an entity the server moves by more than its
-  /// own input has to run the same rule, and that rule needs the world. With
-  /// nowhere to put the world, a client writes a second, lesser rule and drifts by
-  /// the whole size of the force it left out.
+  /// An entity the server moves by more than its own input has to run the same
+  /// rule and that rule needs the world. With nowhere to put the world, a client
+  /// writes a second, lesser rule and drifts by the whole size of the force it
+  /// left out.
   test('a forced entity predicts the force from its context', () {
     P applyWithWind(P p, double i, double wind) => P(p.v + i + wind);
 
@@ -88,8 +88,8 @@ void main() {
   });
 
   /// A server holding an entity still (dead, stunned, mid respawn) keeps reporting
-  /// the same position. A client that keeps integrating input into it manufactures
-  /// a correction every single packet, out of nothing.
+  /// the same position. A client that keeps integrating input into it produces a
+  /// correction on every packet.
   test('a frozen entity stops predicting instead of inventing corrections', () {
     final me = player(0.0)..input(1.0);
     expect(me.logical.v, 1.0);
@@ -109,9 +109,8 @@ void main() {
     expect(me.logical.v, 2.0, reason: 'it picks back up without replaying the frozen inputs');
   });
 
-  /// A correction is a disagreement about a path and must be eased. A teleport is
-  /// not a disagreement at all: easing it draws the entity smoothly across
-  /// everything in between.
+  /// A correction is eased. Easing a teleport would draw the entity smoothly
+  /// across everything in between, so a teleport snaps.
   test('a teleport snaps and drops the journey', () {
     final me = player(0.5)..input(1.0);
     me.reconcile(const P(50.0), 0);

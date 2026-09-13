@@ -2,9 +2,9 @@
 //!
 //! Real-time, but only just. A trainer is standing on a tile or walking to the
 //! next one, and there is no third state, so the whole simulation is a step
-//! timer and a facing. That is the point rather than a simplification: the
-//! netcode a discrete world needs is not a cheaper version of a continuous
-//! one's, it is a different set of problems, and most of them are smaller.
+//! timer and a facing. That is deliberate rather than a simplification: a
+//! discrete world has a different set of netcode problems from a continuous
+//! one, most of them smaller.
 
 use crate::grid::{Facing, Tile, Trainer, MAP, PHASE_STEPS};
 
@@ -108,7 +108,7 @@ impl World {
 
   /// Seats the town's own wanderers, past the last seat a player can hold.
   ///
-  /// Most of them walk maps nobody is on, which is the point rather than
+  /// Most of them walk maps nobody is on, which is deliberate rather than
   /// waste: it makes "somebody on another map is absent rather than far away"
   /// a live measurement instead of something only a test has ever seen.
   pub fn populate(&mut self, centre: Tile, spread: u32) {
@@ -197,8 +197,8 @@ impl World {
     };
     let (from, zone) = (watcher.trainer.at, watcher.zone);
     for walker in self.walkers.iter().filter(|w| w.alive) {
-      // Zone first, and it is not a distance check: somebody on another map is
-      // not far away, they are absent.
+      // Zone first. This is not a distance check: somebody on another map is
+      // absent rather than far away.
       if walker.zone == zone && walker.trainer.at.within(from, radius) {
         out.push(walker.trainer.seat);
       }
@@ -322,7 +322,7 @@ mod tests {
 
   #[test]
   fn a_direction_cannot_be_changed_part_way_through_a_step() {
-    // Which is the whole reason a client can draw a step from its start: if the
+    // This is why a client can draw a step from its start: if the
     // facing could change mid-step, the far tile would not be known.
     let mut world = World::new();
     world.seat(0, Tile::new(10, 10));
@@ -335,7 +335,7 @@ mod tests {
 
   #[test]
   fn somebody_on_another_map_is_absent_rather_than_far_away() {
-    // Which is the whole reason zones exist: a boundary is where a client's
+    // This is why zones exist: a boundary is where a client's
     // world ends, not where its query gets more expensive.
     let mut world = World::new();
     world.seat(0, Tile::new(10, 10));

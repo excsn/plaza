@@ -1,11 +1,10 @@
 //! A client on the real wire, shared by the desktop window and the wasm page.
 //!
-//! One thing here differs in kind from cube_yard's client, and it is the reason
-//! this example exists at the far end of the latency-tolerance axis: ships
-//! **appear and disappear** as they cross the view radius. A yard's cubes are
-//! always all there and only their freshness varies; here the set itself is the
-//! thing that churns, and a client has to be able to say "I am no longer being
-//! told about that one" without treating it as a ship that stopped moving.
+//! The main difference from cube_yard's client is that ships **appear and
+//! disappear** as they cross the view radius. A yard's cubes are always all
+//! there and only their freshness varies. Here the set itself changes and a
+//! client has to recognise "I am no longer being told about that one" without
+//! treating it as a ship that stopped moving.
 
 use std::collections::HashMap;
 
@@ -62,9 +61,9 @@ pub enum Status {
 ///
 /// **A homing shot has no other way to die on the client.** It is not carried
 /// forward, because its path cannot be derived, so its life never runs down
-/// here; and nothing announces that one hit something or expired, it simply
-/// stops being in the frame. Without this, every missile that ever came into
-/// view stayed in the map for ever, drawn at the last place it was seen.
+/// here. Nothing announces that one hit something or expired either; it just
+/// stops appearing in the frame. Without this, every missile that ever came
+/// into view stayed in the map for ever, drawn at the last place it was seen.
 ///
 /// Free-standing so it can be tested without a socket.
 pub fn forget_quiet_bolts(bolts: &mut HashMap<u32, Shot>, frame: u64) -> usize {
@@ -100,8 +99,8 @@ pub fn name(seat: u16) -> String {
 /// Drops ships that have stopped being mentioned, and reports how many went.
 ///
 /// The half of relevance a client has to implement itself. A server that stops
-/// sending a ship has said "you cannot see this any more", and there is no
-/// message that says so: the absence *is* the message, which is why this runs
+/// sending a ship has said "you cannot see this any more" without any message
+/// saying so. The client has to read the absence itself, which is why this runs
 /// on a frame count rather than waiting for something to arrive.
 ///
 /// Free-standing so it can be tested without a socket, which is most of why it
@@ -150,9 +149,9 @@ pub struct NetClient {
   pub frame: u64,
   pub stamp: u64,
   pub meter: RateMeter,
-  /// What this client *sends*, which was free while input was a keyed level
-  /// that changed twice a turn and is not free now that a mouse sets it every
-  /// frame. Every other measurement in this example is downstream.
+  /// What this client *sends*. That was close to zero while input was a keyed
+  /// level that changed twice a turn, but a mouse now sets it every frame.
+  /// Every other measurement in this example is downstream.
   pub up: RateMeter,
   /// How many ships the last frame carried, which is the number the panel
   /// should show rather than the volume's population.
@@ -202,13 +201,13 @@ pub struct NetClient {
   /// wrong about it. Counted rather than hidden, since a wrap is a real event
   /// and a reader should be able to tell the two apart.
   pub teleports: u64,
-  /// **The rule includes its timestep**, which is what this is here to hold.
+  /// **The rule includes its timestep.**
   ///
   /// `advance` moves a ship by one server tick, so calling it once per rendered
   /// frame silently makes prediction a function of the display: over one second
   /// of wall clock a ship travelled 5.1 units at 30fps, 19.0 at 60 and 67.7 at
-  /// 120, against the server's 19.0. Sharing the rule as code is not enough on
-  /// its own if the two sides disagree about how often to run it.
+  /// 120, against the server's 19.0. Both sides must also agree on how often to
+  /// run the shared rule.
   ///
   /// The block's `from_hz` is the same expression as `plaza::TickDriver`'s and
   /// a test in `plaza` pins the two to each other, so stepping from here means
@@ -387,9 +386,9 @@ impl NetClient {
   /// Drops ships that have stopped being mentioned.
   ///
   /// The half of relevance a client has to implement itself. A server that
-  /// stops sending a ship has said "you cannot see this any more", and there is
-  /// no message that says so: the absence *is* the message, which is why this
-  /// runs on a frame count rather than waiting for something to arrive.
+  /// stops sending a ship has said "you cannot see this any more" without any
+  /// message saying so. The client has to read the absence itself, which is why
+  /// this runs on a frame count rather than waiting for something to arrive.
   fn forget_the_quiet(&mut self) {
     self.forgotten += forget_the_quiet(&mut self.ships, self.frame, self.mine) as u64;
   }
@@ -398,7 +397,7 @@ impl NetClient {
   ///
   /// Written here rather than on the server, because the same event reads
   /// differently to each of the three people it concerns and sending three
-  /// strings to say one thing would be paying for grammar on the wire.
+  /// strings for one event would spend bandwidth on wording.
   fn announce(&mut self, kill: Kill, frame: u64) {
     let mine = self.mine;
     let line = if Some(kill.killer) == mine {
@@ -429,22 +428,22 @@ impl NetClient {
     }
     self.sent = Some(fly);
     let op = SpaceOp::Fly(fly);
-    // Encoded once to measure and once to send. Wasteful, and worth it: a
-    // number the example quotes has to be the bytes that actually cross, not a
-    // count of fields multiplied by a guess.
+    // Encoded once to measure and once to send, so the number the example
+    // quotes is the bytes that actually cross rather than a count of fields
+    // multiplied by a guess.
     if let Ok(bytes) = WIRE.encode(&vec![op.clone()]) {
       self.up.add(bytes.len() as u64);
     }
     self.pump.send_op(&op);
   }
 
-  /// Carries straight shots forward, and drops the ones whose time is up.
+  /// Carries straight shots forward and drops the ones whose time is up.
   ///
-  /// The client half of "send the spawn, not the path". A bolt's whole future
-  /// follows from where it started and how fast, so this is not prediction in
-  /// the reconciliation sense: there is nothing to be wrong about and nothing
-  /// to correct against. A homing shot is skipped, because its path is exactly
-  /// the thing that could not be derived.
+  /// The client half of sending a bolt's spawn rather than its path. A bolt's
+  /// whole future follows from where it started and how fast, so this is not
+  /// prediction in the reconciliation sense: there is nothing to be wrong about
+  /// and nothing to correct against. A homing shot is skipped, because its path
+  /// cannot be derived.
   fn carry_bolts(&mut self) {
     let step = self.timestep.step_secs();
     self.bolts.retain(|_, bolt| {
@@ -464,11 +463,11 @@ impl NetClient {
   /// Drops shots the server has stopped sending.
   ///
   /// **A homing shot has no other way to die on this client.** It is not
-  /// carried forward, so its life never runs down here, and nothing announces
-  /// that one hit something or expired: it simply stops being in the frame.
+  /// carried forward, so its life never runs down here and nothing announces
+  /// that one hit something or expired: it just stops appearing in the frame.
   /// Without this every missile that ever came into view stayed in the map for
-  /// ever, drawn at the last place it was seen, which is what a volume full of
-  /// frozen missiles was.
+  /// ever, drawn at the last place it was seen and a busy volume filled up
+  /// with frozen missiles.
   fn forget_quiet_bolts(&mut self, frame: u64) {
     self.stale_bolts += forget_quiet_bolts(&mut self.bolts, frame) as u64;
   }
@@ -527,7 +526,7 @@ impl NetClient {
     if let Some(was) = was {
       let now = self.predicted.unwrap().at;
       let offset = [was[0] - now.x, was[1] - now.y, was[2] - now.z];
-      // **A teleport is not an error, and must not be eased.** The volume wraps
+      // **A teleport is not an error and must not be eased.** The volume wraps
       // at its edge, so crossing it moves a ship by `VOLUME * 2`; the prediction
       // and the server do not wrap on the same tick, and the difference for that
       // one frame is the whole width of the world. Bleeding 800 units off at
@@ -566,8 +565,9 @@ impl NetClient {
     let at = self.drawn_local()?;
     Some(ShipState {
       seat,
-      // Straight from the server: health is state nobody predicts, and a
-      // predicted health bar is a lie that reads as a bug.
+      // Straight from the server: health is state nobody predicts. A predicted
+      // health bar would show values the server never had, which reads as a
+      // bug.
       health: known.state.health,
       pos: at,
       rot: quaternion(ship.yaw, ship.pitch),
@@ -618,8 +618,8 @@ mod tests {
     // at 60 and 67.7 at 120, over the same second of wall clock, against a
     // server that always produces 19.0.
     //
-    // Sharing the rule as code is not enough by itself. The two sides have to
-    // agree on how often to run it.
+    // Besides sharing the rule as code, the two sides have to agree on how
+    // often to run it.
     let at30 = travelled(30);
     let at60 = travelled(60);
     let at120 = travelled(120);
@@ -703,7 +703,8 @@ mod tests {
 
   #[test]
   fn a_ship_that_goes_quiet_is_eventually_forgotten() {
-    // Absence is the message. Nothing announces that a ship left the radius.
+    // Nothing announces that a ship left the radius, so the client has to act
+    // on the absence.
     let mut ships = HashMap::new();
     ships.insert(0, known(0, 0));
     ships.insert(1, known(1, 0));
@@ -730,8 +731,8 @@ mod tests {
   }
 
   /// A clock that loses its remainder makes every rate measured against it
-  /// read high, which in an example built to quote bandwidth is the number
-  /// itself being wrong rather than a detail.
+  /// read high. In an example that quotes bandwidth, that makes the quoted
+  /// numbers wrong.
   #[test]
   fn a_correction_bleeds_off_at_the_same_rate_on_any_display() {
     // Not a visible bug, unlike the timestep and the clock: every frame rate

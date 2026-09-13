@@ -1,6 +1,6 @@
 # Usage Guide: plaza_lobby
 
-How to run rooms above a controller: building one of your game, creating and listing and joining, routing a connection to a room its latency can carry, queueing players who would rather be paired than choose, holding a seat between admission and arrival, and reaping what has finished.
+How to run rooms above a controller: building one of your game, creating and listing and joining, routing a connection to a room its latency can carry, queueing players who would rather be paired than choose, holding a seat between admission and arrival and reaping what has finished.
 
 ## Table of Contents
 
@@ -18,7 +18,7 @@ How to run rooms above a controller: building one of your game, creating and lis
 *   [Routing by Latency](#routing-by-latency)
     *   [Stating What a Room Can Carry](#stating-what-a-room-can-carry)
     *   [Supplying the Measurement](#supplying-the-measurement)
-    *   [Placing Rather Than Refusing](#placing-rather-than-refusing)
+    *   [Picking a Room for the Connection](#picking-a-room-for-the-connection)
 *   [Pairing Players Who Do Not Choose](#pairing-players-who-do-not-choose)
 *   [Holding a Seat Between Admission and Arrival](#holding-a-seat-between-admission-and-arrival)
 *   [Handing Out a Join Ticket](#handing-out-a-join-ticket)
@@ -33,18 +33,18 @@ How to run rooms above a controller: building one of your game, creating and lis
 *   **`RoomFactory`**: how a room of *your* game is built. The one thing you implement.
 *   **`RoomHandle`**: what the lobby needs from a room. `InProcessRoomHandle` implements it for a task in this process.
 *   **`InMemoryLobbyManager`**: the registry and the create, join, list and reap flows around your factory.
-*   **Authorization, not connection**: a successful join means the lobby authorized a player and returned an endpoint. The lobby never proxies gameplay traffic.
+*   **Join**: a successful join means the lobby authorized a player and returned an endpoint. The lobby never proxies gameplay traffic.
 *   **`RoomMetadata`**: what a client is shown about a room. Reports `has_password`, never the hash.
 *   **`max_one_way_ms`**: the worst one-way delay a room's simulation can carry. Stated by the room, because nothing above it knows the number.
 *   **`MatchQueue`**: for players who would rather be paired than choose. Forms full matches and reports how many seats to fill with bots when patience runs out.
-*   **`SeatReservations`**: the gap between being admitted and arriving.
+*   **`SeatReservations`**: holds a seat between admission and arrival.
 *   **`TicketStore`**: a one-use token a room resolves a connecting player from, instead of trusting a URL.
 
 ## Quick Start
 
 ### A Room Factory
 
-Plaza cannot know how a room of your game is built, so this is the one trait you implement. Inside `spawn_room` you build a `StateController` as usual, spawn its `run()`, and wrap the pieces.
+Plaza cannot know how a room of your game is built, so this is the one trait you implement. Inside `spawn_room` you build a `StateController` as usual, spawn its `run()` and wrap the pieces.
 
 ```rust,ignore
 #[async_trait]
@@ -126,9 +126,9 @@ let outcome = lobby.handle_join_room_request(&player, agent, &JoinRoomRequestPay
 send_to_client(outcome.room_session_endpoint, outcome.player_game_token);
 ```
 
-In order: find the room, verify the password if it has one, check capacity, then ask the room to accept the player. The room gets the last word, because it may have filled since the lobby checked.
+In order: find the room, verify the password if it has one, check capacity, then ask the room to accept the player. The room decides last, because it may have filled since the lobby checked.
 
-A successful join is an **address**, not a connection. The gameplay join happens when the client connects to the room's own transport.
+A successful join returns an **address**. The gameplay join happens when the client connects to the room's own transport.
 
 ### Reaching a Specific Room
 
@@ -160,11 +160,11 @@ let lobby = InMemoryLobbyManager::new(factory)
   .with_password_verifier(Arc::new(|attempt, hash| argon2_verify(attempt, hash)));
 ```
 
-The default is plain string equality, which suits low-stakes room codes and nothing else. The client sends plaintext in `password_attempt`; the verifier compares it against the stored hash. `RoomMetadata` exposes only `has_password`.
+The default is plain string equality, which is only suitable for low-stakes room codes. The client sends plaintext in `password_attempt`; the verifier compares it against the stored hash. `RoomMetadata` exposes only `has_password`.
 
 ## Routing by Latency
 
-A game that schedules inputs ahead can only carry a connection whose delay fits inside the schedule. Past that, every input lands outside the accepting window and is dropped, so a player is seated and then cannot play, which reads as a broken game rather than an unsuitable connection.
+A game that schedules inputs ahead can only carry a connection whose delay fits inside the schedule. Past that, every input lands outside the accepting window and is dropped, so a player is seated and then cannot play. To the player that looks like a broken game rather than an unsuitable connection.
 
 ### Stating What a Room Can Carry
 
@@ -177,7 +177,7 @@ The limit is a property of that room's simulation, so the room states it.
 
 ### Supplying the Measurement
 
-**The lobby owns no socket**, and the number must be one the *server* measured rather than one the client reported, since a client can understate its own latency and this decides entry.
+**The lobby owns no socket** and the number must be one the *server* measured rather than one the client reported, since a client can understate its own latency and this decides entry.
 
 ```rust,ignore
 let (rtt, samples) = session.agent_rtt(&id).unwrap_or_default();
@@ -188,16 +188,16 @@ lobby.handle_join_room_request(&id, agent, &JoinRoomRequestPayload {
 }).await
 ```
 
-### Placing Rather Than Refusing
+### Picking a Room for the Connection
 
-A room can only say yes or no. A lobby can say *where*.
+A room can only accept or refuse a connection. The lobby can also pick which room it goes to.
 
 ```rust,ignore
 let options = lobby.rooms_playable_at(one_way);     // tightest schedule first
 let best = plaza_lobby::routing::best_for(one_way, options.clone());
 ```
 
-A fast link is not sent to the room built for slow ones and made to pay its delay. A room with no limit sorts last, since it takes anybody and is the fallback.
+Sorting tightest first keeps a fast link out of a room built for slow ones. A room with no limit sorts last, since it takes anybody and is the fallback.
 
 When nothing fits, refusal carries both numbers:
 
@@ -209,7 +209,7 @@ Err(LobbyError::UnsuitableConnection { measured_ms, allowed_ms }) => {
 
 ## Pairing Players Who Do Not Choose
 
-Each of these is bookkeeping your own `StateLogic` drives. No timers, no tasks.
+`MatchQueue` is bookkeeping your own `StateLogic` drives. It holds no timers and spawns no tasks.
 
 ```rust,ignore
 let mut queue: MatchQueue<PlayerId, u64> = MatchQueue::new(4);   // seats per match
@@ -240,7 +240,7 @@ for expired in reservations.sweep(now) { free_seat(expired); }
 
 ## Handing Out a Join Ticket
 
-So a room resolves the connecting player from a one-use ticket instead of trusting a URL.
+A ticket lets a room resolve the connecting player from a one-use token instead of trusting a URL.
 
 ```rust,ignore
 let mut tickets = MapTicketRegistry::new();
@@ -255,7 +255,7 @@ match tickets.redeem(&token, now) {
 }
 ```
 
-This is **placement, not authentication**.
+The ticket handles **placement** only and does not authenticate anyone.
 
 ### The Two Registries
 
@@ -274,13 +274,13 @@ Supply your own signed value when the token has to survive being handled by some
 
 ## Scope
 
-Single server. Rooms are in-process tasks, and nothing here coordinates across machines; that stays an application concern.
+Single server. Rooms are in-process tasks and nothing here coordinates across machines; that stays an application concern.
 
 All four blocks around the manager are exercised by [`examples/lobby_world`](../examples/lobby_world/).
 
 ## Error Handling
 
-`LobbyError` is the one error type, and every flow returns it.
+`LobbyError` is the one error type and every flow returns it.
 
 ```rust,ignore
 match lobby.handle_join_room_request(&id, agent, &payload).await {
@@ -295,6 +295,6 @@ match lobby.handle_join_room_request(&id, agent, &payload).await {
 }
 ```
 
-`UnsuitableConnection` is its own variant rather than a string because it is the one refusal a client can act on, and both numbers belong in it: a client that knows it was measured at 140ms against a 60ms limit can say so, or go looking for a room that fits.
+`UnsuitableConnection` is its own variant rather than a string because it is the one refusal a client can act on and both numbers belong in it: a client that knows it was measured at 140ms against a 60ms limit can say so or go looking for a room that fits.
 
 A factory error propagates out of `handle_create_room_request` and leaves no room registered, so a half-built room is never listed.

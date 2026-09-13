@@ -33,10 +33,9 @@ impl StateLogic<FogOp, PlayerId, FogState> for FogLogic {
           match op {
             FogOp::MoveTo { x, y } => {
               let (x, y) = (x.clamp(0.0, FIELD), y.clamp(0.0, FIELD));
-              // The lead scout stands *on* the point, because any spread wide
-              // enough to be worth having is wider than `CAPTURE_RADIUS`, and a
-              // squad that fans out around a relic never takes it. The other two
-              // fan out for vision, which is what three scouts are for.
+              // The lead scout stands on the point, because any useful spread is
+              // wider than `CAPTURE_RADIUS` and a squad that fans out around a
+              // relic never takes it. The other two fan out for vision.
               for (nth, unit) in state.units.iter_mut().filter(|u| u.owner == player).enumerate() {
                 let (dx, dy) = if nth == 0 {
                   (0.0, 0.0)
@@ -169,8 +168,8 @@ impl StateLogic<FogOp, PlayerId, FogState> for FogLogic {
         if state.players.is_empty() {
           return Ok(audited(state, out));
         }
-        // Per recipient, deliberately, and the opposite of `tag_arena`: the
-        // whole point is that two players are sent different worlds.
+        // Per recipient, unlike `tag_arena`: two players are sent different
+        // worlds.
         let everyone = state.players.values().map(|p| p.agent.clone()).collect();
         Ok(audited(state, out).and_snapshot(SnapshotRequest::to(everyone)))
       }
@@ -228,8 +227,8 @@ fn capture(state: &mut FogState, out: &mut Vec<TargetedOp<FogOp, PlayerId>>) {
 
     let watchers: Vec<PlayerId> = state.players.keys().copied().collect();
     for recipient in watchers {
-      // The capturing player is standing on it, so this is never withheld from
-      // them: the rule is about what you can see, not about who you are.
+      // The capturing player is standing on it, so they can see it and this is
+      // never withheld from them.
       let visible = can_see(state, recipient, x, y);
       if visible || state.leak_mode {
         out.push(TargetedOp::new_system_to(
@@ -247,9 +246,9 @@ fn capture(state: &mut FogState, out: &mut Vec<TargetedOp<FogOp, PlayerId>>) {
           player.stats.told += 1;
         }
       } else if let Some(player) = state.players.get_mut(&recipient) {
-        // Held whole. Telling them "something happened somewhere" would leak
-        // the timing, and telling them nothing ever would leave two boards
-        // disagreeing about a relic they both end up looking at.
+        // Held in full. Telling them "something happened somewhere" would leak
+        // the timing. Never telling them would leave two boards disagreeing
+        // about a relic they both end up looking at.
         player.withheld.push(Withheld {
           relic: id,
           x,
@@ -304,9 +303,8 @@ fn release_withheld(state: &mut FogState, out: &mut Vec<TargetedOp<FogOp, Player
 /// Counts, on the way out, every position this batch tells someone about that
 /// they could not see.
 ///
-/// Not a guard: nothing here drops an op. An example that quietly repaired its
-/// own leaks would have a panel reading zero for two different reasons, and the
-/// number is only worth watching if it is free to move.
+/// Not a guard: nothing here drops an op. If this repaired leaks, a zero on
+/// the panel could mean either no leak or a repaired one.
 fn audited(state: &mut FogState, out: Vec<TargetedOp<FogOp, PlayerId>>) -> LogicOutput<FogOp, PlayerId> {
   let mut counts: Vec<(PlayerId, u64)> = Vec::new();
   for targeted in &out {

@@ -493,10 +493,9 @@ impl Scene {
   /// One body.
   ///
   /// There is no skeleton and no animation data. Everything here is a function
-  /// of a clock and of what the server said the body is doing, which is the
-  /// whole budget an example gets to spend on looking alive. A walk cycle is
-  /// presentation, and deriving it locally means it costs nothing on the wire
-  /// and keeps working at any tick length.
+  /// of a clock and of what the server said the body is doing, which keeps the
+  /// animation cheap. A walk cycle is presentation, so deriving it locally means
+  /// it costs nothing on the wire and keeps working at any tick length.
   pub fn draw_body(&mut self, at: Vec3, facing: u8, look: Look, doing: Doing, tint: Color, pose: Pose) {
     let angle = facing as f32 * std::f32::consts::FRAC_PI_4;
     let front = vec3(angle.sin(), 0.0, -angle.cos());
@@ -738,9 +737,9 @@ pub enum Aim {
 /// Reads a square the way a player means it.
 ///
 /// Priority rather than proximity: a body standing on an item is a fight and
-/// not a pickup, because that is what a player who clicked a brute meant. The
-/// order is the whole of the interface's opinion, and getting it wrong is what
-/// makes a game feel like it is arguing with you.
+/// not a pickup, because that is what a player who clicked a brute meant. This
+/// order is the only judgement the interface makes. Getting it wrong makes a
+/// game feel like it is arguing with you.
 pub fn aim_at(client: &NetClient, tile: Tile) -> Aim {
   if let Some(other) = client
     .others

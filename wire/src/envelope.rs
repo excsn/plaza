@@ -1,18 +1,16 @@
 //! Who a message is from.
 //!
-//! These types live here rather than in `plaza` core for one concrete reason: a
-//! **browser client cannot depend on core**. Core pulls tokio and does not
-//! target `wasm32-unknown-unknown`, so a wasm client that wanted to speak the
-//! protocol could not name the type it had to send, and would have to
-//! hand-reimplement the envelope and hope the two agreed. Putting the on-wire
-//! vocabulary in the runtime-free crate is what makes a shared protocol actually
-//! shared.
+//! These types live here rather than in `plaza` core because a **browser
+//! client cannot depend on core**. Core pulls tokio and does not target
+//! `wasm32-unknown-unknown`, so a wasm client that wanted to speak the protocol
+//! could not name the type it had to send and would have to reimplement the
+//! envelope by hand and hope the two agreed. With the on-wire vocabulary in the
+//! runtime-free crate, both ends name the same types.
 //!
-//! Only the types that are genuinely serialized are here. `MessageTarget`,
+//! Only the types that are serialized are here. `MessageTarget`,
 //! `PresenceEvent`, `TargetedOp` and `SessionMessage` stay in core: they are
-//! server-side routing and stream plumbing, they are not `Serialize`, and no
-//! client ever sees one. This crate is the wire vocabulary, not everything the
-//! server happens to name.
+//! server-side routing and stream plumbing, they are not `Serialize` and no
+//! client ever sees one.
 //!
 //! Core re-exports all of it, so server code goes on writing `plaza::Agent`.
 
@@ -28,22 +26,22 @@ use serde::{Deserialize, Serialize};
 /// writing anything.
 /// An identity plaza can route on.
 ///
-/// **No serde bound**, because nothing plaza sends contains one: the wire is a
-/// kind byte and the application's ops, and `SessionMessage::from` is the
+/// **No serde bound**, because nothing plaza sends contains one: the wire
+/// carries a kind byte and the application's ops. `SessionMessage::from` is the
 /// server's own bookkeeping rather than anything a client is told. A type that
-/// genuinely embeds an id in a payload declares that itself, which is where the
-/// requirement belongs; `Agent` below is one such type.
+/// embeds an id in a payload declares the bound itself; `Agent` below is one
+/// such type.
 pub trait AgentId: Clone + Debug + Eq + Hash + Send + Sync + 'static {}
 
 impl<T> AgentId for T where T: Clone + Debug + Eq + Hash + Send + Sync + 'static {}
 
-/// An actor in the system: a person, a bot, or the server itself.
+/// An actor in the system: a person, a bot or the server itself.
 ///
 /// Identity only. A display name is application data: plaza never reads one,
-/// routing compares ids, and a name carried here rode along on every clone and
-/// every frame as a copy of something the application already had. Keep names
-/// in your own state, or in `ParticipantTracker`'s `app_data`, and send them
-/// like any other value: as an op, or as a field in your snapshot payload.
+/// routing compares ids and a name carried here was copied onto every clone
+/// and every frame, duplicating something the application already had. Keep
+/// names in your own state or in `ParticipantTracker`'s `app_data` and send
+/// them like any other value: as an op or as a field in your snapshot payload.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(bound = "ID: Serialize + for<'de2> Deserialize<'de2>"))]

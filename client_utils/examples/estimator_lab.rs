@@ -1,4 +1,4 @@
-//! Estimator lab: when the fancier clock and jitter estimators earn their keep.
+//! Estimator lab: when the heavier clock and jitter estimators are worth using.
 //!
 //! `RttEstimator` (a fixed-weight moving average) is the zero-config default and
 //! is enough for most games. This runs the two heavier building blocks against
@@ -21,9 +21,10 @@
 //!    of it, compared by how much variance each leaves.
 //!
 //! The drift here is deliberately fast so twelve seconds is enough to see it; real
-//! clocks drift far slower, over minutes. And a real link is *asymmetric* (the two
-//! legs differ), which adds a constant offset error no estimator can remove from
-//! round trips alone, the regression still recovers the drift *rate* through it.
+//! clocks drift far slower, over minutes. A real link is also *asymmetric* (the
+//! two legs differ), which adds a constant offset error no estimator can remove
+//! from round trips alone, though the regression still recovers the drift *rate*
+//! through it.
 //! The link here is kept symmetric so that irreducible error does not muddy the
 //! comparison.
 

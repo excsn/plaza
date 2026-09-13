@@ -25,7 +25,7 @@ pub fn frame_to_ms(frame: u64) -> u64 {
   frame * 1000 / TICK_HZ
 }
 
-/// One cube as the wire currently carries it: position, orientation, velocity,
+/// One cube as the wire currently carries it: position, orientation, velocity
 /// and whether the solver has put it to sleep.
 ///
 /// Nothing is quantised yet. At 901 cubes and 60Hz this is the baseline the
@@ -56,7 +56,7 @@ pub enum Cubes {
   Subset(Payload),
   /// Stage four: the same, with each cube encoded against what the client is
   /// known to hold. A separate variant rather than a flag because the two
-  /// layouts are not distinguishable from their bytes, and guessing wrong
+  /// layouts are not distinguishable from their bytes and guessing wrong
   /// would decode garbage into a baseline both ends have to agree on.
   Delta(Payload),
 }
@@ -86,9 +86,9 @@ pub enum Encoding {
   Full,
   /// Quantised and bit-packed by hand.
   Packed,
-  /// Packed, and only what fits a hard byte budget each tick.
+  /// Packed and limited to what fits a hard byte budget each tick.
   Budgeted,
-  /// Budgeted, and each cube encoded against what the client already holds.
+  /// Budgeted, with each cube encoded against what the client already holds.
   Delta,
 }
 
@@ -165,7 +165,7 @@ pub struct Drive {
   /// input cannot strand it in the wrong one.
   ///
   /// `false` hovers: the cube floats and shoves the field aside without
-  /// touching it. `true` rolls: it drops, tumbles along the ground, and weakly
+  /// touching it. `true` rolls: it drops, tumbles along the ground and weakly
   /// holds on to whatever it runs into.
   pub rolling: bool,
 }

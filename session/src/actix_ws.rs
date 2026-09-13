@@ -81,8 +81,8 @@ where
   /// Measured by this transport timing its own WebSocket ping, so it costs the
   /// application no protocol and cannot be overstated by the client. `min` is the
   /// one to compare a schedule against: jitter only ever adds delay, so the
-  /// smallest sample is the honest estimate of the link, where a mean flatters a
-  /// connection that is usually fine and occasionally awful.
+  /// smallest sample is the closest estimate of the link. A mean misreports a
+  /// connection that is usually fine and occasionally very slow.
   pub fn connection_rtt(&self, conn_id: plaza::session::ConnectionId) -> Option<(std::time::Duration, std::time::Duration, u64)> {
     let manager = self.inner.manager();
     let smoothed = manager.rtt(conn_id)?;
@@ -120,21 +120,21 @@ where
     Some((smoothed, min, manager.link_rtt_samples(conn_id)))
   }
 
-  /// Sets the delay, jitter and loss every frame to and from this agent rides.
+  /// Sets the delay, jitter and loss applied to every frame to and from this
+  /// agent.
   ///
   /// Impairment belongs to the link, so it applies to whatever crosses the
   /// connection rather than to the ops an application decided to route through
-  /// a queue of its own. Latency probes and the version handshake ride the
-  /// delay but are never dropped.
+  /// a queue of its own. Latency probes and the version handshake are delayed
+  /// too but are never dropped.
   pub fn set_agent_link_profile(&self, id: &ID, profile: LinkProfile) {
     self.inner.manager().set_agent_link_profile(id, profile);
   }
 
   /// How many frames the links have discarded, summed over every connection.
   ///
-  /// Only a datagram profile discards any. Worth reading because an
-  /// application cannot count these for itself: what the link lost never
-  /// reaches it.
+  /// Only a datagram profile discards any. An application cannot count these
+  /// itself, because what the link loses never reaches it.
   pub fn link_dropped(&self) -> u64 {
     self.inner.manager().total_link_dropped()
   }
@@ -174,14 +174,14 @@ where
 
   /// What an agent declared it speaks, or `None` if it never sent a `Hello`.
   ///
-  /// Reading it is where this layer's involvement ends. Whether a mismatch is
-  /// fatal, cosmetic, or worth a banner is the application's to decide, and it is
+  /// This layer does nothing beyond recording it. Whether a mismatch is
+  /// fatal, cosmetic or worth a banner is the application's to decide and it is
   /// not decidable here: the version is a build hash, so a peer that merely
   /// recompiled is indistinguishable from one whose shapes changed. Compare
-  /// against your own build's version and answer however your game answers.
+  /// against your own build's version and decide what your game does about it.
   ///
-  /// `None` is not a mismatch. It is a peer that declared nothing, which is every
-  /// client built before the handshake existed.
+  /// `None` means the peer declared nothing, which is every client built before
+  /// the handshake existed. It is not a mismatch.
   pub fn protocol(&self, id: &ID) -> Option<ProtocolVersion> {
     self.inner.manager().protocol(id)
   }
@@ -198,8 +198,8 @@ where
   /// [`ProtocolVersion::UNKNOWN`] declares nothing and sends no `Hello`, which is
   /// what [`with_codec`](Self::with_codec) does.
   ///
-  /// A shipped mobile client is the case this exists for: a browser can be forced
-  /// to reload, and an installed app cannot.
+  /// This exists for shipped mobile clients: a browser can be forced to reload
+  /// but an installed app cannot.
   pub fn with_protocol(codec: C, protocol: ProtocolVersion) -> Arc<Self> {
     Self::with_options(codec, SessionOptions::with_protocol(protocol))
   }
@@ -348,8 +348,8 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
       // The application ending or bounding the session. Flush order: what the
       // link was holding is older than what the queue still holds, and the
       // farewell goes last so it is the final thing the client reads. The
-      // close frame itself stays a transport event; the reason rode in front
-      // of it.
+      // close frame itself carries no application reason; the farewell was
+      // written before it.
       Ok(order) = orders.recv() => {
         let farewell = match order {
           ConnectionOrder::Close { farewell } => farewell,
@@ -397,13 +397,13 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
       // The transport times its own round trip, using the WebSocket's own ping
       // frame. No application message is involved, so every consumer gets a
       // measured latency per connection without adding anything to its protocol.
-      // It rides underneath the conditioner deliberately: this is what the
-      // socket costs, against which the probe below says what plaza and the
-      // configured link add.
+      // It bypasses the conditioner deliberately, so it measures what the socket
+      // costs and the probe below measures what plaza and the configured link
+      // add.
       //
       // Fast at first, then sparse: a caller deciding whether a connection can
       // meet a schedule wants several samples in the first second, and after that
-      // this is upkeep. One sample decides nothing on a jittery link.
+      // this is upkeep. A single sample is not enough on a jittery link.
       _ = tokio::time::sleep_until(next_ping) => {
         pings_sent += 1;
         next_ping = tokio::time::Instant::now()

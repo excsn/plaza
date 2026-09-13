@@ -1,13 +1,13 @@
 //! Relevance: deciding what each client needs to see.
 //!
-//! A multiplayer world is bigger than one screen, and its players stand in
+//! A multiplayer world is bigger than one screen and its players stand in
 //! different places. Sending every entity to every client is `players x entities`
-//! and does not scale, a horde game (thousands of short-lived enemies) makes that
-//! obvious. So the server sends each client only what is *relevant* to it, and
+//! and does not scale; a horde game (thousands of short-lived enemies) shows that
+//! quickly. So the server sends each client only what is *relevant* to it and
 //! streams the churn (what entered or left a client's view) rather than the whole
 //! set each tick.
 //!
-//! This module is the mechanism for that, as building blocks, not a policy:
+//! This module provides the mechanism as building blocks rather than a policy:
 //!
 //! - [`morton`]: Z-order curve encode/decode, mapping 2D or 3D integer cells to a
 //!   single integer that preserves spatial locality. The mathematical primitive
@@ -20,9 +20,9 @@
 //!   fast bitwise diff against the previous tick, the `entered`/`left` streams a
 //!   client needs to spawn and despawn entities.
 //!
-//! What stays the app's: the world layout (cell size, origin), the relevance rule
-//! (a radius, a frustum, a team), and how the streams are encoded on the wire.
-//! This only makes those cheap to compute.
+//! The app decides the world layout (cell size, origin), the relevance rule (a
+//! radius, a frustum, a team) and how the streams are encoded on the wire. This
+//! module only makes those cheap to compute.
 
 use std::collections::HashMap;
 
@@ -30,9 +30,9 @@ use std::collections::HashMap;
 /// into one integer whose ordering follows spatial locality.
 ///
 /// Two cells close in space have (mostly) close Morton codes, so sorting entities
-/// by their code groups neighbours, and a cell's code is a single `u64` key for a
+/// by their code groups neighbours and a cell's code is a single `u64` key for a
 /// hash bucket. This is the primitive [`GridQuantizer`] and [`SpatialGrid`] build
-/// on; it is public for locality sorts, broadphase, and out-of-core layouts.
+/// on; it is public for locality sorts, broadphase and out-of-core layouts.
 pub mod morton {
   /// Spreads the low 32 bits of `v` across the even bit positions of a `u64`
   /// (one zero between each), so two of them interleave into a 64-bit code.
@@ -145,9 +145,9 @@ impl GridQuantizer {
 
   /// The world-space minimum corner of a cell.
   ///
-  /// What makes a coordinate expressible *relative to its cell*: a payload
-  /// that knows which cell it describes can quantise over one cell's width
-  /// instead of the world's, which is several bits an axis at the same step.
+  /// Lets a coordinate be written *relative to its cell*: a payload that knows
+  /// which cell it describes can quantise over one cell's width instead of the
+  /// world's, saving several bits per axis at the same step.
   pub fn corner(&self, cx: u32, cy: u32) -> (f32, f32) {
     (
       self.origin_x + cx as f32 * self.cell_size,
@@ -177,7 +177,7 @@ impl GridQuantizer {
   /// A Morton key is the right identifier for a sparse map; a world with known
   /// bounds can index a flat `Vec` by `(cx, cy)` instead, which costs an
   /// array index where the key costs a hash. Both are here because which one
-  /// is right is a property of the world rather than of the grid.
+  /// fits depends on the world rather than the grid.
   pub fn cells_in_radius(&self, x: f32, y: f32, radius: f32) -> impl Iterator<Item = (u32, u32)> + use<> {
     let (cx, cy) = self.cell(x, y);
     let r = self.cells_for_radius(radius);
@@ -194,25 +194,25 @@ impl GridQuantizer {
 /// A [`GridQuantizer`] over a world with **known bounds**, so every cell has a
 /// dense integer index and anything keyed by cell can live in a flat `Vec`.
 ///
-/// The quantizer alone answers "which cell", and a Morton key is the right
-/// identifier when the world is unbounded or sparse, because a hash map is the
-/// only thing that can hold it. A bounded world can do better: an array index
-/// where the key costs a hash. That is not a micro-optimisation at the scale
-/// this exists for. Publishing one payload per cell and handing each viewer the
-/// cells its view touches does roughly `viewers x cells-per-view` lookups a
-/// tick, and moving those off a hash was measured at 1.39x of a whole tick in
-/// one consumer, and 8x on the path that also builds a per-cell recipient list.
+/// The quantizer alone answers "which cell" and a Morton key is the right
+/// identifier when the world is unbounded or sparse, because only a hash map
+/// can hold it. A bounded world can use an array index where the key costs a
+/// hash and at the scale this is for the difference is large. Publishing one
+/// payload per cell and handing each viewer the cells its view touches does
+/// roughly `viewers x cells-per-view` lookups a tick; moving those off a hash
+/// was measured at 1.39x of a whole tick in one consumer and 8x on the path
+/// that also builds a per-cell recipient list.
 ///
-/// It is deliberately not a container. It is the *addressing scheme*, and the
-/// containers are whatever the caller needs keyed by place:
+/// It is the *addressing scheme* rather than a container. The containers are
+/// whatever the caller needs keyed by place:
 ///
 /// - `CellTable<Vec<Id>>` is a dense spatial grid.
 /// - `CellTable<Bytes>` is one published payload per cell.
 /// - `CellTable<Vec<ClientId>>` is the inverse index that says who is listening
 ///   to each cell, which is what addressing a per-cell payload needs.
 ///
-/// All three appear in a single consumer, which is why this is a primitive
-/// rather than any one of them.
+/// All three appear in a single consumer, which is why the addressing scheme is
+/// the shared piece rather than any one container.
 #[derive(Debug, Clone, Copy)]
 pub struct CellSpace {
   quantizer: GridQuantizer,
@@ -446,7 +446,7 @@ impl<Id: Copy> SpatialGrid<Id> {
   /// Appends to `out` every id in the cells overlapping the square of half-width
   /// `radius` around `(x, y)`. Cell-granular, so it can include ids just outside
   /// the radius; filter exactly afterward if that matters. `out` is not cleared,
-  /// so a caller can gather several regions, and reusing one `Vec` avoids
+  /// so a caller can gather several regions and reusing one `Vec` avoids
   /// allocating per query.
   pub fn query_radius(&self, x: f32, y: f32, radius: f32, out: &mut Vec<Id>) {
     for key in self.quantizer.keys_in_radius(x, y, radius) {
@@ -461,8 +461,8 @@ impl<Id: Copy> SpatialGrid<Id> {
 
   /// Every occupied cell and its ids, in no particular order.
   ///
-  /// This is the grid seen cell-first instead of viewer-first: build one
-  /// payload per occupied cell here, then hand each viewer the payloads for
+  /// Use it to build one payload per occupied cell, then hand each viewer the
+  /// payloads for
   /// [`GridQuantizer::keys_in_radius`] of its position. Cells emptied by
   /// [`clear`](Self::clear) but not refilled are skipped.
   pub fn occupied(&self) -> impl Iterator<Item = (u64, &[Id])> {
@@ -479,19 +479,16 @@ impl<Id: Copy> SpatialGrid<Id> {
   }
 }
 
-/// A dense bitset of which entities are visible to one client, with a fast diff
-/// against the previous tick.
-///
 /// A membership boundary with hysteresis: it takes less distance to stay in
 /// than to get in.
 ///
 /// Any threshold that switches what the wire carries (a near tier at full
 /// precision and rate against a far tier quantised and slow, a relevance
 /// radius, an aggro range) flaps when an entity loiters on it: membership
-/// changes every few frames, and every change is a precision or rate step the
+/// changes every few frames and every change is a precision or rate step the
 /// receiver has to absorb, visible as a peer marker twitching between two
-/// qualities of motion. The cure is two radii with a gap, judged against
-/// where the entity stood last time.
+/// qualities of motion. The fix is two radii with a gap, judged against where
+/// the entity stood last time.
 ///
 /// The memory is the caller's own previous membership set, which it already
 /// keeps for diffing, so this costs no state: pass `was_inside` from it.
@@ -529,14 +526,17 @@ impl TierBoundary {
   }
 }
 
+/// A dense bitset of which entities are visible to one client, with a fast diff
+/// against the previous tick.
+///
 /// Interest management needs, per client, the set of entities in view and the
 /// *change* since last tick: who [`entered`](Self::diff) (spawn it) and who
 /// [`left`](Self::diff) (despawn it). With entities addressed by a dense `u32`
-/// index (recycle indices for short-lived swarm entities, exactly the horde case),
-/// that set is a bitset and the diff is a word-at-a-time `new & !old` / `old & !new`,
-/// no per-entity hashing.
+/// index (recycle indices for short-lived swarm entities, as in the horde case),
+/// that set is a bitset and the diff is a word-at-a-time `new & !old` / `old & !new`
+/// with no per-entity hashing.
 ///
-/// For sparse handles (`Uuid`), map them to dense indices first, or diff two
+/// For sparse handles (`Uuid`), map them to dense indices first or diff two
 /// sorted id lists instead; this type is the dense-index fast path.
 #[derive(Debug, Clone, Default)]
 pub struct VisibilitySet {
@@ -631,9 +631,9 @@ impl VisibilitySet {
   }
 }
 
-// The digest is shared with the client crate, which is the point of it: one fold,
-// so a disagreement can only ever be about the world and never about the
-// arithmetic. Re-exported here because this is where server code reaches for it.
+// The digest is shared with the client crate so both sides run the same fold,
+// which means a disagreement always reflects different sets. Re-exported here
+// because this is where server code reaches for it.
 pub use plaza_client_utils::digest::SetDigest;
 
 /// Appends the set bit indices of `word` (in the `w`-th 64-bit block) to `out`.
@@ -686,8 +686,8 @@ mod tests {
 
   #[test]
   fn morton_preserves_locality_within_a_cell_row() {
-    // Adjacent cells on a row have codes that bracket their neighbours: the point
-    // of a Z-order curve. Not a total order over 2D, but locality holds locally.
+    // Adjacent cells on a row have codes that bracket their neighbours. A
+    // Z-order curve is not a total order over 2D, but locality holds locally.
     let a = morton::encode_2d(10, 10);
     let b = morton::encode_2d(11, 10);
     let far = morton::encode_2d(10, 1000);
@@ -803,9 +803,9 @@ mod tests {
 
   #[test]
   fn one_cell_space_keys_the_three_tables_a_publisher_needs() {
-    // The reason this is a primitive rather than any one container: publishing
-    // per cell needs entities by cell, a payload by cell, and the inverse index
-    // of who is listening to each cell, and all three are the same addressing.
+    // Publishing per cell needs entities by cell, a payload by cell and the
+    // inverse index of who is listening to each cell. All three use the same
+    // addressing.
     let q = GridQuantizer::new((0.0, 0.0), 10.0);
     let space = CellSpace::new(q, 100.0);
 
@@ -911,8 +911,8 @@ mod tests {
 
   #[test]
   fn a_delta_that_never_landed_is_detectable() {
-    // The failure this exists for: the server removed an entity, the client
-    // never applied it, and nothing else about the client looks wrong.
+    // The server removed an entity, the client never applied it and nothing
+    // else about the client looks wrong.
     let mut server = SetDigest::from_keys([1u64, 2, 3, 4]);
     let client = SetDigest::from_keys([1u64, 2, 3, 4]);
     assert_eq!(server.digest(), client.digest());
@@ -942,8 +942,8 @@ mod tests {
     v.remove(5);
     assert!(!v.contains(5));
 
-    // The point: with the bit cleared, the next diff sees 5 as newly visible
-    // rather than carrying the dead occupant's membership forward.
+    // With the bit cleared, the next diff sees 5 as newly visible rather than
+    // carrying the dead occupant's membership forward.
     let mut next = VisibilitySet::new();
     next.insert(5);
     let (mut entered, mut left) = (Vec::new(), Vec::new());
@@ -1013,8 +1013,7 @@ mod tests {
 
   #[test]
   fn a_peer_loitering_on_the_boundary_does_not_flap() {
-    // The pathology hysteresis exists for: wobbling a step either side of one
-    // radius must not change membership at all.
+    // Wobbling a step either side of one radius must not change membership.
     let tier = TierBoundary::new(100.0, 120.0);
 
     // A member wobbling between the two radii stays a member...

@@ -11,9 +11,9 @@ enum Kind {
 
   /// The kind for [byte], or null if this build has never heard of it.
   ///
-  /// Null means *skip the frame*, not *fail the connection*. A server speaking
-  /// a newer protocol may send kinds this client does not know, and refusing
-  /// them turns every additive change into a break.
+  /// Null means skip the frame rather than fail the connection. A server
+  /// speaking a newer protocol may send kinds this client does not know and
+  /// refusing them turns every additive change into a break.
   static Kind? fromByte(int byte) {
     for (final k in Kind.values) {
       if (k.byte == byte) return k;
@@ -29,7 +29,7 @@ class Frame {
   final int kindByte;
 
   /// The encoded body: a `List<int>` for a binary frame, a `String` for a text
-  /// one. Which it is follows the codec, not the frame.
+  /// one. Which one depends on the codec.
   final Object body;
 
   /// Null for a tag this build does not know.
@@ -62,10 +62,10 @@ Object buildFrame(Kind kind, Object body) {
 
 /// What a peer says it speaks, the body of a [Kind.hello] frame.
 ///
-/// **Consumed, never computed.** The Rust side derives this by hashing the type
-/// definitions that make up the wire format; a Dart client cannot hash Rust
-/// sources, so the constant is generated alongside the wire types rather than
-/// worked out here.
+/// The Dart side never computes this. The Rust side derives it by hashing the
+/// type definitions that make up the wire format; a Dart client cannot hash
+/// Rust sources, so the constant is generated alongside the wire types rather
+/// than worked out here.
 class ProtocolVersion {
   const ProtocolVersion(this.value);
 

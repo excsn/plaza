@@ -1,15 +1,15 @@
 //! Does what the server sent decode into what the server holds?
 //!
-//! Delta encoding rests on one property: the server's record of what a client
-//! holds and the client's own record stay identical, frame after frame. Nothing
-//! else checks it. `pack.rs` exercises the encoder against the decoder with one
+//! Delta encoding depends on the server's record of what a client holds and
+//! the client's own record staying identical, frame after frame. Nothing else
+//! checks it. `pack.rs` exercises the encoder against the decoder with one
 //! shared harness, and the client's own tests hand-build frames rather than
 //! receiving them, so both sides of the real path have been tested against a
 //! stand-in and never against each other.
 //!
 //! If the two baselines ever drift, a delta decodes against the wrong previous
-//! value and the yard corrupts silently: no error, no dropped frame, just cubes
-//! in the wrong places that look like a physics bug.
+//! value and the yard corrupts without an error or a dropped frame, leaving
+//! cubes in the wrong places that look like a physics bug.
 //!
 //! This drives `YardLogic` directly rather than through a socket, because that
 //! is what puts the server's own truth in reach for comparison.
@@ -127,18 +127,17 @@ async fn a_delta_stream_decodes_into_what_the_server_holds() {
   assert!(checked > 10_000, "only {checked} cubes were actually compared");
 }
 
-/// Drop one frame and the yard corrupts. That is not a defect, it is the
-/// reason the README says this encoding depends on the transport.
+/// Drop one frame and the yard corrupts. That is expected and is why the
+/// README says this encoding depends on the transport.
 ///
-/// A delta is measured against what the other end is *known* to hold, and the
+/// A delta is measured against what the other end is *known* to hold and the
 /// server learns that from having sent it. Over TCP that inference is sound:
 /// what was sent is what arrives, in order. Lose a frame and the server's
 /// record is ahead of the client's, every later delta is measured from a value
-/// the client never saw, and it decodes to somewhere else with no error raised.
+/// the client never saw and it decodes to somewhere else with no error raised.
 ///
-/// This test exists as much to prove the assertion above has teeth as to
-/// document the dependency: a check that has never failed is weak evidence that
-/// it could.
+/// This test also shows that the assertion above can fail, as well as
+/// documenting the dependency.
 #[tokio::test]
 async fn a_dropped_frame_corrupts_the_yard_which_is_why_this_needs_an_ordered_transport() {
   let mut state = YardState::with(Encoding::Delta, false);

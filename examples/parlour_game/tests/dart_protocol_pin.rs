@@ -2,7 +2,7 @@
 //!
 //! `build.rs` rewrites the file whenever the wire changes, so this can only
 //! fail when someone commits a wire change without building the server, which
-//! is exactly the drift the handshake exists to catch.
+//! is the drift the handshake catches.
 
 use plaza_example_parlour_game::types::PROTOCOL;
 

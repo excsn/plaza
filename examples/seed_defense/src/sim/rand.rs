@@ -1,20 +1,19 @@
 //! The simulation's own random numbers.
 //!
-//! `plaza_client_utils::net_sim::Rng` exists and is deterministic, and it is
-//! still not the right thing here: its documented contract is a test and demo
-//! aid for jitter and loss, so its algorithm is free to change. In an example
-//! whose entire wire is a seed, the generator **is** the wire format. It has to
-//! be pinned by the crate that depends on it, and it has to be pinned by a test
-//! that names actual numbers.
+//! `plaza_client_utils::net_sim::Rng` is deterministic but is not used here: it
+//! is documented as a test and demo aid for jitter and loss, so its algorithm
+//! may change. When the whole wire is a seed, changing the generator changes
+//! what every seed means. So the generator is defined in this crate and pinned
+//! by a test that names actual numbers.
 //!
 //! SplitMix64, because it is a handful of integer operations with no state
-//! machine to get wrong, and because it produces well distributed output from
+//! machine to get wrong and because it produces well distributed output from
 //! sequential seeds. That last part matters: waves are seeded `base + wave`, so
 //! a generator whose neighbouring seeds give neighbouring streams would make
 //! wave 4 a slightly shifted copy of wave 3.
 
-/// A deterministic integer generator. No floats anywhere in its output, because
-/// a float in the sim is exactly what this example is avoiding.
+/// A deterministic integer generator. No floats in its output, because the
+/// simulation contains no floating point.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rand(u64);
 
@@ -33,11 +32,10 @@ impl Rand {
 
   /// An integer in `[0, n)`.
   ///
-  /// Plain modulo, and the bias it carries is deliberate: rejection sampling
-  /// would consume a variable number of values, and a stream whose length
-  /// depends on the values drawn is a stream two implementations can fall out
-  /// of step on if either one ever changes the range it asks for. The bias is
-  /// far below anything a wave composition would show.
+  /// Plain modulo, with a deliberate bias. Rejection sampling would consume a
+  /// variable number of values, so two implementations could fall out of step
+  /// if either one ever changed the range it asks for. The bias is far below
+  /// anything a wave composition would show.
   pub fn below(&mut self, n: u64) -> u64 {
     if n == 0 {
       0
@@ -61,9 +59,9 @@ mod tests {
 
   #[test]
   fn the_stream_is_pinned_by_its_actual_numbers() {
-    // Not "it is deterministic": a test that only reseeds and compares passes
-    // for *any* generator, including a changed one. These are the numbers this
-    // wire format promises, so changing the algorithm has to break a test.
+    // A test that only reseeds and compares passes for *any* generator,
+    // including a changed one. These are the numbers this wire format depends
+    // on, so changing the algorithm breaks this test.
     let mut r = Rand::new(0);
     assert_eq!(r.next_u64(), 16_294_208_416_658_607_535);
     assert_eq!(r.next_u64(), 7_960_286_522_194_355_700);

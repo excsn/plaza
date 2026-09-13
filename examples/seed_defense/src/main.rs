@@ -1,4 +1,5 @@
-//! Frame loop: place towers, watch a wave nobody sent you, and try to break it.
+//! Frame loop: place towers, watch a wave that was never sent and try to break
+//! it.
 
 mod render;
 mod ui;
@@ -14,8 +15,9 @@ use seed_defense::sim::types::Controls;
 
 /// Reports a fatal misconfiguration.
 ///
-/// Never `process::exit` on wasm: there is no process to exit, the call traps,
-/// and a browser shows `RuntimeError: unreachable executed` with no reason.
+/// Never `process::exit` on wasm: there is no process to exit, so the call
+/// traps and a browser shows `RuntimeError: unreachable executed` with no
+/// reason.
 fn give_up(message: String) {
   if cfg!(target_arch = "wasm32") {
     println!("{message}");
@@ -196,8 +198,7 @@ async fn frame_loop(options: role::Options) {
       }
 
       // The countdown comes from the wave announcement's own tick, which this
-      // client already has. A timer message of its own would be a second
-      // opinion about the same moment.
+      // client already has. A separate timer message could disagree with it.
       let (wave, in_ms) = match client.sim.next_wave() {
         Some((wave, at)) => (
           wave,
@@ -247,8 +248,8 @@ async fn frame_loop(options: role::Options) {
   }
 }
 
-/// Frame time, because a client that cannot keep up simulates in bursts, and a
-/// burst is a client that briefly stops matching anybody.
+/// Frame time, because a client that cannot keep up simulates in bursts and
+/// during a burst it briefly stops matching anybody.
 struct Perf {
   mean_dt: f32,
   window: std::collections::VecDeque<f32>,

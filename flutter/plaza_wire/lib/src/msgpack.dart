@@ -5,8 +5,7 @@ import 'dart:typed_data';
 ///
 /// The core spec only: nil, bool, int, float, str, bin, array, map. No
 /// extension types, because plaza's wire never emits one and a decoder that
-/// pretends to handle ext would be claiming a compatibility it has not been
-/// tested for.
+/// accepted ext would claim a compatibility nobody has tested.
 ///
 /// # What maps to what
 ///
@@ -16,10 +15,9 @@ import 'dart:typed_data';
 /// field name, the same shape JSON gives. Both decode here, and which you get
 /// is decided by the server's codec alone.
 ///
-/// The protocol version does not police that choice, and does not need to: a
-/// mismatch fails on the first frame rather than decoding into something
-/// plausible. What the version guards is field order, which is what compact
-/// depends on.
+/// The protocol version does not cover that choice, because a codec mismatch
+/// fails on the first frame rather than decoding into something plausible. The
+/// version guards field order, which compact depends on.
 ///
 /// A map whose keys are all strings is returned as `Map<String, Object?>`, so
 /// it casts like a `jsonDecode` result. Anything else stays
@@ -286,8 +284,8 @@ class _Reader {
   /// MessagePack keys are any value, but a struct's are always strings, so an
   /// all-string map comes back as `Map<String, Object?>` to match what
   /// `jsonDecode` returns. Without that, `fields['x'] as Map<String, Object?>`
-  /// throws under a codec and passes under JSON, which is the worst way to
-  /// find out the two differ.
+  /// throws under a codec and passes under JSON, so the difference would only
+  /// show up at runtime.
   Map<Object?, Object?> _map(int n) {
     final m = <Object?, Object?>{};
     var allStrings = true;

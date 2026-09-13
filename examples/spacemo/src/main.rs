@@ -1,4 +1,5 @@
-//! Frame loop: fly a ship through a volume, and watch who you are told about.
+//! Frame loop: fly a ship through a volume and see which ships you are told
+//! about.
 
 #[cfg(all(feature = "client", feature = "websocket"))]
 mod render;
@@ -87,9 +88,9 @@ const SENSITIVITY: f32 = 0.0032;
 
 #[cfg(all(feature = "client", feature = "websocket"))]
 fn read_fly(aim: &mut Aim, last: &mut Vec2) -> Fly {
-  // Pointer capture on first click. In the browser this is a hard requirement
-  // rather than a nicety: pointer lock needs a user gesture, so a page that
-  // grabs on load simply does not grab.
+  // Pointer capture on first click. In the browser this is required: pointer
+  // lock needs a user gesture, so a page that grabs on load does not get the
+  // pointer.
   if !aim.captured && is_mouse_button_pressed(MouseButton::Left) {
     set_cursor_grab(true);
     show_mouse(false);

@@ -1,7 +1,7 @@
 //! The duel drawn: two totems, the stack as a physical column between them,
-//! and the spell row along the bottom. The column is the pedagogy: a spell
-//! sits where it waits, the top is what resolves next, and a counter lands
-//! visibly on top of the thing it answers.
+//! and the spell row along the bottom. The column shows how the stack works: a
+//! spell sits where it waits, the top is what resolves next and a counter
+//! lands visibly on top of the thing it answers.
 
 use macroquad::prelude::*;
 use last_word::net::client::NetClient;

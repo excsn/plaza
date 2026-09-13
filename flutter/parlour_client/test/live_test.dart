@@ -9,9 +9,9 @@ import 'package:plaza_ws/plaza_ws.dart';
 
 /// The client against a real `examples/parlour_game` server, over real sockets.
 ///
-/// Everything else runs against `LoopbackSocket`, which proves the lifecycle and
-/// never the wire. This is the only place that proves the Dart client reads
-/// named MessagePack written by `rmp_serde`, and the only place the ticketed
+/// Everything else runs against `LoopbackSocket`, which covers the lifecycle but
+/// not the wire. This is the only place that checks the Dart client reads
+/// named MessagePack written by `rmp_serde` and the only place the ticketed
 /// endpoint is actually redeemed.
 ///
 /// Started by `flutter/e2e.sh`.
@@ -35,8 +35,8 @@ void main() {
       game.quickMatch();
 
       // Three seats, and nobody else is queueing, so this waits out the queue's
-      // patience and the remaining seats are filled with bots. That is the
-      // path worth testing: it exercises the server's timed-out branch.
+      // patience and the remaining seats are filled with bots. This exercises
+      // the server's timed-out branch.
       await _until(() => game.seated, 'a placement', timeout: const Duration(seconds: 30));
 
       // The lobby socket must still be open, or the seat this client was just
@@ -50,8 +50,8 @@ void main() {
       expect(view.seatsTotal, 3);
       expect(view.opponents, isNotEmpty, reason: 'the bots never took their seats');
 
-      // Play whenever it is this client's turn, until the match settles. What
-      // this proves is the whole loop: named MessagePack decoded, a play encoded
+      // Play whenever it is this client's turn, until the match settles. This
+      // covers the whole loop: named MessagePack decoded, a play encoded
       // back, and the server accepting it.
       final deadline = DateTime.now().add(const Duration(seconds: 60));
       while (game.view!.phase != 'Finished' && DateTime.now().isBefore(deadline)) {

@@ -1,37 +1,35 @@
 //! On-screen controls, for the playgrounds that are otherwise unplayable
 //! without a keyboard.
 //!
-//! Every one of these examples ships a browser build, so every one of them is
-//! reachable from a phone. Two of them were driven entirely by `WASD` and had
-//! no pointer input at all, which means the page loaded, the game ran, and
-//! nothing a finger could do would move anything.
+//! Every one of these examples ships a browser build, so each is reachable from
+//! a phone. Two of them were driven entirely by `WASD` and had no pointer input
+//! at all, so on a phone the game ran but nothing could move it.
 //!
 //! # Why this uses touches rather than the mouse
 //!
 //! macroquad synthesises a left click from a touch by default, so a *tap
 //! target* needs nothing special: `is_mouse_button_pressed` already fires. That
-//! covers a menu and a build strip, and it is why the examples that are driven
+//! covers a menu and a build strip, which is why the examples that are driven
 //! by clicking were already fine.
 //!
-//! It does not cover a **held** control, and it does not cover two at once. The
-//! simulated mouse is a single pointer, so "steer left while charging" is not
-//! expressible through it. Anything that has to be held reads [`touches`]
-//! directly, and takes the mouse only as one extra pointer when there are no
-//! touches, so a desktop can still exercise the same code.
+//! It does not cover a **held** control or two controls at once. The simulated
+//! mouse is a single pointer, so "steer left while charging" is not expressible
+//! through it. Anything that has to be held reads [`touches`] directly and
+//! takes the mouse only as one extra pointer when there are no touches, so a
+//! desktop can still exercise the same code.
 //!
 //! # Why the controls are hidden until something touches the screen
 //!
-//! A thumb pad drawn over a desktop window is clutter in the one place a player
-//! is looking. [`Pointers::seen_touch`] latches on the first touch the process
-//! ever sees, and the controls draw from then on. A device that never produces
-//! one never grows a d-pad.
+//! A thumb pad drawn over a desktop window only gets in the way.
+//! [`Pointers::seen_touch`] latches on the first touch the process ever sees
+//! and the controls draw from then on.
 
 use macroquad::prelude::*;
 
 /// Where every finger is this frame.
 ///
 /// The mouse counts as a pointer only when there are no touches: with
-/// `simulate_mouse_with_touch` on, a touch also moves the mouse, and counting
+/// `simulate_mouse_with_touch` on, a touch also moves the mouse and counting
 /// both would make one finger read as two.
 #[derive(Clone, Debug, Default)]
 pub struct Pointers {
@@ -108,7 +106,7 @@ const EDGE: Color = Color::new(0.85, 0.88, 0.94, 0.35);
 ///
 /// Four separate targets rather than an analogue stick, because the games that
 /// need it take a *discrete* direction: a stick would have to be thresholded
-/// back into one of four, and the threshold is a thing to get wrong.
+/// back into one of four and that threshold is easy to get wrong.
 #[derive(Clone, Copy, Debug)]
 pub struct Pad {
   pub centre: Vec2,
@@ -195,8 +193,8 @@ impl Button {
   }
 
   pub fn held(&self, pointers: &Pointers) -> bool {
-    // A square target for a round button, on purpose: a thumb that lands on the
-    // corner meant to press it, and a miss is worse than a generous hit.
+    // A square target for a round button: a thumb that lands on the corner
+    // meant to press it and a miss is worse than a generous hit.
     pointers.inside(self.rect())
   }
 
@@ -218,7 +216,7 @@ impl Button {
 
 /// A floating analogue stick.
 ///
-/// Wherever a finger first lands becomes the origin, and the drag from there is
+/// Wherever a finger first lands becomes the origin and the drag from there is
 /// the direction. Deliberately **relative** rather than "steer toward where I
 /// touched": a drag delta lives in one coordinate space, so it cannot be skewed
 /// by a mismatch between where the touch is reported and where the drawing

@@ -142,7 +142,7 @@ pub enum PoketoOp {
   ///
   /// The town has one set of these, not one per client, which is what makes it
   /// a playground rather than a game: whoever moves a slider moves it for
-  /// everyone, and the point is to watch what that does to the numbers on the
+  /// everyone, so everybody can watch what that does to the numbers on the
   /// panel. Clamped on arrival, because a client is not trusted to have kept
   /// its own slider in range.
   Tune(Tuning),

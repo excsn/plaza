@@ -5,8 +5,8 @@
 # wasm step: the browser client here is plain HTML served by the same actix app
 # as the sockets, so there is nothing to build separately.
 #
-# What this does buy over `cargo run -p plaza_example_parlour_game` is working
-# from anywhere. The examples are their own workspace, so that command only
+# Unlike `cargo run -p plaza_example_parlour_game`, this works from any
+# directory. The examples are their own workspace, so that command only
 # resolves from inside `examples/`.
 #
 # Usage: ./run.sh [-- <cargo args>]

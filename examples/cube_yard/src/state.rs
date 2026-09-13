@@ -22,8 +22,8 @@ pub struct YardState {
   /// The level each seat currently holds; a tick with nothing new repeats it.
   pub driving: [Drive; MAX_PLAYERS],
   pub agents: HashMap<PlayerId, Agent<PlayerId>>,
-  /// One share of the wire per client: a budget is per link, so the choosing
-  /// is too, and two clients standing in different places get different cubes.
+  /// One share of the wire per client: a budget is per link, so cube selection
+  /// is too and two clients standing in different places get different cubes.
   pub streams: HashMap<PlayerId, Stream>,
 }
 

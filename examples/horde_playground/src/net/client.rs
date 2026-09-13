@@ -14,7 +14,7 @@
 //!   so the server's loss recovery has something to diff against.
 //! - **The area pulse arrives as a declared event.** The packet carries the
 //!   pulse's server timestamp, and the ring is a pure function of it and the
-//!   render instant. It was inferred from the death burst it causes once, and
+//!   render instant. It was once inferred from the death burst it causes and
 //!   the inference re-fired on every recovery repeat of the same announcements.
 
 use plaza_client_utils::{InputCoalescer, RateMeter, Timeline};
@@ -22,9 +22,9 @@ use plaza_wire::{MsgPackCodec, WireCodec};
 use plaza_ws::pump::{mismatch_message, Arrival, FramePump};
 use plaza_ws::{Event, State};
 
-/// One codec for the whole client. Zero-sized, so naming it costs nothing, and
-/// naming it *once* is the point: the server is built with the same type, so
-/// the two ends cannot drift onto different formats.
+/// One codec for the whole client. Zero-sized, so naming it costs nothing. It
+/// is named *once* and the server is built with the same type, so the two ends
+/// cannot drift onto different formats.
 const WIRE: MsgPackCodec = MsgPackCodec;
 
 use crate::sim::client::Client as SimClient;
@@ -79,7 +79,7 @@ pub struct NetClient {
   input_seq: u64,
   /// When to actually transmit, as opposed to when to integrate. The two are
   /// deliberately different: the prediction advances every tick whatever the wire
-  /// is doing, so a quiet wire is not a stuttering player.
+  /// is doing, so a quiet wire does not make the player stutter.
   send_policy: InputCoalescer<Vec2>,
 
   /// What this client is actually receiving, which is the number it wants and
@@ -90,20 +90,19 @@ pub struct NetClient {
   /// The same traffic as the *server* counts it: what these packets would cost
   /// with compact ids and quantised positions, rather than what the MessagePack
   /// on the wire actually cost. Kept beside the real figure because the gap between
-  /// them is the encoding's price, and it is the one number about wire cost
-  /// this example never showed.
+  /// them is what the encoding costs, which this example did not show before.
   modelled: RateMeter,
   /// What this client *sends*. Bandwidth has two directions and every counter
   /// here measured one of them, which made "bandwidth" mean downstream by
-  /// accident. Upstream is small but it is not nothing: an input every tick
-  /// unless coalescing is on, plus an acknowledgement per applied frame.
+  /// accident. Upstream is small but not zero: an input every tick unless
+  /// coalescing is on, plus an acknowledgement per applied frame.
   sent: RateMeter,
   /// The pump's cumulative counters as of the last poll, so the meters above
   /// can be fed the delta.
   seen_rx_bytes: u64,
   seen_rx_msgs: u64,
   seen_tx_bytes: u64,
-  /// The worst frame in a short window, not the average over a second.
+  /// The worst frame in a short window rather than the average over a second.
   ///
   /// The rate meters beside this one answer "how much bandwidth", which is the
   /// wrong question for a hitch: a spike lasting two frames barely moves a
@@ -164,7 +163,7 @@ fn now_micros() -> u64 {
 ///
 /// Separate from the rate meters because they answer a different question. A
 /// per-second average is the wrong instrument for a hitch: a spike lasting two
-/// frames barely moves it, and is exactly what a player feels.
+/// frames barely moves it and is exactly what a player feels.
 #[derive(Default)]
 pub struct FrameCost {
   window: std::collections::VecDeque<(u32, u32, u32)>,
@@ -177,8 +176,8 @@ pub struct FrameCost {
 
 impl FrameCost {
   /// How many frames the window holds. A couple of seconds at a typical send
-  /// rate: long enough that a spike does not scroll away before it is read,
-  /// short enough that it is about *now* rather than the whole session.
+  /// rate: long enough that a spike stays until it is read and short enough to
+  /// reflect recent frames rather than the whole session.
   const WINDOW: usize = 120;
 
   fn record(&mut self, bytes: usize, micros: u64, ops: usize) {
@@ -190,7 +189,7 @@ impl FrameCost {
     }
     // Recomputed rather than kept as a running maximum, so the reading falls
     // again once the spike leaves the window. A high-water mark that only ever
-    // rises says a stall happened, never that it stopped.
+    // rises can show that a stall happened but not that it ended.
     let (mut b, mut o) = (0, 0);
     for &(sb, _, so) in &self.window {
       b = b.max(sb);
@@ -206,15 +205,15 @@ impl FrameCost {
 
   /// Mean decode microseconds per frame, averaged across the whole window.
   ///
-  /// **A mean rather than the worst, and deliberately so.** A browser clamps
-  /// timer precision for fingerprinting reasons (Firefox to 1ms by default),
-  /// and `performance.now` is what macroquad's clock reads underneath. A single
-  /// decode of a hundred microseconds therefore measures as either 0 or 1000,
-  /// and a per-frame *maximum* reads 1000 the instant one frame rounds up: it
-  /// reports the clamp, not the work, and it looks like a tenfold regression
-  /// against a native run that can see the real figure.
+  /// A mean rather than the worst. A browser clamps timer precision for
+  /// fingerprinting reasons (Firefox to 1ms by default) and `performance.now`
+  /// is what macroquad's clock reads underneath. A single decode of a hundred
+  /// microseconds therefore measures as either 0 or 1000 and a per-frame
+  /// *maximum* reads 1000 the instant one frame rounds up: it reports the clamp
+  /// rather than the work and looks like a tenfold regression against a native
+  /// run that can see the real figure.
   ///
-  /// Summing the window defeats that. A hundred frames of real work totals well
+  /// Summing the window avoids that. A hundred frames of real work totals well
   /// past the granularity, so dividing back out recovers a per-frame number
   /// that means something in both builds. The cost is that this can no longer
   /// show a single expensive frame, which is why `worst` keeps the byte and op
@@ -283,16 +282,16 @@ impl NetClient {
 
   /// Where to draw your own player: **on the same timeline as everything else**.
   ///
-  /// Not predicted. The client renders the world at one instant, and exempting
-  /// the local player from it is the seam every other fix in this example
-  /// removed: your marker would sit a render delay ahead of the enemies it is
-  /// standing among, so your shots left from somewhere you were not.
+  /// Not predicted. The client renders the world at one instant. Exempting the
+  /// local player from it would bring back the seam every other fix in this
+  /// example removed: your marker would sit a render delay ahead of the enemies
+  /// it is standing among, so your shots left from somewhere you were not.
   ///
   /// Drawing it from the played-out stream instead means there is nothing to
-  /// correct, so the reversal stiffness has no mechanism left rather than a
-  /// better cure: prediction and authority cannot disagree when there is no
-  /// prediction. It also makes a recording replay to exactly what you saw, which
-  /// a predicted local player can never do.
+  /// correct, so the mechanism behind the reversal stiffness no longer exists:
+  /// with no prediction, nothing can disagree with authority. It also
+  /// makes a recording replay to exactly what you saw, which a predicted local
+  /// player can never do.
   ///
   /// What it costs is stated where it is chosen: see
   /// [`Controls::playout_delay_ms`](crate::sim::types::Controls::playout_delay_ms).
@@ -304,9 +303,9 @@ impl NetClient {
       .map(|at| self.sim.render_players(at))
       .and_then(|drawn| drawn.get(me).copied())
       // Never `unwrap_or_default`: the arena is measured from a corner, so the
-      // origin is a view of the outside of it, and a camera that lands there
-      // before the first packet opens on the wrong world. This path is not
-      // reachable today, and it is the one that regressed last time.
+      // origin is outside it and a camera that lands there before the first
+      // packet shows the wrong world. This path is not reachable today but it
+      // is the one that regressed last time.
       .unwrap_or_else(|| {
         self
           .sim
@@ -321,9 +320,9 @@ impl NetClient {
   ///
   /// A client that renders in the past has **nothing** to show until its
   /// timeline has started and a frame has been played out of it, which is one
-  /// render delay after the first packet at the earliest. Drawing anyway is not
-  /// an empty screen, it is a *wrong* one: entities at the origin, a camera on
-  /// the corner of the arena, and then everything teleporting into place at once
+  /// render delay after the first packet at the earliest. Drawing anyway shows a
+  /// *wrong* screen rather than an empty one: entities at the origin, a camera on
+  /// the corner of the arena and then everything teleporting into place at once
   /// when the first frame lands.
   pub fn ready(&self) -> bool {
     self.frames_seen > 0 && self.sim.render_at().is_some()
@@ -359,8 +358,8 @@ impl NetClient {
       // apart their pings are. Its own estimate of the server clock, plus the
       // playout depth the server advertised, in the server's step units.
       //
-      // The server decides whether that tick is still open. This is an intention,
-      // not a claim.
+      // The server decides whether that tick is still open; the client is only
+      // asking for it.
       //
       // The estimate already carries the newest-stamp floor
       // ([`Timeline::server_time_ms`]): after a resume the fit can trail the
@@ -438,13 +437,13 @@ impl NetClient {
   /// Discards all but the tail of a resume backlog, **before any of it is
   /// parsed**: see [`plaza_ws::trim_backlog`], which owns the how and the why.
   ///
-  /// What stays here is what only this client knows. Whether the burst is a
-  /// join or a resume (before the first frame it is a join, and a join's burst
-  /// must arrive whole). What a drop means for its own state (the timeline is
-  /// lost, once, deliberately). And the accounting: the dropped bytes still
-  /// crossed the wire, so the meters count them in full. The one thing not
-  /// repaired by the recovery contract is a policy change made mid-stall,
-  /// which stands until the host next edits a setting; accepted, since the
+  /// What stays here is what only this client knows: whether the burst is a
+  /// join or a resume (before the first frame it is a join and a join's burst
+  /// must arrive whole), what a drop means for its own state (the timeline is
+  /// lost, once, deliberately) and the accounting (the dropped bytes still
+  /// crossed the wire, so the meters count them in full). The recovery
+  /// contract does not repair a policy change made mid-stall, which stands
+  /// until the host next edits a setting. That is accepted, since the
   /// alternative is parsing the backlog to look for it.
   fn drop_resume_backlog(&mut self, events: &mut Vec<Event>, now_ms: u64) {
     if self.frames_seen == 0 {
@@ -528,7 +527,7 @@ impl NetClient {
   /// The worst frame in the recent window: bytes and ops, both exact.
   ///
   /// Read this rather than the rate meters when something *hitched*: an average
-  /// over a second is precisely the thing that hides a two-frame stall.
+  /// over a second hides a two-frame stall.
   pub fn worst_frame(&self) -> (u32, u32) {
     self.worst.worst()
   }
@@ -607,7 +606,7 @@ impl NetClient {
           // sample claims an offset 80 ms off. Mixing the two made the estimate
           // wobble every ping interval and jerk the enemy projection backward.
           // Pongs are correct on a host (direct) and a remote (delayed like the
-          // frames), so they are the honest source. The stamp still floors the
+          // frames), so they are the right source. The stamp still floors the
           // estimate from below: the server wrote it.
           // Hand the sim server time, not local time. It computes a packet's age
           // as `recv - server_time` to project a sample into the present, and that

@@ -1,11 +1,11 @@
 //! The wire vocabulary shared by a Plaza server and whatever talks to it: the
-//! message [`envelope`], the encoding trait ([`WireCodec`]), and the common
+//! message [`envelope`], the encoding trait ([`WireCodec`]) and the common
 //! netcode payloads ([`payloads`]).
 //!
 //! This crate exists so both ends can agree without the client inheriting the
 //! server's async runtime. It is pure serde with no async, so a browser, a wasm
-//! build, or a native client can depend on it alone; `plaza_session` re-exports
-//! the codec, and `plaza` core re-exports the payloads, so server code rarely
+//! build or a native client can depend on it alone; `plaza_session` re-exports
+//! the codec and `plaza` core re-exports the payloads, so server code rarely
 //! names this crate directly.
 //!
 //! [`JsonCodec`] is behind the default `json` feature. Turn it off
@@ -67,9 +67,9 @@ pub trait WireCodec: Clone + Send + Sync + 'static {
   /// and pay no allocation per message. **A server fanning out cannot**: the
   /// frame it produces is shared by every recipient, so the buffer becomes the
   /// frame and the allocation goes with it. What that caller can do instead is
-  /// size the buffer from the last frame it built, which is worth more than it
-  /// sounds, because a `Vec` growing from nothing to even a few dozen bytes
-  /// reallocates and copies four or five times before the encode is done.
+  /// size the buffer from the last frame it built: a `Vec` growing from nothing
+  /// to even a few dozen bytes reallocates and copies four or five times before
+  /// the encode is done.
   ///
   /// The default implementation calls [`encode`](Self::encode) and copies, so an
   /// existing codec keeps working. Override it: `serde_json::to_writer`,
@@ -134,31 +134,29 @@ impl WireCodec for JsonCodec {
   }
 }
 
-/// MessagePack wire format: compact, and what a game usually wants once the
+/// MessagePack wire format: compact and what a game usually wants once the
 /// protocol has stopped changing shape every day.
 ///
-/// **Compact, not named.** `rmp_serde` offers two encodings: `to_vec_named`
+/// **Compact encoding.** `rmp_serde` offers two encodings: `to_vec_named`
 /// keeps struct field names, `to_vec` drops them and encodes structs
-/// positionally. Both compile, both round-trip, and picking the wrong one
+/// positionally. Both compile and round-trip, so picking the wrong one
 /// silently costs most of the benefit: measured on a ten-op message, named came
 /// out at 67% of JSON and compact at 40%. This uses compact, so a peer decoding
 /// it must be built from the same struct definitions, **in the same order**.
 /// [`MsgPackNamedCodec`] is the other choice.
 ///
-/// The protocol version does not police that. It hashes type definitions, so
-/// the same types under either codec declare the same number: what it catches
-/// is a field renamed or reordered, not the encoding. Nothing needs to catch
+/// The protocol version does not check that. It hashes type definitions, so
+/// the same types under either codec declare the same number: it catches a
+/// field renamed or reordered but not the encoding. Nothing needs to catch
 /// the encoding, because a mismatch fails on the first frame rather than
 /// decoding into something plausible.
 ///
-/// **What compact does not drop: enum variant names.** A struct becomes an
-/// array, but a variant is still a map keyed by its name, so
-/// `Op::Hello { protocol }` goes out as `{"Hello": [protocol]}` rather than as
-/// an index. Short variant names are therefore worth something on the wire and
-/// long ones cost on every frame carrying them, which is not obvious from the
-/// format's reputation for compactness. Measured on horde's real traffic the
-/// codec is still worth 4.2x against JSON, so this is a refinement rather than
-/// a reason to hesitate.
+/// **Compact still sends enum variant names.** A struct becomes an array, but
+/// a variant is still a map keyed by its name, so `Op::Hello { protocol }`
+/// goes out as `{"Hello": [protocol]}` rather than as an index. Long variant
+/// names therefore cost bytes on every frame that carries them. Measured on
+/// horde's real traffic the codec is still worth 4.2x against JSON, so this is
+/// a refinement rather than a reason to avoid it.
 #[cfg(feature = "msgpack")]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MsgPackCodec;
@@ -179,7 +177,7 @@ impl WireCodec for MsgPackCodec {
     buf: &mut Vec<u8>,
   ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // `to_vec` allocates four times on a ten-op message and `write` none, which
-    // is why the trait has this method at all.
+    // is why the trait has this method.
     rmp_serde::encode::write(buf, value).map_err(Into::into)
   }
 
@@ -193,25 +191,25 @@ impl WireCodec for MsgPackCodec {
 /// [`MsgPackCodec`] is the one to reach for by default; this one exists for a
 /// client that cannot be built from the server's struct definitions and so has
 /// nothing to recover field order from. A hand-written decoder in another
-/// language is the usual case, and a generated model layer keyed by name is the
+/// language is the usual case and a generated model layer keyed by name is the
 /// other.
 ///
-/// **It costs more than the usual figure suggests, and how much depends on your
+/// **It costs more than the usual figure suggests and how much depends on your
 /// messages.** The often-quoted 67% of JSON against compact's 40% comes from a
 /// ten-op message. Measured instead on a whole match of real traffic
 /// (`examples/parlour_game --example parlour_report`), named came out at **76% of JSON
 /// where compact was 26%**, a premium of **+190%** rather than +67%.
 ///
-/// The reason is worth knowing before choosing: a field name is paid **per
-/// field per message**, so the premium tracks how *wide* a message is, not how
-/// large. A per-recipient state view with fifteen fields pays far more than a
-/// two-field notice, and it is usually also the most frequent message. Measure
-/// your own mix before assuming the cheap end of that range.
+/// A field name is paid **per field per message**, so the premium tracks how
+/// *wide* a message is rather than how large. A per-recipient state view with
+/// fifteen fields pays far more than a two-field notice and it is usually also
+/// the most frequent message. Measure your own mix before assuming the cheap
+/// end of that range.
 ///
-/// **Decoding is shared, not merely similar.** `rmp_serde` dispatches on the
+/// **Both MessagePack codecs decode identically.** `rmp_serde` dispatches on the
 /// MessagePack marker rather than on the type: a struct arrives as an array or
 /// as a map and both deserialize. So this codec's `decode` is
-/// [`MsgPackCodec`]'s, and a server reads either shape whichever it writes.
+/// [`MsgPackCodec`]'s and a server reads either shape whichever it writes.
 /// A migration can therefore turn one direction at a time.
 #[cfg(feature = "msgpack")]
 #[derive(Debug, Clone, Copy, Default)]
@@ -288,8 +286,8 @@ mod tests {
     assert!(named.len() > compact.len(), "the names are what named pays for");
   }
 
-  /// The property a migration rests on: whichever shape a peer writes, it reads
-  /// both, so the two ends can be turned over one at a time.
+  /// Whichever shape a peer writes, it reads both, so a migration can switch the
+  /// two ends one at a time.
   #[cfg(feature = "msgpack")]
   #[test]
   fn either_msgpack_codec_decodes_the_other() {

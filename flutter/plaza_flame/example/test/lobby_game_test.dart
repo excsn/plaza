@@ -6,8 +6,7 @@ import 'package:plaza_flame_example/lobby_game.dart';
 import 'package:plaza_flame_example/main.dart';
 
 /// Drives the example against `LoopbackSocket`, so it needs no server and no
-/// display. The point is that the example is executed by something: one that only
-/// compiles is documentation wearing a `.dart` extension.
+/// display.
 class FakeLobby {
   final List<LoopbackSocket> sockets = <LoopbackSocket>[];
 
@@ -97,7 +96,7 @@ void main() {
   });
 
   /// An unplayable arena is drawn and refused rather than hidden: "too slow for
-  /// your link" is information, and an absent row is not.
+  /// your link" tells the player why, which a missing row would not.
   test('an unplayable arena is still drawn', () async {
     final lobby = FakeLobby();
     final game = await loaded(lobby);
@@ -145,9 +144,8 @@ void main() {
     game.onRemove();
   });
 
-  /// The trap the helpers exist for: serde writes a unit variant as a bare string,
-  /// so a client indexing for a property drops it and the symptom looks like the
-  /// server never sending.
+  /// Serde writes a unit variant as a bare string, so a client indexing for a
+  /// property drops it and the symptom looks like the server never sending.
   test('QueueLeft arrives as a bare string and still lands', () async {
     final lobby = FakeLobby();
     final game = await loaded(lobby);
@@ -179,8 +177,7 @@ void main() {
       expect(game.skew!.theirs, const ProtocolVersion(99));
       expect(game.playable, isFalse);
 
-      // The library kept the connection open, deliberately; the game is the thing
-      // that stopped participating.
+      // The library keeps the connection open; the game stops sending.
       expect(game.plaza.status, PlazaStatus.open);
       lobby.latest.sent.clear();
       game.quickMatch();

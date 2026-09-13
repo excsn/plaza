@@ -3,33 +3,33 @@
 //! Stage four deltas against what was last **sent**, which is sound only
 //! because the transport is TCP: what was sent is what arrives, in order. Lose
 //! one frame and the server's record runs ahead of the client's, every later
-//! delta is measured from a value the client never saw, and it decodes
-//! somewhere else with nothing raised. `tests/agreement.rs` prices that at
+//! delta is measured from a value the client never saw and it decodes
+//! somewhere else with nothing raised. `tests/agreement.rs` measures that at
 //! 0.609 units on cubes one unit across.
 //!
-//! The fix is Fiedler's, and the only new idea in it is patience: delta against
-//! what the client has **acknowledged**, not what you have sent. A value stays
-//! the baseline until the client says it arrived, so a lost frame costs
-//! bandwidth (later deltas are measured from further back) and never costs
-//! correctness.
+//! The fix is Fiedler's: delta against what the client has **acknowledged**
+//! rather than what you have sent. A value stays the baseline until the client
+//! says it arrived, so a lost frame costs bandwidth (later deltas are measured
+//! from further back) but never corrupts the yard.
 //!
-//! Two details are load-bearing, and one of them plaza already learned the hard
-//! way in [`plaza_client_utils::AckWindow`]:
+//! Two details matter. [`plaza_client_utils::AckWindow`] already handles the
+//! first:
 //!
-//! - The baseline is the newest **contiguous** acknowledgement, not the newest
-//!   bit set. Receiving packet N+1 after losing N does not put a client in the
-//!   state N+1 implies, and taking the newest set bit made horde_playground's
-//!   recovery statistically indistinguishable from no recovery at all.
+//! - The baseline is the newest **contiguous** acknowledgement rather than the
+//!   newest bit set. Receiving packet N+1 after losing N does not put a client
+//!   in the state N+1 implies and taking the newest set bit made
+//!   horde_playground's recovery statistically indistinguishable from no
+//!   recovery at all.
 //! - A cube sent twice before either lands is deltaed against the same old
-//!   baseline both times. That is the bandwidth the scheme costs, and it is the
-//!   reason this is a mode rather than the default.
+//!   baseline both times. That is the bandwidth the scheme costs and the reason
+//!   this is a mode rather than the default.
 
 use plaza_client_utils::AckWindow;
 
 use crate::pack::{quantize_cube, Quantized};
 use crate::protocol::CubeState;
 
-/// Per-cube: what the client has confirmed, and what is still in the air.
+/// Per-cube: what the client has confirmed and what is still in the air.
 pub struct Acked {
   confirmed: Vec<Option<Quantized>>,
   /// Ascending by sequence. Short in practice: one entry per unacked send.
@@ -62,7 +62,7 @@ impl Acked {
   }
 
   /// Promotes everything sent at or before the newest contiguous acknowledged
-  /// sequence, and drops it from the pending list.
+  /// sequence and drops it from the pending list.
   ///
   /// `first` is the oldest sequence this stream ever sent, which is what lets a
   /// window with no gaps report a base at all.
@@ -89,9 +89,9 @@ impl Acked {
   /// before it.
   ///
   /// The client needs this because a frame names the baseline it was measured
-  /// from, and "everything I have received since" is a different and wrong
-  /// reference. Both ends run the same reconstruction, which is what keeps them
-  /// describing the same thing.
+  /// from and "everything I have received since" is a different reference,
+  /// which decodes wrong. Both ends run the same reconstruction, so they agree
+  /// on the baseline.
   pub fn view_at(&self, at: u64) -> Vec<Option<Quantized>> {
     let mut view = self.confirmed.clone();
     for (index, pending) in self.pending.iter().enumerate() {
@@ -163,8 +163,8 @@ mod tests {
 
   #[test]
   fn a_gap_holds_the_baseline_back_even_when_later_frames_land() {
-    // The lesson AckWindow already records: the newest *contiguous* ack, not
-    // the newest bit set. Frame 2 is lost; 3 and 4 arrive.
+    // As in AckWindow: the newest *contiguous* ack rather than the newest bit
+    // set. Frame 2 is lost; 3 and 4 arrive.
     let cubes = yard(4);
     let mut acked = Acked::new(4);
     for seq in 1..=4 {

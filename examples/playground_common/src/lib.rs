@@ -1,39 +1,35 @@
-//! What a listen-server process **is**: one argument with four answers, and the
-//! parsing that turns argv into one.
+//! The role of a listen-server process (one argument with four possible values)
+//! and the parsing that turns argv into it.
 //!
-//! A listen server is a process that holds the authority and may also play. That
-//! makes "what is this process" a real question with a small number of real
-//! answers, and asking it with a scatter of booleans (`--host`, `--headless`,
-//! `--connect`) lets a caller request combinations that cannot exist, which then
-//! have to be rejected a pair at a time. One [`Role`] says what is possible and
-//! nothing else needs checking.
+//! A listen server is a process that holds the authority and may also play, so
+//! each process has one of a few roles. Describing that with separate booleans
+//! (`--host`, `--headless`, `--connect`) lets a caller request combinations that
+//! cannot exist, which then have to be rejected a pair at a time. A [`Role`] can
+//! only hold a combination that exists, so nothing else needs checking.
 //!
-//! # Why this is its own crate, and why it is not part of the library
+//! # Why this is a separate crate outside the library
 //!
 //! Both halves of a listen server need this vocabulary: the server parses
-//! `--role headless`, and the browser client it serves needs to know it can only
-//! ever be a [`Role::Client`]. One of those halves is a wasm bundle, and it must
-//! not inherit an HTTP server and an async runtime to learn the name of its own
-//! role. So it cannot live beside the hosting code in `plaza_session`, and it has
-//! no dependencies at all.
+//! `--role headless` and the browser client it serves needs to know it can only
+//! be a [`Role::Client`]. The client is a wasm bundle and must not pull in an
+//! HTTP server and an async runtime to name its own role. So this cannot live
+//! beside the hosting code in `plaza_session` and it has no dependencies at all.
 //!
 //! # What else lives here
 //!
-//! [`touch`], behind a feature, because the same argument kept coming up:
-//! every playground ships a browser build and is therefore reachable from a
-//! phone, and two of them had no pointer input at all. One set of on-screen
-//! controls rather than one per example. It is the only remaining lodger:
-//! `oneshot` graduated to `plaza_server_utils::oneshot` and `fixed` to
-//! `plaza_client_utils::fixed` once it was clear they were library blocks
-//! that had merely been written here first.
+//! [`touch`], behind a feature. Every playground ships a browser build and is
+//! therefore reachable from a phone, but two of them had no pointer input at
+//! all, so one set of on-screen controls serves every example. Nothing else
+//! lives here now: `oneshot` moved to `plaza_server_utils::oneshot` and `fixed`
+//! to `plaza_client_utils::fixed` once it was clear they were library blocks
+//! that had been written here first.
 //!
-//! That is an argument about where it *cannot* go, though, not an argument that
-//! it belongs in the published library. Argument parsing is an opinion, and an
-//! application of any size will have its own (clap, or a config file, or an
-//! environment it is deployed into). What generalises is the observation that
-//! only four of the eight role combinations mean anything; the parsing around it
-//! is scaffolding, and scaffolding shared between two examples is exactly what
-//! this is. The genuinely reusable half of a listen server is
+//! The wasm constraint only rules out `plaza_session`. It does not make role
+//! parsing part of the published library. An application of any size will
+//! parse arguments its own way (clap, a config file or the environment it is
+//! deployed into). The part that generalises is that only four of the eight
+//! role combinations mean anything. The parsing around it is scaffolding shared
+//! between examples. The reusable half of a listen server is
 //! `plaza_session::host::Host`, which is where the HTTP layer lives.
 
 #[cfg(feature = "touch")]
@@ -46,7 +42,7 @@ use std::fmt;
 /// the same program.
 ///
 /// One enum rather than three booleans because only four of the eight
-/// combinations mean anything, and a scatter of flags has to reject the
+/// combinations mean anything and separate flags would have to reject the
 /// impossible ones a pair at a time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
@@ -103,9 +99,9 @@ impl Default for Role {
   fn default() -> Self {
     // A browser can only ever join: it cannot accept incoming connections and its
     // build has no server in it. Defaulting to `Host` there means the wasm client
-    // asks for a role it cannot perform, fails its own feature check, and calls
-    // `process::exit`, which in wasm is a trap. The page loads and then dies with
-    // `unreachable executed` and no reason for it.
+    // asks for a role it cannot perform, fails its own feature check and calls
+    // `process::exit`, which in wasm is a trap. The page loads and then stops
+    // with `unreachable executed` and no reason given.
     if cfg!(target_arch = "wasm32") { Role::Client } else { Role::Host }
   }
 }
@@ -123,14 +119,14 @@ pub struct Options {
   /// Give this an **absolute** default, baked in at compile time with
   /// `concat!(env!("CARGO_MANIFEST_DIR"), "/static")`. A relative default
   /// resolves against the working directory, so the server works from the
-  /// repository root and answers every request with a 404 from anywhere else: a
-  /// server that looks healthy and is not.
+  /// repository root and answers every request with a 404 from anywhere else,
+  /// while looking healthy.
   pub static_dir: Option<String>,
   /// How many rooms a host should run, for a game that has more than one.
   ///
-  /// **One by default, and that is not timidity.** Each room is a whole
+  /// One by default, because rooms are expensive. Each room is a whole
   /// simulation, so a local run of a many-entity game pays for every extra one
-  /// while a single player is using a single arena. More rooms earn their cost
+  /// while a single player is using a single arena. More rooms are worth it
   /// when real people with real connections arrive, which is a deployment
   /// decision rather than a property of the example.
   pub rooms: usize,
@@ -140,9 +136,7 @@ impl Default for Options {
   fn default() -> Self {
     Self {
       role: Role::default(),
-      // All interfaces, because the entire point is that somebody else can reach
-      // it. A demo that only ever listened on loopback would be single player
-      // with extra steps.
+      // All interfaces, so somebody else can reach it.
       bind: "0.0.0.0:8080".to_owned(),
       connect: "ws://127.0.0.1:8080/ws".to_owned(),
       static_dir: None,
@@ -151,11 +145,10 @@ impl Default for Options {
   }
 }
 
-/// Which roles a *build* can perform, which is not the same question as which
-/// roles exist.
+/// Which roles a *build* can perform, as opposed to which roles exist.
 ///
 /// Feature flags are per crate, so a library cannot read the application's with
-/// `cfg!`. The application passes its own answers in, and gets an error message
+/// `cfg!`. The application passes its own answers in and gets an error message
 /// that names the missing feature rather than a panic.
 #[derive(Clone, Copy, Debug)]
 pub struct Support {
@@ -237,10 +230,8 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I, defaults: Options) -> Resu
   Ok(options)
 }
 
-/// Rejects a role this build cannot perform, naming the feature that is missing.
-///
-/// "This build has no server in it" is a far better message than "unknown
-/// option", and much better than a panic.
+/// Rejects a role this build cannot perform, naming the feature that is missing
+/// rather than reporting an unknown option or panicking.
 pub fn check_supported(role: Role, support: Support) -> Result<(), String> {
   if role.runs_a_server() && !support.server {
     return Err(format!("`--role {role}` needs a server, and this build has none. Rebuild with `--features server`."));
@@ -260,10 +251,10 @@ pub fn check_supported(role: Role, support: Support) -> Result<(), String> {
 /// A macro rather than library functions because two of the pieces can only be
 /// evaluated in the leaf crate. `cfg!(feature = ...)` reads the features of the
 /// crate being compiled, so a check written as code in this library would read
-/// *this* crate's features and cheerfully approve a role the binary has no code
-/// for; and `env!("CARGO_MANIFEST_DIR")` names the leaf crate's `static/`, not
-/// this one's. Expansion happens at the call site, which is what makes both
-/// read the right crate.
+/// *this* crate's features and approve a role the binary has no code for.
+/// Likewise `env!("CARGO_MANIFEST_DIR")` has to name the leaf crate's
+/// `static/` rather than this one's. Expanding at the call site makes both read
+/// the leaf crate.
 ///
 /// ```ignore
 /// // src/role.rs, the whole file:
@@ -276,10 +267,10 @@ macro_rules! playground_role {
 
     /// This crate's `static/`, as an absolute path.
     ///
-    /// Absolute, and baked in at compile time. A relative default resolves
+    /// Absolute and baked in at compile time. A relative default resolves
     /// against the working directory, so running from anywhere but the
     /// repository root would serve nothing and answer every request with a
-    /// 404: a server that looks healthy and is not.
+    /// 404 while looking healthy.
     pub const DEFAULT_STATIC_DIR: &str = ::core::concat!(::core::env!("CARGO_MANIFEST_DIR"), "/static");
 
     /// Where this example starts before the command line has its say.
@@ -349,8 +340,8 @@ mod tests {
 
   #[test]
   fn each_role_answers_the_three_questions_differently() {
-    // The reason this is one enum and not three booleans: only four of the eight
-    // combinations mean anything.
+    // Only four of the eight combinations mean anything, so this is one enum
+    // rather than three booleans.
     let cases = [
       (Role::Headless, (true, false, false)),
       (Role::Observer, (true, true, false)),

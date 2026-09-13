@@ -52,7 +52,7 @@ void main() {
   test('connect waits for the handshake before returning', () async {
     final socket = await ChannelSocket.connect(server.uri);
     expect(socket.state, SocketState.open);
-    // The point of waiting: a frame sent here must not be dropped.
+    // Because connect waited, a frame sent here must not be dropped.
     socket.send('first');
     await pump();
     expect(server.received, ['first']);

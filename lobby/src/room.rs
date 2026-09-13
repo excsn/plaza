@@ -43,11 +43,10 @@ where
   /// public room.
   ///
   /// Never in [`metadata`](Self::metadata), which reports only whether a
-  /// password exists. The comparison is the lobby's, through its
-  /// `PasswordVerifier`, which is why this is readable at all; a room that
-  /// would rather answer "does this admit" than hand the hash over wants a
-  /// different method, and that is the better shape for a room in another
-  /// process.
+  /// password exists. The lobby does the comparison through its
+  /// `PasswordVerifier`, which is why this is readable at all. A room in
+  /// another process would be better served by a method that answers whether
+  /// an attempt is admitted without handing the hash over.
   fn password_hash(&self) -> Option<String>;
 }
 

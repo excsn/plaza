@@ -33,7 +33,7 @@ const DASH_FLASH_SECS: f32 = 0.34;
 /// cannot see your own dash at all, because the client deliberately does not
 /// predict the dash movement, so your drawn hole never actually speeds up. This
 /// refreshes a timer whenever a hole is dashing and eases it out afterwards, so a
-/// signal only a couple of packets long still blooms into a full flash. The frame
+/// signal only a couple of packets long still produces a full flash. The frame
 /// loop owns one and threads it through the world draw.
 #[derive(Default)]
 pub struct DashFx {
@@ -113,13 +113,13 @@ impl Camera {
 #[cfg(all(feature = "client", feature = "websocket"))]
 const FADE_IN_SECS: f32 = 0.45;
 
-/// Masks the join transient, which is not a cosmetic problem.
+/// Masks the join transient.
 ///
 /// A client that is told a *field* and integrates from it has nothing at all
-/// before the first packet, so the alternative to a fade is showing a world that
-/// is wrong rather than merely empty. One overlay rather than an alpha threaded
-/// through every draw call: it masks uniformly and cannot be forgotten by
-/// whoever adds the next thing to draw.
+/// before the first packet, so without a fade it would show a wrong world, not
+/// just an empty one. One overlay instead of an alpha threaded through every
+/// draw call, so it masks uniformly and whoever adds the next thing to draw
+/// cannot forget it.
 #[cfg(all(feature = "client", feature = "websocket"))]
 pub fn draw_fade_in(ready_secs: Option<f32>) {
   let alpha = match ready_secs {
@@ -149,8 +149,8 @@ pub fn draw_world(world: &World, controls: &Controls, cam: &Camera, fx: &mut Das
   let you = world.holes()[0].pos;
 
   // The server's truth, faint. Any gap to the bright pellets is divergence
-  // between the local integration and the authority, and it is on by default
-  // because that divergence is the entire subject of this example.
+  // between the local integration and the authority. It is on by default
+  // because that divergence is what this example measures.
   if controls.show_ghost {
     for pellet in world.truth_pellets() {
       if pellet.pos.dist(you) <= VIEW_RADIUS * 1.15 {
@@ -190,8 +190,8 @@ pub fn draw_world(world: &World, controls: &Controls, cam: &Camera, fx: &mut Das
   }
 }
 
-/// The whole arena: every hole and the pellet field, so the scale of what is
-/// being derived from so little is visible.
+/// The whole arena: every hole and the pellet field, so you can see how much is
+/// derived from a few hole states.
 pub fn draw_minimap(world: &World, cam: &Camera) {
   let size = (cam.sw.min(cam.sh) * 0.24).max(140.0);
   let pad = 12.0;
@@ -234,7 +234,7 @@ pub fn draw_scores(world: &World, cam: &Camera) {
 /// neither: pellets under field sync are never sent, so there is nothing to
 /// compare its own integration against. What it does have is the field it was
 /// told about, which includes where the last frame put its own hole, so it gets
-/// a ghost ring for that. Received state is not a privilege.
+/// a ghost ring for that.
 #[cfg(all(feature = "client", feature = "websocket"))]
 pub fn draw_client_world(client: &blackhole_playground::net::client::NetClient, controls: &Controls, cam: &Camera, fx: &mut DashFx, dt: f32) {
   let you = client.my_position();
@@ -251,18 +251,18 @@ pub fn draw_client_world(client: &blackhole_playground::net::client::NetClient, 
     if !hole.alive {
       continue;
     }
-    // Your own hole is drawn at the *predicted* position, not where the last
-    // packet put it: that is the entire point of predicting it.
+    // Your own hole is drawn at the *predicted* position rather than where the
+    // last packet put it.
     let mine = me.is_some_and(|m| m as usize == i);
     let mut drawn = *hole;
     if mine {
       drawn.pos = you;
     }
-    // The joiner's own server ghost, which needs no privilege: `hole.pos` is
-    // where the last frame put it, and that is a fact this client holds. Only
-    // your own hole is drawn anywhere else, so only your own hole gets a ring.
-    // The gap is your prediction error plus the one link delay the sample is
-    // old, and it opens during a grapple, where collision separation between
+    // The joiner's own server ghost, which needs no omniscient access:
+    // `hole.pos` is where the last frame put it and this client holds that.
+    // Only your own hole is drawn anywhere else, so only your own hole gets a
+    // ring. The gap is your prediction error plus the one link delay the sample
+    // is old. It opens during a grapple, where collision separation between
     // holes is deliberately left unpredicted.
     if controls.show_ghost && mine && hole.pos.dist(you) <= VIEW_RADIUS * 1.6 {
       let (gx, gy) = cam.at(hole.pos);
@@ -283,7 +283,7 @@ pub fn draw_client_world(client: &blackhole_playground::net::client::NetClient, 
 ///
 /// A host is the server and a client in one process, so unlike a joiner it may
 /// legitimately show both: the faint truth from the `HostView` the arena
-/// publishes, and the bright believed pellets from its own client. Its own hole
+/// publishes and the bright believed pellets from its own client. Its own hole
 /// is drawn where it is predicted, everyone else's where the server says they
 /// are.
 #[cfg(all(feature = "server", feature = "client", feature = "websocket"))]
@@ -331,11 +331,11 @@ pub fn draw_host_world(
       draw_hole(&drawn, color, cam, Some(&label));
     }
     // Only your own hole is drawn anywhere other than where the server has it,
-    // so only your own hole gets a ghost. That single gap is this example's
-    // hardest quantity: the hole is a *forced* entity, pulled by every other
-    // hole and pushed out of every overlap, and collision separation is
-    // deliberately left unpredicted. The ring is where the residual lives, and
-    // it opens during a grapple and closes when you break away.
+    // so only your own hole gets a ghost. That gap is the hardest thing to
+    // predict here: the hole is a *forced* entity, pulled by every other hole
+    // and pushed out of every overlap. Collision separation is deliberately
+    // left unpredicted. The ring shows the residual: it opens during a grapple
+    // and closes when you break away.
     //
     // A host's ring is the server's *current* truth rather than a received
     // sample, so unlike a joiner's it carries no link delay: the whole gap is
@@ -398,12 +398,12 @@ pub fn draw_host_scores(view: &blackhole_playground::net::arena::HostView, clien
   }
 }
 
-/// An observer's view: the authoritative truth, and nothing believed.
+/// An observer's view: the authoritative truth only.
 ///
 /// An observer runs the server but drives no hole, so unlike a host it has no
 /// client and no locally integrated field to overlay. It draws the truth
-/// directly and brightly, because the truth is all it has and there is no second
-/// version to compare it against. Every hole is neutral; none of them is "you".
+/// brightly, because there is no second version to compare it against. Every
+/// hole is neutral; none of them is "you".
 #[cfg(feature = "server")]
 pub fn draw_observer_world(view: &blackhole_playground::net::arena::HostView, cam: &Camera, fx: &mut DashFx, dt: f32) {
   for pellet in &view.pellets {

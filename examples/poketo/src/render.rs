@@ -269,8 +269,8 @@ pub fn draw_battle(client: &NetClient, art: &Art) {
   let size = (h * 0.28).min(220.0);
 
   // How far into the reaction to the last resolved turn, or `None` once it has
-  // played out. A turn that changes only numbers is a turn a player cannot see
-  // happen, which is what this is for.
+  // played out. This exists because a player cannot see a turn happen if only
+  // numbers change.
   const HIT_MS: f32 = 420.0;
   let since = client.now_ms().saturating_sub(client.struck_at) as f32;
   let hit = (since < HIT_MS && client.struck_at > 0).then_some(since / HIT_MS);

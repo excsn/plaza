@@ -1,12 +1,12 @@
 /// Decides whether this frame's input needs to go on the wire.
 ///
 /// Against a server that holds an input and integrates it every tick, sending
-/// the same direction sixty times a second says nothing it does not know.
+/// the same direction sixty times a second tells it nothing new.
 ///
-/// What is *transmitted* is a bandwidth decision; what is *integrated* is a
-/// simulation decision. Keeping them separate is what makes coalescing safe:
-/// local prediction advances every tick whatever the wire is doing, so a quiet
-/// wire is not a stuttering player. It also means this pairs with a held-input
+/// Transmission and integration are separate decisions, which makes
+/// coalescing safe: local prediction
+/// advances every tick whatever the wire is doing, so the player does not
+/// stutter while nothing is sent. It also means this pairs with a held-input
 /// server and **not** with one that consumes one input per step, where dropping
 /// repeats drops actual movement.
 ///
@@ -14,8 +14,8 @@
 class InputCoalescer<I> {
   /// Resends the held input at least every [keepaliveMs].
   ///
-  /// Pick the interval against how long a wrong direction is tolerable, not
-  /// against bandwidth: it is the worst case a dropped change persists for.
+  /// Pick the interval by how long a wrong direction is tolerable rather than by
+  /// bandwidth: it is the longest a dropped change persists.
   InputCoalescer(this.keepaliveMs);
 
   final int keepaliveMs;
@@ -27,9 +27,9 @@ class InputCoalescer<I> {
   /// Whether to transmit [input] now.
   ///
   /// The keepalive is not optional. Sending purely on change fails under loss:
-  /// the server holds the last direction it received, so a *dropped* change is
-  /// not a missing update but a wrong state that persists until the player
-  /// presses something else. It reads as the controls sticking and looks
+  /// the server holds the last direction it received, so a *dropped* change
+  /// leaves it holding a wrong state until the player presses something else.
+  /// It reads as the controls sticking and looks
   /// nothing like packet loss.
   bool shouldSend(I input, int nowMs) {
     if (!enabled) return true;
@@ -58,11 +58,12 @@ class InputCoalescer<I> {
   }
 }
 
-/// Names the tick an input is meant for, floored by what the stream has proven.
+/// Names the tick an input is meant for, floored by the newest stamp the stream
+/// has delivered.
 ///
 /// The clock names the tick; the newest arrived stamp bounds it from below. The
-/// server wrote that stamp, so server time is provably past it, and aiming
-/// behind it is a rejection bought in advance.
+/// server wrote that stamp, so server time is provably past it. An input aimed
+/// behind it is certain to be rejected.
 ///
 /// This matters most after a resume, when a clock fit can trail the stream by
 /// hundreds of milliseconds while its window refills. Measured in horde: aiming
@@ -99,15 +100,15 @@ class TickNamer {
 
   /// The tick to name, given the clock's estimate of server time now.
   ///
-  /// An intention, not a claim: the server decides whether that tick is open.
+  /// This is only a request: the server decides whether that tick is open.
   int tickFor(int serverNowMs) {
     final aimed = (serverNowMs + playoutDelayMs) ~/ stepMs;
     final floor = (_newestStampMs + playoutDelayMs) ~/ stepMs;
     return aimed > floor ? aimed : floor;
   }
 
-  /// Whether the floor is currently doing the work, which is the signal that
-  /// the clock is trailing the stream.
+  /// Whether the floor is currently raising the aim, which means the clock is
+  /// trailing the stream.
   bool floorApplies(int serverNowMs) =>
       (_newestStampMs + playoutDelayMs) ~/ stepMs > (serverNowMs + playoutDelayMs) ~/ stepMs;
 

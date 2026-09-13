@@ -29,9 +29,9 @@ tokio = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 
-# Server-side only, and the opposite configuration to puck_rink's: state sync
+# Server-side only and configured the opposite way to puck_rink's: state sync
 # does not re-simulate on the client, so nothing here needs determinism and
-# `parallel` is free to take.
+# `parallel` can be enabled.
 rapier3d = { version = "=0.35.1", optional = true, default-features = false, features = [
   "dim3",
   "f32",

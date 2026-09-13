@@ -124,7 +124,7 @@ async fn frame_loop(options: role::Options) {
       effects.absorb(moment, clock_ms);
     }
 
-    // Whose hands the frame belongs to, and since when.
+    // Which unit this client is ordering now and since when.
     let my_current = if client.my_turn() {
       client.view.as_ref().and_then(|v| v.current)
     } else {

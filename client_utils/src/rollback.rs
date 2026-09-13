@@ -272,8 +272,8 @@ pub fn repeat_last_input<Input: Clone>(last: &Input, _frame: Frame) -> Input {
 /// counterpart to [`crate::PredictedPlayer`].
 ///
 /// Each peer runs its own session and calls its local player index the "local"
-/// one; the two are otherwise identical, which is the point, both re-simulate to
-/// the same state from the same inputs.
+/// one; the two are otherwise identical: both re-simulate to the same state
+/// from the same inputs.
 ///
 /// ```ignore
 /// // Two players; the deterministic step advances the shared world one frame.
@@ -360,9 +360,9 @@ impl<State: Clone + Debug, Input: Clone + Debug + PartialEq> RollbackSession<Sta
   }
 
   /// The world at the start of `frame`, if still retained. This is the *saved*
-  /// state, so for a fully-confirmed frame it is identical on every peer, that
-  /// equality is the determinism guarantee, and comparing two peers here is how a
-  /// demo shows they are in sync. Returns the present for the current frame.
+  /// state, so for a fully-confirmed frame it is identical on every peer.
+  /// Comparing two peers here shows whether they are in sync. Returns the
+  /// present for the current frame.
   pub fn state_at(&self, frame: Frame) -> Option<State> {
     if frame == self.head_frame {
       return Some(self.current_state.clone());
@@ -372,10 +372,10 @@ impl<State: Clone + Debug, Input: Clone + Debug + PartialEq> RollbackSession<Sta
 
   /// Turns rollback on or off (on by default). With it off the session still
   /// predicts and advances, but never restores or re-simulates: it trusts every
-  /// guess permanently. That is not a way to ship, predictions that are never
-  /// corrected drift a peer out of sync, but it isolates what rollback buys, and
-  /// it is the mechanism a delay-based front end disables when it waits for inputs
-  /// instead of predicting them.
+  /// guess permanently. Do not ship with it off, because predictions that are
+  /// never corrected drift a peer out of sync. It is useful for measuring what
+  /// rollback contributes. A delay-based front end also turns rollback off with
+  /// it when it waits for inputs instead of predicting them.
   pub fn set_rollback_enabled(&mut self, enabled: bool) {
     self.rollback_enabled = enabled;
   }
@@ -549,12 +549,12 @@ mod tests {
     RollbackSession::new(World { pos: [0, 0] }, vec![NEUTRAL, NEUTRAL], RollbackConfig { max_rollback_frames: 64 }, step)
   }
 
-  /// The predictor swap, and the readouts nothing was calling.
+  /// The predictor swap and the readouts nothing was calling.
   ///
-  /// A rollback session's whole cost is how often it has to re-simulate, and
-  /// that is decided by how good the guess was. The default repeats the last
+  /// A rollback session's cost is mostly how often it has to re-simulate,
+  /// which depends on how good the guess was. The default repeats the last
   /// input, which is right for a held direction and wrong for anything that
-  /// alternates, so being able to replace it is not a nicety.
+  /// alternates, so it needs to be replaceable.
   mod the_predictor {
     use super::*;
 
@@ -585,9 +585,8 @@ mod tests {
 
     #[test]
     fn a_predictor_that_guesses_right_costs_fewer_rollbacks() {
-      // The measurement that says the knob does anything: repeating the last
-      // input is exactly right for a peer holding a direction, and guessing
-      // neutral is wrong every frame.
+      // Repeating the last input is exactly right for a peer holding a
+      // direction and guessing neutral is wrong every frame.
       let repeating = rollbacks_with(None);
       let neutral = rollbacks_with(Some(always_neutral));
       assert!(
@@ -730,9 +729,9 @@ mod tests {
 
   #[test]
   fn two_peers_exchanging_inputs_converge_to_the_same_world() {
-    // The determinism guarantee end to end: two independent sessions, each local
-    // to one player, each predicting the other, each rolling back. With every
-    // input eventually delivered they must agree, and agree with ground truth.
+    // Two independent sessions, each local to one player, predict the other
+    // player and roll back. With every input eventually delivered they must
+    // agree with each other and with ground truth.
     let p0: Vec<In> = (0..40).map(|f| In(((f * 7) % 5) as i64 - 2)).collect();
     let p1: Vec<In> = (0..40).map(|f| In(((f * 3) % 4) as i64 - 1)).collect();
 
@@ -798,7 +797,7 @@ mod tests {
   fn rollback_disabled_keeps_a_wrong_guess_and_diverges_from_the_truth() {
     // The same direction change as the rollback test, but with rollback off: the
     // misprediction is detected and then ignored, so the present never lands on
-    // the ground truth. This is the "why rollback" contrast.
+    // the ground truth.
     let remote: Vec<In> = (0..10).map(|f| if f < 4 { In(1) } else { In(-3) }).collect();
     let local = vec![In(1); 10];
 
@@ -825,7 +824,7 @@ mod tests {
   #[test]
   fn state_at_a_confirmed_frame_matches_across_two_peers() {
     // Two peers, predictions and rollbacks along the way. At a frame both have
-    // fully confirmed, their saved states are identical, that is the in-sync check.
+    // fully confirmed, their saved states are identical.
     let p0: Vec<In> = (0..30).map(|f| In(((f * 5) % 3) as i64 - 1)).collect();
     let p1: Vec<In> = (0..30).map(|f| In(((f * 2) % 3) as i64 - 1)).collect();
 

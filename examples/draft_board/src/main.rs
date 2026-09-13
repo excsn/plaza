@@ -1,16 +1,16 @@
-//! A snake draft, written to find out whether `TurnManager` is a seam.
+//! A snake draft, written to test whether `TurnManager` fits a second turn
+//! order.
 //!
 //! `RoundRobinTurnManager` had been the trait's only implementation, so nothing
-//! had ever tested whether the trait describes a category or describes its one
-//! member. [`SnakeTurnManager`](plaza_example_draft_board::snake) is the second,
-//! and its module records what fit and what did not.
+//! had tested whether the trait fits other turn orders.
+//! [`SnakeTurnManager`](plaza_example_draft_board::snake) is the second. Its
+//! module records what fit and what did not.
 //!
-//! The short version: both trait methods carried a reversing order without
-//! complaint, including the part that looks illegal, where the next actor is the
-//! *same* one that just played. What did not carry is everything around them.
-//! `begin`, `restart`, `add_actor` and `remove_actor` live on the concrete
-//! round-robin type and not on the trait, so this manager had to declare its own
-//! and nothing checks that the two agree.
+//! Both trait methods handle a reversing order, including the case where the
+//! next actor is the same one that just played. The rest of the lifecycle did
+//! not fit. `begin`, `restart`, `add_actor` and `remove_actor` live on the
+//! concrete round-robin type and not on the trait, so this manager had to
+//! declare its own and nothing checks that the two agree.
 //!
 //! This binary is the scripted run. To draft by hand, `cargo run -p
 //! plaza_example_draft_board --bin serve` and open three browser tabs.
@@ -37,7 +37,7 @@ type BoardSession = InProcessSession<DraftOp, PlayerId>;
 const TICK: Duration = Duration::from_millis(20);
 
 /// Logs what one drafter receives. The board is public, so all three see the
-/// same thing, which is the contrast with `card_table` worth noticing.
+/// same thing, unlike in `card_table`.
 fn spawn_drafter_listener(name: &'static str, inbox: ClientInbox<DraftOp, PlayerId>) -> tokio::task::JoinHandle<()> {
   tokio::spawn(async move {
     while let Ok(msg) = inbox.recv().await {
@@ -112,15 +112,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   settle().await;
 
   // Pass one runs down the order. The pool is racked most valuable first, so
-  // picking third is a real cost here, which is the thing the snake pays back.
+  // picking third costs value. The snake makes it back in the next pass.
   info!("--- pass 1: Ada, Bo, Cy");
   take(&session, &ada, 0).await;
   take(&session, &bo, 1).await;
   take(&session, &cy, 2).await;
   settle().await;
 
-  // The reversal. Cy just picked last and now picks first, which a wrapping
-  // manager cannot express: round-robin would hand the turn back to Ada.
+  // Cy just picked last and now picks first. Round-robin would hand the turn
+  // back to Ada.
   info!("--- pass 2 reverses: Cy picks again, then Bo, then Ada");
   take(&session, &cy, 3).await;
   take(&session, &bo, 4).await;

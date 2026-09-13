@@ -1,16 +1,15 @@
-//! The lattice, and everything standing on it.
+//! The lattice and everything on it.
 //!
-//! The one decision the rest of this example follows from: **a player's position
-//! is a cell**, not a point. A step from one cell to the next takes time and is
-//! drawn as motion, but the simulation only ever knows "in cell C" or "walking
-//! from C to D, N ticks in". Nothing rounds a float to a cell, because there is
-//! no float to round.
+//! **A player's position is a cell** rather than a point. A step from one cell
+//! to the next takes time and is drawn as motion, but the simulation only ever
+//! knows "in cell C" or "walking from C to D, N ticks in". No float is ever
+//! rounded to a cell, because positions are never floats.
 //!
-//! That is what makes this the counterpoint to the continuous playgrounds. A
+//! This is where the example differs from the continuous playgrounds. A
 //! position error of two pixels can be eased away over a few frames and nobody
-//! sees it. A cell error cannot: you are either in the blast or you are not, and
-//! there is no halfway to ease through. Every correction here is discrete, which
-//! means every correction is visible, which is the whole subject.
+//! sees it. A cell error cannot: you are either in the blast or you are not and
+//! there is nothing in between to ease through. Every correction here is
+//! discrete and therefore visible.
 
 use serde::{Deserialize, Serialize};
 
@@ -22,8 +21,7 @@ pub const GRID_H: u8 = 13;
 
 /// The simulation step, in milliseconds. The server's tick counter is derived
 /// from its clock by this, never counted alongside it: two representations of
-/// one fact eventually disagree, and the one that broke horde was exactly this
-/// pair.
+/// one fact can drift apart. Horde broke on exactly this pair.
 pub const SIM_STEP_MS: u64 = 16;
 
 /// How long one cell of walking takes at speed level zero.
@@ -269,9 +267,9 @@ impl Powerup {
 /// The board. Only the tiles: everything that moves lives elsewhere.
 ///
 /// Sent whole exactly once per round, in the `Welcome` or the round start,
-/// because a 15x13 board is 195 bytes and a delta of it would be more machinery
-/// than the thing it compresses. What *changes* rides as an event: a blast says
-/// which cells it cleared, and clearing is monotonic within a round.
+/// because a 15x13 board is 195 bytes and a delta scheme would be more
+/// machinery than the board it compresses. Changes are sent as events: a blast
+/// says which cells it cleared and clearing is monotonic within a round.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Grid {
   pub tiles: Vec<Tile>,
@@ -287,7 +285,7 @@ impl Default for Grid {
 
 impl Grid {
   /// The classic layout: a hard border, hard pillars on even/even, soft walls
-  /// scattered over the rest, and the four spawn corners kept clear.
+  /// scattered over the rest and the four spawn corners kept clear.
   ///
   /// `seed` drives the soft-wall scatter, so a round is reproducible from one
   /// number, which is what lets the offline harness replay a round exactly.
@@ -326,8 +324,8 @@ impl Grid {
         if grid.get(cell) != Tile::Empty || clear.contains(&cell) {
           continue;
         }
-        // xorshift, written out because the whole point is that two builds of
-        // this example agree on the board from the seed alone.
+        // xorshift, written out so two builds of this example agree on the
+        // board from the seed alone.
         state ^= state << 13;
         state ^= state >> 7;
         state ^= state << 17;
@@ -375,7 +373,7 @@ pub fn spawns(players: usize) -> Vec<Cell> {
   corners.into_iter().take(players.clamp(1, 4)).collect()
 }
 
-/// A walk in progress: which way, and how far through it.
+/// A walk in progress: which way and how far through it.
 ///
 /// `progress_ms` rather than a fraction, because the server counts in
 /// milliseconds and a fraction would have to be recomputed against a step
@@ -390,8 +388,8 @@ pub struct Step {
 
 impl Step {
   /// How far along, `0..=1`. **Presentation only**: no rule reads this, because
-  /// a rule that did would be deciding something on a fraction of a cell, and
-  /// the whole design is that the simulation knows cells.
+  /// a rule that did would be deciding something on a fraction of a cell; the
+  /// simulation is meant to know only cells.
   pub fn t(&self) -> f32 {
     if self.duration_ms == 0 {
       1.0
@@ -441,13 +439,13 @@ impl PlayerState {
   /// a pickup is collected from, where a bomb is dropped.
   ///
   /// A step commits at its halfway point. That is the one place a fraction of a
-  /// step reaches a rule, and it is deliberate: committing on *arrival* means
+  /// step reaches a rule and it is deliberate: committing on *arrival* means
   /// stepping out of a bomb's cell leaves you dying in it for a whole step
-  /// after you visibly left, and committing on *departure* lets you claim a
+  /// after you visibly left, while committing on *departure* lets you claim a
   /// cell you have not reached. Halfway is the only choice that agrees with
-  /// what the player can see, and it is still discrete: one cell, never two.
+  /// what the player can see and it is still discrete: one cell at a time.
   ///
-  /// [`Self::cell`] remains the committed cell, and is what a correction is
+  /// [`Self::cell`] remains the committed cell and is what a correction is
   /// compared against.
   pub fn occupied(&self) -> Cell {
     match &self.step {
@@ -489,7 +487,7 @@ impl PlayerState {
 ///
 /// `fires_at_ms` is on the **server clock**, declared rather than counted down,
 /// which is what lets a client draw an accurate fuse without a countdown of its
-/// own drifting against the server's. A chain reaction changes this number, and
+/// own drifting against the server's. A chain reaction changes this number and
 /// the change is announced, because a chained bomb fires early and a client
 /// counting its own fuse would be wrong for exactly as long as the fuse had
 /// left.
@@ -515,16 +513,16 @@ pub struct Controls {
   pub jitter_ms: u64,
   pub loss_pct: f32,
   /// What a lost packet costs, which is a property of the link rather than of
-  /// this simulation. The transport underneath is a WebSocket, so the truthful
-  /// answer is a retransmission: the frame is late and nothing is missing. The
-  /// netcode above is written for the other answer, where the packet is gone,
-  /// which is the one worth demonstrating here.
+  /// this simulation. The transport underneath is a WebSocket, so a real loss
+  /// is retransmitted: the frame is late and nothing is missing. The netcode
+  /// above is written for a link where the packet is gone, which is the case
+  /// this demonstrates.
   pub datagram_link: bool,
   /// How long the server holds an input before executing it.
   ///
-  /// The fairness knob, and it matters more here than in a continuous game: two
-  /// players reaching for the same pickup, or the same escape cell, is decided
-  /// by whoever the server processes first. Scheduling by *press time* means
+  /// The fairness setting. It matters more here than in a continuous game: two
+  /// players reaching for the same pickup or the same escape cell is decided by
+  /// whoever the server processes first. Scheduling by *press time* means
   /// that is decided by who pressed first rather than by who is nearer the
   /// server.
   pub playout_delay_ms: u64,
@@ -532,9 +530,9 @@ pub struct Controls {
   pub input_max_late_ticks: u64,
   pub input_max_early_ticks: u64,
   pub input_playout: bool,
-  /// Predict local movement, and snap when the server disagrees. Off, the
+  /// Predict local movement and snap when the server disagrees. Off, the
   /// player is drawn only where the server says, so the same link feels like a
-  /// round trip of input lag: the switch that makes the trade visible.
+  /// round trip of input lag. Toggling it shows the trade.
   pub predict_local: bool,
   /// Predict a bomb the instant it is asked for. A bomb is the discrete event
   /// with no way to ease a mistake, so a refused one has to vanish.

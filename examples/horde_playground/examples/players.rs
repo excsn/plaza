@@ -1,4 +1,4 @@
-//! What a player costs the server, measured rather than assumed.
+//! What a player costs the server.
 //!
 //! The slider's ceiling is a claim about capacity, so it should come from a
 //! number. Every player is a *viewer*: it owns a relevance query and a packet
@@ -6,8 +6,8 @@
 //! to both `fire_weapons` and `nova`, which are `O(players * enemies)`.
 //!
 //! Run with `cargo run -p horde_playground --release --example players
-//! --no-default-features --features native,client`. Release matters: a debug
-//! build measures the absence of optimizations.
+//! --no-default-features --features native,client`. Use release: a debug
+//! build's numbers are dominated by the missing optimizations.
 //!
 //! **The clients have to acknowledge.** Under ack recovery the server diffs
 //! against the newest state a client has *confirmed*, so a harness where nobody
@@ -33,9 +33,9 @@ pub const VIEW_NEAR: f32 = VIEW_RADIUS * 1.5;
 
 /// One measurement: the server's own cost, and where its bytes go.
 ///
-/// The split is grouped by **what each group scales with**, which is the whole
-/// question: the entity groups are bounded by relevance, and the per-player
-/// groups are broadcast to everybody and so grow as the square of the count.
+/// The split is grouped by **what each group scales with**: the entity groups
+/// are bounded by relevance, while the per-player groups are broadcast to
+/// everybody and so grow as the square of the count.
 #[derive(Default)]
 struct Row {
   server_ms: f32,
@@ -54,8 +54,8 @@ struct Row {
   /// The digest and sequence number: a fixed cost per packet.
   fixed: usize,
   /// Whether every client ended up holding a position for every player, and the
-  /// worst placement error among the ones outside the near tier. The far tier's
-  /// whole job, checked at the count where it is least affordable.
+  /// worst placement error among the ones outside the near tier. This is what
+  /// the far tier is for, checked at the count where it is least affordable.
   known_worst: usize,
   far_error_worst: f32,
 }
@@ -91,7 +91,7 @@ fn measure(enemy_count: usize, players: usize) -> Row {
         let split = packet.bytes_breakdown();
         // `bytes_breakdown` folds a fixed 10 into its player slot, which is the
         // digest and sequence number, so it is unpacked here to keep the groups
-        // honest.
+        // accurate.
         let entities = split[0] + split[1] + split[2] + packet.crowds.len() * CROWD_BYTES;
         // Wallets only, now. Positions, health and shields moved to the player
         // stream, which is where the relevance rule can reach them.
@@ -106,8 +106,8 @@ fn measure(enemy_count: usize, players: usize) -> Row {
         row.coins += coins;
         row.fixed += 10;
         // Every byte has to land in exactly one group. A breakdown that does not
-        // add up is a breakdown that hides the thing being looked for, and the
-        // first version of this left 28% unexplained.
+        // add up can hide the thing being looked for; the first version of this
+        // left 28% unexplained.
         assert_eq!(
           entities + per_player + split[3] + coins + 10,
           packet.bytes(),
@@ -151,8 +151,8 @@ fn measure(enemy_count: usize, players: usize) -> Row {
 }
 
 /// Does the cost drift as a run goes on? Reported as successive windows of the
-/// same length, because one average over a long run hides a trend, and a trend
-/// is what a player notices as "it keeps going up".
+/// same length, because one average over a long run hides a trend, which is
+/// what a player notices as "it keeps going up".
 fn drift(enemy_count: usize, players: usize, windows: usize, window_secs: f32) {
   let step_ms = (SIM_DT * 1000.0) as u64;
   let controls = Controls {
@@ -168,7 +168,7 @@ fn drift(enemy_count: usize, players: usize, windows: usize, window_secs: f32) {
 
   println!("\ndrift at {enemy_count} enemies / {players} players, {window_secs:.0}s windows");
   // Three ways of answering "what is the bandwidth", so the difference between
-  // them is visible rather than argued: the true rate over this window computed
+  // them can be seen: the true rate over this window computed
   // from raw bytes, the same thing through the windowed meter, and the session
   // mean the meter used to report.
   println!("  window   KiB/s   meter  lifetime   entities  sampleB    alive   spawns/pkt   diff");
@@ -237,8 +237,8 @@ fn main() {
   for enemy_count in [3000usize, 8000] {
     for players in [4usize, 16, 32, 64, 128] {
       let row = measure(enemy_count, players);
-      // A harness that measures a broken harness is the failure mode this whole
-      // file is exposed to, and writing the lesson down did not prevent a second
+      // Measuring through a broken harness is the failure mode this whole file
+      // is exposed to. Writing the lesson down did not prevent a second
       // occurrence, so it is an assertion now. Zero sample bytes means the ack
       // loop is not closing and every packet is a full re-send: the numbers
       // below would be inflated and look plausible.

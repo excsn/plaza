@@ -1,23 +1,23 @@
-//! What crosses the wire, and how little of it there is.
+//! What crosses the wire.
 //!
 //! Every other playground here sends the world. This one sends the *causes* of
 //! the world and lets each machine produce it:
 //!
 //! - **A wave is two integers.** [`Op::Wave`] names the wave number and the tick
-//!   it begins on. The composition, the timing of every spawn, and the health of
-//!   every enemy follow from that and the seed handed out at join. Thirty
-//!   seconds of a screen full of enemies, for about six bytes.
+//!   it begins on. The composition, the timing of every spawn and the health of
+//!   every enemy follow from that and the seed handed out at join. That covers
+//!   thirty seconds of a screen full of enemies in about six bytes.
 //! - **A build is one small op**, addressed to a tick like every other input in
 //!   this repository, so every machine applies it at the same moment.
-//! - **A digest is eight bytes**, and it is the only thing that regularly
-//!   describes the state at all. It does not carry the state; it carries enough
-//!   to prove the state matches.
-//! - **A snapshot is the whole field**, and it is sent only when a digest has
-//!   already proved that something is wrong. It is the expensive message, and
-//!   its rarity is the measurement.
+//! - **A digest is eight bytes** and it is the only thing that regularly
+//!   describes the state at all. It carries only enough to check that the
+//!   state matches.
+//! - **A snapshot is the whole field** and it is sent only when a digest has
+//!   already proved that something is wrong. It is the expensive message, so
+//!   how rarely it is sent is what the example measures.
 //!
-//! The asymmetry that remains is the usual one: a client sends an intent, never
-//! an outcome. It asks to build; it never says a tower exists.
+//! As elsewhere, a client sends an intent, never an outcome: it asks to build
+//! and never says a tower exists.
 
 use serde::{Deserialize, Serialize};
 
@@ -31,7 +31,7 @@ include!(concat!(env!("OUT_DIR"), "/wire_protocol.rs"));
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Op {
   // ---- client to server ----
-  /// "I would like a tower here." Never "there is a tower here."
+  /// A request for a tower. The client never tells the server a tower exists.
   Want {
     seq: u64,
     cell: Cell,
@@ -51,8 +51,7 @@ pub enum Op {
   // ---- server to client ----
   Welcome {
     player: PlayerId,
-    /// The seed every wave is drawn from. The single most valuable number on
-    /// this wire, and it is sent once.
+    /// The seed every wave is drawn from. It is sent once.
     seed: u64,
     policy: ServerPolicy,
     field: Box<Field>,
@@ -70,22 +69,24 @@ pub enum Op {
   },
   /// What the server's field hashes to at a tick.
   ///
-  /// `enemies` rides along not because the digest needs it but because a
-  /// mismatch is far easier to read when you can see whether the two sides even
-  /// hold the same number of things.
+  /// The digest does not need `enemies`. It is included because a mismatch is
+  /// far easier to read when you can see whether the two sides even hold the
+  /// same number of things.
   Digest {
     tick: u64,
     digest: u64,
     enemies: u32,
   },
-  /// The whole field. The message this example is built to avoid sending.
+  /// The whole field. This example avoids sending it except to resync a client
+  /// or start a new run.
   Snapshot {
     field: Box<Field>,
     server_time_ms: u64,
   },
-  /// The line broke. Sent once per run, and it is the only way a run ends: the
-  /// waves do not stop coming, they stop being survivable. The next run arrives
-  /// as a [`Op::Snapshot`] once the board has been up long enough to read.
+  /// The line broke. Sent once per run. Every run ends this way, because the
+  /// waves keep coming until one of them cannot be survived. The next run
+  /// arrives as a [`Op::Snapshot`] once the board has been up long enough to
+  /// read.
   Over {
     wave: u32,
   },
@@ -104,11 +105,10 @@ pub enum Op {
 
 /// Server settings a client has to know to reproduce the server's world.
 ///
-/// Longer than the other examples' equivalents, and necessarily so: a client
-/// that only *draws* the world needs the send rate, while a client that
-/// *reproduces* it needs every constant the reproduction depends on. Anything
-/// missing from here is something a client would have to guess, and a guess is
-/// a divergence with extra steps.
+/// Longer than the other examples' equivalents: a client that only *draws* the
+/// world needs the send rate, while a client that *reproduces* it needs every
+/// constant the reproduction depends on. Anything missing from here a client
+/// would have to guess and a wrong guess makes it diverge.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ServerPolicy {
   pub sync_hz: u32,
@@ -120,9 +120,9 @@ pub struct ServerPolicy {
 
 /// A rough count of what an op costs on the wire.
 ///
-/// Deliberately a count of the *encoded* bytes rather than of `size_of`: the
-/// interesting number is what a snapshot costs against what a digest costs, and
-/// in memory those two look far more alike than they do encoded.
+/// A count of the *encoded* bytes, not of `size_of`: the comparison that
+/// matters is what a snapshot costs against what a digest costs and in memory
+/// those two look far more alike than they do encoded.
 pub fn wire_cost(op: &Op) -> usize {
   match op {
     Op::Wave { .. } => 10,
@@ -137,8 +137,8 @@ pub fn wire_cost(op: &Op) -> usize {
   }
 }
 
-/// What a field costs to send whole: the number the whole example is measured
-/// against.
+/// What a field costs to send whole. The streaming comparison is measured
+/// against this.
 pub fn field_cost(field: &Field) -> usize {
   32 + field.enemies.len() * 16 + field.towers.len() * 7 + field.pending.len() * 6
 }

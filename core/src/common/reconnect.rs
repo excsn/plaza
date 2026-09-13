@@ -3,8 +3,8 @@
 //! Plaza reports a dropped connection immediately, as
 //! [`LogicInput::AgentLeft`](crate::state_logic::LogicInput::AgentLeft): it does
 //! not decide whether that ends the player's participation. Most games want a
-//! window in which a returning player keeps their seat, and how long that window
-//! is, and what expiry means, are yours to choose.
+//! window in which a returning player keeps their seat. How long that window is
+//! and what expiry means are up to you.
 //!
 //! [`ReconnectTracker`] is the bookkeeping for that window: who is disconnected,
 //! since when, and who has run out of time. It holds no timers and spawns
@@ -36,8 +36,8 @@
 //!
 //! For this to work the transport must give a returning client the *same* agent
 //! ID: derive it from an auth token or session cookie rather than generating a
-//! fresh one per connection. That is the application's call, in the route handler
-//! or `AgentFactory`, which is why plaza does not do it for you.
+//! fresh one per connection. The application decides this in the route handler
+//! or `AgentFactory`, so plaza does not do it.
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -88,8 +88,8 @@ impl<ID: AgentId, T: SchedulerInstant> ReconnectTracker<ID, T> {
 
   /// Removes and returns every agent whose grace period has passed.
   ///
-  /// Drive this from `TimeStep`. Returning them rather than acting means the
-  /// consequence stays yours: forfeit the match, substitute a bot, pause play.
+  /// Drive this from `TimeStep`. It returns them rather than acting, so you
+  /// decide what happens: forfeit the match, substitute a bot or pause play.
   pub fn expired(&mut self, now: T) -> Vec<ID> {
     let expired: Vec<ID> = self
       .deadlines

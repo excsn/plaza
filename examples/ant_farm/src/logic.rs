@@ -1,5 +1,5 @@
-//! The tick: step, bucket, publish, deal. Every phase is timed separately,
-//! because which one owns the frame is the finding.
+//! The tick: step, bucket, publish, deal. Every phase is timed separately to
+//! find which one takes most of the frame.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -83,9 +83,9 @@ impl FarmState {
 }
 
 /// Holds the session itself for the `Cells` fan-out: the controller
-/// coalesces neighbouring same-target ops into one envelope, which is right
-/// on a stream and fatal on a datagram link where every frame must fit the
-/// MTU. Sending one message per payload keeps one payload per datagram.
+/// coalesces neighbouring same-target ops into one envelope, which works on
+/// a stream but breaks a datagram link, where every frame must fit the MTU.
+/// Sending one message per payload keeps one payload per datagram.
 pub struct AntLogic {
   session: Arc<dyn Session<AntOp, WatcherId>>,
 }

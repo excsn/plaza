@@ -1,11 +1,10 @@
 //! The order rules, shared verbatim by the server and every client.
 //!
-//! This module is the example's claim made structural: whichever regime runs,
-//! who acts next is a pure function of state both ends already hold, so the
-//! wire never carries an upcoming-actors list and the client can be *audited*
-//! against the server instead of trusted to guess. Everything here is integer
-//! arithmetic for that reason; one float would put the two ends a rounding
-//! mode apart.
+//! Whichever regime runs, who acts next is a pure function of state both ends
+//! already hold, so the wire never carries an upcoming-actors list and the
+//! client can be audited against the server instead of trusted to guess.
+//! Everything here is integer arithmetic for that reason; one float could make
+//! the two ends round differently.
 
 use crate::protocol::{
   class_of, Class, Move, Regime, Unit, UnitId, BASE_SPEEDS, CHARGES, CTB_SCALE, GUARD_SHIELD, INITIATIVE_DIE, MAX_HP,
@@ -78,8 +77,8 @@ pub fn ctb_recharge(units: &mut [Unit], actor: UnitId, now: u64, time: u64, befo
 }
 
 /// The delay regime's act list: simulate `n` picks forward, each paying a
-/// standard action at its current speed. Speculative past the first entry
-/// twice over, since nobody knows the moves to come; exact for the head.
+/// standard action at its current speed. Exact for the first entry and
+/// speculative after it, since the moves to come are unknown.
 pub fn ctb_project(units: &[Unit], n: usize) -> Vec<UnitId> {
   let mut sim: Vec<Unit> = units.to_vec();
   let mut out = Vec::with_capacity(n);
@@ -94,8 +93,8 @@ pub fn ctb_project(units: &[Unit], n: usize) -> Vec<UnitId> {
 
 /// One round's order under the initiative regime: speed plus a d20 rolled from
 /// `(seed, round, unit)`, sorted highest first, ties to the lower id. Living
-/// units only; the roll reads speed *now*, which is why the boundary is the
-/// only honest moment to call this.
+/// units only; the roll reads speed now, which is why this should only be
+/// called at the boundary.
 pub fn initiative_order(seed: u64, round: u32, units: &[Unit]) -> Vec<UnitId> {
   let mut rolled: Vec<(u32, UnitId)> = units
     .iter()
@@ -113,8 +112,8 @@ pub fn initiative_order(seed: u64, round: u32, units: &[Unit]) -> Vec<UnitId> {
 /// the standing `order` (initiative) or from the gauges as they stand (delay).
 ///
 /// Initiative: the rest of the standing round, then the next round rolled from
-/// speeds as they stand now, which is exactly as much as anyone can honestly
-/// know: a haste landing before the boundary re-rolls that tail.
+/// speeds as they stand now. That is as far as the order can be known: a haste
+/// landing before the boundary re-rolls that tail.
 pub fn project(regime: Regime, seed: u64, round: u32, order: &[UnitId], past: usize, units: &[Unit], n: usize) -> Vec<UnitId> {
   match regime {
     Regime::Ctb => ctb_project(units, n),
@@ -170,8 +169,8 @@ pub fn nominal_apply(units: &mut [Unit], actor: UnitId, mv: Move, damage: i32) {
   }
 }
 
-/// The what-if: the act list as it would stand after `actor` played `mv`, crit
-/// unrolled because a preview promising a crit would be lying half the time.
+/// The what-if: the act list as it would stand after `actor` played `mv`, with
+/// no crit rolled because a preview showing a crit would often be wrong.
 pub fn preview(
   regime: Regime,
   seed: u64,

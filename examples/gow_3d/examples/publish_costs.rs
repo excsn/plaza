@@ -1,42 +1,39 @@
-//! What is left on the table now that the zone publishes per cell.
+//! The remaining delivery options, priced now that the zone publishes per cell.
 //!
-//! `zone_scale` measured the shipped path and split: crowding inverted (7.3x)
-//! and population was a wash, because `build` fell 1.56x while `encode` rose
-//! 4.3x. This prices every candidate that split points at, before any of them
-//! touches the protocol. Nothing here changes the wire; every arm is
-//! hand-rolled beside the real one, which is the same division
-//! `crowd_techniques` used to argue for the shape now shipping.
+//! `zone_scale` measured the shipped path and got mixed results: crowding
+//! inverted (7.3x) and population was a wash, because `build` fell 1.56x while
+//! `encode` rose 4.3x. This prices every candidate those results point at,
+//! before any of them touches the protocol. Nothing here changes the wire;
+//! every arm is hand-rolled beside the real one, as `crowd_techniques` did for
+//! the shape now shipping.
 //!
 //! **Every arm is timed over the whole per-client path**: deciding which cells
-//! a view touches, finding their payloads, and assembling and encoding what
+//! a view touches, finding their payloads, assembling them and encoding what
 //! goes out. An earlier revision of this file hoisted the window walk out of
 //! the timed region and priced the flat index on *bucketing*, which is 18µs of
-//! a 2822µs tick; the walk and the payload lookups are where the time is, and
-//! an arm that is not charged for them is not being measured.
+//! a 2822µs tick; the walk and the payload lookups are where the time goes, so
+//! an arm has to be charged for them.
 //!
 //! **These are stage costs, so every ratio here is an upper bound on what the
 //! same change does to a tick.** A real tick also advances the simulation and
-//! builds `you`, the party's extras and the landing filter for every client,
+//! builds `you`, the party's extras and the landing filter for every client
 //! and no delivery scheme touches any of it. Measured against `zone_scale`,
 //! which runs the whole thing: this file put the fan-out at **2.73x** over
 //! joined and the tick moved **1.75x**, because roughly 1.2-1.6ms at 4096
-//! clients is shared work neither mode can avoid. Read a ratio here as "at
-//! best", and confirm it end to end before believing it.
+//! clients is shared work neither mode can avoid. Treat a ratio here as a best
+//! case and confirm it end to end.
 //!
-//! **Every packing arm reads back what it wrote**, which is a rule this file
-//! earned the hard way. The byte arm used to hand-roll its own writers and so
-//! priced a format that could not be decoded: it quantised over exactly one
-//! cell with no padding for a body clamped into a border cell, and never wrote
-//! down *which* cell, because the loop happened to have the corner in hand. It
-//! promised 10-12% and the wire delivered 0-9%. An arm that must decode its
-//! own output cannot omit what the decoder needs.
+//! **Every packing arm reads back what it wrote.** The byte arm used to
+//! hand-roll its own writers and so priced a format that could not be decoded:
+//! it quantised over exactly one cell with no padding for a body clamped into a
+//! border cell and never wrote down *which* cell, because the loop happened to
+//! have the corner in hand. It promised 10-12% and the wire delivered 0-9%.
 //!
 //! - `per viewer`: what shipped when this file was written, and the baseline
 //!   every ratio below is against. A hashed lookup per touched cell, a byte
 //!   string per cell in the frame, the whole frame assembled and encoded per
-//!   client. **It is no longer what ships**, and the arms are kept because
-//!   they are the evidence for choices already made rather than a description
-//!   of the current code.
+//!   client. **It is no longer what ships.** The arms are kept as evidence for
+//!   choices already made, not as a description of the current code.
 //! - `joined`: the touched payloads concatenated into one byte string before
 //!   encoding. Each is self-delimiting (its own count opens it), so a reader
 //!   loops until the buffer runs out. Kills 48 of 49 envelope framings.
@@ -61,11 +58,12 @@
 //!
 //! **What ships now is none of these arms.** The zone re-keyed this whole layer
 //! by the viewer's *cell* rather than the viewer: `Packed` is refcounted, the
-//! body blob is assembled once per occupied viewer-cell, and addressing walks
+//! body blob is assembled once per occupied viewer-cell and addressing walks
 //! cell pairs against a fixed offset mask. Every arm here is per-viewer, so
 //! every ratio is measured against a shape that no longer exists and the
 //! current cost of a tick lives in `zone_scale`, which runs the real path.
-//! Read this file as the argument for the changes, not as their result.
+//! This file shows why the changes were made; it does not measure their
+//! result.
 //!
 //! Run with `cargo run -p gow_3d --release --example publish_costs`.
 
@@ -130,7 +128,7 @@ fn zone_of(count: usize, spread: f32) -> (GowState, f32) {
   for seat in 0..count as u16 {
     let spot = at(seat, spread);
     state.zone.admit(seat, spot);
-    // Seated as one of the zone's own so it walks: a still life would flatter
+    // Seated as one of the zone's own so it walks: a still zone would favour
     // anything keyed on change and mislead anything keyed on cell occupancy.
     state.bots.take_seat(seat, spot);
   }
@@ -540,9 +538,8 @@ fn main() {
       }
 
       // ---- per-cell ops + flat: the same scheme, given the index every other
-      // arm was given, so the comparison is a fair fight rather than a
-      // handicap. The encode is identical and is charged again so the totals
-      // are read the same way.
+      // arm was given, so the comparison is fair. The encode is identical and
+      // is charged again so the totals are read the same way.
       let started = Instant::now();
       for bucket in audience_flat.iter_mut() {
         bucket.clear();
@@ -579,13 +576,11 @@ fn main() {
       // since this asks what a body costs rather than what a tick costs.
       //
       // **Written with the shipped packer and read back with the shipped
-      // reader.** An earlier revision of this arm hand-rolled both, and so
+      // reader.** An earlier revision of this arm hand-rolled both and so
       // measured a format that could not be decoded at all: it quantised over
       // exactly one cell with no padding for a body clamped into a border
-      // cell, and it never wrote down *which* cell, because it happened to
-      // have the corner in hand. It promised 10-12% and the wire delivered
-      // 0-9%. A packing arm that never reads back what it wrote will always
-      // omit whatever the reader needed.
+      // cell and it never wrote down *which* cell, because it happened to have
+      // the corner in hand. It promised 10-12% and the wire delivered 0-9%.
       if let Some(me) = seats_at[0] {
         geom.window_into(me.0, me.2, &mut window);
         for (cx, cz) in &window {
@@ -625,8 +620,7 @@ fn main() {
           write_graded(&mut g, index, &bodies, corner, coarse);
           let g_bytes = g.finish();
 
-          // The round trip, on every arm, every tick. This is the rule the
-          // file exists to enforce on itself.
+          // The round trip, on every arm, every tick.
           check_absolute(&a_bytes, &bodies);
           check_relative(&r_bytes, &bodies, corner);
           check_graded(&g_bytes, &bodies, corner);

@@ -1,4 +1,4 @@
-//! Development analysis: what field sync costs, and what it costs you in
+//! Development analysis: what field sync costs and what it costs you in
 //! accuracy when the system it drives is divergent.
 //!
 //! ```sh
@@ -66,10 +66,9 @@ fn main() {
   }
 
   println!("\n== 1d. the third option: coarsen the far field instead of deleting it ==");
-  // The field column is separated out deliberately. Coarsening the field can only
-  // ever reach the bytes the field occupies, and at 64 holes that is a third of
-  // the traffic, so a total-bandwidth column on its own would make the technique
-  // look weaker than it is at what it actually does.
+  // The field column is shown separately. Coarsening the field only reaches the
+  // bytes the field occupies, which at 64 holes is a third of the traffic, so a
+  // total-bandwidth column alone would understate what the technique saves.
   println!("{:<26}{:>12}{:>12}{:>12}{:>12}{:>12}{:>12}", "config @ 64 holes", "KiB/s", "field KiB/s", "attractors", "force M/s", "median", "p90");
   let mut rows: Vec<(String, Controls)> = vec![
     ("full field".to_string(), Controls { player_count: 64, ..base }),

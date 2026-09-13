@@ -1,10 +1,9 @@
 //! What the server owns: one zone, and who is sitting in it.
 //!
-//! Thinner than the other examples' state, and that is the finding rather than
-//! an omission. There is no predicted state to reconcile because the client's
-//! position is the truth, and no simulation to step because the only thing with
-//! a clock is a cast bar. What is left is a roster, a set of subscriptions, and
-//! a timer per character.
+//! Thinner than the other examples' state on purpose. There is no predicted
+//! state to reconcile because the client's position is authoritative and no
+//! simulation to step because the only thing with a clock is a cast bar. What
+//! is left is a roster, a set of subscriptions and a timer per character.
 
 use std::collections::HashMap;
 
@@ -18,19 +17,18 @@ use crate::zone::Zone;
 
 /// How many characters a zone seats unless something says otherwise.
 ///
-/// The number the example is *played* at, not a ceiling the design rests on:
-/// [`GowState::with_capacity`] takes any, and `examples/zone_scale.rs` runs the
-/// sweep that says what the shape costs past it. Nothing here is sized in a way
-/// that cares, which is the claim that sweep exists to check rather than
-/// assert: the spawn spiral's radius grows as `sqrt(seat)` so density is flat,
-/// and the audience query is a grid lookup rather than a scan.
+/// The number the example is *played* at rather than a hard limit:
+/// [`GowState::with_capacity`] takes any and `examples/zone_scale.rs` measures
+/// what larger zones cost. Nothing here depends on the size and that sweep
+/// checks it: the spawn spiral's radius grows as `sqrt(seat)` so density is
+/// flat and the audience query is a grid lookup rather than a scan.
 pub const MAX_CHARACTERS: usize = 64;
 
 /// Where a character starts.
 ///
 /// A spiral rather than a ring, because a ring of a fixed angular step wraps:
 /// the first version stepped 0.9 radians and put seat 7 on top of seat 0. The
-/// golden angle is the one step that never repeats. The ground then decides
+/// golden angle never brings two seats to the same angle. The ground then decides
 /// the height and nudges the point onto footing, so nobody spawns in the sea
 /// or inside a cliff.
 pub fn spawn_at(seat: Seat) -> (f32, f32, f32) {
@@ -77,15 +75,15 @@ pub struct GowState {
   /// between every viewer standing in it.
   pub assembled: plaza_server_utils::relevance::CellTable<Option<crate::protocol::Packed>>,
   /// Viewers bucketed by the cell they stand in. Every viewer in one cell has
-  /// the same window and the same near/far reading of it, so this is the key
-  /// the whole addressing layer wants.
+  /// the same window and the same near/far reading of it, so the addressing
+  /// layer keys on this.
   pub viewers: plaza_server_utils::relevance::CellTable<Vec<PlayerId>>,
   /// Who is listening to each cell at the coarse width, under
   /// [`Precision::Graded`](crate::protocol::Precision::Graded).
   pub audience_far: plaza_server_utils::relevance::CellTable<Vec<PlayerId>>,
   /// Who is listening to each cell, under [`Delivery::Cells`](crate::protocol::Delivery::Cells).
-  /// The inverse of a view query, and the cost that scheme pays instead of
-  /// assembling a buffer per client.
+  /// The inverse of a view query. Building it is what that scheme pays instead
+  /// of assembling a buffer per client.
   pub audience: plaza_server_utils::relevance::CellTable<Vec<PlayerId>>,
   /// Scratch, so a tick that queries once per client allocates nothing.
   scratch: Vec<Seat>,
@@ -164,9 +162,8 @@ mod tests {
 
   #[test]
   fn spawns_are_spread_rather_than_stacked() {
-    // A zone that starts as a pile is one where the first thing every client
-    // does is a spatial query returning everybody, which is the case this
-    // example is meant to be measuring away from.
+    // If the zone starts as a pile, every client's first spatial query returns
+    // everybody, which is the case this example avoids.
     let mut closest = f32::MAX;
     for a in 0..MAX_CHARACTERS as Seat {
       for b in (a + 1)..MAX_CHARACTERS as Seat {

@@ -5,16 +5,16 @@
 //! `Packet`s and `ClientMsg`s through an in-memory delay queue. This is the same
 //! vocabulary as one flat `Op` a `plaza` [`Session`] carries either way.
 //!
-//! Two asymmetries are deliberate and worth naming, and they are the same ones
-//! the black hole example makes.
+//! Two asymmetries are deliberate. They are the same ones the black hole
+//! example makes.
 //!
-//! **A client sends an intent, never a position.** [`Op::Input`] is a direction;
+//! **A client sends a direction and never a position.** [`Op::Input`] is a direction;
 //! the server decides where that puts you. A client that could send a position
 //! could put itself anywhere.
 //!
 //! **A client never says who it is.** Nothing upstream carries a player id:
-//! `plaza_session` attaches the `Agent` from the connection, because identity is
-//! the server's fact and not the client's claim.
+//! `plaza_session` attaches the `Agent` from the connection, because the server
+//! decides identity and the client has no say in it.
 //!
 //! Note that this rides *alongside* the entity stream's own sequence and
 //! acknowledgement, which are about which relevance deltas landed. [`Op::Input`]
@@ -31,12 +31,12 @@ use crate::sim::types::{Packet, PlayerFrame, PlayerId, Upgrade};
 /// define it (see `build.rs`), so it cannot drift out of date the way a manual
 /// constant does.
 ///
-/// The point is a browser client that is a build product: it does not rebuild
-/// when the server does, so a page from before a wire change is the normal state
-/// of affairs rather than an exotic one. Without a version the failure is silent
-/// in the worst way, because the page loads, the game appears to run, and only
-/// the messages whose shape changed are rejected, which reads as a netcode bug
-/// and is a deployment one. With it the client is told to reload.
+/// The browser client is a build product: it does not rebuild when the server
+/// does, so a page from before a wire change is the normal case. Without a
+/// version the failure is silent: the page loads, the game appears to run and
+/// only the messages whose shape changed are rejected, which looks like a
+/// netcode bug when it is a deployment one. With it the client is told to
+/// reload.
 ///
 /// Two limits worth knowing. It cannot rescue a client older than the handshake
 /// itself, which is the bootstrapping floor every protocol version has. And it
@@ -54,16 +54,16 @@ pub enum Op {
   /// can say which inputs it has applied and the client can replay the rest.
   /// Where this player wants to go, and **which tick it is meant for**.
   ///
-  /// A tick rather than a timestamp, and the difference is authority. A timestamp
-  /// is the client naming a moment, which the server then has to judge plausible;
-  /// judging it needs a shared clock, a shared clock is an estimate, and the
-  /// estimate's error is the slack a liar hides in. A tick is the client naming
-  /// *the server's own unit of time*, which is either still open or is not.
+  /// A tick rather than a timestamp, which keeps the authority with the server.
+  /// A timestamp names a moment the server then has to judge plausible. Judging
+  /// it needs a shared clock, which is only an estimate; a cheating client can
+  /// hide inside that estimate's error. A tick names *the server's own unit of
+  /// time*, which is either still open or closed.
   ///
   /// The client computes it from the same rule everyone uses, so two players who
   /// pressed at the same instant name the same tick however far apart their pings
-  /// are. The server takes it as an intention, never as a fact: outside the
-  /// accepting window it is dropped, not corrected.
+  /// are. The server treats it as a request it can refuse: outside the accepting
+  /// window it is dropped rather than corrected.
   Input { seq: u64, dx: f32, dy: f32, tick: u64 },
   /// The entity stream acknowledgement: which relevance packets this client is
   /// holding, so the server can diff against a state the client provably reached.
@@ -97,9 +97,9 @@ pub enum Op {
   /// This connection was measured and belongs in a different arena. Reconnect
   /// there.
   ///
-  /// The useful answer to a link that does not fit *this* room, and the reason
-  /// the decision wants a lobby rather than a room: a room can only refuse, and
-  /// a lobby can say where. [`Op::Refused`] is what is left when nothing fits.
+  /// Sent when a link does not fit *this* room but fits another. The decision
+  /// belongs in a lobby because a room can only refuse, while a lobby can pick
+  /// where to go. [`Op::Refused`] is sent only when nothing fits.
   Placed { room: u32, name: String, endpoint: String, measured_ms: u32 },
   /// This connection cannot meet **any** arena's input schedule, so it was not
   /// seated.

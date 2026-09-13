@@ -1,10 +1,9 @@
 //! The authoritative tick.
 //!
-//! One structural difference from cube_yard, and it is the example's whole
-//! shape: there is no broadcast. Every tick queries relevance once per client
-//! and sends each of them a different frame, from the first stage rather than
-//! as a later optimisation. In a volume the alternative does not exist, because
-//! nobody can hold the world.
+//! Unlike cube_yard there is no broadcast. Every tick queries relevance once
+//! per client and sends each a different frame. That was the design from the
+//! first stage rather than a later optimisation, since in a volume no client
+//! can hold the whole world.
 
 use async_trait::async_trait;
 use plaza::agent::Agent;
@@ -186,8 +185,8 @@ fn step_once(state: &mut SpaceState, ctx: &mut Ctx) {
       .collect();
     let (ships, bolts) = if state.packed {
       // The packed path still builds the same lists; what changes is what
-      // crosses. Keeping both live is what lets the panel price one against
-      // the other without a second run.
+      // crosses. Keeping both live lets the panel compare them without a
+      // second run.
       let anchor = ships
         .iter()
         .find(|s| s.seat == seat as u16)
@@ -232,9 +231,8 @@ fn step_once(state: &mut SpaceState, ctx: &mut Ctx) {
           .copied()
           .filter(|struck| seen.contains(&(*struck as u32)))
           .collect(),
-        // Visible, *or* about this client. Being told you died by someone you
-        // never saw is the whole experience of being sniped, and withholding
-        // the name would be relevance applied past the point it helps.
+        // Visible, *or* about this client. A player killed by someone they
+        // never saw still needs to know who did it.
         kills: state
           .space
           .kills
@@ -318,10 +316,10 @@ mod tests {
 
   #[test]
   fn the_wire_orientation_is_the_nose_the_ship_actually_flies_along() {
-    // The sim reasons in yaw and pitch and the wire carries a quaternion, so
-    // these are two expressions of one thing that nothing forces to agree.
-    // Wrong, every ship renders pointing somewhere it is not going, and no
-    // test of positions would ever notice.
+    // The sim works in yaw and pitch and the wire carries a quaternion.
+    // Nothing forces the two to agree. If they disagree, every ship renders
+    // pointing somewhere it is not going and no test of positions would
+    // notice.
     for yaw in [-2.0f32, -0.7, 0.0, 0.4, 1.6, 3.0] {
       for pitch in [-1.2f32, -0.3, 0.0, 0.5, 1.1] {
         let ship = crate::sim::Ship {
@@ -343,8 +341,8 @@ mod tests {
   /// What transient entities cost against the standing world.
   ///
   /// Every other example in the tree measures steady state: N bodies updating
-  /// every tick. This is the other half, and the reason the answer is not
-  /// obvious is that bolts are individually cheap and collectively numerous.
+  /// every tick. This measures the other half. The answer is not obvious
+  /// because bolts are individually cheap and collectively numerous.
   #[tokio::test]
   async fn what_churn_costs_against_a_standing_world() {
     let mut state = SpaceState::new();
@@ -399,8 +397,8 @@ mod tests {
 
     assert!(bolts > 0, "the fight has to actually produce bolts");
     assert!(state.space.expired > 0, "and they have to expire");
-    // The claim worth pinning: a bolt is cheaper than a ship, or transient
-    // entities would be unaffordable at the rate they are created.
+    // A bolt must be cheaper than a ship, or transient entities would be
+    // unaffordable at the rate they are created.
     let bolt_each = bolt_bytes as f32 / bolts.max(1) as f32;
     let ship_each = ship_bytes as f32 / ships.max(1) as f32;
     assert!(
@@ -412,7 +410,7 @@ mod tests {
   /// What a populated volume does to the panel, which is why bots exist.
   ///
   /// With one ship in flight every strategy returns the same answer, so the
-  /// dial moves and nothing else does. This is the measurement made watchable.
+  /// dial moves and nothing else does.
   #[tokio::test]
   async fn the_strategy_dial_only_says_anything_in_a_populated_volume() {
     let mut seen = Vec::new();
@@ -460,8 +458,8 @@ mod tests {
 
   /// What it costs to send a path that could have been derived.
   ///
-  /// The two weapons differ by one field and have opposite wire profiles, and
-  /// this is the number that says so rather than the paragraph.
+  /// The two weapons differ by one field and have opposite wire profiles. This
+  /// test measures that difference.
   #[tokio::test]
   async fn a_straight_shot_need_not_have_its_path_sent_and_a_homing_one_must() {
     let mut rows = Vec::new();
@@ -476,8 +474,8 @@ mod tests {
       }
       // Strung out along +Z, which is where a ship at yaw zero is looking, so
       // each has the next one inside its lock cone. Lined up across the nose
-      // instead, nothing acquires a target, no missile ever launches, and the
-      // comparison quietly loses the half it exists to make.
+      // instead, nothing acquires a target, no missile ever launches and the
+      // comparison loses its homing half.
       for seat in 0..6 {
         state.space.ships[seat].at = Vec3::new(0.0, seat as f32 * 3.0, seat as f32 * 55.0);
       }
@@ -504,10 +502,9 @@ mod tests {
           counted += 1;
         }
       }
-      // Asserted rather than assumed. The first version of this scene lined the
-      // ships up across the nose, so nothing acquired a target, no missile ever
-      // launched, and the comparison read 83x while measuring only half of
-      // itself.
+      // The first version of this scene lined the ships up across the nose, so
+      // nothing acquired a target, no missile ever launched and the comparison
+      // read 83x while measuring only the bolts.
       assert!(homing > 0, "the scene has to actually produce homing shots");
       rows.push((stream, carried as f32 / counted.max(1) as f32));
     }
@@ -543,8 +540,7 @@ mod tests {
 
   #[tokio::test]
   async fn every_client_gets_its_own_frame_rather_than_a_broadcast() {
-    // The structural claim. Two pilots far apart must not receive the same
-    // list, or relevance is decorative.
+    // Two pilots far apart must not receive the same list.
     let mut state = SpaceState::new();
     for id in [7, 8] {
       run(&mut state, LogicInput::AgentJoined {

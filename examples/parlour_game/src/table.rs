@@ -1,9 +1,9 @@
-//! One table: the rules from a card game, the seating from a lobby.
+//! One table: `card_table`'s rules with seating handed out by a lobby.
 //!
-//! The rules are `card_table`'s. What is new here is that a seat is *reserved*
-//! before its player connects, so arriving is admission rather than first-come,
-//! and a table that fills is a match the lobby formed rather than three tabs
-//! that happened to open.
+//! What is new here is that a seat is reserved before its player connects.
+//! Arriving redeems that reservation instead of taking the first free seat and
+//! a table that fills is a match the lobby formed rather than three tabs that
+//! happened to open.
 
 use async_trait::async_trait;
 use plaza::agent::Agent;
@@ -307,9 +307,9 @@ fn finish_match(state: &mut TableState, ctx: &mut Ctx) {
 
 /// Deals another match for whoever is still sitting here.
 ///
-/// The room stays per-match in the sense that matters: it was created for this
-/// match-up and dies with it. What it stops doing is dying between *hands*,
-/// which forced three players who wanted to play again back through the queue.
+/// The room is still per match: it was created for this match-up and closes
+/// when the players leave. It does not close between *hands*, since that would
+/// send three players who want to play again back through the queue.
 fn start_match(state: &mut TableState, ctx: &mut Ctx) {
   // Same players, new match, so the roster is kept and only the scores go. The
   // stake settles once per match, which is what `settled` guards.
@@ -323,7 +323,7 @@ fn start_match(state: &mut TableState, ctx: &mut Ctx) {
 /// Schedules the table to play for whoever is on turn, if they take too long.
 ///
 /// The token is taken *now*, so it names this occupancy of `Playing`. By the
-/// time it fires the round may have ended, and the epoch is what says so.
+/// time it fires the round may have ended and the epoch records that.
 fn arm_turn_timeout(state: &mut TableState) {
   let Some(player) = state.turns.current_turn_actor() else {
     return;
@@ -358,7 +358,7 @@ fn run_due_timeouts(state: &mut TableState, ctx: &mut Ctx) -> bool {
       }
 
       TableEvent::Rematch => {
-        // Players drifted off during the intermission. Dealing to a short table
+        // Players left during the intermission. Dealing to a short table
         // would leave a hand nobody can finish; the next arrival deals instead.
         if state.seats.occupied_count() < TABLE_SIZE {
           debug!(seated = state.seats.occupied_count(), "Rematch skipped: not enough players left.");
@@ -535,9 +535,9 @@ mod tests {
     assert_eq!(refusals(&output), vec!["that card is not in your hand"]);
   }
 
-  /// Secrecy is a property of the whole outbound stream, not of the snapshot,
-  /// so this reads what the provider would actually send rather than asking the
-  /// state what it intended.
+  /// Checks the payload the provider would actually send to each player rather
+  /// than asking the state what it intended, since a hand leaks if any sent
+  /// payload carries it.
   #[tokio::test]
   async fn a_snapshot_never_carries_another_players_hand() {
     let mut state = table();
@@ -561,9 +561,8 @@ mod tests {
     }
   }
 
-  /// The uniform pass and a spectator get the same answer, and it must be the
-  /// empty one: `None` here means "no particular recipient", which is exactly
-  /// when a hand must not travel.
+  /// The uniform pass and a spectator both get an empty hand. `None` here means
+  /// "no particular recipient" and then no hand may be sent.
   #[tokio::test]
   async fn a_view_for_nobody_holds_no_hand_at_all() {
     let mut state = table();

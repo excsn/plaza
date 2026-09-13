@@ -2,9 +2,9 @@
 
 ## 1. Introduction & Core Concepts
 
-`plaza_flame` is three things: a [mixin](#mixin-plazagame) that owns a [`PlazaClient`](../plaza_client/API_REFERENCE.md#class-plazaclient) for the life of a `FlameGame`, the [counters](#class-plazastats) it keeps, and a [readout widget](#class-plazadebughud) that shows them.
+`plaza_flame` is three things: a [mixin](#mixin-plazagame) that owns a [`PlazaClient`](../plaza_client/API_REFERENCE.md#class-plazaclient) for the life of a `FlameGame`, the [counters](#class-plazastats) it keeps and a [readout widget](#class-plazadebughud) that shows them.
 
-Deliberately thin. It connects on load, closes on removal, and turns the two lifecycle events a mobile app actually has into the two calls the client wants. Anything thicker belongs in the game or in [`plaza_client_utils`](../plaza_client_utils/).
+It is kept small: it connects on load, closes on removal and turns the two lifecycle events a mobile app has into the two calls the client needs. Anything more belongs in the game or in [`plaza_client_utils`](../plaza_client_utils/).
 
 ```dart
 import 'package:plaza_flame/plaza_flame.dart';
@@ -16,7 +16,7 @@ That entry point re-exports the whole of [`plaza_client`](../plaza_client/API_RE
 
 One thing throws: reading [`plaza`](#property-plaza) before `onLoad` has run gives a `StateError`. Test [`plazaReady`](#property-plazaready) when you might be earlier than that, which in practice means a widget built alongside a game that has not finished loading.
 
-Everything else follows [`plaza_client`](../plaza_client/API_REFERENCE.md#2-error-handling): network conditions are events, not exceptions. [`sendPlazaOps`](#method-sendplazaops) returns false rather than throwing or queueing when there is no open socket.
+Everything else follows [`plaza_client`](../plaza_client/API_REFERENCE.md#2-error-handling): network conditions are reported as events rather than thrown. [`sendPlazaOps`](#method-sendplazaops) returns false rather than throwing or queueing when there is no open socket.
 
 ## 3. The mixin
 
@@ -77,7 +77,7 @@ Connection lifecycle. [`plazaStats`](#property-plazastats) is already updated be
 
 #### Property `plazaStats`
 
-[`PlazaStats`](#class-plazastats). Counters for a debug overlay. A `ChangeNotifier`, and safe to hand to a widget.
+[`PlazaStats`](#class-plazastats). Counters for a debug overlay. A `ChangeNotifier` and safe to hand to a widget.
 
 #### Property `plazaTimeline`
 
@@ -120,7 +120,7 @@ Reports a packet to the render clock.
 | `lifecycleStateChange` | On `resumed`, resets the render clock and calls [`PlazaClient.resume`](../plaza_client/API_REFERENCE.md#method-resume). | Call `super`. |
 | `onRemove` | Cancels both subscriptions and stops the client. | Call `super.onRemove()` last. |
 
-The resume hook is the reason this mixin exists rather than being per-app wiring: Flame routes the platform lifecycle here, so a suspended app drops whatever queued while the process was frozen and the game hears `Connected(resumed: true)` instead of replaying a world that has moved on.
+The resume hook is why this is a mixin rather than per-app wiring: Flame routes the platform lifecycle here, so a suspended app drops whatever queued while the process was frozen and the game hears `Connected(resumed: true)` instead of replaying stale state.
 
 ## 4. Counters
 
@@ -143,7 +143,7 @@ class PlazaStats extends ChangeNotifier {
 
 What a connection has actually done, for a panel to show. A `ChangeNotifier`, so a widget rebuilds on any change.
 
-Every field here exists because a fault was invisible without it.
+Each field was added because a fault could not be seen without it.
 
 | Field | What a change means |
 |---|---|
@@ -151,12 +151,12 @@ Every field here exists because a fault was invisible without it.
 | `opsIn` / `opsOut` | Ops received and sent. Sent counts only what actually left, since a dropped send returns false. |
 | `reconnects` | Climbing on a still-connected session means the link is **flapping rather than down**, which looks identical from inside a game and is a different problem. |
 | `resumes` | Times the app came back from suspension. Always accompanied by a `reconnects` increment, since a resume reports as a resumed connection. |
-| `framesSkipped` | Climbing means the server is ahead of this build and sending frame kinds it has never heard of. Additive change working as intended, but this is how you learn it is happening. |
-| `lastDisconnectReason` | For a log line, not for matching on. |
+| `framesSkipped` | Climbing means the server is ahead of this build and sending frame kinds it has never heard of. That is additive change working as intended; this counter shows it is happening. |
+| `lastDisconnectReason` | For a log line. Do not match on it. |
 
 #### Property `outdated`
 
-`Outdated?`. Set when the two ends were built from different wire definitions. **An app showing this should be prompting for an update, not playing on**, and this is what an update screen keys off.
+`Outdated?`. Set when the two ends were built from different wire definitions. **An app with this set should prompt for an update rather than play on.** An update screen keys off this field.
 
 #### Property `gaveUp`
 
@@ -164,7 +164,7 @@ Every field here exists because a fault was invisible without it.
 
 #### Property `healthy`
 
-`bool`. `status == PlazaStatus.open && outdated == null`. The one-line answer to "should this game accept input".
+`bool`. `status == PlazaStatus.open && outdated == null`. Use it to decide whether the game should accept input.
 
 #### Method `reset`
 
@@ -220,7 +220,7 @@ GameWidget<MyGame>(
 
 Rebuilds on `stats`, so nothing has to drive it.
 
-**Do not have the game call `overlays.add` itself.** That asserts a builder is registered, and builders come from `GameWidget`, so a game that adds its own overlays cannot be loaded without the widget that configures it, which breaks `flutter test` and any headless use. Keep the state in the game and let the widget layer watch it.
+**Do not have the game call `overlays.add` itself.** That asserts a builder is registered and builders come from `GameWidget`, so a game that adds its own overlays cannot be loaded without the widget that configures it, which breaks `flutter test` and any headless use. Keep the state in the game and let the widget layer watch it.
 
 #### Argument `client`
 

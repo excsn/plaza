@@ -142,8 +142,8 @@ fn spring_of_region(rx: u32, ry: u32) -> Option<Tile> {
   (0..SPRING_TRIES).find_map(|attempt| {
     let (ox, oy) = spring_offset(rx, ry, attempt);
     let at = Tile::new(rx * SPRING_REGION + ox, ry * SPRING_REGION + oy);
-    // Never in a lake or a wood: a spring nothing can reach is a rule saying a
-    // place exists and a map saying nothing can get to it. Grass rather than
+    // Never in a lake or a wood: the rule would place a spring there that
+    // nobody could reach. Grass rather than
     // tall grass, so the tile that mends you is not also the tile that starts
     // a fight.
     matches!(base_terrain(at), Terrain::Grass | Terrain::Path).then_some(at)
@@ -300,7 +300,7 @@ mod tests {
 
   #[test]
   fn the_map_is_a_rule_rather_than_a_thing_that_is_sent() {
-    // The whole reason no map payload exists: both ends run this, so a
+    // This is why no map payload exists: both ends run this, so a
     // disagreement about what is underfoot is not representable.
     for (x, y) in [(0, 0), (17, 4), (500, 500), (crate::grid::MAP - 1, crate::grid::MAP - 1)] {
       let at = Tile::new(x, y);
@@ -347,7 +347,7 @@ mod tests {
   #[test]
   fn there_is_always_a_spring_within_a_regions_walk() {
     // A place to go rather than scenery. Somewhere to mend has to be findable
-    // from wherever a beaten trainer is standing, or the feature is a rumour.
+    // from wherever a beaten trainer is standing. Otherwise nobody can use it.
     for (cx, cy) in [(200u32, 200u32), (600, 730), (900, 120)] {
       let found = (0..SPRING_REGION * 2)
         .flat_map(|dy| (0..SPRING_REGION * 2).map(move |dx| Tile::new(cx + dx, cy + dy)))
@@ -359,8 +359,8 @@ mod tests {
 
   #[test]
   fn a_spring_is_never_somewhere_nothing_can_reach() {
-    // A spring in the middle of a lake is a rule saying a place exists and a
-    // map saying nothing can get to it.
+    // A spring in the middle of a lake would exist by the rule with no way for
+    // anyone to reach it.
     for y in 400..600 {
       for x in 400..600 {
         let at = Tile::new(x, y);

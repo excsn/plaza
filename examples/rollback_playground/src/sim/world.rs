@@ -42,7 +42,7 @@ pub struct World {
   a_heard: AckWindow,
   b_heard: AckWindow,
   /// The newest window each side has been *told* about, which is what it resends
-  /// from. Always at least a latency out of date, and that staleness is the
+  /// from. Always at least a latency out of date and that staleness is the
   /// technique's real cost: a sender resends frames the peer may already have.
   a_told: AckWindow,
   b_told: AckWindow,
@@ -88,9 +88,9 @@ impl World {
 
   /// A packet of this side's inputs, newest first.
   ///
-  /// The three policies differ only in which past frames get repeated, which is
-  /// the whole comparison: blind repeats a fixed tail whether or not anyone needs
-  /// it, targeted asks the peer's acknowledgement and repeats exactly the gaps.
+  /// The three policies differ only in which past frames get repeated: blind
+  /// repeats a fixed tail whether or not anyone needs it, targeted asks the
+  /// peer's acknowledgement and repeats exactly the gaps.
   fn build_packet(hist: &VecDeque<(Frame, Input)>, heard: &AckWindow, told: &AckWindow, mode: Redundancy) -> InputPacket {
     let newest = hist.back().copied();
     match mode {
@@ -381,10 +381,9 @@ mod tests {
 
   #[test]
   fn blind_redundancy_is_cheaper_once_the_link_is_bad() {
-    // The other half of the trade, and the reason this is a choice rather than an
-    // upgrade. Ten bytes of acknowledgement per packet is a fixed toll, and once
-    // enough is genuinely missing, targeted is resending most of the tail anyway
-    // and paying the toll on top.
+    // The other half of the trade. Ten bytes of acknowledgement per packet is a
+    // fixed cost. Once enough is genuinely missing, targeted is resending most
+    // of the tail anyway and paying that cost on top.
     let bad = Controls {
       loss_pct: 40.0,
       latency_ms: 100,
@@ -408,19 +407,19 @@ mod tests {
     // redundancy makes a *fixed number of attempts*: six packets carry each input
     // and then it is gone forever. Targeted keeps resending a frame until the
     // acknowledgement says it landed, so it makes as many attempts as the link
-    // demands. At mild loss that difference is invisible; at 50% it is the whole
-    // story, because 0.5^6 of the inputs outlive a blind tail.
+    // demands. At mild loss that difference is invisible; at 50% it decides the
+    // result, because 0.5^6 of the inputs outlive a blind tail.
     //
-    // So the two policies are not "cheap and expensive". They are bounded effort
-    // and bounded outcome, and the second degrades more gracefully.
+    // So blind caps the effort spent on each input while targeted keeps trying
+    // until the input lands. Targeted degrades more gracefully.
     //
-    // "More attempts" is not "unlimited attempts", which is the correction this
-    // test earned: at 50% loss targeted converges every time and at 55% it drops
-    // to 6 of 8. The real bound is not the attempt count, it is `HISTORY`. A gap
-    // can only be resent while the input is still held, and once acknowledgements
-    // are themselves being dropped, the round trip that reveals a gap can outlast
-    // the window that could fix it. Lengthening the history moves the cliff; it
-    // does not remove it.
+    // Targeted is still bounded, as this test showed: at 50% loss targeted
+    // converges every time and at 55% it drops to 6 of 8. The real bound is
+    // `HISTORY` rather than the attempt count. A gap can only be resent while
+    // the input is still held. Once acknowledgements are themselves being
+    // dropped, the round trip that reveals a gap can outlast the window that
+    // could fix it. Lengthening the history raises the loss rate where this
+    // happens but does not remove it.
     let brutal = Controls {
       loss_pct: 55.0,
       latency_ms: 100,
@@ -436,7 +435,7 @@ mod tests {
 
   #[test]
   fn the_delivery_readout_does_not_measure_success() {
-    // Worth a test of its own, because the number is tempting and wrong. The
+    // The delivery number is tempting but misleading. The
     // acknowledgement window counts how many of the last frames arrived, which
     // under blind redundancy is inflated by copies nobody needed. Targeted scores
     // *lower* on it while converging *more* often, so ranking policies by this

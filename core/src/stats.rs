@@ -1,37 +1,34 @@
-//! What the controller can see about itself, and nothing else can.
+//! Counters only the controller can collect about itself.
 //!
-//! Tick duration, how much work a tick did, and how deep the command queue was
-//! when it was read are all *inside* the controller's loop. An application has
-//! no way to those numbers, which is why this exists rather than being left to
-//! the application the way bandwidth and connection counts are.
+//! Tick duration, how much work a tick did and how deep the command queue was
+//! when it was read are all measured inside the controller's loop. An
+//! application cannot reach those numbers, so this module collects them,
+//! unlike bandwidth and connection counts, which are left to the application.
 //!
 //! # Why shared memory rather than a command
 //!
-//! The obvious design is a `ControllerCommand::QueryStats`, and it is unusable
-//! for the case that matters. It travels the same queue it is reporting on, so
-//! it is answered slowly by a busy controller and not at all by a wedged one:
-//! the reading goes blank exactly when it becomes interesting. **You cannot ask
-//! a stalled thing how stalled it is.** So the controller writes into shared
-//! atomics and anyone holding the `Arc` reads them whenever they like, including
-//! from another thread while the controller is mid-tick.
+//! A `ControllerCommand::QueryStats` would travel the same queue it reports
+//! on, so a busy controller would answer it late and a stalled one would not
+//! answer at all. Instead the controller writes into shared atomics and anyone
+//! holding the `Arc` reads them at any time, including from another thread
+//! while the controller is mid-tick.
 //!
-//! The same reasoning rules out a callback. Handing the controller a closure to
-//! call would run application code inside the loop, which is the deadlock this
-//! crate already refuses in `StateLogic` (logic that messages its own controller
-//! blocks on a queue only it can drain).
+//! A callback is ruled out for a similar reason. Handing the controller a
+//! closure to call would run application code inside the loop, which risks the
+//! deadlock this crate already avoids in `StateLogic` (logic that messages its
+//! own controller blocks on a queue only it can drain).
 //!
-//! # What this deliberately is not
+//! # Scope
 //!
-//! Not a metrics framework. There is no registry, no labels, no histogram, no
-//! exporter, and no opinion about what you do with the numbers. It is a handful
-//! of counters you read and feed to whatever you already run, because shipping
-//! the framework would pick one every application then works around.
+//! This is not a metrics framework. There is no registry, label set, histogram
+//! or exporter. It is a handful of counters you read and feed to whatever you
+//! already run, because shipping a framework would force one scheme on every
+//! application.
 //!
-//! It also holds only what nothing else can reach. Connection counts belong to
-//! the transport ([`ConnectionManager::connection_count`]), bandwidth belongs to
-//! the transport and the application, and how long *your* logic took is
-//! measurable inside your own `StateLogic`. Duplicating those here would create
-//! two numbers for one fact, which eventually disagree.
+//! It holds only numbers no other layer can see. Connection counts belong to
+//! the transport ([`ConnectionManager::connection_count`]); bandwidth belongs
+//! to the transport and the application; you can time your own logic inside
+//! `StateLogic`. Copies of those here could drift from the originals.
 //!
 //! [`ConnectionManager::connection_count`]: https://docs.rs/plaza_session
 
@@ -42,13 +39,13 @@ use std::time::Duration;
 /// Live counters for one running controller, shared with whoever asks.
 ///
 /// Obtained from [`StateControllerBuilder::stats`] before `build`, or from
-/// [`StateController::stats`] after it. Cheap to read and cheap to update:
-/// every operation is a relaxed atomic, because these are counters rather than
-/// synchronisation and no reader needs them to be consistent with each other.
+/// [`StateController::stats`] after it. Every read and update is a relaxed
+/// atomic, because these are counters rather than synchronisation and no
+/// reader needs them to be consistent with each other.
 ///
-/// A reading is therefore a *sample*, not a transaction. Two fields read in
-/// succession may come from either side of a tick boundary, which is fine for
-/// what this is for and worth knowing before computing a ratio from them.
+/// Fields are therefore read independently. Two fields read in succession may
+/// come from either side of a tick boundary, which matters if you compute a
+/// ratio from them.
 ///
 /// ```no_run
 /// # use plaza::stats::ControllerStats;
@@ -99,9 +96,8 @@ impl ControllerStats {
 
   /// Ops the [`OpGuard`] refused, which `StateLogic` never saw.
   ///
-  /// A number that climbs is clients attempting what they may not do, which is
-  /// either a confused client or a probing one; the guard's own logging says
-  /// which op and whose.
+  /// A climbing count means clients are submitting ops they may not, either by
+  /// mistake or to probe; the guard's own logging says which op and whose.
   ///
   /// [`OpGuard`]: crate::op_guard::OpGuard
   pub fn ops_refused(&self) -> u64 {
@@ -112,7 +108,7 @@ impl ControllerStats {
   ///
   /// This is the controller's view: the whole `ProcessTimeStep`, including your
   /// logic and any snapshots it asked for. Compare it against your tick interval
-  /// to answer whether the simulation is keeping up with itself.
+  /// to see whether the simulation keeps up.
   pub fn mean_tick(&self) -> Duration {
     let ticks = self.ticks();
     if ticks == 0 {
@@ -211,10 +207,8 @@ mod tests {
 
   #[test]
   fn a_reading_is_available_while_the_controller_is_busy() {
-    // The property the whole design is for: a reader never waits on the thing it
-    // is measuring. A command-based query would be answered late by a busy
-    // controller and never by a wedged one, so the reading goes blank exactly
-    // when it matters.
+    // Reading never waits on the controller. A command-based query would be
+    // answered late by a busy controller and never by a stalled one.
     let stats = ControllerStats::new();
     let writer = Arc::clone(&stats);
     let handle = std::thread::spawn(move || {
@@ -233,9 +227,8 @@ mod tests {
 
   #[test]
   fn the_worst_tick_survives_a_mean_that_looks_fine() {
-    // Why both are kept. One slow tick in a thousand is invisible in the mean and
-    // is exactly the hitch a player notices, so a single number would hide the
-    // case worth reporting.
+    // One slow tick in a thousand does not show in the mean, but a player
+    // notices it, so the worst tick is kept separately.
     let stats = ControllerStats::new();
     for _ in 0..999 {
       stats.record_tick(Duration::from_millis(1));

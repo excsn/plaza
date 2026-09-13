@@ -1,28 +1,25 @@
 //! Who decides where you are.
 //!
 //! Every other example in this tree is server-authoritative, because that is
-//! the right default and plaza is built for it. This genre is not: the client
-//! says where it is and the server sanity-checks. It buys perfectly smooth
-//! local movement with no prediction, no reconciliation and no correction to
-//! ease off, and it costs a class of cheating that cannot be closed, only
-//! bounded.
+//! the right default and what plaza is built for. In this genre the client says
+//! where it is and the server sanity-checks the claim. That gives smooth local
+//! movement without prediction, reconciliation or any correction to ease off.
+//! The cost is a class of cheating that can be limited but not closed.
 //!
-//! **The honest part is what a validator cannot do.** It can catch a player
-//! crossing a zone in a second. It cannot catch one moving ten percent faster
-//! than they should, because a ten percent overrun is indistinguishable from a
-//! late packet, and a threshold tight enough to catch it throws out honest
-//! players on bad connections. Anyone reading this as an endorsement has been
-//! failed by the example: it is a demonstration of a trade with the price
-//! visible.
+//! **A validator has limits.** It can catch a player crossing a zone in a
+//! second. It cannot catch one moving ten percent faster than they should,
+//! because a ten percent overrun looks the same as a late packet and a
+//! threshold tight enough to catch it throws out honest players on bad
+//! connections. The example shows what the trade costs; it does not recommend
+//! it.
 
 /// Units a character may cover in a second, honestly.
 pub const RUN_SPEED: f32 = 7.0;
 
 /// How much over that a validator tolerates before refusing a step.
 ///
-/// Slack for a late packet, a frame that ran long, or a clock that drifted.
-/// Every bit of it is also room a cheat can hide in, which is the trade stated
-/// as a constant.
+/// Slack for a late packet, a frame that ran long or a clock that drifted. All
+/// of it is also room a cheat can use, so this constant sets the trade.
 pub const TOLERANCE: f32 = 1.35;
 
 /// The finest interval the server's clock actually resolves, in milliseconds.
@@ -48,10 +45,10 @@ pub struct Tracked {
   pub at_ms: u64,
   /// Distance this character has earned and not yet spent.
   ///
-  /// A budget rather than a per-claim allowance, and the difference is the
-  /// whole of the validator's correctness. Measuring each claim against the
-  /// time since the last one has to credit *something* when two arrive in the
-  /// same millisecond, and whatever it credits is a rate a client can claim at
+  /// A budget rather than a per-claim allowance, because a per-claim
+  /// allowance can be gamed. Measuring each claim against the time since the
+  /// last one has to credit *something* when two arrive in the same
+  /// millisecond, and whatever it credits is a rate a client can claim at
   /// will: crediting one tick let a client sending twice a tick move at twice
   /// the speed. A budget cannot be gamed that way because it accrues from the
   /// clock alone, however often it is asked.
@@ -61,10 +58,10 @@ pub struct Tracked {
 
 /// The most distance a character may bank while nobody is hearing from them.
 ///
-/// Uncapped, a disconnection is a teleport: five minutes of silence earns the
-/// width of the zone several times over. Capped too tightly, an honest client
-/// coming back from a stall is refused for the gap. A few seconds is the
-/// compromise, and it is a compromise rather than a solution.
+/// Without a cap, five minutes of silence would earn the width of the zone
+/// several times over and a disconnection would allow a teleport. With too
+/// tight a cap, an honest client coming back from a stall is refused for the
+/// gap. A few seconds is a compromise.
 pub const MAX_BANKED_MS: f32 = 3000.0;
 
 impl Tracked {
@@ -89,11 +86,11 @@ impl Tracked {
     self.budget = (self.budget + RUN_SPEED * TOLERANCE * elapsed)
       .min(RUN_SPEED * TOLERANCE * (MAX_BANKED_MS / 1000.0));
 
-    // Horizontal only. A run speed is a speed over the ground, and charging a
-    // climb against it means walking up a hill is indistinguishable from
-    // running, so an honest player on a slope is refused. What a claim does
-    // vertically is the air rule's business, and that rule is exact because
-    // the ground is derived rather than sent.
+    // Horizontal only. A run speed is a speed over the ground; charging the
+    // climb against it would make walking uphill look like running, so an
+    // honest player on a slope would be refused. Vertical movement is checked
+    // by the air rule, which is exact because the ground is derived rather
+    // than sent.
     let moved = ground_distance(self.at, to);
     if moved > self.budget {
       self.refusals += 1;
@@ -128,9 +125,9 @@ pub const GRAVITY: f32 = 22.0;
 /// it.
 ///
 /// A jump reaches `JUMP_SPEED^2 / (2 * GRAVITY)`, so the ceiling is that plus
-/// room for a slope the client and server rounded differently. It is the one
-/// check a height rule makes possible and a speed budget cannot: a client
-/// flying costs no horizontal distance at all.
+/// room for a slope the client and server rounded differently. A height rule
+/// can catch a flying client and a speed budget cannot, because flying covers
+/// no horizontal distance.
 pub const MAX_AIR: f32 = JUMP_SPEED * JUMP_SPEED / (2.0 * GRAVITY) + 2.5;
 
 /// A character with vertical motion, which is the client's own half of this
@@ -172,8 +169,9 @@ impl Body {
     z = z.clamp(-crate::terrain::EDGE + 2.0, crate::terrain::EDGE - 2.0);
 
     let floor = ground(x, z);
-    // A step up a slope is a step, not a fall: walking into a hillside must
-    // not launch anyone, and walking off one must not stick them to it.
+    // A step up a slope is treated as a step rather than a fall: walking into a
+    // hillside must not launch anyone and walking off one must not stick them
+    // to it.
     if self.grounded && (floor - self.at.1).abs() <= STEP_UP {
       self.at = (x, floor, z);
       self.vy = 0.0;
@@ -199,8 +197,7 @@ pub const STEP_UP: f32 = 1.2;
 /// How far a character gets in a second at a given multiple of the honest
 /// speed, once a validator has refused everything it can.
 ///
-/// The number that prices the trade: not whether a cheat is possible, but how
-/// much of one survives.
+/// This prices the trade by measuring how much of a cheat survives.
 pub fn gained(multiplier: f32, ticks: u32, step_ms: u64) -> f32 {
   let mut tracked = Tracked::new((0.0, 0.0, 0.0), 0);
   let step = step_ms as f32 / 1000.0;
@@ -273,8 +270,8 @@ mod tests {
 
   #[test]
   fn a_plausible_step_is_taken_as_the_truth() {
-    // Which is the whole point of the mode: no prediction, no reconciliation,
-    // and nothing to ease off, because the client was right by definition.
+    // Under client authority there is no prediction, reconciliation or easing,
+    // because the client's claim is accepted as the position.
     let mut t = Tracked::new((0.0, 0.0, 0.0), 0);
     assert_eq!(t.claim((0.1, 0.0, 0.0), 50), Verdict::Accepted);
     assert_eq!(t.at.0, 0.1);
@@ -293,10 +290,10 @@ mod tests {
   fn a_silence_earns_distance_up_to_the_cap_and_no_further() {
     // A character really did have that long to walk, so refusing the distance
     // outright would punish a client for a gap the network caused. Banking it
-    // without limit is the other failure: five minutes of silence would earn
-    // the width of the zone several times over, and a disconnection would be a
-    // teleport. The cap is a compromise and costs exactly what it says: a
-    // client returning from a stall longer than it gets snapped back once.
+    // without limit would let five minutes of silence earn the width of the
+    // zone several times over, so a disconnection would allow a teleport. The
+    // cap is a compromise: a client returning from a longer stall gets snapped
+    // back once.
     let mut within = Tracked::new((0.0, 0.0, 0.0), 0);
     assert_eq!(within.claim((20.0, 0.0, 0.0), 3_000), Verdict::Accepted);
 
@@ -307,12 +304,11 @@ mod tests {
 
   #[test]
   fn two_claims_between_ticks_are_not_refused_for_arriving_together() {
-    // Without a credited grain this is the shape of a false positive that
-    // costs the design its only signal: an honest client whose packets bunch
-    // up gets refused for it, and the refusal count stops meaning anything.
-    // Two halves of a tick's travel, which is what a client sending twice in a
-    // tick actually reports. Two *whole* steps in no elapsed time is not a
-    // bunched packet, it is twice the speed, and the budget refuses it.
+    // Without a credited grain an honest client whose packets bunch up gets
+    // refused and the refusal count, the design's only signal, stops meaning
+    // anything. Two halves of a tick's travel, which is what a client sending twice in a
+    // tick actually reports. Two *whole* steps in no elapsed time is twice
+    // the speed rather than a bunched packet, so the budget refuses it.
     let mut t = Tracked::new((0.0, 0.0, 0.0), 0);
     let step = RUN_SPEED * (CLOCK_GRAIN_MS as f32 / 1000.0);
     assert_eq!(t.claim((step / 2.0, 0.0, 0.0), 0), Verdict::Accepted);
@@ -330,25 +326,24 @@ mod tests {
 
   #[test]
   fn the_credited_grain_is_one_tick_and_not_a_free_pass() {
-    // The other half, or the fix would be a hole: crediting a grain does not
-    // credit a teleport.
+    // Crediting a grain must not credit a teleport.
     let mut t = Tracked::new((0.0, 0.0, 0.0), 0);
     assert_eq!(t.claim((400.0, 0.0, 0.0), 0), Verdict::Refused);
   }
 
   #[test]
   fn the_elapsed_time_is_the_servers_or_the_cheat_is_to_claim_both() {
-    // Nothing in `claim` reads a client clock, and this is what that buys: a
-    // client cannot pair a long distance with a long gap of its own invention.
+    // Nothing in `claim` reads a client clock, so a client cannot pair a long
+    // distance with a long gap it made up.
     let mut t = Tracked::new((0.0, 0.0, 0.0), 0);
     assert_eq!(t.claim((60.0, 0.0, 0.0), 16), Verdict::Refused);
   }
 
   #[test]
   fn what_a_validator_actually_stops() {
-    // The honest table. A tolerance wide enough for a late packet is wide
-    // enough for a cheat that size, and no threshold separates them, because
-    // they are the same observation.
+    // A tolerance wide enough for a late packet is wide enough for a cheat that
+    // size. No threshold separates them, because the server sees the same
+    // thing in both cases.
     println!("\n  a second of running, against an honest 7.0 units:\n");
     println!("{:>12} {:>12} {:>10}", "claimed", "achieved", "gain");
     let honest = gained(1.0, 60, 16);
@@ -367,9 +362,9 @@ mod tests {
 
   #[test]
   fn a_refusal_count_is_the_only_signal_there_is() {
-    // Which is why the panel shows it. A single refusal is a bad frame; a
-    // thousand is a client that is not playing the same game, and telling
-    // those apart is a judgement rather than a rule.
+    // The panel shows the count for this reason. A single refusal is a bad
+    // frame; a thousand is a client that is cheating. Where to draw the line
+    // between them is a judgement call rather than a rule.
     let mut honest = Tracked::new((0.0, 0.0, 0.0), 0);
     let mut cheat = Tracked::new((0.0, 0.0, 0.0), 0);
     for tick in 1..=60u64 {

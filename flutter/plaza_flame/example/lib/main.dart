@@ -47,8 +47,8 @@ void main() {
 ///
 /// Everything here rebuilds on [PlazaStats], which is a `ChangeNotifier` the mixin
 /// keeps current. That includes the update screen: `stats.outdated` is set for
-/// exactly this, and its own doc comment says an app showing it "should be
-/// prompting for an update, not playing on".
+/// this and its own doc comment says an app with it set "should prompt for an
+/// update rather than play on".
 class LobbyControls extends StatelessWidget {
   const LobbyControls({super.key, required this.game});
 
@@ -67,9 +67,10 @@ class LobbyControls extends StatelessWidget {
               alignment: Alignment.bottomLeft,
               child: Padding(
                 padding: const EdgeInsets.all(16),
-                // The status is the part that grows, so it is the part that gives
-                // way. Without `Expanded` and an ellipsis the row overflows the
-                // moment a message is long, which a phone hits before a desktop.
+                // The status is the only part that varies in length, so it is
+                // the part allowed to shrink. Without `Expanded` and an ellipsis
+                // the row overflows the moment a message is long, which a phone
+                // hits before a desktop.
                 child: Row(
                   children: [
                     FilledButton(onPressed: game.quickMatch, child: const Text('Quick match')),
@@ -95,8 +96,8 @@ class LobbyControls extends StatelessWidget {
   }
 }
 
-/// What the skew policy looks like on a screen: blocking, and specific about
-/// which two versions disagreed.
+/// The skew policy on screen: it blocks input and names the two versions that
+/// disagreed.
 class UpdateRequired extends StatelessWidget {
   const UpdateRequired({super.key, required this.skew});
 

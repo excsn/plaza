@@ -1,8 +1,8 @@
 //! A client on the real wire, shared by the desktop window and the wasm page.
 //!
-//! Deliberately thin: the server already cut this side's view, so there is no
-//! filtering to do here, only decoding, moments for the window to spend and
-//! the offer state the defender acts on.
+//! The server already cut this side's view, so there is no filtering here.
+//! The client decodes, queues moments for the window and tracks the offer
+//! state the defender acts on.
 
 use std::collections::VecDeque;
 

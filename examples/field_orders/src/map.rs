@@ -1,5 +1,5 @@
-//! The battlefields: four sizes of terrain, where the squads stand at deploy,
-//! and the movement the ground prices.
+//! The battlefields: four sizes of terrain, where the squads stand at deploy
+//! and movement priced by terrain.
 
 use std::collections::{BinaryHeap, HashMap};
 
@@ -7,7 +7,7 @@ use crate::protocol::{
   manhattan, on_board_of, Activation, Army, Cell, Class, MapSize, PlayerId, Terrain, Unit, SQUAD,
 };
 
-/// The artisanal small board: rocks wall the second and fifth ranks into a
+/// The hand-authored small board: rocks wall the second and fifth ranks into a
 /// central corridor; forests post the flanks and the corridor mouths.
 const SMALL_ROWS: [&[u8]; 7] = [
   b"..........",

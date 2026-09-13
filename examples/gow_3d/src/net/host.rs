@@ -52,9 +52,9 @@ pub async fn serve(
   );
 
   let logic = GowLogic::new().with_bots(bots).with_clock(sim_clock).with_dial(dial);
-  // No snapshot provider, and less of a compromise here than anywhere else in
-  // the tree: a joiner's first ordinary frame is already the complete audience,
-  // because nothing in this example is a delta against a baseline.
+  // No snapshot provider: a joiner's first ordinary frame is already the
+  // complete audience, because nothing in this example is a delta against a
+  // baseline.
   let (commands, controller) = StateControllerBuilder::new(
     Arc::new(logic),
     session.clone(),

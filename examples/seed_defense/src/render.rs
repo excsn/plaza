@@ -1,17 +1,15 @@
-//! Drawing the map, and drawing the one thing you cannot otherwise see.
+//! Drawing the map and the agreement bar.
 //!
-//! The invisible thing here is **agreement**. A client that has quietly stopped
-//! matching the server looks completely normal: enemies walk, towers fire,
-//! money accrues. There is no snap, no rubber band, no stutter. It is simply a
-//! different game, played on the same screen, and nothing in the picture says
-//! so.
+//! A client that has quietly stopped matching the server looks completely
+//! normal: enemies walk, towers fire and money accrues, with no snap, rubber
+//! band or stutter. Nothing in the picture shows that its game has diverged.
 //!
-//! So the agreement is drawn: a bar that is green while the digests match and
-//! red from the tick one did not, and a marker where the two sides last
-//! disagreed about how many enemies were alive.
+//! So **agreement** is drawn explicitly: a bar that is green while the digests
+//! match and red from the tick one did not, plus a marker where the two sides
+//! last disagreed about how many enemies were alive.
 //!
 //! This is also the only module allowed to call [`Fx::to_f32`]. Everything the
-//! simulation touches is integer; the pixels are not.
+//! simulation touches is integer and only the pixels are float.
 
 use macroquad::prelude::*;
 
@@ -29,11 +27,11 @@ impl Board {
   /// Lays the whole screen out from the top down: a fixed band for the
   /// readouts, then the board, then the build strip directly under it.
   ///
-  /// Packed rather than centred, and the strip is placed against the board
-  /// rather than against the bottom of the window. Anchoring one element to the
-  /// top and another to the bottom means trusting that the window is exactly as
-  /// tall as it says it is, and the first version of this screen put the strip
-  /// off the bottom edge entirely.
+  /// Packed rather than centred and the strip is placed against the board, not
+  /// against the bottom of the window. Anchoring one element to the top and
+  /// another to the bottom means trusting that the window is exactly as tall as
+  /// it says it is. The first version of this screen put the strip off the
+  /// bottom edge entirely.
   pub fn fit() -> Self {
     let margin = 16.0;
     let usable_w = (screen_width() - margin * 2.0).max(64.0);
@@ -183,7 +181,7 @@ pub fn draw_enemies(board: &Board, field: &Field) {
 }
 
 /// The beams fired this tick. Not sent by anybody: both sides derive them from
-/// the same step, which is the whole point.
+/// the same step.
 pub fn draw_shots(board: &Board, shots: &[(P, P)]) {
   for (from, to) in shots {
     let a = board.at(*from);
@@ -192,12 +190,12 @@ pub fn draw_shots(board: &Board, shots: &[(P, P)]) {
   }
 }
 
-/// The agreement bar: the one readout this example cannot do without.
+/// The agreement bar.
 ///
-/// A diverged client looks perfectly healthy, so "it looks fine" is worth
-/// nothing here. Green means the last digest matched. Red means it did not, and
-/// names the tick, because a divergence has a *moment* and knowing which one is
-/// the difference between a bug report and a debugging session.
+/// A diverged client looks perfectly healthy, so this bar is the only visible
+/// sign. Green means the last digest matched. Red means it did not and names
+/// the tick, because a divergence happens at a specific *moment* and knowing
+/// which one makes it far easier to debug.
 pub struct Agreement {
   pub checked: u64,
   pub mismatches: u64,
@@ -263,16 +261,16 @@ impl Agreement {
 /// The build bar and the inspector, drawn on the canvas rather than in the
 /// debug panel.
 ///
-/// The panel is for the things this example is *about*: what crossed the wire,
-/// whether the machines agree, and how to break them. Choosing a tower is not
-/// one of those, it is the game, and burying it in a collapsing header made a
-/// player read a diagnostics window to take their turn.
+/// The panel holds the diagnostics: what crossed the wire, whether the machines
+/// agree and how to break them. Choosing a tower is part of the game, so it is
+/// drawn here. Putting it in a collapsing header made a player open a
+/// diagnostics window to take their turn.
 pub struct BuildBar {
   cards: Vec<(TowerKind, Rect)>,
   strip: Rect,
 }
 
-/// How tall the build strip is, and how tall the band of readouts above the
+/// How tall the build strip is and how tall the band of readouts above the
 /// board is. Both are reserved before the board is sized, so nothing is ever
 /// drawn on top of anything else.
 pub const STRIP_H: f32 = 96.0;
@@ -292,9 +290,8 @@ impl BuildBar {
   }
 }
 
-/// A fixed-point value to one decimal, without going anywhere near a float.
-/// The renderer may use floats freely; this is here because six call sites
-/// spelling out the same shift is noise.
+/// A fixed-point value to one decimal, without a float. The renderer may use
+/// floats freely; this exists so six call sites do not repeat the same shift.
 fn tenths(v: Fx) -> String {
   format!("{}.{}", v.to_int(), (v.0 % ONE) * 10 / ONE)
 }
@@ -397,7 +394,7 @@ pub fn draw_build_bar(board: &Board, selected: TowerKind, gold: i32, inspect: Op
   BuildBar { cards, strip }
 }
 
-/// The stat block for a tower already on the map: what it is now, and what the
+/// The stat block for a tower already on the map: what it is now and what the
 /// next level would cost and buy.
 fn draw_inspector(x: f32, y: f32, kind: TowerKind, level: u8, owner: PlayerId, gold: i32) {
   let h = STRIP_H - 20.0;
@@ -500,14 +497,14 @@ pub fn draw_hud(board: &Board, wave: u32, in_ms: u64, lives: i32, gold: i32) {
   );
 }
 
-/// The end of the run, which is the only way a run ends: the waves do not
-/// stop coming, they stop being survivable.
+/// The end of the run. Every run ends this way, because the waves keep coming
+/// until one of them cannot be survived.
 ///
 /// Drawn from the server's announcement rather than inferred from the lives
 /// reaching zero locally, so every player sees it at the same moment.
 pub fn draw_over(board: &Board, wave: u32) {
   // Centred on the board rather than on the window, like everything else on
-  // this screen: one thing decides where the layout is.
+  // this screen, so the board alone decides the layout.
   draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.0, 0.0, 0.0, 0.6));
   let mid = board.origin.x + board.width() * 0.5;
   let y = board.origin.y + board.height() * 0.5;

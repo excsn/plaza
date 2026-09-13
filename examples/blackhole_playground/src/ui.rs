@@ -1,5 +1,5 @@
-//! The control panel: the sync-mode comparison this example is built around, and
-//! the readouts that make it a number rather than a claim.
+//! The control panel: the sync-mode comparison and the readouts that measure
+//! it.
 
 use blackhole_playground::sim::{Controls, SyncMode, World};
 use egui_macroquad::egui;
@@ -15,11 +15,11 @@ fn section<R>(ui: &mut egui::Ui, title: &str, default_open: bool, add: impl FnOn
 /// The sliders and toggles, identical for the offline playground and a networked
 /// host.
 ///
-/// Factored out precisely because they must stay identical: the whole point of
-/// making the host the server is that its controls are the same ones the offline
-/// demo has always had, so they live in one place rather than being copied and
-/// left to drift. On a host these edits reach the running arena through the
-/// shared `Controls`; offline they rebuild the `World`.
+/// Factored out because they must stay identical. The host is the server so
+/// that its controls are the same ones the offline demo has. Keeping them in one
+/// place stops two copies drifting apart. On a host these edits reach the
+/// running arena through the shared `Controls`; offline they rebuild the
+/// `World`.
 fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls) {
   section(ui, "what the server sends", true, |ui| {
     ui.radio_value(&mut controls.mode, SyncMode::Field, "the field (a few holes)")
@@ -192,7 +192,7 @@ pub fn draw_net_ui(client: &blackhole_playground::net::client::NetClient, url: &
 /// running arena, and every offline readout, rebuilt from the truth the arena
 /// publishes plus the host's own believed state.
 ///
-/// This is the promise that the host keeps everything. Its sliders are the
+/// The host keeps everything the offline build had. Its sliders are the
 /// offline sliders, edited into the shared `Controls` the arena reads; its
 /// readouts are the offline readouts, computed from the `HostView` truth and the
 /// host's `NetClient`, which together are exactly the two sides the offline
@@ -297,10 +297,10 @@ fn refresh_interval_secs(controls: &Controls, pellet_count: usize) -> f64 {
 /// The observer's panel: every control, live, and the truth-side readouts.
 ///
 /// An observer drives no hole and runs no client, so it has the authoritative
-/// half of every readout but not the believed half. It shows what it honestly
-/// has (bandwidth, the correction budget, the events, the true field weight) and
-/// says plainly that the client-side error is a thing only a client can measure.
-/// The controls are the whole point of the role, so they are the same live set a
+/// half of every readout but not the believed half. It shows what it has
+/// (bandwidth, the correction budget, the events and the true field weight) and
+/// says that only a client can measure the client-side error.
+/// The controls are the role's main purpose, so they are the same live set a
 /// host has.
 ///
 /// Returns whether the pointer is over the panel, so the caller can tell a drag

@@ -3,10 +3,9 @@ import 'dart:collection';
 /// A tiny deterministic PRNG (xorshift64). Not for anything but reproducible
 /// jitter and loss.
 ///
-/// `>>>` rather than `>>`, and the same reason as `mix64`: Dart's `>>`
+/// `>>>` rather than `>>`, for the same reason as `mix64`: Dart's `>>`
 /// sign-extends and this is a u64 algorithm. The sequence agrees with the Rust
-/// `Rng` for the same seed, which is what makes a Rust scenario and a Dart one
-/// comparable at all.
+/// `Rng` for the same seed, so a Rust scenario and a Dart one are comparable.
 ///
 /// Ported from `plaza_client_utils::net_sim::Rng`.
 class Rng {
@@ -57,11 +56,10 @@ class Rng {
 
 /// Whether the simulated wire may deliver packets out of send order.
 ///
-/// This is not a detail. Impairment tooling that can produce failures the real
-/// transport cannot is worse than no tooling, because the failures are credible
-/// enough to spend a day chasing, and because it quietly hides that the real
-/// system has stronger guarantees than the tests assume. Pick the one that matches
-/// the transport being stood in for.
+/// Impairment tooling that can produce failures the real transport cannot is
+/// worse than no tooling: the failures are credible enough to spend a day
+/// chasing and it hides that the real system has stronger guarantees than the
+/// tests assume. Pick the one that matches the transport being simulated.
 enum PacketOrdering {
   /// Jitter delays a packet, possibly past its successors, but never ahead of its
   /// predecessors. **The default**, and what TCP, WebSocket, QUIC streams and any
@@ -70,8 +68,9 @@ enum PacketOrdering {
 
   /// Jitter may reorder freely, so a later packet can arrive first. What raw UDP
   /// and unordered datagram channels do. Choose this deliberately: a delta stream
-  /// that assumes ordering will diverge under it, which is a real finding on a
-  /// datagram transport and a phantom on an ordered one.
+  /// that assumes ordering will diverge under it. On a datagram transport that
+  /// is a real finding; on an ordered transport it is an artefact of the
+  /// simulator.
   unordered,
 }
 
@@ -151,7 +150,7 @@ class LatencyLink<T> {
 /// A stable sort by delivery time.
 ///
 /// Dart's `List.sort` is not stable, and an unstable sort here would reorder
-/// packets that share a delivery time, which is exactly the shuffling
+/// packets that share a delivery time, which is the shuffling
 /// [PacketOrdering.ordered] exists to rule out.
 void mergeSortByDeliveryTime<T>(List<(int, T)> items) {
   if (items.length < 2) return;

@@ -45,9 +45,9 @@
         canvas.width = PX; canvas.height = PX;
 
         let ws, me = null, view = null;
-        // Fog of war means the client keeps what it last saw. The server stops
-        // sending a relic the moment it leaves your vision, so anything still
-        // drawn from here is memory, and may already be wrong.
+        // The client keeps what it last saw. The server stops sending a relic
+        // the moment it leaves your vision, so anything still drawn from here
+        // is remembered and may already be out of date.
         const remembered = new Map();
 
         const s = (v) => (v / FIELD) * PX;
@@ -65,9 +65,8 @@
                     me = op.Welcome.you;
                 } else if (op.Captured) {
                     const c = op.Captured;
-                    // A late one is the whole demonstration: you are hearing
-                    // about a capture from tick N at tick N+k, because until
-                    // now you had no business knowing that place had changed.
+                    // A late capture from tick N arrives at tick N+k, when you
+                    // can first see the place it happened.
                     remembered.set(c.relic, { ...(remembered.get(c.relic) || {}), id: c.relic, x: c.x, y: c.y, owner: c.by });
                     say(c.late
                         ? `P${c.by} took relic ${c.relic} on tick ${c.tick} — you are only being told now`
@@ -107,8 +106,8 @@
             ctx.clearRect(0, 0, PX, PX);
 
             if (view) {
-                // Everything outside a scout's circle is unlit. The dark is not
-                // a rendering effect over data we hold: there is no data.
+                // Everything outside a scout's circle is unlit, because this
+                // client holds no data for it.
                 ctx.save();
                 ctx.beginPath();
                 view.my_units.forEach(u => {
@@ -119,7 +118,7 @@
                 ctx.fill();
                 ctx.restore();
 
-                // Remembered, but not currently in sight: what you believe.
+                // Remembered but not currently in sight.
                 const live = new Set(view.relics.map(r => r.id));
                 remembered.forEach(r => {
                     if (live.has(r.id)) return;

@@ -1,26 +1,25 @@
-//! Ships in a volume, and the question of who can see whom.
+//! Ships in a volume and who can see whom.
 //!
-//! cube_yard proved the 3D encoding and the bandwidth budget; horde proved
-//! relevance. Both of them are, spatially, flat: a yard has a floor and an
-//! arena has a plane, so `SpatialGrid` being two-dimensional never cost either
-//! of them anything. Open space is where that stops being true, and it is the
-//! cheapest place to find out, because space needs no terrain, no gravity, no
-//! character controller and no solver.
+//! cube_yard worked out the 3D encoding and the bandwidth budget; horde worked
+//! out relevance. Both are spatially flat: a yard has a floor and an arena has
+//! a plane, so `SpatialGrid` being two-dimensional never cost either of them
+//! anything. Open space is where that stops being true and it is the cheapest
+//! place to test it, because space needs no terrain, no gravity, no character
+//! controller and no solver.
 //!
-//! The claim under test is not that a third axis is needed. It is that the
-//! third axis should be *measured* against the one-line fix it competes with,
-//! and that the answer "a flat grid plus a height filter is enough" is a
-//! perfectly good result to publish.
+//! The example *measures* the third axis against the one-line height filter it
+//! competes with instead of assuming it is needed. The result is that a flat
+//! grid plus a height filter is enough.
 
 /// The largest view radius the dial allows.
 ///
-/// A **bound on the encoding**, not a gameplay number. Positions cross as
-/// offsets from the observer, so the range those offsets have to cover is the
-/// view radius, and a radius that outgrew it would clamp: exactly the bug
-/// cube_yard shipped when it widened its floor without widening its bounds, and
-/// the outer ring of its field froze while flying perfectly well on the server.
-/// So this is sized once, for the widest the dial goes, and never for whatever
-/// it currently says.
+/// A **bound on the encoding** rather than a gameplay number. Positions cross
+/// as offsets from the observer, so the range those offsets have to cover is
+/// the view radius and a radius that outgrew it would clamp. cube_yard shipped
+/// that bug when it widened its floor without widening its bounds: the outer
+/// ring of its field froze on clients while flying normally on the server. So
+/// this is sized once, for the widest the dial goes, rather than for its
+/// current setting.
 pub const fn max_view() -> f32 {
   600.0
 }

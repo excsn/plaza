@@ -3,10 +3,10 @@
 //! Open http://127.0.0.1:8082. Click to send your scouts; you see only what
 //! they see. Bots hold the other corners.
 //!
-//! The panel is the example. It counts what the *outbound op stream* told you,
-//! not what the frames cost, because a per-recipient frame can be perfectly
-//! filtered while the events beside it name places nobody scouted. The toggle
-//! turns the deferral off, and the leak counter starts climbing immediately.
+//! The panel counts what the outbound op stream told you and not what the
+//! frames cost, because a per-recipient frame can be filtered correctly while
+//! the events beside it name places nobody scouted. The toggle turns the
+//! deferral off and the leak counter starts climbing immediately.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;

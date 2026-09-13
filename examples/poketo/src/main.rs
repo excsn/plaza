@@ -148,8 +148,9 @@ async fn frame_loop(options: role::Options) {
     }
 
     if stats || knobs || toggled {
-      // Reading is not walking: a direction held when this opened would carry
-      // the trainer into the grass while nobody was looking at the town.
+      // The overlay must not walk the trainer: a direction held when this
+      // opened would carry the trainer into the grass while nobody was looking
+      // at the town.
       client.walk(None);
       client.ease(get_frame_time());
     } else if client.battling() {

@@ -1,15 +1,15 @@
 //! The yard, written by hand into bits.
 //!
-//! This is the part a derive cannot reach. Serde knows a position is three
-//! `f32`; it does not know the yard is 64 units across and renders at a
-//! millimetre, which is the difference between 96 bits and 47. Every choice
-//! here is a bound plus a precision, and both are properties of *this* game
-//! that no codec could infer.
+//! A derive cannot produce this. Serde knows a position is three `f32`; it
+//! does not know the yard is 64 units across and renders at a millimetre,
+//! which is the difference between 96 bits and 47. Every choice here is a
+//! bound plus a precision and both are properties of *this* game that no codec
+//! could infer.
 //!
-//! The reader is hand-written too, and that is the honest cost of the 5x. A
-//! layout and its reader are two functions that must agree with nothing but
-//! this comment holding them together, which is why only the hot array gets
-//! this treatment and the envelope stays MessagePack.
+//! The reader is hand-written too, which is the cost of the 5x. A layout and
+//! its reader are two functions that must agree with only this comment keeping
+//! them in sync, so only the per-cube array is packed this way and the envelope
+//! stays MessagePack.
 
 use plaza_wire::bits::{BitReader, BitWriter};
 
@@ -17,10 +17,10 @@ use crate::protocol::CubeState;
 
 /// The bounds have to cover **everywhere a cube can be**, with margin.
 ///
-/// A value outside them does not wrap or error, it *clamps*, so a cube beyond
-/// the edge is pinned to it and stops moving on the client while carrying on
-/// perfectly well on the server. Widening the yard once without widening these
-/// left the outer ring of the field frozen: awake, correctly flagged, and
+/// A value outside them *clamps* rather than wrapping or erroring, so a cube
+/// beyond the edge is pinned to it and stops moving on the client while
+/// carrying on normally on the server. Widening the yard once without widening
+/// these left the outer ring of the field frozen: awake, correctly flagged and
 /// stuck. So these track the floor, which is why the floor is finite at all.
 ///
 /// At 16 bits over 310 units a step is under 5mm, which on cubes a unit across
@@ -39,14 +39,13 @@ const ROT_BITS: u32 = 9;
 const VEL: (f32, f32) = (-32.0, 32.0);
 const VEL_BITS: u32 = 11;
 
-/// The bounds above are not descriptions, they are **claims about the
-/// simulation**, and a claim that stops being true clamps rather than errors: a
-/// body outside them pins to the edge on the client while moving perfectly well
-/// on the server. This yard shipped exactly that once, by widening the field
-/// past the bounds, and the outer ring went still while staying awake.
+/// The bounds above are **assumptions about the simulation**. When one stops
+/// holding the value clamps rather than erroring: a body outside them pins to
+/// the edge on the client while moving normally on the server. This yard
+/// shipped that bug once: widening the field past the bounds made the outer
+/// ring go still while staying awake.
 ///
-/// So the relationships are asserted rather than described. Each of these is a
-/// comment that the compiler reads.
+/// So the relationships are asserted at compile time rather than described.
 /// Gated, because `sim` is server-only and `pack` is not: the browser client
 /// compiles this file without a simulation to check against.
 #[cfg(feature = "server")]
@@ -59,8 +58,8 @@ const _: () = assert!(
 /// The fastest a player cube can be going, in any mode.
 ///
 /// One constant rather than three comparisons, because clippy folds the
-/// constants and rejects an `&&` whose right side cannot fail, which is fair:
-/// a const assertion that cannot fail is the exact thing these guards exist to
+/// constants and rejects an `&&` whose right side cannot fail, which is
+/// reasonable: a const assertion that cannot fail is what these guards exist to
 /// prevent elsewhere.
 #[cfg(feature = "server")]
 const PLAYER_TOP_SPEED: f32 = {
@@ -181,9 +180,9 @@ pub const fn cube_bits(at_rest: bool) -> usize {
 /// What to allow for one index delta.
 ///
 /// A nibble varint costs five bits per four bits of value, so this covers a
-/// gap of up to 4095, which a subset of a yard this size never exceeds. Being
-/// generous here only means finishing a little under budget, and being mean
-/// means going over it.
+/// gap of up to 4095, which a subset of a yard this size never exceeds.
+/// Overestimating only means finishing a little under budget, while
+/// underestimating means going over it.
 pub const INDEX_BITS: usize = 15;
 
 #[cfg(feature = "server")]
@@ -468,10 +467,10 @@ mod tests {
 
 /// A cube as the wire sees it: the quantised integers themselves.
 ///
-/// A delta has to be taken against what the *other side holds*, not against the
-/// f32 the solver holds, or the two ends would disagree by a rounding error
-/// that accumulates with every frame. Keeping the quantised form is what makes
-/// a delta exact.
+/// A delta has to be taken against what the *other side holds* rather than
+/// the f32 the solver holds. Otherwise the two ends would disagree by a
+/// rounding error that accumulates with every frame. Keeping the quantised
+/// form makes a delta exact.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Quantized {
   pos: [u64; 3],
@@ -546,9 +545,9 @@ const SMALLEST_THREE: f32 = std::f32::consts::FRAC_1_SQRT_2;
 /// What a cube costs when it has not moved since the other side last heard
 /// about it: an index, a known bit, a rest bit and an unchanged bit.
 ///
-/// This is the whole point of delta encoding here. A settled yard is 905
-/// sleeping cubes that a budget still has to refresh, and at eight bits each
-/// the refresh is almost free.
+/// Most of delta encoding's saving comes from this. A settled yard is 905
+/// sleeping cubes that a budget still has to refresh and at eight bits each
+/// the refresh costs almost nothing.
 pub const UNCHANGED_BITS: usize = INDEX_BITS + 3;
 
 /// Writes a subset as deltas against `baseline`, updating it as it goes.
@@ -635,10 +634,10 @@ fn write_absolute(w: &mut BitWriter, q: &Quantized) {
 /// Writes cubes in priority order until the next one would not fit, and reports
 /// which ones actually travelled.
 ///
-/// The alternative is planning against a per-cube cost estimate, and an
+/// The alternative is planning against a per-cube cost estimate and an
 /// estimate has to be conservative or it overruns: allowing fifteen bits for an
 /// index delta that is usually five leaves most of the budget unspent. Measuring
-/// the writer as it goes spends the budget exactly, and needs no cost function
+/// the writer as it goes spends the budget exactly and needs no cost function
 /// at all.
 ///
 /// `order` is hottest first; the packed layout needs ascending indices, so this
@@ -675,7 +674,7 @@ pub fn pack_delta_until_full(
   (payload, picked)
 }
 
-/// A trial fit leaves no trace, which is now simply the read-only encode.
+/// A trial fit leaves no trace, so it is the read-only encode.
 fn pack_delta_dry(cubes: &[CubeState], indices: &[usize], baseline: &[Option<Quantized>]) -> Vec<u8> {
   pack_delta_against(cubes, indices, baseline)
 }
@@ -685,7 +684,7 @@ fn pack_delta_dry(cubes: &[CubeState], indices: &[usize], baseline: &[Option<Qua
 /// sequence.
 ///
 /// What an acknowledged baseline needs on the receiving side: a frame is
-/// encoded against a *named* earlier state, not against everything the client
+/// encoded against a *named* earlier state rather than everything the client
 /// has seen since, so the reader has to be told which state to measure from.
 pub fn unpack_delta_against(
   bytes: &[u8],

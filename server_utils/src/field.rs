@@ -1,23 +1,22 @@
-//! Three answers to "who can see whom" in a volume, so the third axis can be
-//! priced instead of assumed.
+//! Three ways to answer "who can see whom" in a volume, so the cost of the
+//! third axis can be measured.
 //!
-//! [`SpatialGrid`](crate::relevance::SpatialGrid) is two-dimensional, and every
-//! locally-2.5D world (a landscape, a voxel floor) can ignore that: a flat grid
-//! with a height check is what shipping MMOs actually use. Open space is where
-//! it stops being free, and the failure is the opposite of the obvious guess. A
-//! flat grid indexed on `(x, z)` returns everything inside the **disc**, which
-//! is a *superset* of the sphere, so nothing is ever missed. What it costs is
-//! false positives: two entities at the same `(x, z)` and five kilometres apart
-//! in altitude are each other's neighbours, and you pay to tell them so.
-//! Interest management wrong in this direction does not break the game, it
-//! quietly funds the bandwidth it was built to save.
+//! [`SpatialGrid`](crate::relevance::SpatialGrid) is two-dimensional and a
+//! locally-2.5D world (a landscape, a voxel floor) can ignore that: shipping
+//! MMOs use a flat grid with a height check. In open space it costs more,
+//! though not by missing anyone. A flat grid indexed on `(x, z)` returns
+//! everything inside the **disc**, which is a *superset* of the sphere, so
+//! nothing is ever missed. The cost is false positives: two entities at the
+//! same `(x, z)` and five kilometres apart in altitude count as neighbours and
+//! you pay to tell each about the other. The game still works while the
+//! bandwidth interest management was meant to save is spent anyway.
 //!
-//! Measured in the examples this came from, both ways. spacemo's open volume:
-//! the flat disc cost **7.1x** the bandwidth of the same query with the
-//! one-line height filter. gow_3d's landscape, once fliers stacked over one
-//! spot: the height filter *examined* **2.7x** what a volumetric grid did.
-//! Hence three strategies rather than a winner: filter on height when things
-//! are spread out, and index the third axis when they stack.
+//! Measured in the examples this came from: in spacemo's open volume the flat
+//! disc cost **7.1x** the bandwidth of the same query with the one-line height
+//! filter. In gow_3d's landscape, once fliers stacked over one spot, the height
+//! filter *examined* **2.7x** what a volumetric grid did. So the module offers
+//! all three: filter on height when things are spread out and index the third
+//! axis when they stack.
 
 use std::collections::HashMap;
 
@@ -28,8 +27,8 @@ use plaza_client_utils::math::Vec3;
 pub enum Strategy {
   /// A grid on `(x, z)`, altitude ignored. What `SpatialGrid` does.
   Flat,
-  /// The same grid, with everything it returns filtered on `|dy|`. Exact, and
-  /// about as cheap to write as this sentence.
+  /// The same grid, with everything it returns filtered on `|dy|`. Exact and
+  /// one line to write.
   FlatBand,
   /// Cells in all three axes.
   Volume,
@@ -47,12 +46,12 @@ impl Strategy {
   }
 }
 
-/// What a query did, not just what it returned.
+/// What a query did, as well as what it returned.
 ///
 /// `examined` is the part a result set cannot show and the part the third axis
 /// is supposed to reduce: how many candidates were pulled out of cells and
 /// tested. A strategy that returns the right answer after touching the whole
-/// world has not done interest management, it has done a scan with extra steps.
+/// world is still doing a full scan.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Query {
   pub returned: usize,
@@ -60,17 +59,16 @@ pub struct Query {
   pub cells: usize,
   /// Returned but not actually within the radius.
   pub false_positives: usize,
-  /// Within the radius and not returned. Any value above zero is a bug rather
-  /// than a trade.
+  /// Within the radius and not returned. Any value above zero is a bug.
   pub missed: usize,
 }
 
 /// A uniform grid that can be indexed in two axes or three.
 ///
-/// Deliberately one type with a mode rather than three types, so a measurement
-/// changes one enum and nothing else. Cell keys are `(i32, i32, i32)` in every
-/// mode; the flat modes simply pin the altitude index to zero, which is exactly
-/// what dropping an axis means and makes the wasted-candidate count fall out.
+/// One type with a mode rather than three types, so comparing strategies
+/// changes one enum. Cell keys are `(i32, i32, i32)` in every mode; the flat
+/// modes pin the altitude index to zero, which drops that axis and makes the
+/// wasted-candidate count directly measurable.
 pub struct Field {
   cell: f32,
   strategy: Strategy,
@@ -106,8 +104,8 @@ impl Field {
     let z = (at.z / self.cell).floor() as i32;
     let y = match self.strategy {
       Strategy::Volume => (at.y / self.cell).floor() as i32,
-      // The flat modes have one layer, which is the whole of their cheapness
-      // and the whole of their cost.
+      // The flat modes have one layer. That makes them cheap and is also why
+      // they return false positives.
       _ => 0,
     };
     (x, y, z)
@@ -133,7 +131,7 @@ impl Field {
   /// Everyone within `radius` of `at`, by this field's strategy.
   ///
   /// `truth` is the brute-force answer, supplied by the caller so the same
-  /// sphere test scores every strategy and none of them get to define correct.
+  /// sphere test scores every strategy.
   /// Serving paths pass `&[]` and skip the scoring.
   pub fn query(&self, at: Vec3, radius: f32, out: &mut Vec<u32>, truth: &[u32]) -> Query {
     out.clear();
@@ -157,7 +155,7 @@ impl Field {
             stats.examined += 1;
             let to = self.points[id as usize];
             let near = match self.strategy {
-              // Altitude never enters the test, which is the point.
+              // Altitude never enters the test, matching what `SpatialGrid` does.
               Strategy::Flat => {
                 let (dx, dz) = (to.x - at.x, to.z - at.z);
                 dx * dx + dz * dz <= radius * radius
@@ -200,7 +198,7 @@ mod tests {
   use super::*;
   use plaza_client_utils::determinism::XorShift;
 
-  /// A deterministic spread, so a run is a measurement rather than an anecdote.
+  /// A deterministic spread, so every run measures the same points.
   fn scatter(count: usize, spread: Vec3) -> Vec<Vec3> {
     let mut rng = XorShift::new(0x2545_f491_4f6c_dd1d);
     let mut next = move |scale: f32| (rng.unit() * 2.0 - 1.0) * scale;
@@ -211,9 +209,9 @@ mod tests {
 
   #[test]
   fn a_flat_grid_never_misses_anyone_and_that_is_not_the_problem() {
-    // The intuition to correct: dropping an axis does not hide entities, it
-    // returns a disc where a sphere was asked for. Nothing is missed; a great
-    // deal is sent that should not have been.
+    // Dropping an axis does not hide entities. It returns a disc where a
+    // sphere was asked for, so nothing is missed but much is sent that should
+    // not be.
     let points = scatter(2000, Vec3::new(400.0, 400.0, 400.0));
     let mut field = Field::new(60.0, Strategy::Flat);
     field.rebuild(&points);

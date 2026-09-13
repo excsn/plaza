@@ -1,8 +1,9 @@
-//! Waiting for opponents, and giving up on them.
+//! Pairs waiting players into matches and fills the empty seats when they have
+//! waited too long.
 //!
-//! [`InMemoryLobbyManager`](crate::InMemoryLobbyManager) answers "which room",
-//! which assumes the player is choosing. A queue answers "who with", for the
-//! games where they are not: press play, wait, get dropped into a match.
+//! [`InMemoryLobbyManager`](crate::InMemoryLobbyManager) lets a player choose a
+//! room. A queue is for games where they do not choose: they press play, wait
+//! and get dropped into a match.
 //!
 //! Holds no timers and spawns nothing, like
 //! [`ReconnectTracker`](plaza::common::reconnect). Keep one and drive it:
@@ -20,12 +21,11 @@
 //!
 //! # Why patience produces bots rather than a refusal
 //!
-//! A queue that only ever pairs humans stops working at exactly the moment a
-//! game needs it most: launch, off-peak, and small regions. The interesting
-//! decision is not "how long do we wait" but "what do we do when the wait is
-//! over", and the answer that keeps a game playable is to start anyway with the
-//! seats filled. So [`Formed::bots`] is a *count of seats to fill*, and what
-//! fills them is yours: a bot, a lower player count, a merged lobby.
+//! A queue that only ever pairs humans fails when player counts are low: at
+//! launch, off-peak and in small regions. To keep the game playable it starts
+//! the match anyway once patience runs out. [`Formed::bots`] is a *count of
+//! seats to fill*; you decide what fills them, such as a bot, a lower player
+//! count or a merged lobby.
 //!
 //! Zero patience forms a match on the next [`drain_ready`](MatchQueue::drain_ready)
 //! with whoever is present, which is a reasonable way to say "never wait".
@@ -44,8 +44,9 @@ pub struct Formed<ID: AgentId> {
   pub bots: usize,
   /// Whether patience ran out rather than the match filling.
   ///
-  /// The two cases are worth telling apart in a readout: a queue that only ever
-  /// forms this way is not matchmaking, it is a single-player game with a delay.
+  /// Worth showing in a readout: if a queue only ever forms matches this way,
+  /// players are getting a single-player game after a wait rather than
+  /// matchmaking.
   pub timed_out: bool,
 }
 

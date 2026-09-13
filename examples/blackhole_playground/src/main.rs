@@ -19,7 +19,7 @@ const SEED: u64 = 0x81AC_C0DE;
 
 /// Reports a fatal misconfiguration.
 ///
-/// Never `process::exit` on wasm: there is no process to exit, and the call
+/// Never `process::exit` on wasm: there is no process to exit and the call
 /// traps, so a browser sees `RuntimeError: unreachable executed` and no reason
 /// for it. On a desktop an exit code is what a shell wants; in a page the only
 /// place a person will look is the console.
@@ -36,8 +36,8 @@ fn give_up(message: String) {
 ///
 /// A headless run must never create a window, and macroquad's `#[main]` opens
 /// one before the body of `main` runs, so the decision has to happen ahead of
-/// it. Hence a plain `main` that either serves and exits, or hands over to the
-/// windowed loop.
+/// it. So a plain `main` either serves and exits or hands over to the windowed
+/// loop.
 fn main() {
   let options = match role::parse(std::env::args()) {
     Ok(options) => options,
@@ -161,10 +161,10 @@ type HostHandle = Option<std::sync::Arc<parking_lot::Mutex<blackhole_playground:
 #[cfg(all(feature = "client", feature = "websocket", not(feature = "server")))]
 type HostHandle = ();
 
-/// The single-process playground: no sockets, every readout, exactly as it was.
+/// The single-process playground: no sockets and every readout.
 ///
-/// Still the whole example when built without networking
-/// (`--no-default-features --features native,client`), and still where the
+/// It is the whole example when built without networking
+/// (`--no-default-features --features native,client`) and it is where the
 /// measurements that need both sides at once are taken.
 async fn offline() {
   let mut controls = Controls::default();
@@ -235,10 +235,9 @@ async fn networked(options: role::Options, controls: std::sync::Arc<parking_lot:
       options.connect.clone()
     }
   } else {
-    // A host joins its own arena over a real socket rather than through a
-    // shortcut. That is deliberate: the host's own player then runs exactly the
-    // client its joiners run, serialization and all, so there is no privileged
-    // path that could quietly diverge.
+    // A host joins its own arena over a real socket, not through a shortcut,
+    // so the host's own player runs exactly the client its joiners run,
+    // serialization included. No separate path can quietly diverge.
     let port = options.bind.rsplit(':').next().unwrap_or("8080");
     format!("ws://127.0.0.1:{port}/ws")
   };
@@ -342,10 +341,10 @@ async fn networked(options: role::Options, controls: std::sync::Arc<parking_lot:
 
 /// Watching an arena from inside its own process, with every control but no hole.
 ///
-/// This is the whole of the observer role. It reads the truth the arena
-/// publishes and draws it, and it writes the shared controls its panel edits, and
-/// it never opens a client connection, which is exactly why it costs no seat. The
-/// camera drifts to wherever the holes are so there is always something in frame.
+/// The observer reads the truth the arena publishes and draws it, writes the
+/// shared controls its panel edits and never opens a client connection, so it
+/// takes no seat. The camera drifts to wherever the holes are so there is always
+/// something in frame.
 #[cfg(feature = "server")]
 async fn observe(controls: std::sync::Arc<parking_lot::Mutex<Controls>>, view: std::sync::Arc<parking_lot::Mutex<blackhole_playground::net::arena::HostView>>) {
   let mut fps = Perf::default();
@@ -384,7 +383,7 @@ async fn observe(controls: std::sync::Arc<parking_lot::Mutex<Controls>>, view: s
     }
 
     // Pan by dragging, unless the drag began over the panel, so grabbing a slider
-    // does not also heave the whole map.
+    // does not also move the whole map.
     let mouse = mouse_position();
     if is_mouse_button_down(MouseButton::Left) && !pointer_over_panel {
       if dragging {
@@ -471,7 +470,7 @@ impl TouchSteer {
   }
 }
 
-/// You steer your own hole; gravity does the rest.
+/// Reads the steering direction for your own hole from the keyboard.
 fn read_input() -> SimVec2 {
   let mut dx = 0.0;
   let mut dy = 0.0;
@@ -497,28 +496,25 @@ fn read_input() -> SimVec2 {
 
 /// A frame-rate readout, bottom right.
 ///
-/// Worth having on every one of these: they all push entity counts and per-frame
-/// work hard enough that "is this the network or is this my machine?" is a real
-/// question, and without a frame counter the two are indistinguishable. Smoothed,
-/// because raw per-frame values are unreadable, and it turns red when a frame is
-/// slow enough to feel.
+/// These examples push entity counts and per-frame work hard enough that a
+/// stall could be the network or the machine. Without a frame counter the two
+/// look the same. Smoothed, because raw per-frame values are unreadable. It
+/// turns red when a frame is slow enough to feel.
 /// A frame-time readout, rather than an fps one.
 ///
-/// **Frame time is the number that maps onto what a player feels**, and fps is a
-/// reciprocal that compresses exactly the region worth seeing: 8ms to 16ms reads
-/// as a dramatic 120 to 60, while 33ms to 50ms, which is the difference between
-/// rough and unplayable, reads as a modest 30 to 20.
+/// Frame time maps onto what a player feels. Fps is a reciprocal that
+/// compresses the range that matters: 8ms to 16ms reads as a dramatic 120 to
+/// 60, while 33ms to 50ms, the difference between rough and unplayable, reads
+/// as a modest 30 to 20.
 ///
-/// **The worst frame in the window is kept beside the mean** because a hitch is
-/// one long frame. An average over a second is the instrument that hides it,
-/// which is the same reason the wire readout tracks a worst frame rather than a
-/// rate.
+/// The worst frame in the window is kept beside the mean because a hitch is one
+/// long frame and an average over a second hides it. The wire readout tracks a
+/// worst frame instead of a rate for the same reason.
 ///
-/// The mean smooths *frame time* and reciprocates at the end. The previous
-/// version averaged `1.0 / dt` directly, which is biased toward fast frames: a
-/// single 100ms stall contributes 10 to that average while the ten 8ms frames
-/// around it contribute 125 each, so the stall is almost invisible in the very
-/// number meant to reveal it.
+/// The mean smooths *frame time* and takes the reciprocal at the end. The
+/// previous version averaged `1.0 / dt` directly, which is biased toward fast
+/// frames: a single 100ms stall contributes 10 to that average while the ten
+/// 8ms frames around it contribute 125 each, so the stall barely shows.
 #[derive(Default)]
 pub struct Perf {
   /// Smoothed frame time in seconds. Zero until the first frame.
@@ -529,16 +525,17 @@ pub struct Perf {
 
 impl Perf {
   /// About two seconds at 60fps, one at 120: long enough that a spike does not
-  /// scroll away before it is read, short enough to be about *now*.
+  /// scroll away before it is read and short enough to reflect the current
+  /// state.
   const WINDOW: usize = 120;
 
   /// A ~50-frame time constant: half a second at 120fps, most of a second at 60.
   ///
-  /// Deliberately slower than it looks like it should be. Frame time is noisy
-  /// even on an idle machine (7ms to 10ms is ordinary vsync jitter), and a fast
-  /// filter on a noisy signal, printed to a couple of digits, churns constantly
-  /// and reads as instability that is not there. The mean exists to be *stable
-  /// enough to compare against*; the worst-frame figure beside it is what reacts.
+  /// Deliberately slow. Frame time is noisy even on an idle machine (7ms to
+  /// 10ms is ordinary vsync jitter) and a fast filter on a noisy signal, printed
+  /// to a couple of digits, changes constantly and looks like instability that
+  /// is not there. The mean is meant to be stable enough to compare against;
+  /// the worst-frame figure beside it is the one that reacts.
   const SMOOTHING: f32 = 0.02;
 
   fn observe(&mut self, dt: f32) {
@@ -568,7 +565,7 @@ fn draw_perf(perf: &mut Perf) {
   let text = format!("{mean_ms:.1} ms  (worst {worst_ms:.1})   {fps:.0} fps");
   let dims = measure_text(&text, None, 18, 1.0);
   // Judged on the worst frame, not the mean: a run that averages well and
-  // stalls regularly is the case this readout exists to catch.
+  // stalls regularly is the case this readout is for.
   let color = if worst_ms > 33.0 {
     Color::new(1.0, 0.5, 0.4, 0.95)
   } else if worst_ms > 20.0 {

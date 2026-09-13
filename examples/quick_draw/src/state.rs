@@ -152,8 +152,9 @@ pub fn rng(seed: u64) -> u64 {
   x.wrapping_mul(0x2545_F491_4F6C_DD1D)
 }
 
-/// A sample in `mean ± jitter`, uniform. The shape of human reaction time is
-/// beside the point here; the spread is what the orderings disagree inside.
+/// A sample in `mean ± jitter`, uniform. The exact distribution of human
+/// reaction time does not matter here, only the spread the orderings disagree
+/// inside.
 pub fn sample_ms(seed: u64, mean: u32, jitter: u32) -> u64 {
   let mean = mean as i64;
   let jitter = jitter as i64;

@@ -113,8 +113,8 @@ function send(ops) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   const frame = jsonFrame(KIND_OPS, ops);
   const lag = Number($('lag').value);
-  // Delays only the sending. What was named happened before this, which is
-  // exactly the separation the server's arbitration relies on.
+  // Delays only the sending. The tick was named before this and the server's
+  // arbitration uses only the named tick.
   if (lag > 0) setTimeout(() => ws.readyState === WebSocket.OPEN && ws.send(frame), lag);
   else ws.send(frame);
 }

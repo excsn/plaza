@@ -132,8 +132,8 @@ pub fn draw_units(
     if commanding_army && unit.activation == Activation::Done {
       color = Color::new(color.r * 0.45, color.g * 0.45, color.b * 0.45, 1.0);
     }
-    // A struck unit blinks white and swells for an instant, so a blow is a
-    // thing seen and not only a bar that got shorter.
+    // A struck unit blinks white and swells for an instant, so a blow is
+    // visible and not only a shorter bar.
     let flashing = flash
       .get(&unit.id)
       .map(|until| (until.saturating_sub(now)) as f32 / FLASH_LIFE_MS as f32)
@@ -152,8 +152,8 @@ pub fn draw_units(
     let dims = measure_text(letter, None, size, 1.0);
     draw_text(letter, cx - dims.width * 0.5, cy + dims.height * 0.5, size as f32, WHITE);
 
-    // Hit points as pips under the unit, eased toward the truth so damage
-    // drains rather than teleports.
+    // Hit points as pips under the unit, eased toward the real value so damage
+    // drains smoothly rather than jumping.
     let max = unit.class.stats().hp;
     let shown = shown_hp.get(&unit.id).copied().unwrap_or(unit.hp as f32);
     let pip = (board.cell * 0.8) / max as f32;

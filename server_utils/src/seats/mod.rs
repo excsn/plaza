@@ -2,29 +2,30 @@
 //!
 //! A world with a bounded number of participants (four players, sixteen holes,
 //! two paddles) has to answer three questions as people come and go: who is
-//! driving which seat, what happens to a seat nobody holds, and what happens to
+//! driving which seat, what happens to a seat nobody holds and what happens to
 //! the state that seat accumulated while somebody else was in it.
 //!
-//! The first two are bookkeeping. The third is where the bugs are, and it is why
+//! The first two are bookkeeping. The third is where the bugs are, which is why
 //! [`seat`](SeatTable::seat) returns a [`Seating`] rather than a bare index.
 //!
 //! # The reason `Seating` is an enum
 //!
 //! Anything kept per seat outlives the person in it: a delta baseline, an input
 //! history, a score, a cooldown. A server that keeps advancing those for
-//! unoccupied seats (which is usually the simplest thing, and often the right
-//! thing, because bots drive the empties) hands a joiner a seat with somebody
-//! else's history attached.
+//! unoccupied seats (usually the simplest choice and often the right one,
+//! because bots drive the empties) hands a joiner a seat with somebody else's
+//! history attached.
 //!
 //! That failure is close to invisible. In the case this was drawn from, a
 //! relevance baseline had been advancing on an empty seat since startup, so a
 //! joiner's first frame was computed as a *delta against a world it had never
-//! received*: almost nothing was sent, and the arena arrived only as the slow
-//! trickle of whatever later became newly relevant. It looked like packet loss.
-//! It was a seat that remembered.
+//! received*: almost nothing was sent and the arena arrived only as the slow
+//! trickle of whatever later became newly relevant. It looked like packet loss,
+//! but the cause was the baseline the seat had kept.
 //!
 //! Returning `Seating::Fresh` rather than `Some(index)` makes the caller decide
-//! what to reset, at the one moment it is knowable, instead of remembering to.
+//! what to reset at the moment it is known, instead of relying on them to
+//! remember.
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -39,21 +40,20 @@ pub use slots::SeatSlots;
 
 /// What happened when a key asked for a seat.
 ///
-/// Deliberately not `Option<usize>`: the difference between a new occupant and a
-/// key that already held a seat is exactly the difference between "reset this
-/// seat's history" and "do not", and collapsing the two is the bug this type
-/// exists to prevent.
+/// Not `Option<usize>`, because the difference between a new occupant and a key
+/// that already held a seat is the difference between "reset this seat's
+/// history" and "do not". Collapsing the two is the bug this type prevents.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Seating {
   /// A newly occupied seat. Everything kept per seat belongs to whoever sat here
-  /// before, and is now this occupant's problem unless it is reset.
+  /// before and is now this occupant's problem unless it is reset.
   Fresh(usize),
   /// This key already held this seat. A duplicate join, or a rejoin that was
   /// never unseated. Nothing to reset; resetting anyway would throw away state
   /// the occupant is mid-way through using.
   Existing(usize),
-  /// Every seat is taken. A real outcome rather than an assertion: a world with
-  /// a fixed number of seats is a world people can overfill.
+  /// Every seat is taken. A real outcome rather than an assertion: people can
+  /// overfill a world with a fixed number of seats.
   Full,
 }
 
@@ -69,7 +69,7 @@ impl Seating {
     }
   }
 
-  /// Whether this occupancy is new, and so whether per-seat state is stale.
+  /// Whether this occupancy is new and so whether per-seat state is stale.
   pub fn is_fresh(self) -> bool {
     matches!(self, Seating::Fresh(_))
   }
@@ -114,7 +114,7 @@ impl<Key: Eq + Hash + Clone> SeatTable<Key> {
   }
 
   /// Empties a key's seat, returning which one it was so the caller can hand it
-  /// back to a bot, clear its pending input, or whatever an empty seat means
+  /// back to a bot, clear its pending input or whatever an empty seat means
   /// here.
   ///
   /// Idempotent: unseating a key that holds no seat is not an error, because a
@@ -199,9 +199,9 @@ impl<Key: Eq + Hash + Clone> SeatTable<Key> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SeatState<'a, Key> {
   Human(&'a Key),
-  /// The seat is kept for a departed key. Whose clock decides for how long is
-  /// the application's: pair with `ReconnectTracker` or your own deadline, and
-  /// call [`Roster::expire`] when it runs out.
+  /// The seat is kept for a departed key. The application decides for how
+  /// long: pair with `ReconnectTracker` or your own deadline and call
+  /// [`Roster::expire`] when it runs out.
   Held(&'a Key),
   Open,
 }
@@ -217,8 +217,8 @@ pub enum Admission {
   Resumed { seat: usize },
   /// Queued for the next open seat, at this position (0 is next).
   Waitlisted { position: usize },
-  /// Not seated and not queued. Whether that means spectating or a refusal is
-  /// the application's answer to the same event.
+  /// Not seated and not queued. The application decides whether that means
+  /// spectating or a refusal.
   Turned(Turnaway),
 }
 
@@ -242,45 +242,45 @@ pub enum Departure {
   NotPresent,
 }
 
-/// What [`resolve`](Roster::resolve) did: who reached a seat, and who was
+/// What [`resolve`](Roster::resolve) did: who reached a seat and who was
 /// displaced to make room for a better-ranked waiter.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Shuffle<Key> {
   /// Promoted from the waitlist. The seat is fresh.
   Promoted { key: Key, seat: usize },
-  /// Unseated in favour of a better-ranked waiter, and requeued at the tail of
+  /// Unseated in favour of a better-ranked waiter and requeued at the tail of
   /// their own rank band.
   Displaced { key: Key, seat: usize },
 }
 
 /// Seating with the policies games actually vary: a lock for games that seat
-/// only between rounds, a ranked waitlist for the next open seat, and seats
+/// only between rounds, a ranked waitlist for the next open seat and seats
 /// held across an absence.
 ///
-/// [`SeatTable`] is the plain case, seat-on-arrival and free-on-leave, and
-/// stays the right choice for it. `Roster` is for everything the examples were
-/// hand-rolling around it: a rink whose empty seats are bots until a human
-/// takes one, two paddles that bots hold only until a person wants one, a run
-/// that keeps a leaver's seat while their grace lasts. It is composed of two
-/// smaller public blocks, [`SeatSlots`] and [`RankedQueue`]: a seating policy
-/// this type does not express is built from those directly, the same
-/// unmake-the-prescription contract as `SimHost` over `Host`.
+/// [`SeatTable`] stays the right choice for the plain case: seat on arrival,
+/// free on leave. `Roster` is for everything the examples were hand-rolling
+/// around it: a rink whose empty seats are bots until a human takes one, two
+/// paddles that bots hold only until a person wants one, a run that keeps a
+/// leaver's seat while their grace lasts. It is composed of two smaller public
+/// blocks, [`SeatSlots`] and [`RankedQueue`]: a seating policy this type does
+/// not express can be built from those directly, the same contract `SimHost`
+/// has over `Host`.
 ///
-/// Three rules run through it:
+/// Three rules apply:
 ///
 /// - **Promotion happens on the tick.** [`admit`](Self::admit) and
 ///   [`depart`](Self::depart) settle the arriving or leaving key immediately,
 ///   but a freed seat reaches the waitlist only in
-///   [`resolve`](Self::resolve), called from your `TimeStep` arm. Seating
-///   decisions made in two places, join handling and departure handling, is
-///   the bug the pong example spent a comment warning about.
+///   [`resolve`](Self::resolve), called from your `TimeStep` arm. Making
+///   seating decisions in two places, join handling and departure handling,
+///   is a bug the pong example had a comment warning about.
 /// - **Ranks displace only across bands.** A waiter with a better (lower)
 ///   rank takes the worst-ranked human seat at `resolve`; equals never
-///   displace each other, and a held seat is never displaced, because the
-///   hold is a promise.
+///   displace each other and a held seat is never displaced, because it is
+///   reserved for its occupant.
 /// - **No clocks.** A held seat stays held until you call
-///   [`expire`](Self::expire); how long that takes is between you and your
-///   `ReconnectTracker`.
+///   [`expire`](Self::expire); your `ReconnectTracker` decides how long that
+///   takes.
 #[derive(Clone, Debug, Default)]
 pub struct Roster<Key: Eq + Hash + Clone> {
   slots: SeatSlots<Key>,
@@ -446,7 +446,7 @@ impl<Key: Eq + Hash + Clone> Roster<Key> {
   }
 
   /// The worst-ranked human seat, later seats winning ties. Held seats are
-  /// not candidates: the hold is a promise.
+  /// not candidates, because they are reserved for their occupants.
   fn worst_seated(&self) -> Option<(usize, u32)> {
     let mut worst: Option<(usize, u32)> = None;
     for seat in 0..self.slots.capacity() {
@@ -504,8 +504,8 @@ mod tests {
 
     #[test]
     fn occupants_pairs_every_key_with_the_seat_it_holds() {
-      // The iteration a server does every tick to build per-client output, and
-      // the one place a seat and its holder must not drift apart.
+      // A server iterates this every tick to build per-client output, so a
+      // seat and its holder must not drift apart here.
       let mut table: SeatTable<u32> = SeatTable::new(4);
       table.seat(10);
       table.seat(20);
@@ -530,9 +530,8 @@ mod tests {
 
     #[test]
     fn a_locked_roster_says_so() {
-      // Worth pinning because the flag is what a between-rounds game reads to
-      // decide whether a joiner waits, and a lock that does not report itself
-      // is one nobody can show a player.
+      // A between-rounds game reads this flag to decide whether a joiner waits
+      // and to show the player.
       let mut roster: Roster<u32> = Roster::new(4);
       assert!(!roster.is_locked());
       roster.lock();
@@ -583,8 +582,8 @@ mod tests {
 
   #[test]
   fn a_full_world_refuses_rather_than_panicking() {
-    // A demo people can share is a demo people can overfill, so this is an
-    // outcome to report, not an invariant to assert.
+    // People can overfill a shared demo, so this is an outcome to report, not
+    // an invariant to assert.
     let mut seats: SeatTable<u64> = SeatTable::new(2);
     assert!(seats.seat(1).is_fresh());
     assert!(seats.seat(2).is_fresh());
@@ -782,7 +781,7 @@ mod roster_tests {
 
   #[test]
   fn a_held_seat_is_never_displaced() {
-    // The hold is a promise, and a better-ranked arrival does not break it.
+    // A better-ranked arrival does not take a held seat.
     let mut roster: Roster<u64> = Roster::new(1).holding_seats().with_waitlist();
     roster.admit_ranked(10, 1);
     roster.depart(&10);
@@ -802,7 +801,7 @@ mod roster_tests {
 
   #[test]
   fn open_seats_read_as_whatever_the_game_says_they_are() {
-    // The bot bench: every open seat is bot-driven, and the block does not know.
+    // The bot bench: every open seat is bot-driven and the block does not know.
     let mut roster: Roster<u64> = Roster::new(4);
     roster.admit(7);
     let occupants: Vec<bool> = roster.seats().map(|state| matches!(state, SeatState::Open)).collect();
