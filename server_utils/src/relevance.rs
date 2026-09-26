@@ -16,6 +16,9 @@
 //!   their Morton keys).
 //! - [`SpatialGrid`]: buckets entity ids into cells so a viewer can gather the ids
 //!   near it without scanning the whole world. Rebuilt each tick; allocation-light.
+//! - [`DenseGrid`]: the same surface over a world with known bounds, its buckets
+//!   in a flat `Vec` indexed by [`CellSpace`] rather than a `HashMap` keyed by
+//!   Morton code, so a cell lookup is an index rather than a hash.
 //! - [`VisibilitySet`]: a dense bitset of who is visible to one client, with a
 //!   fast bitwise diff against the previous tick, the `entered`/`left` streams a
 //!   client needs to spawn and despawn entities.
@@ -476,6 +479,90 @@ impl<Id: Copy> SpatialGrid<Id> {
   /// The quantizer this grid uses, for computing keys or cell spans directly.
   pub fn quantizer(&self) -> &GridQuantizer {
     &self.quantizer
+  }
+}
+
+/// [`SpatialGrid`] for a world with known bounds: the same surface, with the
+/// buckets in a flat `Vec` indexed by [`CellSpace`] instead of a `HashMap`
+/// keyed by Morton code.
+///
+/// A cell lookup is an index rather than a hash, which is the cost that
+/// dominates once thousands of entities are re-bucketed every tick and every
+/// viewer's query walks its cell window. The hashed grid stays for a world
+/// that is unbounded or sparse, where a table over every cell would mostly
+/// hold nothing. `clear`, `insert`, `query_radius` and `quantizer` are spelled
+/// the same on both, so a consumer swaps the type and its constructor and
+/// nothing else; `members` and `occupied` name a cell by its dense index here
+/// and by its Morton key there.
+///
+/// A position outside the space is filed in the border cell on that side,
+/// matching [`CellSpace::index_of`], so size the space to the world.
+///
+/// The filled cells are listed as they fill, so `clear` and `occupied` walk
+/// only those. Without the list a sparse world paid a walk over every cell of
+/// the space each tick, which measured slower than the hash it replaced.
+#[derive(Debug, Clone)]
+pub struct DenseGrid<Id: Copy> {
+  cells: CellTable<Vec<Id>>,
+  filled: Vec<usize>,
+}
+
+impl<Id: Copy> DenseGrid<Id> {
+  pub fn new(space: CellSpace) -> Self {
+    Self {
+      cells: CellTable::new(space),
+      filled: Vec::new(),
+    }
+  }
+
+  /// Empties every filled cell but keeps each one's capacity. Call before
+  /// re-inserting the world each tick.
+  pub fn clear(&mut self) {
+    for index in self.filled.drain(..) {
+      if let Some(cell) = self.cells.get_mut(index) {
+        cell.clear();
+      }
+    }
+  }
+
+  /// Files `id` under the cell its position falls in.
+  pub fn insert(&mut self, id: Id, x: f32, y: f32) {
+    let index = self.cells.space().index_of(x, y);
+    if let Some(cell) = self.cells.get_mut(index) {
+      if cell.is_empty() {
+        self.filled.push(index);
+      }
+      cell.push(id);
+    }
+  }
+
+  /// Appends to `out` every id in the cells overlapping the square of
+  /// half-width `radius` around `(x, y)`. Cell-granular and not cleared, as
+  /// [`SpatialGrid::query_radius`].
+  pub fn query_radius(&self, x: f32, y: f32, radius: f32, out: &mut Vec<Id>) {
+    for index in self.cells.space().indices_in_radius(x, y, radius) {
+      out.extend_from_slice(self.members(index));
+    }
+  }
+
+  /// The ids in one cell, by its dense index. Empty for a cell nothing
+  /// occupies or an index outside the space.
+  pub fn members(&self, index: usize) -> &[Id] {
+    self.cells.get(index).map_or(&[], Vec::as_slice)
+  }
+
+  /// Every occupied cell and its ids, in the order the cells first filled
+  /// since the last [`clear`](Self::clear).
+  pub fn occupied(&self) -> impl Iterator<Item = (usize, &[Id])> {
+    self.filled.iter().map(|&index| (index, self.members(index)))
+  }
+
+  pub fn space(&self) -> &CellSpace {
+    self.cells.space()
+  }
+
+  pub fn quantizer(&self) -> &GridQuantizer {
+    self.cells.space().quantizer()
   }
 }
 
@@ -1026,5 +1113,71 @@ mod tests {
     // Only a real approach admits, and only a real departure drops.
     assert!(tier.admits(false, 99.0));
     assert!(!tier.admits(true, 121.0));
+  }
+
+  #[test]
+  fn the_dense_grid_answers_what_the_hashed_one_answers() {
+    let q = GridQuantizer::new((-100.0, -100.0), 10.0);
+    let mut hashed = SpatialGrid::new(q);
+    let mut dense = DenseGrid::new(CellSpace::new(q, 200.0));
+    for id in 0..400u32 {
+      let (x, y) = (-100.0 + (id % 20) as f32 * 10.3, -100.0 + (id / 20) as f32 * 9.7 + 0.5);
+      hashed.insert(id, x, y);
+      dense.insert(id, x, y);
+    }
+
+    for (x, y) in [(0.0, 0.0), (-95.0, -95.0), (95.0, 95.0), (33.3, -12.0)] {
+      let (mut from_hashed, mut from_dense) = (Vec::new(), Vec::new());
+      hashed.query_radius(x, y, 15.0, &mut from_hashed);
+      dense.query_radius(x, y, 15.0, &mut from_dense);
+      from_hashed.sort_unstable();
+      from_dense.sort_unstable();
+      assert!(!from_dense.is_empty(), "query at ({x}, {y}) found nobody");
+      assert_eq!(from_dense, from_hashed, "query at ({x}, {y})");
+    }
+    assert_eq!(dense.occupied().count(), hashed.occupied().count());
+  }
+
+  #[test]
+  fn clearing_the_dense_grid_keeps_each_cell_s_capacity() {
+    let q = GridQuantizer::new((0.0, 0.0), 10.0);
+    let mut grid = DenseGrid::new(CellSpace::new(q, 100.0));
+    for id in 0..8u32 {
+      grid.insert(id, 5.0, 5.0);
+    }
+    let index = grid.space().index_of(5.0, 5.0);
+    let capacity = grid.cells.get(index).unwrap().capacity();
+
+    grid.clear();
+    assert!(grid.members(index).is_empty());
+    assert_eq!(grid.cells.get(index).unwrap().capacity(), capacity, "a rebuild must not churn the heap");
+    assert_eq!(grid.occupied().count(), 0);
+    assert!(grid.cells.occupied().count() == 0, "the table itself is empty, not only the list");
+    let mut out = Vec::new();
+    grid.query_radius(5.0, 5.0, 10.0, &mut out);
+    assert!(out.is_empty());
+
+    grid.insert(9, 5.0, 5.0);
+    grid.insert(10, 5.0, 5.0);
+    grid.insert(11, 95.0, 95.0);
+    let cells: Vec<usize> = grid.occupied().map(|(index, _)| index).collect();
+    assert_eq!(cells, vec![index, grid.space().index_of(95.0, 95.0)], "each filled cell listed once, as it filled");
+  }
+
+  #[test]
+  fn a_point_outside_the_space_is_filed_at_the_edge_and_found_there() {
+    let q = GridQuantizer::new((0.0, 0.0), 10.0);
+    let mut grid = DenseGrid::new(CellSpace::new(q, 100.0));
+    grid.insert(1u32, 5000.0, 5000.0);
+    grid.insert(2, -50.0, -50.0);
+
+    let last = grid.space().side() - 1;
+    assert_eq!(grid.members(grid.space().index_at(last, last)), &[1]);
+    assert_eq!(grid.members(grid.space().index_at(0, 0)), &[2]);
+    assert!(grid.members(grid.space().len()).is_empty(), "an index past the space is empty, not a panic");
+
+    let mut out = Vec::new();
+    grid.query_radius(100.0, 100.0, 5.0, &mut out);
+    assert_eq!(out, vec![1], "a query at the edge reaches the border cell");
   }
 }

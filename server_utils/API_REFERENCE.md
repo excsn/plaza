@@ -18,6 +18,7 @@
   - [Struct `CellTable<T>`](#struct-celltablet)
   - [Trait `Clearable`](#trait-clearable)
   - [Struct `SpatialGrid<Id: Copy>`](#struct-spatialgridid-copy)
+  - [Struct `DenseGrid<Id: Copy>`](#struct-densegridid-copy)
   - [Struct `TierBoundary`](#struct-tierboundary)
   - [Struct `VisibilitySet`](#struct-visibilityset)
   - [Struct `SetDigest` (re-exported)](#struct-setdigest-re-exported)
@@ -165,6 +166,15 @@ Buckets entity ids into cells for range queries. Rebuild each tick.
 *   **`quantizer(&self) -> &GridQuantizer`**.
 
 **The grid indexes two axes, so in three dimensions it over-returns rather than missing.** On a plane the exact distance test after `query_radius` makes the answer correct. In open volume a query on `(x, z)` answers with a disc where a sphere was wanted, so nobody is missed but much is sent that should not be. `spacemo` measured that at 7.1x the bandwidth per client, with the game looking correct. Filter the returned set on `|dy|` as well: it is exact at the same query cost, since it touches the same cells and examines the same candidates. Most 3D games need nothing more, because a landscape is locally 2.5D. A volumetric grid sends exactly what the filter sends, so it is only worth using for a lower query cost.
+
+### Struct `DenseGrid<Id: Copy>`
+
+`SpatialGrid` for a world with known bounds: the same surface, with the buckets in a flat `Vec` indexed by `CellSpace` instead of a `HashMap` keyed by Morton code, so a cell lookup is an index rather than a hash. That is the cost that dominates once thousands of entities are re-bucketed every tick and every viewer's query walks its cell window. The hashed grid stays for a world that is unbounded or sparse, where a table over every cell would mostly hold nothing. `clear`, `insert`, `query_radius` and `quantizer` are spelled the same on both, so a consumer swaps the type and its constructor and nothing else.
+
+*   **`new(CellSpace)`**, **`clear(&mut self)`** (empties every cell, keeps each one's capacity), **`insert(&mut self, id, x, y)`**. A position outside the space is filed in the border cell on that side, matching `CellSpace::index_of`, so size the space to the world.
+*   **`query_radius(&self, x, y, radius, out: &mut Vec<Id>)`**: as `SpatialGrid::query_radius`, over `CellSpace::indices_in_radius`.
+*   **`members(&self, index: usize) -> &[Id]`**, **`occupied(&self) -> impl Iterator<Item = (usize, &[Id])>`**: a cell by its dense index rather than its Morton key; occupied cells come in the order they first filled since the last `clear`. The grid lists filled cells as they fill, so `clear` and `occupied` walk only those: without the list a sparse world paid a walk over every cell of the space each tick, which measured slower than the hash it replaced.
+*   **`space(&self) -> &CellSpace`**, **`quantizer(&self) -> &GridQuantizer`**.
 
 ### Struct `TierBoundary`
 
