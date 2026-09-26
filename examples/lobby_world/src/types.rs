@@ -174,6 +174,10 @@ pub enum RoomOp {
   /// a room hop closes the old connection after the new seat is reserved.
   Withdraw { player: PlayerId },
 
+  /// System-only. The link the lobby admitted this player on, so the arena can
+  /// budget what it sends them; see `room::snapshot_budget`.
+  Link { player: PlayerId, one_way_ms: u32 },
+
   /// Boxed, or every `RoomOp` in a batch is sized to a whole view.
   Snapshot(Box<RoomView>),
   Claimed {

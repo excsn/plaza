@@ -71,9 +71,15 @@ This follows from the `Agent` slimming and is why the registry is thirty lines i
 
 Spectating deliberately does **not** go through `handle_join_room_request`. A spectator consumes no capacity and runs no schedule, so neither the seat count nor the latency budget applies to watching and a spectator can watch a full arena. The lobby's accounting never sees a spectator.
 
-The arena decides the seat itself, from a reservation the lobby sends ahead over the room's command channel. Without that an arena could not tell an admitted player from a passer-by and would seat whoever arrived until it filled, ignoring the lobby's capacity accounting.
+The arena decides the seat itself, from a reservation the lobby places ahead through `RoomHandle::reserve_seat`; the in-process handle turns that into the arena's own `RoomOp::Reserve`, so the seam still names no game type. Without that an arena could not tell an admitted player from a passer-by and would seat whoever arrived until it filled, ignoring the lobby's capacity accounting.
 
 A reservation is cancelled only by the lobby, never by a closing socket. The second bug described below came from getting that wrong.
+
+### 5. Fewer, complete frames for a slow link
+
+Every tab is assigned a different simulated delay, so the same arena serves links of 0, 25, 70 and 140 ms one way. The arena ticks at 20 Hz and a 140 ms link is not sent twenty snapshots a second: the lobby declares the admitted link to the arena beside the reservation (`RoomOp::Link`), `snapshot_budget` turns it into an `OutboundBudget` on that seat's connection when it joins and `ArenaSnapshotter` asks `agent_owed` before building a viewer's snapshot, answering `Ok(None)` when the budget has no credit. A 25 ms link keeps the tick rate, 70 ms gets ten a second and 140 ms gets four. The transport withholds nothing: ops and events still go, they are charged to the same credit and the next snapshot the viewer does get is the whole view, so the skip costs latency and never correctness.
+
+This arena publishes on change rather than every tick: a snapshot goes out when the pot refreshes or somebody claims, which four browser tabs measured at about one arena frame every five seconds. That is under every budget in the table, so the skip is wired here and never fires. It binds in an arena that snapshots at its tick rate, which is horde at player count.
 
 ## What it shows about plaza
 

@@ -156,6 +156,30 @@ impl LobbyLogic {
     cards
   }
 
+  /// Through the seam: the lobby's handle names no game type and the arena
+  /// spells the reservation itself.
+  async fn hold_seat(&self, room_id: &RoomId, why: &str, player: PlayerId) {
+    match self.manager.room(room_id) {
+      Some(room) => {
+        if let Err(error) = room.reserve_seat(&player).await {
+          warn!(room = %room_id, why, ?error, "Seat not held.");
+        }
+      }
+      None => warn!(room = %room_id, why, "Spoke to a room that has since gone."),
+    }
+  }
+
+  async fn release_seat(&self, room_id: &RoomId, why: &str, player: PlayerId) {
+    match self.manager.room(room_id) {
+      Some(room) => {
+        if let Err(error) = room.withdraw_seat(&player).await {
+          warn!(room = %room_id, why, ?error, "Seat not released.");
+        }
+      }
+      None => warn!(room = %room_id, why, "Spoke to a room that has since gone."),
+    }
+  }
+
   async fn tell_arena(&self, room_id: &RoomId, why: &str, op: crate::types::RoomOp) {
     self
       .command_arena(room_id, why, ControllerCommand::SubmitSystemOps {
@@ -228,9 +252,7 @@ impl LobbyLogic {
 
     for _ in 0..formed.bots {
       let bot = self.next_bot.fetch_add(1, Ordering::Relaxed);
-      self
-        .tell_arena(&room.room_id, "quick match bot", crate::types::RoomOp::Reserve { player: bot })
-        .await;
+      self.hold_seat(&room.room_id, "quick match bot", bot).await;
       self
         .command_arena(&room.room_id, "quick match bot", ControllerCommand::HandleAgentJoined {
           agent: Agent::new_bot(bot),
@@ -271,13 +293,19 @@ impl LobbyLogic {
     if let Some(previous) = state.reserved_in.insert(player, *room_id)
       && previous != *room_id
     {
+      self.release_seat(&previous, "lobby re-placement", player).await;
+    }
+    self.hold_seat(room_id, "lobby admission", player).await;
+    // The arena budgets what it sends this seat from the link the lobby
+    // admitted it on; the arena's own socket cannot see the assigned delay.
+    if let Some(link) = state.links.get(&player) {
       self
-        .tell_arena(&previous, "lobby re-placement", crate::types::RoomOp::Withdraw { player })
+        .tell_arena(room_id, "declared link", crate::types::RoomOp::Link {
+          player,
+          one_way_ms: link.one_way_ms,
+        })
         .await;
     }
-    self
-      .tell_arena(room_id, "lobby admission", crate::types::RoomOp::Reserve { player })
-      .await;
   }
 }
 
@@ -319,11 +347,7 @@ impl StateLogic<LobbyOp, PlayerId, LobbyState> for LobbyLogic {
         // An arena cannot infer this departure from a closing socket; leaving
         // the lobby means the seat will never be taken.
         if let Some(room_id) = state.reserved_in.remove(&agent_id) {
-          self
-            .tell_arena(&room_id, "lobby departure", crate::types::RoomOp::Withdraw {
-              player: agent_id,
-            })
-            .await;
+          self.release_seat(&room_id, "lobby departure", agent_id).await;
         }
         self.manager.handle_player_leaving_lobby(&agent_id).await;
         // Leaving the lobby leaves the world, so the wallet goes too.

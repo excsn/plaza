@@ -1,5 +1,6 @@
 //! One arena: a pot that refills and whoever claims it keeps the coins.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,6 +12,7 @@ use plaza::session::{MessageTarget, TargetedOp};
 use plaza::snapshot::{SnapshotContext, SnapshotError, SnapshotProvider};
 use plaza::state_logic::{LogicInput, LogicOutput, SnapshotRequest, StateLogic, StateLogicError};
 use plaza_lobby::SeatReservations;
+use plaza_session::{ConnectionManager, OutboundBudget};
 use plaza_server_utils::Roster;
 use tracing::info;
 
@@ -49,6 +51,9 @@ pub struct ArenaState {
   /// Who holds a player seat; everyone else present is a spectator.
   pub seats: Roster<PlayerId>,
   pub reserved: SeatReservations<PlayerId>,
+  /// One-way milliseconds the lobby admitted each seat on, declared ahead of
+  /// the connection like the reservation is.
+  pub links: HashMap<PlayerId, u32>,
   pub since_refresh: Duration,
   /// Arena time, the axis bot cooldowns are measured on.
   pub elapsed: Duration,
@@ -73,6 +78,7 @@ impl ArenaState {
       occupants: ParticipantTracker::new(),
       seats: Roster::new(max_players as usize),
       reserved: SeatReservations::with_expiry(RESERVATION_WINDOW),
+      links: HashMap::new(),
       since_refresh: Duration::ZERO,
       elapsed: Duration::ZERO,
       wallets,
@@ -190,7 +196,24 @@ impl ArenaState {
   }
 }
 
-pub struct ArenaLogic;
+/// Holds the arena session's manager so a seat's declared link can become an
+/// outbound budget on the connection that takes it. `None` where there is no
+/// session, which is every unit test.
+#[derive(Default)]
+pub struct ArenaLogic {
+  pub manager: Option<Arc<ConnectionManager<PlayerId>>>,
+}
+
+/// The snapshot rate a declared link earns. The arena ticks at 20 Hz and a
+/// link that cannot carry that is sent fewer, complete frames rather than a
+/// queue that overflows; the transport itself never withholds one.
+pub fn snapshot_budget(one_way_ms: u32) -> Option<OutboundBudget> {
+  match one_way_ms {
+    0..=25 => None,
+    26..=70 => Some(OutboundBudget::frames_per_second(10.0)),
+    _ => Some(OutboundBudget::frames_per_second(4.0)),
+  }
+}
 
 #[async_trait]
 impl StateLogic<RoomOp, PlayerId, ArenaState> for ArenaLogic {
@@ -213,6 +236,9 @@ impl StateLogic<RoomOp, PlayerId, ArenaState> for ArenaLogic {
         if state.reserved.consume(&id) {
           let _ = state.seats.admit(id);
         }
+        if let (Some(manager), Some(one_way_ms)) = (&self.manager, state.links.get(&id)) {
+          manager.set_agent_outbound_budget(&id, snapshot_budget(*one_way_ms));
+        }
 
         let bot = matches!(agent, Agent::Bot(_));
         state.occupants.add_participant(agent, Occupancy {
@@ -227,6 +253,7 @@ impl StateLogic<RoomOp, PlayerId, ArenaState> for ArenaLogic {
       }
 
       LogicInput::AgentLeft { agent_id } => {
+        state.links.remove(&agent_id);
         state.occupants.remove_participant(&agent_id);
         state.seats.depart(&agent_id);
         // The reservation deliberately survives: a room hop closes the old
@@ -357,6 +384,15 @@ impl StateLogic<RoomOp, PlayerId, ArenaState> for ArenaLogic {
               state.reserved.reserve(player);
             }
 
+            RoomOp::Link { player, one_way_ms } => {
+              if !source.is_system() {
+                return Err(StateLogicError::InvalidOperation(
+                  "Only the lobby declares a link.".into(),
+                ));
+              }
+              state.links.insert(player, one_way_ms);
+            }
+
             RoomOp::Withdraw { player } => {
               if !source.is_system() {
                 return Err(StateLogicError::InvalidOperation(
@@ -388,7 +424,12 @@ impl StateLogic<RoomOp, PlayerId, ArenaState> for ArenaLogic {
   }
 }
 
-pub struct ArenaSnapshotter;
+/// Skips a viewer whose budget has no credit this pass: the controller sends
+/// nothing for `Ok(None)` and the next snapshot they do get is the whole view.
+#[derive(Default)]
+pub struct ArenaSnapshotter {
+  pub manager: Option<Arc<ConnectionManager<PlayerId>>>,
+}
 
 #[async_trait]
 impl SnapshotProvider<PlayerId, ArenaState, RoomOp> for ArenaSnapshotter {
@@ -399,6 +440,11 @@ impl SnapshotProvider<PlayerId, ArenaState, RoomOp> for ArenaSnapshotter {
     _context: Option<SnapshotContext>,
   ) -> Result<Option<RoomOp>, SnapshotError<PlayerId>> {
     let viewer = target.and_then(|agent| agent.id());
+    if let (Some(manager), Some(viewer)) = (&self.manager, viewer)
+      && !manager.agent_owed(viewer)
+    {
+      return Ok(None);
+    }
     Ok(Some(RoomOp::Snapshot(Box::new(state.view_for(viewer)))))
   }
 }
@@ -421,7 +467,7 @@ mod tests {
   }
 
   async fn join(state: &mut ArenaState, id: PlayerId) {
-    ArenaLogic
+    ArenaLogic::default()
       .process_input(state, LogicInput::AgentJoined {
         agent: Agent::new_human(id),
       })
@@ -430,7 +476,7 @@ mod tests {
   }
 
   async fn claim(state: &mut ArenaState, id: PlayerId) -> LogicOutput<RoomOp, PlayerId> {
-    ArenaLogic
+    ArenaLogic::default()
       .process_input(state, LogicInput::AgentOps {
         source: Agent::new_human(id),
         ops: vec![RoomOp::Claim],
@@ -440,7 +486,7 @@ mod tests {
   }
 
   async fn reserve(state: &mut ArenaState, id: PlayerId) {
-    ArenaLogic
+    ArenaLogic::default()
       .process_input(state, LogicInput::AgentOps {
         source: Agent::system(),
         ops: vec![RoomOp::Reserve { player: id }],
@@ -512,7 +558,7 @@ mod tests {
   #[tokio::test]
   async fn a_client_cannot_reserve_its_own_seat() {
     let mut state = arena();
-    let result = ArenaLogic
+    let result = ArenaLogic::default()
       .process_input(&mut state, LogicInput::AgentOps {
         source: Agent::new_human(1),
         ops: vec![RoomOp::Reserve { player: 1 }],
@@ -523,7 +569,7 @@ mod tests {
   }
 
   async fn withdraw(state: &mut ArenaState, id: PlayerId) {
-    ArenaLogic
+    ArenaLogic::default()
       .process_input(state, LogicInput::AgentOps {
         source: Agent::system(),
         ops: vec![RoomOp::Withdraw { player: id }],
@@ -537,7 +583,7 @@ mod tests {
   async fn a_closing_socket_does_not_cancel_a_reservation() {
     let mut state = arena();
     reserve(&mut state, 1).await;
-    ArenaLogic
+    ArenaLogic::default()
       .process_input(&mut state, LogicInput::AgentLeft { agent_id: 1 })
       .await
       .unwrap();
@@ -552,7 +598,7 @@ mod tests {
     let mut state = arena();
     reserve(&mut state, 1).await;
 
-    ArenaLogic
+    ArenaLogic::default()
       .process_input(&mut state, LogicInput::TimeStep {
         delta_time: RESERVATION_WINDOW,
       })
@@ -572,7 +618,7 @@ mod tests {
     reserve(&mut state, 1).await;
     join(&mut state, 1).await;
 
-    ArenaLogic
+    ArenaLogic::default()
       .process_input(&mut state, LogicInput::TimeStep {
         delta_time: RESERVATION_WINDOW * 3,
       })
@@ -597,7 +643,7 @@ mod tests {
   async fn a_client_cannot_cancel_someone_elses_reservation() {
     let mut state = arena();
     reserve(&mut state, 1).await;
-    let result = ArenaLogic
+    let result = ArenaLogic::default()
       .process_input(&mut state, LogicInput::AgentOps {
         source: Agent::new_human(2),
         ops: vec![RoomOp::Withdraw { player: 1 }],
@@ -616,7 +662,7 @@ mod tests {
     let earned = state.wallets.balance(1);
     assert!(earned > 0);
 
-    ArenaLogic
+    ArenaLogic::default()
       .process_input(&mut state, LogicInput::AgentLeft { agent_id: 1 })
       .await
       .unwrap();
@@ -627,7 +673,7 @@ mod tests {
 
   async fn seat_bot(state: &mut ArenaState, id: PlayerId) {
     reserve(state, id).await;
-    ArenaLogic
+    ArenaLogic::default()
       .process_input(state, LogicInput::AgentJoined {
         agent: Agent::new_bot(id),
       })
@@ -650,7 +696,7 @@ mod tests {
   }
 
   async fn tick(state: &mut ArenaState, ms: u64) -> LogicOutput<RoomOp, PlayerId> {
-    ArenaLogic
+    ArenaLogic::default()
       .process_input(state, LogicInput::TimeStep {
         delta_time: Duration::from_millis(ms),
       })
@@ -694,7 +740,7 @@ mod tests {
     seat_bot(&mut state, 1_000_000).await;
     assert_eq!(state.bots(), 1);
 
-    ArenaLogic
+    ArenaLogic::default()
       .process_input(&mut state, LogicInput::AgentLeft { agent_id: 1 })
       .await
       .unwrap();
@@ -717,7 +763,7 @@ mod tests {
   async fn the_pot_refills_on_its_own_schedule() {
     let mut state = arena();
     let before = state.pot;
-    ArenaLogic
+    ArenaLogic::default()
       .process_input(&mut state, LogicInput::TimeStep {
         delta_time: Duration::from_millis(400),
       })
@@ -725,7 +771,7 @@ mod tests {
       .unwrap();
     assert_eq!(state.pot, before, "not yet");
 
-    ArenaLogic
+    ArenaLogic::default()
       .process_input(&mut state, LogicInput::TimeStep {
         delta_time: Duration::from_millis(700),
       })
@@ -738,7 +784,7 @@ mod tests {
   async fn the_pot_stops_at_its_ceiling() {
     let mut state = arena();
     for _ in 0..500 {
-      ArenaLogic
+      ArenaLogic::default()
         .process_input(&mut state, LogicInput::TimeStep {
           delta_time: Duration::from_millis(1000),
         })
@@ -753,12 +799,68 @@ mod tests {
   async fn a_full_pot_announces_nothing() {
     let mut state = arena();
     state.pot = POT_CAP;
-    let out = ArenaLogic
+    let out = ArenaLogic::default()
       .process_input(&mut state, LogicInput::TimeStep {
         delta_time: Duration::from_secs(10),
       })
       .await
       .unwrap();
     assert!(out.ops.is_empty());
+  }
+
+  #[tokio::test]
+  async fn a_declared_link_becomes_a_budget_on_the_seat_that_takes_it() {
+    let manager = Arc::new(ConnectionManager::<PlayerId>::new("test", 8));
+    let (tx, _inbox) = plaza::session::session_channel(8);
+    let conn = manager.register(Agent::new_human(1), tx).await;
+    let logic = ArenaLogic {
+      manager: Some(manager.clone()),
+    };
+    let mut state = arena();
+    logic
+      .process_input(&mut state, LogicInput::AgentOps {
+        source: Agent::system(),
+        ops: vec![RoomOp::Link {
+          player: 1,
+          one_way_ms: 140,
+        }],
+      })
+      .await
+      .unwrap();
+    assert_eq!(manager.outbound_budget(conn), None, "declared, not yet connected");
+
+    logic
+      .process_input(&mut state, LogicInput::AgentJoined {
+        agent: Agent::new_human(1),
+      })
+      .await
+      .unwrap();
+    assert_eq!(manager.outbound_budget(conn), snapshot_budget(140));
+    assert!(snapshot_budget(0).is_none(), "a good link keeps the tick rate");
+  }
+
+  #[tokio::test]
+  async fn a_viewer_out_of_credit_gets_no_snapshot_this_pass() {
+    let manager = Arc::new(ConnectionManager::<PlayerId>::new("test", 8));
+    let (tx, _slow_inbox) = plaza::session::session_channel(8);
+    let slow = manager.register(Agent::new_human(1), tx).await;
+    let (tx, _fast_inbox) = plaza::session::session_channel(8);
+    manager.register(Agent::new_human(2), tx).await;
+    manager.set_outbound_budget(slow, Some(OutboundBudget::frames_per_second(0.01)));
+    let snapshotter = ArenaSnapshotter {
+      manager: Some(manager.clone()),
+    };
+    let state = arena();
+
+    let built = snapshotter.create_snapshot(&state, Some(&Agent::new_human(1)), None).await.unwrap();
+    assert!(built.is_some(), "the burst covers the first frame");
+    manager
+      .broadcast(&MessageTarget::Agent(1), plaza_session::Frame::from(vec![0u8; 4]))
+      .unwrap();
+
+    let built = snapshotter.create_snapshot(&state, Some(&Agent::new_human(1)), None).await.unwrap();
+    assert!(built.is_none(), "in debt until the credit refills");
+    assert!(snapshotter.create_snapshot(&state, Some(&Agent::new_human(2)), None).await.unwrap().is_some());
+    assert!(snapshotter.create_snapshot(&state, None, None).await.unwrap().is_some(), "a uniform pass is nobody's budget");
   }
 }

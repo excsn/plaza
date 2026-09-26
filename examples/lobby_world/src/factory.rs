@@ -126,9 +126,13 @@ impl RoomFactory for ArenaFactory {
     );
 
     let (commands, controller) = StateControllerBuilder::new(
-      Arc::new(ArenaLogic),
+      Arc::new(ArenaLogic {
+        manager: Some(session.manager().clone()),
+      }),
       session.clone(),
-      Arc::new(ArenaSnapshotter),
+      Arc::new(ArenaSnapshotter {
+        manager: Some(session.manager().clone()),
+      }),
       state,
     )
     .command_buffer(128)
@@ -153,14 +157,17 @@ impl RoomFactory for ArenaFactory {
       custom_game_settings_summary: room_settings.custom_game_settings,
     };
 
-    let room = Arc::new(InProcessRoomHandle::new(
-      room_id,
-      metadata,
-      commands.clone(),
-      task,
-      endpoint,
-      room_settings.password_hash.clone(),
-    ));
+    let room = Arc::new(
+      InProcessRoomHandle::new(
+        room_id,
+        metadata,
+        commands.clone(),
+        task,
+        endpoint,
+        room_settings.password_hash.clone(),
+      )
+      .with_reservations(|player| RoomOp::Reserve { player }, |player| RoomOp::Withdraw { player }),
+    );
     self.registry.insert(room_id, ArenaEntry {
       session,
       seats,
