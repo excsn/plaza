@@ -66,6 +66,28 @@ class ClientInputBuffer<Op, S> {
   Iterable<BufferedInput<Op, S>> unacknowledgedAfter(int ackSequenceNumber) =>
       _inputs.where((i) => i.sequenceNumber > ackSequenceNumber);
 
+  /// The newest sequence [unacknowledgedWithPass] has handed out. Inputs at or
+  /// below it have been predicted before.
+  int _predictedThrough = 0;
+
+  /// The same as [unacknowledgedAfter], each paired with whether this is its
+  /// first pass: whether no earlier call here has handed it out.
+  ///
+  /// For a predictor that predicts by replaying from the last acknowledgement
+  /// every frame, this is how it tells a press from a replay, so what an input
+  /// causes once (a shot, a footstep) runs on its first pass and not once per
+  /// replay per input in flight, which is one plus round trip times packet
+  /// rate. The mark moves only here; [unacknowledgedAfter] neither reads nor
+  /// moves it. [PredictedPlayer] does not need it: its press-time apply is
+  /// `input` and every apply in `reconcile` is a replay, so it takes `onFirst`.
+  Iterable<(BufferedInput<Op, S>, bool)> unacknowledgedWithPass(int ackSequenceNumber) {
+    final through = _predictedThrough;
+    if (_inputs.isNotEmpty && _inputs.last.sequenceNumber > through) {
+      _predictedThrough = _inputs.last.sequenceNumber;
+    }
+    return unacknowledgedAfter(ackSequenceNumber).map((i) => (i, i.sequenceNumber > through));
+  }
+
   /// The predicted state recorded before a given input, if it is still held.
   S? stateBefore(int sequenceNumber) {
     for (final i in _inputs) {

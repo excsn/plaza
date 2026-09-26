@@ -62,6 +62,7 @@ class PredictedPlayer<S, I, C> {
     required S Function(S state, I input, C ctx) apply,
     required S Function(S a, S b, double t) lerp,
     required C context,
+    void Function(I input, C ctx)? onFirst,
     PlayerConfig config = const PlayerConfig(),
   });
 }
@@ -72,6 +73,8 @@ The local player's entity: predicts on input, reconciles against the server and 
 **For a server that consumes one input per simulation step.** For one that holds an input and integrates it every tick, use [`HeldInputPredictor`](#class-heldinputpredictor).
 
 `apply` takes the world as `C` so a *forced* entity, one the server moves by more than its own input, can run the same rule the server runs.
+
+`onFirst` runs once per input, from `input` and never from a replay. What an input causes once (a shot, a footstep, a flash) goes there; `apply` keeps to what the input does to state, which `reconcile` replays. An effect inside `apply` runs once per reconcile per input in flight, which is one plus round trip times the server's packet rate: ten per trigger pull at 150 ms and 60 packets a second.
 
 | Member | Notes |
 |---|---|
@@ -225,6 +228,7 @@ A history of inputs sent to the server, for prediction and reconciliation. Fixed
 | `void record(int seq, Op op, S stateBeforeOp)` | `stateBeforeOp` is the predicted state immediately before `op` was applied locally. |
 | `void acknowledgeUpTo(int ackSeq)` | Drops everything up to and including `ackSeq`. |
 | `Iterable<BufferedInput<Op, S>> unacknowledgedAfter(int ackSeq)` | In order. What reconciliation replays. |
+| `Iterable<(BufferedInput<Op, S>, bool)> unacknowledgedWithPass(int ackSeq)` | The same, each paired with whether this is its first pass, meaning no earlier call here handed it out. For a predictor that predicts by replaying from the last acknowledgement every frame, so a one-shot runs once. The mark moves only here; `unacknowledgedAfter` neither reads nor moves it. `PredictedPlayer` takes `onFirst` instead. |
 | `S? stateBefore(int seq)` | The recorded pre-state, if still held. |
 | `int get length`, `bool get isEmpty`, `void clear()` | |
 

@@ -707,6 +707,27 @@ fn prediction_vectors() {
     "oldest_retained_seq": small.get_unacknowledged_inputs(0).next().map(|i| i.sequence_number),
   });
 
+  // Which inputs are on their first pass, walked through record, hand-out,
+  // record, acknowledge. A one-shot runs on a first pass and never on a replay.
+  let mut marked: ClientInputBuffer<f32, f32> = ClientInputBuffer::new(8);
+  let passes = |buffer: &mut ClientInputBuffer<f32, f32>, ack: u64| -> Vec<Value> {
+    buffer
+      .unacknowledged_with_pass(ack)
+      .map(|(input, first)| json!([input.sequence_number, first]))
+      .collect()
+  };
+  let mut pass_steps = Vec::new();
+  for seq in 1..=3u64 {
+    marked.record_input(seq, seq as f32, 0.0);
+  }
+  pass_steps.push(json!({ "op": "passes", "ack": 0, "passes": passes(&mut marked, 0) }));
+  marked.record_input(4, 4.0, 0.0);
+  pass_steps.push(json!({ "op": "record", "seq": 4 }));
+  pass_steps.push(json!({ "op": "passes", "ack": 0, "passes": passes(&mut marked, 0) }));
+  marked.acknowledge_inputs_up_to(2);
+  pass_steps.push(json!({ "op": "acknowledge", "seq": 2 }));
+  pass_steps.push(json!({ "op": "passes", "ack": 2, "passes": passes(&mut marked, 2) }));
+
   golden(
     "vectors_prediction",
     &json!({
@@ -715,6 +736,7 @@ fn prediction_vectors() {
       "rel_tolerance": 1e-6,
       "predicted_entity": { "input_buffer": 16, "steps": entity_steps },
       "input_buffer_overflow": overflow,
+      "input_buffer_pass": { "max_size": 8, "first_recorded": 3, "steps": pass_steps },
       "predicted_player": { "input_buffer": 32, "smoothing_secs": 0.2, "steps": player_steps },
       "held_input": { "blend": 0.25, "hold": 10.0, "steps": held_steps },
       "remote_view": {

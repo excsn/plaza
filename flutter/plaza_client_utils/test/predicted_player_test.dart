@@ -167,4 +167,32 @@ void main() {
     me.reconcile(const P(0.0), s);
     expect(me.render().v, 0.0, reason: 'no ease, render is the logical state');
   });
+
+  test('a one-shot runs once however many times its input is replayed', () {
+    final counts = <String, int>{'applied': 0, 'fired': 0};
+    P applyShot(P p, (double, bool) i, Map<String, int> c) {
+      if (i.$2) c['applied'] = c['applied']! + 1;
+      return P(p.v + i.$1);
+    }
+
+    final me = PredictedPlayer<P, (double, bool), Map<String, int>>(
+      initial: const P(0.0),
+      config: const PlayerConfig(inputBuffer: 64, smoothingSecs: 0.0),
+      apply: applyShot,
+      lerp: lerp,
+      context: counts,
+      onFirst: (i, c) {
+        if (i.$2) c['fired'] = c['fired']! + 1;
+      },
+    );
+    for (var n = 0; n < 5; n++) {
+      me.input((1.0, n == 2));
+    }
+    for (var k = 0; k < 10; k++) {
+      me.reconcile(const P(0.0), 0);
+    }
+    expect(counts['fired'], 1, reason: 'one trigger pull is one shot');
+    expect(counts['applied'], 11, reason: 'the applier still replays the input every reconcile');
+    expect(me.logical.v, 5.0, reason: 'and the replay still moves the player');
+  });
 }

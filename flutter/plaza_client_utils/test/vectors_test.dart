@@ -554,6 +554,29 @@ void main() {
           i(section['oldest_retained_seq']));
     });
 
+    /// A one-shot runs on an input's first pass and never on a replay, so which
+    /// pass each hand-out is has to agree between the two ports exactly.
+    test('the first-pass mark moves identically', () {
+      final section = map(v['input_buffer_pass']);
+      final buffer = ClientInputBuffer<double, double>(i(section['max_size']));
+      for (var seq = 1; seq <= i(section['first_recorded']); seq++) {
+        buffer.record(seq, seq.toDouble(), 0.0);
+      }
+      for (final step in list(section['steps'])) {
+        final s = map(step);
+        switch (s['op']) {
+          case 'record':
+            buffer.record(i(s['seq']), i(s['seq']).toDouble(), 0.0);
+          case 'acknowledge':
+            buffer.acknowledgeUpTo(i(s['seq']));
+          case 'passes':
+            final got = buffer.unacknowledgedWithPass(i(s['ack'])).map((e) => [e.$1.sequenceNumber, e.$2]).toList();
+            final want = list(s['passes']).map((p) => list(p)).toList();
+            expect(got, want, reason: 'passes after ack ${s['ack']}');
+        }
+      }
+    });
+
     /// The logical state is what game rules read and the render state is what the
     /// eye sees. Conflating them is the bug the split exists to prevent, so both
     /// are pinned at every step.

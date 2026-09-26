@@ -45,6 +45,74 @@
     "overflowed": 16,
     "recorded": 20
   },
+  "input_buffer_pass": {
+    "first_recorded": 3,
+    "max_size": 8,
+    "steps": [
+      {
+        "ack": 0,
+        "op": "passes",
+        "passes": [
+          [
+            1,
+            true
+          ],
+          [
+            2,
+            true
+          ],
+          [
+            3,
+            true
+          ]
+        ]
+      },
+      {
+        "op": "record",
+        "seq": 4
+      },
+      {
+        "ack": 0,
+        "op": "passes",
+        "passes": [
+          [
+            1,
+            false
+          ],
+          [
+            2,
+            false
+          ],
+          [
+            3,
+            false
+          ],
+          [
+            4,
+            true
+          ]
+        ]
+      },
+      {
+        "op": "acknowledge",
+        "seq": 2
+      },
+      {
+        "ack": 2,
+        "op": "passes",
+        "passes": [
+          [
+            3,
+            false
+          ],
+          [
+            4,
+            false
+          ]
+        ]
+      }
+    ]
+  },
   "note": "Prediction, reconciliation, held input and remote views.",
   "predicted_entity": {
     "input_buffer": 16,

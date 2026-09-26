@@ -229,4 +229,21 @@ void main() {
       expect(buffer.unacknowledgedAfter(1).first.sequenceNumber, 2);
     });
   });
+
+  test('an input is first pass once however often it is replayed', () {
+    final buffer = ClientInputBuffer<int, int>(8);
+    for (var seq = 1; seq <= 3; seq++) {
+      buffer.record(seq, seq * 10, 0);
+    }
+    List<(int, bool)> passes(int ack) =>
+        buffer.unacknowledgedWithPass(ack).map((e) => (e.$1.sequenceNumber, e.$2)).toList();
+
+    expect(passes(0), [(1, true), (2, true), (3, true)], reason: 'never handed out before');
+    buffer.record(4, 40, 0);
+    expect(passes(0), [(1, false), (2, false), (3, false), (4, true)], reason: 'only the new one is a first pass');
+    buffer.acknowledgeUpTo(2);
+    expect(passes(2), [(3, false), (4, false)], reason: 'a replay is never a first pass');
+    expect(buffer.unacknowledgedAfter(2).map((i) => i.sequenceNumber), [3, 4],
+        reason: 'the unmarked iterator neither reads nor moves the mark');
+  });
 }

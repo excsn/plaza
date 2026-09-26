@@ -39,6 +39,7 @@ class PredictedPlayer<S, I, C> {
     required this.apply,
     required this.lerp,
     required C context,
+    this.onFirst,
     PlayerConfig config = const PlayerConfig(),
   })  : _predicted = PredictedEntity<S, I>(initial),
         _inputs = ClientInputBuffer<I, S>(config.inputBuffer),
@@ -49,6 +50,15 @@ class PredictedPlayer<S, I, C> {
   /// moves by more than its own input, can run the same rule the server runs.
   final S Function(S state, I input, C ctx) apply;
   final S Function(S a, S b, double t) lerp;
+
+  /// Runs once per input, when it is pressed and never when it is replayed.
+  ///
+  /// Put what an input causes once here (a shot, a footstep, a flash) and keep
+  /// [apply] to what the input does to state, which reconciliation replays. An
+  /// effect inside [apply] runs once per reconcile per input in flight, which
+  /// is one plus round trip times the server's packet rate: ten times per
+  /// trigger pull at 150 ms and 60 packets a second.
+  final void Function(I input, C ctx)? onFirst;
 
   final PredictedEntity<S, I> _predicted;
   final ClientInputBuffer<I, S> _inputs;
@@ -95,6 +105,7 @@ class PredictedPlayer<S, I, C> {
     final seq = _nextSeq;
     if (!_active) return seq;
     _predicted.applyLocal(input, seq, _inputs, (s, i) => apply(s, i, _ctx));
+    onFirst?.call(input, _ctx);
     return seq;
   }
 
