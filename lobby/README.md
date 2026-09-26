@@ -24,7 +24,7 @@ plaza_lobby = "0.7"
 | Gating a room behind a code or a password | `RoomSettings::password_hash` plus a verifier you supply |
 | Sending a connection to a room whose schedule it can actually meet | `rooms_playable_at`, `routing::best_for` |
 | Pairing players who would rather not choose a room | `MatchQueue` |
-| Holding a seat between admission and arrival | `SeatReservations` |
+| Holding a seat between admission and arrival | `RoomHandle::reserve_seat` / `withdraw_seat` from the lobby, `SeatReservations` in the room |
 | Resolving a connecting player without trusting a URL | `TicketStore`, `MapTicketRegistry`, `CachedTicketRegistry` |
 
 ## Scope

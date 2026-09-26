@@ -27,6 +27,19 @@ where
   /// own `Session` fires its join notification.
   async fn accept_authorized_player(&self, player_for_game: Agent<GameAgentID>) -> Result<(), LobbyError>;
 
+  /// Holds a seat for a player the lobby has admitted, ahead of their
+  /// connection. A room that takes no reservations answers
+  /// [`LobbyError::NotImplemented`], which is the default.
+  async fn reserve_seat(&self, _player: &GameAgentID) -> Result<(), LobbyError> {
+    Err(LobbyError::NotImplemented("this room takes no reservations".to_string()))
+  }
+
+  /// Releases a seat [`reserve_seat`](Self::reserve_seat) held that will not
+  /// be taken: the player left the lobby or was placed elsewhere.
+  async fn withdraw_seat(&self, _player: &GameAgentID) -> Result<(), LobbyError> {
+    Err(LobbyError::NotImplemented("this room takes no reservations".to_string()))
+  }
+
   /// Informs the room that a player left the lobby while assigned to it.
   async fn notify_player_departed(&self, player_id: &GameAgentID);
 
@@ -69,6 +82,20 @@ where
   /// verifier on join; never exposed in `RoomMetadata`, which only reports
   /// whether a password exists.
   password_hash: Option<String>,
+  reservations: Option<ReservationOps<GameOp, GameID>>,
+}
+
+/// How a room spells a reservation in its own ops, so the handle can submit
+/// one without the seam naming a game type.
+struct ReservationOps<GameOp, GameID> {
+  reserve: Box<dyn Fn(GameID) -> GameOp + Send + Sync>,
+  withdraw: Box<dyn Fn(GameID) -> GameOp + Send + Sync>,
+}
+
+impl<GameOp, GameID> Debug for ReservationOps<GameOp, GameID> {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.write_str("ReservationOps")
+  }
 }
 
 impl<GameOp, GameID, GameStateType, CustomRoomSettings>
@@ -95,7 +122,24 @@ where
       metadata: Arc::new(Mutex::new(initial_metadata)),
       game_session_endpoint,
       password_hash,
+      reservations: None,
     }
+  }
+
+  /// Teaches the handle how this room spells a reservation and its
+  /// withdrawal, so [`RoomHandle::reserve_seat`] and
+  /// [`RoomHandle::withdraw_seat`] submit them as system ops. Without this the
+  /// handle answers both with [`LobbyError::NotImplemented`].
+  pub fn with_reservations(
+    mut self,
+    reserve: impl Fn(GameID) -> GameOp + Send + Sync + 'static,
+    withdraw: impl Fn(GameID) -> GameOp + Send + Sync + 'static,
+  ) -> Self {
+    self.reservations = Some(ReservationOps {
+      reserve: Box::new(reserve),
+      withdraw: Box::new(withdraw),
+    });
+    self
   }
 
   /// Called by the room's own session as players connect and disconnect.
@@ -104,6 +148,17 @@ where
     meta.current_players = count;
   }
 
+  async fn submit_system_op(&self, why: &str, op: GameOp) -> Result<(), LobbyError> {
+    let command = ControllerCommand::SubmitSystemOps {
+      source_description: why.to_string(),
+      ops: vec![op],
+    };
+    self
+      .command_tx
+      .send(command)
+      .await
+      .map_err(|_| LobbyError::InternalOrchestrationError(format!("room {} controller has ended", self.room_id)))
+  }
 }
 
 #[async_trait]
@@ -142,6 +197,20 @@ where
       self.game_session_endpoint
     );
     Ok(())
+  }
+
+  async fn reserve_seat(&self, player: &GameID) -> Result<(), LobbyError> {
+    let Some(ops) = &self.reservations else {
+      return Err(LobbyError::NotImplemented("this room takes no reservations".to_string()));
+    };
+    self.submit_system_op("lobby reservation", (ops.reserve)(player.clone())).await
+  }
+
+  async fn withdraw_seat(&self, player: &GameID) -> Result<(), LobbyError> {
+    let Some(ops) = &self.reservations else {
+      return Err(LobbyError::NotImplemented("this room takes no reservations".to_string()));
+    };
+    self.submit_system_op("lobby withdrawal", (ops.withdraw)(player.clone())).await
   }
 
   async fn notify_player_departed(&self, player_id: &GameID) {

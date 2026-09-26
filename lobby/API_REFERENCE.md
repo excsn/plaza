@@ -62,6 +62,7 @@ What the lobby needs from a room. Implemented by `InProcessRoomHandle`; implemen
 *   `id(&self) -> RoomId`
 *   `metadata(&self) -> RoomMetadata<CustomRoomSettings>`
 *   `async accept_authorized_player(&self, player: Agent<GameAgentID>) -> Result<(), LobbyError>` The room's last chance to refuse: it may have filled since the lobby checked.
+*   `async reserve_seat(&self, player: &GameAgentID) -> Result<(), LobbyError>` / `async withdraw_seat(&self, player: &GameAgentID) -> Result<(), LobbyError>`: holds a seat for an admitted player ahead of their connection and releases one that will not be taken (the player left the lobby or was placed elsewhere). Defaulted to `LobbyError::NotImplemented`, so a room that takes no reservations implements nothing. The room keeps the hold itself, in a `SeatReservations` and spends it on `AgentJoined`.
 *   `async notify_player_departed(&self, player_id: &GameAgentID)`
 *   `async request_shutdown(&self)`
 *   `is_finished(&self) -> bool`
@@ -72,6 +73,7 @@ What the lobby needs from a room. Implemented by `InProcessRoomHandle`; implemen
 A room running as a task in this process.
 
 *   **`new(room_id, initial_metadata, command_tx, task_join_handle, game_session_endpoint, password_hash) -> Self`** Called from your factory. `command_tx` is the `CommandSender` from `StateControllerBuilder::build`; `task_join_handle` is the `JoinHandle` from spawning `controller.run()`.
+*   **`with_reservations(self, reserve: impl Fn(GameID) -> GameOp, withdraw: impl Fn(GameID) -> GameOp) -> Self`**: how this room spells a reservation and its withdrawal in its own ops. `reserve_seat` and `withdraw_seat` then submit them as system ops on `command_tx`; without it both answer `NotImplemented`. The seam names no game type, which is what lets a room live in another process, so the spelling is the factory's to supply.
 *   **`update_player_count_in_metadata(&self, count: u32)`**: called by the room's own session as clients connect and disconnect. The lobby reads this when enforcing capacity.
 *   **Public fields**: `room_id`, `command_tx`, `metadata`, `game_session_endpoint`.
 *   Implements `RoomHandle`. The stored password hash is never exposed in `RoomMetadata`, which reports only whether one exists.

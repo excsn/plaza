@@ -180,13 +180,28 @@ impl LobbyLogic {
     cards
   }
 
-  async fn tell_table(&self, room_id: &RoomId, why: &str, op: TableOp) {
-    self
-      .command_table(room_id, why, ControllerCommand::SubmitSystemOps {
-        source_description: why.to_string(),
-        ops: vec![op],
-      })
-      .await;
+  /// Through the seam: the lobby's handle names no game type and the table
+  /// spells the reservation itself.
+  async fn hold_seat(&self, room_id: &RoomId, why: &str, player: PlayerId) {
+    match self.manager.room(room_id) {
+      Some(room) => {
+        if let Err(error) = room.reserve_seat(&player).await {
+          warn!(room = %room_id, why, ?error, "Seat not held.");
+        }
+      }
+      None => warn!(room = %room_id, why, "Spoke to a room that has since gone."),
+    }
+  }
+
+  async fn release_seat(&self, room_id: &RoomId, why: &str, player: PlayerId) {
+    match self.manager.room(room_id) {
+      Some(room) => {
+        if let Err(error) = room.withdraw_seat(&player).await {
+          warn!(room = %room_id, why, ?error, "Seat not released.");
+        }
+      }
+      None => warn!(room = %room_id, why, "Spoke to a room that has since gone."),
+    }
   }
 
   async fn command_table(
@@ -247,9 +262,7 @@ impl LobbyLogic {
 
     for _ in 0..formed.bots {
       let bot = self.next_bot.fetch_add(1, Ordering::Relaxed);
-      self
-        .tell_table(&room.room_id, "quick match bot", TableOp::Reserve { player: bot })
-        .await;
+      self.hold_seat(&room.room_id, "quick match bot", bot).await;
       self
         .command_table(&room.room_id, "quick match bot", ControllerCommand::HandleAgentJoined {
           agent: Agent::new_bot(bot),
@@ -295,13 +308,9 @@ impl LobbyLogic {
     if let Some(previous) = state.reserved_in.insert(player, *room_id)
       && previous != *room_id
     {
-      self
-        .tell_table(&previous, "lobby re-placement", TableOp::Withdraw { player })
-        .await;
+      self.release_seat(&previous, "lobby re-placement", player).await;
     }
-    self
-      .tell_table(room_id, "lobby admission", TableOp::Reserve { player })
-      .await;
+    self.hold_seat(room_id, "lobby admission", player).await;
   }
 }
 
@@ -340,9 +349,7 @@ impl StateLogic<LobbyOp, PlayerId, LobbyState> for LobbyLogic {
         // A table cannot infer this departure: a closing socket tells it
         // nothing, but leaving the lobby means the seat will never be taken.
         if let Some(room_id) = state.reserved_in.remove(&agent_id) {
-          self
-            .tell_table(&room_id, "lobby departure", TableOp::Withdraw { player: agent_id })
-            .await;
+          self.release_seat(&room_id, "lobby departure", agent_id).await;
         }
         self.manager.handle_player_leaving_lobby(&agent_id).await;
         self.wallets.forget(agent_id);

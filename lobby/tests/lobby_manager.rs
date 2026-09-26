@@ -27,12 +27,15 @@ type PlayerId = Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum GameOp {
   Noop,
+  Reserve(PlayerId),
+  Withdraw(PlayerId),
   Snapshot(Box<GameState>),
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct GameState {
   ticks: u64,
+  reserved: Vec<PlayerId>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -53,8 +56,18 @@ impl StateLogic<GameOp, PlayerId, GameState> for GameLogic {
     state: &mut GameState,
     input: LogicInput<GameOp, PlayerId>,
   ) -> Result<LogicOutput<GameOp, PlayerId>, StateLogicError> {
-    if let LogicInput::TimeStep { .. } = input {
-      state.ticks += 1;
+    match input {
+      LogicInput::TimeStep { .. } => state.ticks += 1,
+      LogicInput::AgentOps { source, ops } if source.is_system() => {
+        for op in ops {
+          match op {
+            GameOp::Reserve(player) => state.reserved.push(player),
+            GameOp::Withdraw(player) => state.reserved.retain(|held| *held != player),
+            _ => {}
+          }
+        }
+      }
+      _ => {}
     }
     Ok(LogicOutput::none())
   }
@@ -80,6 +93,8 @@ impl SnapshotProvider<PlayerId, GameState, GameOp> for GameSnapshotter {
 struct TestRoomFactory {
   /// When set, `spawn_room` fails: exercising the error path.
   fail: bool,
+  /// Rooms built without `with_reservations`, to see what the seam answers then.
+  bare: bool,
   /// The concrete handles, kept beside the lobby's trait objects.
   ///
   /// This is the pattern an application uses when it needs something of its
@@ -132,14 +147,19 @@ impl RoomFactory for TestRoomFactory {
       custom_game_settings_summary: settings.custom_game_settings.clone(),
     };
 
-    let room = Arc::new(InProcessRoomHandle::new(
+    let room = InProcessRoomHandle::new(
       room_id,
       metadata,
       command_tx,
       handle,
       format!("ws://test/game/{room_id}"),
       settings.password_hash.clone(),
-    ));
+    );
+    let room = Arc::new(if self.bare {
+      room
+    } else {
+      room.with_reservations(GameOp::Reserve, GameOp::Withdraw)
+    });
     self.spawned.lock().insert(room_id, Arc::clone(&room));
     Ok(room)
   }
@@ -543,4 +563,47 @@ async fn a_slow_connection_is_routed_rather_than_turned_away() {
   assert_eq!(slow.last().unwrap().max_one_way_ms, None, "the unlimited room sorts last: it takes anybody, so it is the fallback");
 
   assert!(lobby.rooms_playable_at(5000).len() == 1, "past every stated budget only the unlimited room is left");
+}
+
+#[tokio::test]
+async fn a_reservation_through_the_seam_lands_in_the_room_as_a_system_op() {
+  let (manager, factory) = manager_with_factory();
+  let created = manager
+    .handle_create_room_request(&Uuid::new_v4(), settings(4, None))
+    .await
+    .expect("room");
+  let room = manager.room(&created.room_id).expect("listed");
+  let player = Uuid::new_v4();
+
+  room.reserve_seat(&player).await.expect("the room takes reservations");
+  assert_eq!(held_by(&factory, &created.room_id).await, vec![player]);
+
+  room.withdraw_seat(&player).await.expect("and withdrawals");
+  assert!(held_by(&factory, &created.room_id).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_room_that_takes_no_reservations_says_so() {
+  let factory = Arc::new(TestRoomFactory {
+    bare: true,
+    ..TestRoomFactory::default()
+  });
+  let manager = InMemoryLobbyManager::new(Arc::clone(&factory));
+  let created = manager
+    .handle_create_room_request(&Uuid::new_v4(), settings(4, None))
+    .await
+    .expect("room");
+  let room = manager.room(&created.room_id).expect("listed");
+
+  assert!(matches!(room.reserve_seat(&Uuid::new_v4()).await, Err(LobbyError::NotImplemented(_))));
+  assert!(matches!(room.withdraw_seat(&Uuid::new_v4()).await, Err(LobbyError::NotImplemented(_))));
+}
+
+/// The room's own record of who holds a seat, read after the op submitted
+/// ahead of this query on the same channel.
+async fn held_by(factory: &TestRoomFactory, room_id: &RoomId) -> Vec<PlayerId> {
+  let commands = factory.concrete(room_id).command_tx.clone();
+  plaza::controller::query_with(&commands, |state: &GameState| state.reserved.clone())
+    .await
+    .expect("the room is running")
 }
