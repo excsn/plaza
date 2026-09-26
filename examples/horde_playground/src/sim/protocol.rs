@@ -72,6 +72,11 @@ pub enum Op {
   Ack { newest: u64, mask: u64, digest: u64 },
   /// A purchase *request*. The client proposes; only the server can spend.
   Buy(Upgrade),
+  /// What this client's link can carry, in bytes a second or `0` for no
+  /// limit. The server clamps it into its own bounds and budgets what it sends
+  /// this client, so a declaration can only ask for less than the arena would
+  /// send anyway.
+  Rate { bytes_per_sec: u32 },
 
   // ---- server to client ----
   /// Sent once on join: which player is yours, and the settings a client cannot

@@ -20,7 +20,7 @@ use plaza::state_logic::{LogicInput, LogicOutput, StateLogic, StateLogicError};
 use plaza_client_utils::RateMeter;
 use plaza_server_utils::oneshot::Pending as OneShots;
 use plaza_server_utils::{SeatTable, Seating};
-use plaza_session::{Delivery, DirectionProfile, LinkProfile, LinkPublisher};
+use plaza_session::{Delivery, DirectionProfile, LinkProfile, LinkPublisher, OutboundBudget};
 
 use crate::sim::protocol::{Op, ServerPolicy};
 use crate::sim::server::{Seat, Server};
@@ -428,6 +428,20 @@ pub type LatencySource = Arc<dyn Fn(&PlayerKey) -> Option<(Duration, u64)> + Sen
 /// why placement is worth wiring.
 pub type Router = Arc<dyn Fn(u32) -> Option<(u32, String, String)> + Send + Sync>;
 
+/// Where a client's declared rate becomes a budget on its connection.
+pub type BudgetSink = Arc<dyn Fn(&PlayerKey, Option<OutboundBudget>) + Send + Sync>;
+
+/// Whether a client is owed a frame this round, asked before one is sent it.
+pub type OwedSource = Arc<dyn Fn(&PlayerKey) -> bool + Send + Sync>;
+
+/// The least a client may declare. Below this the entity stream cannot keep a
+/// baseline alive.
+pub const MIN_RATE_BYTES: u32 = 2 * 1024;
+
+/// The most a declaration buys. A client asking for more is sent what the arena
+/// sends anyway.
+pub const MAX_RATE_BYTES: u32 = 256 * 1024;
+
 /// Publishes the panel's impairment sliders to the transport that owns the link.
 ///
 /// The arena states what the link should be and stops there. Applying it to
@@ -448,6 +462,8 @@ pub struct ArenaLogic {
   /// Which room this arena *is*, so it can tell whether a placement is somewhere
   /// else or right here.
   room: u32,
+  budget: Option<BudgetSink>,
+  owed: Option<OwedSource>,
 }
 
 impl ArenaLogic {
@@ -460,7 +476,31 @@ impl ArenaLogic {
       clock: None,
       router: None,
       room: 0,
+      budget: None,
+      owed: None,
     }
+  }
+
+  /// Where a declared rate is applied and where the send round asks whether a
+  /// client is owed a frame. Without these a declaration is accepted and does
+  /// nothing.
+  pub fn with_budget(mut self, budget: BudgetSink, owed: OwedSource) -> Self {
+    self.budget = Some(budget);
+    self.owed = Some(owed);
+    self
+  }
+
+  /// A declared rate becomes a budget, clamped into this arena's bounds; `0`
+  /// lifts it.
+  fn declare_rate(&self, key: &PlayerKey, bytes_per_sec: u32) {
+    let Some(sink) = &self.budget else { return };
+    let budget = (bytes_per_sec > 0)
+      .then(|| OutboundBudget::bytes_per_second(f64::from(bytes_per_sec.clamp(MIN_RATE_BYTES, MAX_RATE_BYTES))));
+    sink(key, budget);
+  }
+
+  fn owed(&self, key: &PlayerKey) -> bool {
+    self.owed.as_ref().is_none_or(|owed| owed(key))
   }
 
   /// Where to send a connection this arena cannot carry.
@@ -546,6 +586,10 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         // owns the link, so an op reaching here has crossed it.
         let mut out = Vec::new();
         for op in ops {
+          if let Op::Rate { bytes_per_sec } = op {
+            self.declare_rate(&key, bytes_per_sec);
+            continue;
+          }
           if let Some(reply) = state.apply_client_op(key, op) {
             out.push(reply);
           }
@@ -680,7 +724,12 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
           state.spawns.add(packet.entered.len() as u64);
           state.despawns.add(packet.left.len() as u64);
           if let Some(key) = by_seat.get(&(player as usize)) {
-            outbound.push(TargetedOp::new_system_to(*key, vec![Op::Frame(Box::new(packet))]));
+            // A recipient out of credit is skipped whole rather than queued to
+            // overflow. Its baseline is what it acknowledged, so the frame it
+            // misses costs it latency and not a rebuild.
+            if self.owed(key) {
+              outbound.push(TargetedOp::new_system_to(*key, vec![Op::Frame(Box::new(packet))]));
+            }
           } else {
             // A seat nobody is connected to still has packets built for it, and
             // its "client" is this process: it holds exactly what it was sent,
@@ -706,6 +755,9 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         if let Some(frames) = state.sim.take_player_frames() {
           for (seat, frame) in frames {
             let Some(key) = by_seat.get(&(seat as usize)) else { continue };
+            if !self.owed(key) {
+              continue;
+            }
             // Metered on both sides of the comparison. Counting the real cost
             // here and not its counterfactual is what made the saving read
             // negative once player state moved onto this stream.
@@ -892,6 +944,61 @@ mod tests {
       }
       step(logic, state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
     }
+  }
+
+  #[test]
+  fn a_declared_rate_is_clamped_into_the_arenas_bounds() {
+    let (cs, _view) = slots(small());
+    let seen: Arc<Mutex<Vec<(PlayerKey, Option<OutboundBudget>)>>> = Arc::default();
+    let sink = {
+      let seen = seen.clone();
+      Arc::new(move |key: &PlayerKey, budget| seen.lock().push((*key, budget))) as BudgetSink
+    };
+    let logic = ArenaLogic::new(cs, None)
+      .with_latency(link(10, ADMIT_SAMPLES))
+      .with_budget(sink, Arc::new(|_| true));
+    let mut state = Arena::new(small());
+    admit(&logic, &mut state, &Agent::new_human(1u64));
+
+    for rate in [100u32, 8 * 1024, u32::MAX, 0] {
+      step(&logic, &mut state, LogicInput::AgentOps {
+        source: Agent::new_human(1u64),
+        ops: vec![Op::Rate { bytes_per_sec: rate }],
+      });
+    }
+    let budgets: Vec<Option<f64>> = seen.lock().iter().map(|(_, b)| b.and_then(|b| b.bytes_per_sec)).collect();
+    assert_eq!(
+      budgets,
+      vec![Some(f64::from(MIN_RATE_BYTES)), Some(8.0 * 1024.0), Some(f64::from(MAX_RATE_BYTES)), None],
+      "too little is raised, too much is lowered and zero lifts it"
+    );
+  }
+
+  #[test]
+  fn a_client_out_of_credit_is_sent_nothing_this_round_and_its_neighbour_is() {
+    let (cs, _view) = slots(small());
+    let logic = ArenaLogic::new(cs, None)
+      .with_latency(link(10, ADMIT_SAMPLES))
+      .with_budget(Arc::new(|_, _| {}), Arc::new(|key: &PlayerKey| *key != 1));
+    let mut state = Arena::new(small());
+    admit(&logic, &mut state, &Agent::new_human(1u64));
+    admit(&logic, &mut state, &Agent::new_human(2u64));
+
+    let (mut to_one, mut to_two) = (0, 0);
+    for _ in 0..120 {
+      let out = step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
+      for op in &out.ops {
+        if matches!(op.ops.first(), Some(Op::Frame(_) | Op::Players(_))) {
+          match &op.target {
+            MessageTarget::Agent(1) => to_one += 1,
+            MessageTarget::Agent(2) => to_two += 1,
+            _ => {}
+          }
+        }
+      }
+    }
+    assert_eq!(to_one, 0, "not owed, not sent");
+    assert!(to_two > 0, "the neighbour's streams are untouched");
   }
 
   #[test]

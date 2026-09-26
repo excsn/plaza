@@ -239,6 +239,22 @@ The fix is two send rates. Enemy positions can be stale because they are the beh
 
 Averaging position error hides every discontinuity, so it cannot stand in for a smoothness measurement.
 
+### A third rate, the client's
+
+The two rates above are the server's and every client gets them. A client on a link that cannot carry them has a third: `Op::Rate { bytes_per_sec }`, which the arena clamps into `MIN_RATE_BYTES..=MAX_RATE_BYTES` and turns into an `OutboundBudget` on that connection (`plaza_session::budget`). The transport still queues every frame and charges the client's credit for all of them, inputs' acknowledgements included. The send round asks `agent_owed` before it pushes a client's entity or player frame and skips that client whole when the answer is no. Its baseline is what it acknowledged, so a skipped frame costs it latency and never a rebuild.
+
+Measured over real sockets with `examples/rate_budget.rs` against a headless host, 2026-09-26, release, power mode high, two clients joining together and one declaring:
+
+```
+declared 8192 B/s:  8401 B/s,  4.3 packets/s
+declared nothing:  20761 B/s, 24.5 packets/s
+
+declared 4096 B/s:  4046 B/s,  3.0 packets/s
+declared nothing:  25458 B/s, 24.2 packets/s
+```
+
+The declaring client sits at its number and the one beside it is unchanged, in the same arena on the same tick. Both stay seated and playing: what the slow one loses is freshness, not membership.
+
 ## One timeline for everything remote
 
 Peers are now drawn through `RemoteView`, interpolating between two real snapshots and **not** extrapolating, which is Gambetta's entity interpolation as written: dead reckoning a *player* is guessing at a human's intention, which nothing on the wire carries, so it overshoots every direction change and snaps back when the truth lands.

@@ -557,6 +557,13 @@ impl NetClient {
     self.sent.per_sec()
   }
 
+  /// Tells the server what this link can carry, in bytes a second or `0` to
+  /// lift an earlier declaration. The server clamps it and then sends this
+  /// client fewer, complete frames rather than a queue that overflows.
+  pub fn declare_rate(&mut self, bytes_per_sec: u32) {
+    self.send_op(&Op::Rate { bytes_per_sec });
+  }
+
   fn send_op(&mut self, op: &Op) {
     // The codec, not a hand-rolled `serde_json` call, so the client and the
     // server cannot drift apart on format: both name `MsgPackCodec`.
@@ -649,7 +656,7 @@ impl NetClient {
             measured_ms,
           };
         }
-        Op::Input { .. } | Op::Ack { .. } | Op::Buy(_) => {}
+        Op::Input { .. } | Op::Ack { .. } | Op::Buy(_) | Op::Rate { .. } => {}
       }
     }
     applied_frame

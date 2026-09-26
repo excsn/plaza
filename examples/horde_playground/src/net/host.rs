@@ -154,9 +154,20 @@ pub async fn serve(
       let session = session.clone();
       Arc::new(move |profile| session.set_all_link_profiles(profile)) as crate::net::arena::LinkSink
     };
+    let budget = {
+      let session = session.clone();
+      Arc::new(move |key: &PlayerKey, budget| {
+        session.manager().set_agent_outbound_budget(key, budget);
+      }) as crate::net::arena::BudgetSink
+    };
+    let owed = {
+      let session = session.clone();
+      Arc::new(move |key: &PlayerKey| session.manager().agent_owed(key)) as crate::net::arena::OwedSource
+    };
     let logic = ArenaLogic::new(room_controls, room_view)
       .with_latency(measured)
       .with_link(link)
+      .with_budget(budget, owed)
       .with_clock(sim_clock)
       .with_router(room.id, router.clone());
     let mut builder = StateControllerBuilder::new(
