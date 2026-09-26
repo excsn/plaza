@@ -2280,4 +2280,77 @@ mod tests {
       .expect("the registration task");
     assert_eq!(manager.stats().presence_dropped(), 0, "nothing was lost");
   }
+
+  fn ops_frame(op: u32) -> Frame {
+    let mut buf = Vec::new();
+    frame::begin(frame::Kind::Ops, &mut buf);
+    crate::codec::JsonCodec.encode_into(&vec![op], &mut buf).expect("a u32 encodes");
+    Frame::from(buf)
+  }
+
+  /// fibre 0.6.4 kept a sender parked after a single-item `recv` until
+  /// `capacity` items were taken. The bridge takes one raw frame per decoded
+  /// slot freed. Decoded is shallower than inbound so the bridge takes fewer
+  /// raw frames than that.
+  #[tokio::test]
+  async fn a_blocked_inbound_forward_resumes_once_the_bridge_takes_a_frame() {
+    const DECODED: usize = 4;
+    const INBOUND: usize = 16;
+    let options = SessionOptions {
+      queues: Queues {
+        inbound: INBOUND,
+        decoded: DECODED,
+        ..Queues::default()
+      },
+      overflow: Overflow {
+        inbound: InboundOverflow::Backpressure,
+        ..Overflow::default()
+      },
+      ..SessionOptions::default()
+    };
+    let session = TransportSession::<u32, u32, crate::codec::JsonCodec>::with_options(
+      "test",
+      crate::codec::JsonCodec,
+      options,
+    );
+    let decoded = session.subscribe_to_incoming_messages();
+    let manager = session.manager().clone();
+    let from = Agent::new_human(1u32);
+
+    let mut next = 0u32;
+    for _ in 0..=DECODED {
+      manager.forward_incoming(from.clone(), ops_frame(next)).await;
+      next += 1;
+    }
+    tokio::time::timeout(Duration::from_secs(1), async {
+      while decoded.len() < DECODED {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+      }
+    })
+    .await
+    .expect("the bridge fills the decoded queue");
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    for _ in 0..INBOUND {
+      tokio::time::timeout(Duration::from_secs(1), manager.forward_incoming(from.clone(), ops_frame(next)))
+        .await
+        .expect("the inbound queue has room");
+      next += 1;
+    }
+
+    let waiting = {
+      let manager = manager.clone();
+      let from = from.clone();
+      tokio::spawn(async move { manager.forward_incoming(from, ops_frame(next)).await })
+    };
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!waiting.is_finished(), "the forward is waiting on a full inbound queue");
+
+    let taken = decoded.recv_batch(8).await.expect("decoded messages");
+    assert_eq!(taken.len(), DECODED);
+    tokio::time::timeout(Duration::from_secs(1), waiting)
+      .await
+      .expect("the bridge taking frames releases the waiting forward")
+      .expect("the forward task");
+  }
 }
