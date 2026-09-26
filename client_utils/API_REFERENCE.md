@@ -92,6 +92,7 @@ For a server that consumes **one input per simulation step**: `PredictedEntity` 
 
 *   **`new(initial, PlayerConfig, apply: fn(&mut State, &Input, &Ctx), lerp: fn(&State, &State, f32) -> State)`**
 *   **`input(&mut self, input) -> SequenceNumber`**: predict locally, buffer for replay, return the sequence to send.
+*   **`on_first(self, hook: fn(&Input, &Ctx)) -> Self`**: a hook that runs once per input, from `input` and never from a replay. What an input causes once (a shot, a footstep, a flash) goes here; `apply` keeps to what the input does to state, which `reconcile` replays. An effect inside `apply` runs once per reconcile per input in flight, which is one plus round trip times the server's packet rate: measured at ten per trigger pull at 150 ms and 60 packets a second (`examples/replay_refires.rs`).
 *   **`reconcile(&mut self, authoritative, acked_seq) -> Correction<State>`**: snap the logical state to authority, replay unacknowledged inputs, begin easing the visible correction. See [`Correction`](#12-module-correction).
 *   **`advance(&mut self, dt_secs)`**, **`render() -> State`** (eased), **`logical() -> &State`** (exact), **`authoritative() -> &State`**, **`latest_seq()`**, **`acked_seq()`**, **`unacked_count()`**.
 *   **`set_active(&mut self, bool)`** / **`is_active()`**: an inactive predictor stops integrating and stops correcting.
@@ -216,6 +217,7 @@ Requires `State: Clone + Debug`, `Input: Clone + Debug + PartialEq`.
 *   **`record_input(&mut self, sequence_number, op, state_before_op_predicted)`**: at capacity the oldest is discarded, with a `warn`.
 *   **`acknowledge_inputs_up_to(&mut self, ack_sequence_number)`**.
 *   **`get_unacknowledged_inputs(&self, last_acknowledged_sequence_number) -> impl Iterator`**: every buffered input above the argument, in order.
+*   **`unacknowledged_with_pass(&mut self, last_acknowledged_sequence_number) -> impl Iterator<Item = (&BufferedInput, bool)>`**: the same, each paired with whether this is its first pass, meaning no earlier call here handed it out. For a predictor that predicts by replaying from the last acknowledgement every frame, this is how it tells a press from a replay, so a one-shot runs once. The mark moves only here; `get_unacknowledged_inputs` neither reads nor moves it. `PredictedPlayer` does not need it, because its press-time apply is `input` and every apply in `reconcile` is a replay: it takes `on_first` instead.
 *   **`get_predicted_state_before_input(&self, sequence_number) -> Option<&PredictedStateSnapshot>`**.
 *   **`len`**, **`is_empty`**, **`clear`**.
 *   **`overflowed() -> u64`**: inputs discarded because the buffer was full. Non-zero means a reconciliation can no longer replay everything unacknowledged. Size the buffer at input rate times worst round trip.

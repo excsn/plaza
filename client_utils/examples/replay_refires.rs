@@ -4,7 +4,8 @@
 //! every reconciliation until the server acknowledges it. The applier cannot
 //! tell the two apart. This drives one with an applier that counts a `fire`
 //! flag, against a server whose acknowledgements arrive one round trip late,
-//! and prints applications per trigger pull for a range of round trips.
+//! and prints applications per trigger pull for a range of round trips, then
+//! the same with the shot moved into `on_first`, which runs once per press.
 //!
 //! Run with `cargo run -p plaza_client_utils --example replay_refires`.
 
@@ -25,11 +26,18 @@ struct In {
 }
 
 static FIRES: AtomicU64 = AtomicU64::new(0);
+static FIRST: AtomicU64 = AtomicU64::new(0);
 
 fn apply(s: &mut S, i: &In, _: &()) {
   s.x += i.dx;
   if i.fire {
     FIRES.fetch_add(1, Ordering::Relaxed);
+  }
+}
+
+fn on_first(i: &In, _: &()) {
+  if i.fire {
+    FIRST.fetch_add(1, Ordering::Relaxed);
   }
 }
 
@@ -43,8 +51,9 @@ const FIRE_EVERY: u64 = 30;
 
 /// Applications per pull at `rtt_ms`, with the server sending a state packet
 /// `packet_hz` times a second.
-fn run(rtt_ms: u64, packet_hz: u64) -> (u64, u64) {
+fn run(rtt_ms: u64, packet_hz: u64) -> (u64, u64, u64) {
   FIRES.store(0, Ordering::Relaxed);
+  FIRST.store(0, Ordering::Relaxed);
   let one_way = rtt_ms / 2;
   let mut me = PredictedPlayer::new(
     S::default(),
@@ -55,7 +64,8 @@ fn run(rtt_ms: u64, packet_hz: u64) -> (u64, u64) {
     },
     apply,
     lerp,
-  );
+  )
+  .on_first(on_first);
   let mut in_flight: VecDeque<(u64, u64, f32)> = VecDeque::new();
   let mut packets: VecDeque<(u64, S, u64)> = VecDeque::new();
   let (mut server, mut server_ack) = (S::default(), 0u64);
@@ -83,16 +93,22 @@ fn run(rtt_ms: u64, packet_hz: u64) -> (u64, u64) {
       me.reconcile(state, ack);
     }
   }
-  (pulls, FIRES.load(Ordering::Relaxed))
+  (pulls, FIRES.load(Ordering::Relaxed), FIRST.load(Ordering::Relaxed))
 }
 
 fn main() {
   println!("one-shot applications per trigger pull, {INPUT_HZ} Hz inputs, {SECONDS} s each\n");
-  println!("{:>8} {:>10} {:>7} {:>9} {:>10}", "rtt ms", "packets/s", "pulls", "fires", "per pull");
+  println!(
+    "{:>8} {:>10} {:>7} {:>9} {:>10} {:>12}",
+    "rtt ms", "packets/s", "pulls", "in apply", "per pull", "in on_first"
+  );
   for packet_hz in [30u64, 60] {
     for rtt in [0u64, 25, 50, 100, 150, 250] {
-      let (pulls, fires) = run(rtt, packet_hz);
-      println!("{rtt:>8} {packet_hz:>10} {pulls:>7} {fires:>9} {:>10.2}", fires as f64 / pulls as f64);
+      let (pulls, fires, first) = run(rtt, packet_hz);
+      println!(
+        "{rtt:>8} {packet_hz:>10} {pulls:>7} {fires:>9} {:>10.2} {first:>12}",
+        fires as f64 / pulls as f64
+      );
     }
     println!();
   }

@@ -46,6 +46,9 @@ where
   inputs: VecDeque<BufferedInput<Op, PredictedStateSnapshot>>,
   max_size: usize,
   overflowed: u64,
+  /// The newest sequence [`unacknowledged_with_pass`](Self::unacknowledged_with_pass)
+  /// has handed out. Inputs at or below it have been predicted before.
+  predicted_through: SequenceNumber,
 }
 
 impl<Op, PredictedStateSnapshot> ClientInputBuffer<Op, PredictedStateSnapshot>
@@ -65,6 +68,7 @@ where
       inputs: VecDeque::with_capacity(max_size),
       max_size,
       overflowed: 0,
+      predicted_through: 0,
     }
   }
 
@@ -141,6 +145,30 @@ where
     } else {
       self.inputs.range(0..0) // Return an empty iterator if all are acknowledged or buffer is empty
     }
+  }
+
+  /// The unacknowledged inputs, each paired with whether this is its first
+  /// pass: whether no earlier call here has handed it out.
+  ///
+  /// For a predictor that predicts *by* replaying from the last acknowledgement
+  /// every frame, this is how it tells a press from a replay, so what an input
+  /// causes once (a shot, a footstep, a flash) runs on its first pass and not
+  /// once per replay per input in flight, which is one plus round trip times
+  /// packet rate. The mark moves only here; [`get_unacknowledged_inputs`]
+  /// neither reads nor moves it.
+  ///
+  /// [`get_unacknowledged_inputs`]: Self::get_unacknowledged_inputs
+  pub fn unacknowledged_with_pass(
+    &mut self,
+    last_acknowledged_sequence_number: SequenceNumber,
+  ) -> impl DoubleEndedIterator<Item = (&BufferedInput<Op, PredictedStateSnapshot>, bool)> + ExactSizeIterator {
+    let through = self.predicted_through;
+    if let Some(newest) = self.inputs.back() {
+      self.predicted_through = through.max(newest.sequence_number);
+    }
+    self
+      .get_unacknowledged_inputs(last_acknowledged_sequence_number)
+      .map(move |buffered| (buffered, buffered.sequence_number > through))
   }
 
   /// Retrieves a reference to the predicted state snapshot that was recorded
@@ -349,5 +377,26 @@ mod tests {
     buffer.clear();
     assert!(buffer.is_empty());
     assert_eq!(buffer.len(), 0);
+  }
+
+  #[test]
+  fn an_input_is_first_pass_once_however_often_it_is_replayed() {
+    let mut buffer = ClientInputBuffer::<u32, u32>::new(8);
+    for seq in 1..=3 {
+      buffer.record_input(seq, seq as u32 * 10, 0);
+    }
+    let passes: Vec<(SequenceNumber, bool)> = buffer.unacknowledged_with_pass(0).map(|(bi, first)| (bi.sequence_number, first)).collect();
+    assert_eq!(passes, vec![(1, true), (2, true), (3, true)], "never handed out before");
+
+    buffer.record_input(4, 40, 0);
+    let passes: Vec<(SequenceNumber, bool)> = buffer.unacknowledged_with_pass(0).map(|(bi, first)| (bi.sequence_number, first)).collect();
+    assert_eq!(passes, vec![(1, false), (2, false), (3, false), (4, true)], "only the new one is a first pass");
+
+    buffer.acknowledge_inputs_up_to(2);
+    let passes: Vec<(SequenceNumber, bool)> = buffer.unacknowledged_with_pass(2).map(|(bi, first)| (bi.sequence_number, first)).collect();
+    assert_eq!(passes, vec![(3, false), (4, false)], "a replay is never a first pass, whatever was acknowledged");
+
+    let plain: Vec<SequenceNumber> = buffer.get_unacknowledged_inputs(2).map(|bi| bi.sequence_number).collect();
+    assert_eq!(plain, vec![3, 4], "the unmarked iterator neither reads nor moves the mark");
   }
 }

@@ -89,6 +89,7 @@ pub struct PredictedPlayer<State: Clone + Debug, Input: Clone + Debug, Ctx = ()>
   lerp: fn(&State, &State, f32) -> State,
   ctx: Ctx,
   active: bool,
+  on_first: Option<fn(&Input, &Ctx)>,
 }
 
 impl<State: Clone + Debug, Input: Clone + Debug, Ctx: Default> PredictedPlayer<State, Input, Ctx> {
@@ -107,6 +108,7 @@ impl<State: Clone + Debug, Input: Clone + Debug, Ctx: Default> PredictedPlayer<S
       lerp,
       ctx: Ctx::default(),
       active: true,
+      on_first: None,
     }
   }
 }
@@ -177,6 +179,18 @@ impl<State: Clone + Debug, Input: Clone + Debug, Ctx> PredictedPlayer<State, Inp
     self.smoother.reset();
   }
 
+  /// Runs once per input, when it is pressed and never when it is replayed.
+  ///
+  /// Put what an input causes once here (a shot, a footstep, a flash) and keep
+  /// `apply` to what the input does to state, which reconciliation replays.
+  /// An effect inside `apply` runs once per reconcile per input in flight,
+  /// which is one plus round trip times the server's packet rate: ten times
+  /// per trigger pull at 150 ms and 60 packets a second.
+  pub fn on_first(mut self, hook: fn(&Input, &Ctx)) -> Self {
+    self.on_first = Some(hook);
+    self
+  }
+
   /// Applies an input locally (prediction) and records it for replay. Returns the
   /// sequence number to send alongside the input, so the server can acknowledge
   /// it.
@@ -195,6 +209,9 @@ impl<State: Clone + Debug, Input: Clone + Debug, Ctx> PredictedPlayer<State, Inp
     self
       .predicted
       .apply_local_input_and_predict(&input, seq, &mut self.inputs, &|s: &mut State, i: &Input| apply(s, i, ctx));
+    if let Some(hook) = self.on_first {
+      hook(&input, ctx);
+    }
     seq
   }
 
@@ -455,5 +472,55 @@ mod tests {
     let s = me.input(10.0);
     me.reconcile(P(0.0), s);
     assert_eq!(me.render().0, 0.0, "no ease, render is the logical state");
+  }
+
+  #[test]
+  fn a_one_shot_runs_once_however_many_times_its_input_is_replayed() {
+    use std::cell::Cell;
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct Shot {
+      dx: f32,
+      fire: bool,
+    }
+    #[derive(Default)]
+    struct Counts {
+      applied_fires: Cell<u32>,
+      fired: Cell<u32>,
+    }
+    fn apply(p: &mut P, i: &Shot, counts: &Counts) {
+      p.0 += i.dx;
+      if i.fire {
+        counts.applied_fires.set(counts.applied_fires.get() + 1);
+      }
+    }
+    fn on_first(i: &Shot, counts: &Counts) {
+      if i.fire {
+        counts.fired.set(counts.fired.get() + 1);
+      }
+    }
+
+    let mut me: PredictedPlayer<P, Shot, Counts> = PredictedPlayer::new(
+      P(0.0),
+      PlayerConfig {
+        input_buffer: 64,
+        smoothing_secs: 0.0,
+        ..PlayerConfig::default()
+      },
+      apply,
+      lerp,
+    )
+    .on_first(on_first);
+
+    for n in 0..5 {
+      me.input(Shot { dx: 1.0, fire: n == 2 });
+    }
+    for _ in 0..10 {
+      me.reconcile(P(0.0), 0);
+    }
+
+    assert_eq!(me.context().fired.get(), 1, "one trigger pull is one shot");
+    assert_eq!(me.context().applied_fires.get(), 11, "the applier still replays the input every reconcile, which is its job");
+    assert_eq!(me.logical().0, 5.0, "and the replay still moves the player");
   }
 }
