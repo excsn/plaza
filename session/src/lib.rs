@@ -8,6 +8,7 @@
 //!
 //! Enable the `actix_ws` and/or `tcp` features to select transports.
 
+pub mod budget;
 pub mod codec;
 pub mod conditioner;
 pub mod error;
@@ -37,6 +38,7 @@ pub use codec::MsgPackCodec;
 pub use conditioner::{Delivery, DirectionProfile, LinkProfile, LinkPublisher, LinkSink, RETRANSMIT_PENALTY};
 pub use driver::LinkDriver;
 pub use error::SessionLayerError;
+pub use budget::OutboundBudget;
 pub use gate::{Over, Rate, Verdict};
 pub use workload::{Priority, Workload, DEFAULT_SOCKET_BUFFER_BYTES, MIN_INBOUND_RATE, RATE_HEADROOM};
 pub use manager::{

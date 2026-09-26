@@ -34,6 +34,7 @@ pub struct TransportStats {
   outbound: AtomicU64,
   outbound_bytes: AtomicU64,
   outbound_dropped: AtomicU64,
+  outbound_withheld: AtomicU64,
   presence_dropped: AtomicU64,
   refused: AtomicU64,
 }
@@ -98,6 +99,16 @@ impl TransportStats {
   /// stateful, so a lost join leaves the controller with a client it has never
   /// heard of, and a lost leave leaves it holding a seat forever. This is the
   /// one of the three where a single drop is a correctness problem.
+  /// Times a budgeted connection was asked for and not owed a frame. What the
+  /// budget cost in frames not built, by the snapshot passes that asked.
+  pub fn outbound_withheld(&self) -> u64 {
+    self.outbound_withheld.load(Ordering::Relaxed)
+  }
+
+  pub(crate) fn record_outbound_withheld(&self) {
+    self.outbound_withheld.fetch_add(1, Ordering::Relaxed);
+  }
+
   pub fn presence_dropped(&self) -> u64 {
     self.presence_dropped.load(Ordering::Relaxed)
   }

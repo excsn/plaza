@@ -42,6 +42,7 @@ Turning off `json` drops `serde_json` from the build, so name the transport feat
 | Bounding a session that must expire | `set_deadline` |
 | Knowing who is idle and who is flooding | `agent_idle_for`, `agent_inbound` |
 | Making a flood cost the client that sent it and nobody else | `SessionOptions::rate_limit_inbound` with a `Rate` (see `gate`) |
+| Sending a slow client fewer, complete frames instead of dropping some | `set_outbound_budget` with an `OutboundBudget`, then `agent_owed` at the snapshot pass (see `budget`) |
 | Telling a stale client it is stale | `ProtocolVersion` in a `Hello`, read back with `protocol` |
 | Serving a wasm bundle from the same origin as the socket | `host::Host` (feature `actix_host`) |
 | The whole simulation stack behind that | `host::SimHost` |

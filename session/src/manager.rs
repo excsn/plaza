@@ -31,6 +31,7 @@ use crate::codec::WireCodec;
 use plaza_wire::frame::{self, ProtocolVersion};
 use crate::conditioner::LinkProfile;
 use crate::error::SessionLayerError;
+use crate::budget::{Credit, OutboundBudget};
 use crate::gate::{Bucket, Over, Rate, Verdict};
 use crate::stats::TransportStats;
 
@@ -200,6 +201,13 @@ pub struct Limits {
   /// too fast is a question about the application's own protocol: see
   /// [`gate`](crate::gate).
   pub inbound_rate: Option<Rate>,
+  /// What every connection may be sent or `None` to owe every frame.
+  ///
+  /// The outbound twin of `inbound_rate`, applied at registration; a
+  /// connection can be given its own afterwards with
+  /// [`ConnectionManager::set_outbound_budget`]. Nothing here withholds a
+  /// frame: see [`budget`](crate::budget) for where the skip lives.
+  pub outbound_budget: Option<OutboundBudget>,
 }
 
 impl Default for Limits {
@@ -208,6 +216,7 @@ impl Default for Limits {
       max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
       max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
       inbound_rate: None,
+      outbound_budget: None,
     }
   }
 }
@@ -374,6 +383,13 @@ impl SessionOptions {
   /// no default.
   pub fn rate_limit_inbound(mut self, rate: Rate) -> Self {
     self.limits.inbound_rate = Some(rate);
+    self
+  }
+
+  /// Gives every connection this budget at registration. See
+  /// [`budget`](crate::budget) for what a budget does and does not do.
+  pub fn budget_outbound(mut self, budget: OutboundBudget) -> Self {
+    self.limits.outbound_budget = Some(budget);
     self
   }
 
@@ -611,6 +627,10 @@ pub struct InboundVolume {
 pub struct OutboundVolume {
   pub frames: u64,
   pub bytes: u64,
+  /// Times this connection was asked for and not owed a frame, by
+  /// [`ConnectionManager::connection_owed`] or `agent_owed`. Frames the
+  /// snapshot pass did not build, which the two counts above cannot show.
+  pub withheld: u64,
 }
 
 struct ClientHandle<ID: AgentId> {
@@ -632,6 +652,12 @@ struct ClientHandle<ID: AgentId> {
   gate: parking_lot::Mutex<Bucket>,
   outbound_frames: AtomicU64,
   outbound_bytes: AtomicU64,
+  /// The budget this connection is judged against and what it has left. A
+  /// lock because the two move together; `budgeted` keeps the fan-out off it
+  /// for the connections that have none, which is most of them.
+  budget: parking_lot::Mutex<Option<(OutboundBudget, Credit)>>,
+  budgeted: AtomicBool,
+  outbound_withheld: AtomicU64,
   /// Round trip to this client, in microseconds, `0` before the first sample.
   ///
   /// Atomics rather than a lock, so a connection task recording a sample needs
@@ -729,7 +755,38 @@ impl<ID: AgentId> ClientHandle<ID> {
     self.min_link_rtt_us.store(0, Ordering::Relaxed);
   }
 
-  fn new(agent: Agent<ID>, to_client_tx: SessionSender<OutboundFrame>, now_us: u64, rate: Option<&Rate>) -> Self {
+  fn set_budget(&self, budget: Option<OutboundBudget>, now_us: u64) {
+    *self.budget.lock() = budget.map(|b| (b, Credit::full(&b, now_us)));
+    self.budgeted.store(budget.is_some(), Ordering::Release);
+  }
+
+  /// Always, without a budget.
+  fn owed(&self, now_us: u64) -> bool {
+    if !self.budgeted.load(Ordering::Acquire) {
+      return true;
+    }
+    match self.budget.lock().as_mut() {
+      Some((budget, credit)) => credit.owed(budget, now_us),
+      None => true,
+    }
+  }
+
+  fn charge(&self, now_us: u64, bytes: u64) {
+    if !self.budgeted.load(Ordering::Acquire) {
+      return;
+    }
+    if let Some((budget, credit)) = self.budget.lock().as_mut() {
+      credit.charge(budget, now_us, bytes);
+    }
+  }
+
+  fn new(
+    agent: Agent<ID>,
+    to_client_tx: SessionSender<OutboundFrame>,
+    now_us: u64,
+    rate: Option<&Rate>,
+    budget: Option<&OutboundBudget>,
+  ) -> Self {
     let (orders_tx, orders_rx) = session_channel::<ConnectionOrder>(ORDER_QUEUE_DEPTH);
     Self {
       agent,
@@ -743,6 +800,9 @@ impl<ID: AgentId> ClientHandle<ID> {
       gate: parking_lot::Mutex::new(Bucket::full(rate, now_us)),
       outbound_frames: AtomicU64::new(0),
       outbound_bytes: AtomicU64::new(0),
+      budget: parking_lot::Mutex::new(budget.map(|b| (*b, Credit::full(b, now_us)))),
+      budgeted: AtomicBool::new(budget.is_some()),
+      outbound_withheld: AtomicU64::new(0),
       rtt_us: AtomicU64::new(0),
       min_rtt_us: AtomicU64::new(0),
       samples: AtomicU64::new(0),
@@ -1076,7 +1136,13 @@ impl<ID: AgentId> ConnectionManager<ID> {
       .write()
       .insert(
         conn_id,
-        ClientHandle::new(agent.clone(), to_client_tx, self.now_us(), self.limits.inbound_rate.as_ref()),
+        ClientHandle::new(
+          agent.clone(),
+          to_client_tx,
+          self.now_us(),
+          self.limits.inbound_rate.as_ref(),
+          self.limits.outbound_budget.as_ref(),
+        ),
       );
     debug!(transport = self.transport, conn_id, agent = %agent, "Connection registered.");
 
@@ -1216,6 +1282,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
     Some(OutboundVolume {
       frames: handle.outbound_frames.load(Ordering::Relaxed),
       bytes: handle.outbound_bytes.load(Ordering::Relaxed),
+      withheld: handle.outbound_withheld.load(Ordering::Relaxed),
     })
   }
 
@@ -1225,7 +1292,75 @@ impl<ID: AgentId> ConnectionManager<ID> {
     connections.for_agent(id).fold(OutboundVolume::default(), |sum, (_, handle)| OutboundVolume {
       frames: sum.frames + handle.outbound_frames.load(Ordering::Relaxed),
       bytes: sum.bytes + handle.outbound_bytes.load(Ordering::Relaxed),
+      withheld: sum.withheld + handle.outbound_withheld.load(Ordering::Relaxed),
     })
+  }
+
+  /// Gives one connection a budget or with `None` takes it away. A new
+  /// budget starts with a full burst. Returns whether the connection is live.
+  pub fn set_outbound_budget(&self, conn_id: ConnectionId, budget: Option<OutboundBudget>) -> bool {
+    let connections = self.connections.read();
+    let Some(handle) = connections.get(conn_id) else {
+      return false;
+    };
+    handle.set_budget(budget, self.now_us());
+    true
+  }
+
+  /// The same, for each of an agent's connections; how many took it.
+  pub fn set_agent_outbound_budget(&self, id: &ID, budget: Option<OutboundBudget>) -> usize {
+    let connections = self.connections.read();
+    let now_us = self.now_us();
+    let mut given = 0;
+    for (_, handle) in connections.for_agent(id) {
+      handle.set_budget(budget, now_us);
+      given += 1;
+    }
+    given
+  }
+
+  /// The budget a connection is judged against, if it has one.
+  pub fn outbound_budget(&self, conn_id: ConnectionId) -> Option<OutboundBudget> {
+    let connections = self.connections.read();
+    let handle = connections.get(conn_id)?;
+    let budget = handle.budget.lock().as_ref().map(|(budget, _)| *budget);
+    budget
+  }
+
+  /// Whether this connection is owed a frame: whether its budget has credit
+  /// left and always if it has none. What a snapshot pass asks before it
+  /// builds for a recipient, answering `Ok(None)` from its provider when the
+  /// answer is no. A refusal is counted as `withheld`, per connection and in
+  /// [`TransportStats`]. A connection that is gone is owed nothing.
+  ///
+  /// See [`budget`](crate::budget) for why the skip lives there and not here.
+  pub fn connection_owed(&self, conn_id: ConnectionId) -> bool {
+    let connections = self.connections.read();
+    let Some(handle) = connections.get(conn_id) else {
+      return false;
+    };
+    if handle.owed(self.now_us()) {
+      return true;
+    }
+    handle.outbound_withheld.fetch_add(1, Ordering::Relaxed);
+    self.stats.record_outbound_withheld();
+    false
+  }
+
+  /// Whether any of an agent's connections is owed a frame. An agent with none
+  /// is owed nothing. When the answer is no, each connection is charged a
+  /// refusal.
+  pub fn agent_owed(&self, id: &ID) -> bool {
+    let connections = self.connections.read();
+    let now_us = self.now_us();
+    if connections.for_agent(id).any(|(_, handle)| handle.owed(now_us)) {
+      return true;
+    }
+    for (_, handle) in connections.for_agent(id) {
+      handle.outbound_withheld.fetch_add(1, Ordering::Relaxed);
+      self.stats.record_outbound_withheld();
+    }
+    false
   }
 
   /// The live connections an agent holds, newest last. Empty for an agent with
@@ -1392,6 +1527,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
     frame: OutboundFrame,
   ) -> Result<Vec<ConnectionId>, SessionLayerError> {
     let disconnecting = self.overflow.outbound == OutboundOverflow::Disconnect;
+    let now_us = self.now_us();
     let connections = self.connections.read();
     let mut full: Option<ConnectionId> = None;
     let mut overflowed = Vec::new();
@@ -1411,6 +1547,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
         sent += 1;
         handle.outbound_frames.fetch_add(1, Ordering::Relaxed);
         handle.outbound_bytes.fetch_add(frame_bytes, Ordering::Relaxed);
+        handle.charge(now_us, frame_bytes);
       }
     });
     drop(connections);
@@ -1977,7 +2114,7 @@ mod tests {
   use crate::conditioner::DirectionProfile;
 
   fn handle(agent: Agent<u32>) -> ClientHandle<u32> {
-    ClientHandle::new(agent, session_channel(4).0, 0, None)
+    ClientHandle::new(agent, session_channel(4).0, 0, None, None)
   }
 
   #[test]
@@ -2352,5 +2489,62 @@ mod tests {
       .await
       .expect("the bridge taking frames releases the waiting forward")
       .expect("the forward task");
+  }
+
+  #[tokio::test]
+  async fn a_budgeted_connection_is_owed_its_burst_and_then_nothing() {
+    let manager = ConnectionManager::<u32>::with_options("test", None, &SessionOptions::default());
+    let (tx, _slow_inbox) = session_channel(16);
+    let slow = manager.register(Agent::new_human(1u32), tx).await;
+    let (tx, _fast_inbox) = session_channel(16);
+    let fast = manager.register(Agent::new_human(2u32), tx).await;
+    assert!(manager.set_outbound_budget(slow, Some(OutboundBudget::bytes_per_second(10.0))));
+    assert!(manager.connection_owed(slow), "a new budget starts with its burst");
+    assert!(manager.connection_owed(fast));
+
+    let frame: OutboundFrame = Frame::from(vec![7u8; 400]);
+    for _ in 0..3 {
+      manager.broadcast(&MessageTarget::All, frame.clone()).expect("room in both queues");
+    }
+
+    assert!(!manager.connection_owed(slow), "1200 bytes against a 10 byte burst, all of them sent");
+    assert!(!manager.agent_owed(&1u32));
+    assert!(manager.connection_owed(fast), "no budget, always owed");
+    assert!(manager.agent_owed(&2u32));
+    assert!(!manager.agent_owed(&3u32), "an agent with no connection is owed nothing");
+
+    let slow_sent = manager.connection_outbound(slow).expect("known connection");
+    assert_eq!(
+      (slow_sent.frames, slow_sent.bytes, slow_sent.withheld),
+      (3, 1200, 2),
+      "the transport withheld nothing; the two asks were refused"
+    );
+    assert_eq!(manager.agent_outbound(&1u32).withheld, 2);
+    assert_eq!(manager.connection_outbound(fast).expect("known connection").withheld, 0);
+    assert_eq!(manager.stats().outbound_withheld(), 2);
+
+    assert!(manager.set_outbound_budget(slow, None));
+    assert!(manager.connection_owed(slow), "lifting the budget lifts the debt");
+    assert_eq!(manager.outbound_budget(slow), None);
+  }
+
+  #[tokio::test]
+  async fn a_session_wide_budget_applies_at_registration_and_a_connection_can_get_its_own() {
+    let budget = OutboundBudget::frames_per_second(0.2).burst(Duration::from_secs(10));
+    let options = SessionOptions::default().budget_outbound(budget);
+    let manager = ConnectionManager::<u32>::with_options("test", None, &options);
+    let (tx, _inbox) = session_channel(16);
+    let conn = manager.register(Agent::new_human(1u32), tx).await;
+    assert_eq!(manager.outbound_budget(conn), Some(budget));
+
+    let frame: OutboundFrame = Frame::from(vec![1u8; 8]);
+    for _ in 0..3 {
+      manager.broadcast(&MessageTarget::All, frame.clone()).expect("room in the queue");
+    }
+    assert!(!manager.connection_owed(conn), "two frames of burst, three sent");
+
+    assert_eq!(manager.set_agent_outbound_budget(&1u32, Some(OutboundBudget::frames_per_second(60.0))), 1);
+    assert!(manager.connection_owed(conn), "a replaced budget starts with a full burst");
+    assert_eq!(manager.set_agent_outbound_budget(&9u32, None), 0);
   }
 }

@@ -42,7 +42,8 @@
   - [Struct `ProbeState` and function `make_probe`](#struct-probestate-and-function-makeprobe)
   - [Function `earliest` and constant `DOWN_SEED_FLIP`](#function-earliest-and-constant-downseedflip)
 - [10. Module `gate`](#10-module-gate)
-- [11. Error Handling](#11-error-handling)
+- [11. Module `budget`](#11-module-budget)
+- [12. Error Handling](#12-error-handling)
   - [Enum `SessionLayerError`](#enum-sessionlayererror)
 
 ## Feature Flags
@@ -55,7 +56,7 @@
 | `json` | yes | `JsonCodec` and the codec a session type falls back to when it names none. Enables `plaza_wire/json`, which is what pulls in `serde_json`. |
 | `msgpack` | no | `MsgPackCodec` (compact) and `MsgPackNamedCodec` (struct field names kept, for a peer that decodes by name). Enables `plaza_wire/msgpack`. |
 
-[`manager`](#2-module-manager), [`codec`](#1-module-codec) and [`error`](#11-error-handling) compile unconditionally.
+[`manager`](#2-module-manager), [`codec`](#1-module-codec) and [`error`](#12-error-handling) compile unconditionally.
 
 **Dropping `serde_json`.** Turn off `json` and the crate no longer builds it: `plaza_session = { version = "0.7", default-features = false, features = ["tcp", "msgpack"] }`. Nothing else has to change, because `plaza` and `plaza_wire` are depended on with `default-features = false` here and neither `plaza` nor `plaza_lobby` names a codec at all, so no internal dependency forces the choice back on. Bring your own codec and you can drop `msgpack` too, leaving no built-in format compiled.
 
@@ -98,7 +99,9 @@ The connection registry plus the notification channels a `StateController` consu
 *   **`close_connection(&self, conn_id: ConnectionId, farewell: Option<OutboundFrame>) -> bool`**: orders the connection's task to flush what is queued, write the farewell if any and close the socket. Sync (`try_send` under the registry's read guard), so it is callable from inside `StateLogic`. Returns whether a live connection took the order. The departure then arrives as an ordinary `Left`: a forced disconnect and a cable pull look the same to the controller, on purpose. The farewell is bytes the application already encoded (see `encode_message`); the application alone decides which reason it spells.
 *   **`idle_for(&self, conn_id) -> Option<Duration>`** / **`agent_idle_for(&self, id: &ID) -> Option<Duration>`**: how long a connection has been silent, counted from its last data frame or from `register` if it never sent one. **Probes do not count** and that is only implementable here: the control plane answers a `Ping` invisibly, so an AFK rule written against decoded ops is right by accident and one written against frames would never fire. The agent form takes the shortest across its connections. No timers and no timeout policy live here; read it from your own tick and apply your own number.
 *   **`connection_inbound(&self, conn_id) -> Option<InboundVolume>`** / **`agent_inbound(&self, id: &ID) -> InboundVolume`**: monotonic per-connection inbound counters (`frames`, `bytes`, `shed`), counting what the connection sent rather than what survived the queues. [`TransportStats`](#struct-transportstats) counts the session; this answers "who", which the session-wide numbers cannot. Windowing and thresholds are the application's: keep the last reading and diff, or feed a `plaza_client_utils::RateMeter`.
-*   **`connection_outbound(&self, conn_id) -> Option<OutboundVolume>`** / **`agent_outbound(&self, id: &ID) -> OutboundVolume`**: the same shape pointing the other way (`frames`, `bytes`), counting what `broadcast` handed to the connection's queue rather than what the socket managed to write. A frame the fan-out dropped was never that connection's traffic and is not counted.
+*   **`connection_outbound(&self, conn_id) -> Option<OutboundVolume>`** / **`agent_outbound(&self, id: &ID) -> OutboundVolume`**: the same shape pointing the other way (`frames`, `bytes`, `withheld`), counting what `broadcast` handed to the connection's queue rather than what the socket managed to write. A frame the fan-out dropped was never that connection's traffic and is not counted. `withheld` counts the times `connection_owed` / `agent_owed` answered no.
+*   **`set_outbound_budget(&self, conn_id, Option<OutboundBudget>) -> bool`** / **`set_agent_outbound_budget(&self, id: &ID, Option<OutboundBudget>) -> usize`** / **`outbound_budget(&self, conn_id) -> Option<OutboundBudget>`**: what a connection may be sent, see [module `budget`](#11-module-budget). A new budget starts with a full burst; `None` takes it away, debt included. `Limits::outbound_budget` is the one every connection starts with.
+*   **`connection_owed(&self, conn_id) -> bool`** / **`agent_owed(&self, id: &ID) -> bool`**: whether a recipient is owed a frame now: whether its budget has credit left, or always if it has none. What a snapshot pass asks before it builds for a recipient, answering `Ok(None)` from its provider when the answer is no. A connection that is gone is owed nothing and an agent is owed one when any of its connections is. Every refusal is counted as `withheld`.
 *   **`record_inbound_activity(&self, conn_id, bytes: usize) -> Verdict`**: what the control plane calls for each inbound data frame; a custom transport that bypasses `handle_inbound` calls it itself. It both counts the frame and judges it against [`Limits::inbound_rate`](#10-module-gate) and the return is `#[must_use]`: a frame it refuses must not be forwarded. Without a rate configured, always `Verdict::Admit`.
 *   **`set_deadline(&self, conn_id, after: Option<Duration>, farewell: Option<OutboundFrame>) -> bool`**: arms, moves or (with `None`) clears a deadline the connection task enforces; expiry goes through the same flush-then-farewell close. Setting again replaces the deadline, which is how a renewal extends a session (an arcade credit, an auth token's expiry). No timer exists outside the connection task's own loop; the application decides what stamps, renews or revokes it.
 *   **`deregister_agent(&self, id: &ID, farewell: Option<OutboundFrame>) -> usize`**: `connections_of` then `close_connection` on each; how many took the order.
@@ -169,6 +172,7 @@ SessionOptions::with_protocol(ProtocolVersion(PROTOCOL))
 *   **`inbound_capacity`**, **`decoded_capacity`**, **`presence_capacity`**, **`outbound_capacity`**, **`conditioner_capacity`**: one queue depth each.
 *   **`max_frame_bytes`**, **`max_message_bytes`**: one limit each.
 *   **`rate_limit_inbound(Rate)`**: caps how fast one connection may send. See [module `gate`](#10-module-gate).
+*   **`budget_outbound(OutboundBudget)`**: what every connection may be sent, judged at the snapshot pass. See [module `budget`](#11-module-budget).
 *   **`probes`**, **`without_probes`**, **`probe_schedule`**, **`probe_slots`**: the link plane, or none of it.
 
 The clock is read when answering a latency probe and its reading becomes `Pong.responder`. It is called on a connection task, so a clock that lives on the simulation loop has to be shared: store the tick into an `AtomicU64` and close over it. **The unit is the application's**; nothing here reads the value as a quantity, converts it or has a default for it. Without a clock, `Pong.responder` is `None` and a client can still measure a round trip but cannot estimate the offset between the two clocks.
@@ -252,6 +256,7 @@ pub struct Limits {
   pub max_frame_bytes: usize,       // largest inbound length-delimited frame, TCP only
   pub max_message_bytes: usize,     // largest inbound message once continuations are joined, WebSocket only
   pub inbound_rate: Option<Rate>,   // how fast one connection may send; None admits whatever arrives
+  pub outbound_budget: Option<OutboundBudget>,  // what every connection may be sent; None owes every frame
 }
 
 pub struct Probes {
@@ -452,9 +457,10 @@ Turns on a console subscriber, once. `plaza` and `plaza_session` are instrumente
 
 Live counters for one transport, from `ActixWsPlazaSession::stats` or `ConnectionManager::stats`.
 
-*   **`inbound()`** / **`inbound_dropped()`** / **`inbound_shed()`**, **`outbound()`** / **`outbound_bytes()`** / **`outbound_dropped()`**, **`presence_dropped()`**, **`refused()`**.
+*   **`inbound()`** / **`inbound_dropped()`** / **`inbound_shed()`**, **`outbound()`** / **`outbound_bytes()`** / **`outbound_dropped()`** / **`outbound_withheld()`**, **`presence_dropped()`**, **`refused()`**.
 *   `inbound_dropped` and `inbound_shed` differ in who is at fault and who pays. A drop means the controller fell behind, names nothing a client did and costs whoever happened to be sending; a shed names one connection that exceeded its [rate](#10-module-gate) and costs only that connection. A server seeing both should read the shed first.
 *   `outbound_bytes` counts the frame once per recipient it was queued for, because that is what the sockets will carry; per-connection figures are `ConnectionManager::connection_outbound` / `agent_outbound`.
+*   `outbound_withheld` counts the times a budgeted connection was asked for and not owed a frame (see [module `budget`](#11-module-budget)). It is the budget's cost in frames not built and it climbs only when a snapshot pass asks.
 *   **`record_refused()`**: what a transport calls when it turns a socket away before `register`. Nothing else here can see such a socket.
 
 The fan-out uses `try_send` by default: a wedged client must not stall the controller. The drop used to be announced only with `warn!`, which a human reads afterwards and a server cannot read at all, so the events are countable and an application can shed load deliberately instead of degrading quietly. What the default does when a queue fills is now [`Overflow`](#struct-overflow)'s to say and the counters read the same whichever arm is chosen.
@@ -537,7 +543,31 @@ A token bucket, reached through [`SessionOptions::rate_limit_inbound`](#type-ses
 
 Shed frames are counted in three places: `TransportStats::inbound_shed` for the session and `InboundVolume::shed` per connection and per agent, which is what an application escalates on. A shed frame still counts as a frame and still stamps activity, since it did arrive and a flooding client is not idle.
 
-## 11. Error Handling
+## 11. Module `budget`
+
+How much one connection may be sent, judged where the frames are decided on rather than in the transport.
+
+```rust
+pub struct OutboundBudget {
+  pub bytes_per_sec: Option<f64>,    // sustained bytes a second, None for unbounded
+  pub frames_per_sec: Option<f64>,   // sustained frames a second, None for unbounded
+  pub burst: Duration,               // unspent credit a connection may hold, as time at the rate; one second by default
+}
+```
+
+The outbound twin of the [`gate`](#10-module-gate). A client on a slow link is sent what a client on fibre is sent and the only thing between it and its link is its bounded outbound queue, so its failure is binary: keep up or lose frames, be disconnected or stall the controller, whichever [`Overflow`](#struct-overflow) says. A budget is the middle where it is sent *fewer, complete* frames.
+
+**The transport never withholds.** `broadcast` still queues every frame it is handed and charges each recipient's credit for it, ops and events as well as snapshots, because the link carries all of it. What the budget adds is an answer to the question a snapshot pass asks before it builds for a recipient: `ConnectionManager::connection_owed` / `agent_owed`. A `SnapshotProvider` that returns `Ok(None)` for a recipient not owed a frame has skipped it, and a skip there costs latency and never correctness, since a delta stream's baseline is what was acknowledged and the next frame carries everything since. A skip in the transport would have to drop a frame already built, which is the failure the budget replaces.
+
+Credit runs negative: a frame larger than what is left still goes and the connection is owed nothing until the debt refills at its rate. That is what turns a budget into a cadence, at 10 KiB a second and 2 KiB a frame, five whole frames a second. A new budget starts with a full burst and an idle connection banks no more than one.
+
+*   **`OutboundBudget::bytes_per_second(f64)`**, **`OutboundBudget::frames_per_second(f64)`**: one bound, the other unbounded. **`and_bytes_per_second`**, **`and_frames_per_second`** add the other; both then have to hold. **`burst(Duration)`** sets how far ahead a connection may run; it must be positive.
+*   Reached through [`SessionOptions::budget_outbound`](#type-sessionclock-and-struct-sessionoptions) or `Limits::outbound_budget` for every connection at registration or per connection with `ConnectionManager::set_outbound_budget` / `set_agent_outbound_budget`, read back with `outbound_budget`. A client declaring what its link can carry and the server clamping the declaration are both the application's lines to write.
+*   Refusals are counted in `OutboundVolume::withheld` per connection and per agent and in `TransportStats::outbound_withheld` for the session: frames a snapshot pass did not build, which the sent counts cannot show.
+
+**There is no default.** A connection with no budget is always owed a frame, as every connection was before this module existed.
+
+## 12. Error Handling
 
 ### Enum `SessionLayerError`
 
