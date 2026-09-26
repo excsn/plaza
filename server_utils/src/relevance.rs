@@ -499,8 +499,12 @@ impl<Id: Copy> SpatialGrid<Id> {
 /// matching [`CellSpace::index_of`], so size the space to the world.
 ///
 /// The filled cells are listed as they fill, so `clear` and `occupied` walk
-/// only those. Without the list a sparse world paid a walk over every cell of
-/// the space each tick, which measured slower than the hash it replaced.
+/// only those. Measure before swapping: on gow_3d's zone, a bounded world
+/// that is sparsely filled at every population it runs at, this grid was
+/// about twice as slow as the hashed one below 64 bodies, level at 1024 and
+/// 4096 and a few percent faster only once the crowd packed. The hashed
+/// grid's few buckets stay in cache where a table over every cell scatters
+/// the filled ones, so this pays where most cells hold something.
 #[derive(Debug, Clone)]
 pub struct DenseGrid<Id: Copy> {
   cells: CellTable<Vec<Id>>,

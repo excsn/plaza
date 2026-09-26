@@ -173,7 +173,7 @@ Buckets entity ids into cells for range queries. Rebuild each tick.
 
 *   **`new(CellSpace)`**, **`clear(&mut self)`** (empties every cell, keeps each one's capacity), **`insert(&mut self, id, x, y)`**. A position outside the space is filed in the border cell on that side, matching `CellSpace::index_of`, so size the space to the world.
 *   **`query_radius(&self, x, y, radius, out: &mut Vec<Id>)`**: as `SpatialGrid::query_radius`, over `CellSpace::indices_in_radius`.
-*   **`members(&self, index: usize) -> &[Id]`**, **`occupied(&self) -> impl Iterator<Item = (usize, &[Id])>`**: a cell by its dense index rather than its Morton key; occupied cells come in the order they first filled since the last `clear`. The grid lists filled cells as they fill, so `clear` and `occupied` walk only those: without the list a sparse world paid a walk over every cell of the space each tick, which measured slower than the hash it replaced.
+*   **`members(&self, index: usize) -> &[Id]`**, **`occupied(&self) -> impl Iterator<Item = (usize, &[Id])>`**: a cell by its dense index rather than its Morton key; occupied cells come in the order they first filled since the last `clear`. The grid lists filled cells as they fill, so `clear` and `occupied` walk only those. **Measure before swapping.** On gow_3d's zone, a bounded world sparsely filled at every population it runs at, this grid was about twice as slow as the hashed one below 64 bodies, level at 1024 and 4096 and a few percent faster only once the crowd packed: the hashed grid's few buckets stay in cache where a table over every cell scatters the filled ones. It pays where most cells hold something.
 *   **`space(&self) -> &CellSpace`**, **`quantizer(&self) -> &GridQuantizer`**.
 
 ### Struct `TierBoundary`
