@@ -163,6 +163,27 @@ void main() {
       expect(pong[1], 89);
     });
 
+    test('a credential frame is the tag and the bytes as given', () {
+      final frame = splitFrame(bytesOf('frame_credential.bin'))!;
+      expect(frame.kind, Kind.credential);
+      expect(String.fromCharCodes(frame.body as List<int>), 'tok3n');
+    });
+
+    test('a goodbye frame carries its code and detail', () {
+      final frame = splitFrame(bytesOf('frame_goodbye.bin'))!;
+      expect(frame.kind, Kind.goodbye);
+      final goodbye = Goodbye.fromDecoded(msgPackDecode(frame.body as List<int>))!;
+      expect(goodbye.code, 4403);
+      expect(String.fromCharCodes(goodbye.detail!), 'no');
+    });
+
+    test('a goodbye with nothing to add has a null detail', () {
+      final frame = splitFrame(bytesOf('frame_goodbye_bare.bin'))!;
+      final goodbye = Goodbye.fromDecoded(msgPackDecode(frame.body as List<int>))!;
+      expect(goodbye.code, Goodbye.credentialTimeout);
+      expect(goodbye.detail, isNull);
+    });
+
     test('a responder with no clock is null rather than zero', () {
       // The distinction a port is most likely to lose: zero is a legitimate
       // clock reading, so "no clock installed" cannot be encoded as one.

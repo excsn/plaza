@@ -58,6 +58,26 @@ PlazaClient makeClient(
 
 void main() {
   group('handshake', () {
+    test('a credential follows the Hello and precedes anything the app sends', () async {
+      final server = FakeServer();
+      final client = PlazaClient(
+        url: Uri.parse('ws://test/ws'),
+        connect: server.connect,
+        protocol: const ProtocolVersion(7),
+        credential: 'tok3n',
+      );
+      client.events.listen((e) {
+        if (e is Connected) client.sendOp('Push');
+      });
+      await client.start();
+      await pump(const Duration(milliseconds: 10));
+
+      final kinds = server.latest.sent.map((f) => splitFrame(f)!.kind).toList();
+      expect(kinds, <Kind>[Kind.hello, Kind.credential, Kind.ops]);
+      expect(splitFrame(server.latest.sent[1])!.body, 'tok3n');
+      await client.stop();
+    });
+
     test('the client sends its Hello unprompted', () async {
       final server = FakeServer();
       final client = makeClient(server, protocol: 42);
@@ -217,7 +237,23 @@ void main() {
       await client.stop();
     });
 
-    test('a rejection carries its close code and a dropped link does not', () async {
+    test('a dropped link carries no close code and is retried', () async {
+      final server = FakeServer();
+      final client = makeClient(server);
+      final events = <PlazaEvent>[];
+      client.events.listen(events.add);
+      await client.start();
+
+      server.latest.dropFromServer();
+      await pump(const Duration(milliseconds: 60));
+      final dropped = events.whereType<Disconnected>().last;
+      expect(dropped.closeCode, isNull, reason: 'no close frame is not a rejection');
+      expect(dropped.refused, isFalse);
+      expect(server.connections, 2);
+      await client.stop();
+    });
+
+    test('a rejection carries its close code and is not retried', () async {
       final server = FakeServer();
       final client = makeClient(server);
       final events = <PlazaEvent>[];
@@ -226,15 +262,49 @@ void main() {
 
       server.latest.dropFromServer(code: 4004);
       await pump(const Duration(milliseconds: 60));
-      expect(events.whereType<Disconnected>().last.closeCode, 4004);
+      final refused = events.whereType<Disconnected>().last;
+      expect(refused.closeCode, 4004);
+      expect(refused.refused, isTrue);
+      expect(client.status, PlazaStatus.closed);
+      expect(server.connections, 1, reason: 'the same credential would be refused again');
+      expect(events.whereType<GaveUp>(), isEmpty, reason: 'nothing was attempted and given up');
+      await client.stop();
+    });
 
+    test('a goodbye gives the disconnect its code and detail', () async {
+      final server = FakeServer();
+      final client = makeClient(server);
+      final events = <PlazaEvent>[];
+      client.events.listen(events.add);
+      await client.start();
+
+      server.latest.deliver(buildFrame(
+        Kind.goodbye,
+        const JsonCodec().encode(<String, Object?>{'code': 4403, 'detail': <int>[110, 111]}),
+      ));
+      // A transport that lost the close code still has the goodbye.
       server.latest.dropFromServer();
       await pump(const Duration(milliseconds: 60));
-      expect(
-        events.whereType<Disconnected>().last.closeCode,
-        isNull,
-        reason: 'no close frame is not a rejection',
+
+      final closed = events.whereType<Disconnected>().last;
+      expect(closed.closeCode, 4403);
+      expect(closed.detail, <int>[110, 111]);
+      expect(client.status, PlazaStatus.closed);
+      await client.stop();
+    });
+
+    test('retryOn can retry a refusal the application knows to be transient', () async {
+      final server = FakeServer();
+      final client = PlazaClient(
+        url: Uri.parse('ws://test/ws'),
+        connect: server.connect,
+        retryOn: (code) => code == 4429 || PlazaClient.retryUnlessRefused(code),
+        backoff: Backoff(initial: const Duration(milliseconds: 5), jitter: 0, random: Random(1)),
       );
+      await client.start();
+      server.latest.dropFromServer(code: 4429);
+      await pump(const Duration(milliseconds: 60));
+      expect(server.connections, 2);
       await client.stop();
     });
 

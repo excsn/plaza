@@ -31,7 +31,7 @@ Two things deliberately do **not** throw. [`splitFrame`](#function-splitframe) r
 ### Enum `Kind`
 
 ```dart
-enum Kind { ops(0), hello(1) }
+enum Kind { ops(0), hello(1), ping(2), pong(3), credential(4), goodbye(5) }
 ```
 
 What a frame carries. Pinned to `plaza_wire::frame::Kind` on the Rust side, so **the values are wire format and cannot be renumbered**.
@@ -40,6 +40,10 @@ What a frame carries. Pinned to `plaza_wire::frame::Kind` on the Rust side, so *
 |---|---|---|
 | `Kind.ops` | 0 | The ops array itself, encoded by the codec. There is no envelope and no sender field. |
 | `Kind.hello` | 1 | A single integer, the peer's [`ProtocolVersion`](#class-protocolversion). |
+| `Kind.ping` | 2 | `{origin}`, a probe the client answers without the application. |
+| `Kind.pong` | 3 | `{origin, responder}`, the answer to a probe this side sent. |
+| `Kind.credential` | 4 | Opaque: a `String` under a text codec, bytes under a binary one. What the client presents to be admitted, sent once right after its Hello. Never codec-encoded. |
+| `Kind.goodbye` | 5 | A [`Goodbye`](#class-goodbye): why the connection is ending, sent last before every close the server orders. |
 
 #### Property `byte`
 
@@ -54,6 +58,24 @@ static Kind? fromByte(int byte)
 The kind for `byte`, or **null if this build has never heard of it**.
 
 Null means skip the frame rather than fail the connection. A server speaking a newer protocol may send kinds this client does not know and refusing them turns every additive change into a break. The rule exists from the start because it cannot be added later: a client already deployed cannot learn to tolerate a new frame kind.
+
+### Class `Goodbye`
+
+```dart
+class Goodbye {
+  const Goodbye(this.code, {this.detail});
+  static const int credentialExpected = 4401;
+  static const int credentialTimeout = 4408;
+  final int code;
+  final List<int>? detail;
+  bool get refused;
+  static Goodbye? fromDecoded(Object? body);
+}
+```
+
+Why a connection ended, the body of a [`Kind.goodbye`](#enum-kind) frame. `code` is a WebSocket close code whatever the transport and on WebSocket the close frame repeats it; `plaza_client` reads the goodbye's first because a proxy may not carry the close frame's code through. RFC 6455 gives 4000 to 4999 to the application and `refused` is that range: the server deciding, so do not reconnect with the same credential. The two codes the server's session sends on its own are the constants. `detail` is whatever the server said beside the code, undecoded.
+
+`fromDecoded` reads the body after the codec has decoded it: a map (`{"code":..,"detail":..}`) under a named codec or a two-element list under a positional one, null for anything else.
 
 ### Class `Frame`
 

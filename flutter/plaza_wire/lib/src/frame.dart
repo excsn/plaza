@@ -4,7 +4,16 @@ enum Kind {
   ops(0),
   hello(1),
   ping(2),
-  pong(3);
+  pong(3),
+
+  /// What a client presents to be admitted: opaque bytes the server's
+  /// admitter reads, sent once right after the client's [hello].
+  credential(4),
+
+  /// Why a connection is ending, sent last before every close the server
+  /// orders. The body decodes to a map or list of `code` and `detail`; see
+  /// [Goodbye].
+  goodbye(5);
 
   const Kind(this.byte);
   final int byte;
@@ -58,6 +67,50 @@ Object buildFrame(Kind kind, Object body) {
   if (body is String) return String.fromCharCode(kind.byte) + body;
   if (body is List<int>) return <int>[kind.byte, ...body];
   throw ArgumentError('body must be a String or List<int>, got ${body.runtimeType}');
+}
+
+/// Why a connection ended, the body of a [Kind.goodbye] frame.
+///
+/// [code] is a WebSocket close code whatever the transport. RFC 6455 gives
+/// 4000 to 4999 to the application; the two the server's session sends on
+/// its own are [credentialExpected] and [credentialTimeout].
+class Goodbye {
+  const Goodbye(this.code, {this.detail});
+
+  /// A data frame arrived before the credential.
+  static const int credentialExpected = 4401;
+
+  /// No credential arrived within the server's pending timeout.
+  static const int credentialTimeout = 4408;
+
+  final int code;
+
+  /// Whatever the server said beside the code, undecoded.
+  final List<int>? detail;
+
+  /// Whether the server refused this client deliberately: a code in the
+  /// application range.
+  bool get refused => code >= 4000 && code <= 4999;
+
+  /// Reads a decoded goodbye body: a map (`{"code":..,"detail":..}`) under a
+  /// named codec or a two-element list under a positional one. Null when the
+  /// body is neither.
+  static Goodbye? fromDecoded(Object? body) {
+    Object? code;
+    Object? detail;
+    if (body is Map) {
+      code = body['code'];
+      detail = body['detail'];
+    } else if (body is List && body.isNotEmpty) {
+      code = body[0];
+      detail = body.length > 1 ? body[1] : null;
+    }
+    if (code is! int) return null;
+    return Goodbye(code, detail: detail is List ? detail.cast<int>() : null);
+  }
+
+  @override
+  String toString() => 'Goodbye($code${detail == null ? '' : ', ${detail!.length} bytes'})';
 }
 
 /// What a peer says it speaks, the body of a [Kind.hello] frame.

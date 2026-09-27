@@ -8,6 +8,7 @@ library;
 export 'package:plaza_wire/plaza_wire.dart'
     show
         Frame,
+        Goodbye,
         JsonCodec,
         Kind,
         MsgPackCodec,

@@ -7,5 +7,5 @@ library;
 
 export 'src/codec.dart' show WireCodec, JsonCodec, MsgPackCodec, asBytes;
 export 'src/enums.dart' show variant, variantBody, variantFields, variantName;
-export 'src/frame.dart' show Frame, Kind, ProtocolVersion, buildFrame, splitFrame;
+export 'src/frame.dart' show Frame, Goodbye, Kind, ProtocolVersion, buildFrame, splitFrame;
 export 'src/msgpack.dart' show MsgPackError, msgPackDecode, msgPackEncode;

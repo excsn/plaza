@@ -38,9 +38,12 @@ class PlazaClient {
     required SocketFactory connect,
     WireCodec codec = const JsonCodec(),
     ProtocolVersion protocol = ProtocolVersion.unknown,
+    Object? credential,
+    bool Function(int? closeCode)? retryOn,
     Backoff? backoff,
     Timeline? timeline,
   });
+  static bool retryUnlessRefused(int? closeCode);
 }
 ```
 
@@ -54,6 +57,8 @@ A plaza connection.
 | `connect` | required | See [`SocketFactory`](#typedef-socketfactory). Called again on every reconnect, so it must be usable more than once. |
 | `codec` | `const JsonCodec()` | Must match the server's. `const MsgPackCodec()` for anything shipped. |
 | `protocol` | `ProtocolVersion.unknown` | This build's wire version. Generated alongside the wire types, never computed here. Leaving it unknown means the handshake always agrees. |
+| `credential` | `null` | What this client presents to be admitted, sent as a [`Kind.credential`](../plaza_wire/API_REFERENCE.md#enum-kind) right after the Hello on every connect and reconnect, before [`Connected`](#class-connected) fires so nothing the app sends can overtake it. A `String` under a text codec, a `List<int>` under a binary one. Null presents nothing, which is right for a server whose route resolved identity itself. |
+| `retryOn` | `retryUnlessRefused` | Whether a close with this code is followed by a reconnect. The default retries a `null` and anything outside 4000 to 4999: a server that refused this credential would refuse it again, so a refusal ends with [`PlazaStatus.closed`](#enum-plazastatus) after its [`Disconnected`](#class-disconnected) and the application decides what to present next. Pass your own to retry a code you know to be transient. |
 | `backoff` | `Backoff()` | One second, factor 1.8, ceiling thirty seconds, 20% jitter, unlimited attempts. |
 | `timeline` | `Timeline()` | A fresh [`RttEstimator`](../plaza_client_utils/API_REFERENCE.md#class-rttestimator) and a 32-sample [`ClockSyncEstimator`](../plaza_client_utils/API_REFERENCE.md#class-clocksyncestimator). |
 
@@ -200,13 +205,15 @@ Emitted after the `Hello` has been sent but before the server's has arrived, so 
 
 ```dart
 class Disconnected extends PlazaEvent {
-  const Disconnected(this.reason, {this.closeCode});
+  const Disconnected(this.reason, {this.closeCode, this.detail});
   final String reason;
   final int? closeCode;
+  final List<int>? detail;
+  bool get refused;
 }
 ```
 
-`reason` is for logs and diagnostics. Match on `closeCode` instead, which separates a server refusing this client from a link that failed: a 4xxx is deliberate, `null` is a close with no code (a 1006-shaped drop) and is worth retrying unchanged. See [`PlazaSocket.closeCode`](#property-closecode).
+`reason` is for logs and diagnostics. Match on `closeCode` instead, which separates a server refusing this client from a link that failed: a 4xxx is deliberate (`refused`), `null` is a close with no code (a 1006-shaped drop) and is worth retrying unchanged. The code is the server's [`Goodbye`](../plaza_wire/API_REFERENCE.md#class-goodbye) where one arrived, else [`PlazaSocket.closeCode`](#property-closecode); `detail` is what the goodbye carried beside it, undecoded. Whether a retry follows is [`retryOn`](#constructor-arguments)'s to say.
 
 ### Class `Outdated`
 

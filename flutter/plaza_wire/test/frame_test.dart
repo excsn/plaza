@@ -43,10 +43,26 @@ void main() {
       expect(Kind.hello.byte, 1);
       expect(Kind.ping.byte, 2);
       expect(Kind.pong.byte, 3);
+      expect(Kind.credential.byte, 4);
+      expect(Kind.goodbye.byte, 5);
       expect(Kind.fromByte(0), Kind.ops);
       // Still the property a future kind depends on, just past the ones that
       // now exist: a peer built before it must skip rather than fail.
-      expect(Kind.fromByte(4), isNull);
+      expect(Kind.fromByte(6), isNull);
+    });
+
+    test('a goodbye reads from either codec shape', () {
+      final named = Goodbye.fromDecoded(<String, Object?>{'code': 4403, 'detail': <int>[110, 111]})!;
+      expect(named.code, 4403);
+      expect(named.detail, <int>[110, 111]);
+      expect(named.refused, isTrue);
+      final positional = Goodbye.fromDecoded(<Object?>[1000, null])!;
+      expect(positional.code, 1000);
+      expect(positional.detail, isNull);
+      expect(positional.refused, isFalse);
+      expect(Goodbye.fromDecoded('nonsense'), isNull);
+      expect(Goodbye.credentialExpected, 4401);
+      expect(Goodbye.credentialTimeout, 4408);
     });
   });
 

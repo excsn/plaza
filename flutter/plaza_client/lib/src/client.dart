@@ -23,13 +23,20 @@ class Connected extends PlazaEvent {
 }
 
 class Disconnected extends PlazaEvent {
-  const Disconnected(this.reason, {this.closeCode});
+  const Disconnected(this.reason, {this.closeCode, this.detail});
   final String reason;
 
-  /// The close code the server sent, or `null` for a link that died without
-  /// one. A 4xxx is the server deciding, so do not retry the same credential.
-  /// A `null` is worth retrying.
+  /// The close code: the server's goodbye where it sent one, else the
+  /// WebSocket close frame's, else `null` for a link that died without one.
+  /// A 4xxx is the server deciding, so the client does not retry it unless
+  /// [PlazaClient.retryOn] says to. A `null` is worth retrying.
   final int? closeCode;
+
+  /// What the server's goodbye carried beside the code, undecoded.
+  final List<int>? detail;
+
+  /// Whether the server refused this client deliberately.
+  bool get refused => closeCode != null && closeCode! >= 4000 && closeCode! <= 4999;
 }
 
 /// The two ends were built from different wire definitions.
@@ -71,15 +78,34 @@ class PlazaClient {
     required SocketFactory connect,
     this.codec = const JsonCodec(),
     this.protocol = ProtocolVersion.unknown,
+    this.credential,
+    bool Function(int? closeCode)? retryOn,
     Backoff? backoff,
     Timeline? timeline,
   })  : _connect = connect,
+        retryOn = retryOn ?? retryUnlessRefused,
         _backoff = backoff ?? Backoff(),
         timeline = timeline ?? Timeline();
 
   final Uri url;
   final SocketFactory _connect;
   final WireCodec codec;
+
+  /// What this client presents to be admitted, sent as a [Kind.credential]
+  /// right after the Hello on every connect and reconnect: a `String` under a
+  /// text codec, a `List<int>` under a binary one. Null presents nothing,
+  /// which is right for a server whose route resolved identity itself.
+  final Object? credential;
+
+  /// Whether a close with this code is followed by a reconnect. The default,
+  /// [retryUnlessRefused], retries everything but a 4xxx: a server that
+  /// refused this credential would refuse it again, so a refusal ends with
+  /// [PlazaStatus.closed] and the application decides what to present next.
+  final bool Function(int? closeCode) retryOn;
+
+  /// The default [retryOn]: a `null` or a code outside 4000 to 4999.
+  static bool retryUnlessRefused(int? closeCode) =>
+      closeCode == null || closeCode < 4000 || closeCode > 4999;
 
   /// This build's wire version. Generated alongside the wire types, never
   /// computed here: a Dart client cannot hash the Rust sources that define the
@@ -107,6 +133,7 @@ class PlazaClient {
 
   PlazaStatus _status = PlazaStatus.idle;
   ProtocolVersion? _serverProtocol;
+  Goodbye? _goodbye;
 
   /// Ops as they arrive, one event per op rather than one per frame, because a
   /// frame carrying three ops is an implementation detail of batching.
@@ -224,6 +251,7 @@ class PlazaClient {
 
     _socket = socket;
     _serverProtocol = null;
+    _goodbye = null;
     if (_everConnected) timeline.onReconnect();
     _sub = socket.messages.listen(
       _onFrame,
@@ -236,6 +264,9 @@ class PlazaClient {
     // end waits for the other and a peer built before the handshake existed
     // simply never answers.
     socket.send(buildFrame(Kind.hello, codec.encode(protocol.value)));
+    // Before Connected, so nothing the application sends can overtake it: a
+    // data frame ahead of the credential closes the socket.
+    if (credential != null) socket.send(buildFrame(Kind.credential, credential!));
 
     final resumed = _everConnected;
     _everConnected = true;
@@ -282,6 +313,12 @@ class PlazaClient {
         if (origin is int) {
           _pongs.add(Pong(origin, responder is num ? responder.toDouble() : null));
         }
+      // Kept for the close that follows it, which is where the application
+      // hears it.
+      case Kind.goodbye:
+        _goodbye = Goodbye.fromDecoded(codec.decode(frame.body));
+      case Kind.credential:
+        break;
       case Kind.ops:
         final decoded = codec.decode(frame.body);
         if (decoded is List) {
@@ -300,10 +337,16 @@ class PlazaClient {
     _sub?.cancel();
     _sub = null;
     // Read before the socket goes: it is the only thing holding the code.
-    final code = _socket?.closeCode;
+    final goodbye = _goodbye;
+    final code = goodbye?.code ?? _socket?.closeCode;
+    _goodbye = null;
     _socket = null;
     if (_stopped) return;
-    _events.add(Disconnected(reason, closeCode: code));
+    _events.add(Disconnected(reason, closeCode: code, detail: goodbye?.detail));
+    if (!retryOn(code)) {
+      _setStatus(PlazaStatus.closed);
+      return;
+    }
     _scheduleRetry(reason);
   }
 
