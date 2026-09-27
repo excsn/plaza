@@ -4,7 +4,6 @@ import 'dart:ui' show AppLifecycleState;
 import 'package:flame/game.dart';
 import 'package:plaza_flame/plaza_flame.dart';
 
-import 'sequencer.dart';
 import 'wire_types.dart';
 
 /// What this client was told it may see, as the scene mutates it.
@@ -85,7 +84,7 @@ class ParlourGame extends FlameGame with PlazaGame {
   StreamSubscription<Object?>? _tableOps;
   StreamSubscription<PlazaEvent>? _tableEvents;
 
-  final OpSequencer sequencer = OpSequencer();
+  final OpSequencer<Object?> sequencer = OpSequencer<Object?>();
 
   final List<TableCard> tables = <TableCard>[];
   int? playerId;
@@ -212,51 +211,51 @@ class ParlourGame extends FlameGame with PlazaGame {
   ///
   /// A snapshot arrives on a deal and a resolved trick and nothing in between,
   /// so the rest of the round is narrated as ops.
-  double applyTableOp(Object? op) {
+  Hold applyTableOp(Object? op) {
     final v = view;
     switch (TableOp.fromWire(op)) {
       case TableOpSnapshot(value: final snapshot):
         view = TableView.fromView(snapshot);
-        return 0;
+        return Hold.none;
 
       case TableOpPhaseChanged(value: final notice):
         v?.phase = notice.newPhase;
-        return 0;
+        return Hold.none;
 
       case TableOpTurnChanged(value: final notice):
         v?.whoseTurn = notice.newTurnActor;
-        return 0;
+        return Hold.none;
 
       case TableOpRoundStarted(value: final notice):
         v?.round = notice.roundNumber;
-        return 0;
+        return Hold.none;
 
       case TableOpCardPlayed(:final player, :final card):
       case TableOpPlayedForYou(:final player, :final card):
         _played(player, card.value);
         _note('#$player played ${card.value}');
-        return pacing.cardPlayed;
+        return Hold.seconds(pacing.cardPlayed);
 
       case TableOpTrickWon(:final player, :final card):
         _note('#$player took the trick with ${card.value}');
-        return pacing.trickWon;
+        return Hold.seconds(pacing.trickWon);
 
       case TableOpSettled(:final winner, coins: final purse):
         coins = purse;
         _note('match over, #$winner takes the stake');
-        return pacing.settled;
+        return Hold.seconds(pacing.settled);
 
       case TableOpRejected(:final reason):
         _note('refused: $reason');
-        return 0;
+        return Hold.none;
 
       case TableOpClosed(:final reason):
         _note('table closed: $reason');
         unawaited(closeTable());
-        return 0;
+        return Hold.none;
 
       default:
-        return 0;
+        return Hold.none;
     }
   }
 

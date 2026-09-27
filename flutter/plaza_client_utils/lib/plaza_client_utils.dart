@@ -30,6 +30,7 @@ export 'src/interpolation.dart' show InterpolationClock, ServerSnapshot, Snapsho
 export 'src/math.dart' show Quat, Vec2, Vec3, doubleEpsilon, lerpDouble;
 export 'src/smoothing.dart'
     show Easing, ErrorSmoother, easeInCubic, easeInOutQuad, easeInQuad, easeOutCubic, linear, smoothstep;
+export 'src/op_sequencer.dart' show Hold, HoldNone, HoldSeconds, HoldUntil, OpSequencer;
 export 'src/mirror.dart'
     show Agreed, Agreement, DeltaMirror, Divergence, Diverged;
 export 'src/playout.dart' show Admission, PlayoutBuffer;

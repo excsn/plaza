@@ -107,6 +107,29 @@ The application has to do one thing itself: on [`Admission.timelineLost`](API_RE
 
 It needs a **deterministic** step (same state and inputs in, same state out, on every peer) and an input type with a meaningful `==`, because that comparison is how a confirmation is judged against the guess it replaces. A type with identity equality reports every confirmation as a misprediction.
 
+## Ops that must be watched in order
+
+A turn-based client is the opposite of a real-time one: every op is a thing that happened and one applied before the previous animation finishes is one the player never saw. [`OpSequencer`](API_REFERENCE.md#class-opsequencer) sits between `PlazaClient.ops` and the scene and releases them one at a time from the game loop.
+
+```dart
+final sequencer = OpSequencer<Object?>();
+client.ops.listen(sequencer.add);
+
+// every frame
+sequencer.pump(dt, (op) {
+  switch (TableOp.fromWire(op)) {
+    case CardPlayed(): land(op); return const Hold.seconds(0.45);
+    case Settled(): return Hold.until(overlay.show('match over'));
+    default: apply(op); return Hold.none;
+  }
+});
+
+// on a resume, fresh state is coming and the backlog would animate stale state
+sequencer.clear();
+```
+
+Prefer a hold in seconds: it lands on a frame boundary and carries its remainder, so a run of holds keeps time. A hold on a future is released on the next pump after it completes and costs about half a frame per op.
+
 ## Two Dart-specific rules
 
 **Functions instead of traits.** Where the Rust crate constrains a type with `Interpolatable` or `Extrapolatable`, this takes a `lerp` or `extrapolateBy` function, which carries the same information.

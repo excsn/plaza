@@ -858,6 +858,41 @@ Something that should happen every interval. It uses the same accumulator as [`F
 | `int advance(int elapsedMs)` | How many whole periods the elapsed time covers. For work where each occurrence matters (spawning a wave, firing a weapon). |
 | `int intervalNanos` (get/set), `set intervalMs`, `int get remainingMs`, `void reset()` | `fromHz` is exact like `FixedTimestep.fromHz`. Setting keeps whatever has accumulated, so a change takes effect from now rather than restarting the period. |
 
+### Class `OpSequencer`
+
+```dart
+class OpSequencer<T> {
+  OpSequencer({int maxQueued = 512});
+  void pump(double dt, Hold Function(T op) apply);
+}
+```
+
+Ops applied one at a time, with room for an animation between them. A real-time client applies whatever arrived and draws the result; a turn-based client has to show every op in order. Ops queue here and `pump`, called from the game loop, releases them one at a time for as long as the applier's holds allow. Nothing is released outside a pump, so a stalled or backgrounded loop holds the queue where it is.
+
+**No Rust counterpart**, since Rust has no loop to join to.
+
+| Member | Notes |
+|---|---|
+| `void add(T op)` / `void addAll(Iterable<T> ops)` | Past `maxQueued` the op is dropped and counted. |
+| `void pump(double dt, Hold Function(T op) apply)` | Drains a run of ops that return `Hold.none` and stops at the first hold that outlasts the frame. |
+| `void clear()` | Drops the backlog, the hold in progress and any future being waited on. For a resume or a resync, where the state arriving next makes everything queued stale. |
+| `int get pending`, `bool get holding` | |
+| `int get dropped` | Ops discarded because the queue was full. A backstop rather than a tuning knob: reaching it means ops arrive faster than they can be watched. |
+
+#### Sealed class `Hold`
+
+```dart
+sealed class Hold {
+  static const Hold none;
+  const factory Hold.seconds(double seconds);
+  factory Hold.until(Future<void> future);
+}
+```
+
+What the applier asks once it has applied an op. `Hold.seconds` counts down on the frame's `dt`, lands on a frame boundary and carries its remainder into the next hold, so a run of holds keeps time. `Hold.until` is released on the first pump after the future completes or fails, which costs about half a frame per op and carries nothing. Use seconds when the length is known and a future only when it is not, such as an overlay with its own timer.
+
+**The sequencer cannot cancel a future.** `clear` stops waiting on it and a completion after that changes nothing, but any continuation inside the future still runs. A consumer whose per-op work has steps after an `await` guards those steps itself.
+
 ## 12. Rollback
 
 The peer-to-peer deterministic model rather than the server-authoritative one. Each peer predicts every other peer's input and rolls back when a confirmation disproves a guess.

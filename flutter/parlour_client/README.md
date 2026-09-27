@@ -27,9 +27,9 @@ This is the client side of [`lobby_world`](../../examples/lobby_world/)'s "a dis
 
 A snapshot arrives on a deal and on a resolved trick and **nothing in between**; the rest of the round is narrated as ops. Most server-authoritative games split the work this way ("full state only on major changes").
 
-`PlazaClient.ops` delivers as fast as frames arrive, which suits a real-time game where only the newest frame matters. In a card game every op is an event the player needs to see in order: a player who does not see the deal before the first card lands has missed the game. [`OpSequencer`](lib/sequencer.dart) sits between the stream and the scene: ops queue, `pump` releases them one at a time and an op worth watching asks for a hold.
+`PlazaClient.ops` delivers as fast as frames arrive, which suits a real-time game where only the newest frame matters. In a card game every op is an event the player needs to see in order: a player who does not see the deal before the first card lands has missed the game. [`OpSequencer`](../plaza_client_utils/API_REFERENCE.md#class-opsequencer) from `plaza_client_utils` sits between the stream and the scene: ops queue, `pump` releases them one at a time and an op worth watching asks for a hold.
 
-It knows nothing about ops. The caller's function does the work and returns how long to wait, so the pacing lives next to the animation rather than in a table of durations somewhere else.
+It knows nothing about ops. The caller's function does the work and returns a `Hold`, seconds here since every wait at this table has a known length, so the pacing lives next to the animation rather than in a table of durations somewhere else.
 
 ### 3. Generated types and compact MessagePack
 
@@ -41,13 +41,10 @@ It knows nothing about ops. The caller's function does the work and returns how 
 
 **Why it is not extracted.** The obvious shape is a `PlazaLink` that owns one client plus its subscriptions and its stats, with `PlazaGame` holding a primary link and any number of named others. That would change a shipped package's API on the evidence of one consumer, which cannot show whether "a lobby and a room" generalises to "N links" or whether two links are all anyone needs. So it is filed rather than built.
 
-**`OpSequencer` is a candidate for a shared package but not moved there yet, for a narrower reason.** It is a pure primitive: self-contained, no dependencies, in-domain, opt-in and this repository has already corrected itself once about deferring those. Its shape is undecided: `apply` returning a hold duration is one design, an explicit `hold()` the applier calls is another and a "tell me when the animation finishes" callback is a third. With one consumer there is no way to tell which shape is right. A second turn-based client would settle it.
-
 ## Reading order
 
 | File | What is in it |
 |---|---|
-| [`lib/sequencer.dart`](lib/sequencer.dart) | The queue and nothing about plaza or Flame |
 | [`lib/parlour_game.dart`](lib/parlour_game.dart) | Both connections, the view and what each op is worth watching |
 | [`lib/main.dart`](lib/main.dart) | The widget layer, which only reads what the game decided |
 | [`test/parlour_game_test.dart`](test/parlour_game_test.dart) | Two loopback sockets and the claims above |
