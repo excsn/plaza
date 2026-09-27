@@ -37,6 +37,10 @@ pub struct TransportStats {
   outbound_withheld: AtomicU64,
   presence_dropped: AtomicU64,
   refused: AtomicU64,
+  pending: AtomicU64,
+  admitted: AtomicU64,
+  timed_out: AtomicU64,
+  over_cap: AtomicU64,
 }
 
 impl TransportStats {
@@ -122,6 +126,46 @@ impl TransportStats {
   /// What a transport calls when it turns a socket away before registering it.
   pub fn record_refused(&self) {
     self.refused.fetch_add(1, Ordering::Relaxed);
+  }
+
+  /// Sockets waiting on a credential right now.
+  pub fn pending(&self) -> u64 {
+    self.pending.load(Ordering::Relaxed)
+  }
+
+  /// Connections an admitter let in.
+  pub fn admitted(&self) -> u64 {
+    self.admitted.load(Ordering::Relaxed)
+  }
+
+  /// Sockets closed for presenting nothing within the credential timeout.
+  pub fn timed_out(&self) -> u64 {
+    self.timed_out.load(Ordering::Relaxed)
+  }
+
+  /// Sockets turned away before the upgrade because the pending cap was full.
+  pub fn over_cap(&self) -> u64 {
+    self.over_cap.load(Ordering::Relaxed)
+  }
+
+  pub(crate) fn pending_begin(&self) {
+    self.pending.fetch_add(1, Ordering::Relaxed);
+  }
+
+  pub(crate) fn pending_end(&self) {
+    self.pending.fetch_sub(1, Ordering::Relaxed);
+  }
+
+  pub(crate) fn record_admitted(&self) {
+    self.admitted.fetch_add(1, Ordering::Relaxed);
+  }
+
+  pub(crate) fn record_timed_out(&self) {
+    self.timed_out.fetch_add(1, Ordering::Relaxed);
+  }
+
+  pub(crate) fn record_over_cap(&self) {
+    self.over_cap.fetch_add(1, Ordering::Relaxed);
   }
 
   pub(crate) fn record_inbound(&self, dropped: bool) {

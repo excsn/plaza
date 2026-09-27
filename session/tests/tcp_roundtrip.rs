@@ -11,7 +11,8 @@ use plaza::agent::Agent;
 use plaza::session::{MessageTarget, PresenceEvent, Session, SessionMessage};
 use plaza_session::codec::{JsonCodec, WireCodec};
 use plaza_wire::frame::ProtocolVersion;
-use plaza_session::{DirectionProfile, LinkProfile, TcpPlazaSession};
+use plaza_session::{ConnectionAdmission, ConnectionAdmitter, DirectionProfile, Farewell, LinkProfile, Peer, TcpPlazaSession};
+use plaza_wire::frame::{Goodbye, Kind};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
@@ -440,14 +441,6 @@ async fn a_link_slower_than_the_probe_interval_is_still_measured() {
 #[tokio::test]
 async fn a_refused_socket_hears_the_farewell_and_registers_nothing() {
   let admitted = Uuid::new_v4();
-  let codec = JsonCodec;
-  let mut farewell = Vec::new();
-  plaza_wire::frame::begin(plaza_wire::frame::Kind::Ops, &mut farewell);
-  codec
-    .encode_into(&vec![TestOp::Welcome("full".into())], &mut farewell)
-    .unwrap();
-  let farewell = plaza_session::Frame::from(farewell);
-
   let admissions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
   let agent_factory: plaza_session::tcp::AgentFactory<PlayerId> = {
     let admissions = admissions.clone();
@@ -455,7 +448,7 @@ async fn a_refused_socket_hears_the_farewell_and_registers_nothing() {
       if admissions.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
         Ok(Agent::new_human(admitted))
       } else {
-        Err(plaza_session::tcp::Refusal::saying(farewell.clone()))
+        Err(Farewell::new(4403).with_detail(b"full".to_vec()))
       }
     })
   };
@@ -472,15 +465,14 @@ async fn a_refused_socket_hears_the_farewell_and_registers_nothing() {
   let second = TcpStream::connect(addr).await.expect("connect");
   let mut second = Framed::new(second, LengthDelimitedCodec::new());
 
-  let frame = with_timeout(second.next()).await.expect("a farewell").expect("frame ok");
-  let (tag, body) = plaza_wire::frame::split(&frame).expect("a non-empty frame");
-  assert_eq!(plaza_wire::frame::Kind::from_byte(tag), Some(plaza_wire::frame::Kind::Ops));
-  let ops: Vec<TestOp> = codec.decode(body).expect("decode farewell");
-  assert_eq!(ops, vec![TestOp::Welcome("full".into())]);
+  let frame = with_timeout(second.next()).await.expect("a goodbye").expect("frame ok");
+  let goodbye = plaza_wire::frame::decode_goodbye(&JsonCodec, &frame).expect("a goodbye frame");
+  assert_eq!(goodbye.code, 4403);
+  assert_eq!(goodbye.detail.as_deref(), Some(&b"full"[..]));
 
   assert!(
     with_timeout(second.next()).await.is_none(),
-    "the refused socket closes after the farewell"
+    "the refused socket closes after the goodbye"
   );
   assert_eq!(session.manager().connection_count(), 1, "nothing was registered for it");
   assert_eq!(session.manager().stats().refused(), 1);
@@ -499,8 +491,18 @@ async fn next_ops_frame(
   }
 }
 
+/// Reads frames until a `Goodbye` arrives, skipping probes and ops.
+async fn next_goodbye(client: &mut Framed<TcpStream, LengthDelimitedCodec>) -> Option<Goodbye> {
+  loop {
+    let frame = with_timeout(client.next()).await?.ok()?;
+    if let Some(goodbye) = plaza_wire::frame::decode_goodbye(&JsonCodec, &frame) {
+      return Some(goodbye);
+    }
+  }
+}
+
 #[tokio::test]
-async fn a_close_delivers_the_farewell_then_ends_the_session() {
+async fn a_close_delivers_the_goodbye_then_ends_the_session() {
   let player_id = Uuid::new_v4();
   let agent_factory: plaza_session::tcp::AgentFactory<PlayerId> =
     Arc::new(move |_peer| Ok(Agent::new_human(player_id)));
@@ -524,13 +526,11 @@ async fn a_close_delivers_the_farewell_then_ends_the_session() {
     "the id on the event is the one the registry resolves"
   );
 
-  let farewell = session
-    .encode_message(SessionMessage::system(vec![TestOp::Welcome("removed by the host".into())]))
-    .expect("encode farewell");
-  assert!(session.manager().close_connection(conn_id, Some(farewell)));
+  assert!(session.manager().close_connection(conn_id, Farewell::new(4000).with_detail(b"removed by the host".to_vec())));
 
-  let heard = next_ops_frame(&mut client).await.expect("the farewell");
-  assert_eq!(heard, vec![TestOp::Welcome("removed by the host".into())]);
+  let heard = next_goodbye(&mut client).await.expect("the goodbye");
+  assert_eq!(heard.code, 4000);
+  assert_eq!(heard.detail.as_deref(), Some(&b"removed by the host"[..]));
   loop {
     match with_timeout(client.next()).await {
       None => break,
@@ -548,13 +548,13 @@ async fn a_close_delivers_the_farewell_then_ends_the_session() {
   }
   assert!(session.manager().connections_of(&player_id).is_empty());
   assert!(
-    !session.manager().close_connection(conn_id, None),
+    !session.manager().close_connection(conn_id, Farewell::new(1000)),
     "a second close finds nobody to order"
   );
 }
 
 #[tokio::test]
-async fn a_silent_close_still_closes() {
+async fn a_close_with_no_detail_still_closes() {
   let player_id = Uuid::new_v4();
   let agent_factory: plaza_session::tcp::AgentFactory<PlayerId> =
     Arc::new(move |_peer| Ok(Agent::new_human(player_id)));
@@ -569,7 +569,7 @@ async fn a_silent_close_still_closes() {
     other => panic!("expected a join, got {other:?}"),
   };
 
-  assert!(session.manager().close_connection(conn_id, None));
+  assert!(session.manager().close_connection(conn_id, Farewell::new(1000)));
   loop {
     match with_timeout(client.next()).await {
       None | Some(Err(_)) => break,
@@ -624,16 +624,10 @@ async fn deregister_agent_closes_every_connection_the_agent_holds() {
   }
   assert_eq!(session.manager().connections_of(&player_id).len(), 2);
 
-  let farewell = session
-    .encode_message(SessionMessage::system(vec![TestOp::Welcome("closing".into())]))
-    .expect("encode");
-  assert_eq!(session.manager().deregister_agent(&player_id, Some(farewell)), 2);
+  assert_eq!(session.manager().deregister_agent(&player_id, Farewell::new(4001)), 2);
 
   for client in [&mut first, &mut second] {
-    assert_eq!(
-      next_ops_frame(client).await.expect("farewell"),
-      vec![TestOp::Welcome("closing".into())]
-    );
+    assert_eq!(next_goodbye(client).await.expect("goodbye").code, 4001);
     loop {
       match with_timeout(client.next()).await {
         None | Some(Err(_)) => break,
@@ -665,16 +659,11 @@ async fn disconnect_all_is_the_same_close_for_everyone() {
     with_timeout(presence.recv()).await.expect("join");
   }
 
-  let farewell = session
-    .encode_message(SessionMessage::system(vec![TestOp::Welcome("room closed".into())]))
-    .expect("encode");
-  assert_eq!(session.manager().disconnect_all(Some(farewell)), 3);
+  assert_eq!(session.manager().disconnect_all(Farewell::new(1001).with_detail(b"room closed".to_vec())), 3);
 
   for client in &mut clients {
-    assert_eq!(
-      next_ops_frame(client).await.expect("farewell"),
-      vec![TestOp::Welcome("room closed".into())]
-    );
+    let goodbye = next_goodbye(client).await.expect("goodbye");
+    assert_eq!((goodbye.code, goodbye.detail.as_deref()), (1001, Some(&b"room closed"[..])));
     loop {
       match with_timeout(client.next()).await {
         None | Some(Err(_)) => break,
@@ -762,20 +751,19 @@ async fn a_deadline_closes_unless_renewed() {
     other => panic!("expected a join, got {other:?}"),
   };
 
-  let farewell = session
-    .encode_message(SessionMessage::system(vec![TestOp::Welcome("credit spent".into())]))
-    .expect("encode");
-  assert!(session.manager().set_deadline(conn_id, Some(Duration::from_millis(700)), Some(farewell.clone())));
+  let farewell = Farewell::new(4002).with_detail(b"credit spent".to_vec());
+  assert!(session.manager().set_deadline(conn_id, Some(Duration::from_millis(700)), farewell.clone()));
 
   // A renewal half way through replaces the deadline, so the original expiry
   // passes with the session still up.
   tokio::time::sleep(Duration::from_millis(350)).await;
-  assert!(session.manager().set_deadline(conn_id, Some(Duration::from_millis(700)), Some(farewell)));
+  assert!(session.manager().set_deadline(conn_id, Some(Duration::from_millis(700)), farewell));
   tokio::time::sleep(Duration::from_millis(450)).await;
   assert_eq!(session.manager().connection_count(), 1, "renewed past the first expiry");
 
-  let heard = with_patience(next_ops_frame(&mut client)).await.expect("the farewell");
-  assert_eq!(heard, vec![TestOp::Welcome("credit spent".into())]);
+  let heard = with_patience(next_goodbye(&mut client)).await.expect("the goodbye");
+  assert_eq!(heard.code, 4002);
+  assert_eq!(heard.detail.as_deref(), Some(&b"credit spent"[..]));
   loop {
     match with_timeout(client.next()).await {
       None | Some(Err(_)) => break,
@@ -786,4 +774,155 @@ async fn a_deadline_closes_unless_renewed() {
     PresenceEvent::Left { agent_id, .. } => assert_eq!(agent_id, player_id),
     other => panic!("expected a leave, got {other:?}"),
   }
+}
+
+struct Doorman {
+  id: PlayerId,
+}
+
+#[async_trait::async_trait]
+impl ConnectionAdmitter<PlayerId> for Doorman {
+  async fn admit(&self, credential: &[u8], peer: &Peer) -> ConnectionAdmission<PlayerId> {
+    assert!(peer.addr.is_some(), "the transport knows the socket's address");
+    if credential == b"open sesame" {
+      ConnectionAdmission::Admitted(Agent::new_human(self.id))
+    } else {
+      ConnectionAdmission::Refused(Farewell::new(4403).with_detail(b"not you".to_vec()))
+    }
+  }
+}
+
+async fn admitted_session(options: plaza_session::SessionOptions) -> (Arc<TcpPlazaSession<TestOp, PlayerId>>, PlayerId) {
+  let id = Uuid::new_v4();
+  let session = TcpPlazaSession::bind_with_admitter("127.0.0.1:0", Arc::new(Doorman { id }), JsonCodec, options)
+    .await
+    .expect("bind");
+  (session, id)
+}
+
+fn raw_frame(kind: Kind, body: &[u8]) -> bytes::Bytes {
+  let mut buf = Vec::new();
+  plaza_wire::frame::begin(kind, &mut buf);
+  buf.extend_from_slice(body);
+  buf.into()
+}
+
+fn hello_frame(version: u32) -> bytes::Bytes {
+  let mut buf = Vec::new();
+  plaza_wire::frame::begin(Kind::Hello, &mut buf);
+  JsonCodec.encode_into(&ProtocolVersion(version), &mut buf).unwrap();
+  buf.into()
+}
+
+#[tokio::test]
+async fn a_socket_registers_only_once_its_credential_is_admitted() {
+  let (session, id) = admitted_session(plaza_session::SessionOptions::default()).await;
+  let presence = session.on_presence_change();
+
+  let stream = TcpStream::connect(session.local_addr()).await.expect("connect");
+  let mut client = Framed::new(stream, LengthDelimitedCodec::new());
+  client.send(hello_frame(9)).await.unwrap();
+  tokio::time::sleep(Duration::from_millis(100)).await;
+  assert_eq!(session.manager().connection_count(), 0, "a hello alone registers nothing");
+  assert_eq!(session.manager().stats().pending(), 1);
+
+  client.send(raw_frame(Kind::Credential, b"open sesame")).await.unwrap();
+  match with_timeout(presence.recv()).await.expect("presence") {
+    PresenceEvent::Joined { agent, .. } => assert_eq!(agent.id(), Some(&id)),
+    other => panic!("expected a join, got {other:?}"),
+  }
+  assert_eq!(session.manager().connection_count(), 1);
+  assert_eq!(session.manager().stats().pending(), 0);
+  assert_eq!(session.manager().stats().admitted(), 1);
+  assert_eq!(
+    session.manager().protocol(&id),
+    Some(ProtocolVersion(9)),
+    "the hello heard while pending is recorded on admission"
+  );
+}
+
+#[tokio::test]
+async fn a_refused_credential_hears_a_goodbye_and_registers_nothing() {
+  let (session, _) = admitted_session(plaza_session::SessionOptions::default()).await;
+  let _presence = session.on_presence_change();
+
+  let stream = TcpStream::connect(session.local_addr()).await.expect("connect");
+  let mut client = Framed::new(stream, LengthDelimitedCodec::new());
+  client.send(raw_frame(Kind::Credential, b"wrong")).await.unwrap();
+
+  let goodbye = next_goodbye(&mut client).await.expect("a goodbye");
+  assert_eq!(goodbye.code, 4403);
+  assert_eq!(goodbye.detail.as_deref(), Some(&b"not you"[..]));
+  assert!(with_timeout(client.next()).await.is_none(), "closed after the goodbye");
+  assert_eq!(session.manager().connection_count(), 0);
+  assert_eq!(session.manager().stats().refused(), 1);
+  assert_eq!(session.manager().stats().pending(), 0);
+}
+
+#[tokio::test]
+async fn ops_before_the_credential_close_the_socket() {
+  let (session, _) = admitted_session(plaza_session::SessionOptions::default()).await;
+  let _presence = session.on_presence_change();
+
+  let stream = TcpStream::connect(session.local_addr()).await.expect("connect");
+  let mut client = Framed::new(stream, LengthDelimitedCodec::new());
+  let mut ops = Vec::new();
+  plaza_wire::frame::begin(Kind::Ops, &mut ops);
+  JsonCodec.encode_into(&vec![TestOp::Hello("early".into())], &mut ops).unwrap();
+  client.send(ops.into()).await.unwrap();
+
+  assert_eq!(next_goodbye(&mut client).await.expect("a goodbye").code, Goodbye::CREDENTIAL_EXPECTED);
+  assert!(with_timeout(client.next()).await.is_none());
+  assert_eq!(session.manager().connection_count(), 0);
+}
+
+#[tokio::test]
+async fn a_socket_that_presents_nothing_times_out() {
+  let mut options = plaza_session::SessionOptions::default();
+  options.limits.credential_timeout = Duration::from_millis(200);
+  let (session, _) = admitted_session(options).await;
+  let _presence = session.on_presence_change();
+
+  // Timed from before the connect: the server's timer cannot start earlier
+  // than that, so a goodbye inside the timeout means the timer fired early.
+  let started = std::time::Instant::now();
+  let stream = TcpStream::connect(session.local_addr()).await.expect("connect");
+  let mut client = Framed::new(stream, LengthDelimitedCodec::new());
+  assert_eq!(next_goodbye(&mut client).await.expect("a goodbye").code, Goodbye::CREDENTIAL_TIMEOUT);
+  assert!(started.elapsed() >= Duration::from_millis(200), "goodbye after {:?}", started.elapsed());
+  assert!(with_timeout(client.next()).await.is_none());
+  assert_eq!(session.manager().stats().timed_out(), 1);
+  assert_eq!(session.manager().stats().pending(), 0);
+}
+
+#[tokio::test]
+async fn the_pending_cap_turns_a_socket_away_before_reading_anything() {
+  let mut options = plaza_session::SessionOptions::default();
+  options.limits.pending_connections = Some(1);
+  let (session, id) = admitted_session(options).await;
+  let presence = session.on_presence_change();
+
+  let first = TcpStream::connect(session.local_addr()).await.expect("connect");
+  let mut first = Framed::new(first, LengthDelimitedCodec::new());
+  with_patience(async {
+    while session.manager().stats().pending() < 1 {
+      tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+  })
+  .await;
+
+  let second = TcpStream::connect(session.local_addr()).await.expect("connect");
+  let mut second = Framed::new(second, LengthDelimitedCodec::new());
+  assert!(
+    with_timeout(second.next()).await.is_none(),
+    "over the cap the socket is closed with nothing on it"
+  );
+  assert_eq!(session.manager().stats().over_cap(), 1);
+
+  first.send(raw_frame(Kind::Credential, b"open sesame")).await.unwrap();
+  match with_timeout(presence.recv()).await.expect("presence") {
+    PresenceEvent::Joined { agent, .. } => assert_eq!(agent.id(), Some(&id)),
+    other => panic!("expected a join, got {other:?}"),
+  }
+  assert_eq!(session.manager().stats().pending(), 0, "the slot is free once admitted");
 }

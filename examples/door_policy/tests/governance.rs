@@ -1,45 +1,39 @@
 //! What a door has to be able to do, asserted against a real socket.
-//!
-//! Same claims as before the library grew the primitives; what changed is that
-//! the arcade no longer brings its own transport to make them true.
 
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use plaza_example_door_policy::arcade;
 use plaza_example_door_policy::client::Knock;
-use plaza_example_door_policy::types::{ArcadeOp, DuplicateLogin, Refusal, CREDIT_SECS, PER_IP, SEATS};
+use plaza_example_door_policy::types::{ArcadeOp, DuplicateLogin, Refusal, CREDENTIAL_WAIT, CREDIT_SECS, SEATS};
+use plaza_example_door_policy::{arcade, arcade_with};
 
 async fn settle() {
   tokio::time::sleep(Duration::from_millis(250)).await;
 }
 
 #[tokio::test]
-async fn the_socket_rule_is_decided_before_anything_is_built() {
-  let (session, door) = arcade(DuplicateLogin::RefuseNewest).await;
+async fn an_address_over_its_cap_is_refused_before_anything_is_built() {
+  let (session, door) = arcade_with(DuplicateLogin::RefuseNewest, 2).await;
   let addr = session.local_addr().to_string();
 
-  // No `Hello`: these never claim a seat, which is what makes this the
-  // pre-identity rule. A door that can only judge accounts cannot judge these
-  // at all, and they are exactly what a flood of half-open sockets looks like.
   let mut held = Vec::new();
-  for _ in 0..PER_IP {
-    held.push(Knock::arrive(&addr, None).await.expect("connect"));
+  for account in [101, 102] {
+    held.push(Knock::arrive(&addr, Some(account)).await.expect("connect"));
     settle().await;
   }
   let registered_before = door.ledger.registered.load(Ordering::Relaxed);
 
-  // One past the cap, judged on the address alone.
-  let over = Knock::arrive(&addr, None).await.expect("connect");
+  let over = Knock::arrive(&addr, Some(103)).await.expect("connect");
   settle().await;
 
   assert_eq!(over.refusal(), Some(Refusal::PerIpCap), "the cap was not applied");
   assert_eq!(
     door.ledger.registered.load(Ordering::Relaxed),
     registered_before,
-    "a refusal decidable from the socket still registered a connection"
+    "a refusal registered a connection"
   );
   assert_eq!(session.manager().stats().refused(), 1, "the transport counted it too");
+  assert_eq!(session.manager().connection_count(), 2);
   over.leave();
   for k in held {
     k.leave();
@@ -58,7 +52,12 @@ async fn a_closed_session_cannot_keep_talking() {
   // The same account again: under KickOldest the first one is ended.
   let second = Knock::arrive(&addr, Some(7)).await.expect("connect");
   settle().await;
-  assert!(first.closure().is_some(), "the loser was never told why it lost");
+  assert_eq!(
+    first.closure().as_deref(),
+    Some("signed in from somewhere else"),
+    "the loser was never told why it lost"
+  );
+  assert!(second.was_admitted());
 
   // Keep talking after being told to go.
   for _ in 0..5 {
@@ -93,22 +92,40 @@ async fn refusing_the_newest_leaves_the_session_in_progress_alone() {
 }
 
 #[tokio::test]
-async fn a_ban_is_enforced_at_the_door_but_only_after_identity() {
+async fn a_ban_is_enforced_at_the_door_before_anything_is_built() {
   let (session, door) = arcade(DuplicateLogin::RefuseNewest).await;
   let addr = session.local_addr().to_string();
   door.ban(42);
 
-  let registered_before = door.ledger.registered.load(Ordering::Relaxed);
   let banned = Knock::arrive(&addr, Some(42)).await.expect("connect");
   settle().await;
 
   assert_eq!(banned.refusal(), Some(Refusal::Banned));
   assert_eq!(
     door.ledger.registered.load(Ordering::Relaxed),
-    registered_before + 1,
-    "the ban should still have cost one registration, since identity arrives after admission"
+    0,
+    "the ban cost a registration, so identity was judged after admission"
   );
+  assert_eq!(session.manager().connection_count(), 0);
   banned.leave();
+}
+
+#[tokio::test]
+async fn a_socket_that_presents_nothing_is_closed_when_the_wait_runs_out() {
+  let (session, door) = arcade(DuplicateLogin::RefuseNewest).await;
+  let addr = session.local_addr().to_string();
+
+  let silent = Knock::arrive(&addr, None).await.expect("connect");
+  tokio::time::sleep(CREDENTIAL_WAIT / 2).await;
+  assert!(!silent.timed_out(), "closed before the wait ran out");
+  assert_eq!(session.manager().stats().pending(), 1);
+
+  tokio::time::sleep(CREDENTIAL_WAIT).await;
+  assert!(silent.timed_out(), "the session outlived its wait");
+  assert_eq!(session.manager().stats().timed_out(), 1);
+  assert_eq!(session.manager().stats().pending(), 0);
+  assert_eq!(door.ledger.registered.load(Ordering::Relaxed), 0);
+  silent.leave();
 }
 
 #[tokio::test]
@@ -121,7 +138,7 @@ async fn a_credit_buys_a_deadline() {
   assert!(player.closure().is_none(), "expired before the credit ran out");
 
   tokio::time::sleep(Duration::from_secs(CREDIT_SECS + 1)).await;
-  assert!(player.closure().is_some(), "the session outlived its credit");
+  assert_eq!(player.closure().as_deref(), Some("your credit ran out"), "the session outlived its credit");
   player.leave();
 }
 

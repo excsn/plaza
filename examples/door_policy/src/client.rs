@@ -1,14 +1,15 @@
 //! A client that speaks the wire by hand, so the door can be knocked on.
 //!
 //! Answers the session's probes, so a client who says nothing still has a
-//! live, measured link.
+//! live, measured link and keeps the goodbye, which is where every refusal
+//! and every close says why.
 
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 use plaza_session::codec::JsonCodec;
 use plaza_session::DEFAULT_MAX_FRAME_BYTES;
-use plaza_wire::frame::Kind;
+use plaza_wire::frame::{self, Goodbye, Kind};
 use plaza_wire::framing::{delimit, LengthDelimited};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -17,42 +18,52 @@ use crate::types::{decode_ops, encode_ops, Account, ArcadeOp, Refusal};
 
 pub struct Knock {
   pub heard: Arc<Mutex<Vec<ArcadeOp>>>,
+  goodbye: Arc<Mutex<Option<Goodbye>>>,
   writer: Arc<tokio::sync::Mutex<tokio::io::WriteHalf<TcpStream>>>,
   task: tokio::task::JoinHandle<()>,
 }
 
 impl Knock {
-  /// Connects, says who it is, and collects whatever it is told.
+  /// Connects, presents the account as its credential if it has one, and
+  /// collects whatever it is told. `None` presents nothing, which is what a
+  /// half-open flood looks like.
   pub async fn arrive(addr: &str, account: Option<Account>) -> std::io::Result<Self> {
     let stream = TcpStream::connect(addr).await?;
     let heard = Arc::new(Mutex::new(Vec::new()));
+    let goodbye = Arc::new(Mutex::new(None));
 
     let (mut read_half, mut write_half) = tokio::io::split(stream);
     if let Some(account) = account {
+      let mut credential = Vec::new();
+      frame::begin(Kind::Credential, &mut credential);
+      credential.extend_from_slice(account.to_string().as_bytes());
       let mut wire = Vec::new();
-      delimit(&encode_ops(&[ArcadeOp::Hello { account }]), &mut wire);
+      delimit(&credential, &mut wire);
       write_half.write_all(&wire).await?;
     }
 
     let writer = Arc::new(tokio::sync::Mutex::new(write_half));
     let sink = heard.clone();
+    let farewell = goodbye.clone();
     let pong_writer = writer.clone();
     let task = tokio::spawn(async move {
       let mut framing = LengthDelimited::new(DEFAULT_MAX_FRAME_BYTES);
       let mut chunk = [0u8; 8192];
       loop {
         while let Ok(Some(frame)) = framing.next_frame() {
-          if frame.first().copied() == Some(Kind::Ping as u8) {
-            if let Some(reply) = plaza_wire::frame::answer_ping(&JsonCodec, &frame[1..], None) {
-              let mut wire = Vec::new();
-              delimit(&reply, &mut wire);
-              let _ = pong_writer.lock().await.write_all(&wire).await;
+          match frame.first().copied().and_then(Kind::from_byte) {
+            Some(Kind::Ping) => {
+              if let Some(reply) = frame::answer_ping(&JsonCodec, &frame[1..], None) {
+                let mut wire = Vec::new();
+                delimit(&reply, &mut wire);
+                let _ = pong_writer.lock().await.write_all(&wire).await;
+              }
             }
-            continue;
-          }
-          let ops = decode_ops(&frame);
-          if !ops.is_empty() {
-            sink.lock().extend(ops);
+            Some(Kind::Goodbye) => {
+              *farewell.lock() = frame::decode_goodbye(&JsonCodec, &frame);
+            }
+            Some(Kind::Ops) => sink.lock().extend(decode_ops(&frame)),
+            _ => {}
           }
         }
         match read_half.read(&mut chunk).await {
@@ -62,14 +73,24 @@ impl Knock {
       }
     });
 
-    Ok(Self { heard, writer, task })
+    Ok(Self {
+      heard,
+      goodbye,
+      writer,
+      task,
+    })
   }
 
+  pub fn goodbye(&self) -> Option<Goodbye> {
+    self.goodbye.lock().clone()
+  }
+
+  /// Why the door said no, for a connection that never got in.
   pub fn refusal(&self) -> Option<Refusal> {
-    self.heard.lock().iter().find_map(|op| match op {
-      ArcadeOp::Refused { reason } => Some(*reason),
-      _ => None,
-    })
+    if self.was_admitted() {
+      return None;
+    }
+    self.goodbye().and_then(|g| Refusal::from_code(g.code))
   }
 
   pub fn was_admitted(&self) -> bool {
@@ -80,11 +101,20 @@ impl Knock {
       .any(|op| matches!(op, ArcadeOp::Admitted { .. }))
   }
 
+  /// Why a session that was inside ended, from its goodbye's detail.
   pub fn closure(&self) -> Option<String> {
-    self.heard.lock().iter().find_map(|op| match op {
-      ArcadeOp::Closed { reason } => Some(reason.clone()),
-      _ => None,
-    })
+    if !self.was_admitted() {
+      return None;
+    }
+    self
+      .goodbye()
+      .and_then(|g| g.detail)
+      .map(|detail| String::from_utf8_lossy(&detail).into_owned())
+  }
+
+  /// Whether the socket was closed for presenting nothing in time.
+  pub fn timed_out(&self) -> bool {
+    self.goodbye().is_some_and(|g| g.code == Goodbye::CREDENTIAL_TIMEOUT)
   }
 
   pub fn snapshots(&self) -> usize {
@@ -107,4 +137,3 @@ impl Knock {
     self.task.abort();
   }
 }
-

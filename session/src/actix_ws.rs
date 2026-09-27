@@ -28,7 +28,8 @@ use crate::conditioner::{Conditioner, LinkProfile};
 use crate::control::{
   self, earliest, far_future, route_inbound, ProbeState, Routed, DOWN_SEED_FLIP,
 };
-use crate::manager::{ConnectionManager, ConnectionOrder, OutboundFrame, SessionOptions, TransportSession};
+use crate::admission::{ConnectionAdmission, ConnectionAdmitter, Farewell, Peer, Pending, Presented, POLICY_VIOLATION};
+use crate::manager::{ConnectionManager, ConnectionOrder, OutboundFrame, PendingSlot, SessionOptions, TransportSession};
 
 const TRANSPORT: &str = "actix_ws";
 
@@ -235,11 +236,130 @@ where
     let codec = self.inner.codec().clone();
 
     actix_web::rt::spawn(async move {
-      connection_task(ws_session, msg_stream, agent, manager, codec).await;
+      let msg_stream = aggregated(msg_stream, manager.limits().max_message_bytes);
+      run_connection(ws_session, msg_stream, agent, manager, codec, None).await;
     });
 
     Ok(response)
   }
+
+  /// The door for a client that cannot present identity before the upgrade.
+  ///
+  /// The socket is held on its own task, unregistered, until a
+  /// `Kind::Credential` arrives and `admitter` answers; see
+  /// [`admission`](crate::admission) for what may cross it meanwhile. Over
+  /// [`Limits::pending_connections`](crate::manager::Limits::pending_connections)
+  /// the route answers 503 and no socket is created, which a client sees as a
+  /// failed connect rather than a refusal.
+  pub fn admit_connection(
+    &self,
+    req: &HttpRequest,
+    stream: web::Payload,
+    admitter: Arc<dyn ConnectionAdmitter<ID>>,
+  ) -> Result<HttpResponse, actix_web::Error> {
+    let manager = self.inner.manager().clone();
+    let Some(slot) = manager.begin_pending() else {
+      debug!(transport = TRANSPORT, "Refusing a socket: the pending cap is full.");
+      return Ok(HttpResponse::ServiceUnavailable().finish());
+    };
+    let peer = Peer::new(req.peer_addr());
+    let (response, ws_session, msg_stream) = actix_ws::handle(req, stream)?;
+    let codec = self.inner.codec().clone();
+
+    actix_web::rt::spawn(async move {
+      admitted_connection_task(ws_session, msg_stream, admitter, peer, slot, manager, codec).await;
+    });
+
+    Ok(response)
+  }
+}
+
+fn aggregated(msg_stream: actix_ws::MessageStream, max_message_bytes: usize) -> actix_ws::AggregatedMessageStream {
+  msg_stream.aggregate_continuations().max_continuation_size(max_message_bytes)
+}
+
+fn close_reason(farewell: &Farewell) -> CloseReason {
+  CloseReason {
+    code: CloseCode::from(farewell.code),
+    description: None,
+  }
+}
+
+enum PendingEnd<ID: AgentId> {
+  Admitted(Agent<ID>),
+  Refused(Farewell),
+  TimedOut,
+  Gone,
+}
+
+/// Holds a socket until it is admitted, then hands it to the ordinary pump.
+async fn admitted_connection_task<ID: AgentId, C: WireCodec>(
+  mut ws_session: actix_ws::Session,
+  msg_stream: actix_ws::MessageStream,
+  admitter: Arc<dyn ConnectionAdmitter<ID>>,
+  peer: Peer,
+  slot: PendingSlot,
+  manager: Arc<ConnectionManager<ID>>,
+  codec: C,
+) {
+  let limits = manager.limits().clone();
+  let mut msg_stream = aggregated(msg_stream, limits.max_message_bytes);
+  let send_as_text = codec.is_text();
+  let mut pending = Pending::new(limits.max_credential_bytes);
+  let deadline = tokio::time::Instant::now() + limits.credential_timeout;
+
+  let end = loop {
+    tokio::select! {
+      _ = tokio::time::sleep_until(deadline) => break PendingEnd::TimedOut,
+      incoming = msg_stream.next() => {
+        let bytes = match incoming {
+          Some(Ok(AggregatedMessage::Binary(bytes))) => bytes,
+          Some(Ok(AggregatedMessage::Text(text))) => text.into_bytes(),
+          Some(Ok(AggregatedMessage::Ping(payload))) => {
+            if ws_session.pong(&payload).await.is_err() {
+              break PendingEnd::Gone;
+            }
+            continue;
+          }
+          Some(Ok(AggregatedMessage::Pong(_))) => continue,
+          Some(Ok(AggregatedMessage::Close(_))) | Some(Err(_)) | None => break PendingEnd::Gone,
+        };
+        match pending.on_frame(&codec, &bytes) {
+          Presented::Nothing => {}
+          Presented::Refuse(farewell) => break PendingEnd::Refused(farewell),
+          Presented::Credential(credential) => match admitter.admit(&credential, &peer).await {
+            ConnectionAdmission::Admitted(agent) => break PendingEnd::Admitted(agent),
+            ConnectionAdmission::Refused(farewell) => break PendingEnd::Refused(farewell),
+          },
+        }
+      }
+    }
+  };
+
+  let farewell = match end {
+    PendingEnd::Admitted(agent) => {
+      slot.admitted();
+      debug!(transport = TRANSPORT, %agent, "Admitted.");
+      run_connection(ws_session, msg_stream, agent, manager, codec, pending.declared()).await;
+      return;
+    }
+    PendingEnd::Refused(farewell) => {
+      slot.refused();
+      debug!(transport = TRANSPORT, code = farewell.code, "Refused.");
+      farewell
+    }
+    PendingEnd::TimedOut => {
+      slot.timed_out();
+      debug!(transport = TRANSPORT, "No credential arrived in time.");
+      Farewell::credential_timeout()
+    }
+    PendingEnd::Gone => {
+      let _ = ws_session.close(None).await;
+      return;
+    }
+  };
+  let _ = write_frame(&mut ws_session, farewell.encode(&codec), send_as_text).await;
+  let _ = ws_session.close(Some(close_reason(&farewell))).await;
 }
 
 /// Writes one already-encoded frame, in the frame type the codec asks for.
@@ -267,21 +387,26 @@ async fn write_frame(ws_session: &mut actix_ws::Session, frame: OutboundFrame, s
   }
 }
 
-/// Pumps one WebSocket connection in both directions.
-async fn connection_task<ID: AgentId, C: WireCodec>(
+/// Pumps one registered WebSocket connection in both directions.
+///
+/// `declared` is the version a client's `Hello` carried while the connection
+/// was still pending, recorded here because there was no agent to record it
+/// against before.
+async fn run_connection<ID: AgentId, C: WireCodec>(
   mut ws_session: actix_ws::Session,
-  msg_stream: actix_ws::MessageStream,
+  mut msg_stream: actix_ws::AggregatedMessageStream,
   agent: Agent<ID>,
   manager: Arc<ConnectionManager<ID>>,
   codec: C,
+  declared: Option<ProtocolVersion>,
 ) {
-  let (queues, limits) = (manager.queues().clone(), manager.limits().clone());
-  let mut msg_stream = msg_stream
-    .aggregate_continuations()
-    .max_continuation_size(limits.max_message_bytes);
+  let queues = manager.queues().clone();
 
   let (to_client_tx, to_client_rx) = session_channel::<OutboundFrame>(queues.outbound);
   let conn_id = manager.register(agent.clone(), to_client_tx).await;
+  if let Some(theirs) = declared {
+    manager.record_protocol(&agent, theirs);
+  }
   // Frames arrive already encoded, so a broadcast encodes once and every
   // recipient's task just writes bytes.
   let send_as_text = codec.is_text();
@@ -302,7 +427,17 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
   let mut link_generation = link.generation();
   let mut next_probe = probe.first_due(tokio::time::Instant::now());
   let mut deadline: Option<tokio::time::Instant> = None;
-  let mut deadline_farewell: Option<OutboundFrame> = None;
+  let mut deadline_farewell: Option<Farewell> = None;
+
+  // The goodbye goes last so it is the final thing the client reads and the
+  // close frame repeats its code for a client that reads only that.
+  macro_rules! goodbye {
+    ($farewell:expr) => {{
+      let farewell: Farewell = $farewell;
+      let _ = write_frame(&mut ws_session, farewell.encode(&codec), send_as_text).await;
+      Some(close_reason(&farewell))
+    }};
+  }
 
   // Either hand the frame back to be written now, or queue it behind whatever
   // the link is already holding. The emptiness check is what keeps order: a
@@ -346,16 +481,13 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
       }
 
       // The application ending or bounding the session. Flush order: what the
-      // link was holding is older than what the queue still holds, and the
-      // farewell goes last so it is the final thing the client reads. The
-      // close frame itself carries no application reason; the farewell was
-      // written before it.
+      // link was holding is older than what the queue still holds.
       Ok(order) = orders.recv() => {
         let farewell = match order {
           ConnectionOrder::Close { farewell } => farewell,
           ConnectionOrder::Deadline { after, farewell } => {
             deadline = after.map(|gap| tokio::time::Instant::now() + gap);
-            deadline_farewell = farewell;
+            deadline_farewell = Some(farewell);
             continue;
           }
         };
@@ -369,11 +501,8 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
             break;
           }
         }
-        if let Some(farewell) = farewell {
-          let _ = write_frame(&mut ws_session, farewell, send_as_text).await;
-        }
-        debug!(transport = TRANSPORT, conn_id, "Closed by the application.");
-        break Some(CloseReason::from(CloseCode::Normal));
+        debug!(transport = TRANSPORT, conn_id, code = farewell.code, "Closed by the application.");
+        break goodbye!(farewell);
       }
 
       _ = tokio::time::sleep_until(deadline.unwrap_or_else(far_future)), if deadline.is_some() => {
@@ -387,11 +516,11 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
             break;
           }
         }
-        if let Some(farewell) = deadline_farewell.take() {
-          let _ = write_frame(&mut ws_session, farewell, send_as_text).await;
-        }
         debug!(transport = TRANSPORT, conn_id, "Deadline expired.");
-        break Some(CloseReason::from(CloseCode::Normal));
+        break match deadline_farewell.take() {
+          Some(farewell) => goodbye!(farewell),
+          None => Some(CloseReason::from(CloseCode::Normal)),
+        };
       }
 
       // The transport times its own round trip, using the WebSocket's own ping
@@ -459,7 +588,7 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
           break None;
         }
         if ejected {
-          break Some(CloseReason::from(CloseCode::Policy));
+          break goodbye!(Farewell::new(POLICY_VIOLATION));
         }
       }
 
@@ -502,7 +631,7 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
                     break None;
                   }
               }
-              Routed::Eject => break Some(CloseReason::from(CloseCode::Policy)),
+              Routed::Eject => break goodbye!(Farewell::new(POLICY_VIOLATION)),
               Routed::Nothing => {}
             }
           } else if !up.push(bytes.into(), &profile.up, now) {

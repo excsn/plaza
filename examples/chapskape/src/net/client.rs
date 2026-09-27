@@ -298,7 +298,7 @@ impl NetClient {
         Arrival::Mismatch { ours, theirs } => {
           self.status = Status::Gone(mismatch_message(ours, theirs))
         }
-        Arrival::Closed(reason) => self.status = Status::Gone(reason),
+        Arrival::Closed(closed) => self.status = Status::Gone(closed.reason),
       }
     }
     self.arrivals = arrivals;

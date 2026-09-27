@@ -364,6 +364,7 @@ impl Limits {
       max_message_bytes: cap,
       inbound_rate: None,
       outbound_budget: None,
+      ..Limits::default()
     }
   }
 }

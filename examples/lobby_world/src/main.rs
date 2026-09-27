@@ -20,6 +20,7 @@ use plaza::tick_driver::TickDriver;
 use plaza_lobby::manager::InMemoryLobbyManager;
 use plaza_lobby::op_payloads::RoomSettings;
 use plaza_lobby::{MapTicketRegistry, TicketStore};
+use plaza::session::Session;
 use plaza_session::codec::JsonCodec;
 use plaza_session::host::{init_logging, Host};
 use plaza_session::ActixWsPlazaSession;
@@ -206,13 +207,18 @@ async fn main() -> std::io::Result<()> {
           if now.duration_since(*since) < ROOM_IDLE_AFTER {
             continue;
           }
-          let farewell = entry
+          let reason = "closed for inactivity";
+          let _ = entry
             .session
-            .encode_message(plaza::session::SessionMessage::system(vec![types::RoomOp::Closed {
-              reason: "closed for inactivity".into(),
-            }]))
-            .ok();
-          let told = entry.session.manager().disconnect_all(farewell);
+            .send_message(
+              plaza::session::MessageTarget::All,
+              plaza::session::SessionMessage::system(vec![types::RoomOp::Closed { reason: reason.into() }]),
+            )
+            .await;
+          let told = entry
+            .session
+            .manager()
+            .disconnect_all(plaza_session::Farewell::new(1001).with_detail(reason.as_bytes()));
           warn!(room = %id, told, "Idle arena drained; shutting it down.");
           let _ = entry
             .commands

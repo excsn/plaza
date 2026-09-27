@@ -32,13 +32,14 @@ Turning off `json` drops `serde_json` from the build, so name the transport feat
 |---|---|
 | Serving a browser client over WebSockets | `ActixWsPlazaSession` |
 | A native client over a length-delimited byte stream | `TcpPlazaSession` |
-| Turning a socket away before anything is allocated or announced | `AgentFactory` returning `Refusal` |
+| Turning a socket away before anything is allocated or announced | `AgentFactory` returning a `Farewell` (TCP); the route, before `handle_connection` (WebSocket) |
+| Admitting a socket on a credential it presents after the upgrade, held unregistered until then | `ConnectionAdmitter` behind `admit_connection` or `bind_with_admitter` (see `admission`) |
 | Knowing how far away a client is, without asking it | `agent_rtt` (the socket) and `agent_link_rtt` (a real frame's journey) |
 | Stamping a reply with your simulation clock, so a client can fit the offset | `SessionOptions::clock` |
 | Testing at 200ms with 5% loss on a local machine | `LinkProfile`, `DirectionProfile`, `Delivery` |
 | Sizing every queue and cap from what your game actually does | `Workload` and its seven presets |
 | Deciding what a full queue costs: a frame, a connection, or a stall | `Overflow` |
-| Ending a session with a reason in your own vocabulary | `close_connection`, `deregister_agent`, `disconnect_all` |
+| Ending a session with a close code and a reason the client hears on any transport | `Farewell` through `close_connection`, `deregister_agent`, `disconnect_all` |
 | Bounding a session that must expire | `set_deadline` |
 | Knowing who is idle and who is flooding | `agent_idle_for`, `agent_inbound` |
 | Making a flood cost the client that sent it and nobody else | `SessionOptions::rate_limit_inbound` with a `Rate` (see `gate`) |

@@ -15,9 +15,10 @@ use plaza::{
   state_logic::{LogicInput, LogicOutput, SnapshotRequest, StateLogic, StateLogicError},
 };
 use plaza_session::manager::ConnectionManager;
+use plaza_session::Farewell;
 
 use crate::door::Door;
-use crate::types::{op_frame, Account, AgentKey, ArcadeOp, Room, Seat, CREDIT_SECS, STARTING_CREDITS};
+use crate::types::{Account, AgentKey, ArcadeOp, Room, Seat, CREDIT_SECS, CREDIT_SPENT, STARTING_CREDITS};
 
 #[derive(Debug, Clone)]
 pub struct Player {
@@ -76,29 +77,25 @@ impl ArcadeState {
   }
 }
 
-/// The identity rules still run *here*, and that is the residue the rewrite
-/// leaves.
-///
-/// The socket rule moved into the fallible factory, the close and the deadline
-/// are the manager's, and every index the old build kept has a library reader.
-/// But a `Hello` arrives as an op, ops have a single consumer, and the
-/// controller is it: so ban, capacity and duplicate login are judged inside
-/// the game's rules, and the arcade still knows what a ban is. There is still
-/// no place between the socket and the game for governance to run.
+/// The game, which no longer knows what a ban is: by the time a join reaches
+/// it the door has judged the account, so a join is a seat.
 #[derive(Debug)]
 pub struct ArcadeLogic {
   pub door: Arc<Door>,
-  /// The registry, held directly: `close_connection` and `set_deadline` are
-  /// sync, so the logic acts on its own decisions with no relay task.
+  /// The registry, held directly: `set_deadline` is sync, so the logic acts
+  /// on its own decisions with no relay task.
   pub manager: Arc<ConnectionManager<AgentKey>>,
 }
 
 impl ArcadeLogic {
-  fn close(&self, key: AgentKey, op: ArcadeOp) {
+  fn buy_time(&self, key: AgentKey) {
     for conn_id in self.manager.connections_of(&key) {
-      self.manager.close_connection(conn_id, Some(op_frame(op.clone())));
+      self.manager.set_deadline(
+        conn_id,
+        Some(Duration::from_secs(CREDIT_SECS)),
+        Farewell::new(CREDIT_SPENT).with_detail("your credit ran out".as_bytes()),
+      );
     }
-    self.door.closing(key);
   }
 }
 
@@ -126,56 +123,6 @@ impl StateLogic<ArcadeOp, AgentKey, ArcadeState> for ArcadeLogic {
         }
         for op in ops {
           match op {
-            // Admission is the door's decision, not the game's; the game only
-            // carries the judgment because the ops stream has one consumer and
-            // the controller is it.
-            ArcadeOp::Hello { account } => {
-              let Some(conn_id) = self.manager.connections_of(&key).first().copied() else {
-                continue;
-              };
-              let seated = state.players.len();
-              match self.door.present_identity(key, account, seated) {
-                Ok(evicted) => {
-                  for old in evicted {
-                    state.players.remove(&old);
-                    self.close(
-                      old,
-                      ArcadeOp::Closed {
-                        reason: "signed in from somewhere else".into(),
-                      },
-                    );
-                  }
-                  let credits = state.wallets.balance(account);
-                  state.players.insert(
-                    key,
-                    Player {
-                      agent: source.clone(),
-                      account,
-                      score: 0,
-                      seconds_left: CREDIT_SECS,
-                    },
-                  );
-                  self.manager.set_deadline(
-                    conn_id,
-                    Some(Duration::from_secs(CREDIT_SECS)),
-                    Some(op_frame(ArcadeOp::Closed {
-                      reason: "your credit ran out".into(),
-                    })),
-                  );
-                  out.push(TargetedOp::new_system_to(
-                    key,
-                    vec![ArcadeOp::Admitted {
-                      account,
-                      seconds: CREDIT_SECS,
-                      credits,
-                    }],
-                  ));
-                }
-                Err(reason) => {
-                  self.close(key, ArcadeOp::Refused { reason });
-                }
-              }
-            }
             ArcadeOp::Push => {
               if let Some(player) = state.players.get_mut(&key) {
                 player.score += 1;
@@ -189,15 +136,7 @@ impl StateLogic<ArcadeOp, AgentKey, ArcadeState> for ArcadeLogic {
                 if let Some(player) = state.players.get_mut(&key) {
                   player.seconds_left += CREDIT_SECS;
                 }
-                if let Some(conn_id) = self.manager.connections_of(&key).first().copied() {
-                  self.manager.set_deadline(
-                    conn_id,
-                    Some(Duration::from_secs(CREDIT_SECS)),
-                    Some(op_frame(ArcadeOp::Closed {
-                      reason: "your credit ran out".into(),
-                    })),
-                  );
-                }
+                self.buy_time(key);
                 out.push(TargetedOp::new_system_to(
                   key,
                   vec![ArcadeOp::Admitted {
@@ -208,7 +147,7 @@ impl StateLogic<ArcadeOp, AgentKey, ArcadeState> for ArcadeLogic {
                 ));
               }
             }
-            ArcadeOp::Refused { .. } | ArcadeOp::Admitted { .. } | ArcadeOp::Closed { .. } | ArcadeOp::Snapshot(_) => {}
+            ArcadeOp::Admitted { .. } | ArcadeOp::Snapshot(_) => {}
           }
         }
       }
@@ -216,15 +155,39 @@ impl StateLogic<ArcadeOp, AgentKey, ArcadeState> for ArcadeLogic {
         state.players.remove(&agent_id);
         self.door.left(agent_id);
       }
-      // Joining is not being admitted. The connection exists, and whether it
-      // may play is decided when identity arrives, which is why nothing is
-      // seated here.
-      LogicInput::AgentJoined { .. } => {
+      // A join is an admission: the door judged the account before the
+      // connection registered, so the seat is taken here without a question.
+      LogicInput::AgentJoined { agent } => {
         self
           .door
           .ledger
           .registered
           .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let Some(key) = agent.id_cloned() else {
+          return Ok(LogicOutput::none());
+        };
+        let Some(account) = self.door.account_of(key) else {
+          return Ok(LogicOutput::none());
+        };
+        let credits = state.wallets.balance(account);
+        state.players.insert(
+          key,
+          Player {
+            agent: agent.clone(),
+            account,
+            score: 0,
+            seconds_left: CREDIT_SECS,
+          },
+        );
+        self.buy_time(key);
+        out.push(TargetedOp::new_system_to(
+          key,
+          vec![ArcadeOp::Admitted {
+            account,
+            seconds: CREDIT_SECS,
+            credits,
+          }],
+        ));
       }
       LogicInput::TimeStep { .. } => {
         state.tick += 1;

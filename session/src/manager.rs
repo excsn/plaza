@@ -34,6 +34,7 @@ use crate::error::SessionLayerError;
 use crate::budget::{Credit, OutboundBudget};
 use crate::gate::{Bucket, Over, Rate, Verdict};
 use crate::stats::TransportStats;
+use crate::admission::Farewell;
 
 /// Default capacity for the notification channels the controller consumes.
 pub const DEFAULT_BROADCAST_CAPACITY: usize = 256;
@@ -45,6 +46,23 @@ pub const DEFAULT_CLIENT_QUEUE_CAPACITY: usize = 64;
 /// sends every tick otherwise grow memory without limit. Refusal here stands
 /// for a socket buffer running out rather than for anything the network did.
 pub const DEFAULT_CONDITIONER_CAPACITY: usize = 1024;
+/// Default wait for a credential on a connection opened through an admitter.
+///
+/// The timer starts after the handshake and a client sends its credential on
+/// open, so a legitimate one arrives within one upstream trip; this only ever
+/// fires for a socket that will never present. Short on purpose: an
+/// attacker's pending count is its open rate times this.
+pub const DEFAULT_CREDENTIAL_TIMEOUT: Duration = Duration::from_secs(5);
+/// Default cap on sockets waiting for a credential at once.
+///
+/// About 24 MiB of parked sockets at the measured 23 KiB each and roughly
+/// twice the worst legitimate reconnect-storm peak a server's own accept rate
+/// produces. Over it, a socket is refused before the upgrade and the client
+/// sees a failed connect, which its backoff already handles.
+pub const DEFAULT_PENDING_CONNECTIONS: usize = 1024;
+/// Default cap on a credential frame's body. Far under the message caps, so an
+/// unadmitted peer cannot make the session hold a large frame.
+pub const DEFAULT_MAX_CREDENTIAL_BYTES: usize = 4096;
 /// Default probes sent at the fast rate before a connection settles into upkeep.
 pub const DEFAULT_PROBE_FAST_PINGS: u32 = 8;
 /// Default gap between probes while a connection is still being characterised.
@@ -208,6 +226,19 @@ pub struct Limits {
   /// [`ConnectionManager::set_outbound_budget`]. Nothing here withholds a
   /// frame: see [`budget`](crate::budget) for where the skip lives.
   pub outbound_budget: Option<OutboundBudget>,
+  /// How long a connection opened through a [`ConnectionAdmitter`] may wait
+  /// for its credential before it is closed with
+  /// `Goodbye::CREDENTIAL_TIMEOUT`. See [`admission`](crate::admission).
+  ///
+  /// [`ConnectionAdmitter`]: crate::admission::ConnectionAdmitter
+  pub credential_timeout: Duration,
+  /// How many sockets may wait for a credential at once or `None` for no cap.
+  /// Counts only unadmitted sockets; a connection registered from its route
+  /// never touches it. Over the cap a socket is refused before the upgrade
+  /// and counted on [`TransportStats::over_cap`].
+  pub pending_connections: Option<usize>,
+  /// Largest credential frame body. Larger closes the socket with 1009.
+  pub max_credential_bytes: usize,
 }
 
 impl Default for Limits {
@@ -217,6 +248,9 @@ impl Default for Limits {
       max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
       inbound_rate: None,
       outbound_budget: None,
+      credential_timeout: DEFAULT_CREDENTIAL_TIMEOUT,
+      pending_connections: Some(DEFAULT_PENDING_CONNECTIONS),
+      max_credential_bytes: DEFAULT_MAX_CREDENTIAL_BYTES,
     }
   }
 }
@@ -588,19 +622,44 @@ pub type OutboundFrame = Frame;
 /// exactly when a close must still work.
 #[derive(Debug)]
 pub enum ConnectionOrder {
-  /// Flush what is queued, write the farewell if any, then close the socket.
-  ///
-  /// The farewell is bytes the application already encoded; the transport does
-  /// not know what reason they spell.
-  Close { farewell: Option<OutboundFrame> },
+  /// Flush what is queued, write the farewell's `Goodbye` frame, then close
+  /// the socket with its code where the transport has one.
+  Close { farewell: Farewell },
   /// Arm (or with `after: None` clear) a deadline this connection's task
-  /// enforces: when it expires, the task performs the same flush-then-farewell
+  /// enforces: when it expires, the task performs the same flush-then-goodbye
   /// close. Setting again replaces the previous deadline, which is how a
   /// renewal extends a session.
-  Deadline {
-    after: Option<Duration>,
-    farewell: Option<OutboundFrame>,
-  },
+  Deadline { after: Option<Duration>, farewell: Farewell },
+}
+
+/// One socket's place among the pending connections, from
+/// [`ConnectionManager::begin_pending`]. Dropping it frees the place.
+#[derive(Debug)]
+pub struct PendingSlot {
+  stats: Arc<TransportStats>,
+}
+
+impl PendingSlot {
+  /// The pending phase ended in a registration.
+  pub fn admitted(self) {
+    self.stats.record_admitted();
+  }
+
+  /// The pending phase ended in a refusal.
+  pub fn refused(self) {
+    self.stats.record_refused();
+  }
+
+  /// The pending phase ended because nothing was presented in time.
+  pub fn timed_out(self) {
+    self.stats.record_timed_out();
+  }
+}
+
+impl Drop for PendingSlot {
+  fn drop(&mut self) {
+    self.stats.pending_end();
+  }
 }
 
 /// Depth of a connection's order queue. Orders are rare and a close is final,
@@ -1377,13 +1436,13 @@ impl<ID: AgentId> ConnectionManager<ID> {
       .collect()
   }
 
-  /// Orders a connection's task to flush what is queued, write the farewell if
-  /// any and close the socket. Returns whether a live connection took the
-  /// order.
+  /// Orders a connection's task to flush what is queued, write the farewell's
+  /// `Goodbye` and close the socket with its code. Returns whether a live
+  /// connection took the order.
   ///
   /// The departure then arrives as an ordinary `Left`: a forced disconnect and
   /// a cable pull look the same to the controller, on purpose.
-  pub fn close_connection(&self, conn_id: ConnectionId, farewell: Option<OutboundFrame>) -> bool {
+  pub fn close_connection(&self, conn_id: ConnectionId, farewell: Farewell) -> bool {
     let connections = self.connections.read();
     match connections.get(conn_id) {
       Some(handle) => handle.orders_tx.try_send(ConnectionOrder::Close { farewell }).is_ok(),
@@ -1395,10 +1454,10 @@ impl<ID: AgentId> ConnectionManager<ID> {
   /// Returns whether a live connection took the order.
   ///
   /// The deadline is enforced by the connection task's own loop, so no timer
-  /// exists anywhere else; expiry goes through the same flush-then-farewell
+  /// exists anywhere else; expiry goes through the same flush-then-goodbye
   /// close as [`close_connection`](Self::close_connection). The application
   /// decides what stamps, renews or revokes it and what the farewell says.
-  pub fn set_deadline(&self, conn_id: ConnectionId, after: Option<Duration>, farewell: Option<OutboundFrame>) -> bool {
+  pub fn set_deadline(&self, conn_id: ConnectionId, after: Option<Duration>, farewell: Farewell) -> bool {
     let connections = self.connections.read();
     match connections.get(conn_id) {
       Some(handle) => handle
@@ -1412,7 +1471,7 @@ impl<ID: AgentId> ConnectionManager<ID> {
   /// Closes every connection an agent holds: [`connections_of`](Self::connections_of)
   /// then [`close_connection`](Self::close_connection) on each. Returns how
   /// many took the order.
-  pub fn deregister_agent(&self, id: &ID, farewell: Option<OutboundFrame>) -> usize {
+  pub fn deregister_agent(&self, id: &ID, farewell: Farewell) -> usize {
     self
       .connections_of(id)
       .into_iter()
@@ -1420,12 +1479,12 @@ impl<ID: AgentId> ConnectionManager<ID> {
       .count()
   }
 
-  /// Closes every live connection, each after its farewell. Returns how many
+  /// Closes every live connection, each after its goodbye. Returns how many
   /// took the order.
   ///
-  /// The same flush-then-farewell path as a single close, per connection, so a
+  /// The same flush-then-goodbye path as a single close, per connection, so a
   /// drain is a kick applied to every connection.
-  pub fn disconnect_all(&self, farewell: Option<OutboundFrame>) -> usize {
+  pub fn disconnect_all(&self, farewell: Farewell) -> usize {
     let connections = self.connections.read();
     connections
       .handles_with_ids()
@@ -1438,6 +1497,22 @@ impl<ID: AgentId> ConnectionManager<ID> {
           .is_ok()
       })
       .count()
+  }
+
+  /// Takes one of the pending slots [`Limits::pending_connections`] allows, or
+  /// `None` when they are all held, which a transport answers by refusing the
+  /// socket before its upgrade. The slot is released when the returned guard
+  /// drops, whichever way the pending phase ended.
+  pub fn begin_pending(&self) -> Option<PendingSlot> {
+    if let Some(cap) = self.limits.pending_connections
+      && self.stats.pending() >= cap as u64 {
+        self.stats.record_over_cap();
+        return None;
+      }
+    self.stats.pending_begin();
+    Some(PendingSlot {
+      stats: Arc::clone(&self.stats),
+    })
   }
 
   /// Hands a connection's order stream to its transport task, once.

@@ -27,37 +27,19 @@ use plaza_wire::frame::ProtocolVersion;
 use crate::conditioner::{Conditioner, DirectionProfile};
 use crate::control::{self, earliest, far_future, route_inbound, ProbeState, Routed, DOWN_SEED_FLIP};
 use crate::error::SessionLayerError;
-use crate::manager::{ConnectionManager, ConnectionOrder, OutboundFrame, SessionOptions, TransportSession};
+use crate::admission::{ConnectionAdmission, ConnectionAdmitter, Farewell, Peer, Pending, Presented, POLICY_VIOLATION};
+use crate::manager::{ConnectionManager, ConnectionOrder, OutboundFrame, PendingSlot, SessionOptions, TransportSession};
 
 const TRANSPORT: &str = "tcp";
 
-/// Builds the `Agent` for a newly accepted connection, or turns it away.
+/// Builds the `Agent` for a newly accepted connection or turns it away with
+/// a [`Farewell`], whose `Goodbye` is the only thing the socket hears.
 ///
 /// A refusal happens before `register`: nothing is allocated, announced, or
 /// snapshotted for the socket. The only rules that can fire here are ones
-/// keyed on what a socket shows; anything keyed on identity has to wait for
-/// an op that carries it.
-pub type AgentFactory<ID> = Arc<dyn Fn(SocketAddr) -> Result<Agent<ID>, Refusal> + Send + Sync>;
-
-/// A refused connection.
-///
-/// The farewell is bytes the application already encoded; the transport does
-/// not know what reason they spell.
-pub struct Refusal {
-  pub farewell: Option<OutboundFrame>,
-}
-
-impl Refusal {
-  pub fn silent() -> Self {
-    Self { farewell: None }
-  }
-
-  pub fn saying(farewell: OutboundFrame) -> Self {
-    Self {
-      farewell: Some(farewell),
-    }
-  }
-}
+/// keyed on what a socket shows; a rule keyed on identity belongs in a
+/// [`ConnectionAdmitter`] behind [`TcpPlazaSession::bind_with_admitter`].
+pub type AgentFactory<ID> = Arc<dyn Fn(SocketAddr) -> Result<Agent<ID>, Farewell> + Send + Sync>;
 
 /// A Plaza `Session` served over length-delimited TCP. The framing contract
 /// is [`plaza_wire::framing`]: a 4-byte big-endian length, then the frame.
@@ -141,22 +123,38 @@ where
     codec: C,
     options: SessionOptions,
   ) -> Result<Arc<Self>, SessionLayerError> {
-    let addr = addr.into();
-    let listener = TcpListener::bind(&addr)
-      .await
-      .map_err(|source| SessionLayerError::Bind {
-        addr: addr.clone(),
-        source,
-      })?;
-    let local_addr = listener
-      .local_addr()
-      .map_err(|source| SessionLayerError::Bind { addr, source })?;
-
+    let (listener, local_addr) = listen(addr.into()).await?;
     let inner = TransportSession::with_options(TRANSPORT, codec.clone(), options);
     let manager = inner.manager().clone();
 
     let listener_handle = tokio::spawn(accept_loop::<ID, C>(listener, manager, agent_factory, codec));
     info!(transport = TRANSPORT, %local_addr, "Listening.");
+
+    Ok(Arc::new(Self {
+      inner,
+      local_addr,
+      listener_handle,
+    }))
+  }
+
+  /// Binds with a [`ConnectionAdmitter`] in place of the factory: every
+  /// accepted socket waits, unregistered, for a `Kind::Credential` and
+  /// registers as whoever the admitter says. See
+  /// [`admission`](crate::admission). Over
+  /// [`Limits::pending_connections`](crate::manager::Limits::pending_connections)
+  /// a socket is accepted and closed at once.
+  pub async fn bind_with_admitter(
+    addr: impl Into<String>,
+    admitter: Arc<dyn ConnectionAdmitter<ID>>,
+    codec: C,
+    options: SessionOptions,
+  ) -> Result<Arc<Self>, SessionLayerError> {
+    let (listener, local_addr) = listen(addr.into()).await?;
+    let inner = TransportSession::with_options(TRANSPORT, codec.clone(), options);
+    let manager = inner.manager().clone();
+
+    let listener_handle = tokio::spawn(accept_loop_admitted::<ID, C>(listener, manager, admitter, codec));
+    info!(transport = TRANSPORT, %local_addr, "Listening, admitting on credentials.");
 
     Ok(Arc::new(Self {
       inner,
@@ -177,12 +175,34 @@ where
 
   /// Encodes one message with this session's codec, kind byte included.
   ///
-  /// For frames that bypass the targeting path: a farewell handed to
-  /// [`ConnectionManager::close_connection`], or a [`Refusal`]'s farewell
-  /// written before a socket is registered.
+  /// For frames that bypass the targeting path.
   pub fn encode_message(&self, msg: SessionMessage<Op, ID>) -> Result<OutboundFrame, SessionLayerError> {
     self.inner.encode_message(msg)
   }
+}
+
+async fn listen(addr: String) -> Result<(TcpListener, SocketAddr), SessionLayerError> {
+  let listener = TcpListener::bind(&addr)
+    .await
+    .map_err(|source| SessionLayerError::Bind {
+      addr: addr.clone(),
+      source,
+    })?;
+  let local_addr = listener
+    .local_addr()
+    .map_err(|source| SessionLayerError::Bind { addr, source })?;
+  Ok((listener, local_addr))
+}
+
+type Wire = Framed<TcpStream, LengthDelimitedCodec>;
+
+fn framed(stream: TcpStream, max_frame_bytes: usize) -> Wire {
+  Framed::new(
+    stream,
+    LengthDelimitedCodec::builder()
+      .max_frame_length(max_frame_bytes)
+      .new_codec(),
+  )
 }
 
 async fn accept_loop<ID: AgentId, C: WireCodec>(
@@ -196,28 +216,18 @@ async fn accept_loop<ID: AgentId, C: WireCodec>(
       Ok((stream, peer)) => match agent_factory(peer) {
         Ok(agent) => {
           debug!(transport = TRANSPORT, %peer, agent = %agent, "Accepted connection.");
-          tokio::spawn(connection_task::<ID, C>(
-            stream,
-            agent,
-            manager.clone(),
-            codec.clone(),
-          ));
+          let wire = framed(stream, manager.limits().max_frame_bytes);
+          tokio::spawn(run_connection::<ID, C>(wire, agent, manager.clone(), codec.clone(), None));
         }
-        Err(refusal) => {
+        Err(farewell) => {
           manager.stats().record_refused();
-          debug!(transport = TRANSPORT, %peer, "Refused at the door.");
-          if let Some(farewell) = refusal.farewell {
-            let max_frame_bytes = manager.limits().max_frame_bytes;
-            tokio::spawn(async move {
-              let mut framed = Framed::new(
-                stream,
-                LengthDelimitedCodec::builder()
-                  .max_frame_length(max_frame_bytes)
-                  .new_codec(),
-              );
-              let _ = framed.send(farewell.into_bytes()).await;
-            });
-          }
+          debug!(transport = TRANSPORT, %peer, code = farewell.code, "Refused at the door.");
+          let mut wire = framed(stream, manager.limits().max_frame_bytes);
+          let goodbye = farewell.encode(&codec);
+          tokio::spawn(async move {
+            let _ = wire.send(goodbye.into_bytes()).await;
+            let _ = wire.close().await;
+          });
         }
       },
       Err(e) => {
@@ -228,22 +238,122 @@ async fn accept_loop<ID: AgentId, C: WireCodec>(
   }
 }
 
-/// Pumps one connection: socket -> manager, and manager -> socket.
-async fn connection_task<ID: AgentId, C: WireCodec>(
-  stream: TcpStream,
-  agent: Agent<ID>,
+async fn accept_loop_admitted<ID: AgentId, C: WireCodec>(
+  listener: TcpListener,
+  manager: Arc<ConnectionManager<ID>>,
+  admitter: Arc<dyn ConnectionAdmitter<ID>>,
+  codec: C,
+) {
+  loop {
+    match listener.accept().await {
+      Ok((stream, peer)) => {
+        let Some(slot) = manager.begin_pending() else {
+          debug!(transport = TRANSPORT, %peer, "Refusing a socket: the pending cap is full.");
+          drop(stream);
+          continue;
+        };
+        let wire = framed(stream, manager.limits().max_frame_bytes);
+        tokio::spawn(admitted_connection_task::<ID, C>(
+          wire,
+          admitter.clone(),
+          Peer::new(Some(peer)),
+          slot,
+          manager.clone(),
+          codec.clone(),
+        ));
+      }
+      Err(e) => {
+        error!(transport = TRANSPORT, error = %e, "Accept failed; listener stopping.");
+        return;
+      }
+    }
+  }
+}
+
+enum PendingEnd<ID: AgentId> {
+  Admitted(Agent<ID>),
+  Refused(Farewell),
+  TimedOut,
+  Gone,
+}
+
+/// Holds a socket until it is admitted, then hands it to the ordinary pump.
+async fn admitted_connection_task<ID: AgentId, C: WireCodec>(
+  mut wire: Wire,
+  admitter: Arc<dyn ConnectionAdmitter<ID>>,
+  peer: Peer,
+  slot: PendingSlot,
   manager: Arc<ConnectionManager<ID>>,
   codec: C,
 ) {
-  let (queues, limits) = (manager.queues().clone(), manager.limits().clone());
-  let mut framed = Framed::new(
-    stream,
-    LengthDelimitedCodec::builder()
-      .max_frame_length(limits.max_frame_bytes)
-      .new_codec(),
-  );
+  let limits = manager.limits().clone();
+  let mut pending = Pending::new(limits.max_credential_bytes);
+  let deadline = Instant::now() + limits.credential_timeout;
+
+  let end = loop {
+    tokio::select! {
+      _ = tokio::time::sleep_until(deadline) => break PendingEnd::TimedOut,
+      frame = wire.next() => {
+        let bytes = match frame {
+          Some(Ok(bytes)) => bytes,
+          Some(Err(_)) | None => break PendingEnd::Gone,
+        };
+        match pending.on_frame(&codec, &bytes) {
+          Presented::Nothing => {}
+          Presented::Refuse(farewell) => break PendingEnd::Refused(farewell),
+          Presented::Credential(credential) => match admitter.admit(&credential, &peer).await {
+            ConnectionAdmission::Admitted(agent) => break PendingEnd::Admitted(agent),
+            ConnectionAdmission::Refused(farewell) => break PendingEnd::Refused(farewell),
+          },
+        }
+      }
+    }
+  };
+
+  let farewell = match end {
+    PendingEnd::Admitted(agent) => {
+      slot.admitted();
+      debug!(transport = TRANSPORT, %agent, "Admitted.");
+      run_connection(wire, agent, manager, codec, pending.declared()).await;
+      return;
+    }
+    PendingEnd::Refused(farewell) => {
+      slot.refused();
+      debug!(transport = TRANSPORT, code = farewell.code, "Refused.");
+      farewell
+    }
+    PendingEnd::TimedOut => {
+      slot.timed_out();
+      debug!(transport = TRANSPORT, "No credential arrived in time.");
+      Farewell::credential_timeout()
+    }
+    PendingEnd::Gone => {
+      let _ = wire.close().await;
+      return;
+    }
+  };
+  let _ = wire.send(farewell.encode(&codec).into_bytes()).await;
+  let _ = wire.close().await;
+}
+
+/// Pumps one registered connection: socket -> manager and manager -> socket.
+///
+/// `declared` is the version a client's `Hello` carried while the connection
+/// was still pending, recorded here because there was no agent to record it
+/// against before.
+async fn run_connection<ID: AgentId, C: WireCodec>(
+  mut framed: Wire,
+  agent: Agent<ID>,
+  manager: Arc<ConnectionManager<ID>>,
+  codec: C,
+  declared: Option<ProtocolVersion>,
+) {
+  let queues = manager.queues().clone();
   let (to_client_tx, to_client_rx) = session_channel::<OutboundFrame>(queues.outbound);
   let conn_id = manager.register(agent.clone(), to_client_tx).await;
+  if let Some(theirs) = declared {
+    manager.record_protocol(&agent, theirs);
+  }
   let link = manager.link_handle(conn_id).expect("just registered");
   let orders = manager.take_orders(conn_id).expect("just registered");
   let clock = manager.clock().cloned();
@@ -256,7 +366,17 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
   // than firing it.
   let mut next_probe = probe.first_due(Instant::now());
   let mut deadline: Option<Instant> = None;
-  let mut deadline_farewell: Option<OutboundFrame> = None;
+  let mut deadline_farewell: Option<Farewell> = None;
+
+  // The goodbye goes last so it is the final thing the client reads; on this
+  // transport it is also the only place the code travels.
+  macro_rules! goodbye {
+    ($farewell:expr) => {{
+      let farewell: Farewell = $farewell;
+      let _ = framed.send(farewell.encode(&codec).into_bytes()).await;
+      let _ = framed.close().await;
+    }};
+  }
 
   // Either hand the frame back to be written now, or queue it behind whatever
   // the link is already holding. The emptiness check is what keeps order: a
@@ -303,14 +423,13 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
       }
 
       // The application ending or bounding the session. Flush order: what the
-      // link was holding is older than what the queue still holds, and the
-      // farewell goes last so it is the final thing the client reads.
+      // link was holding is older than what the queue still holds.
       Ok(order) = orders.recv() => {
         let farewell = match order {
           ConnectionOrder::Close { farewell } => farewell,
           ConnectionOrder::Deadline { after, farewell } => {
             deadline = after.map(|gap| Instant::now() + gap);
-            deadline_farewell = farewell;
+            deadline_farewell = Some(farewell);
             continue;
           }
         };
@@ -320,11 +439,8 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
         while let Ok(frame) = to_client_rx.try_recv() {
           let _ = framed.send(frame.into_bytes()).await;
         }
-        if let Some(farewell) = farewell {
-          let _ = framed.send(farewell.into_bytes()).await;
-        }
-        let _ = framed.close().await;
-        debug!(transport = TRANSPORT, conn_id, "Closed by the application.");
+        debug!(transport = TRANSPORT, conn_id, code = farewell.code, "Closed by the application.");
+        goodbye!(farewell);
         break;
       }
 
@@ -335,11 +451,13 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
         while let Ok(frame) = to_client_rx.try_recv() {
           let _ = framed.send(frame.into_bytes()).await;
         }
-        if let Some(farewell) = deadline_farewell.take() {
-          let _ = framed.send(farewell.into_bytes()).await;
-        }
-        let _ = framed.close().await;
         debug!(transport = TRANSPORT, conn_id, "Deadline expired.");
+        match deadline_farewell.take() {
+          Some(farewell) => goodbye!(farewell),
+          None => {
+            let _ = framed.close().await;
+          }
+        }
         break;
       }
 
@@ -367,6 +485,7 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
         if dead {
           break;
         }
+        let mut ejected = false;
         while let Some(frame) = up.pop_ready(now) {
           match route_inbound(frame, &codec, clock.as_ref(), &mut probe, conn_id, &manager, &agent).await {
             Routed::Reply(reply) => {
@@ -377,13 +496,17 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
                 }
             }
             Routed::Eject => {
-              dead = true;
+              ejected = true;
               break;
             }
             Routed::Nothing => {}
           }
         }
         if dead {
+          break;
+        }
+        if ejected {
+          goodbye!(Farewell::new(POLICY_VIOLATION));
           break;
         }
       }
@@ -402,7 +525,10 @@ async fn connection_task<ID: AgentId, C: WireCodec>(
                       break;
                     }
                 }
-                Routed::Eject => break,
+                Routed::Eject => {
+                  goodbye!(Farewell::new(POLICY_VIOLATION));
+                  break;
+                }
                 Routed::Nothing => {}
               }
             } else if !up.push(bytes.freeze().into(), &profile, now) {

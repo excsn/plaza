@@ -9,7 +9,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use plaza_session::codec::JsonCodec;
 use plaza_session::DEFAULT_MAX_FRAME_BYTES;
-use plaza_wire::frame::Kind;
+use plaza_wire::frame::{self, Goodbye, Kind};
 use plaza_wire::framing::{delimit, LengthDelimited};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -18,6 +18,7 @@ use crate::types::{decode_ops, encode_ops, Parting, PartyOp, Seat};
 
 pub struct Guest {
   pub heard: Arc<Mutex<Vec<PartyOp>>>,
+  goodbye: Arc<Mutex<Option<Goodbye>>>,
   writer: Arc<tokio::sync::Mutex<tokio::io::WriteHalf<TcpStream>>>,
   task: tokio::task::JoinHandle<()>,
 }
@@ -26,6 +27,7 @@ impl Guest {
   pub async fn arrive(addr: &str, seat: Option<Seat>) -> std::io::Result<Self> {
     let stream = TcpStream::connect(addr).await?;
     let heard = Arc::new(Mutex::new(Vec::new()));
+    let goodbye: Arc<Mutex<Option<Goodbye>>> = Arc::new(Mutex::new(None));
     let (mut read_half, mut write_half) = tokio::io::split(stream);
 
     if let Some(seat) = seat {
@@ -36,6 +38,7 @@ impl Guest {
 
     let writer = Arc::new(tokio::sync::Mutex::new(write_half));
     let sink = heard.clone();
+    let parting = goodbye.clone();
     let pong_writer = writer.clone();
     let task = tokio::spawn(async move {
       let mut framing = LengthDelimited::new(DEFAULT_MAX_FRAME_BYTES);
@@ -43,11 +46,15 @@ impl Guest {
       loop {
         while let Ok(Some(frame)) = framing.next_frame() {
           if frame.first().copied() == Some(Kind::Ping as u8) {
-            if let Some(reply) = plaza_wire::frame::answer_ping(&JsonCodec, &frame[1..], None) {
+            if let Some(reply) = frame::answer_ping(&JsonCodec, &frame[1..], None) {
               let mut wire = Vec::new();
               delimit(&reply, &mut wire);
               let _ = pong_writer.lock().await.write_all(&wire).await;
             }
+            continue;
+          }
+          if let Some(heard) = frame::decode_goodbye(&JsonCodec, &frame) {
+            *parting.lock() = Some(heard);
             continue;
           }
           let ops = decode_ops(&frame);
@@ -62,7 +69,12 @@ impl Guest {
       }
     });
 
-    Ok(Self { heard, writer, task })
+    Ok(Self {
+      heard,
+      goodbye,
+      writer,
+      task,
+    })
   }
 
   pub async fn say(&self, ops: &[PartyOp]) -> std::io::Result<()> {
@@ -71,11 +83,10 @@ impl Guest {
     self.writer.lock().await.write_all(&wire).await
   }
 
+  /// Why the host ended this session, from the goodbye's code; `None` for a
+  /// session still up or a link that simply dropped.
   pub fn farewell(&self) -> Option<Parting> {
-    self.heard.lock().iter().find_map(|op| match op {
-      PartyOp::Farewell { reason, .. } => Some(*reason),
-      _ => None,
-    })
+    self.goodbye.lock().as_ref().and_then(|g| Parting::from_code(g.code))
   }
 
   pub fn was_seated(&self) -> bool {

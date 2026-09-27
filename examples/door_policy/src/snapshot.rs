@@ -11,10 +11,8 @@ use crate::types::{AgentKey, ArcadeOp};
 /// The room, the same for everyone in it.
 ///
 /// Nobody outside is a recipient, which is the door's doing rather than this
-/// provider's: a connection that was refused is not in the roster the logic
-/// names, so no view is ever built for it. That covers a connection refused
-/// at the door. The panel measures the other case: a connection registered
-/// and snapshotted before an identity rule could turn it away.
+/// provider's: a refused socket never registers, so it is never in the roster
+/// the logic names and no view is ever built for it.
 #[derive(Debug, Default)]
 pub struct RoomSnapshotter;
 

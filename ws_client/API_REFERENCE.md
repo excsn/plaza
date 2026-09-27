@@ -306,6 +306,7 @@ The client side of plaza's framed protocol, pumped once per frame. Owns the [`So
 impl<C: WireCodec> FramePump<C> {
   pub fn new(socket: Box<dyn Socket>, wire: C, protocol: u32) -> Self;
   pub fn connect(url: &str, wire: C, protocol: u32) -> Result<Self, WsError>;
+  pub fn credential(self, credential: impl Into<Vec<u8>>) -> Self;
   pub fn ping_interval_ms(self, ms: u64) -> Self;               // default PING_INTERVAL_MS = 1000
 
   pub fn poll(&mut self, now_ms: u64, out: &mut Vec<Arrival>);  // drain + digest in one call
@@ -333,7 +334,7 @@ impl<C: WireCodec> FramePump<C> {
 
 `poll` is `drain` plus `digest` glued together. A client that trims a resume backlog needs its hands between the socket and the dispatch, so the two halves are also public: `drain` into a caller-owned event buffer, [`trim_backlog`](#2-module-backlog), call `on_resume` if anything was dropped, then `digest` the survivors.
 
-`protocol` is the build's wire format number (from `plaza_wire::build`); it goes out as the `Hello` when the socket opens and is compared against the server's. `send_ops` returns the frame's wire length, or `None` if the value would not serialise. The byte counters are cumulative so a windowed meter diffs them; they count everything, probes and answers included.
+`protocol` is the build's wire format number (from `plaza_wire::build`); it goes out as the `Hello` when the socket opens and is compared against the server's. `credential` is what this client presents to be admitted by a server whose route did not resolve identity: sent as a `Kind::Credential` right after the `Hello` and before anything the application sends, the bytes exactly as given, so under a text codec they must be text. `send_ops` returns the frame's wire length or `None` if the value would not serialise. The byte counters are cumulative so a windowed meter diffs them; they count everything, probes and answers included.
 
 ### Enum `Arrival`
 
@@ -342,11 +343,25 @@ pub enum Arrival {
   Opened,
   Ops(OpsFrame),
   Mismatch { ours: u32, theirs: u32 },
-  Closed(String),
+  Closed(Closed),
 }
 ```
 
-Something the application has to act on; everything the session could finish by itself already has been. `Ops` carries the frame undecoded ([`OpsFrame::body`] feeds your codec's `decode::<Vec<Op>>`, [`OpsFrame::wire_len`] is what it cost tag byte included), because the pump cannot know your `Op` type and the decode is work worth timing where it happens. `Closed` carries the reason worded for a person.
+Something the application has to act on; everything the session could finish by itself already has been. `Ops` carries the frame undecoded ([`OpsFrame::body`] feeds your codec's `decode::<Vec<Op>>`, [`OpsFrame::wire_len`] is what it cost tag byte included), because the pump cannot know your `Op` type and the decode is work worth timing where it happens.
+
+### Struct `Closed`
+
+```rust
+pub struct Closed {
+  pub code: Option<u16>,
+  pub detail: Option<Vec<u8>>,
+  pub reason: String,
+}
+impl Closed { pub fn refused(&self) -> bool; }
+impl Display for Closed;  // the reason
+```
+
+How the connection ended, as the server told it where it did. The server writes a `Kind::Goodbye` last before every close it orders, on every transport and the pump keeps it for the close that follows, so `code` is the goodbye's where one arrived, else the WebSocket close frame's, else `None` for a link that died without one or a close this side asked for. `detail` is what the goodbye carried beside the code, undecoded. `refused()` is a code in 4000 to 4999: the server deciding, so do not reconnect with the same credential. Anything else is worth retrying. `reason` is worded for a person.
 
 ### Function `mismatch_message`
 

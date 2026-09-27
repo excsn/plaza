@@ -19,7 +19,7 @@
 //!     Arrival::Opened => { /* ask to join */ }
 //!     Arrival::Ops(frame) => { /* decode frame.body() with your codec */ }
 //!     Arrival::Mismatch { ours, theirs } => { /* a stale build: see mismatch_message */ }
-//!     Arrival::Closed(reason) => { /* say why */ }
+//!     Arrival::Closed(closed) => { /* closed.code says whether to retry; closed.reason says why */ }
 //!   }
 //! }
 //! # }
@@ -33,7 +33,7 @@
 //! for everyone else.
 
 use plaza_client_utils::{Probe, Timeline};
-use plaza_wire::frame::{self, Kind, ProtocolVersion};
+use plaza_wire::frame::{self, Goodbye, Kind, ProtocolVersion};
 use plaza_wire::WireCodec;
 use serde::Serialize;
 
@@ -56,8 +56,40 @@ pub enum Arrival {
   /// The server speaks a different wire format. The connection still stands,
   /// but every ops body after this is suspect; see [`mismatch_message`].
   Mismatch { ours: u32, theirs: u32 },
-  /// Terminal, with the reason worded for a person.
-  Closed(String),
+  /// Terminal. See [`Closed`] for what the server said.
+  Closed(Closed),
+}
+
+/// How the connection ended, as the server told it where it did.
+///
+/// The server writes a `Kind::Goodbye` last before every close it orders, on
+/// every transport, so `code` is the same number whether it came from that
+/// frame or from the WebSocket close frame that repeats it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Closed {
+  /// The close code or `None` for a link that died without one or a close
+  /// this side asked for. A 4xxx is the server deciding, so do not reconnect
+  /// with the same credential; anything else is worth retrying.
+  pub code: Option<u16>,
+  /// What the goodbye carried beside the code, undecoded: the pump cannot
+  /// know your vocabulary.
+  pub detail: Option<Vec<u8>>,
+  /// Worded for a person.
+  pub reason: String,
+}
+
+impl Closed {
+  /// Whether the server refused this client deliberately: a code in the
+  /// application range RFC 6455 gives to the server's own reasons.
+  pub fn refused(&self) -> bool {
+    matches!(self.code, Some(4000..=4999))
+  }
+}
+
+impl std::fmt::Display for Closed {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.write_str(&self.reason)
+  }
 }
 
 /// One `Kind::Ops` frame as it crossed the wire.
@@ -94,6 +126,8 @@ pub struct FramePump<C: WireCodec> {
   socket: Box<dyn Socket>,
   wire: C,
   protocol: ProtocolVersion,
+  credential: Option<Vec<u8>>,
+  goodbye: Option<Goodbye>,
   ping_interval_ms: u64,
   timeline: Timeline,
   probe: Option<Probe>,
@@ -117,6 +151,8 @@ impl<C: WireCodec> FramePump<C> {
       socket,
       wire,
       protocol: ProtocolVersion(protocol),
+      credential: None,
+      goodbye: None,
       ping_interval_ms: PING_INTERVAL_MS,
       timeline: Timeline::new(),
       probe: None,
@@ -135,6 +171,14 @@ impl<C: WireCodec> FramePump<C> {
   /// [`connect_boxed`](crate::connect_boxed).
   pub fn connect(url: &str, wire: C, protocol: u32) -> Result<Self, WsError> {
     Ok(Self::new(crate::connect_boxed(url)?, wire, protocol))
+  }
+
+  /// What this client presents to be admitted, sent as a `Kind::Credential`
+  /// right after the `Hello` and before anything the application sends. The
+  /// bytes are the server's to read; under a text codec they must be text.
+  pub fn credential(mut self, credential: impl Into<Vec<u8>>) -> Self {
+    self.credential = Some(credential.into());
+    self
   }
 
   /// A different probe cadence. The default is [`PING_INTERVAL_MS`].
@@ -172,6 +216,9 @@ impl<C: WireCodec> FramePump<C> {
         Event::Open => {
           let hello = self.protocol;
           self.send_frame(Kind::Hello, &hello);
+          if let Some(credential) = self.credential.clone() {
+            self.send_raw(Kind::Credential, &credential);
+          }
           out.push(Arrival::Opened);
         }
         Event::Text(text) => {
@@ -184,12 +231,22 @@ impl<C: WireCodec> FramePump<C> {
             out.push(arrival);
           }
         }
-        Event::Closed(reason) => out.push(Arrival::Closed(match reason {
-          CloseReason::Local => "you disconnected".to_owned(),
-          CloseReason::Remote { code, reason } if reason.is_empty() => format!("host closed the connection ({code})"),
-          CloseReason::Remote { reason, .. } => reason,
-          CloseReason::Error(e) => e,
-        })),
+        Event::Closed(reason) => {
+          let (code, reason) = match reason {
+            CloseReason::Local => (None, "you disconnected".to_owned()),
+            CloseReason::Remote { code, reason } if reason.is_empty() => {
+              (Some(code), format!("host closed the connection ({code})"))
+            }
+            CloseReason::Remote { code, reason } => (Some(code), reason),
+            CloseReason::Error(e) => (None, e),
+          };
+          let goodbye = self.goodbye.take();
+          out.push(Arrival::Closed(Closed {
+            code: goodbye.as_ref().map(|g| g.code).or(code),
+            detail: goodbye.and_then(|g| g.detail),
+            reason,
+          }));
+        }
       }
     }
   }
@@ -217,6 +274,12 @@ impl<C: WireCodec> FramePump<C> {
           self.bytes_sent += reply.len() as u64;
           let _ = self.socket.send(&reply);
         }
+        None
+      }
+      // Kept for the close that follows it, which is where the application
+      // hears it: the frame itself is the session's business.
+      Some(Kind::Goodbye) => {
+        self.goodbye = self.wire.decode::<Goodbye>(body).ok();
         None
       }
       Some(Kind::Pong) => {
@@ -247,6 +310,13 @@ impl<C: WireCodec> FramePump<C> {
   /// [`send_ops`](Self::send_ops) for the usual case of one.
   pub fn send_op<T: Serialize>(&mut self, op: &T) -> Option<usize> {
     self.send_ops(std::slice::from_ref(op))
+  }
+
+  fn send_raw(&mut self, kind: Kind, body: &[u8]) {
+    frame::begin(kind, &mut self.out);
+    self.out.extend_from_slice(body);
+    self.bytes_sent += self.out.len() as u64;
+    let _ = self.socket.send(&self.out);
   }
 
   fn send_frame<T: Serialize>(&mut self, kind: Kind, body: &T) -> Option<usize> {
@@ -434,7 +504,60 @@ mod tests {
 
     let mut out = Vec::new();
     pump.poll(0, &mut out);
-    assert_eq!(out, vec![Arrival::Closed("host closed the connection (1000)".to_owned())]);
+    assert_eq!(
+      out,
+      vec![Arrival::Closed(Closed {
+        code: Some(1000),
+        detail: None,
+        reason: "host closed the connection (1000)".to_owned(),
+      })]
+    );
+  }
+
+  #[test]
+  fn a_goodbye_gives_the_close_its_code_and_detail() {
+    let scripted = ScriptedSocket::new();
+    let mut pump = pump(&scripted);
+    scripted.feed_message(framed(
+      Kind::Goodbye,
+      &Goodbye {
+        code: 4403,
+        detail: Some(b"banned".to_vec()),
+      },
+    ));
+    scripted.close_by_peer(4403, "");
+
+    let mut out = Vec::new();
+    pump.poll(0, &mut out);
+    let Arrival::Closed(closed) = &out[0] else {
+      panic!("the goodbye itself is not an arrival: {out:?}")
+    };
+    assert_eq!(out.len(), 1);
+    assert_eq!(closed.code, Some(4403));
+    assert_eq!(closed.detail.as_deref(), Some(&b"banned"[..]));
+    assert!(closed.refused());
+
+    let dropped = Closed {
+      code: None,
+      detail: None,
+      reason: "gone".into(),
+    };
+    assert!(!dropped.refused(), "a link that died is worth retrying");
+  }
+
+  #[test]
+  fn a_credential_follows_the_hello_and_precedes_anything_else() {
+    let scripted = ScriptedSocket::new();
+    let mut pump = FramePump::new(Box::new(scripted.clone()), Codec, 7).credential(b"tok3n".to_vec());
+    scripted.feed(Event::Open);
+    let mut out = Vec::new();
+    pump.poll(0, &mut out);
+    pump.send_op(&1u32);
+
+    let sent = scripted.sent();
+    let kinds: Vec<Option<Kind>> = sent.iter().map(|f| Kind::from_byte(f[0])).collect();
+    assert_eq!(kinds, vec![Some(Kind::Hello), Some(Kind::Credential), Some(Kind::Ops)]);
+    assert_eq!(&sent[1][1..], b"tok3n", "the bytes go as given, no codec in between");
   }
 
   #[test]

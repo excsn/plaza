@@ -101,7 +101,7 @@ impl StateLogic<PartyOp, u64, PartyState> for PartyLogic {
               }
               state.ended = true;
             }
-            PartyOp::Farewell { .. } | PartyOp::Seated { .. } | PartyOp::Snapshot(_) => {}
+            PartyOp::Seated { .. } | PartyOp::Snapshot(_) => {}
           }
         }
       }

@@ -96,16 +96,17 @@ The connection registry plus the notification channels a `StateController` consu
 *   **`async register(&self, agent: Agent<ID>, to_client_tx: SessionSender<OutboundFrame>) -> ConnectionId`**: records a connected client, sends the hello frame if there is one and announces the join. Build the queue with `plaza::session::session_channel`, so a transport never names the channel crate. `async` because announcing may wait under `PresenceOverflow::Backpressure`.
 *   **`async deregister(&self, conn_id: ConnectionId)`**: removes it and announces the departure. **Bookkeeping only**: the socket belongs to the connection task and dropping the outbound sender does not wake it. To end a session, use `close_connection`; the task then closes the socket and deregisters itself.
 *   **`connections_of(&self, id: &ID) -> Vec<ConnectionId>`**: the live connections an agent holds. It maps an agent to its connections: a decoded op names an agent, while a close, a deadline or a per-connection reader needs a connection. `PresenceEvent` carries the same id at join and leave.
-*   **`close_connection(&self, conn_id: ConnectionId, farewell: Option<OutboundFrame>) -> bool`**: orders the connection's task to flush what is queued, write the farewell if any and close the socket. Sync (`try_send` under the registry's read guard), so it is callable from inside `StateLogic`. Returns whether a live connection took the order. The departure then arrives as an ordinary `Left`: a forced disconnect and a cable pull look the same to the controller, on purpose. The farewell is bytes the application already encoded (see `encode_message`); the application alone decides which reason it spells.
+*   **`close_connection(&self, conn_id: ConnectionId, farewell: Farewell) -> bool`**: orders the connection's task to flush what is queued, write the farewell's `Goodbye` and close the socket with its code. Sync (`try_send` under the registry's read guard), so it is callable from inside `StateLogic`. Returns whether a live connection took the order. The departure then arrives as an ordinary `Left`: a forced disconnect and a cable pull look the same to the controller, on purpose. The application supplies the code and whatever detail it wants heard; see [`Farewell`](#struct-farewell).
 *   **`idle_for(&self, conn_id) -> Option<Duration>`** / **`agent_idle_for(&self, id: &ID) -> Option<Duration>`**: how long a connection has been silent, counted from its last data frame or from `register` if it never sent one. **Probes do not count** and that is only implementable here: the control plane answers a `Ping` invisibly, so an AFK rule written against decoded ops is right by accident and one written against frames would never fire. The agent form takes the shortest across its connections. No timers and no timeout policy live here; read it from your own tick and apply your own number.
 *   **`connection_inbound(&self, conn_id) -> Option<InboundVolume>`** / **`agent_inbound(&self, id: &ID) -> InboundVolume`**: monotonic per-connection inbound counters (`frames`, `bytes`, `shed`), counting what the connection sent rather than what survived the queues. [`TransportStats`](#struct-transportstats) counts the session; this answers "who", which the session-wide numbers cannot. Windowing and thresholds are the application's: keep the last reading and diff, or feed a `plaza_client_utils::RateMeter`.
 *   **`connection_outbound(&self, conn_id) -> Option<OutboundVolume>`** / **`agent_outbound(&self, id: &ID) -> OutboundVolume`**: the same shape pointing the other way (`frames`, `bytes`, `withheld`), counting what `broadcast` handed to the connection's queue rather than what the socket managed to write. A frame the fan-out dropped was never that connection's traffic and is not counted. `withheld` counts the times `connection_owed` / `agent_owed` answered no.
 *   **`set_outbound_budget(&self, conn_id, Option<OutboundBudget>) -> bool`** / **`set_agent_outbound_budget(&self, id: &ID, Option<OutboundBudget>) -> usize`** / **`outbound_budget(&self, conn_id) -> Option<OutboundBudget>`**: what a connection may be sent, see [module `budget`](#11-module-budget). A new budget starts with a full burst; `None` takes it away, debt included. `Limits::outbound_budget` is the one every connection starts with.
 *   **`connection_owed(&self, conn_id) -> bool`** / **`agent_owed(&self, id: &ID) -> bool`**: whether a recipient is owed a frame now: whether its budget has credit left, or always if it has none. What a snapshot pass asks before it builds for a recipient, answering `Ok(None)` from its provider when the answer is no. A connection that is gone is owed nothing and an agent is owed one when any of its connections is. Every refusal is counted as `withheld`.
 *   **`record_inbound_activity(&self, conn_id, bytes: usize) -> Verdict`**: what the control plane calls for each inbound data frame; a custom transport that bypasses `handle_inbound` calls it itself. It both counts the frame and judges it against [`Limits::inbound_rate`](#10-module-gate) and the return is `#[must_use]`: a frame it refuses must not be forwarded. Without a rate configured, always `Verdict::Admit`.
-*   **`set_deadline(&self, conn_id, after: Option<Duration>, farewell: Option<OutboundFrame>) -> bool`**: arms, moves or (with `None`) clears a deadline the connection task enforces; expiry goes through the same flush-then-farewell close. Setting again replaces the deadline, which is how a renewal extends a session (an arcade credit, an auth token's expiry). No timer exists outside the connection task's own loop; the application decides what stamps, renews or revokes it.
-*   **`deregister_agent(&self, id: &ID, farewell: Option<OutboundFrame>) -> usize`**: `connections_of` then `close_connection` on each; how many took the order.
-*   **`disconnect_all(&self, farewell: Option<OutboundFrame>) -> usize`**: the same close as `deregister_agent`, applied to every live connection: each gets the farewell and is then closed.
+*   **`set_deadline(&self, conn_id, after: Option<Duration>, farewell: Farewell) -> bool`**: arms, moves or (with `None`) clears a deadline the connection task enforces; expiry goes through the same flush-then-goodbye close. Setting again replaces the deadline, which is how a renewal extends a session (an arcade credit, an auth token's expiry). No timer exists outside the connection task's own loop; the application decides what stamps, renews or revokes it.
+*   **`deregister_agent(&self, id: &ID, farewell: Farewell) -> usize`**: `connections_of` then `close_connection` on each; how many took the order.
+*   **`disconnect_all(&self, farewell: Farewell) -> usize`**: the same close as `deregister_agent`, applied to every live connection: each gets the goodbye and is then closed.
+*   **`begin_pending(&self) -> Option<PendingSlot>`**: takes one of the places [`Limits::pending_connections`](#structs-queues-and-limits) allows for a socket awaiting its credential or `None` when they are all held, which a transport answers by refusing the socket before its upgrade. The slot frees itself when dropped; `admitted()`, `refused()` and `timed_out()` consume it and count the outcome on [`TransportStats`](#struct-transportstats). The shipped transports call this; a custom transport with an admitter does the same.
 *   **`take_orders(&self, conn_id: ConnectionId) -> Option<SessionReceiver<ConnectionOrder>>`**: for transport authors. The order stream a connection task selects on beside its outbound queue; it must be its own `select!` arm, because the outbound arm is disabled the moment `deregister` drops the sender, which is exactly when a close must still work. Single-consumer, like the `take_*` streams.
 *   **`async forward_incoming(&self, from: Agent<ID>, frame: Bytes)`**: publishes one client frame toward the controller, still encoded. Drops under load by default; waits under `InboundOverflow::Backpressure`, which stops that client's socket being read. Takes anything that converts into a [`Frame`](#type-alias-outboundframe), so a transport handing over a buffer it already owns reaches the deserialize bridge without a copy.
 *   **`broadcast(&self, target: &MessageTarget<ID>, frame: OutboundFrame) -> Result<Vec<ConnectionId>, SessionLayerError>`**: fans one already-encoded frame out to the matching connections. It takes bytes, not a message, because a `SessionMessage` is encoded **once** by [`encode_message`](#struct-transportsessionop-id-c-wirecodec) and the same buffer is shared with every recipient, at the cost of a refcount bump each. `Agent` and `Agents` cost a lookup per named agent rather than a pass over the registry, which matters because per-recipient snapshots address one agent at a time: a scan there made a snapshot pass quadratic in connections. Measured in `benches/broadcast.rs`, addressing one agent is flat at ~37ns from 8 connections to 4096, against a scan that reaches 10µs at the top of that range; below roughly a dozen connections the scan is the cheaper of the two, by about 9ns.
@@ -348,10 +349,11 @@ Three constants are judgement rather than measurement and say so in their own do
 *   **`with_protocol(codec: C, protocol: ProtocolVersion) -> Arc<Self>`**: announces `protocol` (from [`plaza_wire::build`](../wire/API_REFERENCE.md#6-module-build-feature-build)) as a `Hello` before anything else, so a client learns about a skew on connect rather than by mis-decoding an op. This is the only way a WebSocket session declares a version: without it the handshake is unreachable for exactly the browser and mobile clients it exists for and an installed app cannot be forced to reload the way a page can. `ProtocolVersion::UNKNOWN` is what `with_codec` passes.
 *   **`with_options(codec: C, options: SessionOptions) -> Arc<Self>`**: `with_protocol` plus a [`SessionClock`](#type-sessionclock-and-struct-sessionoptions) for stamping `Pong.responder`. The other constructors delegate to it with no clock.
 *   **`handle_connection(&self, req: &HttpRequest, stream: web::Payload, agent: Agent<ID>) -> Result<HttpResponse, actix_web::Error>`** Completes the handshake, registers the connection and spawns its pump. Return the `HttpResponse` from your route. `agent` identifies the client: derive it from an auth token or a query string or mint a fresh id for anonymous play.
+*   **`admit_connection(&self, req: &HttpRequest, stream: web::Payload, admitter: Arc<dyn ConnectionAdmitter<ID>>) -> Result<HttpResponse, actix_web::Error>`**: the door for a client that cannot present identity before the upgrade, which is every browser and mobile client since neither can set a header. Completes the handshake and holds the socket on its own task, unregistered, until a `Kind::Credential` arrives and `admitter` answers; `Admitted` registers it as that agent and the join fires from there, `Refused` writes the goodbye and closes with its code. See [module `admission`](#12-module-admission) for what may cross the socket meanwhile and the timer that ends a socket presenting nothing. Over [`Limits::pending_connections`](#structs-queues-and-limits) the route answers 503 with no socket created, which a client sees as a failed connect.
 *   **`connection_rtt(conn_id) -> Option<(Duration, Duration, u64)>`** (smoothed, minimum, samples), **`agent_rtt(id) -> Option<(Duration, u64)>`**, **`connection_link_rtt(conn_id)`**, **`agent_link_rtt(id)`**, **`set_agent_link_profile(id, LinkProfile)`**, **`set_all_link_profiles(LinkProfile)`**, **`link_dropped()`**, **`agent_link_dropped(id)`**, **`stats() -> Arc<TransportStats>`**: available whatever the codec. They read the manager underneath, so a session built `with_codec` gets the same measurements as a JSON one.
 *   **`protocol(&self, id: &ID) -> Option<ProtocolVersion>`**: what that agent declared in its `Hello` and where an application decides what to do about it. `None` means the peer declared nothing, which is not a mismatch.
 *   **`manager(&self) -> &Arc<ConnectionManager<ID>>`**: the registry itself, for everything keyed on a connection rather than an agent: `connections_of`, `close_connection` and the per-connection readers.
-*   **`encode_message(&self, msg) -> Result<OutboundFrame, SessionLayerError>`**: this session's codec, for frames that bypass the targeting path, such as a farewell handed to `close_connection`.
+*   **`encode_message(&self, msg) -> Result<OutboundFrame, SessionLayerError>`**: this session's codec, for frames that bypass the targeting path.
 *   Implements `Session`.
 
 Usage is a five-line route:
@@ -379,6 +381,7 @@ Length-delimited framing over TCP (`tokio_util::codec::LengthDelimitedCodec`). E
 *   **`async bind_with_codec(addr, agent_factory, codec: C) -> Result<Arc<Self>, SessionLayerError>`**
 *   **`async bind_with_protocol(addr, agent_factory, codec: C, protocol: ProtocolVersion) -> Result<Arc<Self>, SessionLayerError>`**: announces `protocol` as a `Hello` on every connection.
 *   **`async bind_with_options(addr, agent_factory, codec: C, options: SessionOptions) -> Result<Arc<Self>, SessionLayerError>`**: `bind_with_protocol` plus a [`SessionClock`](#type-sessionclock-and-struct-sessionoptions) for stamping `Pong.responder`. The other constructors delegate to it.
+*   **`async bind_with_admitter(addr, admitter: Arc<dyn ConnectionAdmitter<ID>>, codec: C, options: SessionOptions) -> Result<Arc<Self>, SessionLayerError>`**: the factory's counterpart for identity that arrives after the connection: every accepted socket waits, unregistered, for a `Kind::Credential` and registers as whoever `admitter` says; see [module `admission`](#12-module-admission). Over `Limits::pending_connections` a socket is accepted and closed at once.
 *   **`local_addr(&self) -> SocketAddr`**: resolves `:0` to the assigned port.
 *   **`manager(&self) -> &Arc<ConnectionManager<ID>>`**, **`encode_message(&self, msg) -> Result<OutboundFrame, SessionLayerError>`**: as on `ActixWsPlazaSession`.
 *   Implements `Session`. `Drop` aborts the accept loop.
@@ -388,17 +391,12 @@ Binding happens **before** the accept loop is spawned, so an address already in 
 ### Type Alias `AgentFactory<ID>`
 
 ```rust,ignore
-pub type AgentFactory<ID> = Arc<dyn Fn(SocketAddr) -> Result<Agent<ID>, Refusal> + Send + Sync>;
+pub type AgentFactory<ID> = Arc<dyn Fn(SocketAddr) -> Result<Agent<ID>, Farewell> + Send + Sync>;
 ```
 
-Builds the `Agent` for each accepted connection, or turns the socket away. For reconnection support, derive a stable ID here rather than generating a fresh one per connection.
+Builds the `Agent` for each accepted connection or turns the socket away with a [`Farewell`](#struct-farewell), whose `Goodbye` is the only thing the socket hears. For reconnection support, derive a stable ID here rather than generating a fresh one per connection.
 
-A refusal happens **before** `register`: nothing is allocated, announced or snapshotted for the socket and no presence event fires. The only rules that can be judged here are ones keyed on what a socket shows (its address); a rule keyed on identity has to wait for an op that carries it, which means accepting first. The WS transport needs no equivalent because the application owns the HTTP route and can refuse before calling `handle_connection`.
-
-### Struct `Refusal`
-
-*   **`farewell: Option<Frame>`**: bytes to write before the socket closes, already encoded; the transport does not know what reason they spell. Encode an op of your own vocabulary with [`TransportSession::encode_message`](#struct-transportsessionop-id-c-wirecodec) or by hand.
-*   **`silent()`** / **`saying(farewell: Frame)`**: constructors.
+A refusal happens **before** `register`: nothing is allocated, announced or snapshotted for the socket and no presence event fires. The only rules that can be judged here are ones keyed on what a socket shows (its address); a rule keyed on identity belongs in a [`ConnectionAdmitter`](#12-module-admission) behind `bind_with_admitter`. The WS transport needs no factory because the application owns the HTTP route and can refuse before calling `handle_connection`.
 
 Each refusal is counted on [`TransportStats::refused`](#struct-transportstats).
 
@@ -457,11 +455,12 @@ Turns on a console subscriber, once. `plaza` and `plaza_session` are instrumente
 
 Live counters for one transport, from `ActixWsPlazaSession::stats` or `ConnectionManager::stats`.
 
-*   **`inbound()`** / **`inbound_dropped()`** / **`inbound_shed()`**, **`outbound()`** / **`outbound_bytes()`** / **`outbound_dropped()`** / **`outbound_withheld()`**, **`presence_dropped()`**, **`refused()`**.
+*   **`inbound()`** / **`inbound_dropped()`** / **`inbound_shed()`**, **`outbound()`** / **`outbound_bytes()`** / **`outbound_dropped()`** / **`outbound_withheld()`**, **`presence_dropped()`**, **`refused()`**, **`pending()`** / **`admitted()`** / **`timed_out()`** / **`over_cap()`**.
 *   `inbound_dropped` and `inbound_shed` differ in who is at fault and who pays. A drop means the controller fell behind, names nothing a client did and costs whoever happened to be sending; a shed names one connection that exceeded its [rate](#10-module-gate) and costs only that connection. A server seeing both should read the shed first.
 *   `outbound_bytes` counts the frame once per recipient it was queued for, because that is what the sockets will carry; per-connection figures are `ConnectionManager::connection_outbound` / `agent_outbound`.
 *   `outbound_withheld` counts the times a budgeted connection was asked for and not owed a frame (see [module `budget`](#11-module-budget)). It is the budget's cost in frames not built and it climbs only when a snapshot pass asks.
-*   **`record_refused()`**: what a transport calls when it turns a socket away before `register`. Nothing else here can see such a socket.
+*   **`record_refused()`**: what a transport calls when it turns a socket away before `register`. Nothing else here can see such a socket. An admitter's refusal lands here too.
+*   `pending` is a gauge: sockets waiting on a credential right now. `admitted`, `timed_out` and `over_cap` count how pending phases ended: registered, closed with 4408 for presenting nothing or turned away before the upgrade because [`Limits::pending_connections`](#structs-queues-and-limits) was full. Together with `refused` they are the evidence the cap's default rests on.
 
 The fan-out uses `try_send` by default: a wedged client must not stall the controller. The drop used to be announced only with `warn!`, which a human reads afterwards and a server cannot read at all, so the events are countable and an application can shed load deliberately instead of degrading quietly. What the default does when a queue fills is now [`Overflow`](#struct-overflow)'s to say and the counters read the same whichever arm is chosen.
 
@@ -567,7 +566,79 @@ Credit runs negative: a frame larger than what is left still goes and the connec
 
 **There is no default.** A connection with no budget is always owed a frame, as every connection was before this module existed.
 
-## 12. Error Handling
+## 12. Module `admission`
+
+Admitting a connection on what it presents and how every close says why.
+
+A route that resolves identity before the upgrade hands the transport an `Agent` and the connection registers at once. A route that cannot hands it a `ConnectionAdmitter` instead, through [`admit_connection`](#struct-actixwsplazasessionop-id-c-jsoncodec) or [`bind_with_admitter`](#struct-tcpplazasessionop-id-c-jsoncodec). The socket then waits on its own task, unregistered, until a `Kind::Credential` arrives, the admitter answers and the connection registers as whoever it said. Nothing crosses an unadmitted socket in either direction: inbound, a `Hello` is kept and recorded on admission, probes are neither answered nor forwarded, an unknown kind is skipped and an `Ops` frame closes the socket with `Goodbye::CREDENTIAL_EXPECTED` (4401); outbound, a refusal is a `Goodbye` and nothing else. A socket that presents nothing within [`Limits::credential_timeout`](#structs-queues-and-limits) is closed with `Goodbye::CREDENTIAL_TIMEOUT` (4408) and a credential larger than `Limits::max_credential_bytes` with 1009.
+
+Holding the socket on its task rather than in the registry was measured: a parked socket costs about 23 KiB and 45 us where a registered one costs about 48 KiB and 215 us and keeps costing probe CPU while idle, so a flood of sockets that never present pays for nothing but the socket.
+
+### Struct `Farewell`
+
+```rust
+pub struct Farewell { pub code: u16, pub detail: Option<Vec<u8>> }
+impl Farewell {
+  pub fn new(code: u16) -> Self;
+  pub fn with_detail(self, detail: impl Into<Vec<u8>>) -> Self;
+  pub fn credential_expected() -> Self;   // 4401
+  pub fn credential_timeout() -> Self;    // 4408
+  pub fn encode<C: WireCodec>(&self, codec: &C) -> OutboundFrame;
+}
+```
+
+The one vocabulary for every server-initiated close: a refusal, the pending timer, `close_connection`, `set_deadline`, `deregister_agent`, `disconnect_all` and the factory's refusal all take one. Each transport writes its `Goodbye` frame (`encode`) last, after flushing what was queued; on WebSocket it then closes with the same `code` and on TCP the frame is all there is. `code` is a WebSocket close code whatever the transport. RFC 6455 gives 4000 to 4999 to the application and the application supplies the code on every close it orders, with no default; the two the session sends by itself are the constructors above and a connection ejected for exceeding its inbound rate hears 1008 (`POLICY_VIOLATION`). `detail` is whatever is worth saying beside the code, encoded however the application chooses; the session never reads it.
+
+The client libraries turn the goodbye into their disconnected event and stop reconnecting on a 4xxx by default, because a server that refused a credential would refuse it again. The code says what class of close this is and the detail says what to do next; neither should say why in enough detail to serve as an oracle.
+
+### Trait `ConnectionAdmitter<ID>` and enum `ConnectionAdmission<ID>`
+
+```rust
+#[async_trait]
+pub trait ConnectionAdmitter<ID: AgentId>: Send + Sync {
+  async fn admit(&self, credential: &[u8], peer: &Peer) -> ConnectionAdmission<ID>;
+}
+
+pub enum ConnectionAdmission<ID: AgentId> {
+  Admitted(Agent<ID>),
+  Refused(Farewell),
+}
+```
+
+The gate a socket passes to enter the session and as whom. `credential` is the body of the client's `Kind::Credential` frame exactly as it arrived; plaza verifies nothing itself, so what it is and what it proves are the application's. Async because most identity lives in a store and one boxed future per connection open is nothing next to the handshake before it. `Admitted` registers the connection as that agent and the join is announced from there; `Refused` writes the goodbye and closes; nothing was registered or announced.
+
+An admitter that holds the `ConnectionManager` can settle a duplicate login itself: under kick-the-oldest it calls `deregister_agent` on the older id before returning `Admitted`, which works because the older connection is registered and the newcomer is not yet. `examples/door_policy` is the worked example: ban, per-address cap, capacity and duplicate login all judged before anything registers.
+
+### Struct `Peer`
+
+```rust
+#[non_exhaustive]
+pub struct Peer { pub addr: Option<SocketAddr> }
+impl Peer { pub fn new(addr: Option<SocketAddr>) -> Self; }
+```
+
+What the transport knows about a socket before anything has been presented. The address is there for rate-limiting bad attempts per IP and for audit. Anything from the upgrade request itself, a forwarded-for header behind a proxy or a room in the URL, is the route's to capture: build the admitter per request and close over it, since one `Arc` per connect costs nothing.
+
+### Struct `Pending` and enum `Presented`
+
+```rust
+pub struct Pending { .. }
+impl Pending {
+  pub fn new(max_credential_bytes: usize) -> Self;
+  pub fn on_frame<C: WireCodec>(&mut self, codec: &C, bytes: &[u8]) -> Presented;
+  pub fn declared(&self) -> Option<ProtocolVersion>;
+}
+
+pub enum Presented {
+  Nothing,
+  Credential(Vec<u8>),
+  Refuse(Farewell),
+}
+```
+
+The rules for a socket that has not been admitted, shared by both shipped transports and available to a custom one: feed it every inbound frame until it yields the credential or a refusal, run the timer beside it, then hand the socket to the ordinary pump and record `declared()` against the agent once there is one. `MESSAGE_TOO_BIG` (1009) and `POLICY_VIOLATION` (1008) are the two standard codes the module names.
+
+## 13. Error Handling
 
 ### Enum `SessionLayerError`
 

@@ -54,6 +54,24 @@ impl Parting {
   pub fn keeps_the_seat(self) -> bool {
     matches!(self, Parting::Dropped)
   }
+
+  /// The close code this parting travels as. `Dropped` is never sent: it is
+  /// what the absence of a goodbye means.
+  pub fn code(self) -> u16 {
+    match self {
+      Parting::Dropped => 1006,
+      Parting::Kicked => 4403,
+      Parting::Afk => 4410,
+      Parting::Flooding => 4429,
+      Parting::Drained => 1001,
+    }
+  }
+
+  pub fn from_code(code: u16) -> Option<Self> {
+    [Parting::Kicked, Parting::Afk, Parting::Flooding, Parting::Drained]
+      .into_iter()
+      .find(|p| p.code() == code)
+  }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -68,8 +86,6 @@ pub enum PartyOp {
   EndParty,
 
   // Server to client.
-  /// You are leaving, and this is why. Written before the socket shuts.
-  Farewell { reason: Parting, detail: String },
   Seated { seat: Seat },
   /// What everyone can see, including the moderation panel.
   Snapshot(Box<Table>),
@@ -86,11 +102,6 @@ pub fn decode_ops(frame: &[u8]) -> Vec<PartyOp> {
   plaza_wire::frame::decode_ops(&plaza_session::codec::JsonCodec, frame).unwrap_or_default()
 }
 
-/// One op as a pre-encoded frame: what a farewell hands the library, which
-/// carries the bytes without knowing the vocabulary.
-pub fn op_frame(op: PartyOp) -> plaza_session::Frame {
-  plaza_session::Frame::from(encode_ops(&[op]))
-}
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Guest {

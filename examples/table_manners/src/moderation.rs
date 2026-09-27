@@ -18,8 +18,9 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use plaza::common::closure::{ClosureLog, Departed};
 use plaza_session::manager::ConnectionManager;
+use plaza_session::Farewell;
 
-use crate::types::{op_frame, Parting, PartyOp, Seat, FLOOD_TOLERANCE, FLOOD_WINDOW_MS};
+use crate::types::{Parting, Seat, FLOOD_TOLERANCE, FLOOD_WINDOW_MS};
 
 /// How long a dropped guest's seat stays warm.
 pub const GRACE: std::time::Duration = std::time::Duration::from_secs(10);
@@ -144,17 +145,14 @@ impl Host {
     self.partings.lock().was_ordered(&key)
   }
 
-  /// Ends a guest's session with the reason ahead of the close, and remembers
+  /// Ends a guest's session with the reason in its goodbye and remembers
   /// why so the `Left` that follows is not mistaken for a netdrop.
   pub fn close(&self, key: u64, reason: Parting, detail: impl Into<String>) {
     if !self.partings.lock().order(key, reason) {
       return;
     }
-    let farewell = op_frame(PartyOp::Farewell {
-      reason,
-      detail: detail.into(),
-    });
-    if self.manager.deregister_agent(&key, Some(farewell)) > 0 {
+    let farewell = Farewell::new(reason.code()).with_detail(detail.into().into_bytes());
+    if self.manager.deregister_agent(&key, farewell) > 0 {
       self.meters.reasons_sent.fetch_add(1, Ordering::Relaxed);
     }
   }
@@ -164,10 +162,9 @@ impl Host {
     for key in self.watches.lock().keys() {
       self.partings.lock().order(*key, reason);
     }
-    let told = self.manager.disconnect_all(Some(op_frame(PartyOp::Farewell {
-      reason,
-      detail: reason.as_str().into(),
-    })));
+    let told = self
+      .manager
+      .disconnect_all(Farewell::new(reason.code()).with_detail(reason.as_str().as_bytes()));
     self.meters.reasons_sent.fetch_add(told as u64, Ordering::Relaxed);
   }
 
