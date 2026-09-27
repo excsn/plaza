@@ -170,6 +170,8 @@ pub enum Kind {
   Hello = 1,  // body: ProtocolVersion
   Ping = 2,   // body: Ping
   Pong = 3,   // body: Pong
+  Credential = 4, // body: opaque bytes, read only by the session's admitter
+  Goodbye = 5,    // body: Goodbye
 }
 ```
 
@@ -178,7 +180,9 @@ pub enum Kind {
 
 **The body type follows from the kind.** A protocol frame does not have to fit into the application's op enum, so `Hello` carries a version and nothing else while `Ops` carries the application's payload.
 
-**What belongs in `Kind`.** A kind is an instruction to the *session*; `Ops` is the one kind whose body belongs to the application. If application code has to act on a proposed kind, make it an op instead. `Hello` and `Ping` pass, because recording a version and echoing a value are things a session can finish by itself.
+**What belongs in `Kind`.** A kind is an instruction to the *session*; `Ops` is the one kind whose body belongs to the application. If application code has to act on a proposed kind, make it an op instead. `Hello` and `Ping` pass, because recording a version and echoing a value are things a session can finish by itself. `Credential` passes because a session holding a connection admitter can hold the socket, run a timer and admit or close without the application seeing a frame. `Goodbye` passes because the client library consumes it and hands the application a code.
+
+**`Credential` is the one kind whose body the codec never touches.** The session hands the bytes after the tag to its `ConnectionAdmitter` as they arrived, so a token is text under a text codec and anything under a binary one. A client sends it once, right after its own `Hello` and a session with no admitter skips it.
 
 **`None` means skip the frame and keep the connection.** A peer speaking a newer protocol may send kinds this one has never heard of and refusing them turns every additive change into a break. The rule has to exist from the start, because a client already deployed cannot be taught to tolerate new kinds later. It is also why the tag is read by hand rather than through `serde_repr`, which errors on an unknown discriminant.
 
@@ -210,7 +214,20 @@ A latency probe and its answer. `plaza_session` answers an inbound `Kind::Ping` 
 
 **Plaza does not name, convert or default a unit.** The two ends agree on one out of band; plaza passes the values through.
 
+### Struct `Goodbye`
+
+```rust
+pub struct Goodbye { pub code: u16, pub detail: Option<Vec<u8>> }
+```
+
+Why a connection is ending, the body of a `Kind::Goodbye` frame. `plaza_session` writes one last before every close a server orders, on every transport and a WebSocket close frame carries the same `code`; TCP has nothing else, which is what the frame is for. A client library turns it into its disconnected event and the application never handles the frame.
+
+**`code` is a WebSocket close code whatever the transport.** RFC 6455 gives 4000 to 4999 to the application. The two the session sends on its own are pinned here: `Goodbye::CREDENTIAL_EXPECTED` (4401) when a data frame arrived on a connection that had not presented a credential and `Goodbye::CREDENTIAL_TIMEOUT` (4408) when none arrived in time. `detail` is whatever the server wants to say beside the code, encoded however the application chooses; the session does not read it.
+
 ### Frame Functions
+
+*   `encode_goodbye(codec, &Goodbye) -> Result<Vec<u8>, _>`: one `Kind::Goodbye` frame.
+*   `decode_goodbye(codec, frame) -> Option<Goodbye>`: the frame's goodbye or `None` when the frame is not `Kind::Goodbye` or its body does not decode.
 
 *   `answer_ping(codec, ping_body, responder: Option<u64>) -> Option<Vec<u8>>`: builds the `Kind::Pong` frame answering a ping body; `None` if it does not decode. What `plaza_session` calls and what a client with its own read loop should call so both ends answer identically.
 *   `encode_ops(codec, ops: &[Op]) -> Result<Vec<u8>, _>`: one `Kind::Ops` frame, the kind byte then the codec's one document. The body is the ops array itself; who sent it is the server's bookkeeping and is not on the wire.

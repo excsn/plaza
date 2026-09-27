@@ -31,7 +31,10 @@
 //! whose body belongs to the application. If application code has to act on a
 //! proposed kind, make it an op instead.
 //! `Hello` and `Ping` pass, because recording a version and echoing a value
-//! are things a session can finish by itself.
+//! are things a session can finish by itself. `Credential` passes because a
+//! session holding a connection admitter can hold the socket, run a timer and
+//! admit or close without the application seeing a frame. `Goodbye` passes
+//! because the client library consumes it and hands the application a code.
 
 /// What a frame carries.
 ///
@@ -55,6 +58,16 @@ pub enum Kind {
   Ping = 2,
   /// The answer to a [`Kind::Ping`]. The body is a [`Pong`].
   Pong = 3,
+  /// What a client presents to be admitted. The body is opaque bytes that the
+  /// session hands to its connection admitter without decoding; under a text
+  /// codec it is text. Sent once, right after the client's [`Kind::Hello`].
+  ///
+  /// A session with no admitter skips it like any frame it has no use for.
+  Credential = 4,
+  /// Why a connection is ending. The body is a [`Goodbye`], written last
+  /// before every close a server orders, on every transport. A WebSocket close
+  /// frame carries the same code; TCP has nothing else.
+  Goodbye = 5,
 }
 
 impl Kind {
@@ -74,6 +87,8 @@ impl Kind {
       1 => Some(Kind::Hello),
       2 => Some(Kind::Ping),
       3 => Some(Kind::Pong),
+      4 => Some(Kind::Credential),
+      5 => Some(Kind::Goodbye),
       _ => None,
     }
   }
@@ -126,6 +141,53 @@ pub struct Pong {
   /// what unit is agreed out of band: the two ends have to use the same one for
   /// an offset computed from it to be meaningful.
   pub responder: Option<u64>,
+}
+
+/// Why a connection is ending, the body of a [`Kind::Goodbye`] frame.
+///
+/// `code` is a WebSocket close code and means the same thing on a transport
+/// that has no close frame. RFC 6455 gives 4000 to 4999 to the application;
+/// the two the session sends itself are the associated constants below. A
+/// client library turns this frame into its disconnected event and the
+/// application never handles it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Goodbye {
+  pub code: u16,
+  /// Anything the server wants to say beside the code, encoded however the
+  /// application chooses; the session does not read it.
+  pub detail: Option<Vec<u8>>,
+}
+
+impl Goodbye {
+  /// A data frame arrived on a connection that had not presented a
+  /// credential yet.
+  pub const CREDENTIAL_EXPECTED: u16 = 4401;
+  /// No credential arrived within the session's pending timeout.
+  pub const CREDENTIAL_TIMEOUT: u16 = 4408;
+}
+
+/// Encodes a [`Goodbye`] as one [`Kind::Goodbye`] frame.
+#[cfg(feature = "serde")]
+pub fn encode_goodbye<C: crate::WireCodec>(
+  codec: &C,
+  goodbye: &Goodbye,
+) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+  let mut out = Vec::with_capacity(PROBE_FRAME_HINT);
+  begin(Kind::Goodbye, &mut out);
+  codec.encode_into(goodbye, &mut out)?;
+  Ok(out)
+}
+
+/// Decodes a frame's [`Goodbye`] or `None` when the frame is not
+/// [`Kind::Goodbye`] or its body does not decode.
+#[cfg(feature = "serde")]
+pub fn decode_goodbye<C: crate::WireCodec>(codec: &C, frame: &[u8]) -> Option<Goodbye> {
+  let (tag, body) = split(frame)?;
+  if Kind::from_byte(tag) != Some(Kind::Goodbye) {
+    return None;
+  }
+  codec.decode::<Goodbye>(body).ok()
 }
 
 /// Builds the [`Kind::Pong`] frame answering a ping, or `None` if `ping_body`
@@ -222,7 +284,7 @@ mod tests {
   fn an_unknown_kind_is_skippable_rather_than_fatal() {
     // A peer built before a new frame kind existed must be able to ignore it,
     // which it can only do if this returns None instead of erroring.
-    assert_eq!(Kind::from_byte(4), None, "the first unassigned byte");
+    assert_eq!(Kind::from_byte(6), None, "the first unassigned byte");
     assert_eq!(Kind::from_byte(200), None);
     let frame = [200u8, 1, 2, 3];
     let (kind, body) = split(&frame).expect("still a well-formed frame");
@@ -243,7 +305,7 @@ mod tests {
     // Each kind, through the framing it will actually be written with. The
     // probe tests below assert a Pong is produced; this asserts the tags
     // themselves round-trip, which is what a peer dispatches on.
-    for kind in [Kind::Ops, Kind::Hello, Kind::Ping, Kind::Pong] {
+    for kind in [Kind::Ops, Kind::Hello, Kind::Ping, Kind::Pong, Kind::Credential, Kind::Goodbye] {
       let mut buf = Vec::new();
       begin(kind, &mut buf);
       buf.extend_from_slice(b"body");
@@ -252,8 +314,8 @@ mod tests {
       assert_eq!(body, b"body");
     }
     // And the tags are distinct, otherwise dispatch is ambiguous.
-    let bytes = [Kind::Ops, Kind::Hello, Kind::Ping, Kind::Pong].map(Kind::as_byte);
-    assert_eq!(bytes, [0, 1, 2, 3], "wire values are pinned; renumbering breaks every peer");
+    let bytes = [Kind::Ops, Kind::Hello, Kind::Ping, Kind::Pong, Kind::Credential, Kind::Goodbye].map(Kind::as_byte);
+    assert_eq!(bytes, [0, 1, 2, 3, 4, 5], "wire values are pinned; renumbering breaks every peer");
   }
 
   #[test]
@@ -320,6 +382,23 @@ mod tests {
     let mut buf = Vec::new();
     MsgPackCodec.encode_into(&pong, &mut buf).unwrap();
     assert_eq!(MsgPackCodec.decode::<Pong>(&buf).unwrap(), pong);
+  }
+
+  #[test]
+  #[cfg(feature = "json")]
+  fn a_goodbye_carries_its_code_and_is_not_ops() {
+    use crate::JsonCodec;
+    let goodbye = Goodbye {
+      code: Goodbye::CREDENTIAL_TIMEOUT,
+      detail: Some(b"be quicker".to_vec()),
+    };
+    let frame = encode_goodbye(&JsonCodec, &goodbye).unwrap();
+    assert_eq!(frame[0], Kind::Goodbye.as_byte());
+    assert_eq!(decode_goodbye(&JsonCodec, &frame), Some(goodbye));
+    assert_eq!(decode_ops::<_, String>(&JsonCodec, &frame), None);
+
+    let bare = encode_goodbye(&JsonCodec, &Goodbye { code: 1000, detail: None }).unwrap();
+    assert_eq!(decode_goodbye(&JsonCodec, &bare).unwrap().detail, None);
   }
 
   #[test]

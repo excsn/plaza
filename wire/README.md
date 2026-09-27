@@ -25,6 +25,7 @@ plaza_wire = { version = "0.7", default-features = false }
 |---|---|
 | A browser or Dart client naming what it sends, without depending on a server runtime | the crate itself: no async, no tokio, `wasm32` clean |
 | Dispatching on a message's kind without parsing its body | `frame::Kind`, one byte ahead of the payload |
+| Saying why a connection is ending, on any transport | `frame::Goodbye`, the body of `Kind::Goodbye`; a WebSocket close frame repeats its code |
 | Agreeing where a frame ends on a byte stream | `framing::delimit`, `framing::LengthDelimited` |
 | Swapping the wire format without touching transport code | `WireCodec`, with `JsonCodec` / `MsgPackCodec` / `MsgPackNamedCodec` |
 | Telling a browser it may `JSON.parse` a frame directly | `WireCodec::is_text` |

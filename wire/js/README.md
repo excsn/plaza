@@ -43,6 +43,12 @@ Every plaza peer announces the protocol version it speaks once when a connection
 
 On receive, the server's `Hello` goes to your `onHello` callback if you passed one and otherwise to `staleCheck`, which reloads the page once when its stamped version disagrees with the server's, which happens when a tab stayed open across a redeploy. The reload is guarded per version value, so a mismatch that survives reloading degrades to a console error rather than a loop and the whole path is a no-op outside a browser.
 
+## Credential and goodbye
+
+A server whose route cannot resolve identity before the upgrade admits on a credential the client presents afterwards. Call `announceCredential(sock, credential)` from `onopen` right after `announceHello`, before anything else: a data frame ahead of the credential closes the socket. The credential is opaque to plaza, a string on a text socket or a byte array with your codec on a binary one.
+
+Every close the server orders is preceded by a `Goodbye` frame carrying a close code and an optional detail and the WebSocket close frame repeats the code. `onJsonFrame` and `onBinaryFrame` hand it to an `onGoodbye` callback when you pass one as the last argument and otherwise keep it on the socket so `closeCodeOf(sock, event)` can read it from `onclose`, which is worth doing because a proxy may not carry the close frame's code through. A code from 4000 to 4999 is the server refusing this client on purpose, so do not reconnect with the same credential; 4401 means a data frame arrived before the credential and 4408 that none arrived in time. 1006 is the link failing with no close frame, which is worth reconnecting.
+
 ## Versioning
 
 `PLAZA_PROTOCOL_JS_VERSION` in the file is the artifact's own version and moves semver-style with the file's API. It is not the protocol version in `Hello`: that number is your application's, produced by `plaza_wire::build` from your op type definitions and reaches this file only through the `PLAZA_PROTOCOL` stamp described above.

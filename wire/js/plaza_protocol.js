@@ -21,7 +21,7 @@
 // See README.md beside this file for the full contract and versioning.
 "use strict";
 
-const PLAZA_PROTOCOL_JS_VERSION = "0.2.0";
+const PLAZA_PROTOCOL_JS_VERSION = "0.3.0";
 
 // Frame kinds, mirroring plaza_wire::frame::Kind. Pinned to the Rust enum by
 // examples/check_pages.py.
@@ -29,6 +29,8 @@ const KIND_OPS = 0;
 const KIND_HELLO = 1;
 const KIND_PING = 2;
 const KIND_PONG = 3;
+const KIND_CREDENTIAL = 4;
+const KIND_GOODBYE = 5;
 
 const opName = (op) => (typeof op === "string" ? op : Object.keys(op)[0]);
 const opBody = (op) => (typeof op === "string" ? {} : op[opName(op)]);
@@ -54,6 +56,35 @@ function announceHello(sock, codec) {
   }
 }
 
+// Presents a credential to a server whose route did not resolve identity:
+// one Credential frame, sent from `onopen` right after `announceHello` and
+// before anything else, since a data frame ahead of it closes the socket. The
+// body is opaque to plaza: a string on a text socket, a byte array with
+// `codec` on a binary one.
+function announceCredential(sock, credential, codec) {
+  if (codec) {
+    sock.send(binaryFrame(KIND_CREDENTIAL, Uint8Array.from(credential)));
+  } else {
+    sock.send(String.fromCharCode(KIND_CREDENTIAL) + credential);
+  }
+}
+
+// The server's Goodbye, written last before every close it orders: `code` is
+// the close code and `detail` whatever the server added. Kept on the socket
+// so `onclose` can read it through `closeCodeOf`, since a proxy may not carry
+// the close frame's code through and the goodbye is the same number.
+function keepGoodbye(sock, goodbye) {
+  sock.plazaGoodbye = goodbye;
+}
+
+// The close code for an `onclose` event: the goodbye's if one arrived, else
+// the event's own. 4000 to 4999 is the server refusing this client on
+// purpose, so do not reconnect with the same credential; 1006 is the link
+// failing with no close frame at all, which is worth reconnecting.
+function closeCodeOf(sock, event) {
+  return (sock.plazaGoodbye && sock.plazaGoodbye.code) || (event && event.code) || 0;
+}
+
 // The default reaction to a server's Hello: reload once when the page's stamped
 // version differs from the server's. Guarded so a still-mismatched reload (a
 // cached page, a proxy) degrades to a console error instead of a loop. No-op
@@ -77,9 +108,14 @@ function jsonFrame(kind, value) {
 
 // One received text frame: answers pings, hands each op to `onOp`, skips the
 // rest. The server's Hello goes to `onHello` when given, else to `staleCheck`,
-// so a stamped page reacts to a redeploy without writing anything.
-function onJsonFrame(sock, data, onOp, onHello) {
+// so a stamped page reacts to a redeploy without writing anything. A Goodbye
+// goes to `onGoodbye` when given, else is kept for `closeCodeOf`.
+function onJsonFrame(sock, data, onOp, onHello, onGoodbye) {
   const kind = data.charCodeAt(0);
+  if (kind === KIND_GOODBYE) {
+    (onGoodbye || ((g) => keepGoodbye(sock, g)))(JSON.parse(data.slice(1)));
+    return;
+  }
   if (kind === KIND_PING) {
     // Echo the stamp untouched so the server can measure a browser client's
     // round trip.
@@ -114,10 +150,14 @@ function binaryFrame(kind, body) {
 // `onJsonFrame` for a binary socket (set `binaryType = 'arraybuffer'`).
 // `codec` supplies the body encoding: { encode: value -> byte array,
 // decode: Uint8Array -> value }.
-function onBinaryFrame(sock, data, codec, onOp, onHello) {
+function onBinaryFrame(sock, data, codec, onOp, onHello, onGoodbye) {
   const bytes = new Uint8Array(data);
   const kind = bytes[0];
   const body = bytes.subarray(1);
+  if (kind === KIND_GOODBYE) {
+    (onGoodbye || ((g) => keepGoodbye(sock, g)))(codec.decode(body));
+    return;
+  }
   if (kind === KIND_PING) {
     const ping = codec.decode(body);
     if (sock.readyState === 1) {
@@ -148,6 +188,10 @@ if (typeof module !== "undefined" && module.exports) {
     KIND_HELLO,
     KIND_PING,
     KIND_PONG,
+    KIND_CREDENTIAL,
+    KIND_GOODBYE,
+    announceCredential,
+    closeCodeOf,
     opName,
     opBody,
     ownProtocol,

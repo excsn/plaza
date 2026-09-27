@@ -211,4 +211,36 @@ fn whole_frames_carry_their_tag() {
     )
     .expect("encode");
   golden("frame_pong_no_clock", "bin", &buf);
+
+  // Opaque on purpose: the tag is the only byte the session reads.
+  let mut buf = Vec::new();
+  frame::begin(frame::Kind::Credential, &mut buf);
+  buf.extend_from_slice(b"tok3n");
+  golden("frame_credential", "bin", &buf);
+
+  let mut buf = Vec::new();
+  frame::begin(frame::Kind::Goodbye, &mut buf);
+  MsgPackCodec
+    .encode_into(
+      &frame::Goodbye {
+        code: 4403,
+        detail: Some(b"no".to_vec()),
+      },
+      &mut buf,
+    )
+    .expect("encode");
+  golden("frame_goodbye", "bin", &buf);
+
+  let mut buf = Vec::new();
+  frame::begin(frame::Kind::Goodbye, &mut buf);
+  MsgPackCodec
+    .encode_into(
+      &frame::Goodbye {
+        code: frame::Goodbye::CREDENTIAL_TIMEOUT,
+        detail: None,
+      },
+      &mut buf,
+    )
+    .expect("encode");
+  golden("frame_goodbye_bare", "bin", &buf);
 }
