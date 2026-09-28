@@ -8,6 +8,7 @@ use plaza::game_common::flow_control::rounds::op_payloads::{RoundEndedNoticePayl
 use plaza::game_common::flow_control::turns::op_payloads::TurnChangedNoticePayload;
 use plaza::game_common::flow_control::{Phased, RoundRobinTurnManager, SequentialRoundManager};
 use plaza::game_common::scorekeeping::local::HashMapScorekeeper;
+use plaza_client_utils::determinism::{mix64, XorShift};
 use plaza_server_utils::{Roster, SeatState};
 use plaza_lobby::SeatReservations;
 use serde::{Deserialize, Serialize};
@@ -34,8 +35,8 @@ include!(concat!(env!("OUT_DIR"), "/wire_protocol.rs"));
 pub type PlayerId = u64;
 pub type RoomId = Uuid;
 
-/// Cards per hand, and rounds per match. Deals are fixed rather than shuffled,
-/// so a run is reproducible and the example needs no `rand`.
+/// Cards per hand and rounds per match. The deck is `TABLE_SIZE * HAND_SIZE`
+/// cards numbered from 2, shuffled per deal from a seed the table logs.
 pub const HAND_SIZE: usize = 3;
 pub const ROUNDS: u32 = 3;
 
@@ -300,6 +301,8 @@ pub struct TableState {
   pub tick: u64,
   pub timeouts: PhasedScheduler<TableEvent>,
   pub settled: bool,
+  /// Deals so far, folded into each deal's seed so no two at one table repeat.
+  pub deals: u64,
 
   pub wallets: Arc<WalletRegistry>,
   /// Read by the lobby to refresh `RoomMetadata::current_players`.
@@ -310,6 +313,13 @@ impl Default for TableState {
   fn default() -> Self {
     Self::new(String::new(), TableSettings::default(), 0, Arc::default(), Arc::default())
   }
+}
+
+/// One seed per deal: the name's bytes folded through `mix64`, then the tick
+/// and the deal count mixed in.
+fn deal_seed(name: &str, tick: u64, deals: u64) -> u64 {
+  let name = name.bytes().fold(0x9E37_79B9_7F4A_7C15u64, |acc, b| mix64(acc ^ u64::from(b)));
+  mix64(name ^ mix64(tick) ^ mix64(deals.rotate_left(32)))
 }
 
 impl TableState {
@@ -336,6 +346,7 @@ impl TableState {
       tick: 0,
       timeouts: PhasedScheduler::new(),
       settled: false,
+      deals: 0,
       wallets,
       seats_taken,
     }
@@ -402,18 +413,30 @@ impl TableState {
       .store(self.seated_players(), std::sync::atomic::Ordering::Relaxed);
   }
 
-  /// Deals `HAND_SIZE` cards to each seated player from a fixed deck.
+  /// Deals `HAND_SIZE` cards to each seated player from a shuffled deck and
+  /// returns the seed, which reproduces the deal given the same seats.
   ///
-  /// Deterministic: seat order decides who gets what, so the run reads the same
-  /// every time.
-  pub fn deal(&mut self) {
+  /// The seed comes from the table's name, the tick and the deal count, so two
+  /// tables at one tick and two deals at one table differ. Hands are kept by
+  /// rank, which is the order the view sends them in.
+  pub fn deal(&mut self) -> u64 {
     self.hands.clear();
     self.played.clear();
-    for (seat, player) in self.players().iter().enumerate() {
-      let base = (seat * HAND_SIZE) as u8;
-      let hand = (0..HAND_SIZE).map(|i| Card(base + i as u8 + 2)).collect();
+    self.deals += 1;
+    let seed = deal_seed(&self.name, self.tick, self.deals);
+    let mut rng = XorShift::new(seed);
+
+    let players = self.players();
+    let mut deck: Vec<Card> = (0..players.len() * HAND_SIZE).map(|i| Card(i as u8 + 2)).collect();
+    for i in (1..deck.len()).rev() {
+      deck.swap(i, rng.below(i as u32 + 1) as usize);
+    }
+    for (seat, player) in players.iter().enumerate() {
+      let mut hand = deck[seat * HAND_SIZE..(seat + 1) * HAND_SIZE].to_vec();
+      hand.sort();
       self.hands.insert(*player, hand);
     }
+    seed
   }
 
   /// Removes and returns a card from a player's hand, if they hold it.
@@ -446,5 +469,64 @@ impl TableState {
         (wins, std::cmp::Reverse(*card))
       })
       .or_else(|| hand.first().copied())
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use std::sync::atomic::AtomicU32;
+
+  use super::*;
+
+  fn table(name: &str) -> TableState {
+    let mut state = TableState::new(
+      name.into(),
+      TableSettings::default(),
+      TABLE_SIZE as u32,
+      Arc::new(WalletRegistry::new()),
+      Arc::new(AtomicU32::new(0)),
+    );
+    for player in 1..=TABLE_SIZE as u64 {
+      state.seats.admit(player);
+    }
+    state
+  }
+
+  #[test]
+  fn a_deal_hands_out_the_whole_deck_once_by_rank() {
+    let mut state = table("table 1");
+    state.deal();
+
+    let mut all: Vec<Card> = state.hands.values().flatten().copied().collect();
+    all.sort();
+    let deck: Vec<Card> = (0..TABLE_SIZE * HAND_SIZE).map(|i| Card(i as u8 + 2)).collect();
+    assert_eq!(all, deck);
+    for hand in state.hands.values() {
+      assert_eq!(hand.len(), HAND_SIZE);
+      assert!(hand.windows(2).all(|w| w[0] < w[1]), "a hand arrives by rank");
+    }
+  }
+
+  #[test]
+  fn deals_at_one_table_differ_and_a_seed_reproduces_one() {
+    let mut state = table("table 1");
+    let first_seed = state.deal();
+    let first = state.hands.clone();
+    let second_seed = state.deal();
+    assert_ne!(first_seed, second_seed);
+    assert_ne!(first, state.hands, "the second deal repeated the first");
+
+    let mut again = table("table 1");
+    again.deal();
+    assert_eq!(again.hands, first, "the same table, tick and deal count is the same deal");
+  }
+
+  #[test]
+  fn two_tables_at_one_tick_deal_differently() {
+    let mut one = table("table 1");
+    let mut two = table("table 2");
+    one.deal();
+    two.deal();
+    assert_ne!(one.hands, two.hands);
   }
 }

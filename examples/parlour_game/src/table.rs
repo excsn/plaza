@@ -187,7 +187,8 @@ fn unseat(state: &mut TableState, player: &PlayerId) {
 /// Deals, starts a round, and seats the first turn.
 fn begin_round(state: &mut TableState, ctx: &mut Ctx) {
   state.phase.transition_to(TablePhase::Dealing, ctx, TableOp::PhaseChanged);
-  state.deal();
+  let seed = state.deal();
+  debug!(seed, table = %state.name, "Dealt.");
 
   if let Err(reason) = state.rounds.start_next_round(ctx) {
     debug!(%reason, "No further rounds.");
