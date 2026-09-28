@@ -15,7 +15,7 @@ use plaza::controller::{query_with, CommandSender, ControllerCommand};
 use tracing::debug;
 
 use crate::snapshot::player_view;
-use crate::types::{PlayerId, TableOp, TablePhase, TableState};
+use crate::types::{Card, PlayerId, PlayerView, TableOp, TablePhase, TableState};
 
 pub type TableCommands = CommandSender<TableOp, PlayerId, TableState>;
 
@@ -26,7 +26,9 @@ const THINK: Duration = Duration::from_millis(700);
 /// Plays one bot's turns, from what that bot was sent and nothing else.
 ///
 /// Ends when the controller does, which is what stops a reaped table leaving a
-/// task behind: `query_with` fails once the command channel closes.
+/// task behind: `query_with` fails once the command channel closes. A finished
+/// match is not the end of the table, since the intermission deals another to
+/// the same seats.
 pub async fn play(tx: TableCommands, me: PlayerId) {
   let mut ticker = tokio::time::interval(THINK);
   loop {
@@ -36,14 +38,7 @@ pub async fn play(tx: TableCommands, me: PlayerId) {
       debug!(player = me, "Table gone; bot stopping.");
       return;
     };
-    if view.phase == TablePhase::Finished {
-      return;
-    }
-    if view.phase != TablePhase::Playing || view.whose_turn != Some(me) {
-      continue;
-    }
-    // Lead low, so a bot does not take every trick with its best card.
-    let Some(card) = view.my_hand.iter().min().copied() else {
+    let Some(card) = choose(&view, me) else {
       continue;
     };
     if tx
@@ -56,5 +51,60 @@ pub async fn play(tx: TableCommands, me: PlayerId) {
     {
       return;
     }
+  }
+}
+
+/// The card to play now or nothing if it is not this bot's turn to play.
+///
+/// Leads low, so a bot does not take every trick with its best card.
+fn choose(view: &PlayerView, me: PlayerId) -> Option<Card> {
+  if view.phase != TablePhase::Playing || view.whose_turn != Some(me) {
+    return None;
+  }
+  view.my_hand.iter().min().copied()
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::types::Seat;
+
+  fn view(phase: TablePhase, whose_turn: Option<PlayerId>) -> PlayerView {
+    PlayerView {
+      table: "table 1".into(),
+      phase,
+      round: 1,
+      total_rounds: Some(3),
+      whose_turn,
+      your_seat: Some(Seat::Player),
+      stake: 10,
+      coins: 100,
+      my_hand: vec![Card(7), Card(2), Card(9)],
+      opponents: vec![],
+      played: vec![],
+      scores: vec![],
+      seats_taken: 3,
+      seats_total: 3,
+      spectators: 0,
+      bots: 2,
+    }
+  }
+
+  #[test]
+  fn a_bot_on_turn_leads_low() {
+    assert_eq!(choose(&view(TablePhase::Playing, Some(1_000_000)), 1_000_000), Some(Card(2)));
+  }
+
+  #[test]
+  fn a_bot_waits_when_it_is_not_on_turn() {
+    assert_eq!(choose(&view(TablePhase::Playing, Some(1)), 1_000_000), None);
+    assert_eq!(choose(&view(TablePhase::Dealing, Some(1_000_000)), 1_000_000), None);
+  }
+
+  // The intermission between matches is the Finished phase. A bot that treated
+  // it as the end of the table left the rematch to the turn timeout.
+  #[test]
+  fn a_finished_match_is_a_wait_rather_than_a_stop() {
+    assert_eq!(choose(&view(TablePhase::Finished, None), 1_000_000), None);
   }
 }
