@@ -69,7 +69,7 @@
                     // can first see the place it happened.
                     remembered.set(c.relic, { ...(remembered.get(c.relic) || {}), id: c.relic, x: c.x, y: c.y, owner: c.by });
                     say(c.late
-                        ? `P${c.by} took relic ${c.relic} on tick ${c.tick} — you are only being told now`
+                        ? `P${c.by} took relic ${c.relic} on tick ${c.tick}: you are only being told now`
                         : `P${c.by} took relic ${c.relic}`, c.late);
                 }
             });
@@ -186,7 +186,7 @@
                         `<tr><td style="color:${colour(id)}">${id === me ? 'you' : 'P' + id}</td><td class="n">${sc}</td></tr>`).join('') : '');
 
             const btn = document.getElementById('leak');
-            btn.textContent = p.leak_mode ? 'deferral OFF — telling everyone' : 'turn the deferral off';
+            btn.textContent = p.leak_mode ? 'deferral OFF: telling everyone' : 'turn the deferral off';
             btn.className = p.leak_mode ? 'on' : '';
             document.getElementById('leakhint').textContent = p.leak_mode
                 ? 'Captures now go out the moment they happen. The game plays identically; the leak counter is what changed.'

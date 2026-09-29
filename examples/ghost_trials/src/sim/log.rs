@@ -7,9 +7,9 @@
 //!
 //! - **A ghost is stored as its inputs.** Replaying the inputs through the
 //!   shared rule reproduces the run exactly, so a ghost costs its *inputs*
-//!   rather than its positions. A two-lap run at 50 Hz is a couple of thousand
-//!   ticks and a few hundred bytes, against about twelve kilobytes of sampled
-//!   positions.
+//!   rather than its positions. A two-lap run at 50 Hz is about twelve hundred
+//!   ticks and several hundred bytes, against about twelve kilobytes of
+//!   sampled positions.
 //! - **The time comes from the replay.** The server does not watch anybody
 //!   race. It is handed a log, replays it and reads the time off the replay. A
 //!   client can send any number it likes, but the recorded time is the
@@ -375,7 +375,6 @@ mod tests {
     // Measured: 146 entries over 1208 ticks, 738 bytes against 12088. The
     // threshold sits well under that because the ratio depends on how often
     // the *input* changes and a fixture that steered more would score worse.
-    // See the deadband note above for the worst case.
     assert!(
       log.wire_cost() * 8 < log.path_cost(),
       "{} bytes of inputs against {} of positions",
@@ -422,7 +421,6 @@ mod tests {
 
   #[test]
   fn a_log_that_never_finishes_is_refused() {
-    let track = Track::circuit();
     let mut recorder = Recorder::new(VERSION, Mode::Trial, TrackSize::Medium, 1);
     for _ in 0..600 {
       recorder.observe(Input::new(1, false));

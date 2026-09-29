@@ -34,20 +34,20 @@ pub const VIEW_NEAR: f32 = VIEW_RADIUS * 1.5;
 /// One measurement: the server's own cost, and where its bytes go.
 ///
 /// The split is grouped by **what each group scales with**: the entity groups
-/// are bounded by relevance, while the per-player groups are broadcast to
-/// everybody and so grow as the square of the count.
+/// are bounded by relevance and the per-player groups by how many players each
+/// recipient needs.
 #[derive(Default)]
 struct Row {
   server_ms: f32,
   bytes: usize,
   /// Enemies: samples, spawns, despawns, crowd summaries. Relevance-bounded.
   entities: usize,
-  /// Everything carried once per player in every packet: positions, wallets,
-  /// health, shields. Broadcast, so `O(players^2)`.
+  /// Wallets in the entity packet: the changed ones among the players each
+  /// recipient needs.
   per_player: usize,
-  /// The separate player stream, also broadcast to everybody.
+  /// The separate player stream, one frame per recipient.
   player_stream: usize,
-  /// Live shots, re-sent in full every packet.
+  /// Shot events: fires and early ends.
   shots: usize,
   /// Coins, claims, refusals, hit markers.
   coins: usize,
@@ -93,8 +93,8 @@ fn measure(enemy_count: usize, players: usize) -> Row {
         // digest and sequence number, so it is unpacked here to keep the groups
         // accurate.
         let entities = split[0] + split[1] + split[2] + packet.crowds.len() * CROWD_BYTES;
-        // Wallets only, now. Positions, health and shields moved to the player
-        // stream, which is where the relevance rule can reach them.
+        // Wallets only. Positions, health and shields ride the player stream,
+        // which is where the relevance rule can reach them.
         let per_player = packet.wallets.len() * (1 + 3);
         let coins = packet.coins.len() * (ID_BYTES + POS_BYTES)
           + packet.claims.len() * (1 + ID_BYTES)
@@ -106,16 +106,15 @@ fn measure(enemy_count: usize, players: usize) -> Row {
         row.coins += coins;
         row.fixed += 10;
         // Every byte has to land in exactly one group. A breakdown that does not
-        // add up can hide the thing being looked for; the first version of this
-        // left 28% unexplained.
+        // add up can hide the thing being looked for.
         assert_eq!(
           entities + per_player + split[3] + coins + 10,
           packet.bytes(),
           "the breakdown must account for the whole packet"
         );
       }
-      // The player stream is built once and goes to everybody, so its cost is
-      // per recipient and this has to say so.
+      // The player stream is built per recipient, so its cost is the sum over
+      // every recipient's frame.
       for (_, frame) in frames.iter().flatten() {
         row.player_stream += frame.bytes();
       }
@@ -170,7 +169,7 @@ fn drift(enemy_count: usize, players: usize, windows: usize, window_secs: f32) {
   // Three ways of answering "what is the bandwidth", so the difference between
   // them can be seen: the true rate over this window computed
   // from raw bytes, the same thing through the windowed meter, and the session
-  // mean the meter used to report.
+  // mean.
   println!("  window   KiB/s   meter  lifetime   entities  sampleB    alive   spawns/pkt   diff");
   for w in 0..windows {
     let mut bytes = 0usize;
@@ -238,8 +237,7 @@ fn main() {
     for players in [4usize, 16, 32, 64, 128] {
       let row = measure(enemy_count, players);
       // Measuring through a broken harness is the failure mode this whole file
-      // is exposed to. Writing the lesson down did not prevent a second
-      // occurrence, so it is an assertion now. Zero sample bytes means the ack
+      // is exposed to, so it is an assertion. Zero sample bytes means the ack
       // loop is not closing and every packet is a full re-send: the numbers
       // below would be inflated and look plausible.
       assert!(row.entities > 0, "no entity bytes at {enemy_count}/{players}: the acknowledgement loop is not closing");
@@ -269,5 +267,5 @@ fn main() {
   }
 
   // The shape over time, at the count where it was reported as climbing.
-
+  drift(3000, 10, 30, 40.0);
 }

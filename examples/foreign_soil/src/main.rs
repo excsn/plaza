@@ -76,8 +76,8 @@ impl SnapshotProvider<PlayerId, World, Op> for NoViews {
 ///
 /// It runs as a task rather than being polled on demand, because a probe is
 /// answered whenever it arrives and not only while a test happens to be
-/// looking. Polling it on demand made this example report that the link plane
-/// does not work, which was the harness and not the seam.
+/// looking. Polled on demand, this example reports that the link plane does
+/// not work, which is the harness and not the seam.
 struct Client {
   to_server: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
   ops_seen: tokio::sync::mpsc::UnboundedReceiver<()>,
@@ -198,7 +198,7 @@ async fn main() {
   client.send(ops_frame(&Op::Say("hello".into())));
   let round_trip = client.saw_ops(Duration::from_secs(3)).await;
 
-  // 3. The link plane, which the recipe used to omit entirely.
+  // 3. The link plane.
   let mut measured = None;
   for _ in 0..100 {
     if let Some((rtt, samples)) = session.manager().agent_link_rtt(&1) {
@@ -235,7 +235,7 @@ async fn main() {
     "| impairment applied | {} | free: the same `Conditioner` the shipped adapters use, delay and jitter and loss and all four ordering rules |",
     delayed_arrived && observed >= Duration::from_millis(100)
   );
-  println!("\nThe connection loop is 65 lines, of which about 25 are reading and writing a socket.");
+  println!("\nThe connection loop is 68 lines, of which about 25 are reading and writing a socket.");
   println!("\nA 120ms downstream profile produced {}ms.", observed.as_millis());
 
   assert!(round_trip, "the registry, bridge and outbound queue are the part that is genuinely free");

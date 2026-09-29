@@ -8,9 +8,8 @@ use horde_playground::sim::{Controls, RemoteMode, World};
 /// What one client is actually receiving, next to what the server's own readout
 /// models that same traffic as costing.
 ///
-/// The two are not the same quantity and were never shown together, which is how
-/// a host reading 60 KiB/s and a browser reading 180 went unexplained: the
-/// server counts an idealised encoding (a 3 byte id, quantised positions) while
+/// The two are not the same quantity, which is how a host can read 60 KiB/s
+/// while a browser reads 180: the server counts an idealised encoding (a 3 byte id, quantised positions) while
 /// the wire carries MessagePack, which still spends bytes on its own structure
 /// and on enum variant names. The gap between them is what the format costs and
 /// it is the one wire-cost number this example measures rather than models.
@@ -128,7 +127,7 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls) {
     ui.checkbox(&mut controls.debug_digest, "debug digest mismatches (verbose)")
       .on_hover_text("Ships the server's exact visible set each frame so a mismatching client prints which enemies it holds in error (extra) or is short of (missing) to stderr. A diagnostic: adds wire weight while on.");
     ui.checkbox(&mut controls.coalesce_input, "send input only on change (+ keepalive)")
-      .on_hover_text("Off: an input every tick (~60/s), so a dropped one is covered by the next. On: send only when your direction changes, plus a slow keepalive, which cuts idle upstream traffic. Safe here because the local player has no server-side forces, so it is predicted exactly.");
+      .on_hover_text("Off: an input every tick (~60/s), so a dropped one is covered by the next. On: send only when your direction changes, plus a slow keepalive, which cuts idle upstream traffic. Safe here because the server holds the last direction until a new one arrives.");
   });
 
   section(ui, "combat", false, |ui| {

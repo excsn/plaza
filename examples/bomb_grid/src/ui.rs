@@ -18,8 +18,9 @@ fn warn_line(ui: &mut egui::Ui, text: String, warn: bool) -> egui::Response {
   }
 }
 
-/// The sliders and toggles, identical for a host and a joiner. A joiner's edits
-/// reach only its own client; the impairment and the schedule are the host's.
+/// The sliders and toggles. A joiner gets only the prediction toggles, which
+/// reach only its own client; the link, the input schedule and the world are
+/// the host's.
 fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls, host: bool) {
   section(ui, "prediction", true, |ui| {
     ui.checkbox(&mut controls.predict_local, "predict my own movement")
@@ -64,7 +65,7 @@ fn draw_controls(ui: &mut egui::Ui, controls: &mut Controls, host: bool) {
     section(ui, "the world", false, |ui| {
       ui.add(egui::Slider::new(&mut controls.sync_hz, 5..=60).text("send rate (Hz)"));
       ui.add(egui::Slider::new(&mut controls.render_delay_ms, 0..=400).text("render delay ms"))
-        .on_hover_text("How far behind the server clock remote players and bombs are drawn. Your own player is not on this clock when prediction is on, which is the whole of what prediction buys.");
+        .on_hover_text("How far behind the server clock fire is drawn. Players and bombs are drawn from the newest frame and your own player is predicted when prediction is on.");
       ui.checkbox(&mut controls.bots, "fill empty seats with bots");
     });
   }

@@ -4,9 +4,9 @@
 //!
 //! # Why there is no `PredictedPlayer` here
 //!
-//! `plaza_client_utils::PredictedPlayer` suits a continuous entity and both
-//! other networked playgrounds use it. It cannot be used here because of how it
-//! is built rather than a missing feature: it holds a *seen* position, a
+//! `plaza_client_utils::PredictedPlayer` suits a continuous entity and the
+//! netcode and black hole playgrounds use it. It cannot be used here because
+//! of how it is built rather than a missing feature: it holds a *seen* position, a
 //! *settled* position and an ease between them over a few frames. On a lattice
 //! there is nothing between two cells. A correction of one cell has no fraction
 //! to travel through, so an ease would draw the player in a place they have
@@ -18,9 +18,8 @@
 //! # What is predicted and what is not
 //!
 //! Only the local player, and only through [`rules`], which is the same code the
-//! server runs. Remote players, bombs and pickups are drawn from what arrived,
-//! at one render instant behind the server clock, exactly as the other
-//! playgrounds draw remote state.
+//! server runs. Remote players, bombs and pickups are drawn as the newest frame
+//! describes them.
 //!
 //! A dropped bomb is predicted too. A bomb is a discrete event with a discrete
 //! refusal (the carry limit, an occupied cell), so a refused prediction is a
@@ -122,7 +121,7 @@ pub struct Client {
   paused: bool,
   /// This client's estimate of the server clock, mirrored in every tick.
   server_now_ms: u64,
-  /// How far behind the server clock remote state is drawn.
+  /// How far behind the server clock fire is drawn.
   render_delay_ms: u64,
 
   /// Snaps: corrections the client had to jump rather than ease.
@@ -147,7 +146,7 @@ pub struct Client {
   pub unreached_frames: u64,
   /// The newest tick any frame has described, for the lead readout.
   newest_frame_tick: u64,
-  /// Deaths the client drew from a blast before the frame confirming them.
+  /// Frames folded in: the denominator of [`Client::snap_rate`].
   pub frames_seen: u64,
   pub rounds_seen: u32,
 }
@@ -205,9 +204,7 @@ impl Client {
     !self.players.is_empty()
   }
 
-  /// The instant remote state is drawn at: the server clock, less the declared
-  /// delay. Declared rather than measured, so every client shows the same
-  /// moment and the server can reason about what a client has yet to play.
+  /// The instant fire is drawn at: the server clock, less the render delay.
   pub fn render_at_ms(&self) -> u64 {
     self.server_now_ms.saturating_sub(self.render_delay_ms)
   }
@@ -508,11 +505,10 @@ impl Client {
     // Replaying with one big `dt` instead would land somewhere the tick loop
     // never visits, which amounts to a second implementation of the rule.
     //
-    // Inputs are *not* cleared of their `applied` flag: they are replayed by
-    // being re-run through `step_once`, which reapplies any whose tick falls in
-    // the window because the flag is only consulted for inputs that have not
-    // been seen at all. What carries the replay is `held`, which the earlier
-    // application already set.
+    // The `applied` flags are left alone: this loop walks the pending inputs
+    // itself rather than through `step_once`, re-running each walk intent on
+    // its tick. Bomb intents are not re-run, so a replay never predicts a bomb
+    // twice.
     let last = self.next_tick.saturating_sub(1);
     let mut replay: Vec<Pending> = self.pending.iter().copied().filter(|p| p.tick > at_tick).collect();
     replay.sort_by_key(|p| p.tick);
@@ -769,7 +765,6 @@ mod tests {
     // The board feeds the movement rule this client predicts against, so
     // holding a destroyed wall would refuse a step the server allows and cause
     // a snap.
-    let c = controls();
     let mut server = Server::new(2, B0MB_SEED);
     server.grid.set(Cell::new(2, 1), Tile::Soft);
     let mut client = joined(&server, 0);

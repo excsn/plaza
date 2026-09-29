@@ -6,7 +6,6 @@
 //! outbound traffic is one digest every half second and everything else is
 //! sent in response to an event.
 
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use std::sync::Arc;
@@ -153,8 +152,7 @@ impl ArenaLogic {
   /// Pushes the panel's link settings down to the transport when they change.
   fn publish_link(&self, controls: &Controls) {
     let Some(link) = &self.link else { return };
-    // One way, applied in each direction, which is what the slider has always
-    // meant here.
+    // One way, applied in each direction, which is what the slider means here.
     let one_way = DirectionProfile {
       delay: Duration::from_millis(controls.latency_ms),
       jitter: Duration::from_millis(controls.jitter_ms),
@@ -228,7 +226,6 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
               // player sees nothing happen and asks again. There is no state to
               // reconcile, only a cause that did or did not occur.
               let answers = state.sim.want_build(seat, seq, cell, kind, upgrade, &controls);
-              let now = state.sim.now_ms();
               for answer in answers {
                 match answer {
                   // A `Built` is a cause rather than a reply: every machine has

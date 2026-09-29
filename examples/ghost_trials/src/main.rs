@@ -247,7 +247,7 @@ async fn frame_loop(options: role::Options) {
 
       if let Some(time) = sim.finished_ms {
         let place = if sim.mode == Mode::Race { Some(sim.position() as u32) } else { None };
-        render::draw_result(&board, time, sim.last_place, sim.last_refusal.map(ui::describe), place);
+        render::draw_result(&board, time, sim.last_place, sim.last_refusal.map(ui::describe), place, sim.field);
       }
     }
 
@@ -274,8 +274,9 @@ async fn frame_loop(options: role::Options) {
 
     #[cfg(all(feature = "client", feature = "websocket"))]
     {
-      // Nothing on this canvas is clickable once a run is under way, so the
-      // panel's hover result is only needed by the menu.
+      // The panel's hover result is not used. Nothing on the canvas is
+      // clickable once a run is under way and the menu reads its click before
+      // the panel is drawn.
       let _ = ui::draw_net_ui(&client, &url, extras.as_ref(), &mut controls);
     }
     egui_macroquad::draw();

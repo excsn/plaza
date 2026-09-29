@@ -29,7 +29,7 @@ use crate::world::{self, SIZE};
 
 /// Squares a search may settle before it gives up and walks as far as it got.
 ///
-/// A click across the whole map would mean searching thirty thousand squares
+/// A click across the whole map would mean searching 36,864 squares
 /// inside a tick that also has to run the world. A partial route looks to the
 /// player like walking toward somewhere far away, which is what they asked for.
 pub const MAX_VISITED: usize = 4500;

@@ -47,10 +47,6 @@ pub struct Arena {
   pub sim: Server,
   pub controls: Controls,
   seats: SeatTable<PlayerKey>,
-  /// The impairment, on the real path.
-  ///
-  /// It does not affect the lap, which is the main thing this example shows.
-  /// It decides when a ghost turns up and when a verdict lands.
   /// One-shot ops the client has not yet confirmed.
   pending: OneShots<PlayerKey, Op>,
   /// Frames the link dropped, read back from the session that dropped them.
@@ -253,12 +249,12 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
           players: state.controls.players,
           ..live
         };
-        // A tick moves the clock and delivers whatever the link is holding.
-        // Nothing is simulated: the runs happen on the machines driving them
+        // A tick moves the clock and repeats any one-shot that is due. Nothing
+        // is simulated: the runs happen on the machines driving them
         // and arrive as finished logs.
         state.sim.advance(delta_time.as_millis() as u64);
         let now = state.sim.now_ms();
-        let mut out: Vec<TargetedOp<Op, PlayerKey>> = state
+        let out: Vec<TargetedOp<Op, PlayerKey>> = state
           .pending
           .due(now, live.datagram_link)
           .into_iter()

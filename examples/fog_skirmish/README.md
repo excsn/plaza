@@ -39,7 +39,7 @@ The panel counts ops and not frames because of `pellet_maze`. That example shipp
 
 A capture out of your sight is held in full, not broadcast or summarised. It is delivered, marked `late`, when you next see the place it happened. Your client then agrees with everyone else's about a relic it never watched change hands, so two boards stay consistent without a live position ever being revealed.
 
-Telling you "something happened somewhere" instead would leak the timing. Never telling you would leave two clients permanently disagreeing about a relic they both end up standing on. The feed shows the difference: `P1 took relic 88 on tick 2140 — you are only being told now`.
+Telling you "something happened somewhere" instead would leak the timing. Never telling you would leave two clients permanently disagreeing about a relic they both end up standing on. The feed shows the difference: `P1 took relic 88 on tick 2140: you are only being told now`.
 
 ## The deferral toggle
 

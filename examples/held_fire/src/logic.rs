@@ -705,7 +705,7 @@ fn ticks(ms: u64) -> u64 {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::protocol::{Panel, Unit, ACT_LIMIT_MS};
+  use crate::protocol::ACT_LIMIT_MS;
   use plaza::session::MessageTarget;
 
   async fn run(state: &mut WatchState, input: LogicInput<WatchOp, PlayerId>) -> Vec<TargetedOp<WatchOp, PlayerId>> {

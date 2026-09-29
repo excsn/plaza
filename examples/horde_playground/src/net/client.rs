@@ -1,8 +1,8 @@
 //! A client on a real wire.
 //!
 //! It wraps the same [`sim::Client`] the offline playground uses, so the relevance
-//! mirror, the coins and the drawing are unchanged. What it adds is everything a
-//! shared clock and a function argument were standing in for:
+//! mirror, the coins and the drawing are the same code. What it adds is
+//! everything a shared clock and a function argument stand in for offline:
 //!
 //! - **Your own movement is not predicted.** The whole scene, your own marker
 //!   included, is drawn from the played-out stream at one render instant; the
@@ -14,8 +14,8 @@
 //!   so the server's loss recovery has something to diff against.
 //! - **The area pulse arrives as a declared event.** The packet carries the
 //!   pulse's server timestamp, and the ring is a pure function of it and the
-//!   render instant. It was once inferred from the death burst it causes and
-//!   the inference re-fired on every recovery repeat of the same announcements.
+//!   render instant. Inferring it from the death burst it causes would re-fire
+//!   on every recovery repeat of the same announcements.
 
 use plaza_client_utils::{InputCoalescer, RateMeter, Timeline};
 use plaza_wire::{MsgPackCodec, WireCodec};
@@ -52,7 +52,7 @@ pub enum Status {
 
 /// When coalescing, resend the held input at least this often, so a dropped
 /// direction change cannot strand the player gliding until the next keypress.
-/// See [`InputCoalescer`], which is where that reasoning now lives.
+/// See [`InputCoalescer`], which holds that reasoning.
 const INPUT_KEEPALIVE_MS: u64 = 120;
 /// How long the red damage flash is drawn for after a hit.
 const HIT_FLASH_SECS: f32 = 0.35;
@@ -69,7 +69,7 @@ const BACKLOG_KEEP: usize = 32;
 
 pub struct NetClient {
   pump: FramePump<MsgPackCodec>,
-  /// The same client the offline build runs. Everything it does is unchanged.
+  /// The same client the offline build runs.
   pub sim: SimClient,
   pub status: Status,
   pub me: Option<PlayerId>,
@@ -77,9 +77,9 @@ pub struct NetClient {
 
   /// Your own player.
   input_seq: u64,
-  /// When to actually transmit, as opposed to when to integrate. The two are
-  /// deliberately different: the prediction advances every tick whatever the wire
-  /// is doing, so a quiet wire does not make the player stutter.
+  /// When to actually transmit. The server integrates the held direction every
+  /// tick whatever the wire is doing, so a quiet wire does not make the player
+  /// stutter.
   send_policy: InputCoalescer<Vec2>,
 
   /// What this client is actually receiving, which is the number it wants and
@@ -90,12 +90,12 @@ pub struct NetClient {
   /// The same traffic as the *server* counts it: what these packets would cost
   /// with compact ids and quantised positions, rather than what the MessagePack
   /// on the wire actually cost. Kept beside the real figure because the gap between
-  /// them is what the encoding costs, which this example did not show before.
+  /// them is what the encoding costs.
   modelled: RateMeter,
-  /// What this client *sends*. Bandwidth has two directions and every counter
-  /// here measured one of them, which made "bandwidth" mean downstream by
-  /// accident. Upstream is small but not zero: an input every tick unless
-  /// coalescing is on, plus an acknowledgement per applied frame.
+  /// What this client *sends*. Bandwidth has two directions and the other
+  /// counters here measure downstream only. Upstream is small but not zero: an
+  /// input every tick unless coalescing is on, plus an acknowledgement per
+  /// applied frame.
   sent: RateMeter,
   /// The pump's cumulative counters as of the last poll, so the meters above
   /// can be fed the delta.
@@ -231,6 +231,7 @@ impl NetClient {
     Ok(Self::from_pump(FramePump::connect(url, WIRE, PROTOCOL).map_err(|e| e.to_string())?))
   }
 
+  #[cfg(test)]
   fn from_socket(socket: Box<dyn plaza_ws::Socket>) -> Self {
     Self::from_pump(FramePump::new(socket, WIRE, PROTOCOL))
   }
@@ -283,13 +284,12 @@ impl NetClient {
   /// Where to draw your own player: **on the same timeline as everything else**.
   ///
   /// Not predicted. The client renders the world at one instant. Exempting the
-  /// local player from it would bring back the seam every other fix in this
-  /// example removed: your marker would sit a render delay ahead of the enemies
-  /// it is standing among, so your shots left from somewhere you were not.
+  /// local player from it would open a seam: your marker would sit a render
+  /// delay ahead of the enemies it is standing among, so your shots would leave
+  /// from somewhere you were not.
   ///
   /// Drawing it from the played-out stream instead means there is nothing to
-  /// correct, so the mechanism behind the reversal stiffness no longer exists:
-  /// with no prediction, nothing can disagree with authority. It also
+  /// correct: with no prediction, nothing can disagree with authority. It also
   /// makes a recording replay to exactly what you saw, which a predicted local
   /// player can never do.
   ///
@@ -343,8 +343,8 @@ impl NetClient {
     self.sim.nova_flash_age()
   }
 
-  /// Advances the local prediction and transmits the intent, either every tick or
-  /// only on change, per `controls.coalesce_input`.
+  /// Transmits the intent, either every tick or only on change, per
+  /// `controls.coalesce_input`.
   pub fn send_input(&mut self, dir: Vec2, controls: &Controls) {
     if !self.is_playing() {
       return;
@@ -615,12 +615,12 @@ impl NetClient {
           // Pongs are correct on a host (direct) and a remote (delayed like the
           // frames), so they are the right source. The stamp still floors the
           // estimate from below: the server wrote it.
-          // Hand the sim server time, not local time. It computes a packet's age
-          // as `recv - server_time` to project a sample into the present, and that
-          // is only meaningful if the two clocks agree; over a real wire they do
-          // not, so give it this client's *estimate* of server-time-now. Before
-          // sync converges this falls back to local time, which yields an age near
-          // zero rather than a wild one.
+          // Hand the sim server time, not local time. It steers the render clock
+          // by the arrival time and falls back to it before the stream starts,
+          // and both only mean something on the server's clock; over a real wire
+          // the two clocks do not agree, so give it this client's *estimate* of
+          // server-time-now. Before sync converges this falls back to local
+          // time.
           // Nothing else happens here. The packet is queued for its instant, so
           // everything derived from its contents (the hit flash, the pulse
           // ring) follows play-out, not arrival, or the reaction would land one

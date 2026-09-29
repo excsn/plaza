@@ -40,7 +40,7 @@ const TABLE_IDLE_AFTER: Duration = Duration::from_secs(45);
 /// Only the match queue needs the lobby to advance time and its timeout is
 /// counted in seconds.
 /// Longer than a placement takes to dial, shorter than the seat reservation it
-/// pairs with, which currently has no window of its own.
+/// pairs with, which has no window of its own.
 const PLACEMENT_WINDOW: Duration = Duration::from_secs(30);
 
 const LOBBY_TICK_HZ: u32 = 4;
@@ -55,6 +55,7 @@ struct Services {
   ids: PlayerIds,
 }
 
+/// plaza-wire: off-wire
 #[derive(Deserialize)]
 struct TableQuery {
   /// The lobby's ticket. A table has no other way to learn who this is.

@@ -17,6 +17,7 @@ use async_trait::async_trait;
 use parking_lot::Mutex;
 use plaza::session::{MessageTarget, TargetedOp};
 use plaza::state_logic::{LogicInput, LogicOutput, StateLogic, StateLogicError};
+#[cfg(test)]
 use plaza::Agent;
 use plaza_server_utils::oneshot::Pending as OneShots;
 use plaza_session::{Delivery, DirectionProfile, LinkProfile, LinkPublisher};
@@ -143,16 +144,17 @@ impl Arena {
   }
 }
 
-/// The stateless half plaza acts through.
-///
-/// Carries two shared slots rather than owning that state: `controls` is
-/// written by the host's panel and read here every tick, and `view` is written
-/// here and read by the host's renderer. A headless server has neither, so its
-/// `view` is `None`.
 /// Publishes the panel's impairment sliders to the transport that owns the
 /// link. The arena states what the link should be and stops there.
 pub use plaza_session::LinkSink;
 
+/// The stateless half plaza acts through.
+///
+/// Carries shared slots rather than owning that state: `controls` is written by
+/// the host's panel and read here every tick, `view` is written here and read
+/// by the host's renderer, `link` publishes the impairment to the transport and
+/// `clock` publishes the simulation clock to the session. A headless server has
+/// no renderer, so its `view` is `None`.
 pub struct ArenaLogic {
   controls: Arc<Mutex<Controls>>,
   view: Option<Arc<Mutex<HostView>>>,
@@ -251,7 +253,7 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         let Some(seat) = state.seat_of(&key) else {
           return Ok(LogicOutput::none());
         };
-        let mut replies = Vec::new();
+        let replies = Vec::new();
         let controls = state.controls;
         for op in ops {
           match op {
@@ -329,9 +331,8 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
             .into_iter()
             .map(|(key, op)| TargetedOp::new_system_to(key, vec![op])),
         );
-        // Acknowledgements are not impaired, because trimming a prediction's
-        // pending inputs should not itself be delayed. They are sent every tick
-        // because inputs arrive far more often than frames go out.
+        // Acknowledgements are sent every tick because inputs arrive far more
+        // often than frames go out.
         for (key, seq) in &state.acked {
           targeted.push(TargetedOp::new_system_to(*key, vec![Op::InputAck { seq: *seq }]));
         }

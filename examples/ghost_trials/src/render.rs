@@ -104,8 +104,6 @@ pub fn draw_track(board: &Board, track: &Track, next: u16) {
   }
 }
 
-/// The pickups still on the circuit. A taken one leaves its outline, so a
-/// player can see where it will come back rather than having to remember.
 pub fn power_color(kind: Power) -> Color {
   match kind {
     Power::Turbo => Color::new(1.0, 0.6, 0.25, 1.0),
@@ -115,6 +113,8 @@ pub fn power_color(kind: Power) -> Color {
   }
 }
 
+/// The pickups still on the circuit. A taken one leaves its outline, so a
+/// player can see where it will come back rather than having to remember.
 pub fn draw_pickups(board: &Board, pickups: &[Pickup], tick: u32) {
   for pickup in pickups {
     let at = board.at(pickup.at);
@@ -130,8 +130,6 @@ pub fn draw_pickups(board: &Board, pickups: &[Pickup], tick: u32) {
   }
 }
 
-/// One racer. `ghost` draws it hollow, as a replay of a run rather than
-/// another car.
 /// How long a finished car lingers before it is gone, in ticks.
 ///
 /// It goes hollow first rather than vanishing on the line, so a player can see
@@ -139,6 +137,8 @@ pub fn draw_pickups(board: &Board, pickups: &[Pickup], tick: u32) {
 /// stationary car reads as an obstacle and this one no longer is.
 const FINISHED_LINGER: u32 = 90;
 
+/// One racer. `ghost` draws it hollow, as a replay of a run rather than
+/// another car.
 pub fn draw_racer(board: &Board, racer: &Racer, colour: Color, ghost: bool, tick: u32, place: Option<usize>) {
   let (ghost, colour) = match racer.finished_tick {
     Some(at) => {
@@ -441,7 +441,14 @@ pub fn draw_positions(board: &Board, world: &ghost_trials::sim::rules::World, me
 }
 
 /// Over the circuit when a run ends.
-pub fn draw_result(board: &Board, time_ms: u64, place: Option<u32>, refused: Option<String>, finished_position: Option<u32>) {
+pub fn draw_result(
+  board: &Board,
+  time_ms: u64,
+  place: Option<u32>,
+  refused: Option<String>,
+  finished_position: Option<u32>,
+  field: usize,
+) {
   let mid = board.origin.x + board.width() * 0.5;
   let y = board.origin.y + board.height() * 0.35;
   draw_rectangle(board.origin.x, y - 44.0, board.width(), 110.0, Color::new(0.0, 0.0, 0.0, 0.55));
@@ -455,7 +462,7 @@ pub fn draw_result(board: &Board, time_ms: u64, place: Option<u32>, refused: Opt
   if let Some(position) = finished_position {
     let ordinal = match position {
       1 => "won".to_owned(),
-      n => format!("{n} of {RACE_FIELD}"),
+      n => format!("{n} of {field}"),
     };
     let dims = measure_text(&ordinal, None, 26, 1.0);
     draw_text(&ordinal, mid - dims.width * 0.5, y - 44.0, 26.0, Color::new(0.8, 0.9, 1.0, 1.0));

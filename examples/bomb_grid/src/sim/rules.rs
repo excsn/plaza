@@ -157,7 +157,6 @@ mod tests {
   #[test]
   fn your_own_bomb_lets_you_leave_and_then_blocks_you() {
     let grid = board();
-    let mut p = player(0, Cell::new(1, 1));
     let bombs = vec![BombState {
       cell: Cell::new(1, 1),
       owner: 0,

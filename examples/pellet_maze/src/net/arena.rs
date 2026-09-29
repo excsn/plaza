@@ -1,7 +1,7 @@
 //! The authoritative arena, as `plaza` core wants it.
 //!
 //! The same shape as `bomb_grid`'s. Once the simulation is shaped for it the
-//! netcode wrapper is boilerplate. The only new op this arena sends is
+//! netcode wrapper is boilerplate. The op this example is about is
 //! [`Op::TurnTaken`], the cell a turn happened in.
 
 use std::collections::HashMap;
@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use parking_lot::Mutex;
 use plaza::session::{MessageTarget, TargetedOp};
 use plaza::state_logic::{LogicInput, LogicOutput, StateLogic, StateLogicError};
+#[cfg(test)]
 use plaza::Agent;
 use plaza_server_utils::oneshot::Pending as OneShots;
 use plaza_session::{Delivery, DirectionProfile, LinkProfile, LinkPublisher};
@@ -169,8 +170,7 @@ impl ArenaLogic {
   /// Pushes the panel's link settings down to the transport when they change.
   fn publish_link(&self, controls: &Controls) {
     let Some(link) = &self.link else { return };
-    // One way, applied in each direction, which is what the slider has always
-    // meant here.
+    // One way, applied in each direction, which is what the slider means.
     let one_way = DirectionProfile {
       delay: Duration::from_millis(controls.latency_ms),
       jitter: Duration::from_millis(controls.jitter_ms),

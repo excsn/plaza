@@ -29,6 +29,7 @@ pub enum Stage {
   Withdrawn { by: u16 },
 }
 
+/// plaza-wire: off-wire
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Trade {
   pub seats: [u16; 2],

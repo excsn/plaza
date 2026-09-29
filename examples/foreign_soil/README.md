@@ -22,7 +22,7 @@ A Unix socket rather than TCP is deliberate: no TLS, no HTTP upgrade, no address
 | answering and originating probes | yes | `LinkDriver`, which owns the schedule and the correlation |
 | impairment, all four ordering rules | yes | `LinkDriver`, holding the same `Conditioner` the shipped adapters do |
 
-The connection loop is **65 lines**, of which about 25 are reading and writing a socket. Before the extraction this example's loop was 113 lines and did not implement jitter, loss, monotone release, the retransmit penalty or the queue cap; a complete one would have been about 160.
+The connection loop is **68 lines**, of which about 25 are reading and writing a socket. Before the extraction this example's loop was 113 lines and did not implement jitter, loss, monotone release, the retransmit penalty or the queue cap; a complete one would have been about 160.
 
 ## What this example found
 
@@ -34,11 +34,11 @@ It was written to expose gaps and it did. Each of these is now closed and this e
 
 **The conditioner and the probe table were `pub(crate)`.** Reimplementing them was ~40 lines for the probe correlation, whose failure mode is a table that leaks on a lossy link and four ordering rules for the conditioner, all of which are silent when wrong. Both are public now and `LinkDriver` assembles them so most adapters never touch either.
 
-**The recipe produced a broken adapter.** It showed `register` and `forward_incoming` as synchronous, said nothing about answering `Kind::Ping` and left `set_link_profile` a no-op. A probe frame reaching the deserialize bridge now warns once per connection instead of tracing, because that is a defect in the transport rather than a property of the traffic.
+**The recipe produced a broken adapter.** It showed `register` and `forward_incoming` as synchronous, said nothing about answering `Kind::Ping` and left `set_link_profile` a no-op. A probe frame reaching the deserialize bridge now warns once per agent instead of tracing, because that is a defect in the transport rather than a property of the traffic.
 
 ## What is still yours
 
-Framing and enforcing `Limits::max_frame_bytes` with it. Those are the core job of a transport.
+Reading and writing frames and handing `Limits::max_frame_bytes` to the decoder. Those are the core job of a transport. `plaza_wire::framing` supplies the length prefix and a decoder that enforces the limit it is given, so the transport only feeds it bytes.
 
 And the parts, if the bundle does not suit. `Conditioner`, `ProbeState` and `LinkHandle` are public and each is useful alone, so a transport whose link genuinely reorders can keep the probe plane and write its own release queue: the shipped conditioner releases monotonically because a byte stream does not reorder and that assumption is stated rather than hidden.
 
