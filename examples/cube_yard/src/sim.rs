@@ -32,11 +32,15 @@ pub const FIELD: f32 = 40.0;
 const SPACING: f32 = 2.4;
 
 
-/// How fast a held direction moves a player cube.
+/// Hover mode is Fiedler's push mode from his cubes demo, scaled to this yard:
+/// his player is 1.5 across under a gravity of 20 and this one is 3 across
+/// under 9.81, so lengths double, accelerations halve and time runs at
+/// [`DEMO_TIME`] of the demo's rate.
 ///
-/// Set as a velocity rather than pushed as a force: a platformer stops when you
-/// let go, while a force plus damping coasts and feels like ice.
-pub(crate) const DRIVE_SPEED: f32 = 14.0;
+/// The drive is an acceleration at the centre of mass per held axis.
+const HOVER_PUSH: f32 = 16.0;
+/// `sqrt(L / g)` here over the demo's: 0.553 / 0.274.
+const DEMO_TIME: f32 = 2.02;
 /// Upward speed a jump starts with.
 pub(crate) const JUMP_SPEED: f32 = 12.0;
 /// The fastest a contact may lift a rolling cube. Enough to ride up over a cube
@@ -74,37 +78,40 @@ const LOAD_SHARE: f32 = 0.014;
 /// covers, and a face is `2 * PLAYER` across.
 const ROLL_PER_UNIT: f32 = std::f32::consts::FRAC_PI_2 / (2.0 * PLAYER);
 
-/// How high the cube floats in hover mode, and how hard it holds that height.
+/// Where a player cube starts, about where the repulsion holds it up.
 const HOVER_HEIGHT: f32 = 5.0;
-const HOVER_STIFF: f32 = 6.0;
-/// The fastest it will climb or sink to reach that height.
-const HOVER_DAMP: f32 = 14.0;
 
-/// The repulsion field, which is what ploughs furrows through the field
-/// without ever touching it.
-const REPEL_RANGE: f32 = 11.0;
-/// In units per second **squared**: this is a force, integrated over the step.
-///
-/// It was a per-tick velocity change, which at sixty ticks a second is an
-/// acceleration of well over a thousand and flung cubes clean off the floor.
-/// That went unnoticed while the push pointed downward into the ground.
-const REPEL_PUSH: f32 = 21.0;
+/// Hover mode repels everything within [`REPEL_RANGE`] of a point
+/// [`REPEL_DEPTH`] under the floor below the player, at
+/// `REPEL_PUSH / distance²` capped at [`REPEL_MAX`]. The player is repelled
+/// too, measured from [`REPEL_PLAYER_DROP`] below its centre and scaled by
+/// [`REPEL_PLAYER_SHARE`], which is what holds it up.
+const REPEL_RANGE: f32 = 4.0;
+const REPEL_PUSH: f32 = 392.0;
+const REPEL_MAX: f32 = 490.0;
+const REPEL_DEPTH: f32 = 0.2;
+const REPEL_PLAYER_DROP: f32 = 1.4;
+/// The demo applies the push to its player as a force on a mass of 3.375.
+const REPEL_PLAYER_SHARE: f32 = 1.0 / 3.375;
+/// Hover wobble, as a linear and an angular acceleration per unit of noise.
+const WOBBLE_PUSH: f32 = 0.29;
+const WOBBLE_TURN: f32 = 0.29;
+/// Angular acceleration per radian off upright, with the lean into travel.
+const UPRIGHT: f32 = 19.3;
+const UPRIGHT_MAX_ANGLE: f32 = 0.5;
+const LEAN: f32 = 0.25;
+/// Per-tick velocity multipliers while hovering: the demo's 0.95, 0.96 and
+/// 0.999 spread over [`DEMO_TIME`] ticks.
+const HOVER_SPIN_KEEP: f32 = 0.975;
+const HOVER_DRIFT_KEEP: f32 = 0.98;
+const HOVER_RISE_KEEP: f32 = 0.9995;
+/// The player's own damping: the demo's 0.01 per step, spread over [`DEMO_TIME`].
+const PLAYER_DAMPING: f32 = 0.3;
 /// Sliding friction under one gravity, which is the acceleration a push has to
 /// beat before a resting cube goes anywhere.
 const CUBE_FRICTION: f32 = 0.6;
 const GRAVITY: f32 = 9.81;
 const FIELD_DEADBAND: f32 = CUBE_FRICTION * GRAVITY;
-/// How much of the shove goes upward.
-///
-/// Pushing straight away from the player's centre looks wrong: the player
-/// hovers *above* the field, so "away" for the cube directly beneath is
-/// straight **down** and the whole shove is spent pressing it into the floor.
-/// Only once a cube is off to one side does any of the push become horizontal,
-/// so nothing seems to happen until the player is already past. Flattening the
-/// direction to the ground plane and adding lift makes the field scatter
-/// outward and up, the way a downdraft would.
-const REPEL_LIFT: f32 = 0.3;
-
 /// The hold in roll mode, as a spring toward the player's **surface** rather
 /// than its centre.
 ///
@@ -165,8 +172,7 @@ fn surface_hold(direction: Vec3) -> Vec3 {
 const CARRY_HOLD: f32 = PLAYER + CUBE;
 /// A carried cube further than this has been shaken off.
 const CARRY_LOSE: f32 = 7.0;
-/// Ceiling on either field's acceleration. Six gravities scatters the field
-/// convincingly; thirteen threw cubes two hundred units off the floor.
+/// Ceiling on the carry's acceleration.
 const FIELD_MAX: f32 = 62.0;
 /// The fastest the fields will let a cube travel.
 ///
@@ -213,6 +219,8 @@ pub struct Yard {
   player_colliders: Vec<ColliderHandle>,
   /// Whether each seat held jump last tick, so holding it does not re-fire.
   held_jump: [bool; MAX_PLAYERS],
+  /// Ticks stepped, which drives the hover wobble.
+  frame: u32,
   /// Whether a seat is in the rising half of a jump it asked for, which is the
   /// only time [`CLIMB_MAX`] does not apply.
   airborne: [bool; MAX_PLAYERS],
@@ -225,6 +233,52 @@ pub struct Yard {
   hold: Vec<Vec3>,
   /// Collider back to field-cube index, for asking what a roll just hit.
   cube_of: HashMap<ColliderHandle, usize>,
+}
+
+/// The demo's repulsion at `offset` from its origin, if within range.
+fn repel(offset: Vec3) -> Option<Vec3> {
+  let distance = offset.length();
+  if distance < 0.02 || distance >= REPEL_RANGE {
+    return None;
+  }
+  Some(offset / distance * (REPEL_PUSH / (distance * distance)).min(REPEL_MAX))
+}
+
+/// The demo's push mode on a player cube: lift from its own repulsion, wobble,
+/// an upright torque leaning into travel and per-tick damping.
+fn hover(body: &mut RigidBody, wanted: Vec3, frame: f32) {
+  let mass = body.mass();
+  let inertia = mass * (2.0 * PLAYER).powi(2) / 6.0;
+  let at = body.translation();
+
+  let origin = Vec3::new(at.x, -REPEL_DEPTH, at.z);
+  if let Some(lift) = repel(at - Vec3::Y * REPEL_PLAYER_DROP - origin) {
+    body.add_force(lift * REPEL_PLAYER_SHARE * mass, true);
+  }
+
+  let f = frame / DEMO_TIME;
+  let noise = |a: f32, b: f32, c: f32, d: f32, e: f32| (f * a + b).sin() + (f * c + d).sin() + (f + e).sin();
+  let push = Vec3::new(noise(0.1, 1.0, 0.05, 3.0, 10.0), noise(0.1, 3.0, 0.05, 5.0, 12.0), noise(0.1, 2.0, 0.05, 4.0, 11.0));
+  body.add_force(push * WOBBLE_PUSH * mass, true);
+  let turn = Vec3::new(
+    (f * 0.1 + 10.0).sin() + (f * 0.05 + 22.0).sin() + f.sin(),
+    (f * 0.11 + 4.0).sin() + (f * 0.055 + 9.0).sin() + f.sin(),
+    (f * 0.09 + 5.0).sin() + (f * 0.045 + 16.0).sin() + f.sin(),
+  );
+  body.add_torque(turn * WOBBLE_TURN * inertia, true);
+
+  let target = match Vec3::Y.cross(wanted).try_normalize() {
+    Some(axis) => Rotation::from_axis_angle(axis, LEAN) * Vec3::Y,
+    None => Vec3::Y,
+  };
+  let current = *body.rotation() * Vec3::Y;
+  let angle = target.dot(current).clamp(-1.0, 1.0).acos().min(UPRIGHT_MAX_ANGLE);
+  body.add_torque(-target.cross(current) * angle * UPRIGHT * inertia, true);
+
+  let spin = body.angvel() * HOVER_SPIN_KEEP;
+  body.set_angvel(spin, true);
+  let v = body.linvel();
+  body.set_linvel(Vec3::new(v.x * HOVER_DRIFT_KEEP, v.y * HOVER_RISE_KEEP, v.z * HOVER_DRIFT_KEEP), true);
 }
 
 impl Default for Yard {
@@ -285,8 +339,8 @@ impl Yard {
       let body = bodies.insert(
         RigidBodyBuilder::dynamic()
           .translation(Vec3::new(angle.cos() * 14.0, HOVER_HEIGHT, angle.sin() * 14.0))
-          .linear_damping(0.2)
-          .angular_damping(0.8),
+          .linear_damping(PLAYER_DAMPING)
+          .angular_damping(PLAYER_DAMPING),
       );
       let collider = colliders.insert_with_parent(
         // Almost frictionless, deliberately: nothing depends on grip now that
@@ -322,6 +376,7 @@ impl Yard {
       players,
       player_colliders,
       held_jump: [false; MAX_PLAYERS],
+      frame: 0,
       airborne: [false; MAX_PLAYERS],
       still_for: vec![0; CUBES + MAX_PLAYERS],
       carried: vec![None; CUBES],
@@ -389,20 +444,14 @@ impl Yard {
       body.reset_forces(false);
       body.reset_torques(false);
     }
+    self.frame = self.frame.wrapping_add(1);
 
     for (seat, drive) in driving.iter().enumerate() {
       let handle = self.players[seat];
       let was = self.bodies[handle].linvel();
       let body = &mut self.bodies[handle];
 
-      // Horizontal velocity is *set*, so releasing a key stops the cube on the
-      // next tick; only gravity owns the vertical axis.
       let wanted = Vec3::new(drive.dx.clamp(-1, 1) as f32, 0.0, drive.dz.clamp(-1, 1) as f32);
-      let horizontal = if wanted.length_squared() > 0.0 {
-        wanted.normalize() * DRIVE_SPEED
-      } else {
-        Vec3::ZERO
-      };
       let mut jump_now = false;
       let carried_mass = self.carried.iter().filter(|c| **c == Some(seat as u8)).count() as f32;
       if drive.rolling {
@@ -429,14 +478,13 @@ impl Yard {
         jump_now = drive.jump && !self.held_jump[seat];
         self.held_jump[seat] = drive.jump;
       } else {
-        // Hovering: the vertical velocity is *set* toward the target height
-        // rather than added to. Adding a lift to whatever gravity had just done
-        // leaves the two in equilibrium wherever they happen to cancel, which
-        // measured as floating at 3.3 with the target at 5.
-        let at = body.translation();
-        let climb = ((HOVER_HEIGHT - at.y) * HOVER_STIFF).clamp(-HOVER_DAMP, HOVER_DAMP);
-        body.set_linvel(Vec3::new(horizontal.x, climb, horizontal.z), true);
-        body.set_angvel(Vec3::ZERO, true);
+        let mass = body.mass();
+        body.add_force(wanted * HOVER_PUSH * mass, true);
+        hover(body, wanted, self.frame as f32);
+        let speed = body.linvel();
+        if speed.length() > CUBE_MAX_SPEED {
+          body.set_linvel(speed.normalize() * CUBE_MAX_SPEED, true);
+        }
         self.held_jump[seat] = drive.jump;
       }
 
@@ -476,19 +524,16 @@ impl Yard {
 
   /// The two fields, one per mode.
   ///
-  /// Hovering **repels**: everything within reach is pushed away, which is what
-  /// carves furrows through the field without the cube ever touching it.
+  /// Hovering **repels** everything near a point under the floor below the
+  /// player, which carves furrows through the field without the cube touching
+  /// it. The player's own lift comes from the same field in [`hover`].
   /// Rolling **attracts**, but only what it has actually run into and only
   /// weakly, so the ball grows as you plough through rather than sucking the
-  /// field in
-  /// from a distance.
+  /// field in from a distance.
   ///
-  /// **Neither mode applies a reaction to the player.** Both drive it directly,
-  /// so a force pushing back on authored motion has nothing to be conserved
-  /// against; what a gathered ball weighs lives in `LOAD_SHARE` instead.
-  /// just a fight with the spring holding it up. Applying it there pushed the
-  /// craft out of the sky and across the yard, because it is lighter than the
-  /// sum of the field it is shoving.
+  /// **Neither field pushes back on the player.** Rolling drives it directly,
+  /// so a reaction has nothing to be conserved against; what a gathered ball
+  /// weighs lives in `LOAD_SHARE` instead.
   fn apply_fields(&mut self, driving: &[Drive; MAX_PLAYERS]) {
     self.update_carried(driving);
 
@@ -515,39 +560,22 @@ impl Yard {
           let relative = body.linvel() - moving;
           // Toward its own spot on the surface, not toward the middle.
           let target = at + facing * self.hold[index];
-          (target - body.translation()) * CARRY_PULL - relative * CARRY_DAMP
+          let push = (target - body.translation()) * CARRY_PULL - relative * CARRY_DAMP;
+          if push.length() > FIELD_MAX { push.normalize() * FIELD_MAX } else { push }
         } else {
-          if distance > REPEL_RANGE {
-            continue;
+          let origin = Vec3::new(at.x, -REPEL_DEPTH, at.z);
+          match repel(body.translation() - origin) {
+            Some(push) => push,
+            None => continue,
           }
-          // Outward along the ground and a little upward, never downward.
-          let flat = Vec3::new(-delta.x, 0.0, -delta.z);
-          let outward = if flat.length() > 0.05 {
-            flat.normalize()
-          } else {
-            // Directly underneath: there is no outward, so it just gets lifted.
-            Vec3::ZERO
-          };
-          // Hardest at the centre, fading to nothing at the edge so there is no
-          // rim a cube pops across.
-          let strength = REPEL_PUSH * (1.0 - distance / REPEL_RANGE);
-          (outward + Vec3::Y * REPEL_LIFT) * strength
         };
 
-        let push = if push.length() > FIELD_MAX { push.normalize() * FIELD_MAX } else { push };
-
         // A push too weak to beat the cube's own friction is not applied to a
-        // cube that is not already moving. The field fades to nothing at its
-        // rim, so the outer band could never shift what it touched and holding
-        // those cubes awake left a halo trailing each player: 205 of 901 awake
-        // against 55 actually moving, every one of them paying a velocity on
-        // the wire to hold still.
-        //
-        // Keyed on **motion** rather than on `is_sleeping`. Gating the wake alone
-        // changes nothing, because a cube woken while the player was close
-        // keeps getting the small push as it recedes and so never gets the run
-        // of quiet ticks it needs to sleep again. A cube that is moving still
-        // gets the weak push, so the field has no sudden edge.
+        // cube that is not already moving, so it cannot hold a resting cube
+        // awake: a field that faded to nothing at its rim once left 205 of 901
+        // awake against 55 moving. Keyed on motion rather than `is_sleeping`,
+        // because a cube woken while the player was close would otherwise keep
+        // getting the weak push as it recedes and never earn its quiet ticks.
         if push.length() < FIELD_DEADBAND && body.linvel().length() < STILL {
           continue;
         }

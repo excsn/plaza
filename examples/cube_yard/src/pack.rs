@@ -63,10 +63,10 @@ const _: () = assert!(
 /// prevent elsewhere.
 #[cfg(feature = "server")]
 const PLAYER_TOP_SPEED: f32 = {
-  let fastest = if crate::sim::ROLL_SPEED > crate::sim::DRIVE_SPEED {
+  let fastest = if crate::sim::ROLL_SPEED > crate::sim::CUBE_MAX_SPEED {
     crate::sim::ROLL_SPEED
   } else {
-    crate::sim::DRIVE_SPEED
+    crate::sim::CUBE_MAX_SPEED
   };
   if fastest > crate::sim::JUMP_SPEED {
     fastest
