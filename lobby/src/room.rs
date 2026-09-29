@@ -142,7 +142,9 @@ where
     self
   }
 
-  /// Called by the room's own session as players connect and disconnect.
+  /// Sets the player count reported in [`metadata`](RoomHandle::metadata).
+  /// Nothing in plaza calls it; the application does as players connect and
+  /// disconnect.
   pub fn update_player_count_in_metadata(&self, count: u32) {
     let mut meta = self.metadata.lock();
     meta.current_players = count;
@@ -181,8 +183,8 @@ where
 
   async fn accept_authorized_player(&self, player_for_game: Agent<GameID>) -> Result<(), LobbyError> {
     // Re-check capacity: the lobby's check and this call are not atomic, so the
-    // room may have filled in between. The player count itself is maintained by
-    // the room's own session as clients actually connect.
+    // room may have filled in between. The player count is whatever the
+    // application last set through `update_player_count_in_metadata`.
     {
       let meta = self.metadata.lock();
       if meta.current_players >= meta.max_players {
@@ -219,7 +221,7 @@ where
     };
     if self.command_tx.send(cmd).await.is_err() {
       tracing::warn!(
-        "Failed to send PlayerDeparted notification to room {}: controller task may have ended.",
+        "Failed to send HandleAgentLeft to room {}: controller task may have ended.",
         self.room_id
       );
     }
