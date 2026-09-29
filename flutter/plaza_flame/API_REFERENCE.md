@@ -55,7 +55,7 @@ PlazaClient createClient()
 void onPlazaOp(Object? op)
 ```
 
-One decoded op, called once per op rather than once per frame. Read it with [`variantName`](../plaza_wire/API_REFERENCE.md#function-variantname) and [`variantBody`](../plaza_wire/API_REFERENCE.md#function-variantbody) rather than by checking for a property, or every unit variant is silently dropped.
+One decoded op, called once per op rather than once per frame. Read it with [`variantName`](../plaza_wire/API_REFERENCE.md#function-variantname) and [`variantBody`](../plaza_wire/API_REFERENCE.md#function-variantbody) rather than by checking for a property; otherwise every unit variant is silently dropped.
 
 Default is empty, so a game that reads ops elsewhere can ignore it.
 
@@ -120,7 +120,7 @@ Reports a packet to the render clock.
 | `lifecycleStateChange` | On `resumed`, resets the render clock and calls [`PlazaClient.resume`](../plaza_client/API_REFERENCE.md#method-resume). | Call `super`. |
 | `onRemove` | Cancels both subscriptions and stops the client. | Call `super.onRemove()` last. |
 
-The resume hook is why this is a mixin rather than per-app wiring: Flame routes the platform lifecycle here, so a suspended app drops whatever queued while the process was frozen and the game hears `Connected(resumed: true)` instead of replaying stale state.
+The resume hook is why this is a mixin rather than per-app wiring: Flame routes the platform lifecycle here, so a suspended app drops whatever queued while the process was frozen and the game hears `Connected(resumed: true, afterResume: true)` instead of replaying stale state.
 
 ## 4. Counters
 
@@ -149,8 +149,8 @@ Each field was added because a fault could not be seen without it.
 |---|---|
 | `status` | The client's [`PlazaStatus`](../plaza_client/API_REFERENCE.md#enum-plazastatus). |
 | `opsIn` / `opsOut` | Ops received and sent. Sent counts only what actually left, since a dropped send returns false. |
-| `reconnects` | Climbing on a still-connected session means the link is **flapping rather than down**, which looks identical from inside a game and is a different problem. |
-| `resumes` | Times the app came back from suspension. Always accompanied by a `reconnects` increment, since a resume reports as a resumed connection. |
+| `reconnects` | Counts each `Connected(resumed: true)` that follows a drop, not an app resume. Climbing on a still-connected session means the link is **flapping rather than down**, which looks identical from inside a game and is a different problem. |
+| `resumes` | Counts each `Connected(afterResume: true)`, one per app resume, whether or not the socket survived it. |
 | `framesSkipped` | Climbing means the server is ahead of this build and sending frame kinds it has never heard of. That is additive change working as intended; this counter shows it is happening. |
 | `lastDisconnectReason` | For a log line. Do not match on it. |
 
@@ -189,7 +189,7 @@ void countIn();
 void countOut(int n);
 ```
 
-Bump `opsIn` by one, or `opsOut` by `n`. Also called by the mixin.
+Bump `opsIn` by one or `opsOut` by `n`. Also called by the mixin.
 
 ## 5. The readout
 

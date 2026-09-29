@@ -61,8 +61,8 @@ mixin PlazaGame on FlameGame {
   /// checking for a property, or every unit variant is silently dropped.
   void onPlazaOp(Object? op) {}
 
-  /// Connection lifecycle. The default keeps [plazaStats] current; override and
-  /// call `super` to add to it.
+  /// Connection lifecycle. [plazaStats] is updated before this runs, so an
+  /// override does not need to call `super`.
   void onPlazaEvent(PlazaEvent event) {}
 
   @override

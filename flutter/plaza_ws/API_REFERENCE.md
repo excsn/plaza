@@ -10,13 +10,13 @@ It is separate from [`plaza_client`](../plaza_client/) so that package stays dep
 import 'package:plaza_ws/plaza_ws.dart';
 ```
 
-That entry point re-exports the whole of `plaza_client`, which in turn re-exports [`plaza_wire`](../plaza_wire/API_REFERENCE.md). Two names are its own: [`ChannelSocket`](#class-channelsocket) and [`webSocketConnect`](#function-websocketconnect).
+That entry point re-exports the whole of `plaza_client`, which in turn re-exports [`plaza_wire`](../plaza_wire/API_REFERENCE.md) except its MessagePack internals. Two names are its own: [`ChannelSocket`](#class-channelsocket) and [`webSocketConnect`](#function-websocketconnect).
 
 ## 2. Error Handling
 
 [`ChannelSocket.connect`](#static-method-connect) throws whatever `web_socket_channel` throws when a connection cannot be established, which is a `WebSocketChannelException` or a platform socket exception. That is the one place this package throws.
 
-[`PlazaClient`](../plaza_client/API_REFERENCE.md#class-plazaclient) catches it: a factory that throws produces a [`Disconnected`](../plaza_client/API_REFERENCE.md#class-disconnected) event and a scheduled retry, not an exception out of `start`.
+[`PlazaClient`](../plaza_client/API_REFERENCE.md#class-plazaclient) catches it: a factory that throws produces a [`Disconnected`](../plaza_client/API_REFERENCE.md#class-disconnected) with a null `closeCode` and a scheduled retry, not an exception out of `start`.
 
 After a socket is open, nothing throws. A client reconnects after either a stream error or a clean close, so both close [`messages`](../plaza_client/API_REFERENCE.md#property-messages) and complete [`done`](../plaza_client/API_REFERENCE.md#property-done). Sending on a closed socket is a silent no-op, because [`PlazaClient.sendOps`](../plaza_client/API_REFERENCE.md#method-sendops) has already checked [`state`](../plaza_client/API_REFERENCE.md#enum-socketstate) and returned false to its caller.
 

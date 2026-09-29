@@ -2,7 +2,7 @@
 
 ## 1. Introduction & Core Concepts
 
-`plaza_client` owns a plaza connection's life: it sends the [`Hello`](#the-handshake), carries ops both ways, reconnects with [backoff](#class-backoff) and handles the suspend and resume a mobile app meets that a browser tab does not.
+`plaza_client` owns a plaza connection's life: it sends the [`Hello`](../plaza_wire/API_REFERENCE.md#class-protocolversion) and any credential, carries ops both ways, reconnects with [backoff](#class-backoff) and handles the suspend and resume a mobile app meets that a browser tab does not.
 
 It does not define ops and it does not open sockets. The Rust side defines the op vocabulary, so ops arrive as decoded values and the application pattern-matches them. To open a socket you supply a [`SocketFactory`](#typedef-socketfactory), because choosing `dart:io` or `package:web` here would decide the consuming app's platform support.
 
@@ -18,11 +18,13 @@ Nothing here throws for a network condition. Every failure a running connection 
 
 | Condition | Reported as |
 |---|---|
-| The socket factory threw, or the socket closed | [`Disconnected`](#class-disconnected), then a retry is scheduled |
+| The socket factory threw | [`Disconnected`](#class-disconnected) with a null `closeCode`, then a retry is scheduled |
+| The socket closed | [`Disconnected`](#class-disconnected), then a retry is scheduled |
+| The socket closed with a code [`retryOn`](#constructor-arguments) declines, a 4xxx by default | [`Disconnected`](#class-disconnected) and the status goes to `closed` with no retry |
 | Retries exhausted | [`GaveUp`](#class-gaveup) and the status goes to `closed` |
 | The two ends declared different wire versions | [`Outdated`](#class-outdated) and **the connection stays open** |
 | A frame arrived with a kind byte this build does not know | [`SkippedFrame`](#class-skippedframe) and the frame is dropped |
-| An ops frame decoded to something other than a list | [`Disconnected`](#class-disconnected), naming the type that arrived |
+| An ops frame decoded to something other than a list | The frame is dropped. No event and the connection stays open. |
 | Sending while the socket is not open | [`sendOps`](#method-sendops) returns false. No queue, no throw. |
 
 A codec handed a body it cannot read still throws (`FormatException` or [`MsgPackError`](../plaza_wire/API_REFERENCE.md#class-msgpackerror)); that is a disagreement about the format rather than a network condition and it surfaces where the frame is decoded.
@@ -66,7 +68,7 @@ A plaza connection.
 
 `Stream<Object?>`. Ops as they arrive, **one event per op rather than one per frame**, because a frame carrying three ops is an implementation detail of batching.
 
-Broadcast, so several parts of an app can listen. Read each value with [`variantName`](../plaza_wire/API_REFERENCE.md#function-variantname) and [`variantFields`](../plaza_wire/API_REFERENCE.md#function-variantfields) rather than by testing for a property, or every unit variant is dropped without a trace.
+Broadcast, so several parts of an app can listen. Read each value with [`variantName`](../plaza_wire/API_REFERENCE.md#function-variantname) and [`variantFields`](../plaza_wire/API_REFERENCE.md#function-variantfields) rather than by testing for a property; otherwise every unit variant is dropped without a trace.
 
 #### Property `events`
 
@@ -100,7 +102,7 @@ Answers to the probes [`sendPing`](#method-sendping) started. Broadcast, like [`
 
 #### Property `timeline`
 
-[`Timeline`](#class-timeline). The clocks and the epoch that says which measurements still count. Plaza has no ping of its own, since the transport's heartbeat is the server measuring the client, so feed this around your own ping op.
+[`Timeline`](#class-timeline). The clocks and the epoch that says which measurements still count. [`sendPing`](#method-sendping) begins a probe on it; hand each answer from [`pongs`](#property-pongs) to [`Timeline.complete`](#method-complete).
 
 #### Property `codec`, `url`
 
@@ -112,7 +114,7 @@ The values passed to the constructor.
 Future<void> start()
 ```
 
-Opens the connection and keeps it open. Completes once the first attempt has been made, which is not the same as having connected: a failed attempt schedules a retry and completes normally, having emitted [`Disconnected`](#class-disconnected).
+Opens the connection and keeps it open. Completes once the first attempt has been made, which is not the same as having connected: a factory that throws emits [`Disconnected`](#class-disconnected), schedules a retry and `start` completes normally.
 
 #### Method `sendOps`
 
@@ -160,7 +162,7 @@ Call on `AppLifecycleState.resumed`.
 
 A suspended app has the same problem as a suspended browser tab. Whatever queued while the process was frozen is out of date, so it is dropped unread rather than played out and the connection is remade if it did not survive.
 
-Always invalidates the [`Timeline`](#method-onresume) completely. Emits `Connected(resumed: true)` either way, which is where an application should ask for a fresh snapshot rather than trying to catch up.
+Always invalidates the [`Timeline`](#method-onresume) completely. Emits `Connected(resumed: true, afterResume: true)` at once when the socket survived and otherwise once it has been remade, which is where an application should ask for a fresh snapshot rather than trying to catch up. Does nothing after [`stop`](#method-stop).
 
 #### Method `stop`
 
@@ -168,7 +170,7 @@ Always invalidates the [`Timeline`](#method-onresume) completely. Emits `Connect
 Future<void> stop()
 ```
 
-Closes the socket, cancels any pending retry and closes both streams. Terminal: a stopped client does not reconnect and `start` will not restart it.
+Closes the socket, cancels any pending retry and closes the `ops`, `pongs` and `events` streams. Terminal: a stopped client does not reconnect and `start` will not restart it.
 
 ### Enum `PlazaStatus`
 
@@ -176,7 +178,7 @@ Closes the socket, cancels any pending retry and closes both streams. Terminal: 
 enum PlazaStatus { idle, connecting, open, reconnecting, closed }
 ```
 
-`idle` before the first `start`. `connecting` on the first attempt and `reconnecting` on every later one, so the two are distinguishable in a UI. `closed` after [`stop`](#method-stop) or after [`GaveUp`](#class-gaveup).
+`idle` before the first `start`. `connecting` on the first attempt and `reconnecting` on every later one, so the two are distinguishable in a UI. `closed` after [`stop`](#method-stop), after [`GaveUp`](#class-gaveup) or after a close that [`retryOn`](#constructor-arguments) declines.
 
 ## 4. Events
 
@@ -192,14 +194,17 @@ Sealed, so a `switch` over it is exhaustive and adding a variant is a compile er
 
 ```dart
 class Connected extends PlazaEvent {
-  const Connected({required this.resumed});
+  const Connected({required this.resumed, this.afterResume = false});
   final bool resumed;
+  final bool afterResume;
 }
 ```
 
 `resumed` is whether this is a return rather than a first arrival. An application that needs a fresh snapshot after a gap asks for one here.
 
-Emitted after the `Hello` has been sent but before the server's has arrived, so [`agreed`](#property-agreed) is still true at this point.
+`afterResume` is whether this answers [`resume`](#method-resume) rather than a reconnect after a drop. False whenever `resumed` is false.
+
+Emitted after the `Hello` and any credential have been sent but before the server's `Hello` has arrived, so [`agreed`](#property-agreed) is still true at this point.
 
 ### Class `Disconnected`
 
@@ -213,7 +218,7 @@ class Disconnected extends PlazaEvent {
 }
 ```
 
-`reason` is for logs and diagnostics. Match on `closeCode` instead, which separates a server refusing this client from a link that failed: a 4xxx is deliberate (`refused`), `null` is a close with no code (a 1006-shaped drop) and is worth retrying unchanged. The code is the server's [`Goodbye`](../plaza_wire/API_REFERENCE.md#class-goodbye) where one arrived, else [`PlazaSocket.closeCode`](#property-closecode); `detail` is what the goodbye carried beside it, undecoded. Whether a retry follows is [`retryOn`](#constructor-arguments)'s to say.
+`reason` is for logs and diagnostics. Match on `closeCode` instead, which separates a server refusing this client from a link that failed: a 4xxx is deliberate (`refused`), `null` is a close with no code (a 1006-shaped drop) or a connect that failed and is worth retrying unchanged. The code is the server's [`Goodbye`](../plaza_wire/API_REFERENCE.md#class-goodbye) where one arrived, else [`PlazaSocket.closeCode`](#property-closecode); `detail` is what the goodbye carried beside it, undecoded. Whether a retry follows is [`retryOn`](#constructor-arguments)'s to say.
 
 ### Class `Outdated`
 
@@ -346,7 +351,7 @@ Starts in `SocketState.open`, so a factory is just `(_) async => socket`.
 
 #### Property `lastSent`
 
-`Object?`. The last frame, or null.
+`Object?`. The last frame or null.
 
 #### Method `deliver`
 
@@ -444,7 +449,7 @@ A **reconnect** invalidates measurements in flight but keeps what has been learn
 Probe begin(int nowMs)
 ```
 
-Starts a measurement. Send your ping op stamped with `nowMs`.
+Starts a measurement stamped with `nowMs`. [`PlazaClient.sendPing`](#method-sendping) calls this and sends the ping frame.
 
 #### Method `complete`
 

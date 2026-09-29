@@ -217,6 +217,44 @@ void main() {
       expect(events.whereType<SkippedFrame>().single.kindByte, 99);
       await client.stop();
     });
+
+    test('an ops frame that is not a list is dropped and the connection stays', () async {
+      final server = FakeServer();
+      final client = makeClient(server);
+      final events = <PlazaEvent>[];
+      final ops = <Object?>[];
+      client.events.listen(events.add);
+      client.ops.listen(ops.add);
+      await client.start();
+      server.latest.deliver(buildFrame(Kind.ops, const JsonCodec().encode({'Grab': 1})) as String);
+      await pump();
+
+      expect(ops, isEmpty);
+      expect(events.whereType<Disconnected>(), isEmpty);
+      expect(client.status, PlazaStatus.open);
+      server.latest.deliver(opsFrame(['Reroll']));
+      await pump();
+      expect(ops, ['Reroll']);
+      await client.stop();
+    });
+
+    test('an answered probe arrives as a Pong', () async {
+      final server = FakeServer();
+      final client = makeClient(server);
+      final pongs = <Pong>[];
+      client.pongs.listen(pongs.add);
+      await client.start();
+      final probe = client.sendPing(100)!;
+      server.latest.deliver(buildFrame(
+        Kind.pong,
+        const JsonCodec().encode(<String, Object?>{'origin': probe.sentAtMs, 'responder': 7.5}),
+      ));
+      await pump();
+
+      expect(pongs.single.origin, 100);
+      expect(pongs.single.responderMs, 7.5);
+      await client.stop();
+    });
   });
 
   group('reconnect', () {
@@ -234,6 +272,7 @@ void main() {
       expect(events.whereType<Disconnected>(), isNotEmpty);
       expect(server.connections, 2, reason: 'it reconnected');
       expect(events.whereType<Connected>().last.resumed, isTrue);
+      expect(events.whereType<Connected>().last.afterResume, isFalse);
       await client.stop();
     });
 
@@ -319,6 +358,21 @@ void main() {
       await client.stop();
     });
 
+    test('a failing connect is reported as a disconnect with no code', () async {
+      final server = FakeServer()..failNext = 1;
+      final client = makeClient(server);
+      final events = <PlazaEvent>[];
+      client.events.listen(events.add);
+      await client.start();
+      await pump(const Duration(milliseconds: 60));
+
+      final failed = events.first as Disconnected;
+      expect(failed.reason, contains('connect failed'));
+      expect(failed.closeCode, isNull);
+      expect(events.last, isA<Connected>());
+      await client.stop();
+    });
+
     test('retries stop at the limit and say so', () async {
       final server = FakeServer()..failNext = 99;
       final client = makeClient(
@@ -367,6 +421,7 @@ void main() {
 
       expect(server.connections, 1, reason: 'no reconnect was needed');
       expect(events.whereType<Connected>().last.resumed, isTrue);
+      expect(events.whereType<Connected>().last.afterResume, isTrue);
       await client.stop();
     });
 
@@ -385,9 +440,12 @@ void main() {
       await pump();
       expect(server.connections, 1, reason: 'the backoff is far too long to have fired');
 
+      final events = <PlazaEvent>[];
+      client.events.listen(events.add);
       await client.resume();
       await pump();
       expect(server.connections, 2, reason: 'resume does not wait out the backoff');
+      expect(events.whereType<Connected>().single.afterResume, isTrue);
       await client.stop();
     });
   });

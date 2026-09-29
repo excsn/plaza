@@ -16,7 +16,7 @@ dependencies:
     path: ../plaza_wire
 ```
 
-Pure Dart with no dependencies, so it builds for web, mobile, desktop and the VM alike. If you are using [`plaza_client`](../plaza_client/), it re-exports everything here and you do not need this entry separately.
+Pure Dart with no dependencies, so it builds for web, mobile, desktop and the VM alike. If you are using [`plaza_client`](../plaza_client/), it re-exports everything here except `asBytes`, `MsgPackError`, `msgPackEncode` and `msgPackDecode` and you do not need this entry separately.
 
 ## The frame
 
@@ -34,6 +34,10 @@ switch (frame.kind) {
     final ops = codec.decode(frame.body) as List<Object?>;
   case Kind.hello:
     final theirs = ProtocolVersion(codec.decode(frame.body) as int);
+  case Kind.goodbye:
+    final why = Goodbye.fromDecoded(codec.decode(frame.body));
+  case Kind.ping || Kind.pong || Kind.credential:
+    return;
   case null:
     return;                                // a kind this build has never heard of
 }
@@ -61,7 +65,7 @@ client.sendOp(variant('Join', {'room': 3}));
 
 Pass `null` fields for a unit variant: one sent as `{"LeaveQueue": {}}` fails to deserialize on the Rust side.
 
-**Plaza's MessagePack is the compact one.** `MsgPackCodec` on the Rust side calls `rmp_serde::to_vec`, which encodes a struct as an **array of its fields in declaration order**. So `Move { x, y }` arrives as `{"Move": [-7, 300]}`, not `{"Move": {"x": -7, "y": 300}}`. Decoding depends on field order and the protocol version guards it: it hashes the type definitions, so a reorder changes the version and the handshake reports it before a single op is mis-decoded. A server built with `with_struct_map()` sends names instead; [`msgPackDecode`](API_REFERENCE.md#function-msgpackdecode) reads either shape and your own types have to match.
+**Plaza's MessagePack is the compact one.** `MsgPackCodec` on the Rust side calls `rmp_serde::to_vec`, which encodes a struct as an **array of its fields in declaration order**. So `Move { x, y }` arrives as `{"Move": [-7, 300]}`, not `{"Move": {"x": -7, "y": 300}}`. Decoding depends on field order and the protocol version guards it: it hashes the type definitions, so a reorder changes the version and the handshake reports it before a single op is mis-decoded. A server on `MsgPackNamedCodec` sends names instead; [`msgPackDecode`](API_REFERENCE.md#function-msgpackdecode) reads either shape and your own types have to match.
 
 ## Choosing a codec
 
@@ -71,7 +75,7 @@ Pass `null` fields for a unit variant: one sent as `{"LeaveQueue": {}}` fails to
 
 ## The protocol version
 
-The Rust side derives its version by hashing the source files that define the wire types, from a `build.rs`. A Dart client cannot hash Rust sources, so it is handed the constant instead: the Rust build script publishes it and your client declares it.
+The Rust side derives its version by hashing the source files that define the wire types, from a `build.rs`. A Dart client cannot hash Rust sources, so it is handed the constant instead: the server's build script writes it into a Dart file with `plaza_wire::build::emit_dart` and your client declares it.
 
 ```dart
 const protocol = ProtocolVersion(3152889444);

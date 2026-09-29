@@ -9,7 +9,7 @@ import 'wire_protocol.dart';
 /// A Flame client for `examples/parlour_game`.
 ///
 /// ```sh
-/// cargo run -p plaza_example_parlour_game     # in the plaza repo
+/// cargo run -p plaza_example_parlour_game     # in plaza/examples
 /// flutter run -d macos                        # here
 /// ```
 void main() {

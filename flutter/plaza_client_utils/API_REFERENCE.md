@@ -2,13 +2,13 @@
 
 ## 1. Introduction & Core Concepts
 
-The whole of the Rust `plaza_client_utils` crate, ported. Nothing here knows about a transport, a codec or a session; these are the pieces a real-time client assembles between the socket and the screen.
+Most of the Rust `plaza_client_utils` crate, ported, plus [`RenderTimeline`](#class-rendertimeline), [`TickNamer`](#class-ticknamer) and [`OpSequencer`](#class-opsequencer), which have no Rust counterpart. Not ported: `Silence`, `XorShift`, `ValueNoise`, the `fixed` module, `HermiteView`, `RateMeter`, `RoutePredictor`, `AdaptiveDecay` and `StateDigest`. The Rust crate's `Timeline` and `Probe` are in [`plaza_client`](../plaza_client/API_REFERENCE.md#class-timeline). Nothing here knows about a transport, a codec or a session; these are the pieces a real-time client assembles between the socket and the screen.
 
 The Rust crate stays authoritative. Where Dart forced a decision the Rust source did not have to make, the entry below says so.
 
 ```dart
 import 'package:plaza_client_utils/plaza_client_utils.dart';
-import 'package:plaza_client_utils/net_sim.dart';   // separate, see section 12
+import 'package:plaza_client_utils/net_sim.dart';   // separate, see section 15
 ```
 
 For the guidance that decides *which* of these to use ([the four principles](README.md#four-principles), [which predictor](README.md#which-predictor), [drawing an entity you do not control](README.md#drawing-an-entity-you-do-not-control), [the resume contract](README.md#the-resume-contract)), see the [README](README.md). This file is the surface.
@@ -172,7 +172,7 @@ Holds the interpolate, extrapolate or hold choice internally and returns the rig
 | Member | Notes |
 |---|---|
 | `void push(int timeMs, S state, V velocity)` | Records a sample. The velocity is kept beside it for extrapolation. |
-| `S? render(int? target, [RenderOpts opts])` | What to draw, or null before the first sample. A null `target` gives the newest sample. |
+| `S? render(int? target, [RenderOpts opts])` | What to draw or null before the first sample. A null `target` gives the newest sample. |
 | `S? get latest`, `V? get latestVelocity`, `int? get latestTimestamp` | |
 | `int? get oldestTimestamp`, `int get length`, `bool get isEmpty` | |
 | `void clear()` | |
@@ -268,7 +268,7 @@ The estimate **free-runs** on `advance` rather than snapping on every packet, so
 | `void resync(int newestServerTimeMs, double strength)` | Steers the *position* toward the newest server time by `strength` in 0 to 1. Call in place of `observe` on each packet. |
 | `void observeRate(int newestServerTimeMs, double maxRateAdjust)` | The rate-based alternative: adjusts the estimate's *speed* so it glides into alignment rather than jumping. Behind the newest, run slightly fast; ahead of it, which means interpolation is starving, run slightly slow. Pair with `advanceScaled`. |
 | `void advanceScaled(int dtMs)` | Advances scaled by the playback rate. Identical to `advance` while the rate is 1. |
-| `double get playbackRate` | 1 is real time. For a readout, or to spot a clock under sustained correction. |
+| `double get playbackRate` | 1 is real time. For a readout or to spot a clock under sustained correction. |
 | `void reset()` | Un-starts the clock, keeping the delay. Not in the Rust original, which rebuilds the value; Dart callers hold this behind a `final` field and a resume needs the estimate thrown away without the holder being rebuilt. |
 
 ### Class `SnapshotBuffer`
@@ -580,7 +580,7 @@ A newest sequence plus a bitmask of the ones before it, the shape every reliable
 
 | Member | Notes |
 |---|---|
-| `(int, int)? encode()` | The pair to put on the wire, or null if nothing has arrived. |
+| `(int, int)? encode()` | The pair to put on the wire or null if nothing has arrived. |
 | `bool observe(int seq)` | Records an arrival, returning whether it was new. Handles reordering: a straggler arriving after a newer packet lands in its own slot rather than being taken for the new newest. |
 | `int? get newest`, `int get mask` | Bit `i` is `newest - 1 - i`. |
 | `bool contains(int seq)` | Anything outside the window is false, including sequences newer than the newest seen. |
@@ -598,7 +598,7 @@ The newest sequence such that **everything** from `first` up to it arrived.
 
 This can differ from `newest`. A protocol that **retransmits** wants the mask. One that **re-derives** wants a state the peer provably reached and receiving N+1 after losing N does not put a peer in the state N+1 implies: whatever N announced and N+1 had no reason to repeat is gone. Taking the newest set bit hands the sender a state that never existed and the resulting divergence is permanent and close to invisible. When measured, using the newest set bit made loss recovery statistically indistinguishable from no recovery at every loss rate.
 
-Null when the run is empty, covering two cases a caller treats alike: `first` did not arrive, or it is older than the window can speak about. Neither is a reason to move the frontier backwards.
+Null when the run is empty, covering two cases a caller treats alike: `first` did not arrive or it is older than the window can speak about. Neither is a reason to move the frontier backwards.
 
 ### Class `SetDigest`
 
@@ -668,7 +668,7 @@ Hands out [`SlotKey`](#class-slotkey)s over a dense index space, recycling freed
 | `bool isLive(SlotKey key)`, `bool isOccupied(int index)` | |
 | `SlotKey? keyAt(int index)` | How a bare index becomes a handle that can go on the wire. |
 | `Iterable<SlotKey> get keys` | Every live key, in index order. |
-| `int get length` | Live count. |
+| `int get length`, `bool get isEmpty` | Live count. |
 | `int get indexSpace` | How many indices exist, live or free. **Size a list by this, not by `length`.** |
 | `void clear()` | Bumps each live generation so outstanding handles are invalidated rather than silently matching a rebuilt world. Keeps the index space. |
 | `ReusePolicy policy` (get/set) | Neither is more correct. Prefer `lifo` unless something downstream cares about clustering and if it does, measure rather than assume. |
@@ -821,7 +821,7 @@ Turns real elapsed time into a whole number of fixed simulation steps. Engine-ag
 
 `fromHz` is exact to the nanosecond, the same value the Rust side's `FixedTimestep::from_hz` and `plaza::TickDriver::from_hz` compute: 60Hz is a step of 16666667ns on every side, pinned across the languages by the `fixed_timestep_hz` golden vector. Internals are integer nanoseconds, so no float error accumulates.
 
-`defaultMaxFrameMs` is a quarter of a second, or fifteen steps at 60Hz: enough that an ordinary hitch is caught up smoothly, small enough that a resumed tab skips ahead instead of grinding through the minutes it was asleep.
+`defaultMaxFrameMs` is a quarter of a second (fifteen steps at 60Hz): enough that an ordinary hitch is caught up smoothly, small enough that a resumed tab skips ahead instead of grinding through the minutes it was asleep.
 
 | Member | Notes |
 |---|---|
@@ -887,6 +887,9 @@ sealed class Hold {
   const factory Hold.seconds(double seconds);
   factory Hold.until(Future<void> future);
 }
+class HoldNone extends Hold {}
+class HoldSeconds extends Hold { final double seconds; }
+class HoldUntil extends Hold { final Future<void> future; }
 ```
 
 What the applier asks once it has applied an op. `Hold.seconds` counts down on the frame's `dt`, lands on a frame boundary and carries its remainder into the next hold, so a run of holds keeps time. `Hold.until` is released on the first pump after the future completes or fails, which costs about half a frame per op and carries nothing. Use seconds when the length is known and a future only when it is not, such as an overlay with its own timer.
@@ -934,6 +937,7 @@ Each peer runs its own session and calls its local player index the "local" one;
 | `bool isFrameConfirmed(Frame frame)` | Whether every player's input is confirmed. A delay-based peer waits for this; a rollback peer ignores it and predicts. This only reports. |
 | `Frame? confirmedFrame(int player)` | |
 | `Frame get currentFrame`, `int get numPlayers` | |
+| `int get predictionHorizon` | How many frames the present runs ahead of the least-confirmed player: the depth of prediction currently exposed to a rollback. Zero when every input is known up to the last simulated frame. |
 | `bool rollbackEnabled` (get/set) | With it off the session still predicts and advances but never restores or re-simulates. Not a way to ship, since predictions never corrected drift a peer out of sync, but it shows what rollback contributes and it is the mechanism a delay-based front end disables. |
 | `int get lastRollbackFrames` | Frames re-simulated by the most recent `advanceFrame`, zero if it did not roll back. |
 | `int get maxRollbackFrames`, `int get rollbackCount` | |
@@ -964,7 +968,7 @@ A frame-indexed ring of whole-world state snapshots. Only the most recent `capac
 
 | Member | Notes |
 |---|---|
-| `void save(Frame frame, S state)` | Intended use is contiguous: append `frame == latest + 1`, or overwrite a frame already inside the window (re-simulation does this). A save that skips ahead of the window **resets** it, so the buffer never holds a gap. |
+| `void save(Frame frame, S state)` | Intended use is contiguous: append `frame == latest + 1` or overwrite a frame already inside the window (re-simulation does this). A save that skips ahead of the window **resets** it, so the buffer never holds a gap. |
 | `S? restore(Frame frame)` | Null if evicted or never saved. |
 | `Frame? get oldestFrame`, `Frame? get latestFrame` | |
 | `int get length`, `bool get isEmpty`, `void clear()` | |
@@ -1046,6 +1050,7 @@ double dot(Quat other);
 Quat normalize();
 Quat slerp(Quat end, double t);   // spherical, taking the shorter arc
 Quat multiply(Quat rhs);          // Hamilton product: composes two rotations
+Quat extrapolate(Quat angularVelocityAsDeltaQuatPerSec, double dtSecs);
 ```
 
 `slerp` negates the target when the dot product is negative, so it always takes the shorter arc and falls back to normalised linear interpolation above a dot of 0.9995 where the two are indistinguishable and the trigonometric form loses precision.
@@ -1063,7 +1068,7 @@ import 'package:plaza_client_utils/net_sim.dart';
 ```dart
 class LatencyLink<T> {
   LatencyLink({PacketOrdering ordering = PacketOrdering.ordered});
-  PacketOrdering ordering;
+  final PacketOrdering ordering;
 }
 ```
 
@@ -1071,9 +1076,10 @@ A one-way time-ordered delay queue.
 
 | Member | Notes |
 |---|---|
-| `void send(...)` | Hands a packet to the wire. It may be delayed by the latency plus up to the jitter, or dropped with probability `lossPct / 100`. |
+| `void send(int nowMs, T packet, {required int latencyMs, int jitterMs = 0, double lossPct = 0.0, required Rng rng})` | Hands a packet to the wire. It may be delayed by `latencyMs` plus up to `jitterMs` or dropped with probability `lossPct / 100`. |
 | `List<T> drainDue(int nowMs)` | Every packet whose delivery time has arrived, oldest delivery first. |
 | `void enqueueAt(int deliverAtMs, T packet)` | Bypasses latency, jitter and loss. For tests that need a specific arrival order. |
+| `int get inFlight` | Packets queued and not yet drained. |
 
 ### Enum `PacketOrdering`
 

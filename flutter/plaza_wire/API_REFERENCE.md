@@ -20,11 +20,11 @@ There is no package-wide error type. Three things throw:
 
 | Thrown | By | When |
 |---|---|---|
-| `FormatException` | [`JsonCodec.decode`](#method-decode), [`MsgPackCodec.decode`](#method-decode-1) | The body is not a shape this codec accepts. `MsgPackCodec` says so specifically when handed a text frame, because that means the server is probably speaking JSON. |
-| [`MsgPackError`](#class-msgpackerror) | [`msgPackEncode`](#function-msgpackencode), [`msgPackDecode`](#function-msgpackdecode) | Malformed bytes, a truncated buffer, trailing bytes after a complete value, or a Dart value with no MessagePack representation. |
+| `FormatException` | [`JsonCodec.decode`](#class-jsoncodec), [`MsgPackCodec.decode`](#class-msgpackcodec) | The body is not a shape this codec accepts. `MsgPackCodec` says so specifically when handed a text frame, because that means the server is probably speaking JSON. |
+| [`MsgPackError`](#class-msgpackerror) | [`msgPackEncode`](#function-msgpackencode), [`msgPackDecode`](#function-msgpackdecode) | Malformed bytes, a truncated buffer, trailing bytes after a complete value or a Dart value with no MessagePack representation. |
 | `ArgumentError` | [`buildFrame`](#function-buildframe), [`asBytes`](#function-asbytes) | A body that is neither a `String` nor a `List<int>`. This is a programming error rather than a wire condition. |
 
-Two things deliberately do **not** throw. [`splitFrame`](#function-splitframe) returns null for an empty or unrecognised message and [`Kind.fromByte`](#static-method-fromByte) returns null for a tag this build does not know. Both are conditions a running client meets in normal operation and both mean *skip this frame*.
+Two things deliberately do **not** throw. [`splitFrame`](#function-splitframe) returns null for an empty or unrecognised message and [`Kind.fromByte`](#static-method-frombyte) returns null for a tag this build does not know. Both are conditions a running client meets in normal operation and both mean *skip this frame*.
 
 ## 3. Framing
 
@@ -55,7 +55,7 @@ What a frame carries. Pinned to `plaza_wire::frame::Kind` on the Rust side, so *
 static Kind? fromByte(int byte)
 ```
 
-The kind for `byte`, or **null if this build has never heard of it**.
+The kind for `byte` or **null if this build has never heard of it**.
 
 Null means skip the frame rather than fail the connection. A server speaking a newer protocol may send kinds this client does not know and refusing them turns every additive change into a break. The rule exists from the start because it cannot be added later: a client already deployed cannot learn to tolerate a new frame kind.
 
@@ -100,7 +100,7 @@ A received frame split into its tag and its body.
 
 #### Property `kind`
 
-`Kind?`. [`Kind.fromByte(kindByte)`](#static-method-fromByte). Null for a tag this build does not know.
+`Kind?`. [`Kind.fromByte(kindByte)`](#static-method-frombyte). Null for a tag this build does not know.
 
 ### Function `splitFrame`
 
@@ -135,7 +135,7 @@ class ProtocolVersion {
 
 What a peer says it speaks, sent as the body of a [`Kind.hello`](#enum-kind) frame.
 
-The Dart side never computes this. The Rust side derives it by hashing the type definitions that make up the wire format, from a `build.rs` calling `plaza_wire::build::emit`. A Dart client cannot hash Rust sources, so the constant is published by that build and declared here.
+The Dart side never computes this. The Rust side derives it by hashing the type definitions that make up the wire format, from a `build.rs` calling `plaza_wire::build::emit`. A Dart client cannot hash Rust sources, so `plaza_wire::build::emit_dart` writes the same constant into a Dart file and the client declares it.
 
 Value equality, so two versions compare with `==` and work as map keys.
 
@@ -273,7 +273,7 @@ Null for anything that is not an externally tagged enum value.
 Map<String, Object?> variantFields(Object? value)
 ```
 
-The payload as a map, or an empty map. The common case: a struct variant whose fields you want by name.
+The payload as a map or an empty map. The common case: a struct variant whose fields you want by name.
 
 Returns empty rather than throwing when the payload is a list, which is what compact MessagePack produces. If you are on that codec, read [`variantBody`](#function-variantbody) as a list and index by declaration order.
 
@@ -341,4 +341,4 @@ class MsgPackError implements Exception {
 }
 ```
 
-Malformed bytes, a truncated buffer, trailing bytes, or an unencodable value.
+Malformed bytes, a truncated buffer, trailing bytes or an unencodable value.

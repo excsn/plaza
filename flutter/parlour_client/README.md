@@ -5,7 +5,7 @@ A Flame client for [`examples/parlour_game`](../../examples/parlour_game/): **tw
 The other Flame example, [`plaza_flame/example`](../plaza_flame/example/), stops at the lobby: it drives `lobby_world`, holds one JSON socket and is about the version-skew policy. This one takes the endpoint the lobby hands out, opens a **second** connection to it on a **different codec** and plays a turn-based game across both.
 
 ```sh
-cargo run -p plaza_example_parlour_game    # in the plaza repo, port 8092
+cargo run -p plaza_example_parlour_game    # in plaza/examples, port 8092
 flutter run -d macos                       # here
 flutter test                               # against LoopbackSocket, no server
 flutter test --tags e2e                    # against the live server

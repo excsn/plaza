@@ -14,7 +14,7 @@ dependencies:
     path: ../plaza_client
 ```
 
-It re-exports everything from [`plaza_wire`](../plaza_wire/) plus `RttEstimator` and `ClockSyncEstimator`, so one import covers a turn-based client. For a real socket, add [`plaza_ws`](../plaza_ws/), which re-exports this in turn.
+It re-exports [`plaza_wire`](../plaza_wire/) except its MessagePack internals, plus `RttEstimator` and `ClockSyncEstimator`, so one import covers a turn-based client. For a real socket, add [`plaza_ws`](../plaza_ws/), which re-exports this in turn.
 
 ## Usage
 
@@ -49,7 +49,7 @@ client.sendOp(variant('Join', {'room': 3}));
 
 `connect` is a [`SocketFactory`](API_REFERENCE.md#typedef-socketfactory) you supply and it is called again on every reconnect. [`plaza_ws`](../plaza_ws/) is the usual answer; [`LoopbackSocket`](API_REFERENCE.md#class-loopbacksocket) covers tests with no server and no network.
 
-Ops arrive as decoded values, not as typed objects. Read them with `variantName` and `variantFields` rather than by checking for a property, or every unit variant is silently dropped.
+Ops arrive as decoded values, not as typed objects. Read them with `variantName` and `variantFields` rather than by checking for a property; otherwise every unit variant is silently dropped.
 
 ## Streams
 
@@ -67,14 +67,14 @@ A **reconnect** changed the socket, probably not the link. Measurements in fligh
 
 A **resume** discards both. Arbitrary wall time passed, so a least-squares clock fit across a ten-minute gap produces a meaningless skew and a ping sent before a suspend and answered after it measures the suspend rather than the network. One such sample skews a smoothed estimator for minutes.
 
-Call [`resume`](API_REFERENCE.md#method-resume) on `AppLifecycleState.resumed`. Whatever queued while the process was frozen is out of date, so it is dropped unread rather than played out and the application hears about it as `Connected(resumed: true)`, which is where it should ask for a fresh snapshot instead of trying to catch up.
+Call [`resume`](API_REFERENCE.md#method-resume) on `AppLifecycleState.resumed`. Whatever queued while the process was frozen is out of date, so it is dropped unread rather than played out and the application hears about it as `Connected(resumed: true, afterResume: true)`, which is where it should ask for a fresh snapshot instead of trying to catch up.
 
 ## Measuring the link
 
 A client that wants its own round trip sends a `Kind.ping` frame, which the server's session answers by itself: the reply echoes the stamp back unread and carries the server's clock, if one is installed there.
 
 ```dart
-final probe = client.sendPing(nowMs);
+final probe = client.sendPing(nowMs());
 client.pongs.listen((pong) {
   if (probe != null) client.timeline.complete(probe, nowMs(), serverTimeMs: pong.responderMs);
 });

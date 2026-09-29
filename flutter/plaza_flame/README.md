@@ -44,7 +44,7 @@ class MyGame extends FlameGame with PlazaGame {
 
 ## Resume
 
-Flame routes the platform lifecycle to `lifecycleStateChange` and the mixin overrides it. On `AppLifecycleState.resumed` it resets the render clock and calls [`PlazaClient.resume`](../plaza_client/API_REFERENCE.md#method-resume): whatever queued while the process was frozen is dropped unread and the game hears `Connected(resumed: true)`, which is where it should ask for fresh state rather than replaying stale state.
+Flame routes the platform lifecycle to `lifecycleStateChange` and the mixin overrides it. On `AppLifecycleState.resumed` it resets the render clock and calls [`PlazaClient.resume`](../plaza_client/API_REFERENCE.md#method-resume): whatever queued while the process was frozen is dropped unread and the game hears `Connected(resumed: true, afterResume: true)`, which is where it should ask for fresh state rather than replaying stale state.
 
 This hook lets the library handle resume instead of each app doing it. Override `lifecycleStateChange` and call `super` if you need more.
 

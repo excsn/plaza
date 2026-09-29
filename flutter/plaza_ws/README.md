@@ -14,7 +14,7 @@ dependencies:
     path: ../plaza_ws
 ```
 
-It re-exports the whole of [`plaza_client`](../plaza_client/), which re-exports [`plaza_wire`](../plaza_wire/), so this is the only import a client needs.
+It re-exports the whole of [`plaza_client`](../plaza_client/), which re-exports [`plaza_wire`](../plaza_wire/) except its MessagePack internals, so this is the only import a client needs.
 
 ## Usage
 

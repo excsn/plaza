@@ -135,6 +135,25 @@ void main() {
     game.onRemove();
   });
 
+  test('a reconnect after a drop and an app resume are counted apart', () async {
+    final server = _Server();
+    final game = _TestGame(server);
+    await game.onLoad();
+    await pump();
+
+    server.latest.dropFromServer();
+    await pump(30);
+    expect(server.connections, 2);
+    expect(game.plazaStats.reconnects, 1);
+    expect(game.plazaStats.resumes, 0);
+
+    game.lifecycleStateChange(AppLifecycleState.resumed);
+    await pump();
+    expect(game.plazaStats.reconnects, 1);
+    expect(game.plazaStats.resumes, 1);
+    game.onRemove();
+  });
+
   test('an unknown frame kind is counted, not fatal', () async {
     final server = _Server();
     final game = _TestGame(server);
@@ -171,6 +190,9 @@ void main() {
       stats.apply(const Connected(resumed: false), PlazaStatus.open);
       expect(stats.reconnects, 0);
       stats.apply(const Connected(resumed: true), PlazaStatus.open);
+      expect(stats.reconnects, 1);
+      expect(stats.resumes, 0);
+      stats.apply(const Connected(resumed: true, afterResume: true), PlazaStatus.open);
       expect(stats.reconnects, 1);
       expect(stats.resumes, 1);
     });

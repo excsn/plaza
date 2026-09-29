@@ -37,7 +37,8 @@ class Timeline {
   int _epoch = 0;
   int get epoch => _epoch;
 
-  /// Starts a measurement. Send your ping op stamped with [nowMs].
+  /// Starts a measurement stamped with [nowMs]. `PlazaClient.sendPing` calls
+  /// this and sends the ping frame.
   Probe begin(int nowMs) => Probe(_epoch, nowMs);
 
   /// Records a completed exchange. Returns false if the probe was discarded.

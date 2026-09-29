@@ -28,4 +28,4 @@ export 'src/backoff.dart' show Backoff;
 export 'src/client.dart'
     show Connected, Disconnected, GaveUp, Outdated, PlazaClient, PlazaEvent, PlazaStatus, SkippedFrame;
 export 'src/socket.dart' show LoopbackSocket, PlazaSocket, SocketFactory, SocketState;
-export 'src/timeline.dart' show Probe, Timeline;
+export 'src/timeline.dart' show Pong, Probe, Timeline;

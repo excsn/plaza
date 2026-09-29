@@ -44,10 +44,11 @@ class PlazaStats extends ChangeNotifier {
   void apply(PlazaEvent event, PlazaStatus current) {
     status = current;
     switch (event) {
-      case Connected(:final resumed):
-        if (resumed) {
-          reconnects++;
+      case Connected(:final resumed, :final afterResume):
+        if (afterResume) {
           resumes++;
+        } else if (resumed) {
+          reconnects++;
         }
       case Disconnected(:final reason):
         lastDisconnectReason = reason;

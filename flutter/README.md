@@ -6,15 +6,15 @@ Dart packages so a Flutter app consumes plaza the way a Rust client does. **The 
 |---|---|---|
 | [`plaza_wire`](plaza_wire/) | Framing, protocol version, codecs and the serde enum shapes. Pure Dart, no dependencies. | nothing |
 | [`plaza_client`](plaza_client/) | Session lifecycle: handshake, ops, reconnect, resume and the clocks a resume refits. Pure Dart, transport-agnostic. | `plaza_wire`, `plaza_client_utils` |
-| [`plaza_client_utils`](plaza_client_utils/) | Real-time primitives: the whole Rust crate, ported. Pure Dart, no dependencies. | nothing |
-| [`plaza_ws`](plaza_ws/) | A WebSocket transport, over `web_socket_channel`. Kept apart so `plaza_client` stays dependency-free. | `plaza_client` |
-| [`plaza_flame`](plaza_flame/) | Flame glue: a game mixin that owns the connection, plus a drop-in debug readout. | `plaza_client`, `flame` |
+| [`plaza_client_utils`](plaza_client_utils/) | Real-time primitives: most of the Rust crate, ported. Pure Dart, no dependencies. | nothing |
+| [`plaza_ws`](plaza_ws/) | A WebSocket transport, over `web_socket_channel`. Kept apart so `plaza_client` stays dependency-free. | `plaza_client`, `web_socket_channel` |
+| [`plaza_flame`](plaza_flame/) | Flame glue: a game mixin that owns the connection, plus a drop-in debug readout. | `plaza_client`, `plaza_client_utils`, `flame` |
 | [`parlour_client`](parlour_client/) | A Flame client for `examples/parlour_game`: two sockets with separate lifetimes, on two different codecs and a turn-based table that animates between state changes. | `plaza_flame`, `plaza_ws` |
 | [`fixtures/`](fixtures/) | Golden wire bytes and golden behaviour vectors, written by Rust tests and replayed by Dart ones. | generated |
 
 A turn-based app needs `plaza_wire` and `plaza_client`. A Flame game adds `plaza_ws` and `plaza_flame`. Each package carries its own `README.md` and `API_REFERENCE.md`.
 
-`plaza_client_utils` is the whole Rust crate: the estimators (`RttEstimator`, `ClockSyncEstimator`, `ArrivalMonitor`, `ScalarKalman`, `CorrectionMonitor`), the timing (`InterpolationClock`, `SnapshotBuffer`, `ExtrapolationBase`, `TrajectoryPredictor`, `FixedTimestep`, `PlayoutBuffer`, `RenderTimeline`), the prediction family (`PredictedEntity`, `ClientInputBuffer`, `PredictedPlayer`, `HeldInputPredictor`, `RemoteView`, `ErrorSmoother`), the bookkeeping (`SetDigest`, `DeltaMirror`, `SlotAllocator`, `AckWindow`, `InputCoalescer`, `TickNamer`), the rollback family (`RollbackSession`, `StateHistory`, `InputTimeline`) and the optional `Vec2`/`Vec3`/`Quat`.
+`plaza_client_utils` ports most of the Rust crate: the estimators (`RttEstimator`, `ClockSyncEstimator`, `ArrivalMonitor`, `ScalarKalman`, `CorrectionMonitor`), the timing (`InterpolationClock`, `SnapshotBuffer`, `ExtrapolationBase`, `TrajectoryPredictor`, `FixedTimestep`, `PlayoutBuffer`, `RenderTimeline`), the prediction family (`PredictedEntity`, `ClientInputBuffer`, `PredictedPlayer`, `HeldInputPredictor`, `RemoteView`, `ErrorSmoother`), the bookkeeping (`SetDigest`, `DeltaMirror`, `SlotAllocator`, `AckWindow`, `InputCoalescer`, `TickNamer`), the rollback family (`RollbackSession`, `StateHistory`, `InputTimeline`), `OpSequencer` for pacing a turn-based client's ops and the optional `Vec2`/`Vec3`/`Quat`. Its API reference lists the Rust types it does not port.
 
 The deterministic network simulator is a separate entry point, `package:plaza_client_utils/net_sim.dart`, matching the Rust crate's `net-sim` feature gate: it is a test and demo aid and an app should not pull it in by accident. Its `Rng` is the same xorshift64 with the same seeding, so a scenario scripted in Rust and one scripted in Dart make the same jitter and loss decisions.
 
@@ -22,7 +22,7 @@ Each port carries its Rust unit tests transliterated, same names and tolerances,
 
 ```sh
 ./check.sh    # every package, conformance included
-./e2e.sh      # starts lobby_world, runs the live suite, then the example against it
+./e2e.sh      # starts lobby_world and parlour_game, runs the live suites and the example
 ```
 
 ## The examples
@@ -46,22 +46,24 @@ dart run example/lobby_client.dart --protocol 1   # declares a wrong version
 
 In the skewed run the ops keep arriving after the warning. That is intended: plaza records the disagreement and keeps serving and the client decides to stop.
 
-[`parlour_client/`](parlour_client/) is the two-socket one, against `examples/parlour_game`. Both of the above hold exactly one connection and `Placed` is where they stop: the lobby names a room endpoint and neither of them dials it. This one does, on a **different codec** (the lobby is JSON, a table is named MessagePack) and plays a turn-based game across both.
+[`parlour_client/`](parlour_client/) is the two-socket one, against `examples/parlour_game`. Both of the above hold exactly one connection and `Placed` is where they stop: the lobby names a room endpoint and neither of them dials it. This one does, on a **different codec** (the lobby is JSON, a table is compact MessagePack) and plays a turn-based game across both.
 
 It handles two things a second socket needs. The lobby connection **stays open** after placement, because the server reads a closed lobby socket as the player giving up and withdraws the seat it just issued. And ops are **paced rather than applied**: a snapshot arrives on a deal and a resolved trick and nothing in between, so a client that applies the narration as fast as it arrives shows a hand that has already been played.
 
-`e2e.sh` stands `examples/parlour_game` up alongside `lobby_world` and runs this one's live suite against it, which is the only place named MessagePack written by `rmp_serde` is read by Dart over a real wire.
+`e2e.sh` stands `examples/parlour_game` up alongside `lobby_world` and runs this one's live suite against it, which is the only place compact MessagePack written by `rmp_serde` is read by Dart over a real wire.
 
 ## Measuring the link
 
-Plaza has no client-side ping. The transport's heartbeat is the *server* measuring the client, so a Dart client that wants its own round trip sends its own op and reports the result:
+A Dart client that wants its own round trip sends a `Kind.ping` frame, which the server's session answers by itself with the stamp echoed back and its own clock, if one is installed:
 
 ```dart
-final probe = client.timeline.begin(nowMs);
-client.sendOp(variant('Ping', {'t': probe.sentAtMs}));
-// on the reply:
-client.timeline.complete(probe, nowMs, serverTimeMs: reply['serverTime']);
+final probe = client.sendPing(nowMs());
+client.pongs.listen((pong) {
+  if (probe != null) client.timeline.complete(probe, nowMs(), serverTimeMs: pong.responderMs);
+});
 ```
+
+The client also answers the server's pings by itself, so the server measures the link without the application doing anything.
 
 `complete` returns false when the probe is discarded. A ping sent before the app was suspended and answered after it measures the suspend rather than the network and one such sample skews a smoothed estimator for minutes. The epoch moves on a resume and on a reconnect, so anything in flight across either is dropped.
 
@@ -92,4 +94,4 @@ PLAZA_REGENERATE_FIXTURES=1 cargo test -p plaza_wire --features msgpack,json --t
 PLAZA_REGENERATE_FIXTURES=1 cargo test -p plaza_client_utils --features net-sim --test dart_vectors
 ```
 
-`RenderTimeline` and `TickNamer` have no Rust counterpart to pin against and say so where they live.
+`RenderTimeline`, `TickNamer` and `OpSequencer` have no Rust counterpart to pin against and say so where they live.

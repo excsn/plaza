@@ -15,11 +15,15 @@ sealed class PlazaEvent {
 }
 
 class Connected extends PlazaEvent {
-  const Connected({required this.resumed});
+  const Connected({required this.resumed, this.afterResume = false});
 
   /// Whether this is a return rather than a first arrival. An application that
   /// needs a fresh snapshot after a gap asks for one here.
   final bool resumed;
+
+  /// Whether this answers [PlazaClient.resume] rather than a reconnect after a
+  /// drop.
+  final bool afterResume;
 }
 
 class Disconnected extends PlazaEvent {
@@ -114,10 +118,9 @@ class PlazaClient {
 
   final Backoff _backoff;
 
-  /// Clocks, and the epoch that says which measurements still count. Feed it
-  /// with [Timeline.begin] and [Timeline.complete] around your own ping op:
-  /// plaza has no ping of its own, since the transport's heartbeat is the
-  /// server measuring the client.
+  /// Clocks and the epoch that says which measurements still count. [sendPing]
+  /// begins a probe on it; hand each answer from [pongs] to
+  /// [Timeline.complete].
   final Timeline timeline;
 
   final StreamController<Object?> _ops = StreamController<Object?>.broadcast();
@@ -130,6 +133,7 @@ class PlazaClient {
   int _attempt = 0;
   bool _stopped = false;
   bool _everConnected = false;
+  bool _resuming = false;
 
   PlazaStatus _status = PlazaStatus.idle;
   ProtocolVersion? _serverProtocol;
@@ -209,9 +213,10 @@ class PlazaClient {
     timeline.onResume();
     final socket = _socket;
     if (socket != null && socket.state == SocketState.open) {
-      _events.add(const Connected(resumed: true));
+      _events.add(const Connected(resumed: true, afterResume: true));
       return;
     }
+    _resuming = true;
     _retryTimer?.cancel();
     _attempt = 0;
     await _open();
@@ -241,7 +246,9 @@ class PlazaClient {
     try {
       socket = await _connect(url);
     } catch (e) {
-      _scheduleRetry('connect failed: $e');
+      final reason = 'connect failed: $e';
+      _events.add(Disconnected(reason));
+      _scheduleRetry(reason);
       return;
     }
     if (_stopped) {
@@ -269,10 +276,12 @@ class PlazaClient {
     if (credential != null) socket.send(buildFrame(Kind.credential, credential!));
 
     final resumed = _everConnected;
+    final afterResume = resumed && _resuming;
     _everConnected = true;
+    _resuming = false;
     _attempt = 0;
     _setStatus(PlazaStatus.open);
-    _events.add(Connected(resumed: resumed));
+    _events.add(Connected(resumed: resumed, afterResume: afterResume));
   }
 
   void _onFrame(Object message) {
@@ -321,14 +330,11 @@ class PlazaClient {
         break;
       case Kind.ops:
         final decoded = codec.decode(frame.body);
+        // Any other body is dropped and the connection kept.
         if (decoded is List) {
           for (final op in decoded) {
             _ops.add(op);
           }
-        } else if (decoded != null) {
-          // A body that is not a list is a codec or shape disagreement rather
-          // than a one-op batch, so it is reported instead of treated as an op.
-          _events.add(Disconnected('ops frame was ${decoded.runtimeType}, expected a list'));
         }
     }
   }
