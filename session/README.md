@@ -24,7 +24,7 @@ plaza_session = { version = "0.7", default-features = false, features = ["actix_
 
 The shared connection manager compiles either way.
 
-Turning off `json` drops `serde_json` from the build, so name the transport features you want instead of only setting `default-features = false`. You lose the zero-argument constructors (`new`, `bind`) and the default type parameter, so a session type names its codec: `ActixWsPlazaSession<Op, PlayerId, MsgPackCodec>`. `actix_ws` brings `serde_json` back regardless, since actix-web depends on it. A build without `serde_json` uses TCP or a transport of your own.
+Turning off `json` drops `serde_json` from the build, so name the transport features you want instead of only setting `default-features = false`. You lose the constructors that take no codec argument (`new`, `bind`) and the default type parameter, so a session type names its codec: `ActixWsPlazaSession<Op, PlayerId, MsgPackCodec>`. `actix_ws` brings `serde_json` back regardless, since actix-web depends on it. A build without `serde_json` uses TCP or a transport of your own.
 
 ## What it gives you
 
@@ -38,7 +38,7 @@ Turning off `json` drops `serde_json` from the build, so name the transport feat
 | Stamping a reply with your simulation clock, so a client can fit the offset | `SessionOptions::clock` |
 | Testing at 200ms with 5% loss on a local machine | `LinkProfile`, `DirectionProfile`, `Delivery` |
 | Sizing every queue and cap from what your game actually does | `Workload` and its seven presets |
-| Deciding what a full queue costs: a frame, a connection, or a stall | `Overflow` |
+| Deciding what a full queue costs: a frame, a connection or a stall | `Overflow` |
 | Ending a session with a close code and a reason the client hears on any transport | `Farewell` through `close_connection`, `deregister_agent`, `disconnect_all` |
 | Bounding a session that must expire | `set_deadline` |
 | Knowing who is idle and who is flooding | `agent_idle_for`, `agent_inbound` |

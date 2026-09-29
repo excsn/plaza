@@ -1,6 +1,6 @@
 # Usage Guide: plaza
 
-How to build a shared-state application on `plaza`: writing the rules, standing up a controller, sending a joiner what it should see, driving time, authorizing ops, asking a running controller a question and shutting it down.
+How to build a shared-state application on `plaza`: writing the rules, standing up a controller, sending a joiner what it should see, driving time, dropping scheduled work that has gone stale, authorizing ops, asking a running controller a question and shutting it down.
 
 ## Table of Contents
 
@@ -24,6 +24,10 @@ How to build a shared-state application on `plaza`: writing the rules, standing 
     *   [Measured Time](#measured-time)
     *   [Fixed Steps](#fixed-steps)
     *   [Virtual Time for Tests](#virtual-time-for-tests)
+*   [Dropping Stale Scheduled Work](#dropping-stale-scheduled-work)
+    *   [Scheduling Against a Phase](#scheduling-against-a-phase)
+    *   [Scheduling Against a Decision](#scheduling-against-a-decision)
+    *   [Keeping Two Situations Apart](#keeping-two-situations-apart)
 *   [Authorizing Ops](#authorizing-ops)
     *   [A Guard as a Function](#a-guard-as-a-function)
     *   [A Guard With State](#a-guard-with-state)
@@ -48,12 +52,14 @@ How to build a shared-state application on `plaza`: writing the rules, standing 
 *   **`CommandSender`**: the handle everything else holds. Submits ops, drives time, asks questions, orders a shutdown.
 *   **`Session`**: the transport. `InProcessSession` ships here; real sockets live in `plaza_session`.
 *   **`TickDriver`**: what sends the controller a time step, at a rate you choose.
+*   **`PhasedScheduler`**: deferred events that belong to one occupancy of a phase and are dropped once the phase moves.
+*   **`Situation` and `Mark`**: a counter for one recurring decision (such as whose turn it is) plus the stamp scheduled work carries to tell on firing whether that decision still stands.
 
 ## Quick Start
 
 ### A Complete Program
 
-A counter, over the in-process transport. `examples/shared_counter` is this program, runnable with `cargo run -p plaza-example-shared_counter`.
+A counter, over the in-process transport. `examples/shared_counter` is a fuller version of this program that also adds a second client, a `CounterOp::Set` and a disconnect. Run it with `cargo run -p plaza-example-shared_counter`.
 
 ```rust,ignore
 use plaza::{
@@ -161,9 +167,9 @@ Nearly every type here is generic over the same few.
 | `Op` | Your operations | `Clone + Debug + Send + Sync + 'static`, plus serde to cross a network |
 | `ID` | Your identifier | anything satisfying `AgentId` |
 
-`AgentId` is blanket-implemented for every `Clone + Debug + Eq + Hash + Send + Sync + Serialize + Deserialize + 'static` type, so `Uuid` and `u64` qualify with no work.
+`AgentId` is blanket-implemented for every `Clone + Debug + Eq + Hash + Send + Sync + 'static` type, so `Uuid` and `u64` qualify with no work. It has no serde bound; a type that puts an id in a payload declares that bound itself.
 
-`Agent<ID>`, `AgentId` and `SessionMessage` are defined in the runtime-free [`plaza_wire`](../wire/) and re-exported here, so a browser client that cannot depend on core names the same envelope types the server does. The `plaza::` paths work regardless.
+`Agent<ID>` and `AgentId` are defined in the runtime-free [`plaza_wire`](../wire/) and re-exported here, so a browser client that cannot depend on core names the same agent types the server does. The `plaza::` paths work regardless. `SessionMessage` is defined in core, in `plaza::session`.
 
 ## Writing the Rules
 
@@ -219,9 +225,9 @@ An op can arrive from an agent whose seat has already gone, because a packet cro
 ### Returning Ops to Specific Agents
 
 ```rust,ignore
-TargetedOp::new_system_all(ops)              // everyone
-TargetedOp::new_system_to(player, ops)       // one agent
-TargetedOp::new_system_to_many(players, ops) // several, delivered once each
+TargetedOp::new_system_all(ops)                                          // everyone
+TargetedOp::new_system_to(player, ops)                                   // one agent
+TargetedOp::new(Agent::system(), MessageTarget::Agents(players), ops)    // several, delivered once each
 ```
 
 ## Standing Up a Controller
@@ -252,7 +258,7 @@ let (tx, controller) = StateControllerBuilder::without_snapshots(logic, session,
 let handle = tokio::spawn(controller.run());
 ```
 
-The controller owns the state and processes one input at a time on its own task, so your logic needs no locking. Nothing in this crate spawns a task except `TickDriver` and this call.
+The controller owns the state and processes one input at a time on its own task, so your logic needs no locking. Nothing in this crate spawns a task on its own. `controller.run()` and `TickDriver`'s run methods are plain async fns that you spawn.
 
 ## Sending a Joiner What It Should See
 
@@ -274,8 +280,10 @@ Ok(Some(GameOp::Snapshot(Box::new(GameView {
 When the provider is a pure function of the state and the recipient, which most are, wrap a plain function in `SnapshotFn` instead of writing the `async fn` and `Ok(..)`:
 
 ```rust,ignore
-.snapshot_provider(Arc::new(SnapshotFn(view)))
+StateControllerBuilder::new(logic, session, Arc::new(SnapshotFn(view)), state)
 ```
+
+The provider is the third argument of `StateControllerBuilder::new`. The builder has no method for setting it later.
 
 ### One View for Everyone
 
@@ -328,6 +336,88 @@ TickDriver::new(Duration::from_millis(16)).run_for(tx, 100).await;   // bounded
 TickDriver::run_virtual(&tx, Duration::from_secs(1), 5).await;       // 5s of game time, at once
 ```
 
+## Dropping Stale Scheduled Work
+
+A turn clock, a bot's think timer or a response window is scheduled now and fires later. By the time it fires the game may have moved on, so the event has to check whether the moment it was scheduled for still stands. The full surface is in the [API reference](API_REFERENCE.md#game_commonflow_control).
+
+### Scheduling Against a Phase
+
+`PhasedScheduler` stamps each event with the phase occupancy it was scheduled in. `due` hands back only events whose phase has not changed since and drops the rest.
+
+```rust,ignore
+use plaza::game_common::flow_control::{Phased, PhasedScheduler};
+
+state.timeouts.schedule_after(state.tick, ticks(NEXT_BATTLE_MS), &state.phase, Event::NextBattle);
+
+// From your TimeStep handler:
+for event in state.timeouts.due(state.tick, &state.phase) {
+  match event {
+    Event::NextBattle => start_battle(state, ctx),
+    // ...
+  }
+}
+```
+
+### Scheduling Against a Decision
+
+The phase check cannot see a turn passing, because the phase stays `Fighting` the whole time. A `Situation` covers that case. Advance it whenever the decision moves on, stamp scheduled work with its `Mark` and check `holds` when the work fires.
+
+```rust,ignore
+use plaza::game_common::flow_control::{Mark, Phased, PhasedScheduler, Situation};
+
+#[derive(Clone, Debug)]
+enum Event {
+  BotActs { mark: Mark },
+  TurnTimesOut { mark: Mark },
+}
+
+struct State {
+  phase: Phased<BattlePhase>,
+  timeouts: PhasedScheduler<Event>,
+  ask: Situation,
+  // ...
+}
+
+// Whenever whose turn it is moves on:
+state.ask.advance();
+let mark = state.ask.mark();
+state.timeouts.schedule_after(state.tick, ticks(TURN_LIMIT_MS), &state.phase, Event::TurnTimesOut { mark });
+
+// When it fires:
+for event in state.timeouts.due(state.tick, &state.phase) {
+  match event {
+    Event::BotActs { mark } | Event::TurnTimesOut { mark } => {
+      if !state.ask.holds(mark) {
+        continue;
+      }
+      act_for_current(state, ctx);
+    }
+  }
+}
+```
+
+A clock that fires after its turn was already played does nothing. Call `advance` at every point the decision moves on: a move played, a turn passed, a round restarted. `Mark` is `Copy` and holds one `u64`, so an event carries it by value. `examples/turn_gauge` and `examples/check_raise` schedule their turn clocks this way.
+
+### Keeping Two Situations Apart
+
+A state with more than one recurring decision gives each its own marker type. A `Mark<Ask>` then cannot be checked against a `Situation<March>`.
+
+```rust,ignore
+enum Ask {}
+enum March {}
+
+struct State {
+  ask: Situation<Ask>,
+  march: Situation<March>,
+}
+
+let mark: Mark<Ask> = state.ask.mark();
+state.ask.holds(mark);      // fine
+state.march.holds(mark);    // does not compile
+```
+
+A state with one decision uses the `()` default and writes plain `Situation` and `Mark`.
+
 ## Authorizing Ops
 
 Whether an agent may do something at all is an authorization question, separate from the rules. Putting it in `StateLogic` spreads security checks across the handlers; an `OpGuard` keeps them in one place. The controller runs it per op, ahead of `process_input`, with the state read-only. A refused op never reaches the rules.
@@ -361,7 +451,7 @@ Anything stateful implements `OpGuard` directly, as `examples/night_watch`'s `Vi
 
 ```rust,ignore
 impl OpGuard<GameOp, PlayerId, Game> for VillageGuard {
-  fn clear(&self, state: &Game, source: &Agent<PlayerId>, op: &GameOp) -> OpClearance<GameOp> {
+  fn guard(&self, state: &Game, source: &Agent<PlayerId>, op: &GameOp) -> OpClearance<GameOp> {
     // ...
   }
 }
@@ -397,11 +487,11 @@ let final_state = handle.await??;
 
 ```rust,ignore
 let session = InProcessSession::<Op, PlayerId>::new();
-let (conn_id, inbox) = session.connect(agent).await?;
+let (conn_id, inbox) = session.connect(agent.clone()).await?;
 session.client_send(agent, vec![op]).await;
 ```
 
-For WebSockets or TCP, add [`plaza_session`](../session/). Implementing `Session` yourself is four async methods and two stream accessors.
+For WebSockets or TCP, add [`plaza_session`](../session/). Implementing `Session` yourself is one async method (`send_message`) and two accessors (`subscribe_to_incoming_messages` and `on_presence_change`).
 
 Presence is one ordered stream (`PresenceEvent::{Joined, Left}`) because separate channels would let a leave overtake a join, which breaks reconnection.
 
@@ -417,14 +507,14 @@ These modules are optional. Each is a trait plus at most a ready-made implementa
 | `common::fsm` | `StateMachine`, with `OpsQueue` as the minimal context |
 | `common::participants` | `ParticipantTracker` |
 | `common::math` | Plain `Vec2`/`Vec3`/`Quat` for op payloads |
-| `game_common::reconciliation` | The server half of client-side prediction: sequence tracking, delayed input buffers, a rewind buffer |
-| `game_common::flow_control` | Turns, rounds, phases and deferred work belonging to a phase |
+| `game_common::reconciliation` | The server half of client-side prediction: sequence tracking and delayed input buffers. The rewind buffer, `HistoricalStateBuffer`, is in `plaza_server_utils` |
+| `game_common::flow_control` | Turns, rounds, phases, deferred work belonging to a phase and `Situation` for work belonging to one decision |
 | `game_common::scorekeeping` | `Scorekeeper` and a `HashMap` implementation |
 | `app_common` | Op payload shapes for collaborative apps: locking, presence, ordered collections, object CRUD |
 
 ## Error Handling
 
-`PlazaError<ID>` is the top of the tree; the rest nest under it and each carries the id it concerns.
+`PlazaError<ID>` is the top of the tree. `SessionError<ID>`, `StateLogicError` and `SnapshotError<ID>` nest under it through `From`. Some `SessionError` and `SnapshotError` variants carry the id they concern; `StateLogicError` is not generic and carries no id. `QueryError` stands apart from the tree.
 
 ```rust,ignore
 match query_state(&tx).await {
@@ -437,6 +527,6 @@ match query_state(&tx).await {
 *   **`StateLogicError`**: what your rules return. `InvalidOperation` for an op that cannot be honoured and the variants around it.
 *   **`SnapshotError<ID>`**: what a provider returns when it cannot build a view for an agent.
 *   **`SessionError<ID>`**: transport-level failure, including whatever a real transport wraps.
-*   **`QueryError`**: `query_state` and `query_with` when the controller has gone or the reply was dropped.
+*   **`QueryError`**: not part of `PlazaError`. `query_state` and `query_with` return it when the controller has gone or the reply was dropped.
 
 Returning `Err` from `process_input` is logged and does not stop the controller, so one bad op cannot take the room down. Reserve it for an op that genuinely cannot be honoured and prefer answering the offender with an op of your own.

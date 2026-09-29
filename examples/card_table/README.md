@@ -15,13 +15,13 @@ Three players over `InProcessSession`, fixed cards, one scenario per round: ever
 
 ## The browser version
 
-`--bin serve` hosts on http://127.0.0.1:8081. The table deals once three seats are filled, so open **three tabs**, or open one and wait: a bot takes an open seat after ten seconds and another ten after that. Click a card on your turn; stall and the turn timeout plays your best card for you.
+`--bin serve` hosts on http://127.0.0.1:8081. The table deals once three seats are filled, so open **three tabs** or open one and wait: a bot takes an open seat after ten seconds and another ten after that. Click a card on your turn; stall and the turn timeout plays your best card for you.
 
 The bots play from `player_view`, the same payload a browser is sent. A bot reading `TableState` would hold every hand at the table, which the example says a client cannot do.
 
 The turn timeout is a field on the state rather than a constant, because the two binaries want different answers: the scripted run wants one short enough to reach on purpose in a few seconds and a person choosing a card wants one long enough to choose in.
 
-**After a match ends, the table deals again.** The standings stay up for `INTERMISSION_TICKS`, then the table zeroes the scores and deals again, so nobody reloads to play a second match. It is scheduled through the same `TickEventScheduler` as the turn timeout and carries the same epoch token, so it drops itself if an arriving player fills the table and deals first. It keeps the roster instead of clearing it, which is the difference between `reset_all_scores` and `clear_all_scores`. It does not deal to an emptied table and leaves that to the next arrival.
+**After a match ends, the table deals again.** The standings stay up for `INTERMISSION_TICKS`, then the table zeroes the scores and deals again, so nobody reloads to play a second match. It is scheduled through the same `PhasedScheduler` as the turn timeout, which pairs it with the phase's epoch, so it drops itself if an arriving player fills the table and deals first. It keeps the roster instead of clearing it, which is the difference between `reset_all_scores` and `clear_all_scores`. It does not deal unless all three seats are still filled and leaves that to the arrival that fills the table.
 
 Your tab holds three ranks and three face-down backs per opponent. The backs are there because [`TableSnapshotter`](src/snapshot.rs) never put those ranks in your frame.
 

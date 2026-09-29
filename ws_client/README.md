@@ -34,6 +34,8 @@ plaza_ws = { version = "0.6", features = ["native", "loopback"] }
 | `native` | desktop | `tungstenite` on a worker thread | `tungstenite` |
 | `miniquad` | browser, under macroquad | our own JS plugin | none |
 
-`connect` picks whichever real backend this build has for its target and the choice is never ambiguous: `native` exists only off wasm and `miniquad` only on it, so enabling both (the normal shape for a crate shipping a desktop and a browser client) still leaves exactly one per target. `connect_boxed` is the same choice as a `Box<dyn Socket>` and it exists in every build: with no backend it reports "no socket backend compiled in" at runtime, because an offline teaching build still has to compile its connect path.
+`connect` picks whichever real backend this build has for its target and the choice is never ambiguous: `native` exists only off wasm and `miniquad` only on it, so enabling both (the normal shape for a crate shipping a desktop and a browser client) still leaves exactly one per target. `connect_boxed` is the same choice as a `Box<dyn Socket>` and it exists in every build: with no backend it reports "this build has no socket backend compiled in" at runtime, because an offline teaching build still has to compile its connect path.
+
+A `miniquad` build on rustc 1.98 or later needs `-C link-arg=--import-undefined` for `wasm32-unknown-unknown`; [the guide](README.USAGE.md#browser-under-macroquad) has the config.
 
 The backends can be combined: a listen-server that also plays enables `native` **and** `loopback` and talks to both through the same trait.

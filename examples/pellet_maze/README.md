@@ -108,7 +108,7 @@ Three of the four seats are usually bots, so a bot that runs in circles makes th
 Both roles use BFS over the maze in [`sim/rules.rs`](src/sim/rules.rs) and each needed a fix that only showed up once it was measured:
 
 - A pursuer does not reverse in a corridor, except at a dead end. Without that, two pursuers oscillate around the runner and never close.
-- A runner's route excludes the direction it came from unless that is the only exit, or it paces between two pellets it can no longer eat.
+- A runner's route excludes the direction it came from unless that is the only exit. Without that it paces between two pellets it can no longer eat.
 - Under threat the runner **still eats**; it just refuses to walk toward a pursuer. The first version fled instead, so it never ate under pressure and the runner is under pressure nearly all the time. Eating went from 36 pellets in 45 seconds to 165 with this change and `a_bot_runner_actually_eats` fails on the old behaviour.
 
 The bots do **not** seek power-ups. A version that did was tried and removed after measuring it: routing a threatened runner to a nearby energizer devoured no more pursuers over a minute, ate 22 fewer pellets and left six power-ups on the board. A runner already crosses every corridor eating, so it walks over them anyway. The measurement is recorded in `a_bot_runner_reaches_the_energizers_and_turns_on_its_pursuers`, which asserts the board ends empty and the inversion is reached.

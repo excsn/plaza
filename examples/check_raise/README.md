@@ -14,11 +14,11 @@ Fixed-limit keeps the arithmetic simple: bets of 2 on the early streets and 4 on
 ./run-native.sh                          # host: window plus server; prints the join address
 ./run-native.sh --role client --connect ws://<host>:8306/ws
 ./run-native.sh --role headless
-./wasm-serve.sh                          # browser client on the same port
+./wasm-serve.sh                          # build the browser client and host it headless on port 8096
 cargo run -p check_raise --bin scripted  # no window: the reopening ledger as a gate
 ```
 
-Your two cards are face up to you alone; the gold outline is the seat being asked. When the ask is yours, FOLD, CHECK/CALL and RAISE are buttons under a draining clock and a lapsed clock checks what is free and folds what is not. Up to four humans take chairs in arrival order, the house plays the rest and any stack that busts rebuys at the next deal.
+Your two cards are face up to you alone; the gold outline is the seat being asked. When the ask is yours, FOLD, CHECK/CALL and RAISE are buttons under a draining clock and a lapsed clock checks what is free and folds what is not. Up to four humans take chairs in arrival order, the house plays the rest and any stack below 10 rebuys to 40 at the next deal.
 
 ## The panel
 

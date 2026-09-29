@@ -8,7 +8,7 @@ Plaza has two layers.
 
 The bottom layer is **blocks**: small, single-purpose pieces that each solve one problem completely and know nothing about each other, such as a seat table, a delta baseline, an RTT estimator, a spatial grid or a connection close. Each block is a plain type you own and drive; almost none of them spawn tasks, hold timers or read the clock on their own. Time is passed in as a parameter.
 
-The top layer is **prescriptions**: ready-made answers for the common cases, built from the blocks using only their public API. The `StateController` loop, `PredictedPlayer` and the shipped WebSocket and TCP transports are all prescriptions. So are the examples, each with a README explaining it.
+The top layer is **prescriptions**: ready-made answers for the common cases, built from the blocks using only their public API. The `StateController` loop, `PredictedPlayer` and the shipped WebSocket and TCP transports are all prescriptions. So are the examples. Most have a README explaining them and the smallest explain themselves in their module docs.
 
 You can take any prescription apart and rebuild it your own way without losing anything. A prescription uses only the public API of the blocks it assembles, so your version has the same access plaza's does. [Chapter 33](33-bring-your-own-socket.md) builds a whole transport outside the workspace using only the published API. The [`LinkDriver`](../../session/API_REFERENCE.md) docs say the same: it is a convenience and does not limit what a transport can do.
 

@@ -75,13 +75,13 @@ The cost is CPU: computing who is relevant is a pass over the players plus a pas
 
 A caveat about measuring any of this: a fixed cap of 40 spawns per wave could not keep up with 128 players' kill rate, so the horde collapsed to about 40 alive out of 3000 and every measurement above was really a measurement of an empty arena. The cap scales with the player count now. Watch the `alive` readout before trusting a bandwidth number, because an empty arena costs almost nothing to send.
 
-Two consequences worth knowing. A player who has never been sent to you still occupies a slot in every per-player array, holding the arena-centre seed, so the renderer has to know the difference between "at the centre" and "never heard of": drawing the seed puts a peer in the middle of the map who is not there. And a peer who walks out of your relevance stops updating and freezes at their last known position, which is correct (you cannot see them) but means any measurement of peer freshness has to sample only while the peer is actually relevant, or it measures the feature rather than the link.
+Two consequences worth knowing. A player who has never been sent to you still occupies a slot in every per-player array, holding the arena-centre seed, so the renderer has to know the difference between "at the centre" and "never heard of": drawing the seed puts a peer in the middle of the map who is not there. And a peer who walks out of your relevance stops updating and freezes at their last known position, which is correct (you cannot see them) but means any measurement of peer freshness has to sample only while the peer is actually relevant. Otherwise it measures the feature rather than the link.
 
 ## Two axes of relevance
 
 Culling by distance answers "can I see it" but not "does it matter to me", which is what a minimap needs to know. Sending nothing past the view radius left a teammate's marker frozen wherever they were last seen and walking over to find them produced a jump when they came back into range. The map kept showing a stale position as if it were current.
 
-So players are streamed in **two tiers**, with the boundary at the view radius:
+So players are streamed in **two tiers**, with the boundary just past the view radius (1.3 times it to enter the near tier, 1.5 times to stay in it):
 
 | tier | what is sent | rate | for |
 |---|---|---|---|
@@ -92,7 +92,7 @@ There are two tiers rather than a gradient because of the geometry. In the main 
 
 **Measured at 128 players**, the far tier costs about 25 KiB/s against a 2.2 MiB/s total, roughly 1% and every client ends up holding a position for every player (`128/128` in `examples/players.rs`) with a worst placement error of 138 px, about nine pixels on a minimap. Doubling its rate was measured and rejected: the worst error did not move and it cost 20 KiB/s more.
 
-Two details that are easy to leave out. The boundary has **hysteresis**, a smaller radius to stay in the near tier than to enter it, or a peer loitering on the edge changes tier every few frames and each change is a precision jump the client has to absorb. And coarse samples feed the same `RemoteView` as precise ones, so a peer crossing the boundary is interpolated across the change instead of teleporting.
+Two details that are easy to leave out. The boundary has **hysteresis**, a larger radius to stay in the near tier than to enter it. Without it a peer loitering on the edge changes tier every few frames and each change is a precision jump the client has to absorb. And coarse samples feed the same `RemoteView` as precise ones, so a peer crossing the boundary is interpolated across the change instead of teleporting.
 
 The minimap still shows staleness, because a peer can go quiet for reasons distance does not cover, such as disconnecting or never being seated. The client records when it last heard about each player and the minimap fades a marker out and then drops it rather than keep drawing a solid dot for somebody who has gone.
 
@@ -156,25 +156,25 @@ The **minimap** shows the whole arena with every enemy the server is simulating.
 |---|---|
 | **per-player relevance** | turn it off and watch bandwidth explode: every player is sent every entity |
 | **entity send rate** | defaults to 16 Hz; drop it to 1 Hz, the rate a shipped horde co-op actually uses and see which drawing mode survives |
-| **player send rate** | the other knob, defaulting to 30 Hz. Collapse it onto the entity rate to see why one rate is not enough |
-| **how remotes are drawn** | simulate (run the AI rule locally), dead reckon (last velocity), or interpolate (render in the past) |
+| **player send rate** | the other knob, defaulting to 10 Hz. Collapse it onto the entity rate to see why one rate is not enough |
+| **how remotes are drawn** | simulate (run the AI rule locally), dead reckon (last velocity) or interpolate (render in the past) |
 | **latency / jitter / loss** | real impairment on real connections, in both directions. The host feels its own settings, so what it shows a joiner is what it is living with |
 | **recover from loss** | diff against the last packet the client *acknowledged* instead of the last one sent. Off is the naive stream and at 25% loss it strands hundreds of corpses |
-| **playout delay** | how long the server holds an input before executing it. Off is apply-on-arrival, which decides contested outcomes by ping |
+| **use the playout buffer** | whether the server holds inputs at all. Off is apply-on-arrival, which decides contested outcomes by ping |
 | **crowd level of detail** | the opening angle for summarising the world outside your view radius, instead of knowing nothing about it |
 | **players spread / clustered** | clustered players make the horde converge on one spot, raising local density |
 | **ease corrections** | smoothing, with the caveat measured below |
 | **input playout delay** | how long the server holds an input before executing it, which is what makes a contested pickup independent of ping |
 | **render delay** | how far behind the server clock every client shows the world. One number for the whole session; too small and the underrun counter climbs |
 | **send unresolved frames** | the server's permission and what makes a ghost possible at all |
-| **draw the ghost** | the client's half. Where each entity is *going* to be; the gap to the solid marker is the playout delay, not an error |
+| **draw the ghost** | the client's half. Where each entity is *going* to be; the gap to the solid marker is the render delay, not an error |
 | **weapons, deaths and waves** | combat off leaves a pure movement horde, for isolating the networking |
 | **coins and predicting your balance** | a discrete, contested event, where a correction is a snap rather than an ease |
 | **generational entity handles** | a handle names a slot *and* its occupant; off, a reference to a dead entity would land on whoever recycled its slot |
 | **send input only on change** | your upstream. Off is an input every tick (loss-robust); on transmits only when your direction changes plus a keepalive, which the local player being unforced makes safe |
 | **debug digest** | ship the server's exact key set, so a mismatch prints which enemies you hold in error and which you are short of, rather than only counting |
 
-Press `R` to re-baseline the readouts after changing something. A frame counter sits bottom right: with these entity counts, telling a client-side stall apart from a network effect matters.
+In the offline teaching build, press `R` to re-baseline the readouts after changing something. A frame counter sits bottom right: with these entity counts, telling a client-side stall apart from a network effect matters.
 
 ## What it measured
 
@@ -227,7 +227,7 @@ Most of the byte cost was in the message sent most often. Quantising the whole w
 
 **Churn is modest but it spikes.** Steady movement produces ~23 spawns and ~15 despawns per packet, cheap enough that compressing it would save little. The area pulse is the exception: one wipe despawned **278 entities in a single packet**. A range encoding would be for that burst rather than the steady churn.
 
-**Generational handles were not needed here, which was a surprise.** Across 413 kills with slots actively recycling under 80 ms of latency, the client recorded **zero** stale handle references. Two things make the generation redundant in this configuration: delivery is ordered and the server announces a death *explicitly* (clearing the visibility bit) before the next diff, so a reused slot reads as despawn-then-spawn rather than silently becoming a different entity. Generational handles matter for **unordered** transport, where a stale packet can overtake the despawn that would have invalidated it. Slot recycling alone does not need them. They had been filed as a keystone item before this was measured.
+**Generational handles were not needed here, which was a surprise.** Across 413 kills with slots actively recycling under 80 ms of latency, the client recorded **zero** stale handle references. Two things make the generation redundant in this configuration: delivery is ordered and the server announces a death *explicitly* (clearing the visibility bit) before the next diff, so a reused slot reads as despawn-then-spawn rather than silently becoming a different entity. Generational handles matter for **unordered** transport, where a stale packet can overtake the despawn that would have invalidated it. Slot recycling alone does not need them. They had been treated as essential before this was measured.
 
 ## Two send rates
 
@@ -273,7 +273,7 @@ That breaks against a **scheduled** server. Your input executes at the tick you 
 
 So the local player is now drawn from the played-out stream at `RenderAt`, like everything else. With no prediction there is no correction and so no stiffness; the mechanism was removed rather than tuned. `HeldInputPredictor`, the correction monitor and the reconcile path are all deleted from the client and the renderer lost its special cases (your repulsor ring used to be pinned to the predicted marker while peers' rings sat on their authoritative positions).
 
-**The cost is `playout_delay + render_delay`, which the panel prints:** 250 ms at the defaults. That is not new latency. The server already refused to turn you for 100 ms and the world was already drawn 150 ms back; the client was drawing something else in the meantime and then being dragged off it. Both delays now have sliders, next to each other, with the sum stated, because each was justified separately and nobody had added up the total delay between a key press and the screen.
+**The cost is `playout_delay + render_delay`, which the panel prints:** 280 ms at the defaults. That is not new latency. The server already refused to turn you for 100 ms and the world was already drawn 180 ms back; the client was drawing something else in the meantime and then being dragged off it. Both delays now have sliders, next to each other, with the sum stated, because each was justified separately and nobody had added up the total delay between a key press and the screen.
 
 It also means a recording replays to exactly what every player saw, *including their own screen*. A predicted local player cannot give you that, because the predicted position you saw is not what the server ran.
 
@@ -308,7 +308,7 @@ How the check works, in four parts:
 - **The budget is derived from the settings.** It is exactly the condition that would break a player, so it moves with the sliders instead of drifting out of step with them and admitting people who then cannot play.
 - **The server times its own probe**, at the transport layer. A client reporting its own ping could understate it and this is the check that gates entry. Timing the probe is spoof-proof in the direction that matters: a client can only make itself look *worse*. It also means admission needed no new message: `plaza_session` exposes `agent_rtt` and the arena asks.
 - **An arena that cannot measure admits nobody.** It fails closed because guessing that an unmeasured connection is fine is how the silent exclusion happened.
-- **No seat is held while measuring**, or a slow joiner parks one for a second and a full arena refuses somebody who would have got in.
+- **No seat is held while measuring.** Otherwise a slow joiner parks one for a second and a full arena refuses somebody who would have got in.
 
 There is no exemption for the host. Its loopback ping is near zero so it passes the same check. A host that admitted itself by special case would stop being just another client on a real socket, which is what makes its omniscient readouts trustworthy.
 
@@ -318,7 +318,7 @@ The client shows "checking your connection" while it runs and, if refused, what 
 
 ## Input scheduling
 
-Inputs used to be applied on arrival, which lets ping decide outcomes. A 20 ms player's press lands on the next tick and a 200 ms player's lands nine ticks later, so any outcome decided by who was where first is decided by connection quality. The panel's **playout delay** switches between the two.
+Inputs used to be applied on arrival, which lets ping decide outcomes. A 20 ms player's press lands on the next tick and a 200 ms player's lands nine ticks later, so any outcome decided by who was where first is decided by connection quality. The panel's **use the playout buffer** checkbox switches between the two.
 
 A client now names the **tick** an input is for rather than a timestamp, which keeps the authority with the server. A timestamp names a moment the server then has to judge plausible. Judging it needs a shared clock, which is only an estimate; a cheating client can hide inside that estimate's error. A tick names *the server's own unit of time*, which is either still open or closed. Both sides compute it from the same rule, so two players who pressed at the same instant name the same tick however far apart their pings are. The server buffers by tick and executes in tick order, which also makes the rate a client runs at irrelevant: a 120 Hz client and a 30 Hz one both name ticks.
 
@@ -334,9 +334,9 @@ The loss slider had worked in the offline `World`, which is where every measurem
 
 Loss now applies in both directions and the impairment itself has since moved out of the arena into the session, which is the thing that owns the link. The panel publishes a `LinkProfile` when a slider moves and stops there; delaying, jittering and dropping the frames that cross a connection is `plaza_session`'s and it does it to every frame rather than to the subset an arena remembered to route through a queue.
 
-The exemption list that used to be a match arm turned out to be unnecessary rather than relocated, because the loss model it compensated for was wrong. A WebSocket is TCP and TCP retransmits: a lost segment never reaches the application as a missing message, it costs a retransmission timeout and stalls everything queued behind it. So the slider now produces a latency spike and a burst, which is what loss on this transport actually feels like. Nothing is deleted. The old `droppable` list was hand-modelling UDP over a reliable socket, which is precisely why it needed exceptions: `Welcome` and the other one-shots had no recovery, so they had to be excused from a hazard that could not have happened to them anyway.
+The exemption list that used to be a match arm turned out to be unnecessary rather than relocated, because the loss model it compensated for was wrong. A WebSocket is TCP and TCP retransmits: a lost segment never reaches the application as a missing message, it costs a retransmission timeout and stalls everything queued behind it. So with the **datagram link** checkbox off, the slider produces a latency spike and a burst, which is what loss on this transport actually feels like. Nothing is deleted. The old `droppable` list was hand-modelling UDP over a reliable socket, which is precisely why it needed exceptions: `Welcome` and the other one-shots had no recovery, so they had to be excused from a hazard that could not have happened to them anyway.
 
-Deleting frames is still available as `Delivery::Datagram`, which is the right model for the unreliable channel plaza does not have yet. Choosing it over a WebSocket simulates that transport deliberately, which is how this example's ack-and-digest recovery would get exercised before the channel it is for exists.
+Deleting frames is `Delivery::Datagram`, which is the right model for the unreliable channel plaza does not have yet. The **datagram link** checkbox selects it and is on by default: choosing it over a WebSocket simulates that transport deliberately, which is how this example's ack-and-digest recovery gets exercised before the channel it is for exists.
 
 It also fixed a measurement this example could not previously make. The probe is a `Kind::Ping` frame that crosses the same impaired link as everything else, so `agent_link_rtt` moves with the sliders while `agent_rtt`, which times the WebSocket's own ping underneath all of it, stays at what the socket really costs. The gap between the two is the impairment, read back from the server rather than asserted by the panel that set it.
 

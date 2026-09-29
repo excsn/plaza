@@ -1,6 +1,6 @@
 # The plaza guide
 
-This guide sits between the [project README](../../README.md) (a short overview of plaza) and each crate's README and API_REFERENCE (what to type). It covers how plaza approaches the problems of multiplayer games and realtime apps, why the pieces are shaped the way they are and how to replace one.
+This guide sits between the [project README](../../README.md) (a short overview of plaza) and each crate's README, README.USAGE and API_REFERENCE (what to type). It covers how plaza approaches the problems of multiplayer games and realtime apps, why the pieces are shaped the way they are and how to replace one.
 
 Each chapter answers one question and names a runnable example as its lab, where you can see the chapter's claims hold. Most labs also have a slider that lets you see them fail.
 

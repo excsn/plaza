@@ -14,14 +14,21 @@ How to build the client half of a networked game with `plaza_client_utils`: pred
 *   [Your Own Entity](#your-own-entity)
     *   [Creating the Predictor](#creating-the-predictor)
     *   [Sending an Input](#sending-an-input)
+    *   [Firing a One-Shot Effect Once](#firing-a-one-shot-effect-once)
     *   [Reconciling a Packet](#reconciling-a-packet)
     *   [Advancing and Drawing](#advancing-and-drawing)
     *   [Pausing, Freezing and Teleporting](#pausing-freezing-and-teleporting)
     *   [Sending Inputs Only When They Change](#sending-inputs-only-when-they-change)
+*   [Predicting a Walk by Shared Rule](#predicting-a-walk-by-shared-rule)
+    *   [Seating the Body](#seating-the-body)
+    *   [Setting Out on a Route](#setting-out-on-a-route)
+    *   [Walking and Drawing Each Frame](#walking-and-drawing-each-frame)
+    *   [Checking the Server Against the Route](#checking-the-server-against-the-route)
 *   [Everyone Else](#everyone-else)
     *   [Pushing Snapshots and Rendering](#pushing-snapshots-and-rendering)
     *   [Low Send Rates](#low-send-rates)
     *   [Running an Entity's Own Rule](#running-an-entitys-own-rule)
+    *   [Forgetting What the Server Stopped Mentioning](#forgetting-what-the-server-stopped-mentioning)
 *   [The Render Clock](#the-render-clock)
     *   [Driving the Target](#driving-the-target)
     *   [Keeping It Aligned](#keeping-it-aligned)
@@ -31,9 +38,13 @@ How to build the client half of a networked game with `plaza_client_utils`: pred
     *   [Decaying Big Errors Faster](#decaying-big-errors-faster)
     *   [Knowing Whether a Correction Was Abnormal](#knowing-whether-a-correction-was-abnormal)
 *   [Fixed Steps and Periods](#fixed-steps-and-periods)
+    *   [Stepping a Simulation](#stepping-a-simulation)
+    *   [Capping Catch-Up in Steps](#capping-catch-up-in-steps)
+    *   [Running Something Now and Then](#running-something-now-and-then)
 *   [Streamed Entity Sets](#streamed-entity-sets)
     *   [Applying a Delta Packet](#applying-a-delta-packet)
     *   [Allocating Keys](#allocating-keys)
+    *   [Digesting a Set Yourself](#digesting-a-set-yourself)
     *   [Diagnosing a Divergence](#diagnosing-a-divergence)
 *   [Surviving a Resume](#surviving-a-resume)
     *   [The Playout Queue](#the-playout-queue)
@@ -42,7 +53,12 @@ How to build the client half of a networked game with `plaza_client_utils`: pred
     *   [Round Trip and Server Time](#round-trip-and-server-time)
     *   [What Render Delay This Stream Needs](#what-render-delay-this-stream-needs)
     *   [Acknowledging What Arrived](#acknowledging-what-arrived)
+    *   [Measuring a Rate](#measuring-a-rate)
 *   [Deterministic Arithmetic](#deterministic-arithmetic)
+*   [Agreeing on Randomness and State](#agreeing-on-randomness-and-state)
+    *   [Drawing Numbers Both Ends Agree On](#drawing-numbers-both-ends-agree-on)
+    *   [Generating Terrain From a Seed](#generating-terrain-from-a-seed)
+    *   [Checking Two Worlds Match](#checking-two-worlds-match)
 *   [Testing Without a Network](#testing-without-a-network)
 *   [Four Principles](#four-principles)
 *   [What the Measurements Settled](#what-the-measurements-settled)
@@ -60,6 +76,10 @@ How to build the client half of a networked game with `plaza_client_utils`: pred
 *   **Mirror**: the client's copy of a server-streamed entity set, held by `DeltaMirror` and checked against the server's `SetDigest`.
 *   **`SlotKey`**: an index plus a generation, the key both ends of that stream name entities by.
 *   **Epoch**: a `Timeline` generation. A probe answered in a later epoch is discarded rather than recorded.
+*   **Shared rule**: a deterministic function both ends run over the same state, such as a pathfinder. `RoutePredictor` predicts by running it instead of replaying inputs.
+*   **One-shot**: something an input causes once (a shot, a footstep), run from `on_first` because `apply` runs again on every replay.
+*   **Grace**: how long an entity may go unmentioned before `Silence` treats it as gone, in whatever unit your stamps use.
+*   **State digest**: one `u64` summarising a whole simulation state in a fixed field order, compared between two ends to catch a quiet divergence.
 
 ## Quick Start
 
@@ -154,8 +174,9 @@ Pick between the two bundles by how the **server** consumes input. A wrong choic
 |---|---|
 | consumes one input per simulation step | `PredictedPlayer` (replay unacknowledged inputs) |
 | holds an input and integrates it every tick | `HeldInputPredictor` (dead reckon and ease) |
+| answers an op with a deterministic rule the client can run too, such as a pathfinder | `RoutePredictor` (walk the same route locally) |
 
-Replaying inputs against a server of the second kind double counts and gets worse the more you economise on bandwidth, because one coalesced input can cover a long stretch of simulation.
+Replaying inputs against a server of the second kind double counts and gets worse the more you economise on bandwidth, because one coalesced input can cover a long stretch of simulation. The third kind sends one op for a whole journey, so there is nothing per tick to replay or ease; see [Predicting a Walk by Shared Rule](#predicting-a-walk-by-shared-rule).
 
 ### Drawing an Entity You Do Not Control
 
@@ -212,6 +233,37 @@ me.hold(mv);
 send(mv);
 ```
 
+### Firing a One-Shot Effect Once
+
+`apply` runs on the press and again on every reconcile while the input is unacknowledged. A sound or a muzzle flash inside `apply` repeats once per replay: about ten times per trigger pull at 150 ms round trip and 60 packets a second (`client_utils/examples/replay_refires.rs`). Keep `apply` to what the input does to state and move the effect to `on_first`, which runs only from `input`:
+
+```rust,ignore
+fn apply_shot(state: &mut Pos, input: &Shot, _ctx: &()) {
+  state.x += input.dx;              // state only: this is replayed
+}
+fn fire_once(input: &Shot, _ctx: &()) {
+  if input.fire {
+    play_sound(Sound::Shot);        // runs once per press, never from a replay
+  }
+}
+
+let mut me = PredictedPlayer::new(start, PlayerConfig::default(), apply_shot, lerp_pos)
+  .on_first(fire_once);
+```
+
+A predictor you build yourself on `ClientInputBuffer` gets the same split from `unacknowledged_with_pass`, which pairs each input with whether this is the first time it has been handed out:
+
+```rust,ignore
+for (buffered, first) in inputs.unacknowledged_with_pass(acked_seq) {
+  apply_shot(&mut state, &buffered.op, &ctx);
+  if first {
+    fire_once(&buffered.op, &ctx);
+  }
+}
+```
+
+The full surface is in [`PredictedPlayer`](API_REFERENCE.md#struct-predictedplayerstate-input-ctx) and [`ClientInputBuffer`](API_REFERENCE.md#struct-clientinputbufferop-predictedstatesnapshot).
+
 ### Reconciling a Packet
 
 ```rust,ignore
@@ -228,7 +280,7 @@ let correction = me.reconcile(packet.state, age_secs);
 ### Advancing and Drawing
 
 ```rust,ignore
-me.advance(dt_secs);          // integrate, then progress the ease
+me.advance(dt_secs);          // PredictedPlayer: progress the ease. HeldInputPredictor: dead reckon one step
 draw(&me.render());           // eased: what the eye should see
 let exact = me.logical();     // exact: what the next prediction builds on
 ```
@@ -269,6 +321,87 @@ if coalescer.should_send(&mv, now_ms) {
 ```
 
 The keepalive is required. The server keeps applying the last direction it received, so a *dropped* direction change leaves a wrong state in place until the keepalive resends the input.
+
+## Predicting a Walk by Shared Rule
+
+`RoutePredictor` is for a game where a click sends one op and the server answers it with a deterministic rule, such as a pathfinder over a map both ends derive. The client runs the same rule, so it knows the whole journey the moment the click happens. Prediction only has to walk the body across its squares on the local clock without jumping. The rule must be shared code over shared state (see [Agreeing on Randomness and State](#agreeing-on-randomness-and-state)). Otherwise every journey diverges.
+
+### Seating the Body
+
+`P` is a square: a tile, a node, whatever the rule routes over. `point` maps it to the plane you draw on.
+
+```rust,ignore
+use plaza_client_utils::{Heard, RoutePredictor};
+
+fn tile_point(tile: &Tile) -> [f32; 2] {
+  [tile.x as f32, tile.y as f32]
+}
+
+let mut body = RoutePredictor::new(Tile::default(), tile_point, TICK_MS);
+
+// The seat assignment, a respawn or a teleport. The only move that jumps.
+body.jump_to(you.tile, now_ms);
+
+// Each frame packet: the step length is live, so chase the server's tick.
+body.set_step_ms(frame.tick_ms);
+```
+
+Nothing walks until `jump_to` has run once; `is_seeded()` says whether it has.
+
+### Setting Out on a Route
+
+Draw the route locally first and send the op second, so the body is already moving before the op leaves the machine:
+
+```rust,ignore
+let route = finder.route(body.predicted, Goal::On(tile));   // the server's own pathfinder
+body.set_out(route, true, now_ms);
+send(Op::WalkTo { tile });
+```
+
+The `checkable` flag says whether the server expands the same route. Pass `true` for a walk to a fixed square. Pass `false` when the rule answers differently on each end, such as chasing something that moves:
+
+```rust,ignore
+body.set_out(finder.route(body.predicted, Goal::Beside(target_tile)), false, now_ms);
+```
+
+A `true` is only honoured when the body is at rest with nothing owed, because a click mid-walk makes each end expand from a different square. Cancelling is an empty route; the crossing in progress finishes and nothing else happens:
+
+```rust,ignore
+body.set_out(std::iter::empty(), false, now_ms);
+```
+
+### Walking and Drawing Each Frame
+
+```rust,ignore
+let steps = if running { 2 } else { 1 };   // squares per tick, as the server's rule defines a run
+body.advance(now_ms, steps);
+body.settle(now_ms);                       // takes the server's square once the body has stopped
+
+let [x, y] = body.drawn(now_ms);
+if let Some([dx, dy]) = body.heading(now_ms) {
+  face_towards(dx, dy);
+}
+let animate_walk = body.walking(now_ms);
+```
+
+`settle` is the only reconciliation. There is no per-tick correction, because both ends are walking to the same place and arrive together, so it usually does nothing.
+
+### Checking the Server Against the Route
+
+On each packet, check the server's square against the route this client drew, not against the client's current square. The two ends are a tick out of phase by design.
+
+```rust,ignore
+if you.refused == Some(Refusal::NoRoute) {
+  body.abandon(you.tile, now_ms);          // keeps the drawn position, drops the plan
+}
+
+match body.confirm(you.tile, 2) {          // slack: the server's steps per tick
+  Heard::OnRoute | Heard::Unchecked => {}
+  Heard::Diverged => notice("the world walked a different way"),
+}
+```
+
+A divergence means the two ends are no longer running the same rule, which is a bug rather than a network condition. `body.diverged` should read zero; show it beside `body.confirmations` in a debug panel. The full surface is in [`RoutePredictor`](API_REFERENCE.md#struct-routepredictorp-module-route).
 
 ## Everyone Else
 
@@ -317,6 +450,28 @@ enemy.hold(Intent { target: player_id });
 enemy.advance(dt_secs);
 enemy.reconcile(sample.state, sample_age_secs);
 ```
+
+### Forgetting What the Server Stopped Mentioning
+
+A server that filters by relevance sends no despawn. It stops mentioning the entity and no other message will say it is gone. Record the frame each entity was last mentioned on and sweep with a `Silence`:
+
+```rust,ignore
+use plaza_client_utils::Silence;
+
+const GRACE: Silence = Silence::new(8);    // frames; panics at zero
+
+for ship in frame.ships {
+  ships.insert(ship.seat, Known { state: ship.state, seen: frame.number });
+}
+
+let forgotten = GRACE.sweep(&mut ships, frame.number, |seat, known| {
+  (Some(*seat) != my_seat).then_some(known.seen)   // None: never forget my own ship
+});
+```
+
+The closure returns `None` for anything silence must never remove: your own entity or one sent once by design and never mentioned again, such as a spawn-only projectile. `GRACE.keeps(seen, now)` answers the same question for one entity.
+
+A grace of one frame makes entities at the edge of the view radius flicker as both ends drift across it. An entity streamed every frame it exists can use a short grace; one that is sometimes skipped for bandwidth needs a longer one. See [`Silence`](API_REFERENCE.md#struct-silence).
 
 ## The Render Clock
 
@@ -380,7 +535,7 @@ smoother.advance(dt_secs);
 draw(&smoother.sample(&logical, lerp_pos));
 ```
 
-Keep the duration **shorter than your send interval**, or corrections arrive faster than the ease finishes and the smoother itself becomes the dominant error. Past that point, shed a fraction per frame instead:
+Keep the duration **shorter than your send interval**. Otherwise corrections arrive faster than the ease finishes and the smoother itself becomes the dominant error. Past that point, shed a fraction per frame instead:
 
 ```rust,ignore
 let mut smoother = ErrorSmoother::at_rate(0.85);
@@ -420,33 +575,63 @@ if monitor.record(distance) {
 }
 ```
 
-`with_warmup` matters: a baseline initialised to zero calls every early correction enormous, so a monitor without a warmup raises the most alarms at startup, before it has seen enough samples to judge.
+The warmup matters: a baseline initialised to zero calls every early correction enormous, so a monitor without one raises the most alarms at startup, before it has seen enough samples to judge. `CorrectionMonitor::new()` learns from 32 samples before flagging anything; `with_warmup` changes that count.
 
 ## Fixed Steps and Periods
 
 Both sides stepping the same rule at different step sizes are not running the same simulation and the drift reads as network jitter.
 
+### Stepping a Simulation
+
 ```rust,ignore
 let mut ticker = FixedTimestep::from_step_ms(16).with_max_frame_ms(250);
 
-for step_ms in ticker.advance(elapsed_ms) {
-  world.step(step_ms as f32 / 1000.0);   // the yielded duration, never the frame delta
+for step in ticker.advance(elapsed_ms) {
+  world.step(step.as_secs_f32());   // the yielded Duration, never the frame delta
 }
 let blend = ticker.alpha();               // for interpolating a render between two states
 ```
 
-`from_hz` is exact to the nanosecond and uses the same expression as `plaza::TickDriver::from_hz`, so 60 Hz is a 16.666667 ms step on both sides.
+Build it from a `Duration` or a rate when you have one:
+
+```rust,ignore
+let ticker = FixedTimestep::from_step(Duration::from_millis(50));
+let ticker = FixedTimestep::from_hz(60);
+```
+
+`from_hz` is exact to the nanosecond and uses the same expression as `plaza::TickDriver::from_hz`, so 60 Hz is a 16.666667 ms step on both sides. `ticker.step()` reads the step back as a `Duration` and `set_step` changes it live.
 
 Watch `ticker.dropped_ms()`: real time the simulation never ran because the cap refused it.
+
+### Capping Catch-Up in Steps
+
+`with_max_frame_ms` caps how much elapsed time one `advance` is handed. For a slow tick over a fast driver, such as a 600 ms game tick fed by 50 ms wakes, cap in whole steps instead. That cap follows the step length when the step length changes:
+
+```rust,ignore
+let mut ticker = FixedTimestep::from_step_ms(TICK_MS)
+  .with_max_steps(CATCH_UP)
+  .with_max_frame_ms(3_600_000);   // raise the time cap so the steps cap is the policy
+
+ticker.set_step(Duration::from_millis(frame.tick_ms));   // the server changed its tick
+```
+
+Time owed past the steps cap goes into `dropped_ms`.
+
+### Running Something Now and Then
 
 For work that is idempotent and only needs doing now and then, `Periodic` asks "is it time yet" instead:
 
 ```rust,ignore
-let mut heartbeat = Periodic::new(1000);
+let mut heartbeat = Periodic::new(1000);          // or Periodic::from_interval(Duration::from_secs(1))
 if heartbeat.due(elapsed_ms) {
   send_keepalive();
 }
+
+let owed = heartbeat.advance(elapsed_ms);          // every occurrence, when each one counts
+let every = heartbeat.interval();                  // a Duration
 ```
+
+See [`FixedTimestep` and `Periodic`](API_REFERENCE.md#10-module-timestep) for the full surface.
 
 ## Streamed Entity Sets
 
@@ -478,16 +663,35 @@ The server hands out `SlotKey`s; a client that allocates its own uses the same t
 let mut slots = SlotAllocator::with_capacity(1024).with_policy(ReusePolicy::Fifo);
 
 let key = slots.alloc();
-storage[key.index() as usize] = entity;   // storage is yours, sized by index_space()
+storage[key.index as usize] = entity;     // storage is yours, sized by index_space()
 slots.free(key);                          // the generation bumps here, not on alloc
 ```
+
+### Digesting a Set Yourself
+
+`DeltaMirror` keeps its own digest. Reach for `SetDigest` directly when you are the side producing one or when you compare a set that is not a mirror. Order does not matter and a key can be added or removed in O(1):
+
+```rust,ignore
+use plaza_client_utils::SetDigest;
+
+let mut digest = SetDigest::new();
+for enemy in &field.enemies {
+  digest.insert(enemy.key.encode());      // index and generation: checks the occupant
+}
+digest.remove(dead.key.encode());
+send(Frame { digest: digest.digest(), .. });
+
+let rebuilt = SetDigest::from_keys(field.enemies.iter().map(|e| e.key.encode()));
+```
+
+Hash a bare index to check membership only. Pack index with generation, as `SlotKey::encode` does, to check that both ends hold the same occupant. When the order of the fields matters, as in a whole world, use a [state digest](#checking-two-worlds-match) instead.
 
 ### Diagnosing a Divergence
 
 A digest tells you the sets differ but not which keys differ, so in a debug build ship the server's key list beside it:
 
 ```rust,ignore
-let d = mirror.divergence_from(&packet.all_keys);
+let d = mirror.divergence_from(packet.all_keys.iter().copied());
 error!(missing = ?d.missing, extra = ?d.extra, "mirror divergence");
 ```
 
@@ -582,7 +786,7 @@ Whether to *adapt* is yours: a delay that follows the link hides bad links inste
 let mut acks = AckWindow::new();
 acks.observe(packet.seq);
 if let Some((newest, mask)) = acks.encode() {
-  send(Ack { newest, mask });    // twelve bytes, whatever the loss rate
+  send(Ack { newest, mask });    // sixteen bytes, whatever the loss rate
 }
 ```
 
@@ -604,9 +808,54 @@ if let Some(base) = acks.contiguous_base(first_seq) {
 
 Receiving packet N+1 after losing N does not put a peer in the state N+1 implies: whatever N announced and N+1 had no reason to repeat is gone.
 
+### Measuring a Rate
+
+`RateMeter` is a running total, a sample count and a clock you supply. Feed it amounts as they happen and hand it your clock each tick:
+
+```rust,ignore
+use plaza_client_utils::RateMeter;
+
+let mut traffic = RateMeter::new();
+let mut packets = RateMeter::new();
+
+// Each poll: the delta of a cumulative counter.
+let rx = pump.bytes_received();
+traffic.add(rx - seen_rx_bytes);
+seen_rx_bytes = rx;
+packets.add(1);
+
+// Each tick, with the simulation clock rather than wall time.
+traffic.elapsed(now_ms);
+packets.elapsed(now_ms);
+```
+
+Read `per_sec` for a number somebody watches and `lifetime_per_sec` for a summary over a fixed run:
+
+```rust,ignore
+let live = traffic.per_sec();              // the last eight seconds
+let whole = traffic.lifetime_per_sec();    // since this meter started
+let per_packet = traffic.mean();           // per sample, same window as per_sec
+```
+
+A lifetime average on a live readout keeps creeping toward a new steady state for minutes, which looks like a slow leak. The rolling window follows a setting you just changed within seconds and decays to zero when traffic stops.
+
+Before optimising how a stream is encoded, measure its share of the whole:
+
+```rust,ignore
+positions.add(encoded_positions.len() as u64);
+bytes.add(packet.len() as u64);
+let share = positions.share_of(&bytes);    // 0.0..=1.0
+```
+
+In `horde_playground` despawn ids were 1.2% of the traffic and position samples 86.1%. Call `reset()` when the world is rebuilt, so the rates cover only the current world. `add_empty()` counts a sample that carried nothing toward `mean`. See [`RateMeter`](API_REFERENCE.md#struct-ratemeter).
+
 ## Deterministic Arithmetic
 
-For a wire that carries inputs rather than state, where nothing is ever corrected and `f32` cannot be relied on to match between a wasm build and a native one.
+For a wire that carries inputs rather than state, where nothing is ever corrected and `f32` cannot be relied on to match between a wasm build and a native one. Module `fixed` needs the `fixed` feature, which also pulls in `serde`:
+
+```toml
+plaza_client_utils = { version = "0.6", features = ["fixed"] }
+```
 
 ```rust,ignore
 use plaza_client_utils::fixed::{Fx, P};
@@ -615,7 +864,7 @@ let speed = Fx::ratio(3, 2);              // 1.5
 let pos = P::from_ints(10, 4);
 let next = P { x: pos.x + speed, y: pos.y };
 
-if next.dist_sq(&target) < RANGE_SQ {     // no square root on the path
+if next.dist_sq(target) < RANGE_SQ {      // no square root on the path
   hit();
 }
 
@@ -624,7 +873,92 @@ draw(next.x.to_f32(), next.y.to_f32());   // the only float, one way, for the re
 
 Nothing in a simulation may call `to_f32`.
 
+## Agreeing on Randomness and State
+
+A shared rule that draws a random number, reads terrain or walks a map must get the same answer on both ends and in every build. `mix64`, `XorShift::next`, `XorShift::below` and `StateDigest` are integer arithmetic. `XorShift::unit`, `ValueNoise::corner` and `ValueNoise::octave` return `f32` built only from integer conversion, `floor` and the basic IEEE operations, which round the same way on wasm and native. None of it has dependencies.
+
+### Drawing Numbers Both Ends Agree On
+
+`XorShift` is a stream: seed it once and replaying a tick reproduces its draws exactly. `mix64` folds values into a seed:
+
+```rust,ignore
+use plaza_client_utils::determinism::{mix64, XorShift};
+
+fn deal_seed(name: &str, tick: u64, deals: u64) -> u64 {
+  let name = name.bytes().fold(0x9E37_79B9_7F4A_7C15u64, |acc, b| mix64(acc ^ u64::from(b)));
+  mix64(name ^ mix64(tick) ^ mix64(deals.rotate_left(32)))
+}
+
+let mut rng = XorShift::new(deal_seed(&table.name, table.tick, table.deals));
+for i in (1..deck.len()).rev() {
+  deck.swap(i, rng.below(i as u32 + 1) as usize);   // Fisher-Yates
+}
+let jitter = rng.unit();                            // 0.0..1.0
+```
+
+A stateless draw needs no generator at all. Key it on what it belongs to and no order can differ between the ends:
+
+```rust,ignore
+let roll = mix64(seed ^ mix64(entity_id) ^ mix64(tick)) % 100;
+```
+
+Walking a `HashMap` while drawing from one shared `XorShift` hands each entity a different number on each run. Sort the keys first or key each draw with `mix64`.
+
+### Generating Terrain From a Seed
+
+`ValueNoise` samples one octave of smoothed value noise. Octave weights and scales are yours:
+
+```rust,ignore
+use plaza_client_utils::determinism::ValueNoise;
+
+const NOISE: ValueNoise = ValueNoise::new(SEED);
+const LATTICE: f32 = 19.0;   // squares between lattice points; larger is smoother
+
+pub fn height_at(x: f32, z: f32) -> f32 {
+  let broad = NOISE.octave(x, z, LATTICE, 0);
+  let hills = NOISE.octave(x, z, LATTICE / 2.6, 1) * 0.45;
+  let detail = NOISE.octave(x, z, LATTICE / 6.1, 2) * 0.15;
+  broad + hills + detail
+}
+```
+
+Derive both the renderer's surface and the pathfinder's walkable squares from the one function, so the picture and the rules agree about where a cliff is. `NOISE.corner(xi, zi, octave)` reads a raw lattice value.
+
+### Checking Two Worlds Match
+
+`StateDigest` folds a simulation state into one `u64`. Write the fields in the same canonical order on both ends each frame and compare:
+
+```rust,ignore
+use plaza_client_utils::StateDigest;
+
+pub fn digest(world: &World) -> u64 {
+  let mut digest = StateDigest::new();
+  for p in &world.paddles {
+    digest.write_i32(p.x.0);
+    digest.write_i32(p.y.0);
+  }
+  digest.write_i32(world.puck.x.0);
+  digest.write_i32(world.puck.y.0);
+  digest.write_i32(world.scores[0] as i32);
+  digest.write_i32(world.scores[1] as i32);
+  digest.finish()
+}
+
+// Server: ship it with the frame. Client: compare against its own world for that frame.
+if digest(&local_world) != frame.digest {
+  error!(frame = frame.number, "worlds diverged");
+}
+```
+
+`write_f32` hashes the bit pattern, so `-0.0` and `0.0` disagree and a difference in the lowest bit shows. `SetDigest` answers "do we hold the same set"; `StateDigest` answers "is this the same world". See [`determinism`](API_REFERENCE.md#19-module-determinism) and [`StateDigest`](API_REFERENCE.md#struct-statedigest).
+
 ## Testing Without a Network
+
+Module `net_sim` needs the `net-sim` feature:
+
+```toml
+plaza_client_utils = { version = "0.6", features = ["net-sim"] }
+```
 
 ```rust,ignore
 use plaza_client_utils::net_sim::{LatencyLink, Ordering, Rng};

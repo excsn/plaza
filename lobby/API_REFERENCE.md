@@ -74,7 +74,7 @@ A room running as a task in this process.
 
 *   **`new(room_id, initial_metadata, command_tx, task_join_handle, game_session_endpoint, password_hash) -> Self`** Called from your factory. `command_tx` is the `CommandSender` from `StateControllerBuilder::build`; `task_join_handle` is the `JoinHandle` from spawning `controller.run()`.
 *   **`with_reservations(self, reserve: impl Fn(GameID) -> GameOp, withdraw: impl Fn(GameID) -> GameOp) -> Self`**: how this room spells a reservation and its withdrawal in its own ops. `reserve_seat` and `withdraw_seat` then submit them as system ops on `command_tx`; without it both answer `NotImplemented`. The seam names no game type, which is what lets a room live in another process, so the spelling is the factory's to supply.
-*   **`update_player_count_in_metadata(&self, count: u32)`**: called by the room's own session as clients connect and disconnect. The lobby reads this when enforcing capacity.
+*   **`update_player_count_in_metadata(&self, count: u32)`**: sets the player count reported in `metadata`. Nothing in plaza calls it; the application does as clients connect and disconnect. The lobby reads this when enforcing capacity.
 *   **Public fields**: `room_id`, `command_tx`, `metadata`, `game_session_endpoint`.
 *   Implements `RoomHandle`. The stored password hash is never exposed in `RoomMetadata`, which reports only whether one exists.
 
@@ -99,7 +99,7 @@ A room running as a task in this process.
 
 #### Reaching a room
 
-*   **`room(&self, room_id: &RoomId) -> Option<Arc<InProcessRoomHandle<..>>>`** The way to send a specific room a `ControllerCommand`, read its metadata, or update its player count.
+*   **`room(&self, room_id: &RoomId) -> Option<Arc<dyn RoomHandle<..>>>`**: the handle of one room, for reading its metadata, endpoint and whether it has finished through [`RoomHandle`](#trait-roomhandlegameagentid-agentid-customroomsettings). Sending a `ControllerCommand` or updating a player count needs the concrete `InProcessRoomHandle` or the `CommandSender`, which the application keeps itself.
 *   **`rooms(&self) -> Vec<Arc<InProcessRoomHandle<..>>>`**
 
 ## 3. Payloads
@@ -211,7 +211,7 @@ A `TicketStore` over a `HashMap` behind a mutex, adding no dependency the crate 
 
 A `TicketStore` over `fibre_cache`, whose janitor sweeps on its own schedule and whose shards replace the single mutex the lobby and every room route otherwise share. Off by default, so nothing downstream pays for it unless it enables the feature.
 
-*   **`with_expiry(window)`**: a TTL, with no capacity set, so nothing is ever evicted for pressure and a ticket leaves only by being spent, revoked, or timing out.
+*   **`with_expiry(window)`**: a TTL, with no capacity set, so nothing is ever evicted for pressure and a ticket leaves only by being spent, revoked or timing out.
 *   **`run_maintenance()`**: forces the expiry pass deterministically, so a test does not have to sleep past the window.
 
 ### Writing a third

@@ -101,7 +101,7 @@ Two things make the cheap mode possible and neither is the diff.
 
 The dial is on the panel and both modes live in one build, because the comparison is the deliverable rather than either mode on its own.
 
-**What the cheap mode costs is a second piece of client code.** Under `every tick` a frame is the whole visible set, so absence means a prop is standing again. Under `on change` absence means nothing happened and a prop coming back has to be said out loud with a zero, or a client draws a stump for the rest of the session. `a_prop_that_comes_back_is_said_out_loud_in_either_mode` runs both.
+**What the cheap mode costs is a second piece of client code.** Under `every tick` a frame is the whole visible set, so absence means a prop is standing again. Under `on change` absence means nothing happened and a prop coming back has to be said out loud with a zero. Otherwise a client draws a stump for the rest of the session. `a_prop_that_comes_back_is_said_out_loud_in_either_mode` runs both.
 
 ## Dropped items and their audience
 
@@ -171,9 +171,9 @@ Every one of these is a place where both halves were individually correct.
 - **A client is never in its own audience.** `You` exists for that reason and gow_3d shipped the other way round: a client that read itself out of the list of other people read nothing at all and every key press was silent.
 - **An unexplained refusal looks like a broken key.** Every one is named on the wire and said in words, once. `NeedsLevel` carries the skill and the level, because "nothing happened" and "you need woodcutting 8" look identical from the outside.
 - **A respawn is the one square the client is put on rather than walking to.** A counter rather than a flag, so the client applies the move exactly once however many frames repeat it and a dropped frame is caught by the next.
-- **A diagonal needs both of its sides open**, or a body walks through the join of two walls. It is the one pathfinding bug a player notices immediately and cannot unsee.
+- **A diagonal needs both of its sides open.** Otherwise a body walks through the join of two walls. It is the one pathfinding bug a player notices immediately and cannot unsee.
 - **A walled-off click still means something.** The search returns the best partial route rather than nothing, because standing still is a worse answer than setting off and *which* partial is decided by the same total order, so giving up is as reproducible as succeeding.
-- **A pack fills the first free square rather than the end**, or a player who eats from the middle watches their pack grow past its own last square and then refuse an item it plainly has room for.
+- **A pack fills the first free square rather than the end.** Otherwise a player who eats from the middle watches their pack grow past its own last square and then refuse an item it plainly has room for.
 - **The draw batch is bounded by the buffer, asked at every push.** macroquad's batcher clamps at 10000 vertices and 5000 indices, warns once and draws the front of the buffer, so a scene past it is quietly missing rather than broken. Counting bodies was gow_3d's bug and it is not repeated here.
 
 ## Layout

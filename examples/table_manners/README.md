@@ -23,7 +23,7 @@ This example originally shipped a 252-line hand-written TCP transport, because A
 
 ## Kick reasons
 
-The farewell is a `PartyOp` of this crate's own vocabulary, pre-encoded and handed to the close; the library flushes what was queued, writes it last and shuts the socket. Delivery is asserted from the client's side, on every kick and again on a room-wide drain, which is where delivery is real: the server can order the farewell but cannot watch it land.
+The farewell is a `Farewell`: the close code from `Parting::code` (4403 for a kick, 4410 for AFK, 4429 for flooding, 1001 for a drain) with the reason as detail bytes. The library flushes what was queued, writes the farewell last as a `Goodbye` frame and shuts the socket; on WebSocket the close carries the same code. The guest reads the reason back from the goodbye's code with `Parting::from_code`. Delivery is asserted from the client's side, on every kick and again on a room-wide drain, which is where delivery is real: the server can order the farewell but cannot watch it land.
 
 ## Kicks and netdrops
 
@@ -38,7 +38,7 @@ The parting reason lives in the `Host`, not in any transport. The host initiated
 
 ## AFK is a policy on the session's reading
 
-`agent_idle_for` counts from the last **data** frame and probes never move it: the control plane answers a `Ping` invisibly, so this reading has to be the session's or it cannot exist. The guest in the test answers every probe for the whole timeout, so the link is alive and measured while the seat is silent and the removal still fires. Talking across twice the timeout does not. The steward that applies the number is the example's own 200ms loop, which is the division the doc wants: no timers in the session.
+`agent_idle_for` counts from the last **data** frame and probes never move it: the control plane answers a `Ping` invisibly, so this reading has to be the session's or it cannot exist. The guest in the test answers every probe for the whole timeout, so the link is alive and measured while the seat is silent and the removal still fires. Talking for longer than the timeout does not. The steward that applies the number is the example's own 200ms loop, which is the division the doc wants: no timers in the session.
 
 ## The griefer floods
 
@@ -50,6 +50,6 @@ The parting reason lives in the `Host`, not in any transport. The host initiated
 
 `disconnect_all` with the same farewell for everyone: told, then closed, the same flush semantic as the kick applied room-wide. That is a graceful server restart in one call.
 
-## The wire question, still answered the same way
+## The wire question
 
-The close reason is an `Op`, not a `Kind`. The library agrees: `close_connection` carries pre-encoded application bytes and the close frame stays a transport event, with the farewell riding the ops path in front of it.
+This example first sent the close reason as an `Op` rather than a new `Kind`. The library settled it the other way: `close_connection`, `deregister_agent` and `disconnect_all` take a `Farewell` (a close code plus optional detail bytes the session never reads) and the transport writes it as a `Kind::Goodbye` frame. No `PartyOp` carries the reason any more.

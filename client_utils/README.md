@@ -13,7 +13,7 @@ The server half lives in [`plaza`](../core/) under `game_common::reconciliation`
 plaza_client_utils = "0.6"
 ```
 
-**No workspace dependencies.** This crate pulls in `thiserror` and `tracing` and nothing else, deliberately, so wasm builds and game-engine plugins do not drag in a server's async runtime. It is pure logic: no transport, no serialization, no engine coupling. You feed it what you receive and read back what to render.
+**No workspace dependencies.** This crate pulls in `thiserror` and `tracing`, plus an optional `serde` that only the `fixed` feature enables. It stays that small deliberately, so wasm builds and game-engine plugins do not drag in a server's async runtime. It is pure logic: no transport, no wire format and no engine coupling. You feed it what you receive and read back what to render.
 
 You do not need a Plaza server to use it. Anything speaking a sequence-numbered-input protocol works.
 
@@ -22,7 +22,7 @@ You do not need a Plaza server to use it. Anything speaking a sequence-numbered-
 **The drop-in bundles.** Most clients wire the primitives the same way, so three types package the whole job:
 
 - `PredictedPlayer` is your controlled entity when the server consumes **one input per simulation step**: feed it inputs and server packets, read a render position back. It wires prediction, reconciliation, replay and smoothing together.
-- `HeldInputPredictor` is your controlled entity when the server **holds a direction and integrates it every tick**: dead reckon locally, ease toward each authoritative sample. See [which predictor](#which-predictor).
+- `HeldInputPredictor` is your controlled entity when the server **holds a direction and integrates it every tick**: dead reckon locally, ease toward each authoritative sample. See [which predictor](README.USAGE.md#which-predictor).
 - `RemoteView` is an entity you do not control: `push` snapshots, `render` a state. It wires interpolation, extrapolation and the starvation handling in between.
 
 **Or the primitives underneath**, if you want finer control. The bundles are built from them and nothing more:
@@ -46,7 +46,7 @@ You do not need a Plaza server to use it. Anything speaking a sequence-numbered-
 | Arithmetic that must agree to the bit across builds, because the wire carries inputs rather than state | `fixed` (`Fx`, `P`), feature `fixed` |
 | Tracking clock offset **and drift** against a server | `ClockSyncEstimator` (least-squares offset + skew) |
 | Optimally smoothing one noisy signal (jitter, latency) | `ScalarKalman` (a 1D Kalman filter) |
-| Telling the other side what arrived, in twelve bytes, however bad the link | `ack::AckWindow` (a sliding-window bitmask) |
+| Telling the other side what arrived, in sixteen bytes, however bad the link | `ack::AckWindow` (a sliding-window bitmask) |
 | Coasting a *turning* entity through a long gap, not off its tangent | `trajectory::TrajectoryPredictor` (a damped quadratic fit) |
 | Sending an input only when it changes, without the state sticking on a lost packet | `coalesce::InputCoalescer` |
 | Holding the client side of a streamed entity set and proving it still agrees | `mirror::DeltaMirror` (+ `SetDigest`, `SlotKey`, `SlotAllocator`) |

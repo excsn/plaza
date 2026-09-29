@@ -38,6 +38,8 @@ How to hold a WebSocket in a frame loop: polling it, choosing a backend for desk
 *   **Backend**: where the socket actually lives. `native` off wasm, `miniquad` on it, `loopback` anywhere.
 *   **`FramePump`**: the loop every client of a `plaza_session` server would otherwise write: probes, kind-byte dispatch, the `Hello` check, the clock estimators.
 *   **`Arrival`**: what the pump hands back after keeping the protocol traffic: `Opened`, `Ops`, `Mismatch`, `Closed`.
+*   **Credential**: bytes the pump sends straight after its `Hello`, for a server that admits connections by what the client presents.
+*   **`Closed`**: how a pumped connection ended: the server's goodbye code, its undecoded detail and a reason worded for a person. `refused()` is true for a 4xxx code.
 *   **`Timeline`**: the pump's own round trip, clock fit and newest-stamp floor, from `plaza_client_utils`.
 *   **`ScriptedSocket`**: the test double. Feed events in, read sent bytes out.
 
@@ -55,10 +57,10 @@ let mut events = Vec::new();
 socket.poll(&mut events);
 for event in events.drain(..) {
   match event {
-    Event::Open => socket.send_text("hello"),
+    Event::Open => socket.send_text("hello")?,
     Event::Message(bytes) => decode(&bytes),
     Event::Text(text) => println!("{text}"),
-    Event::Closed(reason) => println!("closed: {reason}"),
+    Event::Closed(reason) => println!("closed: {reason:?}"),
   }
 }
 ```
@@ -68,22 +70,27 @@ for event in events.drain(..) {
 Against a `plaza_session` server, use this instead and never write the protocol loop.
 
 ```rust,ignore
-use plaza_ws::pump::{FramePump, Arrival};
+use plaza_ws::pump::{mismatch_message, Arrival, FramePump};
 
-let mut pump = FramePump::connect(&url, MsgPackCodec, PROTOCOL)?;
+let mut pump = FramePump::connect(&url, MsgPackCodec, PROTOCOL)?.credential(token);
 let mut arrivals = Vec::new();
 
 // Once per frame.
 pump.poll(now_ms, &mut arrivals);
 for arrival in arrivals.drain(..) {
   match arrival {
-    Arrival::Opened => pump.send_ops(&[Op::Join { name }])?,
+    Arrival::Opened => {
+      pump.send_ops(&[Op::Join { name }]);
+    }
     Arrival::Ops(frame) => apply(codec.decode::<Vec<Op>>(frame.body())?),
-    Arrival::Mismatch { ours, theirs } => banner(pump.mismatch_message(ours, theirs)),
-    Arrival::Closed(reason) => banner(reason),
+    Arrival::Mismatch { ours, theirs } => banner(mismatch_message(ours, theirs)),
+    Arrival::Closed(closed) if closed.refused() => sign_in_again(closed.code, closed.detail),
+    Arrival::Closed(closed) => reconnect_later(closed.reason),
   }
 }
 ```
+
+`credential` is for a server that admits connections through a `ConnectionAdmitter`: the pump sends it straight after its `Hello`, before anything else. `Closed` carries the server's goodbye: its `code`, its undecoded `detail` and a `reason` worded for a person. `refused()` is true for a 4xxx code, which is the server deciding, so reconnecting with the same credential will be refused again.
 
 ## Holding a Socket
 
@@ -98,8 +105,8 @@ Non-blocking and it drains into a buffer you own, so a per-frame call allocates 
 ### Sending
 
 ```rust,ignore
-socket.send(&bytes);
-socket.send_text("a string");
+socket.send(&bytes)?;
+socket.send_text("a string")?;
 ```
 
 With the `json` feature, `SendJson` adds one more by blanket impl over `Socket`:
@@ -125,7 +132,7 @@ Reconnection policy, backoff, heartbeats and your own message framing are all yo
 let mut socket: Box<dyn Socket> = plaza_ws::connect_boxed(&url)?;
 ```
 
-`connect_boxed` exists in every build. With no backend compiled in it reports "no socket backend compiled in" at runtime, because an offline teaching build still has to compile its connect path.
+`connect_boxed` exists in every build. With no backend compiled in it reports "this build has no socket backend compiled in" at runtime, because an offline teaching build still has to compile its connect path.
 
 ## Choosing a Backend
 
@@ -140,7 +147,7 @@ let mut socket: Box<dyn Socket> = plaza_ws::connect_boxed(&url)?;
 ### Desktop
 
 ```toml
-plaza_ws = { version = "0.7", features = ["native"] }
+plaza_ws = { version = "0.6", features = ["native"] }
 ```
 
 One thread owns the socket and talks to the frame loop over channels, because `tungstenite` is blocking, a frame loop cannot block and an async runtime would drag tokio into a program whose job is to render at 60 fps. It uses a non-blocking stream rather than a blocking read, since `tungstenite::WebSocket` has no split and a thread parked in `read()` would hold the socket for as long as the peer stayed quiet.
@@ -148,7 +155,14 @@ One thread owns the socket and talks to the frame loop over channels, because `t
 ### Browser Under Macroquad
 
 ```toml
-plaza_ws = { version = "0.7", features = ["miniquad"] }
+plaza_ws = { version = "0.6", features = ["miniquad"] }
+```
+
+The plugin's functions and miniquad's are provided by JavaScript when the page loads, so the module leaves them undefined at link time. From rustc 1.98, `wasm32-unknown-unknown` no longer turns undefined symbols into imports and the link fails with `undefined symbol: init_webgl` or `plaza_ws_connect`. Put the flag in the app's `.cargo/config.toml`:
+
+```toml
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "link-arg=--import-undefined"]
 ```
 
 See [Wiring the Browser Page](#wiring-the-browser-page): the plugin JS has to be loaded before the module is instantiated.
@@ -193,16 +207,18 @@ It counts every byte both ways, so a bandwidth panel diffs its counters instead 
 `drain` and `digest` are the two halves of `poll`, split so a backlog trim can run between them.
 
 ```rust,ignore
-let raw = pump.drain();
-let kept = plaza_ws::trim_backlog(raw, LOST_AHEAD);   // a resumed tab's lump
-pump.digest(now_ms, kept, &mut arrivals);
+pump.drain(now_ms, &mut events);
+if plaza_ws::trim_backlog(&mut events, TRIGGER, KEEP).is_some() {
+  pump.on_resume();   // a resumed tab's lump: what the estimators learned is stale
+}
+pump.digest(&mut events, now_ms, &mut arrivals);
 ```
 
 ### Answering a Protocol Mismatch
 
 ```rust,ignore
 Arrival::Mismatch { ours, theirs } => {
-  banner(pump.mismatch_message(ours, theirs));   // "reload, this page is stale"
+  banner(mismatch_message(ours, theirs));   // "reload, this page is stale"
 }
 ```
 
@@ -234,15 +250,15 @@ It parses the built wasm's import section and fails if the plugin does not satis
 
 ```toml
 [dev-dependencies]
-plaza_ws = { version = "0.7", features = ["scripted"] }
+plaza_ws = { version = "0.6", features = ["scripted"] }
 ```
 
 ```rust,ignore
 use plaza_ws::scripted::ScriptedSocket;
 
 let mut socket = ScriptedSocket::new();
-socket.push(Event::Open);
-socket.push(Event::Message(server_frame));
+socket.feed(Event::Open);
+socket.feed_message(server_frame);
 
 let mut events = Vec::new();
 socket.poll(&mut events);
@@ -286,6 +302,6 @@ let mut socket = match plaza_ws::connect(&url) {
 
 Everything after that is an `Event` rather than a `Result`. A socket that fails while open reports `Event::Closed(reason)` on the next `poll`, so a frame loop handles a drop in the same place it handles a clean close and there is no error path that can be forgotten between frames.
 
-`send` on a closed socket is a no-op rather than a panic, so a frame loop that discovers the close one frame later does not fail on the frame in between.
+`send` on a closed socket returns `Err(WsError::Closed)` rather than panicking, so a frame loop that discovers the close one frame later can ignore that error on the frame in between.
 
 The pump reports a stale build as `Arrival::Mismatch` rather than an error, since the connection works and the peer is only a different build. What to do about it is the application's and `mismatch_message` writes the sentence if you want it.

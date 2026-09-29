@@ -28,7 +28,7 @@ The client runs the same fixed-point `sim::step` the server runs, predicts every
 The panel draws the puck one of two ways and measures both the same way, recording what was shown each frame and comparing when the authoritative world for that frame arrives:
 
 - **Interpolate**: delayed server frames blended, the standard treatment for anything owned by someone else. Smooth and late by the render delay plus the one-way, which on a contested puck is exactly the window where your paddle visibly passes through it.
-- **Rollback**: the re-simulated present. On the beam, corrections arrive as re-simulations instead of position lerps and the panel prices them: corrections count, mean snap size and re-simulated frames, the cost the IDEAS entry asked to see beside the error.
+- **Rollback**: the re-simulated present. On the beam, corrections arrive as re-simulations instead of position lerps and the panel prices them: corrections count, mean snap size and re-simulated frames, shown beside the error.
 
 The toggle covers the puck alone. Paddles are always drawn from the predicted present with corrections **eased**: whatever a rollback rewrites stays on screen as an offset that bleeds off over ~100ms, so a wrong guess shows as a small nudge rather than a jump. The whole screen therefore holds one timeline and a bounce lands where the paddles are drawn; drawing the paddles from delayed frames was tried and made the puck bounce off paddles that had not been drawn there yet.
 

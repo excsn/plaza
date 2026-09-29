@@ -15,6 +15,8 @@ Every block, one line each, grouped by the problem it solves. Links go to the cr
 | `ReconnectTracker` | disconnect grace, driven from your tick; what expiry means is up to you | [core](../../core/API_REFERENCE.md) |
 | `SeatTable` / `Seating` | bounded seats where a fresh occupant must not inherit the last one's state | [server_utils](../../server_utils/API_REFERENCE.md) |
 | `Roster` | the same, when a seat number is what your ops and your wire actually carry | [server_utils](../../server_utils/API_REFERENCE.md) |
+| `Crew` | bots in the roster: real seats through the same admission as a person, with no connection | [server_utils](../../server_utils/API_REFERENCE.md) |
+| `ClosureLog` | telling a close you ordered apart from a netdrop, since both arrive as the same `AgentLeft` | [core](../../core/API_REFERENCE.md) |
 
 ## Showing the world (chapters 10, 11)
 
@@ -30,7 +32,9 @@ Every block, one line each, grouped by the problem it solves. Links go to the cr
 | `DeltaMirror`, `SetDigest`, `SlotKey`, `SlotAllocator` | the client half of that stream and the check that both ends still agree | [client_utils](../../client_utils/API_REFERENCE.md) |
 | `PriorityAccumulator` | choosing which relevant entities fit *this* packet, without starving the rest | [server_utils](../../server_utils/API_REFERENCE.md) |
 | `RestDetector` | knowing which entities have stopped, so a packet can stop paying for them | [server_utils](../../server_utils/API_REFERENCE.md) |
-| `RateMeter` | live rates, means and shares on a HUD | [server_utils](../../server_utils/API_REFERENCE.md) |
+| `Told` | what each viewer has already been told, so a world that is not changing is not re-sent | [server_utils](../../server_utils/API_REFERENCE.md) |
+| `Silence` | the client acting on an entity the server has stopped mentioning, with a grace period you choose | [client_utils](../../client_utils/API_REFERENCE.md) |
+| `RateMeter` | live rates, means and shares on a HUD (re-exported by server_utils) | [client_utils](../../client_utils/API_REFERENCE.md) |
 
 ## Your own character (chapter 20)
 
@@ -42,6 +46,7 @@ Every block, one line each, grouped by the problem it solves. Links go to the cr
 | `ErrorSmoother` / `CorrectionMonitor` | easing what you draw after a correction / knowing whether that correction was normal | [client_utils](../../client_utils/API_REFERENCE.md) |
 | `AdaptiveDecay` | clearing a large correction *sooner* than a small one, rather than in the same fixed time | [client_utils](../../client_utils/API_REFERENCE.md) |
 | `InputCoalescer` | send-on-change plus keepalive, paired with held-input servers only | [client_utils](../../client_utils/API_REFERENCE.md) |
+| `RoutePredictor` | a client that runs the same deterministic rule as the server (a pathfinder), so one op covers a whole walk | [client_utils](../../client_utils/API_REFERENCE.md) |
 | reconciliation module (server half) | tracking which inputs each client has been credited for | [core](../../core/API_REFERENCE.md) |
 
 ## Everyone else and fairness (chapter 21)
@@ -62,7 +67,7 @@ Every block, one line each, grouped by the problem it solves. Links go to the cr
 
 | Block | Reach for this when | Lives in |
 |---|---|---|
-| `FixedTimestep` / `Periodic` | a variable frame driving a fixed-quantum sim / "is it time yet" | [client_utils](../../client_utils/API_REFERENCE.md) |
+| `FixedTimestep` / `Periodic` | a variable frame driving a fixed-quantum sim / "is it time yet"; `FixedTimestep::advance` yields each step as a `Duration` | [client_utils](../../client_utils/API_REFERENCE.md) |
 | `RttEstimator` | smoothed round trip, jitter and minimum from the probe plane | [client_utils](../../client_utils/API_REFERENCE.md) |
 | `ClockSyncEstimator` | server-clock offset and drift rate by least squares, for long sessions | [client_utils](../../client_utils/API_REFERENCE.md) |
 | `Timeline` / `Probe` | keeping probe samples valid across reconnects and tab resumes | [client_utils](../../client_utils/API_REFERENCE.md) |
@@ -73,10 +78,12 @@ Every block, one line each, grouped by the problem it solves. Links go to the cr
 | Block | Reach for this when | Lives in |
 |---|---|---|
 | `frame` (kinds, split, begin) | the `[kind][body]` layout and the skip-unknown rule | [wire](../../wire/API_REFERENCE.md) |
+| `framing`, `LengthDelimited` | the 4-byte length prefix a byte stream carries each frame behind, with a decoder for your own I/O | [wire](../../wire/API_REFERENCE.md) |
 | `JsonCodec` / `MsgPackCodec` / `MsgPackNamedCodec` / `WireCodec` | JSON by default, compact MessagePack when measurement shows it saves enough, named MessagePack when the other end cannot be built from your struct definitions and your own codec when none fits | [wire](../../wire/API_REFERENCE.md) and [session](../../session/API_REFERENCE.md) |
-| `build::emit` / `ProtocolVersion` | a wire version generated from your protocol types, so nobody bumps it by hand | [wire](../../wire/API_REFERENCE.md) |
+| `build::Wire` / `build::emit` / `ProtocolVersion` | a wire version generated from your protocol types, so nobody bumps it by hand; `Wire::dart_types` also generates Dart types | [wire](../../wire/API_REFERENCE.md) |
 | `answer_ping` | answering probes from a hand-written read loop | [wire](../../wire/API_REFERENCE.md) |
-| `AckWindow` | telling the other side what arrived, in twelve bytes | [client_utils](../../client_utils/API_REFERENCE.md) |
+| `AckWindow` | telling the other side what arrived, in sixteen bytes | [client_utils](../../client_utils/API_REFERENCE.md) |
+| `oneshot::Pending` | resending a one-shot op (a welcome, a refusal) until the other end shows it arrived, on a link that can lose it | [server_utils](../../server_utils/API_REFERENCE.md) |
 | `bits` (`BitWriter`/`BitReader`, `quantize`, `smallest_three`, varints) | packing the hot array, where a byte-aligned codec cannot use a value's bounds and the bounds are where the saving comes from | [wire](../../wire/API_REFERENCE.md) |
 | `BitCodec` | the same idea with no layout written by hand: saves 1.4x, which is as far as a derive can go | [wire](../../wire/API_REFERENCE.md) |
 | `Payload` | carrying packed bytes in a field, without a codec re-encoding every byte as an integer | [wire](../../wire/API_REFERENCE.md) |
@@ -92,19 +99,25 @@ Every block, one line each, grouped by the problem it solves. Links go to the cr
 | `LinkProfile` / `DirectionProfile` | impairment: delay, jitter, loss, per connection, per direction, at runtime | [session](../../session/API_REFERENCE.md) |
 | `Host` | serving the browser bundle with cache busting, so a stale client only needs a reload | [session](../../session/API_REFERENCE.md) |
 | `SessionOptions`, `Workload` | queue depths, limits and overflow policy, sized from a description of your traffic | [session](../../session/API_REFERENCE.md) |
-| `Socket` trait, `loopback::pair`, `trim_backlog` | one client socket shape across desktop, wasm and in-process; resumed-tab backlog | [ws_client](../../ws_client/) |
+| `Socket` trait, `loopback::pair`, `trim_backlog` | one client socket shape across desktop, wasm and in-process; resumed-tab backlog | [ws_client](../../ws_client/API_REFERENCE.md) |
+| `FramePump` | the client half of the framed protocol: hello, probes, version check, credential and the server's goodbye | [ws_client](../../ws_client/API_REFERENCE.md) |
+| `ScriptedSocket` | a socket whose arrivals a test feeds, for client code with no network | [ws_client](../../ws_client/API_REFERENCE.md) |
 | `TransportStats` | what the transport carried and dropped, readable while it is busy | [session](../../session/API_REFERENCE.md) |
+| `OutboundBudget`, `connection_owed` | sending a slow client fewer complete frames rather than losing frames from a full queue | [session](../../session/API_REFERENCE.md) |
 
 ## Saying no (chapter 40)
 
 | Block | Reach for this when | Lives in |
 |---|---|---|
-| fallible `AgentFactory` / `Refusal` | turning a socket away before anything is registered for it | [session](../../session/API_REFERENCE.md) |
+| fallible `AgentFactory` | turning a TCP socket away by what it shows, before anything is registered for it | [session](../../session/API_REFERENCE.md) |
+| `ConnectionAdmitter`, `admit_connection` / `bind_with_admitter` | admitting a client on the credential it presents after its `Hello`, with every identity rule judged before it registers | [session](../../session/API_REFERENCE.md) |
+| `Farewell` | the close code and detail every server-initiated close writes last as a `Goodbye` | [session](../../session/API_REFERENCE.md) |
 | `connections_of` + `PresenceEvent`'s conn id | resolving an account to a connection handle you can close | [session](../../session/API_REFERENCE.md) |
 | `close_connection` / `deregister_agent` / `disconnect_all` | ending one connection, all of one account's or everyone's, with the reason arriving first | [session](../../session/API_REFERENCE.md) |
 | `idle_for` / `agent_idle_for` | AFK rules that probe traffic cannot postpone | [session](../../session/API_REFERENCE.md) |
 | `connection_inbound` / `agent_inbound` | attributing a flood to the connection sending it | [session](../../session/API_REFERENCE.md) |
 | `SessionOptions::rate_limit_inbound`, `Rate` | making that flood cost only the connection sending it | [session](../../session/API_REFERENCE.md) |
+| `OpGuard` | refusing an op before the rules see it, in one place rather than across every handler | [core](../../core/API_REFERENCE.md) |
 | `set_deadline` | credits, trials and token expiry as one renewable mechanism | [session](../../session/API_REFERENCE.md) |
 
 ## Rooms and placement (chapter 41)
@@ -123,5 +136,6 @@ Every block, one line each, grouped by the problem it solves. Links go to the cr
 |---|---|---|
 | `LatencyLink`, `Rng` (feature `net-sim`) | deterministic latency, jitter and loss for tests, behaving like a real stream | [client_utils](../../client_utils/API_REFERENCE.md) |
 | `PlayoutBuffer` / `Admission` | a playout queue that knows when a resumed tab's timeline is lost | [client_utils](../../client_utils/API_REFERENCE.md) |
-| `Vec2` / `Vec3` / `Quat` and the `Interpolatable` trait | standalone math, or implement the traits on glam and keep your own | [client_utils](../../client_utils/API_REFERENCE.md) |
+| `Vec2` / `Vec3` / `Quat` and the `Interpolatable` trait | standalone math; or implement the traits on glam and keep your own | [client_utils](../../client_utils/API_REFERENCE.md) |
+| `Fx`, `XorShift`, `ValueNoise`, `mix64` | fixed-point arithmetic and seeded draws that give the same number on both ends in every build | [client_utils](../../client_utils/API_REFERENCE.md) |
 | schedulers, fsm, flow control, scorekeeping | optional core modules, take what fits, each a trait with a swappable impl | [core](../../core/API_REFERENCE.md) |

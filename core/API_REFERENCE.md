@@ -12,14 +12,14 @@
   - [Trait `SnapshotProvider`](#trait-snapshotprovider)
   - [Struct `NoSnapshots`](#struct-nosnapshots)
   - [Struct `SnapshotFn<F>`](#struct-snapshotfnf)
-  - [Trait `OpGuard` (module `op_guard`)](#trait-opguard-module-opguard)
+  - [Trait `OpGuard` (module `op_guard`)](#trait-opguard-module-op_guard)
 - [3. The Controller](#3-the-controller)
-  - [Struct `StateControllerBuilder<Op, ID, StateType, SL, Sess, SP, G = NoGuard>`](#struct-statecontrollerbuilderop-id-statetype-sl-sess-sp-g-noguard)
-  - [Struct `StateController<Op, ID, StateType, SL, Sess, SP, G = NoGuard>`](#struct-statecontrollerop-id-statetype-sl-sess-sp-g-noguard)
+  - [Struct `StateControllerBuilder<Op, ID, StateType, SL, Sess, SP, G = NoGuard>`](#struct-statecontrollerbuilderop-id-statetype-sl-sess-sp-g--noguard)
+  - [Struct `StateController<Op, ID, StateType, SL, Sess, SP, G = NoGuard>`](#struct-statecontrollerop-id-statetype-sl-sess-sp-g--noguard)
   - [Enum `ControllerCommand<Op, ID: AgentId, StateType>`](#enum-controllercommandop-id-agentid-statetype)
   - [Type Alias `CommandSender<Op, ID, StateType>`](#type-alias-commandsenderop-id-statetype)
-  - [Function `query_with`](#function-querywith)
-  - [Function `query_state`](#function-querystate)
+  - [Function `query_with`](#function-query_with)
+  - [Function `query_state`](#function-query_state)
   - [Struct `StateReader<StateType>`](#struct-statereaderstatetype)
   - [Controller Constants](#controller-constants)
 - [4. Sessions (Transport)](#4-sessions-transport)
@@ -42,12 +42,12 @@
   - [`common::fsm`](#commonfsm)
   - [`common::participants`](#commonparticipants)
   - [`common::math`](#commonmath)
-- [8. Module `game_common`: game patterns](#8-module-gamecommon-game-patterns)
-  - [`game_common::reconciliation`](#gamecommonreconciliation)
-  - [`game_common::flow_control`](#gamecommonflowcontrol)
-  - [`game_common::scorekeeping`](#gamecommonscorekeeping)
-  - [`game_common::input_intent`](#gamecommoninputintent)
-- [9. Module `app_common`: collaboration payloads](#9-module-appcommon-collaboration-payloads)
+- [8. Module `game_common`: game patterns](#8-module-game_common-game-patterns)
+  - [`game_common::reconciliation`](#game_commonreconciliation)
+  - [`game_common::flow_control`](#game_commonflow_control)
+  - [`game_common::scorekeeping`](#game_commonscorekeeping)
+  - [`game_common::input_intent`](#game_commoninput_intent)
+- [9. Module `app_common`: collaboration payloads](#9-module-app_common-collaboration-payloads)
 - [10. Crate Re-exports](#10-crate-re-exports)
 - [11. Error Handling](#11-error-handling)
   - [Enum `PlazaError<ID: AgentId>`](#enum-plazaerrorid-agentid)
@@ -158,7 +158,7 @@ fn view(state: &Game, target: Option<&Agent<PlayerId>>) -> Option<GameOp> {
 let provider = Arc::new(SnapshotFn(view));
 ```
 
-Return `None` to send a recipient nothing. A named function coerces cleanly; a closure usually needs its argument types written out. Anything fallible, or anything that must await, still implements [`SnapshotProvider`](#trait-snapshotprovider) directly.
+Return `None` to send a recipient nothing. A named function coerces cleanly; a closure usually needs its argument types written out. Anything fallible or anything that must await, still implements [`SnapshotProvider`](#trait-snapshotprovider) directly.
 
 #### Enum `SnapshotContext`
 
@@ -166,7 +166,7 @@ Which snapshot is wanted. **Plaza never reads this**: it carries it from caller 
 
 *   **Variants**: `Full` (default), `DeltaFromVersion(u64)`, `ForPerspective(String)`, `Custom(Arc<dyn Any + Send + Sync>)`.
 *   **Methods**: `custom<T>(value) -> Self`, `downcast_ref<T>() -> Option<&T>`.
-*   The named variants are conveniences. When your notion of "which snapshot" is a content hash, a vector clock, or a typed enum, use `Custom`. Plaza tracks no versions and runs no acknowledgement protocol.
+*   The named variants are conveniences. When your notion of "which snapshot" is a content hash, a vector clock or a typed enum, use `Custom`. Plaza tracks no versions and runs no acknowledgement protocol.
 
 ### Trait `OpGuard` (module `op_guard`)
 
@@ -176,7 +176,7 @@ pub trait OpGuard<Op, ID: AgentId, StateType>: Send + Sync + 'static {
 }
 ```
 
-Screens ops for authorization. Whether an agent may do something at all is a separate question from what the act does. Answering both inside `StateLogic` spreads security checks across the handlers. The controller runs the guard per op, ahead of `process_input`, so authorization lives in one place and a refused op never reaches the rules. Installed with [`StateControllerBuilder::guard`](#struct-statecontrollerbuilderop-id-statetype-sl-sess-sp-g-noguard); the default is `NoGuard`.
+Screens ops for authorization. Whether an agent may do something at all is a separate question from what the act does. Answering both inside `StateLogic` spreads security checks across the handlers. The controller runs the guard per op, ahead of `process_input`, so authorization lives in one place and a refused op never reaches the rules. Installed with [`StateControllerBuilder::guard`](#struct-statecontrollerbuilderop-id-statetype-sl-sess-sp-g--noguard); the default is `NoGuard`.
 
 The guard decides whether this agent may submit this op at all. For example, whether a seated, living player may vote in this phase belongs in the guard, while whether the player they voted for exists belongs in the rules. The state is read-only, so authorization cannot mutate. **The guard is synchronous** because it runs per op on the controller's task. Load a permission kept in a database into state ahead of time instead of fetching it per op.
 
@@ -353,7 +353,7 @@ The interval and the step are separate settings. Waking more often than you step
 
 ### Struct `ControllerStats`
 
-Live counters for one running controller, obtained from [`StateControllerBuilder::stats`](#struct-statecontrollerbuilderop-id-statetype-sl-sess-sp-g-noguard) before `build` (or `with_stats` to supply one you already hold) and from `StateController::stats` after.
+Live counters for one running controller, obtained from [`StateControllerBuilder::stats`](#struct-statecontrollerbuilderop-id-statetype-sl-sess-sp-g--noguard) before `build` (or `with_stats` to supply one you already hold) and from `StateController::stats` after.
 
 *   **`ticks()`**, **`commands()`**, **`ops()`**, **`joins()`**, **`leaves()`**, **`snapshots()`**.
 *   **`ops_refused()`**: ops the [`OpGuard`](#trait-opguard-module-op_guard) refused, which `StateLogic` never saw. A climbing count means clients are attempting ops they may not submit; the guard's own logging says which op and whose.
@@ -437,7 +437,7 @@ Turns and rounds are a trait plus a ready-made implementation, so anything provi
 
 Phases have no trait. When a phase changes varies too much between games for one shape to fit, so the transition rules stay with the application. Every game needs each change to reach clients, so `Phased` owns the field and gives no way to change it without emitting a notice. The `phases` module docs say where that line falls.
 
-All three types are `Clone` and hold no timers, channels, or boxed closures, so a game that searches ahead can clone its state and re-run flow control in simulation.
+All three types are `Clone` and hold no timers, channels or boxed closures, so a game that searches ahead can clone its state and re-run flow control in simulation.
 
 *   **Trait `TurnManager<Op, AppID, TurnActorId>`**: `current_turn_actor`, `begin(context)`, `restart(context)`, `add_actor`, `remove_actor`, `end_current_turn_and_advance(context)`.
 *   **The trait is for conformance rather than dispatch.** Nothing holds a `dyn TurnManager`, since a game knows which order it plays in. The trait lists what an order of your own must provide. It held only the first and last of those methods until [`draft_board`](../examples/draft_board/) wrote a second implementation and found that every consumer was calling five. Seating and roster changes are on the trait because a manager without them is not usable.

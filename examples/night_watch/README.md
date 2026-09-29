@@ -1,6 +1,6 @@
 # night_watch
 
-A village with a wolf in it, written to exercise two parts of `flow_control` that no other example used: phases that decide who may act and rounds with no count.
+A village with a wolf in it, written to exercise two parts of `flow_control` that no example had used before it: phases that decide who may act and rounds with no count.
 
 ```sh
 cargo run -p plaza_example_night_watch                    # the scripted run
@@ -13,9 +13,9 @@ Social deduction without chat is a thin game, because most of the genre's intere
 
 **A phase that decides who may act.** `card_table`'s Dealing to Playing to Scoring is one flow in stages; every player may do the same things throughout. Here the phase decides who may act: at night one role may `Hunt` and nobody may `Vote`. By day it is the reverse. Both examples use the same `Phased` block.
 
-**Rounds with no count.** `SequentialRoundManager::new(None, ..)` had been documented and unit-tested since it was written, but this is its first consumer. The game ends when the wolf is exiled or reaches parity, never on a round number. `the_game_ends_on_a_condition_not_a_count` tests that the round manager never ends the game itself.
+**Rounds with no count.** `SequentialRoundManager::new(None, ..)` had been documented and unit-tested since it was written, but this example was its first consumer. The game ends when the wolf is exiled or reaches parity, never on a round number. `the_game_ends_on_a_condition_not_a_count` tests that the round manager never ends the game itself.
 
-**Collect, then resolve.** Every other example in this repository resolves input as it arrives or one actor at a time. Here a day's ballots are collected and nothing happens until dusk, which resolves them all at once. Resubmitting overwrites. Who has voted is public and who they chose is not. Dusk falls early when every living player has voted, which leads to the fourth point:
+**Collect, then resolve.** Most examples in this repository resolve input as it arrives or one actor at a time. Here a day's ballots are collected and nothing happens until dusk, which resolves them all at once. Resubmitting overwrites. Who has voted is public and who they chose is not. Dusk falls early when every living player has voted, which leads to the fourth point:
 
 **A deadline that goes stale.** The day's deadline is scheduled when the day begins. When dusk falls early nothing cancels it. The phase moves, the epoch it carries stops matching and it fires into the night as a no-op. `the_stale_day_deadline_does_not_fire_into_the_night` makes the night long and the day short so the deadline comes due in the wrong phase, then asserts it tallies nothing.
 

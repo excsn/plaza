@@ -18,7 +18,7 @@ The crate docs recommend three habits. Compare budgets against `min_rtt` rather 
 
 ## Client-side and test-side simulation
 
-For tests and demos with no session in the middle, the client crate's `net-sim` feature ships `LatencyLink`, a deterministic latency, jitter and loss pipe. Impairment tooling has to behave like the transport it stands in for. `LatencyLink`'s early default reordered frames, which WebSockets cannot do. Chasing that fake reordering cost a full diagnostic cycle.
+For tests and demos with no session in the middle, the client crate's `net-sim` feature ships `LatencyLink`, a deterministic latency, jitter and loss pipe. Impairment tooling has to behave like the transport it stands in for, so `LatencyLink` defaults to `Ordering::Ordered`: jitter can delay a packet past its successors but never ahead of its predecessors, which is what TCP and WebSockets do. `Ordering::Unordered` is there for simulating a datagram transport; on an ordered one it produces failures the real link never could.
 
 ## Results that latency does not change
 
@@ -30,4 +30,4 @@ The conditioner and the probe machinery are blocks a custom transport gets throu
 
 ## The lab
 
-Any playground with sliders works. [horde_playground](../../examples/horde_playground/) is the most complete and it is where an earlier shortcut impaired a queue the real traffic did not use, which is why the impairment has to cross the real path. Drag latency up and watch which meters move; add loss and compare what [chapter 11](11-keeping-the-pipe-small.md)'s recovery fixes against what it costs in bandwidth. Then run [ghost_trials](../../examples/ghost_trials/) and watch a number stay the same.
+Any playground with sliders works. [horde_playground](../../examples/horde_playground/) is the most complete and its impairment crosses the real path, so what the sliders do is what a player on that link would get. Drag latency up and watch which meters move; add loss and compare what [chapter 11](11-keeping-the-pipe-small.md)'s recovery fixes against what it costs in bandwidth. Then run [ghost_trials](../../examples/ghost_trials/) and watch a number stay the same.

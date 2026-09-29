@@ -1,6 +1,6 @@
 # Usage Guide: plaza_wire
 
-How to speak plaza's wire: choosing a codec, writing frames, measuring a round trip, deriving a protocol version at build time, generating a Dart client's types and packing a hot array by hand when a derive has run out of room.
+How to speak plaza's wire: choosing a codec, writing frames, measuring a round trip, admitting and closing a connection, deriving a protocol version at build time, generating a Dart client's types and packing a hot array by hand when a derive has run out of room.
 
 ## Table of Contents
 
@@ -21,6 +21,11 @@ How to speak plaza's wire: choosing a codec, writing frames, measuring a round t
     *   [Sending a Probe](#sending-a-probe)
     *   [Answering One by Hand](#answering-one-by-hand)
     *   [What the Two Fields Mean](#what-the-two-fields-mean)
+*   [Admitting and Closing a Connection](#admitting-and-closing-a-connection)
+    *   [Presenting a Credential](#presenting-a-credential)
+    *   [Reading a Credential by Hand](#reading-a-credential-by-hand)
+    *   [Saying Goodbye Before a Close](#saying-goodbye-before-a-close)
+    *   [Reading Why You Were Closed](#reading-why-you-were-closed)
 *   [Deriving a Protocol Version](#deriving-a-protocol-version)
     *   [Tagging Your Roots](#tagging-your-roots)
     *   [Emitting the Version](#emitting-the-version)
@@ -30,6 +35,8 @@ How to speak plaza's wire: choosing a codec, writing frames, measuring a round t
 *   [Packing Bits by Hand](#packing-bits-by-hand)
     *   [Letting the Derive Do It](#letting-the-derive-do-it)
     *   [Writing a Layout Yourself](#writing-a-layout-yourself)
+    *   [Reading It Back](#reading-it-back)
+    *   [Catching a Range That Is Too Small](#catching-a-range-that-is-too-small)
     *   [Carrying a Packed Payload](#carrying-a-packed-payload)
 *   [What the Measurements Settled](#what-the-measurements-settled)
 *   [Error Handling](#error-handling)
@@ -37,7 +44,7 @@ How to speak plaza's wire: choosing a codec, writing frames, measuring a round t
 ## Core Concepts
 
 *   **Frame**: one kind byte, then the codec-encoded body. Nothing else is on the wire.
-*   **`Kind`**: the tag byte. `Ops`, `Hello`, `Ping`, `Pong` and whatever a later version adds.
+*   **`Kind`**: the tag byte. `Ops`, `Hello`, `Ping`, `Pong`, `Credential`, `Goodbye` and whatever a later version adds.
 *   **`WireCodec`**: how a value becomes bytes. Stateless, cheap to clone, one per session shared across every connection.
 *   **`ProtocolVersion`**: a `u32` hashed from the type definitions your wire reaches, announced in a `Hello`.
 *   **Root**: a type tagged `/// plaza-wire: root`, where the resolver starts walking.
@@ -45,6 +52,9 @@ How to speak plaza's wire: choosing a codec, writing frames, measuring a round t
 *   **`Ping` / `Pong`**: a latency probe answered by the session itself, with no application code on either side.
 *   **`origin`**: an opaque value echoed back exactly as it went out. What a round trip is measured from.
 *   **`responder`**: the other end's clock, read as the reply was built. What an offset is fitted from.
+*   **`Credential`**: the frame a client sends after its `Hello` to be admitted, whose body is opaque bytes the codec never touches.
+*   **`Goodbye`**: the frame a server writes last before a close it orders, carrying a WebSocket close code and optional detail bytes.
+*   **Clamp count**: how many quantized writes on a `BitWriter` fell outside their range and were written at its edge.
 *   **`BitCodec`**: a `WireCodec` that packs any `Serialize` type with nothing written by hand.
 *   **`bits`**: the layer under it, for a layout you write yourself: quantisation, smallest-three, varints.
 *   **`Payload`**: a `Vec<u8>` newtype that serialises as bytes rather than as a sequence of integers.
@@ -64,7 +74,8 @@ let decoded: MyOp = codec.decode(&bytes)?;
 ### Writing and Reading a Frame
 
 ```rust,ignore
-use plaza_wire::frame::{self, Kind};
+use plaza_wire::frame::{self, Kind, ProtocolVersion};
+use plaza_wire::WireCodec;
 
 let mut buf = Vec::new();
 frame::begin(Kind::Ops, &mut buf);
@@ -115,11 +126,12 @@ A WebSocket hands each message over whole. TCP hands over bytes, so both ends mu
 use plaza_wire::framing::{delimit, LengthDelimited};
 
 // Writing: a 4-byte big-endian length, then the frame.
-let out = delimit(&frame_bytes);
+let mut out = Vec::new();
+delimit(&frame_bytes, &mut out);
 
 // Reading: feed bytes, take frames.
 let mut decoder = LengthDelimited::new(max_frame_bytes);
-decoder.extend(&received);
+decoder.feed(&received);
 while let Some(frame) = decoder.next_frame()? {
   handle(frame);
 }
@@ -201,7 +213,7 @@ codec.encode_into(&frame::Ping { origin: my_clock_now }, &mut buf)?;
 In a client with its own read loop:
 
 ```rust
-if let Some(reply) = frame::answer_ping(&codec, body, my_clock_now) {
+if let Some(reply) = frame::answer_ping(&codec, body, Some(my_clock_now)) {
   socket.send(&reply);
 }
 ```
@@ -219,6 +231,87 @@ pub struct Pong { pub origin: u64, pub responder: Option<u64> }
 *   **`responder`** is the other end's clock and the field easy to leave out. Echoing the origin alone gives a round trip, which measures the *distance* to the responder but says nothing about its clock. A client rendering on the responder's timeline needs the clock too, which is what `ClockSyncEstimator::observe_exchange` fits an offset from. It is `Option` because a responder with no clock installed must be distinguishable from one whose clock reads zero.
 
 **The unit is agreed out of band.** Plaza does not convert, default or name a unit, so both ends have to use the same one. A simulation clock is usually right, because it is the timeline the client is drawing on; wall time is right only if that is also what stamps your snapshots.
+
+## Admitting and Closing a Connection
+
+A browser or mobile client cannot set a header on its upgrade request, so it proves who it is with a `Kind::Credential` frame after connecting. A server says why it is ending a connection with a `Kind::Goodbye` frame written last before the close.
+
+### Presenting a Credential
+
+```rust,ignore
+use plaza_wire::frame::{self, Kind, ProtocolVersion};
+use plaza_wire::WireCodec;
+
+frame::begin(Kind::Hello, &mut buf);
+codec.encode_into(&ProtocolVersion(PROTOCOL), &mut buf)?;
+socket.send(&buf);
+
+frame::begin(Kind::Credential, &mut buf);
+buf.extend_from_slice(token.as_bytes());   // raw bytes, never through the codec
+socket.send(&buf);
+```
+
+Send it once, right after your own `Hello` and before any `Ops`. The body is the only one the codec never touches: the session hands the bytes after the tag to its admitter exactly as they arrived. Under a text codec such as `JsonCodec` the frame goes out as text, so the credential must be valid UTF-8 there.
+
+`plaza_ws`'s `FramePump::credential(token)` writes this frame for you. A session with no admitter skips it like any frame it has no use for.
+
+### Reading a Credential by Hand
+
+```rust,ignore
+let (tag, body) = frame::split(&bytes).expect("non-empty");
+match Kind::from_byte(tag) {
+  Some(Kind::Hello) => declared = codec.decode::<ProtocolVersion>(body).ok(),
+  Some(Kind::Credential) => return admit(body),       // the token, undecoded
+  Some(Kind::Ops) => return refuse(Goodbye::CREDENTIAL_EXPECTED),
+  _ => {}                                             // probes and unknown kinds wait
+}
+```
+
+This is the loop `plaza_session` runs for a socket that has not been admitted. A server built on it plugs in a `ConnectionAdmitter` instead of writing this; see [module `admission`](../session/API_REFERENCE.md#12-module-admission).
+
+### Saying Goodbye Before a Close
+
+```rust,ignore
+use plaza_wire::frame::{self, Goodbye};
+
+const BANNED: u16 = 4403;
+
+let bye = frame::encode_goodbye(&codec, &Goodbye {
+  code: BANNED,
+  detail: Some(b"banned until tomorrow".to_vec()),
+})?;
+socket.send(&bye);
+socket.close(BANNED);                       // WebSocket repeats the code; TCP just closes
+```
+
+`code` is a WebSocket close code whatever the transport. RFC 6455 gives 4000 to 4999 to the application. `detail` is yours to encode however you like and the session never reads it.
+
+The session sends two codes on its own:
+
+```rust,ignore
+Goodbye::CREDENTIAL_EXPECTED   // 4401: a data frame arrived before any credential
+Goodbye::CREDENTIAL_TIMEOUT    // 4408: no credential within the pending timeout
+```
+
+A `plaza_session` server writes the goodbye for you through `Farewell` on every close it orders.
+
+### Reading Why You Were Closed
+
+```rust,ignore
+if let Some(bye) = frame::decode_goodbye(&codec, &bytes) {
+  last_goodbye = Some(bye);                 // keep it for the close that follows
+}
+
+// When the socket closes:
+match last_goodbye.map(|g| g.code) {
+  Some(Goodbye::CREDENTIAL_EXPECTED) => send_credential_first(),
+  Some(Goodbye::CREDENTIAL_TIMEOUT) => reconnect_and_present_sooner(),
+  Some(4000..=4999) => give_up(),           // the server decided; the same credential fails again
+  _ => retry(),
+}
+```
+
+`decode_goodbye` returns `None` for any frame that is not a `Kind::Goodbye` or whose body does not decode, so it is safe to call on every inbound frame. `plaza_ws` does all of this and hands the application a `Closed` with the code and the undecoded detail. Full surface: [`Goodbye`](API_REFERENCE.md#struct-goodbye) and [frame functions](API_REFERENCE.md#frame-functions).
 
 ## Deriving a Protocol Version
 
@@ -321,12 +414,15 @@ MessagePack spends a byte on a `bool` and five on a large `u32`. That is fine fo
 ### Letting the Derive Do It
 
 ```rust,ignore
-use plaza_wire::BitCodec;
+use plaza_wire::{BitCodec, WireCodec};
 
 let bytes = BitCodec.encode(&snapshot)?;
+let back: Snapshot = BitCodec.decode(&bytes)?;
 ```
 
 One bit per `bool`, nibble varints for integers, one bit for an `Option`, a varint for an enum tag and no field names on the wire. It takes one line and is lossless.
+
+Nothing on the wire says what type it is, so both ends must decode the exact same type. Pin the [protocol version](#deriving-a-protocol-version) and keep `BitCodec` bytes off disk. A type that needs `deserialize_any` (`#[serde(untagged)]`, `#[serde(flatten)]`, `serde_json::Value`) cannot decode under it at all; see [Error Handling](#error-handling).
 
 ### Writing a Layout Yourself
 
@@ -347,12 +443,61 @@ for e in entities {
   }
 }
 let packed = w.finish();
-
-let mut r = BitReader::new(&packed);
-let count = r.varint()?;
 ```
 
-You write the reader too and it must mirror the writer exactly. The usual shape is to pack only the hot array and leave the envelope on MessagePack.
+The usual shape is to pack only the hot array and leave the envelope on MessagePack.
+
+### Reading It Back
+
+```rust,ignore
+use plaza_wire::bits::{BitReader, BitError};
+
+fn unpack(bytes: &[u8]) -> Result<Vec<Entity>, BitError> {
+  let mut r = BitReader::new(bytes);
+  let count = r.varint()? as usize;
+  let mut out = Vec::with_capacity(count);
+  for _ in 0..count {
+    let id = r.bits(12)? as u32;
+    let x = r.quantized(-256.0, 256.0, 18)?;
+    let y = r.quantized(-256.0, 256.0, 18)?;
+    let at_rest = r.bool()?;
+    let rotation = if at_rest { IDENTITY } else { r.smallest_three(9)? };
+    out.push(Entity { id, x, y, at_rest, rotation });
+  }
+  Ok(out)
+}
+```
+
+The reader carries no tags to check, so it must ask for the same widths and ranges in the same order as the writer. Keep both functions next to each other in one file. A quantized value comes back within half a step of what was written: `(max - min) / (2 * ((1 << bits) - 1))`.
+
+`finish` zero-pads each payload to a byte, so two payloads written back to back are byte-aligned but a reader running through them is not:
+
+```rust,ignore
+let header = read_header(&mut r)?;
+r.align_to_byte();                          // skip the first payload's padding
+let body = read_body(&mut r)?;
+```
+
+### Catching a Range That Is Too Small
+
+```rust,ignore
+#[test]
+fn a_real_run_never_clamps() {
+  let mut world = World::new();
+  for tick in 0..600 {
+    world.step();
+    let mut w = BitWriter::new();
+    for e in world.entities() {
+      write_entity(&mut w, e);
+    }
+    assert_eq!(w.clamped(), 0, "tick {tick}: first clamped write at bit {:?}", w.first_clamped_bit());
+  }
+}
+```
+
+A value outside `min..=max` is written at the edge of the range and a NaN is written as 0. Both are counted by `clamped()`. The packet still decodes, so neither the wire nor the reader can see the mistake: the object just appears stuck at the edge of the map.
+
+`first_clamped_bit()` gives the `bit_len` offset of the first clamped write, which tells you which field in the layout overflowed. Read both before `finish`, since it consumes the writer. Drive the test from the real simulation, because a synthetic scene stays inside the bounds it was built with. A live server can log `clamped()` per packet too.
 
 ### Carrying a Packed Payload
 
@@ -364,6 +509,11 @@ struct Snapshot {
   tick: u64,
   entities: Payload,        // not Vec<u8>
 }
+
+let snapshot = Snapshot { tick, entities: Payload::from(w.finish()) };
+
+// On the other side, Payload derefs to &[u8]:
+let entities = unpack(&snapshot.entities)?;
 ```
 
 A `Vec<u8>` field reaches the outer codec through `serialize_seq`, so every byte is re-encoded as its own integer. `Payload` calls `serialize_bytes` instead. Its `Deserialize` also accepts a sequence, so a text codec with no byte-string type still round-trips.
@@ -405,8 +555,41 @@ match codec.decode::<Vec<Op>>(body) {
 
 `frame::split` returns `None` on an empty frame. `Kind::from_byte` returns `None` on a tag this build does not know, which is not an error: skip the frame and carry on.
 
-`BitReader` returns `BitError::Underrun` past the end rather than panicking. The final byte is zero-padded, so up to seven padding bits read back as zeroes before the error.
+`frame::decode_goodbye` returns `None` for a frame that is not a goodbye or does not decode, which is also not an error.
 
-`BitWriter::bits` **panics** if the width is 0 or above 64, because a width is part of a layout rather than input.
+`BitReader` never panics. It returns a `BitError`:
+
+```rust,ignore
+use plaza_wire::bits::BitError;
+
+match unpack(&snapshot.entities) {
+  Ok(entities) => apply(entities),
+  Err(BitError::Underrun { wanted, left }) => warn!(wanted, left, "short packet, dropped"),
+  Err(BitError::Width(bits)) => unreachable!("layout bug: width {bits}"),
+}
+```
+
+`Underrun` means the bytes ran out: a truncated packet or a reader that does not match its writer. The final byte is zero-padded, so up to seven padding bits read back as zeroes before the error. `Width` means a width outside `1..=64`, which is a bug in the layout rather than bad input.
+
+`BitWriter::bits` **panics** on the same bad width, because a width is part of a layout rather than input.
+
+`BitCodec` fails with a `bit_codec::Error`, boxed like any other codec error, so downcast to match on it:
+
+```rust,ignore
+use plaza_wire::bit_codec::Error as BitCodecError;
+use plaza_wire::{BitCodec, WireCodec};
+
+if let Err(e) = BitCodec.decode::<Snapshot>(body) {
+  match e.downcast_ref::<BitCodecError>() {
+    Some(BitCodecError::Bits(bits)) => warn!(%bits, "short or mismatched packet"),
+    Some(BitCodecError::NotSelfDescribing) => panic!("Snapshot needs deserialize_any"),
+    Some(BitCodecError::Utf8) => warn!("string field is not UTF-8"),
+    Some(BitCodecError::Message(m)) => warn!(%m, "the type rejected the value"),
+    None => warn!(%e, "dropping malformed frame"),
+  }
+}
+```
+
+`NotSelfDescribing` comes from a type that uses `#[serde(untagged)]`, `#[serde(flatten)]` or `serde_json::Value`, so it fails on every decode rather than on bad input. Change the type or pick another codec. See [`bit_codec::Error`](API_REFERENCE.md#enum-bit_codecerror) for the full enum.
 
 Build-time problems fail the build: a reference the resolver cannot place fails the build naming both ends and two definitions sharing one bare name is an error, because the index is by name.

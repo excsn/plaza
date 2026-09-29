@@ -12,7 +12,7 @@ Each client's snapshot is built *for that client*, so a card game showing every 
 
 Plaza is a set of building blocks rather than a framework, so use the ones you need.
 
-[The plaza guide](docs/guide/README.md) explains how the pieces fit together in fourteen short chapters, from "what plaza is made of" to lag compensation, governance and lobbies, each with a runnable example. This README is for skimming and the guide goes deeper.
+[The plaza guide](docs/guide/README.md) explains how the pieces fit together in fifteen short chapters and an appendix, from "what plaza is made of" to lag compensation, governance and lobbies, each with a runnable example. This README is for skimming and the guide goes deeper.
 
 ## Project Status: Experimental ⚠️
 
@@ -22,23 +22,23 @@ Where a decision belongs to your application (how long a disconnected player kee
 
 ## Structure
 
-*   `core/`: The main `plaza` library, the controller loop and the traits you implement. See [`core/README.md`](core/README.md) for installation, usage and a complete program.
-*   `session/`: Real transports: actix-web WebSockets and length-delimited TCP, with a pluggable wire format, plus the optional listen-server HTTP layer that serves a browser client from the same origin as the socket. See [`session/README.md`](session/README.md).
+*   `core/`: The main `plaza` library, the controller loop and the traits you implement. See [`core/README.md`](core/README.md) for installation and [`core/README.USAGE.md`](core/README.USAGE.md) for usage and a complete program.
+*   `session/`: Real transports: actix-web WebSockets and length-delimited TCP, with a pluggable wire format, admission by credential, a per-connection inbound rate and outbound budget, plus the optional listen-server HTTP layer that serves a browser client from the same origin as the socket. See [`session/README.md`](session/README.md).
 *   `lobby/`: Rooms on a single server: create, list, join, reap. See [`lobby/README.md`](lobby/README.md).
 *   `client_utils/`: The client side: prediction (for either server input model), reconciliation, interpolation, correction smoothing, fixed timesteps and the mirror that holds a streamed entity set. No async runtime and no server crates, so it suits wasm and engine plugins. See [`client_utils/README.md`](client_utils/README.md).
 *   `server_utils/`: The pure server-side counterpart: historical state rewind for lag compensation, relevance streaming, crowd aggregation, delta baselines and seat allocation. Also runtime-free and wasm-safe and shares `client_utils`'s interpolation, digest and slot-key types so the two sides cannot disagree about them. See [`server_utils/README.md`](server_utils/README.md).
 *   `wire/`: The `WireCodec` trait and message envelope shared by a server and its clients, kept runtime-free, plus a build-time protocol version so the two ends can tell they were built from the same definition. See [`wire/README.md`](wire/README.md).
-*   `ws_client/`: `plaza_ws`, the client-side socket: one interface over desktop, browser and in-process. The counterpart to `session/`, which is server-only by design. See [`ws_client/README.md`](ws_client/README.md).
+*   `ws_client/`: `plaza_ws`, the client-side socket: one interface over desktop, browser and in-process, plus `FramePump`, the client half of the framed protocol. The counterpart to `session/`, which is server-only by design. See [`ws_client/README.md`](ws_client/README.md).
 
-Each crate carries an `API_REFERENCE.md` documenting its full public API. [`INDEX.md`](INDEX.md) maps where everything lives and [the guide](docs/guide/README.md) explains how the pieces fit together and why they are shaped the way they are.
+Each crate carries a `README.USAGE.md` guide and an `API_REFERENCE.md` documenting its full public API. [`INDEX.md`](INDEX.md) maps where everything lives and [the guide](docs/guide/README.md) explains how the pieces fit together and why they are shaped the way they are.
 
 ## Getting Started
 
-Please refer to **[`core/README.md`](core/README.md)** for installation, the four type parameters everything is generic over and a complete runnable program.
+Please refer to **[`core/README.md`](core/README.md)** for installation and **[`core/README.USAGE.md`](core/README.USAGE.md#quick-start)** for the four type parameters everything is generic over and a complete runnable program.
 
 ## Examples
 
-[examples/](examples/) lists the examples, one crate each, smallest first, with what each one demonstrates. There are twenty-six of them, from a two-client shared counter to a listen-server running thousands of entities.
+[examples/](examples/) lists the examples, one crate each, smallest first, with what each one demonstrates. There are forty-three of them, from a two-client shared counter to a listen-server running thousands of entities.
 
 Start with [`shared_counter`](examples/shared_counter/) for the smallest complete application, [`pong`](examples/pong/) for real WebSockets in two browser tabs or [`card_table`](examples/card_table/) for turns and hidden information.
 
@@ -48,8 +48,6 @@ The examples are their own workspace, so run them from `examples/`:
 cd examples
 cargo run -p plaza_example_shared_counter
 ```
-
-Turning the browser playgrounds into real listen-servers turned up a series of bugs whose causes were consistently somewhere other than where the symptoms pointed and most of what is in `client_utils` and `server_utils` today was written in response to them.
 
 ## License
 

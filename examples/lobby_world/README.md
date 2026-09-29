@@ -2,7 +2,7 @@
 
 Three arenas behind one lobby. The lobby admits you to an arena based on your measured link and your wallet carries over from one arena to the next.
 
-This is the `plaza_lobby` example. That crate has been the least-demonstrated block in the workspace: `horde_playground` borrows the free routing function and nothing else, so `RoomFactory`, `InMemoryLobbyManager` and `InProcessRoomHandle` have only ever been exercised by their own unit tests; this example runs them. A room is spawned on demand with its own session and its own controller, the lobby measures a link and admits or refuses on it and a player carries a balance from one room to the next.
+This is the `plaza_lobby` example. That crate was the least-demonstrated block in the workspace: `horde_playground` borrows the free routing function and the room metadata and nothing else, so `RoomFactory`, `InMemoryLobbyManager` and `InProcessRoomHandle` had only been exercised by their own unit tests until this example ran them. `parlour_game` has since built on `RoomFactory` and `InProcessRoomHandle` as well. A room is spawned on demand with its own session and its own controller, the lobby measures a link and admits or refuses on it and a player carries a balance from one room to the next.
 
 The game inside each arena is deliberately thin: a pot refills on a timer and whoever claims it keeps the coins. It only needs to make a wallet worth carrying.
 
@@ -12,7 +12,7 @@ The game inside each arena is deliberately thin: a pot refills on a timer and wh
 ./run.sh                                   # http://127.0.0.1:8090, from anywhere
 ```
 
-There is one script instead of the three the playgrounds have. There is no wasm step here, because the browser client is plain HTML embedded with `include_str!` and served by the same actix app as the sockets. The script's advantage over `cargo run` is that it works from any directory, since the examples are their own workspace.
+There is one script instead of the three the playgrounds have. There is no wasm step here, because the browser client is a plain HTML page in `static/` served by the same actix app as the sockets. The script's advantage over `cargo run` is that it works from any directory, since the examples are their own workspace.
 
 The plain form, from inside `examples/`:
 
@@ -65,7 +65,7 @@ A refusal is `LobbyError::UnsuitableConnection`, which carries **both** numbers 
 
 A wallet cannot live on `Agent`, which holds identity only. It cannot live in an arena's state either, because moving to another arena destroys that. So it lives in a `WalletRegistry` the lobby and every arena share, keyed by the id the lobby issued. The registry keeps a balance when its player leaves a room and clears it only when the player leaves the world.
 
-This follows from the `Agent` slimming and is why the registry is thirty lines in the example instead of a feature of the crate. Whether a balance outlives a room, a session or a process is for the application to decide. The implementation here is just a `Mutex` around a map.
+This follows from the `Agent` slimming and is why the registry is about forty lines in the example instead of a feature of the crate. Whether a balance outlives a room, a session or a process is for the application to decide. The implementation here is just a `Mutex` around a map.
 
 ### 4. Spectating without a seat
 
@@ -73,7 +73,7 @@ Spectating deliberately does **not** go through `handle_join_room_request`. A sp
 
 The arena decides the seat itself, from a reservation the lobby places ahead through `RoomHandle::reserve_seat`; the in-process handle turns that into the arena's own `RoomOp::Reserve`, so the seam still names no game type. Without that an arena could not tell an admitted player from a passer-by and would seat whoever arrived until it filled, ignoring the lobby's capacity accounting.
 
-A reservation is cancelled only by the lobby, never by a closing socket. The second bug described below came from getting that wrong.
+A reservation is cancelled by the lobby or lapses after `RESERVATION_WINDOW` (45 seconds) if nobody dials in, never by a closing socket. The second bug described below came from getting that wrong.
 
 ### 5. Fewer, complete frames for a slow link
 
@@ -83,7 +83,7 @@ This arena publishes on change rather than every tick: a snapshot goes out when 
 
 ## What it shows about plaza
 
-**There is no authorization hook ahead of `StateLogic`.** `RoomOp::Reserve` is server-originated and is the only thing standing between a client and a free seat, so the arena checks `source.is_system()` inside the rule that acts on it. That puts a security check inside the simulation because there is nowhere else to put it. An authorization hook is an open item.
+**The seat check sits inside the rules.** `RoomOp::Reserve` is server-originated and is the only thing standing between a client and a free seat, so the arena checks `source.is_system()` inside the rule that acts on it. When this example was written there was nowhere else to put it. Core now has that hook, `plaza::OpGuard`, which the controller runs per op before `process_input`, but this example does not use it yet.
 
 **`JoinRoomOutcomePayload::player_game_token` was unused before this example.** Without it the arena URL would have to carry the player id and a client that can name its own id can name someone else's and take their wallet. The lobby mints a one-use ticket and the arena route resolves it, so identity comes from the lobby rather than from the client. The ticket itself is a counter and can be guessed in one try. It shows *where the check goes* and is not a real credential, because plaza has no authentication design yet for it to follow.
 

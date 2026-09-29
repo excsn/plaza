@@ -23,9 +23,9 @@ Two labs cover this:
 
 Relevance decides which *other* entities a client is told about and it is easy to treat that as everything a frame carries. A client never appears in its own relevance set, so anything about the client itself is missing: your own cast bar, your cooldown, your mana, your health and the place you just respawned at.
 
-[gow_3d](../../examples/gow_3d/) shipped that mistake and nothing on the server showed it. Its frame carried the audience and a seat number. The client drew its own body from its own position and read everything else from the list of other people, which never contained it. A player pressed the cast key, the server started, ticked and landed a bar and **nothing on screen changed at all**. Three of four keys did nothing and it looked the same as an empty zone until somebody stood next to a character and watched that character's bar run instead.
+Nothing on the server shows this mistake. A frame that carries only the audience and a seat number leaves the client drawing its own body from its own position and reading everything else from the list of other people, which never contains it. The player presses the cast key, the server starts, ticks and lands a bar and **nothing on screen changes at all**. In [gow_3d](../../examples/gow_3d/) that would leave three of four keys doing nothing, which looks the same as an empty zone until somebody stands next to a character and watches that character's bar run instead.
 
-The fix is a separate block on the frame for what the player needs to know about themselves, instead of a lookup into the audience. That block also holds the other cases that are about the recipient rather than the world: how long until you may act again, how long until you are back up and the one position that travels down the wire instead of up it.
+The fix is a separate block on the frame for what the player needs to know about themselves, instead of a lookup into the audience. gow_3d's frame carries it as `you`. That block also holds the other cases that are about the recipient rather than the world: how long until you may act again, how long until you are back up and the one position that travels down the wire instead of up it.
 
 This applies outside games too. Any per-recipient view built by filtering a collection leaves out the recipient, because the filter has no reason to keep it.
 

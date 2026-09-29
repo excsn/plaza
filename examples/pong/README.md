@@ -6,7 +6,7 @@ Two-player Pong over real WebSockets, at 60Hz.
 cargo run -p plaza_example_pong
 ```
 
-Open http://127.0.0.1:8080 in two tabs to play, or open one and wait: after eight seconds a bot takes the other paddle. It stands down the moment a second person arrives and takes the seat back if one leaves.
+Open http://127.0.0.1:8080 in two tabs to play. Or open one and wait: after eight seconds a bot takes the other paddle. It stands down the moment a second person arrives and takes the seat back if one leaves.
 
 The mouse moves your paddle. Space skips a countdown.
 

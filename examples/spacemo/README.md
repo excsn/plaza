@@ -2,7 +2,7 @@
 
 Ships and rocks in open space, used to work out **who can see whom in a volume**, which a flat world never has to answer.
 
-`plaza_server_utils`'s `SpatialGrid` is two-dimensional. `insert(id, x, y)`, `query_radius(x, y, radius)`. Every 3D example built here so far could ignore that: a yard has a floor, an arena has a plane and a voxel world or a character on a landscape is locally 2.5D. Shipping MMOs use a flat grid plus a height check. Open space is where that stops working and it is also the cheapest place to test it, since space needs no terrain, no gravity, no character controller and no solver.
+`plaza_server_utils`'s `SpatialGrid` is two-dimensional. `insert(id, x, y)`, `query_radius(x, y, radius, out)`. Every 3D example built here so far could ignore that: a yard has a floor, an arena has a plane and a voxel world or a character on a landscape is locally 2.5D. Shipping MMOs use a flat grid plus a height check. Open space is where that stops working and it is also the cheapest place to test it, since space needs no terrain, no gravity, no character controller and no solver.
 
 It sits at the far end of the axis the [examples index](../README.md) is organised on. [puck_rink](../puck_rink/) rolls back; [cube_yard](../cube_yard/) predicts nothing at all. This one has to predict, because nothing in the design absorbs latency for it.
 
@@ -11,9 +11,9 @@ It sits at the far end of the axis the [examples index](../README.md) is organis
 ./run-native.sh --role client --connect ws://<host>:8200/ws
 ```
 
-Mouse aims, W and S are the throttle, space fires, right click or shift launches a missile. Click to capture the pointer, escape to release it. In the browser the click is required, since pointer lock needs a user gesture.
+Mouse aims, W and S (or up and down) are the throttle, space or left click fires, right click or left shift launches a missile. Click to capture the pointer, escape to release it. In the browser the click is required, since pointer lock needs a user gesture.
 
-Everything that changes what crosses the wire is a **host dial on the panel** rather than a flag: the relevance strategy, bit packing, relative positions, whether a straight shot's path is sent, the view radius and the bot population. They change *who you are told about* and *what that costs* and the difference only shows while the volume is moving. The bots are there for that reason: with one ship in flight every strategy returns the same answer, so moving the dial changed nothing visible.
+Everything that changes what crosses the wire is a **host dial on the panel** rather than a flag: the relevance strategy, bit packing, held locks, relative positions, whether a straight shot's path is sent, the view radius and the bot population. They change *who you are told about* and *what that costs* and the difference only shows while the volume is moving. The bots are there for that reason: with one ship in flight every strategy returns the same answer, so moving the dial changed nothing visible.
 
 ## Flat grid versus volume
 
@@ -32,7 +32,7 @@ volume                  8.4      7.3 KiB/s      77.0    53.8
 
 **A flat grid costs 7.1x the bandwidth of the same query with a one-line height filter on it.** The filtered query touches the same cells and examines the same candidates; all that changes is a cheaper test per candidate.
 
-That leaves query cost as the only place a third grid axis could win. It trades **3x fewer distance tests for 2.5x more cell lookups**, which has no clear winner without a timed run. So `encode_3d` in `relevance.rs` stays unused and this example recommends the one-line filter.
+That leaves query cost as the only place a third grid axis could win. It trades **3x fewer distance tests for 2.5x more cell lookups**, which counts alone cannot settle. [examples/grid_timing.rs](examples/grid_timing.rs) times both on one scene (`cargo run --release --example grid_timing -p spacemo`, in high power mode). The three strategies now live in `plaza_server_utils::field` as `Strategy::Flat`, `FlatBand` and `Volume` and `relevance.rs` here re-exports them. gow_3d measured the opposite case there: once fliers stack over one spot, the height filter examines 2.7x what the volumetric grid does. For a spread-out volume like this one the one-line filter is the recommendation.
 
 The control run varies the slab thickness:
 
@@ -67,7 +67,7 @@ Lock is resolved on the server, so pressing launch does nothing when the cone is
 
 A missile is removed from a client's screen when it stops being sent. A bolt is sent once and carried forward until its life runs out, but a missile is streamed every frame because its path cannot be derived, so nothing on the client counts it down. No message announces its end either: it hits, expires or loses its target and stops appearing in the frame. Until the client treated that silence as an ending, every missile that came into view stayed for ever where it was last seen and a busy volume filled up with frozen ones. The panel counts missiles going quiet, since from outside a working despawn and one that never fires look the same.
 
-There are three more decisions about the missile. **Lock is resolved on the server**, nearest target inside a 35 degree cone. The target is the one thing here a client could name that it should not be allowed to name and the check costs a dot product. **The counter-play is distance rather than evasion**: a missile flies 70 units a second against a ship's 90, so running away works and turning while chased gets you hit. **A missile whose target leaves** expires on a short fuse rather than flying on. A shot chasing nothing looks like a threat without being one and since a missile's path is sent every frame, letting it fly on spends bandwidth on a shot with no target.
+There are three more decisions about the missile. **Lock is resolved on the server**, nearest target inside a 35 degree cone. The target is the one thing here a client could name that it should not be allowed to name and the check costs a dot product. **The counter-play is distance rather than evasion**: a missile leaves at its launcher's velocity plus 70 units a second and holds that speed while a ship tops out at 90, so a ship at full throttle out-runs one fired from a standstill and turning while chased gets you hit. **A missile whose target leaves** expires on a short fuse rather than flying on. A shot chasing nothing looks like a threat without being one and since a missile's path is sent every frame, letting it fly on spends bandwidth on a shot with no target.
 
 ## Events and state
 
@@ -133,7 +133,7 @@ The lock was recomputed from the cone on every frame, so it changed as fast as t
 
 A held lock can then be a subscription, using `plaza_server_utils::subscription`. `Audience::of` unions it with the radius answer, so the locked ship is in the frame wherever it is.
 
-`gow_3d` uses the same shape for a party. spacemo covers the other extreme: **one entry held for seconds rather than a handful held for hours.** The extra cost shows on the panel as `added` and is at most one ship per client however large the volume gets.
+`gow_3d` uses the same shape for a party. spacemo covers the other extreme: **one entry held for seconds rather than a handful held for hours.** The extra cost is counted in the server state's `lock_added` and is at most one ship per client however large the volume gets.
 
 The hold then broke an assumption in the wire format. `REL` bounds an offset by the view radius because a frame used to carry only what the radius reached. The subscription adds ships from outside it: a locked ship can be anywhere in the volume, so its offset clamped at the bound and with the relative dial on it was drawn over a hundred units from where it flew. The mirror test that checks the client lands where the server is caught it. Nothing else could, since encode and decode agreed with each other perfectly. One bit per ship now says which arm carried it, an offset inside the radius or the absolute bounds past it, costing one bit per in-radius ship and three extra for the held one.
 

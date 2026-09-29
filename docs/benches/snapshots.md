@@ -4,7 +4,7 @@
 
 One `create_snapshot` and one `send_message` per recipient, M4 Pro. `immediate` is the deployed shape (every shipped provider builds its view synchronously and no shipped `send_message` awaits); `yielding` suspends without waiting on anything outside the runtime; `delayed` waits on a timer, modelling a provider that reads a database, at ~1.3 ms per call once tokio's timer granularity is accounted for.
 
-Strategies: `sequential` is the controller's loop today, `concurrent` is `FuturesUnordered`, `handrolled` is a `poll_fn` over a `Vec` of the boxed futures `async_trait` already returns, `probed` polls the first call once and picks the loop from whether it was ready.
+Strategies: `sequential` awaits each call in turn, `concurrent` is `FuturesUnordered`, `handrolled` is a `poll_fn` over a `Vec` of the boxed futures `async_trait` already returns (what the controller's `send_snapshots` runs), `probed` polls the first call once and picks the loop from whether it was ready.
 
 ## snapshot_pass, immediate
 

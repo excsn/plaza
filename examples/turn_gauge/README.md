@@ -14,7 +14,7 @@ Under initiative, a haste landing mid-round moves nothing until the boundary re-
 
 ## What it says about `flow_control`
 
-The initiative regime is composition over the shipped manager: one `RoundRobinTurnManager` per round, built from the re-rolled order at the boundary, its own turn notices going straight onto the wire as the audit line. No third `TurnManager` implementation was needed, as the IDEAS entry predicted. The delay regime holds no manager at all: a linear scan and two integer rules, because a gauge has no passes for a manager to walk.
+The initiative regime is composition over the shipped manager: one `RoundRobinTurnManager` per round, built from the re-rolled order at the boundary, its own turn notices going straight onto the wire as the audit line. No third `TurnManager` implementation was needed. The delay regime holds no manager at all: a linear scan and two integer rules, because a gauge has no passes for a manager to walk.
 
 One deviation to know about before reusing the pattern ([`src/logic.rs`](src/logic.rs), `advance_turn`): the round boundary is decided **before** the last advance rather than read from `Advanced::PassClosed`. Advancing off the round's last actor would wrap the cursor, seat the first actor of the *old* order and emit its notice and only then report `PassClosed`; under a re-rolling boundary that notice names the wrong unit. `PassClosed` suits a continuous round-robin but arrives one turn too late for a pass that re-plans.
 
@@ -34,4 +34,4 @@ A lone commander gets the bot on the other side after a few seconds; a second hu
 
 - **turns audited / diverged**: the mirror's result for every turn the server opened. The second number must read zero.
 - **series / battle / round / turn** and how many chairs timed out.
-- The act list: the client's projection, current actor first. It is exact for the current actor and speculative after it, more so under the delay queue, since the moves to come are unknown and it assumes a standard action for each. The projection shifting when a haste lands is how this kind of turn order behaves, not an error.
+- The act list across the top of the screen, beside the panel: the client's projection, current actor first. It is exact for the current actor and speculative after it, more so under the delay queue, since the moves to come are unknown and it assumes a standard action for each. The projection shifting when a haste lands is how this kind of turn order behaves, not an error.

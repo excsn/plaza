@@ -27,7 +27,7 @@ The controller does not advance time on its own; a [`TickDriver`](../../core/API
 - `run` passes measured elapsed time. Use it for physics-free decay, cooldowns and anything else where you only need to know how long it has been.
 - `run_fixed` spends accumulated time as exact whole steps. It is required as soon as anything predicts, replays or rolls back, because a simulation advanced by measured deltas depends on the scheduler as well as its inputs and no client can reproduce it.
 
-After the process stalls, `run_fixed` advances a bounded number of steps and lets the world fall behind instead of fast-forwarding in one unplayable burst. The client-side equivalent is `FixedTimestep` in the client crate. [Chapter 20](20-hiding-the-wire.md) shows what happens when the two sides step different quanta: four bugs that all looked like network faults.
+After the process stalls, `run_fixed` advances a bounded number of steps and lets the world fall behind instead of fast-forwarding in one unplayable burst. The client-side equivalent is `FixedTimestep` in the client crate. [Chapter 20](20-hiding-the-wire.md) shows what happens when the two sides step different quanta: four bugs, three of which looked exactly like network faults.
 
 ## Watching it run
 

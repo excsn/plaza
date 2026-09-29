@@ -38,7 +38,7 @@ The sections below cover three consequences of that.
 
 ### 1. Corrections snap and are counted
 
-`plaza_client_utils::PredictedPlayer` suits a continuous entity and both other networked playgrounds use it. It is not used here because of how it is built rather than a missing feature: it holds a *seen* position, a *settled* position and an ease between them. Between two cells there is nothing to ease through. Easing would draw the player in a place they have never been, in a game where your position decides whether you are on fire.
+`plaza_client_utils::PredictedPlayer` suits a continuous entity and `netcode_playground` and `blackhole_playground` use it. It is not used here because of how it is built rather than a missing feature: it holds a *seen* position, a *settled* position and an ease between them. Between two cells there is nothing to ease through. Easing would draw the player in a place they have never been, in a game where your position decides whether you are on fire.
 
 So the client snaps. [`Client::snaps`](src/sim/client.rs) is on the panel next to the rate per hundred frames and the total cells jumped. Both numbers are shown because four one-cell snaps and one four-cell snap feel completely different and a count alone cannot tell them apart.
 
@@ -85,7 +85,7 @@ This example had a shared rule and tick-addressed inputs from the first commit a
 - The **client** advanced once per rendered frame while the server advanced once per tick. Even at matching rates the grids are unaligned, so the two cross every cell boundary up to a tick apart. It scales with boundaries crossed, so open ground is where it becomes obvious.
 - The **server** advanced by `TickDriver`'s *measured* elapsed time: 16 ms, then 17, then 16. That makes the simulation a function of the host's scheduler, which nothing can reproduce. This one survived the three client-side fixes above and cost 2.2 snaps per hundred frames with no loss, no jitter and every input accepted on time.
 
-Both sides now step in whole `SIM_STEP_MS` ticks. The client catches up to `clock / SIM_STEP_MS` one step at a time; the server accumulates elapsed time and spends it the same way and its host uses [`TickDriver::run_fixed`](../../core/API_REFERENCE.md#struct-tickdriver), which exists because of this example. The `dt` parameter is gone from the client's `tick` entirely: a caller must not be able to influence how fast a prediction runs. The simulation keeps its own accumulator as well as using the fixed driver, so a different driver cannot silently break the guarantee.
+Both sides now step in whole `SIM_STEP_MS` ticks. The client catches up to `clock / SIM_STEP_MS` one step at a time; the server accumulates elapsed time and spends it the same way and its host, `plaza_session::host::SimHost::new`, drives it with [`TickDriver::run_fixed`](../../core/API_REFERENCE.md#struct-tickdriver), which exists because of this example. The `dt` parameter is gone from the client's `tick` entirely: a caller must not be able to influence how fast a prediction runs. The simulation keeps its own accumulator as well as using the fixed driver, so a different driver cannot silently break the guarantee.
 
 Three of the four looked exactly like network faults. A network problem also shows up as corrections, so bugs like these are easy to blame on the network.
 

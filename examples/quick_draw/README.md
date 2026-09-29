@@ -25,9 +25,9 @@ Genuine simultaneity is rare in a human duel (reaction time is an order of magni
 
 The falsifier is a slider that widens one side's one-way. The **arrival column moves and the declared column must not**, because an honest declared stamp does not depend on where the delay is. A test pins this (`delaying_one_link_moves_arrival_wins_and_not_declared_wins`), including the edge case: matched links **cannot** disagree, since both orders then reduce to press order. They start to disagree only once the links differ. The cheat dial (`A claims early`) drives the floored counter to 100% of contests and shows the bounded gain.
 
-## The deferred extraction
+## Whether to extract it
 
-IDEAS filed this with: extract a fractional offset onto `InputSchedule`'s path only if the rate justifies it. The mill's answer at defaults (40ms reaction jitter, one side delayed 130ms): a few percent of contests disagree, all of them where links are uneven. With matched links, zero disagree. So the mechanism makes same-window contests fair *between unequal links* and changes nothing where links match. Whether that justifies the extraction is a product decision. The hand-rolled cost here was ~40 lines (the clamp and the double resolution).
+The open question was whether the disagreement rate justifies moving a fractional offset onto `InputSchedule`'s path. The mill's answer with the default 40ms reaction jitter and one side's one-way raised by 130ms: a few percent of contests disagree, all of them where links are uneven. With matched links, zero disagree. So the mechanism makes same-window contests fair *between unequal links* and changes nothing where links match. Whether that justifies the extraction is a product decision. The hand-rolled cost here was ~40 lines (the clamp and the double resolution).
 
 ## Structure
 

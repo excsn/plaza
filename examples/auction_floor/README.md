@@ -4,7 +4,7 @@ Items drop, everyone grabs and the server awards each claim. The graphics are mi
 
 The example shows three things. The server decides a contested claim once, from the tick each client named and not from when their packet arrived, so ping does not decide who wins. The earliest tick a client may legally name comes from the server's own measurement and not from the client. One event is also split across audiences: the winner and each loser are told something different from the public record.
 
-The `req` field on `Grab` is redundant, which is worth knowing before you copy this. Item ids are monotonic and never reused and a player may hold only one claim per item, so `(player, item)` already identifies which claim a reply concerns. The example was designed around request correlation before that was checked. The final design removed the need. See the declined entry for why an action that names a unique target rarely needs a synthetic id.
+The `req` field on `Grab` is redundant, which is worth knowing before you copy this. Item ids are monotonic and never reused and a player may hold only one claim per item, so `(player, item)` already identifies which claim a reply concerns. The example was designed around request correlation before that was checked. The final design removed the need.
 
 ## Running it
 
@@ -29,7 +29,7 @@ Ties break on a hash of the player and the item. The hash is arbitrary but fixed
 
 Naming a low tick is how you win, so the obvious attack is to always name the earliest tick in the window. What stops it is a number the client does not control: a client may not name a tick before its own connection could have seen the drop.
 
-The floor is `dropped_at + (measured_rtt / 2)` in ticks, from `ActixWsPlazaSession::agent_rtt`, which the transport measures with its own WebSocket ping. A player on a 200 ms link cannot claim the first two ticks, but they also did not see the item until then, so the bound costs them nothing. A claim under the floor comes back as `TooEarly` carrying both numbers.
+The floor is `dropped_at + (measured_rtt / 2)` in ticks, from `ActixWsPlazaSession::agent_link_rtt`, the round trip of a probe frame that is encoded, queued and impaired like any op. `agent_rtt`, the WebSocket's own ping, is the fallback until a frame-path sample exists. A player on a 200 ms link cannot claim the first two ticks, but they also did not see the item until then, so the bound costs them nothing. A claim under the floor comes back as `TooEarly` carrying both numbers.
 
 This is the same approach as `lobby_world`'s latency admission: the server bases these bounds on what it measured itself rather than on what the client reports.
 

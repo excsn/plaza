@@ -21,7 +21,7 @@ The grace window has a cost whichever way it is set, so each side has a meter. I
 
 Every acting op carries its seat's own sequence. The client keeps an **outbox** of everything unacked (the per-seat `acked_seq` in each snapshot is the ack) and after a resume it re-sends the outbox in full: at-least-once, the retry most clients on a flaky link end up writing. The server applies each sequence **at most once**: a sequence at or below the applied mark is a duplicate, suppressed and counted. The two together give exactly-once delivery across a drop.
 
-The dedup has an off switch so you can see the failure it prevents. With it off, the resent `Unlock` finds the door it already opened and the key burns. One door opens and two keys are gone and `keys_burned` counts it. This demonstrates the IMPROVEMENTS entry saying a duplicated op is the one kind of staleness a resync cannot repair.
+The dedup has an off switch so you can see the failure it prevents. With it off, the resent `Unlock` finds the door it already opened and the key burns. One door opens and two keys are gone and `keys_burned` counts it. A duplicated op is the one kind of staleness a resync cannot repair.
 
 ## Structure
 

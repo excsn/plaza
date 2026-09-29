@@ -1,6 +1,6 @@
 # Plaza examples
 
-One crate each, smallest first. Run any of them with `cargo run -p <crate>` (the crate name is in the last column). The two playgrounds are the exception: they target the browser and have their own scripts, see their READMEs.
+One crate each, smallest first. Run any of them with `cargo run -p <crate>` (the crate name is in the last column). Examples with a window also ship their own `run-native.sh` and browser scripts, see their READMEs.
 
 ## Recommended Examples
 
@@ -49,7 +49,8 @@ One crate each, smallest first. Run any of them with `cargo run -p <crate>` (the
 | [`table_manners`](table_manners/) | **Moderation as a live tool**: kick with a reason that arrives before the close, a kick told apart from a netdrop, AFK from a number the transport already sees, per-connection flood meters and a room-wide drain. See its [README](table_manners/README.md). | `plaza_example_table_manners` |
 | [`grace_run`](grace_run/) | **Held seats and exactly-once resume**: a four-seat delve where a dropped link keeps its seat and loot (`ReconnectTracker`'s other half), the party never advances past a held seat and every op is sequenced so the resend-after-resume is exactly-once. The dedup can be switched off so the panel shows the cost: a key used up on a door that was already open. The grace window is a dial with a meter for each side of the trade-off. Native and wasm. See its [README](grace_run/README.md). | `grace_run` |
 | [`map_forge`](map_forge/) | **The first example to use `app_common`**: a four-editor board bench where every collaborative surface uses `app_common`'s shipped vocabulary unchanged: quadrant locks around every paint, the board as a property object, the spawn roster as an ordered collection, cursors as presence. Optimistic paints reverse on refusal, counted. Then a playtest runs the authored board under `bomb_grid`'s own rules and its blasts carve the walls you painted. Native and wasm. See its [README](map_forge/README.md). | `map_forge` |
-| [`foreign_soil`](foreign_soil/) | **A transport plaza does not ship**: a Unix-socket adapter written against the published API only, with neither built-in transport compiled in. It found problems that could not be seen from inside the crate and shows that a third party can use the `Session` seam. See its [README](foreign_soil/README.md). | `foreign_soil` |
+| [`foreign_soil`](foreign_soil/) | **A transport plaza does not ship**: a Unix-socket adapter written against the published API only, with neither built-in transport compiled in. It found problems that could not be seen from inside the crate and shows that a third party can use the `Session` seam. See its [README](foreign_soil/README.md). | `plaza_example_foreign_soil` |
+| [`ant_farm`](ant_farm/) | **A pane onto a colony**: a colony too big to send in full, where each client asks for a window onto the board and receives only the cells that window touches, packed once per cell however many watchers share them. Plain UDP through the transport seam `foreign_soil` demonstrated, with an optional AF_XDP send path on Linux. See its [README](ant_farm/README.md). | `plaza_example_ant_farm` |
 | [`csp_net_example`](csp_net_example/) | Client-side prediction and server reconciliation over a simulated network (headless). | `plaza_csp_net_example` |
 | [`netcode_playground`](netcode_playground/) | The same made interactive in the browser, plus interpolation and lag compensation. See its [README](netcode_playground/README.md). | `netcode_playground` |
 | [`rollback_playground`](rollback_playground/) | The other netcode family: peer-to-peer deterministic rollback, two peers predicting each other's inputs in the browser. See its [README](rollback_playground/README.md). | `rollback_playground` |
@@ -73,12 +74,12 @@ Turning the last two into real listen-servers turned up a series of bugs whose c
 For example:
 
 ```sh
-cargo run -p plaza-example-shared_counter
+cargo run -p plaza_example_shared_counter
 ```
 
-The ten playgrounds (`netcode`, `rollback`, `horde`, `blackhole`, `bomb_grid`, `pellet_maze`, `seed_defense`, `ghost_trials`, `hit_scan`, `curtain_fire`) pull in a large graphics dependency, so they are excluded from the default workspace build; a bare `cargo build`/`test` skips them. Run each via its own `run-native.sh` or `wasm-build.sh` / `wasm-serve.sh` for the browser client (`netcode` and `rollback` still use a single `serve.sh`).
+Nine playgrounds (`netcode`, `rollback`, `horde`, `bomb_grid`, `pellet_maze`, `seed_defense`, `ghost_trials`, `hit_scan`, `curtain_fire`) are excluded from the default workspace build, so a bare `cargo build`/`test` skips them. `foreign_soil` is excluded too. Run each playground via its own `run-native.sh` or `wasm-build.sh` / `wasm-serve.sh` for the browser client (`netcode` and `rollback` use `serve.sh` for the browser instead).
 
-`horde`, `blackhole`, `bomb_grid`, `pellet_maze`, `seed_defense`, `ghost_trials`, `hit_scan` and `curtain_fire` are real multiplayer over a real socket (built on `plaza`, `plaza_session` and `plaza_ws`) rather than scripted single-player. `./run-native.sh` hosts and plays by default; a `--role` argument switches between `headless` (deploy), `observer` (watch), `host` and `client` (join). Their `static/*.wasm` are gitignored build artifacts, so run `wasm-build.sh` to produce the browser client on a fresh checkout or `wasm-serve.sh` to build and host it in one step. The other two (`netcode`, `rollback`) remain single-process browser demos.
+`horde`, `blackhole`, `bomb_grid`, `pellet_maze`, `seed_defense`, `ghost_trials`, `hit_scan` and `curtain_fire` are real multiplayer over a real socket (built on `plaza`, `plaza_session` and `plaza_ws`) rather than scripted single-player. `./run-native.sh` hosts and plays by default; a `--role` argument switches between `headless` (deploy), `observer` (watch), `host` and `client` (join). Their `static/*.wasm` are gitignored build artifacts, so run `wasm-build.sh` to produce the browser client on a fresh checkout or `wasm-serve.sh` to build and host it in one step. The other two (`netcode`, `rollback`) remain single-process demos.
 
 Both keep a **single-process teaching build** with no networking compiled in (`--no-default-features --features native,client`), which is where most of the measurements in their READMEs come from and which is the fastest way to isolate a fault: a counter that reads zero there and non-zero over a socket narrows the fault to the networking path.
 

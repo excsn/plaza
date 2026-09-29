@@ -6,7 +6,7 @@ The vocabulary of this chapter and the next (prediction, reconciliation, interpo
 
 ## The four principles
 
-The client crate's docs start with four principles, drawn from the netcode bugs found while building the playgrounds. The docs say everything else in the crate only *recovers* from bugs, while the principles *prevent* them.
+The client crate's docs set out four principles, drawn from the netcode bugs found while building the playgrounds. The docs say everything else in the crate only *recovers* from bugs, while the principles *prevent* them.
 
 1. **A shared rule must be shared code.** If the client and server both apply movement, they both compile the same function instead of each keeping a copy that happens to agree today.
 2. **Prediction is presentation.** Shared rules consume authoritative state; the predicted state is only drawn and is never fed back into decisions.
@@ -19,7 +19,7 @@ Following them from the start costs nothing. Retrofitting each one has cost abou
 
 The mechanics are the Gambetta loop: apply your input locally the moment it happens, remember it in a [`ClientInputBuffer`](../../client_utils/API_REFERENCE.md) and when the server's authoritative state arrives for a tick you have already left behind, rewind to it and replay the inputs the server had not seen yet. When prediction was right, the replayed state lands where you already are and nothing visible happens. When it was wrong, the replay moves you to the corrected position.
 
-Plaza ships the loop assembled two ways and which one you need depends on your server's input model. A server that consumes one input per step gets `PredictedPlayer`, which replays. A server that integrates held inputs over time gets `HeldInputPredictor`, which dead-reckons and eases. Choosing wrong gives no error: replay against a held-input server double-counts inputs, which the docs point out looks like unexplained drift.
+Plaza ships the loop assembled three ways and which one you need depends on your server's input model. A server that consumes one input per step gets `PredictedPlayer`, which replays. A server that integrates held inputs over time gets `HeldInputPredictor`, which dead-reckons and eases. A server that answers one op with a deterministic rule the client can also run, such as a pathfinder, gets `RoutePredictor`, which walks the same route locally and reconciles only once the body is at rest; [chapskape](../../examples/chapskape/) uses it. Choosing wrong gives no error: replay against a held-input server double-counts inputs, which the docs point out shows up as a prediction that is always slightly behind and gets worse the more you economise on bandwidth.
 
 Prediction needs a server half too, which lives in core's reconciliation module (input tracking, per-client acknowledgment). The shared state types implement one `Interpolatable` trait, so a single impl serves the client's buffers and the server's rewind in the next chapter.
 
@@ -39,7 +39,7 @@ A grid game cannot ease half a cell, so [bomb_grid](../../examples/bomb_grid/) c
 
 ## When the design removes the need for prediction
 
-Before you reach for any of this, check what the player is already waiting for. [gow_3d](../../examples/gow_3d/) is a zone of characters with no prediction, no reconciliation, no input buffer, no sequence numbers and no correction to ease off. It still feels responsive on a bad connection, because the genre's design makes the player wait before the network is involved.
+Before you reach for any of this, check what the player is already waiting for. [gow_3d](../../examples/gow_3d/) is a zone of characters with no prediction, no reconciliation, no input buffer, no sequence numbers and no correction to ease off. Its movement is client-authoritative by default: the client reports where it is and the server sanity-checks the claim, with a server-authority mode on the panel for comparison. Everything else still feels responsive on a bad connection, because the genre's design makes the player wait before the network is involved.
 
 An ability with a cast time hides its round trip, because the bar is already running. The delay itself does not shrink: it is the same 150ms at every cast time. What changes is the *share* of the wait that is network delay and the share is what a player perceives.
 

@@ -13,10 +13,10 @@ How to use it: [README.USAGE.md](README.USAGE.md). Full surface: [API_REFERENCE.
 plaza_wire = "0.7"
 ```
 
-Trait only, no JSON:
+The `WireCodec` trait without JSON:
 
 ```toml
-plaza_wire = { version = "0.7", default-features = false }
+plaza_wire = { version = "0.7", default-features = false, features = ["serde"] }
 ```
 
 ## What it gives you
@@ -49,5 +49,6 @@ For plain JavaScript clients, the frame layer ships as a single vendorable file:
 
 | Feature | Default | Effect |
 |---|---|---|
-| `json` | yes | Provides `JsonCodec` and pulls in `serde_json`. Disable to take the trait alone. |
+| `json` | yes | Provides `JsonCodec` and pulls in `serde_json`. Enables `serde`. |
+| `serde` | via `json` | The `WireCodec` trait, `BitCodec` and the serde payload types. For the trait without JSON, turn off default features and enable this one. |
 | `build` | no | The build-script half above, including the `Wire` resolver (pulls `syn`, build-time only). Belongs in `[build-dependencies]`, not `[dependencies]`. |

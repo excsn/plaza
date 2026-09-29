@@ -2,7 +2,7 @@
 
 A time trial whose opponents are **replays of an op log** and a server that decides your time by replaying it too.
 
-Drive two laps through the rings as fast as you can. Every run you finish becomes a ghost and everyone who joins afterwards races every ghost. The example exists because of how a ghost is stored.
+Drive two laps through the rings as fast as you can. Every run you finish becomes a ghost and everyone who joins afterwards races the six fastest. The example exists because of how a ghost is stored.
 
 `plaza`'s op stream is an event-sourced record, which means state never has to be kept because it can always be rebuilt. This is the only example in the repository that relies on that directly: a ghost is stored as the **inputs**, replayed through the same rules that produced them, rather than as a recorded path. The server derives a lap time from those inputs rather than taking the client's report.
 
@@ -16,7 +16,7 @@ Drive two laps through the rings as fast as you can. Every run you finish become
 cargo test -p ghost_trials                   # every claim below, as a test
 ```
 
-Pick a mode: **time trial** alone against the clock and the ghosts, or **race** against a CPU field of up to 32 who shove and take your pickups. The menu also picks the circuit, small, medium or large.
+Pick a mode: **time trial** alone against the clock and the ghosts or **race** against a CPU field of up to 32 who shove and take your pickups. The menu also picks the circuit, small, medium or large.
 
 Left and right steer. Hold space to charge: you slow down, you turn harder and you bank a boost that spends when you let go. `R` starts again, `Escape` goes back to the menu.
 
@@ -35,8 +35,8 @@ On a phone, steer and charge buttons appear the first time you touch the screen.
 | the strip at the bottom | the board and what each ghost cost to send against what a path would have |
 | purple arrows | the CPU field, in a race |
 | a car going hollow and fading | somebody who has finished. They stop being an obstacle the moment they cross |
-| **T** and **G** discs | pickups. **T** is a turbo, **G** is grip. An outline is one that has been taken and is coming back |
-| rim around a car | grip, running |
+| **T**, **G**, **S** and **L** discs | pickups. **T** is a turbo, **G** is grip, **S** is a shield and **L** is slick. An outline is one that has been taken and is coming back |
+| rim around a car | grip, slick or shield, running |
 
 ## Runs are stored as inputs
 
@@ -82,11 +82,11 @@ The menu picks between two modes that share the track, the rules and the op log.
 
 The circuit and the field size are in the log too, for the same reason the mode is: they are cheap (a byte and a number) and a run cannot be reproduced without them. The track itself is **never sent**. Both ends build it from the size, because the layouts are constants both ends already have.
 
-`seed_defense` uses the same approach for a wave of enemies; here it is applied to opponents. It is also why the mode is stored *in* the log: replaying a race log as a trial would leave three cars out and produce a time that no run actually took.
+`seed_defense` uses the same approach for a wave of enemies; here it is applied to opponents. It is also why the mode is stored *in* the log: replaying a race log as a trial would leave the CPU field out and produce a time that no run actually took.
 
 ### Making the CPU field uneven
 
-A field of identical drivers moves as one block, fast or slow. The three seats have different tolerances for being off line, different appetites for charging and different rates of simply not paying attention for a moment. `the_cpu_field_is_uneven` asserts the sharp one finishes ahead of the sloppy one, because a change that flattened the field would otherwise pass every other test here.
+A field of identical drivers moves as one block, fast or slow. The CPU seats cycle through a set of driver profiles with different tolerances for being off line, different appetites for charging and different rates of simply not paying attention for a moment. `the_cpu_field_is_uneven` asserts the sharp one finishes ahead of the sloppy one, because a change that flattened the field would otherwise pass every other test here.
 
 The mistakes come from **a hash of the tick and the seat** rather than a random generator. There is no random state anywhere in this example, because a generator is hidden state that a log does not carry, so a ghost would need it saved and restored to replay. A hash of the tick needs nothing saved.
 
@@ -94,7 +94,7 @@ The noise is also sampled in *chunks* of ticks rather than per tick, for two rea
 
 ### The power-ups
 
-There are four and they are part of the circuit rather than events: fixed positions, fixed kinds and a fixed respawn interval. Nothing about them is random, so a run can be reproduced from its inputs alone.
+There are four kinds and they are part of the circuit rather than events: fixed positions, fixed kinds and a fixed respawn interval. Nothing about them is random, so a run can be reproduced from its inputs alone.
 
 - **Turbo** gives you the boost you would otherwise have had to slow down to earn.
 - **Grip** gives you the charge turn *without* the charge speed.
@@ -123,7 +123,7 @@ A replay only reproduces a run if today's arithmetic matches the arithmetic that
 
 So the same rules apply, plus one more:
 
-- **No floating point in the simulation.** The fixed-point type is [`playground_common::fixed`](../playground_common/src/fixed.rs), shared with `seed_defense` rather than copied, because two copies of a type that must agree to the bit would be the "shared rule written twice" mistake.
+- **No floating point in the simulation.** The fixed-point type is [`plaza_client_utils::fixed`](../../client_utils/src/fixed.rs), shared with `seed_defense` rather than copied, because two copies of a type that must agree to the bit would be the "shared rule written twice" mistake.
 - **The angles go through a table of integer literals** rather than `sin`. A library trigonometric function is not specified to the last bit across platforms or versions and it is on the path of every single tick.
 - **The rules file is hashed into the wire version.** `build.rs` feeds `rules.rs` to `plaza_wire::build::emit` alongside the message shapes, because a change to how a racer handles invalidates every recorded log just as a change to a message would. A log carries the version it was made under. A log from a different version is **refused**, because replaying it would produce a run its player never drove.
 
@@ -149,7 +149,7 @@ If you turn the latency to 800 ms and drive a lap, **the time is identical**. Th
 
 The link decides when the verdict on your run comes back and when somebody else's ghost turns up. The impairment is on the real path for both: the session holds back every frame the connection carries in either direction and on a datagram link it can drop one. The panel reports the frames it dropped, read back from the session rather than counted here, because a frame the link discarded never reaches this arena to be counted.
 
-An earlier version of this example did **not** impair the live path at all. The sliders were wired only to the offline harness, so on a real host they changed nothing and a player who turned the latency up saw no change anywhere and concluded the example was not doing anything. `the_impairment_is_on_the_real_path` now asserts a verdict cannot come back faster than the link allows.
+An earlier version of this example did **not** impair the live path at all. The sliders were wired only to the offline harness, so on a real host they changed nothing and a player who turned the latency up saw no change anywhere and concluded the example was not doing anything. `the_sliders_are_published_to_the_link_rather_than_applied_here` now asserts the panel's numbers reach the session as a link profile. Holding the frames back is the session's job and is tested there.
 
 ## How it is built
 

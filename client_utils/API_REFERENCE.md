@@ -15,7 +15,7 @@
   - [Struct `AdaptiveDecay`](#struct-adaptivedecay)
 - [3. Rollback netcode (deterministic lockstep)](#3-rollback-netcode-deterministic-lockstep)
   - [Struct `StateHistory<State: Clone>`](#struct-statehistorystate-clone)
-  - [Struct `InputTimeline<Input: Clone + Debug>`](#struct-inputtimelineinput-clone-debug)
+  - [Struct `InputTimeline<Input: Clone + Debug>`](#struct-inputtimelineinput-clone--debug)
   - [Struct `RollbackSession<State, Input>`](#struct-rollbacksessionstate-input)
 - [4. Prediction and Reconciliation](#4-prediction-and-reconciliation)
   - [Struct `PredictedEntity<StateType, Op>`](#struct-predictedentitystatetype-op)
@@ -67,7 +67,7 @@
 - [19. Module `determinism`](#19-module-determinism)
   - [Function `mix64`, struct `XorShift`, struct `ValueNoise`](#function-mix64-struct-xorshift-struct-valuenoise)
 - [20. Module `math`](#20-module-math)
-- [21. Module `net_sim` (feature `net-sim`)](#21-module-netsim-feature-net-sim)
+- [21. Module `net_sim` (feature `net-sim`)](#21-module-net_sim-feature-net-sim)
   - [Struct `LatencyLink<T>`](#struct-latencylinkt)
   - [Struct `Rng`](#struct-rng)
 - [22. Module `fixed` (feature `fixed`)](#22-module-fixed-feature-fixed)
@@ -111,6 +111,7 @@ Prediction by **shared rule**, for games where re-running inputs against samples
 *   **`set_out(route, checkable, now_ms)`**: takes a route the shared rule produced and touches nothing about where the body *is*. `checkable` marks a journey whose server twin expands from the same square: at rest, nothing owed, confirmed and predicted agreeing; a mid-walk click fails that and is not checked and a chase of something moving should pass `false` outright. No free step is granted, since otherwise spam outruns the server and is pulled back at rest.
 *   **`advance(now_ms, steps_per_tick)`** (two is a run), **`drawn(now_ms) -> [f32; 2]`**, **`walking(now_ms)`**, **`crossing(now_ms)`**, **`heading(now_ms)`** (for facing), **`plan()`** / **`plan_is_empty()`**.
 *   **`confirm(at, slack) -> Heard`**: checks the server's square against the **route** this client drew, never its current square, because the two are a tick out of phase by design. `slack` is the server's steps per tick, since a run's first square is one nothing ever reports. `Heard::{OnRoute, Diverged, Unchecked}`; a divergence, counted in `diverged`, means the two ends are no longer running the same rule.
+*   **Public fields**: `predicted: P` (where this client believes the body is), `confirmed: P` (where the server last said it was), `confirmations: u64` (server reports checked against a route) and `diverged: u64` (checked reports that left it).
 *   **`abandon(at, now_ms)`** (a refused route, drawn position preserved), **`settle(now_ms) -> bool`**: takes the server's square once the body has stopped. This is the only reconciliation step. There is deliberately no per-tick correction, because both ends are walking to the same place from different starts and will arrive together, so the usual case is a no-op.
 
 This requires the first principle applied strictly: the rule must be shared code over shared **state**, deterministic on both ends (see [`determinism`](#19-module-determinism)). Otherwise every journey diverges.
@@ -135,7 +136,7 @@ A `SnapshotBuffer` plus the interpolate / extrapolate / hold decision, with buff
 
 *   **`new(buffer_size, max_extrapolation_ms)`**: `buffer_size` >= 2.
 *   **`push(&mut self, time_ms, state, velocity)`**.
-*   **`render(&self, target: Option<u64>, RenderOpts) -> Option<State>`**: `None` until the first push. Interpolated at `target`, dead-reckoned when the buffer has starved (if `opts.extrapolate`), or the raw newest (if `opts.interpolate` is false).
+*   **`render(&self, target: Option<u64>, RenderOpts) -> Option<State>`**: `None` until the first push. Interpolated at `target`, dead-reckoned when the buffer has starved (if `opts.extrapolate`) or the raw newest (if `opts.interpolate` is false).
 *   **`latest() -> Option<&State>`**.
 *   **`over_extrapolations() -> u64`**: renders that asked past `max_extrapolation_ms` and were served the capped coast. Accumulates what each render's `ExtrapolationBase` found, since that base is built per call.
 *   **`oldest_timestamp() -> Option<u64>`**: the oldest instant still interpolatable. A `render` target before this is **clamped to the oldest snapshot** silently.
@@ -169,7 +170,7 @@ Module `rollback`. **`Frame = u64`**: a logical simulation frame. Rollback count
 A frame-indexed ring of whole-world snapshots. Pure save/restore by frame, no interpolation.
 
 *   **`new(capacity)`**: keeps the most recent `capacity` frames, the maximum rollback distance. **Panics if 0.**
-*   **`save(&mut self, frame, state)`**: contiguous use only (append `latest + 1`, or overwrite a frame in the window). A save that skips ahead resets the window rather than leaving a gap.
+*   **`save(&mut self, frame, state)`**: contiguous use only (append `latest + 1` or overwrite a frame in the window). A save that skips ahead resets the window rather than leaving a gap.
 *   **`restore(&self, frame) -> Option<State>`**: `None` if evicted or never saved.
 *   **`oldest_frame()`**, **`latest_frame()`**, **`len`**, **`is_empty`**, **`clear`**.
 *   **`resets() -> u64`**: saves that fell outside the window and reset it. Non-zero means the window was rebuilt from one frame, which shortens how far back the session can roll.
@@ -242,7 +243,7 @@ Supplies the `target_render_time` `get_interpolated_state` needs. `T` is whateve
 *   **`new(delay: T) -> Self`**: render this far behind the estimated server clock.
 *   **`observe(&mut self, server_time: T)`**: the first call starts the clock; later calls are ignored.
 *   **`advance(&mut self, dt: T)`**, **`started(&self) -> bool`**.
-*   **`target(&self) -> Option<T>`**: `now - delay`, or `None` before the first `observe`. Clamped so it never precedes the timeline's zero.
+*   **`target(&self) -> Option<T>`**: `now - delay` or `None` before the first `observe`. Clamped so it never precedes the timeline's zero.
 *   **`resync(&mut self, newest_server_time_ms: u64, strength: f32)`** (on `InterpolationClock<u64>`): steers the estimate toward the newest server time by `strength` in `[0, 1]`. `0.1` is smooth, `1.0` snaps.
 *   **`observe_rate(&mut self, newest_server_time_ms: u64, max_rate_adjust: f32)`** + **`advance_scaled(&mut self, dt_ms: u64)`** + **`playback_rate() -> f32`** (on `InterpolationClock<u64>`): adjusts the estimate's *speed* rather than its position. Drift is normalized by the render delay; `max_rate_adjust` bounds how far from real time it goes. Pair `observe_rate` (per packet) with `advance_scaled` (per frame). **Pick one of `resync` or `observe_rate`, not both.**
 *   **`delay()`** / **`set_delay(delay)`**.
@@ -359,7 +360,7 @@ The newest sequence number, plus a bitmask of the `WINDOW` (64) before it. Bit `
 
 *   **`new()`**, **`reset()`**.
 *   **`observe(seq: u64) -> bool`**: returns whether it was new. A straggler arriving after a newer packet lands in its own slot rather than being taken for the new newest.
-*   **`encode() -> Option<(u64, u64)>`** / **`from_encoded(newest, mask)`**: the wire form, twelve bytes.
+*   **`encode() -> Option<(u64, u64)>`** / **`from_encoded(newest, mask)`**: the wire form, sixteen bytes.
 *   **`contains(seq) -> bool`**, **`newest() -> Option<u64>`**, **`mask() -> u64`**, **`received_in_window() -> u32`**.
 *   **`missing_since(oldest) -> impl Iterator<Item = u64>`**: the gaps, ascending, clamped to the window. What a sender resends.
 *   **`contiguous_base(first) -> Option<u64>`**: the newest sequence such that everything from `first` up to it arrived. `None` if `first` itself is missing. **The argument is the first sequence to *check***, not the newest already known to have arrived: passing `0` at the start of a protocol numbering from zero would otherwise read as "zero already arrived".
@@ -457,7 +458,7 @@ It does not store your entities: keep them in a `Vec<T>` indexed by `SlotKey::in
 
 An order-independent digest of a set of `u64` keys, maintainable incrementally. **`new`**, **`from_keys`**, **`insert`**, **`remove`**, **`clear`**, **`len`**, **`is_empty`**, **`digest() -> u64`**.
 
-The combine is addition, so a key can be added or removed in O(1) and duplicates do not cancel the way XOR would. The key is a `u64` you choose: hash a bare index to check *membership*, or pack index with generation to check the *occupant*.
+The combine is addition, so a key can be added or removed in O(1) and duplicates do not cancel the way XOR would. The key is a `u64` you choose: hash a bare index to check *membership* or pack index with generation to check the *occupant*.
 
 `VisibilitySet::digest()` computes the same value over a bitset's membership.
 

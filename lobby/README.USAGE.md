@@ -21,6 +21,11 @@ How to run rooms above a controller: building one of your game, creating and lis
     *   [Picking a Room for the Connection](#picking-a-room-for-the-connection)
 *   [Pairing Players Who Do Not Choose](#pairing-players-who-do-not-choose)
 *   [Holding a Seat Between Admission and Arrival](#holding-a-seat-between-admission-and-arrival)
+*   [Reserving a Seat Through the Room](#reserving-a-seat-through-the-room)
+    *   [Teaching the Handle the Room's Ops](#teaching-the-handle-the-rooms-ops)
+    *   [Holding and Releasing a Seat From the Lobby](#holding-and-releasing-a-seat-from-the-lobby)
+    *   [Redeeming the Hold in the Room](#redeeming-the-hold-in-the-room)
+    *   [Handling a Room That Takes No Reservations](#handling-a-room-that-takes-no-reservations)
 *   [Handing Out a Join Ticket](#handing-out-a-join-ticket)
     *   [The Two Registries](#the-two-registries)
     *   [Issuing Your Own Value](#issuing-your-own-value)
@@ -38,6 +43,7 @@ How to run rooms above a controller: building one of your game, creating and lis
 *   **`max_one_way_ms`**: the worst one-way delay a room's simulation can carry. Stated by the room, because nothing above it knows the number.
 *   **`MatchQueue`**: for players who would rather be paired than choose. Forms full matches and reports how many seats to fill with bots when patience runs out.
 *   **`SeatReservations`**: holds a seat between admission and arrival.
+*   **Reservation seam**: `RoomHandle::reserve_seat` and `withdraw_seat`, which the lobby calls without knowing the room's op type. The room keeps the hold itself.
 *   **`TicketStore`**: a one-use token a room resolves a connecting player from, instead of trusting a URL.
 
 ## Quick Start
@@ -58,21 +64,21 @@ impl RoomFactory for MyGameFactory {
     &self,
     room_id: RoomId,
     settings: &RoomSettings<MySettings>,
-  ) -> Result<InProcessRoomHandle<MyOp, PlayerId, MyState, MySettings>, LobbyError> {
+  ) -> Result<Arc<dyn RoomHandle<PlayerId, MySettings>>, LobbyError> {
     let session = ActixWsPlazaSession::<MyOp, PlayerId>::new();
     let (command_tx, controller) = StateControllerBuilder::new(
       Arc::new(MyLogic), session.clone(), Arc::new(MySnapshotter), MyState::default(),
     ).build();
     let task = tokio::spawn(controller.run());
 
-    Ok(InProcessRoomHandle::new(
+    Ok(Arc::new(InProcessRoomHandle::new(
       room_id,
       RoomMetadata { /* from settings */ },
       command_tx,
       task,
       format!("ws://host/game/{room_id}"),
       settings.password_hash.clone(),
-    ))
+    )))
   }
 }
 ```
@@ -133,20 +139,25 @@ A successful join returns an **address**. The gameplay join happens when the cli
 ### Reaching a Specific Room
 
 ```rust,ignore
+use plaza_lobby::RoomHandle;
+
 if let Some(room) = lobby.room(&room_id) {
-  room.update_player_count_in_metadata(count);
-  room.command_tx.send(ControllerCommand::SubmitSystemOps { /* ... */ }).await?;
+  let players = room.metadata().current_players;
+  let endpoint = room.session_endpoint_info();
+  if room.is_finished() { /* ... */ }
 }
 
 for room in lobby.rooms() { /* ... */ }
 ```
+
+`room` and `rooms` return `Arc<dyn RoomHandle<..>>`, so only the trait's methods are available. To send a room a `ControllerCommand` or call `InProcessRoomHandle::update_player_count_in_metadata`, keep the `CommandSender` or the concrete handle from your factory in a map of your own keyed by `RoomId`.
 
 ### Reaping
 
 Nothing reaps automatically.
 
 ```rust,ignore
-// From a scheduled job, or your own tick.
+// From a scheduled job or your own tick.
 lobby.reap_finished_rooms().await;
 lobby.handle_player_leaving_lobby(&player_id).await;
 ```
@@ -212,13 +223,13 @@ Err(LobbyError::UnsuitableConnection { measured_ms, allowed_ms }) => {
 `MatchQueue` is bookkeeping your own `StateLogic` drives. It holds no timers and spawns no tasks.
 
 ```rust,ignore
-let mut queue: MatchQueue<PlayerId, u64> = MatchQueue::new(4);   // seats per match
+let mut queue: MatchQueue<PlayerId, u64> = MatchQueue::new(4, patience);   // seats per match, wait before bots fill
 
 queue.enqueue(player, now);
-for Formed { players, bots_needed } in queue.form(now) {
+for Formed { players, bots, .. } in queue.drain_ready(now) {
   let room = lobby.handle_create_room_request(&host, settings.clone()).await?;
   seat(room.room_id, players);
-  fill_with_bots(room.room_id, bots_needed);
+  fill_with_bots(room.room_id, bots);
 }
 ```
 
@@ -227,47 +238,144 @@ When patience runs out it reports how many seats to fill with bots rather than r
 ## Holding a Seat Between Admission and Arrival
 
 ```rust,ignore
-let mut reservations: SeatReservations<PlayerId> = SeatReservations::new().with_expiry(30_000);
+let mut reservations: SeatReservations<PlayerId> = SeatReservations::with_expiry(Duration::from_secs(30));
 
-reservations.reserve(room_id, player, now);
-// On arrival:
-reservations.claim(room_id, &player);
-// From your TimeStep, never from a timer of its own:
-for expired in reservations.sweep(now) { free_seat(expired); }
+if !reservations.reserve(player) {
+  // this player already held a seat; the first promise stands
+}
+// On AgentJoined:
+let admitted = reservations.consume(&player);
+// From LogicInput::TimeStep, with the same delta_time:
+for lapsed in reservations.tick(delta_time) { free_seat(lapsed); }
+// From the lobby, when the player was placed elsewhere:
+reservations.withdraw(&player);
 ```
 
+`SeatReservations::new()` holds a reservation until it is consumed or withdrawn. The type never reads a clock: `tick` advances its own.
+
 **A closing socket deliberately does not cancel a reservation.** A room hop closes the old connection *after* the new seat is reserved, so treating a disconnect as a cancellation silently demotes a player the lobby already promised.
+
+## Reserving a Seat Through the Room
+
+The hold lives in the room's own state, because the room is what seats a player when they connect. The lobby reaches it through `RoomHandle`, which names no game type. `examples/parlour_game` wires this up end to end. The full surface is under [`RoomHandle`](API_REFERENCE.md#trait-roomhandlegameagentid-agentid-customroomsettings) and [`InProcessRoomHandle`](API_REFERENCE.md#struct-inprocessroomhandlegameop-gameid-gamestatetype-customroomsettings).
+
+### Teaching the Handle the Room's Ops
+
+The factory tells the handle how this room spells a reservation and a withdrawal in its own ops.
+
+```rust,ignore
+let room: Arc<dyn RoomHandle<PlayerId, MySettings>> = Arc::new(
+  InProcessRoomHandle::new(
+    room_id,
+    metadata,
+    command_tx,
+    task,
+    endpoint,
+    settings.password_hash.clone(),
+  )
+  .with_reservations(|player| MyOp::Reserve { player }, |player| MyOp::Withdraw { player }),
+);
+```
+
+`reserve_seat` and `withdraw_seat` then submit those ops to the room's controller as system ops.
+
+### Holding and Releasing a Seat From the Lobby
+
+```rust,ignore
+use plaza_lobby::RoomHandle;
+
+if let Some(room) = lobby.room(&room_id) {
+  room.reserve_seat(&player).await?;
+}
+
+// The player left the lobby or was placed somewhere else:
+if let Some(room) = lobby.room(&previous_room_id) {
+  room.withdraw_seat(&player).await?;
+}
+```
+
+Withdraw the old seat before reserving a new one when a player is moved, so the first room does not keep counting a seat nobody will fill. If the room's controller has already ended, both calls return `LobbyError::InternalOrchestrationError`.
+
+### Redeeming the Hold in the Room
+
+The room keeps a `SeatReservations`, fills it from the system ops and spends it on `AgentJoined`.
+
+```rust,ignore
+LogicInput::AgentOps { source, ops } => {
+  let system = source.is_system();
+  for op in ops {
+    match op {
+      MyOp::Reserve { player } if system => {
+        state.reserved.reserve(player);
+      }
+      MyOp::Withdraw { player } if system => {
+        state.reserved.withdraw(&player);
+      }
+      MyOp::Reserve { .. } | MyOp::Withdraw { .. } => {
+        // A client sent it: refuse.
+      }
+      // ...
+    }
+  }
+}
+
+LogicInput::AgentJoined { agent } => {
+  let Some(player) = agent.id_cloned() else { return Ok(LogicOutput::none()) };
+  let seat = if state.reserved.consume(&player) { Seat::Player } else { Seat::Spectator };
+  // ...
+}
+```
+
+Accept `Reserve` and `Withdraw` only from a system source. A client that could send them would seat itself. An [`OpGuard`](../core/README.USAGE.md#authorizing-ops) can do the same screening ahead of the rules. `consume` spends the hold once, so a second connection on the same id arrives as a spectator. Leave the hold alone on `AgentLeft`; only `Withdraw` cancels it.
+
+### Handling a Room That Takes No Reservations
+
+Without `with_reservations`, both calls answer `LobbyError::NotImplemented`. The same default applies to a `RoomHandle` you write yourself until you implement the two methods.
+
+```rust,ignore
+match room.reserve_seat(&player).await {
+  Ok(()) => {}
+  Err(LobbyError::NotImplemented(_)) => {}   // this room seats whoever connects
+  Err(error) => warn!(?error, "seat not held"),
+}
+```
 
 ## Handing Out a Join Ticket
 
 A ticket lets a room resolve the connecting player from a one-use token instead of trusting a URL.
 
 ```rust,ignore
-let mut tickets = MapTicketRegistry::new();
+let tickets: Arc<dyn TicketStore<PlayerId>> = Arc::new(MapTicketRegistry::with_expiry(Duration::from_secs(20)));
 
-let ticket = tickets.issue(player.clone(), room_id, now);
-outcome.player_game_token = Some(ticket.value.clone());
+let token = tickets.issue(player.clone(), room_id);
+outcome.player_game_token = Some(token);
 
 // In the room's own route:
-match tickets.redeem(&token, now) {
-  Some(Ticket { holder, .. }) => seat(holder),
-  None => refuse(),
+match tickets.redeem(&token, &room_id) {
+  Some(Ticket { player, .. }) => seat(player),
+  None => refuse(),   // never issued, already used, expired or issued for another room
 }
 ```
+
+`redeem` checks the room before it spends the ticket, so a token presented at the wrong door is refused and stays valid. `revoke(&token)` drops a ticket the lobby has since cancelled. Keep the ticket window shorter than the [reservation](#holding-a-seat-between-admission-and-arrival) window; otherwise a player lands with a spent ticket and no seat.
 
 The ticket handles **placement** only and does not authenticate anyone.
 
 ### The Two Registries
 
 ```rust,ignore
-MapTicketRegistry::new()      // sweeps from issue
-CachedTicketRegistry::new()   // feature `cache`: fibre_cache's janitor drives expiry
+MapTicketRegistry::new()                                       // never expires
+MapTicketRegistry::with_expiry(Duration::from_secs(20))        // sweeps on issue, once per window
+CachedTicketRegistry::with_expiry(Duration::from_secs(20))     // feature `cache`: fibre_cache's janitor drives expiry
 ```
+
+Both implement `TicketStore`, so a route written against `Arc<dyn TicketStore<ID>>` works with either.
 
 ### Issuing Your Own Value
 
 ```rust,ignore
-tickets.issue_with(player, room_id, now, sign(player, room_id));
+let token = sign(&player, &room_id);
+tickets.issue_with(token.clone(), player, room_id);
 ```
 
 Supply your own signed value when the token has to survive being handled by something you do not control.
@@ -286,8 +394,7 @@ All four blocks around the manager are exercised by [`examples/lobby_world`](../
 match lobby.handle_join_room_request(&id, agent, &payload).await {
   Ok(outcome) => outcome,
   Err(LobbyError::RoomNotFound(id)) => return no_such_room(id),
-  Err(LobbyError::RoomFull { .. }) => return full(),
-  Err(LobbyError::InvalidPassword) => return wrong_password(),
+  Err(LobbyError::JoinRoomFailed(why)) => return refused(why),   // full, wrong or missing password
   Err(LobbyError::UnsuitableConnection { measured_ms, allowed_ms }) => {
     return too_slow(measured_ms, allowed_ms);
   }

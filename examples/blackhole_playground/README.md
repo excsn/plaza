@@ -18,14 +18,14 @@ This is deliberately a **hard** case for the technique. The [`horde_playground`]
 ./wasm-serve.sh                                                  # build it and host it; open the printed URL
 ```
 
-| `--role` | server | window | your own hole |
-|---|---|---|---|
+| `--role` | server | window | your own hole | notes |
+|---|---|---|---|---|
 | `headless` | yes | no | no | the windowless deployable and what `wasm-serve.sh` runs |
 | `observer` | yes | yes | no | full control panel, watching; a free camera (drag / WASD / wheel, `C` recenters) |
 | `host` | yes | yes | yes | plays and serves. **The default** |
 | `client` | no | yes | yes | join only. The only role a browser can take |
 
-A host prints a local URL and a LAN URL; open either in a browser to join, or send the LAN one to a friend. The browser client connects back to whoever served it (over `wss://` if the page was secure), so a `--role headless` deploy behind a TLS terminator works the same way. The impairment sliders (latency, jitter, loss) act on the **real** per-connection link and in **both** directions, so a host can show a joiner what 200 ms and 10% loss feel like.
+A host prints a local URL and a LAN URL; open either in a browser to join or send the LAN one to a friend. The browser client connects back to whoever served it (over `wss://` if the page was secure), so a `--role headless` deploy behind a TLS terminator works the same way. The impairment sliders (latency, jitter, loss) act on the **real** per-connection link and in **both** directions, so a host can show a joiner what 200 ms and 10% loss feel like.
 
 **WASD / arrows** to move, **space** to dash; on a phone, touch and drag anywhere to steer.
 
@@ -119,7 +119,7 @@ Building the tree over a fitted bounding box was a bug that nothing flagged. The
 
 `client_utils::net_sim::LatencyLink` gained ordered delivery, since WebSocket runs over TCP and cannot reorder. An impairment link that produces failures the real transport cannot sends debugging the wrong way: a full diagnostic cycle in the horde example chased a reordering bug that only existed in the tooling. Horde was moved onto the fixed link. This example kept a private copy, which was still the unclamped version.
 
-At the shipped defaults, 15 ms of jitter against a roughly 16 ms send interval, that copy could deliver an older frame after a newer one to its own client. The pellet stream cannot handle that, because `swallowed` and `spawned` are order-sensitive. After extracting a shared version, find and replace every other copy. Otherwise the fix only reaches one of them. The copy existed because `LatencyLink` was not `Clone` and a plaza state must be `Clone`. A primitive's derives are part of its API, because one that cannot be stored in application state will get reimplemented.
+At the defaults it shipped with then, 15 ms of jitter against a roughly 16 ms send interval, that copy could deliver an older frame after a newer one to its own client. The pellet stream cannot handle that, because `swallowed` and `spawned` are order-sensitive. After extracting a shared version, find and replace every other copy. Otherwise the fix only reaches one of them. The copy existed because `LatencyLink` was not `Clone` and a plaza state must be `Clone`. A primitive's derives are part of its API, because one that cannot be stored in application state will get reimplemented.
 
 ## How it is built
 
@@ -131,12 +131,12 @@ Depends on `plaza_client_utils` (for the deterministic `net_sim` link and the pr
 
 The simulation is headless and is where the tests live (`cargo test -p blackhole_playground`). `cargo run --release -p blackhole_playground --example blackhole_report` prints the tables above.
 
-The networked layer ([src/net/](src/net/)) wraps the headless sim without changing it. The server side is `plaza` core (`StateController`, `StateLogic`, `TickDriver`) over `plaza_session` (`ActixWsPlazaSession`); the arena buffers each seat's input and drains it on the tick, exactly the shape the offline `advance_seats` already had. The client side is `plaza_client_utils` (`PredictedPlayer` for your own hole, `CorrectionMonitor` to say whether a correction was abnormal, `ClockSyncEstimator`, `RttEstimator`) over a `plaza_ws::Socket`. The hole is the reason `PredictedPlayer` carries a prediction **context**: it is a *forced* entity, so the client's copy of the rule needs the gravitational field to run and before the context existed this example passed the whole field inside every buffered input. It is also why `set_active` exists, because an eliminated hole is frozen by the server through a respawn delay and a client that keeps integrating it produces a stream of corrections with no cause on the server. Cargo features name what you want to build rather than the crates behind them: `client`, `server` (not available on `web`), `native`, `web`, `websocket`. The host keeps every control and readout because it is the server and a client in one process, publishing a `HostView` of the truth each send round for its own omniscient half.
+The networked layer ([src/net/](src/net/)) wraps the headless sim without changing it. The server side is `plaza_session::host::SimHost` in its `measured` mode at a 60 Hz tick, which assembles `plaza` core (`StateController`, `TickDriver`) over `ActixWsPlazaSession` and runs this example's `StateLogic`; the arena buffers each seat's input and drains it on the tick, exactly the shape the offline `advance_seats` already had. The client side is `plaza_client_utils` (`PredictedPlayer` for your own hole, `CorrectionMonitor` to say whether a correction was abnormal) over a `plaza_ws::pump::FramePump`, which owns the socket and the `Timeline` that estimates the round trip and the server clock. The hole is the reason `PredictedPlayer` carries a prediction **context**: it is a *forced* entity, so the client's copy of the rule needs the gravitational field to run and before the context existed this example passed the whole field inside every buffered input. It is also why `set_active` exists, because an eliminated hole is frozen by the server through a respawn delay and a client that keeps integrating it produces a stream of corrections with no cause on the server. Cargo features name what you want to build rather than the crates behind them: `client`, `server` (not available on `web`), `native`, `web`, `websocket`. The host keeps every control and readout because it is the server and a client in one process, publishing a `HostView` of the truth each send round for its own omniscient half.
 
 ## Notes
 
-- Excluded from `default-members`, so a bare `cargo build` / `test` skips macroquad's dependency tree. Building for wasm needs `--no-default-features --features web`, because the default set includes the native socket and the actix server, neither of which targets the browser; `wasm-build.sh` does this.
-- The compiled `static/*.wasm` is a build artifact and is gitignored. Run `wasm-build.sh` (or the `cargo build --target wasm32-unknown-unknown --features web` it wraps) to produce it before serving a fresh checkout.
+- Listed in the examples workspace's `default-members`, so a bare `cargo build` / `test` in `examples/` builds it along with macroquad's dependency tree. Building for wasm needs `--no-default-features --features web`, because the default set includes the native socket and the actix server, neither of which targets the browser; `wasm-build.sh` does this.
+- The compiled `static/*.wasm` is a build artifact and is gitignored. Run `wasm-build.sh` (or the `cargo build -p blackhole_playground --target wasm32-unknown-unknown --release --no-default-features --features web` it wraps) to produce it before serving a fresh checkout.
 - A physics engine (Rapier and friends) would be the wrong tool here: pellets are non-colliding point masses in a force field, so rigid bodies, contacts and joints go unused and the gravity loop is still yours to write. It also works against this technique: a heavy simulation makes client-side re-integration expensive and cross-platform determinism fragile, which pushes a game toward streaming state with interpolation instead.
 
 A frame counter sits bottom right, so at these entity counts you can tell a client-side stall from a network effect.

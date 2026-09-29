@@ -132,7 +132,7 @@ A named target avoids that problem. The client says who it is aiming at and when
 
 The range is checked when the cast **lands** rather than when it starts, because a target walking out of reach during a one-and-a-half second bar is an ordinary part of a fight. Checking at the start would make the same decision earlier and get it wrong more often.
 
-A landing takes 12 health off. A character brought to zero goes **down**: out of view, unable to act and back up three seconds later where it stands. Besides giving the health bars a purpose, going down is the third way somebody leaves your frame, after walking away and disconnecting. It separates the two relevance channels most visibly: **a downed party member stays in the party frame at zero health while their body leaves the world.** A client with one channel cannot draw that. A client that treated absence as "gone" would delete the party entry for the person who needs help.
+A landing takes the ability's damage off: 9 for Strike, 26 for Bolt and 7 for a beast's Claw. A character brought to zero goes **down**: unable to act, out of view once its 1.6-second fall has played and back up six seconds later at its spawn point. Besides giving the health bars a purpose, going down is the third way somebody leaves your frame, after walking away and disconnecting. It separates the two relevance channels most visibly: **a downed party member stays in the party frame at zero health while their body leaves the world.** A client with one channel cannot draw that. A client that treated absence as "gone" would delete the party entry for the person who needs help.
 
 ## Two channels of relevance
 
@@ -204,9 +204,9 @@ This is the second version of that measurement. When the world was an 80-metre t
 
 ## What the tick does
 
-Very little, as expected. Nobody's position is computed, because the clients own those and the only thing with a clock is a cast bar. The rest is working out, once per client, who that client is told about and why.
+Very little, as expected. Under the default client authority no adventurer's position is computed, because the clients own those; the server moves only the beasts and the clocks it runs are cast bars, cooldowns and downed characters coming back up. The rest is working out, once per client, who that client is told about and why.
 
-One frame cannot be broadcast to everyone, because two characters in different corners of the zone share nothing. The spatial channel does not have to be built per client either. `Zone::publish` packs each occupied grid cell once and a client's frame is the payloads its view touches plus a small per-client remainder: `you`, the party's extras, the landings it can see. The build tracks the occupied-cell count instead of the client count.
+One frame cannot be broadcast to everyone, because two characters in different corners of the zone share nothing. The spatial channel does not have to be built per client either. `Zone::publish_at` packs each occupied grid cell once and a client's frame is the payloads its view touches plus a small per-client remainder: `you`, the party's extras, the landings it can see. The build tracks the occupied-cell count instead of the client count.
 
 ## What a zone costs when it is not small
 
@@ -228,7 +228,7 @@ Both delivery modes run through `process_input`, because `Cells` does its addres
      4096        44 cells            1428     1824.2µs     1056.9µs     2881.1µs       8.6%
 ```
 
-**One zone holds 4096 connected clients in 14% of a 30Hz tick, or 9% fanned out, on one core.** The view saturates at 44, so cost per client is flat and the tick grows linearly with clients. Population is not what limits this genre's netcode.
+**One zone holds 4096 connected clients in 14% of a 30Hz tick on one core (9% fanned out).** The view saturates at 44, so cost per client is flat and the tick grows linearly with clients. Population is not what limits this genre's netcode.
 
 Crowding was the limit and it is measured separately. The same 256 people, packed until everyone can see everyone:
 
@@ -244,7 +244,7 @@ Crowding was the limit and it is measured separately. The same 256 people, packe
       0.5       256 cells            3351       71.6µs       52.5µs      124.2µs       0.4%
 ```
 
-**The tick column falls as the crowd tightens.** Under a per-client frame this table was the example's one real limit: it ran 675µs to 3504µs over the same spacings and population headroom did not help, because it is the same people in a smaller field. It now runs 246µs to 163µs joined, or 181µs to 124µs fanned out: **up to 28x better at the packed end** and a 6x change in how many people are in view moves the tick *down* by a third. A tighter crowd is fewer occupied cells, a cell is packed once however many people look at it and every viewer in a cell shares one assembled blob.
+**The tick column falls as the crowd tightens.** Under a per-client frame this table was the example's one real limit: it ran 675µs to 3504µs over the same spacings and population headroom did not help, because it is the same people in a smaller field. It now runs 246µs to 163µs joined and 181µs to 124µs fanned out: **up to 28x better at the packed end** and a 6x change in how many people are in view moves the tick *down* by a third. A tighter crowd is fewer occupied cells, a cell is packed once however many people look at it and every viewer in a cell shares one assembled blob.
 
 **Pick the delivery mode by bandwidth rather than CPU.** The fan-out is faster everywhere by a fairly flat margin, but what it costs in bytes swings with density: **41% more per client on a spread zone** (1014 to 1428) and **1% more when packed** (3314 to 3351). Spread out, a client's 49 cells hold about one body each, so 49 op envelopes are nearly all framing; packed, the same envelopes carry a crowd apiece and framing is a small share of the bytes. `Joined` suits a thin world and `Cells` a dense one, so the panel offers both.
 
@@ -350,7 +350,7 @@ In each of these, both halves were correct on their own.
 - **Absence means two different things.** A neighbour missing from a frame has walked away and must be dropped; a party member missing has left the zone. Both look the same on the wire and only `Because` tells them apart.
 - **A landing is an event.** No later frame mentions it, so a client that misses it never sees it. It is only sent to clients near enough to have a character for it; otherwise a client would play an animation on nothing.
 - **The client learns its spawn from the wire.** Computing it from the seat number would derive the same fact twice and the two copies can drift apart.
-- **Leaving the zone leaves the party**, or a health bar keeps updating for somebody who is not here.
+- **Leaving the zone leaves the party.** Otherwise a health bar keeps updating for somebody who is not here.
 - **A draw batch counted the wrong thing.** The renderer flushed every 64 bodies. That worked while a body was one box, but at eight boxes a body it reached 18432 indices against macroquad's limit of 5000. Past that limit the batcher warns once and draws the front of the buffer, so characters were silently missing from the scene. The batch now checks what is in the buffer at every push, so it stays under the limit however many boxes a body has.
 - **The spawn ring wrapped.** A fixed angular step of 0.9 radians reaches 2π at seat 7, so seats 0 and 7 spawned on top of each other. It looked fine for the first handful, which is why the test checks all 64. Spawns now follow a golden-angle spiral, which never puts two seats at the same angle.
 

@@ -76,7 +76,7 @@ A rollback peer tolerates packet loss because a lost input arrives in a later pa
 | | blind | 2245 | 5.99 | 6/8 |
 | | targeted | 3264 | 5.40 | 8/8 |
 
-**Blind** repeats the last six frames every packet whether anyone needs them or not. **Targeted** carries a `plaza_client_utils::ack::AckWindow`, twelve bytes saying exactly which frames arrived and repeats only the gaps.
+**Blind** repeats the last six frames every packet whether anyone needs them or not. **Targeted** carries a `plaza_client_utils::ack::AckWindow`, counted here as ten bytes (`ACK_BYTES`), saying exactly which frames arrived and repeats only the gaps.
 
 The bandwidth crossover is around 12% loss: targeted costs 28% less on a clean link and 45% more at 50%. That much was expected. Two other results were not.
 
@@ -116,10 +116,11 @@ The primitives stay public for anyone who wants to wire the loop by hand; the se
 | [src/main.rs](src/main.rs) | the frame loop and input |
 | [static/](static/) | `index.html` and the vendored `mq_js_bundle.js` loader |
 | `serve.sh`, `run-native.sh` | the two ways to run it |
+| [examples/rollback_report.rs](examples/rollback_report.rs) | the redundancy measurement behind the table above (`cargo run --release -p rollback_playground --example rollback_report`) |
 
 The simulation logic is the valuable part and is where the tests live (`cargo test -p rollback_playground`); the renderer only reads its results. The `client_utils` rollback module has its own tests, including a two-peers-converge determinism check (`cargo test -p plaza_client_utils rollback`).
 
 ## Notes
 
-- The crate is a workspace member but is excluded from `default-members`, so a bare `cargo build` / `test` / `check` skips macroquad's large dependency tree. `cargo <cmd> --workspace` still includes it.
+- The crate is a workspace member but is excluded from `default-members`, so a bare `cargo build` / `test` / `check` in `examples/` skips it. `-p rollback_playground` or `--workspace` still includes it.
 - A built wasm bundle is shareable by hosting the `static/` directory anywhere.

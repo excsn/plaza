@@ -1,6 +1,6 @@
 # curtain_fire
 
-A 1-4 player co-op bullet-hell shmup with thousands of enemy bullets and a hitbox two and a half units across. It has three different rules for who decides that you were hit.
+A 1-4 player co-op bullet-hell shmup with thousands of enemy bullets and a hitbox five units across. It has three different rules for who decides that you were hit.
 
 Every other prediction example in this repository corrects a **position**: you drew a player a few pixels off or on the wrong cell and the fix is to move them. bomb_grid showed that a lattice cannot hide its netcode because a wrong cell is a jump you can count. In a shmup a wrong answer costs a life. A death cannot be eased or rewound afterwards, so this example is about **who decides that you died**.
 
@@ -15,7 +15,7 @@ It also carries a second, unrelated measurement, because no other example here h
 cargo test -p curtain_fire                   # every claim below, as a test
 ```
 
-wasd or arrows to fly, space to fire. The white dot is your hitbox; the ship around it is decoration.
+wasd or arrows to fly, space to fire. On a touch screen a stick flies and any touch fires. The white dot is your hitbox; the ship around it is decoration.
 
 ## The curtain
 
@@ -50,7 +50,7 @@ seed_defense showed that sending only the causes of the state works. It had no h
 
 ### The share of a frame that is variant names
 
-`IMPROVEMENTS` makes float quantization, bit packing and numeric variant tags depend on one number: the share of a frame taken up by variant names. `MsgPackCodec`'s documentation says compact MessagePack keeps the names and that short names are therefore worth having, but it does not give the share, which is what the backlog item is waiting on. This example measures the share on its own traffic and shows it on the panel.
+Whether float quantization, bit packing and numeric variant tags are worth adding depends on one number: the share of a frame taken up by variant names. `MsgPackCodec`'s documentation says compact MessagePack keeps the names and that short names are therefore worth having, but it does not give the share. This example measures the share on its own traffic and shows it on the panel.
 
 It stays a measurement and not a rule because a tag is a fixed cost: it dominates a stream of small events and is negligible in a large frame. Before switching to numeric tags, find out which kind of traffic you have. Tests pin both cases.
 

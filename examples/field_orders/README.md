@@ -9,7 +9,7 @@ A Fire Emblem-shaped battle, playable from two commanders to thirty-two: two arm
 cargo run -p plaza_example_field_orders --bin scripted   # the in-process scripted arc
 ```
 
-Arrivals gather in a lobby and nothing counts down by itself: the first-mustered commander is the **host**, picks the field size (or leaves it on auto) and starts the countdown. The deploy takes the larger of the pick and what the muster needs, so a pair may duel on the Xlarge field but nine squads can never squeeze onto Small; settings lock once the countdown runs and a leaving host hands the lobby to the next in line. After a battle the field returns to the lobby for the host to restart. The bot takes one squad to even an odd side, which is also how a lone commander gets an opponent. Lose and the next deploy opens you on the other colour.
+Arrivals gather in a lobby and nothing counts down by itself: the first-mustered commander is the **host**, picks the field size (or leaves it on auto) and starts the countdown. The deploy takes the larger of the pick and what the muster needs, so a pair may duel on the Xlarge field but nine squads can never squeeze onto Small; settings lock once the countdown runs and a leaving host hands the lobby to the next in line. After a battle the field returns to the lobby for the host to restart. The bot takes one squad to even an odd side, which is also how a lone commander gets an opponent. Each deploy swaps which colour the first-mustered commander takes, so with the same muster everyone changes sides.
 
 ## The game
 

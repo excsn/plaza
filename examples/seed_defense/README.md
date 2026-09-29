@@ -63,7 +63,7 @@ The client compares digests at the tick the server named, not at its own newest 
 
 ### 3. Fixed-point arithmetic
 
-The simulation contains no floating point. `Fx` is a signed 32-bit fixed-point value with 8 fractional bits and `Fx::to_f32` is one-way and called only by the renderer.
+The simulation contains no floating point. `Fx` (from `plaza_client_utils::fixed`, behind its `fixed` feature) is a signed 32-bit fixed-point value with 8 fractional bits and `Fx::to_f32` is one-way and called only by the renderer.
 
 This is because `f32` is not guaranteed to give the same answer in a wasm build and a native one: a compiler may contract a multiply and an add into a fused multiply-add, keep an intermediate in a wider register or reassociate a sum. Any of those changes the last bit and here the last bit is never corrected.
 
@@ -119,14 +119,14 @@ None of the saving comes from compression. The state is never encoded because it
 
 ## How it is built
 
-- **[src/sim/](src/sim/)** is the whole game, headless: the fixed-point maths, the generator, the map, the shared rules, the authority and a client that reproduces it. No sockets, no window, no async. Every claim above is a test at this layer and [`sim/world.rs`](src/sim/world.rs) is the harness that puts a server and its clients in one process with an impaired link between them.
+- **[src/sim/](src/sim/)** is the whole game, headless: the generator, the map, the shared rules, the authority and a client that reproduces it. No sockets, no window, no async. Every claim above is a test at this layer and [`sim/world.rs`](src/sim/world.rs) is the harness that puts a server and its clients in one process with an impaired link between them.
 - **[src/net/](src/net/)** wraps that for a real wire and adds no rules.
 - **[src/render.rs](src/render.rs)** and **[src/ui.rs](src/ui.rs)** draw it and put the numbers on screen.
 
-The host uses [`TickDriver::run_fixed`](../../core/API_REFERENCE.md#struct-tickdriver), never `run`. `run` delivers the measured elapsed time, so the simulation's rate would depend on the host's scheduler. In the lattice examples that causes a correction. Here there are no corrections, so every client would permanently disagree with the server.
+The host stands up on [`SimHost`](../../session/API_REFERENCE.md#struct-simhost-and-struct-simwiring), whose driver is [`TickDriver::run_fixed`](../../core/API_REFERENCE.md#struct-tickdriver), never `run`. `run` delivers the measured elapsed time, so the simulation's rate would depend on the host's scheduler. In the lattice examples that causes a correction. Here there are no corrections, so every client would permanently disagree with the server.
 
 ## Notes
 
-- Excluded from `default-members`, so a bare `cargo build` skips macroquad's dependency tree. `cargo <cmd> --workspace` includes it.
+- Excluded from `default-members`, so a bare `cargo build` in `examples/` skips it. `-p seed_defense` or `--workspace` includes it.
 - Building for wasm needs `--no-default-features --features web`; `wasm-build.sh` does this.
 - The compiled `static/*.wasm` is a build product and is gitignored. Run `wasm-build.sh` before serving a fresh checkout.

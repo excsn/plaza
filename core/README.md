@@ -2,7 +2,7 @@
 
 **License:** Mozilla Public License 2.0 (MPL-2.0) · **Status:** Experimental
 
-The controller loop and the traits you implement around it. This is the crate you start with; [`plaza_session`](../session/), [`plaza_lobby`](../lobby/) and [`plaza_client_utils`](../client_utils/) build on top. `plaza` itself depends on no other crate in the workspace.
+The controller loop and the traits you implement around it. This is the crate you start with; [`plaza_session`](../session/), [`plaza_lobby`](../lobby/) and [`plaza_client_utils`](../client_utils/) build on top. `plaza` itself depends only on [`plaza_wire`](../wire/), for the agent types and the payloads it re-exports.
 
 How to use it: [README.USAGE.md](README.USAGE.md). Full surface: [API_REFERENCE.md](API_REFERENCE.md). For the concepts and why they are shaped this way, see the [workspace README](../README.md).
 

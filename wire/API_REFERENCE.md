@@ -16,11 +16,12 @@
   - [Enum `Kind`](#enum-kind)
   - [Struct `ProtocolVersion`](#struct-protocolversion)
   - [Structs `Ping` and `Pong`](#structs-ping-and-pong)
+  - [Struct `Goodbye`](#struct-goodbye)
   - [Frame Functions](#frame-functions)
   - [A frame is not fragmentable](#a-frame-is-not-fragmentable)
 - [4. Module `framing`](#4-module-framing)
 - [5. Module `payloads`](#5-module-payloads)
-  - [Module `flow_payloads`](#module-flowpayloads)
+  - [Module `flow_payloads`](#module-flow_payloads)
 - [6. Module `build` (feature `build`)](#6-module-build-feature-build)
   - [Struct `Wire`](#struct-wire)
   - [File-list functions](#file-list-functions)
@@ -30,6 +31,7 @@
   - [Bit Functions](#bit-functions)
   - [The `Vec<u8>` trap and `Payload`](#the-vecu8-trap-and-payload)
 - [8. Struct `BitCodec` (feature `serde`)](#8-struct-bitcodec-feature-serde)
+  - [Enum `bit_codec::Error`](#enum-bit_codecerror)
 - [9. Feature Flags](#9-feature-flags)
 - [10. Error Handling](#10-error-handling)
 
@@ -127,7 +129,7 @@ pub struct MsgPackNamedCodec;
 
 MessagePack with struct field names kept: `Move { x, y }` goes out as `{"x": -7, "y": 300}` where [`MsgPackCodec`](#struct-msgpackcodec) sends `[-7, 300]`. `name()` returns `"msgpack-named"`, `is_text()` stays `false`.
 
-Reach for `MsgPackCodec` by default. This one is for a peer that **cannot be built from the server's struct definitions** and so has nothing to recover field order from: a hand-written decoder in another language, or a generated model layer keyed by name.
+Reach for `MsgPackCodec` by default. This one is for a peer that **cannot be built from the server's struct definitions** and so has nothing to recover field order from: a hand-written decoder in another language or a generated model layer keyed by name.
 
 **It costs more than the usual figure suggests.** The often-quoted 67% of JSON against compact's 40% comes from a ten-op message. Measured on a whole match of real traffic in [`examples/parlour_game`](../examples/parlour_game/) (`cargo run -p plaza_example_parlour_game --example parlour_report`), named came out at **76% of JSON where compact was 26%**: a premium of **+190%** rather than +67%. That makes the choice close to a quarter of JSON against three quarters of it, so adopting named to keep a hand-written client simple gives up most of what MessagePack saves.
 
@@ -231,8 +233,8 @@ Why a connection is ending, the body of a `Kind::Goodbye` frame. `plaza_session`
 
 *   `answer_ping(codec, ping_body, responder: Option<u64>) -> Option<Vec<u8>>`: builds the `Kind::Pong` frame answering a ping body; `None` if it does not decode. What `plaza_session` calls and what a client with its own read loop should call so both ends answer identically.
 *   `encode_ops(codec, ops: &[Op]) -> Result<Vec<u8>, _>`: one `Kind::Ops` frame, the kind byte then the codec's one document. The body is the ops array itself; who sent it is the server's bookkeeping and is not on the wire.
-*   `decode_ops(codec, frame) -> Option<Vec<Op>>`: the frame's ops, or `None` when the frame is not `Kind::Ops` or its body does not decode, the same skip-silently rule unknown kinds get.
-*   `split(frame: &[u8]) -> Option<(u8, &[u8])>`: the tag and the body, or `None` for an empty frame, which is malformed rather than unknown. An unrecognised tag still splits; deciding what to do about it is `Kind::from_byte`'s job.
+*   `decode_ops(codec, frame) -> Option<Vec<Op>>`: the frame's ops or `None` when the frame is not `Kind::Ops` or its body does not decode, the same skip-silently rule unknown kinds get.
+*   `split(frame: &[u8]) -> Option<(u8, &[u8])>`: the tag and the body or `None` for an empty frame, which is malformed rather than unknown. An unrecognised tag still splits; deciding what to do about it is `Kind::from_byte`'s job.
 *   `begin(kind: Kind, buf: &mut Vec<u8>)`: clears `buf` and writes the tag, so the body can be appended after it. Capacity survives the clear, which is why it clears rather than starting fresh.
 *   `PROBE_FRAME_HINT: usize = 64`: enough for a `Ping` or a `Pong` under either shipped codec. `answer_ping` starts its buffer here and `plaza_session` does the same for the probes it sends, so a control frame costs one allocation rather than the several a `Vec` growing from nothing needs to reach twenty-odd bytes.
 
@@ -287,7 +289,7 @@ The resolver: the version derived from tagged roots instead of listed files and 
 *   **`.also_scan(dir)`**: scan another directory, for a workspace keeping wire types in a sibling crate it owns.
 *   **`.vocab(bundle)`**: include a vocabulary bundle, `(label, source_text)` pairs of definitions resolved, covered by the version and emitted by `.dart_types` exactly like your own; your own definition of a name shadows a bundle's. `build::vocab` ships plaza's: `MATH` (`Vec2`/`Vec3`/`Quat`) and `APP_COMMON` (the collaborative payloads), vendored copies pinned byte-for-byte against core's originals by `wire/tests/vocab_sync.rs`. Referencing one of those types without its bundle warns (resolver) or fails (generator) naming the exact `.vocab(...)` line to add. The same shape includes a vendored third-party definition; pin your copy with a test the way plaza pins its own.
 *   **`.leaf(name)`**: acknowledge a name the resolver should not chase (a macro-generated type, a shape pinned elsewhere). Explicitly **uncovered by the version**.
-*   **`.emit()`** / **`.version() -> u32`**: publish (as `emit` does, plus the Dart const), or take the number and place it yourself.
+*   **`.emit()`** / **`.version() -> u32`**: publish (as `emit` does, plus the Dart const) or take the number and place it yourself.
 
 The walk starts at the roots and follows field types transitively, generic arguments included, so the version hashes exactly the reachable definitions: an off-wire neighbour sharing a file moves nothing, a doc edit or reformat moves nothing and a payload two files away counts. Type aliases are followed and their targets count as wire shape. Plaza's own vocabulary is covered by **`VOCAB_VERSION`**, a constant baked into this crate from its own sources and mixed into every derived number, so you never list `Agent`, the netcode payloads or the flow-control notice payloads; their shape changing moves every consumer's version on its next `cargo update`. A reference the resolver cannot place **fails the build naming both ends**. A serde-derived type unreachable from every root and referenced by nothing gets a `cargo:warning` naming it and both tags (`plaza-wire: root` / `plaza-wire: off-wire`), because the resolver has no other way to notice a forgotten tag. Two definitions sharing one bare name is an error: the index is by name.
 
@@ -339,7 +341,7 @@ Available without the `serde` feature, since it works on bits and bytes and is n
 
 ### Struct `BitReader<'a>`
 
-**`new(&[u8])`**, **`bits_left()`**, **`align_to_byte()`** (skip to the next byte boundary; `BitWriter::finish` pads, so concatenated payloads are byte-aligned and a reader running through them is not), **`is_aligned()`** and `bits` / `bool` / `varint` / `signed_varint` / `quantized` / `smallest_three` mirroring the writer. Reads past the end return `BitError::Underrun` rather than panicking. The final byte is zero-padded, so up to seven padding bits read back as zeroes before the error.
+**`new(&[u8])`**, **`bits_left()`**, **`align_to_byte()`** (skip to the next byte boundary; `BitWriter::finish` pads, so concatenated payloads are byte-aligned and a reader running through them is not), **`is_aligned()`** and `bits` / `bool` / `varint` / `signed_varint` / `quantized` / `smallest_three` mirroring the writer. Reads past the end return `BitError::Underrun { wanted, left }` rather than panicking. A width outside `1..=64` returns `BitError::Width(u32)`, which is a layout bug rather than bad input. The final byte is zero-padded, so up to seven padding bits read back as zeroes before the error.
 
 ### Bit Functions
 
@@ -349,7 +351,7 @@ Available without the `serde` feature, since it works on bits and bytes and is n
 
 A packed payload carried as a `Vec<u8>` field reaches the outer codec through `serialize_seq`, so every byte is re-encoded as its own integer. In `wire/tests/packing.rs` that costs **15502 bytes to carry 10396**, giving back half of the packing saving.
 
-**Struct `Payload`** (feature `serde`) is the fix: a `Vec<u8>` newtype whose `Serialize` calls `serialize_bytes`, so the same payload travels in **10411**, a fifteen-byte header over the raw layout. `From<Vec<u8>>`, `Deref<Target = [u8]>`, `as_slice`, `into_inner`, `len`, `is_empty`; `Debug` prints the length rather than the bytes, because raw packed bytes are unreadable in a log line. Its `Deserialize` also accepts a sequence, so a text codec with no byte-string type still round-trips.
+**Struct `Payload`** (feature `serde`) is the fix: a `Vec<u8>` newtype whose `Serialize` calls `serialize_bytes`, so the same payload travels in **10411**, a fifteen-byte header over the raw layout. `Payload::new()` (empty), `From<Vec<u8>>`, `Deref<Target = [u8]>`, `as_slice`, `into_inner`, `len`, `is_empty`; `Debug` prints the length rather than the bytes, because raw packed bytes are unreadable in a log line. Its `Deserialize` also accepts a sequence, so a text codec with no byte-string type still round-trips.
 
 ## 8. Struct `BitCodec` (feature `serde`)
 
@@ -369,14 +371,24 @@ Measured on Fiedler's scene of 901 cubes, one snapshot at 60Hz (`cargo test -p p
 
 A derive gets you 1.4x for one line of setup; the remaining 3.6x costs a hand-written layout **and** a hand-written reader for every packed type and is lossy by construction where the derive is lossless. `BitCodec` is not self-describing, so both ends must agree on the type exactly: pin the protocol version (see [`build`](#6-module-build-feature-build)) and do not put it on disk.
 
+### Enum `bit_codec::Error`
+
+What `BitCodec::decode` and `encode` fail with, boxed into the [`WireCodec`](#trait-wirecodec) error.
+
+*   **`Message(String)`**: a serde error raised by the type being encoded or decoded.
+*   **`Bits(BitError)`**: the bit stream ran out or a width was invalid; see [`BitReader`](#struct-bitreadera).
+*   **`NotSelfDescribing`**: a `deserialize_any` call, which a format with no tags cannot answer. `#[serde(untagged)]`, `#[serde(flatten)]` and `serde_json::Value` all make one.
+*   **`Utf8`**: a string's bytes were not UTF-8.
+
 ## 9. Feature Flags
 
 | Feature | Default | Effect |
 |---|---|---|
-| `json` | yes | Compiles [`JsonCodec`](#struct-jsoncodec) and enables the `serde_json` dependency. With `default-features = false` the crate is the trait and payloads plus `serde` alone. |
+| `serde` | via `json` | Compiles the [`WireCodec`](#trait-wirecodec) trait, the [payload modules](#5-module-payloads), serde for `Agent` and the frame bodies, [`BitCodec`](#8-struct-bitcodec-feature-serde) and [`Payload`](#the-vecu8-trap-and-payload). Off, the crate is the framing byte, [`bits`](#7-bit-packing-module-bits) and the identity types. |
+| `json` | yes | Compiles [`JsonCodec`](#struct-jsoncodec), enables the `serde_json` dependency and turns on `serde`. |
 | `msgpack` | no | Compiles [`MsgPackCodec`](#struct-msgpackcodec) and [`MsgPackNamedCodec`](#struct-msgpacknamedcodec) and enables the `rmp-serde` dependency. |
 | `build` | no | Compiles [`build`](#6-module-build-feature-build), for use from a `build.rs`. Put it under `[build-dependencies]`, not `[dependencies]`. |
 
 ## 10. Error Handling
 
-This crate defines no error type. Both trait methods return `Box<dyn std::error::Error + Send + Sync>`, so an implementation propagates whatever its underlying library produces (`serde_json::Error`, `rmp_serde::encode::Error`) without a conversion layer. `plaza_session` wraps these into its own `SessionLayerError::Serialization` and `::Deserialization` variants, tagging them with [`name`](#method-name) so a log line says which format failed.
+Two error types belong to the bit packing: [`BitError`](#struct-bitreadera) from reading a bit stream and [`bit_codec::Error`](#enum-bit_codecerror) from `BitCodec`. Otherwise both `WireCodec` methods return `Box<dyn std::error::Error + Send + Sync>`, so an implementation propagates whatever its underlying library produces (`serde_json::Error`, `rmp_serde::encode::Error`) without a conversion layer. `plaza_session` wraps these into its own `SessionLayerError::Serialization` and `::Deserialization` variants, tagging them with [`name`](#trait-wirecodec) so a log line says which format failed.

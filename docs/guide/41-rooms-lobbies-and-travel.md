@@ -10,7 +10,7 @@ A room works just as well as a channel, a document or a workspace; nothing in th
 
 ## What the lobby decides
 
-The crate splits mechanism from policy the same way as [chapter 40](40-the-right-to-say-no.md). Capacity is checked at the lobby and re-checked by the room, because the two checks are not atomic and the room's is the one that counts. Passwords hash however you say (the verifier is swappable; the default is a plain compare and the docs say so). Reaping polls; *when* to reap is up to your timer. Placement tickets handle placement only and do no authentication. Plaza has no authentication for tickets to fit into, so the crate provides the bookkeeping and leaves the secret to you.
+The crate splits mechanism from policy the same way as [chapter 40](40-the-right-to-say-no.md). Capacity is checked at the lobby and re-checked by the room, because the two checks are not atomic and the room's is the one that counts. Passwords hash however you say (the verifier is swappable; the default is a plain compare and the docs say so). Reaping polls; *when* to reap is up to your timer. Placement tickets handle placement only and do no authentication: `issue` mints a counter, which stops a client naming another player but is not a secret. Plaza verifies no credential itself (a `ConnectionAdmitter` decides what one proves, [chapter 40](40-the-right-to-say-no.md)), so the crate provides the bookkeeping and leaves the secret to you: mint a signed, expiring token and record it with `issue_with`.
 
 Two details of the ticket are easy to get wrong. **The room is checked before the ticket is spent**, because spending first and comparing afterwards burns a ticket the room had no claim on. Since `issue` mints a counter, that would let anyone destroy anyone else's placement by presenting a guessed ticket at the wrong room. **The ticket's window has to be shorter than the reservation's window**, because redemption is two steps in two places: the route spends the ticket, then the session comes up, then the room's logic consumes the reservation. Equal windows look correct but strand a client that connected at the edge of the window, holding a spent ticket and seated as a spectator.
 
@@ -20,7 +20,7 @@ Two details of the ticket are easy to get wrong. **The room is checked before th
 
 The room lasts per *group* rather than per hand. A settled match deals another after an intermission, because sending three people who want to keep playing back through the queue is worse than keeping the room they are already in. The room still closes when they leave and the reaper collects it, which is all "per match" was meant to guarantee.
 
-Reservations end with the room, so an abandoned placement costs nothing and the reservation window only matters for standing rooms. Room lifetime becomes the reaper's job rather than a capacity question. The client must also **hold its lobby socket open until it is seated at the table**: closing it on `Placed`, the obvious thing to do once you have an endpoint, makes the lobby emit `AgentLeft`, which withdraws the reservation it just issued. The player then arrives as a spectator. The two sockets have separate lifetimes and the first has to stay open until the second is seated. Single-socket tests cannot see this; it was found only by driving both.
+Reservations end with the room, so an abandoned placement costs nothing and the reservation window only matters for standing rooms. Room lifetime becomes the reaper's job rather than a capacity question. The client must also **hold its lobby socket open until it is seated at the table**: closing it on `Placed`, the obvious thing to do once you have an endpoint, makes the lobby emit `AgentLeft`, which withdraws the reservation it just issued. The player then arrives as a spectator. The two sockets have separate lifetimes and the first has to stay open until the second is seated. Single-socket tests cannot see this; only a test that drives both sockets does.
 
 ## Admission by measurement
 
@@ -34,7 +34,7 @@ The hard travel bug is reservation withdrawal, which the crate docs put in itali
 
 ## Closing a room
 
-An idle room's teardown reuses [chapter 40](40-the-right-to-say-no.md)'s drain: occupants get a farewell op, then their sockets close, then the room's controller is told to shut down and the reaper collects the finished handle on a later pass. Closing a room uses the same mechanism as removing a guest, so no player's connection ends in a silent EOF.
+An idle room's teardown reuses [chapter 40](40-the-right-to-say-no.md)'s drain: occupants are told why (lobby_world sends a `Closed` op, then `disconnect_all` writes a `Goodbye` whose detail repeats the reason), then their sockets close, then the room's controller is told to shut down and the reaper collects the finished handle on a later pass. Closing a room uses the same mechanism as removing a guest, so no player's connection ends in a silent EOF.
 
 ## Replacing it
 
@@ -44,4 +44,4 @@ The in-memory lobby manager is the prescription; the factory trait, the ticket s
 
 ## The lab
 
-[lobby_world](../../examples/lobby_world/): four browser tabs, each assigned a different simulated link, so the room lists differ per tab; create a room, quick-match into one with bot seats, watch your wallet follow you between arenas and leave a dynamic room idle to see the reaper drain it. Then [parlour_game](../../examples/parlour_game/) for the room-per-match shape, where the lobby runs JSON and each table runs named MessagePack on the same server and whose [Flutter client](../../flutter/parlour_client/) plays a match to completion over the two sockets. Then [horde_playground](../../examples/horde_playground/) with `--rooms` for placement at scale.
+[lobby_world](../../examples/lobby_world/): four browser tabs, each assigned a different simulated link, so the room lists differ per tab; create a room, quick-match into one with bot seats, watch your wallet follow you between arenas and leave a dynamic room idle to see the reaper drain it. Then [parlour_game](../../examples/parlour_game/) for the room-per-match shape, where the lobby runs JSON and each table runs compact MessagePack on the same server and whose [Flutter client](../../flutter/parlour_client/) plays a match to completion over the two sockets. Then [horde_playground](../../examples/horde_playground/) with `--rooms` for placement at scale.

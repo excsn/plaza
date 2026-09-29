@@ -27,7 +27,7 @@ cargo test -p poketo --test reconnect -- --nocapture   # what a reconnection cos
 
 ## Tile positions on the wire
 
-The plan for this example expected a tile position to be much cheaper than a continuous one and the saving to let the view radius grow a lot. Both were measured and both savings were smaller than expected.
+A tile position was expected to be much cheaper than a continuous one and the saving was expected to let the view radius grow a lot. Both were measured and both savings were smaller than expected.
 
 ```
 one trainer, on the wire:
@@ -123,13 +123,13 @@ A choice names a move slot rather than a move. `Choose { turn, choice }` keeps t
 
 **A miss is computed from a hash rather than rolled.** The hash takes the battle's seed, the turn, the acting side and **both sides' choices**. The choices have to be in it: if a client could compute the roll from what it already holds, it could pick whichever move is going to hit and the inaccurate move would carry no risk at all. Neither side knows the other's choice until both have committed, which is when the hash is computed. Nothing in it may read the server's clock. If it did, the same choice replayed at a different wall time would resolve differently and resends would only be harmless by coincidence, with every reconnection test still passing.
 
-The wild side's choice is hashed the same way rather than hardcoded, so the transcript is complete and does not depend on hidden server state. Status effects and turn order are both read before anything is applied: a `Slow` that lands this turn must not reorder the turn it landed on, or the ordering would depend on which machine evaluated it first.
+The wild side's choice is hashed the same way rather than hardcoded, so the transcript is complete and does not depend on hidden server state. Status effects and turn order are both read before anything is applied: a `Slow` that lands this turn must not reorder the turn it landed on. If it did, the ordering would depend on which machine evaluated it first.
 
 ## Showing the battle result
 
 The first version of this ended a battle the moment it was decided: the final `Battle` and the `Returned` that sends you back went out in the same batch. A client applies a batch in order, so it set the finished battle and cleared it inside one loop and **the result was never on screen for a single frame**. In play you pressed a key and were dumped back in the town with no idea what happened.
 
-The fix does not use a delay. A decided battle stays in `battles`, where the seat already was. The client sends `Dismiss` once the player has read it. Everything else still holds: a seat is in exactly one collection, the finished battle is a transcript that is just as valid a minute later and a battle whose owner drops mid-result still parks and resumes. `Dismiss` is refused for a battle still being fought, or the key that dismisses a result would walk a losing player out of the fight.
+The fix does not use a delay. A decided battle stays in `battles`, where the seat already was. The client sends `Dismiss` once the player has read it. Everything else still holds: a seat is in exactly one collection, the finished battle is a transcript that is just as valid a minute later and a battle whose owner drops mid-result still parks and resumes. `Dismiss` is refused for a battle still being fought. Otherwise the key that dismisses a result would walk a losing player out of the fight.
 
 This applies outside this game too. An op that reports a result and an op that removes the screen it would be shown on cannot be sent in the same batch. There has to be a gap between them, which can be a delay, an acknowledgement or an input.
 
@@ -177,21 +177,19 @@ There is one set of values for the whole town rather than one per player. Whoeve
 
 ## The art
 
-These are the first sprites in this tree; every other example draws itself with rectangles and circles. Five sheets in [assets/](assets/), generated with SpriteCook for ten credits, listed with their prompts and cell orders in [assets/MANIFEST.md](assets/MANIFEST.md).
+These are the first sprites in this tree; every other example draws itself with rectangles and circles. Five sheets in [assets/](assets/), generated with SpriteCook for twelve credits (the healing spring was a sixth generation composited into the tileset), listed with their prompts and cell orders in [assets/MANIFEST.md](assets/MANIFEST.md).
 
-They are **embedded with `include_bytes!` rather than fetched at runtime**, for three reasons, none of them speed. First, a missing or renamed asset becomes a compile error on every target instead of a 404 in one browser on a stack whose documented failure mode is silent stubbing. This tree already has `ws_client/check_js_imports.py` to catch pages that fail silently. Second, `Host::cache_bust` stamps asset URLs written in `index.html` and a texture the wasm fetches for itself never appears there, so stale art could be served against a fresh binary indefinitely. Bytes inside the wasm share the wasm's own stamp. Third, it is one code path on both targets, with no loading state and no untextured first frames. The cost is 256 KiB in a 1.1 MiB wasm, less than removing the dead `egui-macroquad` dependency in the same pass saved.
+They are **embedded with `include_bytes!` rather than fetched at runtime**, for three reasons, none of them speed. First, a missing or renamed asset becomes a compile error on every target instead of a 404 in one browser on a stack whose documented failure mode is silent stubbing. This tree already has `ws_client/check_js_imports.py` to catch pages that fail silently. Second, `Host::cache_bust` stamps asset URLs written in `index.html` and a texture the wasm fetches for itself never appears there, so stale art could be served against a fresh binary indefinitely. Bytes inside the wasm share the wasm's own stamp. Third, it is one code path on both targets, with no loading state and no untextured first frames. The cost is the five PNGs, about 227 KiB, inside the wasm.
 
 The generated sheets needed mechanical correction before they were usable. The cells came back at 250 pixels square, so they were resampled once, offline, to a size whose cells divide exactly and the renderer addresses them with integer rectangles. The tileset was asked for with gridlines to make its layout legible and they had to be cropped back off, because the game would draw them as part of the tile. The creatures were re-cut from their measured bounding boxes rather than by splitting the sheet in three, because one of them overflowed its share and drew a sliver of itself down the edge of its neighbour. The walk frames were trimmed to a common size and baseline, because a generator draws each cell at its own scale and cycling those looks like a jiggle rather than a walk.
 
 Tile positions are rounded from the camera origin once rather than per tile. Rounding each tile on its own puts neighbours 31 or 33 pixels apart depending on where the camera is and the one-pixel gaps show up as a grid of seams across the whole map.
 
-## Where it sits
-
 ## Reconnection cost
 
 `cargo test -p poketo --test reconnect -- --nocapture`
 
-The plan for this example named one failure it had to pin: **an operation applied twice because a reconnect re-sent it.** It only shows with both sides running, because each side is right on its own: the client resends since it never heard an answer and the server accepts a choice. Neither side on its own can tell whether this choice is the same one.
+This example had one failure to pin: **an operation applied twice because a reconnect re-sent it.** It only shows with both sides running, because each side is right on its own: the client resends since it never heard an answer and the server accepts a choice. Neither side on its own can tell whether this choice is the same one.
 
 ```
   a choice for turn 1, resent on a new connection after the old
@@ -202,5 +200,7 @@ The plan for this example named one failure it had to pin: **an operation applie
 The turn number on the choice is what prevents it. Without it a resent choice would look like a fresh one and the move would play again. The server ignores a resend rather than correcting anything, so nothing is sent back for one.
 
 The same test pins two smaller things. A resumed client learns where it is from the ordinary frame, so a reconnection needs no catch-up protocol. A token that aged out is seated fresh with no error, because a failed resume and a first join are the same situation and an error would make every client handle a case that needs no different response.
+
+## Where it sits
 
 [spacemo](../spacemo/) is at the far end of the same axis: nothing in its design absorbs latency, so the netcode has to. poketo is at the near end for two reasons: movement is discrete and a battle is turn-based. [The netcode chapter](../../docs/guide/02-choosing-your-netcode.md) covers that axis and these two examples sit at its ends.

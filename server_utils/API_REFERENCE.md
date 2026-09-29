@@ -6,7 +6,7 @@
 
 - [1. Core API](#1-core-api)
   - [Struct `HistoricalStateBuffer<EntityId, EntityStateSnapshot, ServerTime>`](#struct-historicalstatebufferentityid-entitystatesnapshot-servertime)
-  - [Function `render_error_at`](#function-rendererrorat)
+  - [Function `render_error_at`](#function-render_error_at)
   - [Struct `RenderError`](#struct-rendererror)
   - [Struct `TimedState<ServerTime, State>`](#struct-timedstateservertime-state)
   - [Shared traits](#shared-traits)
@@ -45,7 +45,7 @@
   - [Struct `DeltaBaseline`](#struct-deltabaseline)
 - [9. What each viewer was told (module `told`)](#9-what-each-viewer-was-told-module-told)
   - [Struct `Told<Viewer, K, V>`](#struct-toldviewer-k-v)
-- [10. Input scheduling (module `input_schedule`)](#10-input-scheduling-module-inputschedule)
+- [10. Input scheduling (module `input_schedule`)](#10-input-scheduling-module-input_schedule)
   - [Struct `InputWindow`](#struct-inputwindow)
   - [Enum `Submission`](#enum-submission)
   - [Struct `InputSchedule<Input>`](#struct-inputscheduleinput)
@@ -192,7 +192,7 @@ A dense bitset of which entities (by `u32` index) are visible to one client, wit
 *   **`diff(&self, previous, entered: &mut Vec<u32>, left: &mut Vec<u32>)`**: appends newly-visible indices to `entered` (`self & !previous`) and no-longer-visible to `left` (`previous & !self`), word at a time, the spawn/despawn stream. Vectors are not cleared, so reuse them.
 *   **`digest() -> u64`**: an order-independent digest of the visible indices, the same fold as `SetDigest` below.
 
-For sparse handles (`Uuid`), map to dense indices first, or diff two sorted lists; this is the dense-index fast path. See the [`relevance_demo`](examples/relevance_demo.rs) example.
+For sparse handles (`Uuid`), map to dense indices first or diff two sorted lists; this is the dense-index fast path. See the [`relevance_demo`](examples/relevance_demo.rs) example.
 
 ### Struct `SetDigest` (re-exported)
 
@@ -209,8 +209,9 @@ Run the comparison on every **report**, rather than only when the state changes.
 
 ### Module `field`: `Field`, `Strategy`, `Query`
 
-Measures what the third axis costs. A flat grid indexed on `(x, z)` returns the **disc** containing the sphere it was asked for, so nothing is missed and altitude shows up as false positives: bandwidth spent telling entities far apart in altitude about each other. `Field` is one uniform grid with a `Strategy` mode (**`Flat`**, **`FlatBand`** which filters the flat answer on `|dy|`, **`Volume`**), so comparing strategies means changing one enum.
+Measures what the third axis costs. A flat grid indexed on `(x, z)` returns the **disc** containing the sphere it was asked for, so nothing is missed and altitude shows up as false positives: bandwidth spent telling entities far apart in altitude about each other. `Field` is one uniform grid with a `Strategy` mode (**`Flat`**, **`FlatBand`** which tests everything the flat grid returns against the full sphere, **`Volume`** which indexes all three axes), so comparing strategies means changing one enum.
 
+*   **`Strategy::ALL: [Strategy; 3]`** (every mode, for a comparison run) and **`Strategy::name(self) -> &'static str`** (`"flat (x,z)"`, `"flat + y band"`, `"volume"`).
 *   **`Field::new(cell, strategy)`**, **`insert(id, at: Vec3)`**, **`rebuild(&[Vec3])`**, **`clear`**, **`strategy()`**, **`cell()`**.
 *   **`query(&self, at, radius, out, truth) -> Query`**: everyone within `radius`, by the strategy. `truth` is the brute-force answer (from **`field::truth`**) so one sphere test scores every strategy; serving paths pass `&[]`.
 *   **`Query`**: what the query *did*: `returned`, `examined` (the candidates pulled from cells and tested, which a result set cannot show), `cells`, `false_positives`, `missed` (any value above zero is a bug).
@@ -228,6 +229,7 @@ Per-entity priority that survives the ticks an entity is not sent on. Indexed de
 *   **`new(entities)`**, **`resize(entities)`**, **`len()`**, **`is_empty()`**, **`clear()`**.
 *   **`bump(&mut self, index, priority: f32)`**: adds this tick's priority. An index past the end grows the space rather than panicking, since an allocator handing out a fresh slot is ordinary.
 *   **`fill(&mut self, budget: usize, cost: impl Fn(usize) -> usize, out: &mut Vec<usize>)`**: fills `budget` with the highest scorers, clearing `out` first and returning indices highest-priority first. **Chosen entities reset to zero; skipped ones keep what they had**, so nothing starves. The walk continues past an entity that does not fit rather than stopping, so one large entity near the front cannot leave the rest of the packet empty; its priority keeps climbing until it wins outright. Ties break by index, so a server and a replay of it choose alike.
+*   **`order(&mut self, out: &mut Vec<usize>)`** and **`sent(&mut self, indices: &[usize])`**: the two halves of `fill` for a caller that packs until the packet is full rather than planning against an estimated cost. `order` writes every entity above zero, highest first, without changing a score; `sent` clears the scores of the entities that actually went out. Clearing one that was not sent starves it.
 *   **`score(index) -> f32`**, **`forget(index)`**: drop an entity to zero without sending it, for a despawn or for something that has gone irrelevant and should not come back with a large accumulated score.
 
 Entities at zero or below are never chosen, so a negative score excludes an entity without removing it. You choose the per-tick priority: distance, ownership, whether it is [at rest](#5-at-rest-module-rest), how long since it changed.
@@ -251,7 +253,7 @@ Decides which entities are at rest. One quiet tick is not enough: a body at the 
 
 ### Enum `Because`
 
-Why an entity is in an audience: `Near`, `Subscribed`, or `Either`. Helpers **`is_near()`** and **`is_subscribed()`**.
+Why an entity is in an audience: `Near`, `Subscribed` or `Either`. Helpers **`is_near()`** and **`is_subscribed()`**.
 
 The distinction has to reach the wire, but do not send this type. This crate carries no serde, because coupling your protocol to it would cost more than the duplication: a protocol version is a hash of the types on the wire, so a wire type owned by a library means upgrading the library silently re-versions every application using it and a patch release disconnects clients. Spell the three variants again in your own protocol under a name you chose.
 
@@ -262,10 +264,10 @@ The two reasons have different lifetimes and a client that cannot tell them apar
 A directed subscription set with a reverse index. Directed because a spectator following a player does not make the player follow the spectator.
 
 *   **`new(limit)`** / **`default()`**: `limit` caps outgoing subscriptions per key (`usize::MAX` by default). A radius is limited by how many entities fit in it, but subscriptions have no natural limit, so this sets one.
-*   **`subscribe(who, to) -> bool`**: one direction. False if it would pass the limit, or if `who == to`.
+*   **`subscribe(who, to) -> bool`**: one direction. False if it would pass the limit or if `who == to`.
 *   **`pair(a, b) -> bool`**: both directions, **all or nothing**. A half-applied symmetric relationship is worse than a refused one, since one side draws a party frame and the other does not.
 *   **`group(a, b) -> bool`**: merges the two symmetric groups into one, everyone subscribed to everyone. Refused whole if the result would pass the limit, changing nothing. This is the party-joins-party operation, which is easy to get wrong by adding one person to one side.
-*   **`group_of(&key) -> Vec<K>`**: the symmetric group holding `key`, `key` included; a key with no subscriptions is a group of one. One-sided subscriptions are excluded, or following somebody would drag them into your party.
+*   **`group_of(&key) -> Vec<K>`**: the symmetric group holding `key`, `key` included; a key with no subscriptions is a group of one. One-sided subscriptions are excluded or following somebody would drag them into your party.
 *   **`leave_group(&key) -> Vec<K>`**: takes the key out of its symmetric group and returns who was told, leaving directed subscriptions (a spectator watching you) alone. **Leaving a party is a different event from leaving the world.** An application with only `remove` ends up building this from `unsubscribe` calls in both directions and getting the dissolve wrong. A group of one left behind is dissolved, since keeping it costs a lookup on every query for a party that no longer exists.
 *   **`remove(&key) -> Vec<K>`**: drops the key both directions and **returns everyone who was subscribed to it**. Those are the clients whose interface still shows the removed key; without this you would scan every subscriber to find them. Call it on departure, otherwise the subscription outlives its subject and a health bar keeps updating for somebody who left.
 *   **`unsubscribe(&who, &from)`**, **`of(&key)`**, **`watchers(&key)`**, **`count_of(&key)`**, **`is_subscribed(&who, &to)`**, **`subscribers()`**, **`clear()`**.
@@ -334,7 +336,7 @@ The drift check also lets a client resync. A client may discard any stretch of t
 
 ### Struct `DeltaPlan`
 
-What to send this round. `full_baseline: bool` (the subscriber must clear its mirror first, because what follows is the whole visible set; set when a subscriber is new, when its acknowledged baseline has aged out of history, or when its digest proved the mirror had drifted), `baseline_seq: Option<u64>` (the sequence the differences were computed against, or `None` for a difference from nothing, worth putting on the wire), `entered: Vec<u64>` (keys the subscriber does not hold and should), `left: Vec<u64>` (keys the subscriber may hold and should not).
+What to send this round. `full_baseline: bool` (the subscriber must clear its mirror first, because what follows is the whole visible set; set when a subscriber is new, when its acknowledged baseline has aged out of history or when its digest proved the mirror had drifted), `baseline_seq: Option<u64>` (the sequence the differences were computed against or `None` for a difference from nothing, worth putting on the wire), `entered: Vec<u64>` (keys the subscriber does not hold and should), `left: Vec<u64>` (keys the subscriber may hold and should not).
 
 ### Struct `DeltaBaseline`
 
@@ -377,7 +379,7 @@ Three more details, each of which was wrong in a shipped version:
 The state half of a change-only stream: a per-viewer memory of what was last said, diffed against what is now in their view, so nothing is sent for a world that is not changing. `V = ()` is announce-once (a spawn said the tick it appears and never again until it leaves and returns).
 
 *   **`new()`**, **`diff(viewer, current, say)`**: diffs `current` (the `(key, value)` pairs now true in this viewer's view) against the record, updates it and calls `say(key, Some(&value))` for anything new or changed and `say(key, None)` for anything they hold that is gone from `current`. The caller decides whether a `None` goes on the wire, because "no longer true" and "no longer visible" arrive as the same absence and only the application knows which: a prop that reverted while still in view must be said, one that fell out of view is forgotten silently. The key is forgotten either way, so a returning key is announced again from scratch, which also lets a reused slot re-announce. The `None` keys arrive sorted, so two identical runs produce identical wire output.
-*   **`forget(&viewer)`** (departure, or switching them to a repeat-everything stream), **`holdings(&viewer)`**, **`viewers()`**, **`clear()`**.
+*   **`forget(&viewer)`** (departure or switching them to a repeat-everything stream), **`holdings(&viewer)`**, **`viewers()`**, **`clear()`**.
 
 It needs a **stable value to diff against**: a value that jitters is sent every tick and the saving is lost. This is the state half of a private channel. The transcript half ("what just happened", said once to its one audience) is a `Vec` drained into the frame, so it is not shipped as a block. A channel needs both. Otherwise "who is this for" becomes a field somebody forgets.
 
@@ -456,8 +458,8 @@ Seating with the policies games actually vary; `SeatTable` stays the right choic
 Three rules apply throughout. **Promotion happens on the tick**: `admit` and `depart` settle the arriving or leaving key immediately, but a freed seat reaches the waitlist only in `resolve()`, called from your `TimeStep` arm, because deciding seating in two places is a bug the pong example had a comment warning about. **Ranks displace only across bands**: at `resolve`, a waiter with a better rank takes the worst-ranked human seat (later seats first); equals never displace each other and a held seat is never displaced, because it is reserved for its occupant. **No clocks**: a held seat stays held until `expire(&key)`; your `ReconnectTracker` decides how long that takes.
 
 *   **`new(capacity)`**, **`with_waitlist()`**, **`holding_seats()`**, **`lock()`**, **`unlock()`**, **`is_locked()`**.
-*   **`admit(key) -> Admission`** (rank 0; a roster whose admissions all use this never displaces anyone), **`admit_ranked(key, rank) -> Admission`**: seats, resumes, queues or turns away, in that order of preference. `Admission` is **`Seated { seat, fresh }`** (same freshness contract as `Seating`), **`Resumed { seat }`** (their held seat is theirs again, everything in it intact: resend state, reset nothing), **`Waitlisted { position }`**, or **`Turned(Turnaway)`** with `Turnaway::{Full, Locked}`; whether a turnaway means spectating or refusal is the application's answer.
-*   **`depart(&key) -> Departure`**: **`Freed { seat }`**, **`Held { seat }`** (start their clock), **`Unwaitlisted`**, or **`NotPresent`**. Idempotent, because a disconnect can be reported more than once; a repeat report of a held key reports the hold again rather than breaking it.
+*   **`admit(key) -> Admission`** (rank 0; a roster whose admissions all use this never displaces anyone), **`admit_ranked(key, rank) -> Admission`**: seats, resumes, queues or turns away, in that order of preference. `Admission` is **`Seated { seat, fresh }`** (same freshness contract as `Seating`), **`Resumed { seat }`** (their held seat is theirs again, everything in it intact: resend state, reset nothing), **`Waitlisted { position }`** or **`Turned(Turnaway)`** with `Turnaway::{Full, Locked}`; whether a turnaway means spectating or refusal is the application's answer.
+*   **`depart(&key) -> Departure`**: **`Freed { seat }`**, **`Held { seat }`** (start their clock), **`Unwaitlisted`** or **`NotPresent`**. Idempotent, because a disconnect can be reported more than once; a repeat report of a held key reports the hold again rather than breaking it.
 *   **`expire(&key) -> Option<usize>`**: releases a held seat whose grace ran out. **`resolve() -> Vec<Shuffle<Key>>`**: seats the waitlist into open seats in queue order, then settles rank displacement; a no-op while locked. `Shuffle` is **`Promoted { key, seat }`** (the seat is fresh) or **`Displaced { key, seat }`** (requeued at the tail of their own rank band).
 *   **`seat_of(&key)`**, **`seat_state(seat) -> SeatState`** (`Human(&Key)` / `Held(&Key)` / `Open`), **`seats()`**, **`waiting()`**, **`capacity()`**, **`occupied_count()`** (held seats count: a held seat is not free), **`is_full()`**.
 

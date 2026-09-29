@@ -1,6 +1,6 @@
 # Usage Guide: plaza_session
 
-How to put a real network transport under a `plaza` `StateController`: standing a session up on WebSockets or TCP, sizing what it holds, measuring each connection, impairing a link, ending a session, hosting a browser client and writing a transport of your own.
+How to put a real network transport under a `plaza` `StateController`: standing a session up on WebSockets or TCP, sizing what it holds, measuring each connection, limiting what each connection sends and is sent, impairing a link, ending a session, admitting a connection by credential, hosting a browser client and writing a transport of your own.
 
 ## Table of Contents
 
@@ -24,6 +24,17 @@ How to put a real network transport under a `plaza` `StateController`: standing 
 *   [Watching Connections](#watching-connections)
     *   [Who Is Idle](#who-is-idle)
     *   [Who Is Sending How Much](#who-is-sending-how-much)
+*   [Limiting How Fast a Client Sends](#limiting-how-fast-a-client-sends)
+    *   [Setting a Rate](#setting-a-rate)
+    *   [Deriving a Rate From a Workload](#deriving-a-rate-from-a-workload)
+    *   [Shedding a Frame or Closing the Connection](#shedding-a-frame-or-closing-the-connection)
+    *   [Seeing Who Was Shed](#seeing-who-was-shed)
+    *   [Judging the Rate in Your Own Transport](#judging-the-rate-in-your-own-transport)
+*   [Budgeting What a Client Is Sent](#budgeting-what-a-client-is-sent)
+    *   [Giving Every Connection a Budget](#giving-every-connection-a-budget)
+    *   [Changing One Connection's Budget](#changing-one-connections-budget)
+    *   [Skipping a Recipient in the Snapshot Pass](#skipping-a-recipient-in-the-snapshot-pass)
+    *   [Seeing What Was Withheld](#seeing-what-was-withheld)
 *   [Impairing a Link](#impairing-a-link)
     *   [Setting a Profile](#setting-a-profile)
     *   [What a Loss Costs](#what-a-loss-costs)
@@ -32,6 +43,15 @@ How to put a real network transport under a `plaza` `StateController`: standing 
     *   [Closing One Connection](#closing-one-connection)
     *   [Kicking an Agent, Draining a Room](#kicking-an-agent-draining-a-room)
     *   [Bounding a Session With a Deadline](#bounding-a-session-with-a-deadline)
+    *   [Choosing a Close Code](#choosing-a-close-code)
+*   [Admitting a Connection by Credential](#admitting-a-connection-by-credential)
+    *   [Writing an Admitter](#writing-an-admitter)
+    *   [Binding TCP With an Admitter](#binding-tcp-with-an-admitter)
+    *   [Admitting on a WebSocket Route](#admitting-on-a-websocket-route)
+    *   [Presenting a Credential From the Client](#presenting-a-credential-from-the-client)
+    *   [Settling a Duplicate Login](#settling-a-duplicate-login)
+    *   [Bounding the Wait for a Credential](#bounding-the-wait-for-a-credential)
+    *   [Counting What the Door Did](#counting-what-the-door-did)
 *   [Hosting a Browser Client](#hosting-a-browser-client)
     *   [Serving the Bundle](#serving-the-bundle)
     *   [Cache Busting](#cache-busting)
@@ -57,6 +77,11 @@ How to put a real network transport under a `plaza` `StateController`: standing 
 *   **`Workload`**: what your application does, in terms you already know, which every queue depth and cap is derived from.
 *   **`Overflow`**: what each queue does when it is full, per queue, because the producers differ.
 *   **`ConnectionOrder`**: a close or a deadline delivered to a connection task on its own channel.
+*   **`Farewell`**: the close code and optional detail every server-initiated close carries, written to the client as a `Kind::Goodbye` frame.
+*   **`Rate`**: a per-connection token bucket on inbound frames, judged before the queue every connection shares.
+*   **`OutboundBudget`**: how much one connection may be sent, which a snapshot pass asks about before it builds a frame for that recipient.
+*   **`ConnectionAdmitter`**: your code that reads a client's credential and answers with the `Agent` to register or a `Farewell` to refuse.
+*   **Pending connection**: a socket that has completed its handshake and waits, unregistered, for its credential.
 
 ## Quick Start
 
@@ -104,7 +129,7 @@ The factory can also refuse:
 ```rust,ignore
 Arc::new(|peer| {
   if banned(peer.ip()) {
-    Err(Refusal::saying(farewell.clone()))
+    Err(Farewell::new(BANNED).with_detail("this address is banned".as_bytes()))
   } else {
     Ok(Agent::new_human(id_for(peer)))
   }
@@ -178,15 +203,15 @@ What the presets derive today:
 
 | preset | inbound | decoded | presence | outbound |
 |---|---|---|---|---|
-| `action` | 48 | 48 | 16 | 4 |
-| `horde` | 192 | 192 | 64 | 47 |
+| `action` | 32 | 32 | 16 | 4 |
+| `horde` | 128 | 128 | 64 | 47 |
 | `turn_based` | 16 | 16 | 16 | 4 |
 | `social_relay` | 4096 | 4096 | 512 | 4 |
 | `spectator` | 8 | 8 | 512 | 4 |
 | `lobby` | 8 | 8 | 4096 | 4 |
 | `local` | 32 | 32 | 32 | 4 |
 
-The `outbound` column is measured rather than chosen: a stalled client's socket already holds roughly 540 KiB before this crate's queue is what fills, which is over a thousand frames at 512 bytes and fourteen at 40 KiB. For a small-payload game the outbound queue is nearly a no-op and the kernel buffer absorbs the backlog. The queue only matters once frames are large, which is why `horde` is the one preset needing a real one.
+The `outbound` column is measured rather than chosen: a stalled client's socket already holds roughly 540 KiB before this crate's queue is what fills, which is over a thousand frames at 512 bytes and 13 at 40 KiB. For a small-payload game the outbound queue is nearly a no-op and the kernel buffer absorbs the backlog. The queue only matters once frames are large, which is why `horde` is the one preset needing a real one.
 
 ### Setting Depths and Caps by Hand
 
@@ -202,7 +227,7 @@ Or a whole group at once:
 ```rust,ignore
 SessionOptions::with_protocol(ProtocolVersion(PROTOCOL))
   .queues(Queues { inbound: 256, decoded: 256, presence: 64, outbound: 16, conditioner: 1024 })
-  .limits(Limits { max_frame_bytes: 256 * 1024, max_message_bytes: 1024 * 1024 })
+  .limits(Limits { max_frame_bytes: 256 * 1024, max_message_bytes: 1024 * 1024, ..Limits::default() })
 ```
 
 Read them back where a third-party transport picks them up:
@@ -319,6 +344,168 @@ let delta = volume.frames - last.frames;
 
 `TransportStats` counts the session as a whole, so it can show that something is flooding but not which connection. Windows and thresholds stay yours: diff two readings or feed a `plaza_server_utils::RateMeter`.
 
+## Limiting How Fast a Client Sends
+
+### Setting a Rate
+
+```rust,ignore
+use plaza_session::Rate;
+
+SessionOptions::with_protocol(ProtocolVersion(PROTOCOL))
+  .rate_limit_inbound(Rate::per_second(60.0).burst(120))
+```
+
+A `Rate` is a token bucket: `per_sec` frames a second sustained and `burst` frames at once from a full bucket. `Rate::per_second` alone gives a burst of one second's worth. There is no default, so a session without a rate admits everything.
+
+The builder only sets `Limits::inbound_rate`, so setting the field does the same:
+
+```rust,ignore
+let mut options = SessionOptions::with_protocol(ProtocolVersion(PROTOCOL));
+options.limits.inbound_rate = Some(Rate::per_second(60.0));
+
+let current = session.manager().limits().inbound_rate;   // read it back
+```
+
+The gate runs on each connection's task before the inbound queue every connection shares, so a flood costs the flooder and nobody else. It counts frames and never reads their content. Frame size is already capped by `max_frame_bytes` and `max_message_bytes`, so the rate times the cap is a byte ceiling.
+
+### Deriving a Rate From a Workload
+
+```rust,ignore
+let workload = Workload::action();
+SessionOptions::with_protocol(ProtocolVersion(PROTOCOL))
+  .workload(&workload)
+  .rate_limit_inbound(Rate::for_workload(&workload))
+```
+
+`workload` derives every queue and cap but does not derive a rate, because a rate is the one setting that refuses traffic. It replaces the whole `Limits` with `Limits::for_workload`, which sets `inbound_rate` and `outbound_budget` to `None`, so a rate or budget set before `.workload()` is wiped. Call `.workload()` first and set the rate after it. `Rate::for_workload` takes `tick_rate * ops_per_player_per_tick`, multiplies it by `RATE_HEADROOM` (4.0) and floors it at `MIN_INBOUND_RATE` (5.0) frames a second. The headroom is large on purpose: too high still bounds a flood, too low drops input an honest client believes arrived.
+
+### Shedding a Frame or Closing the Connection
+
+```rust,ignore
+Rate::per_second(60.0)                   // Over::Shed: drop the frame, keep the connection
+Rate::per_second(600.0).disconnecting()  // Over::Close: end the connection
+```
+
+Shed is right when the traffic is an eager client and the next op supersedes the dropped one. The dropped frames are ops the client believes arrived, so a stream where each op matters exactly once wants `disconnecting()` or a rate it will never hit. Pick `Close` for a rate no honest build can reach. WebSocket closes with 1008 (policy violation). TCP has no close code, so it writes a Goodbye carrying `Farewell::new(POLICY_VIOLATION)` and then closes the connection.
+
+### Seeing Who Was Shed
+
+```rust,ignore
+let manager = session.manager();
+let total = manager.stats().inbound_shed();       // the whole session
+let theirs = manager.agent_inbound(&id).shed;     // one agent, monotonic
+
+if theirs - last_shed > 50 {
+  manager.deregister_agent(&id, Farewell::new(FLOODING).with_detail("slow down".as_bytes()));
+}
+```
+
+`inbound_shed` names one connection that went over its rate and costs only that connection. `inbound_dropped` means the controller fell behind and costs whoever happened to be sending. When both climb, look at the shed first. A shed frame still counts toward `frames` and still resets `agent_idle_for`, since it did arrive.
+
+### Judging the Rate in Your Own Transport
+
+`LinkDriver::inbound` applies the rate and adds two outcomes to the match:
+
+```rust,ignore
+use plaza_session::admission::POLICY_VIOLATION;
+use plaza_session::control::Inbound;
+
+match driver.inbound(frame, Instant::now()) {
+  Inbound::Forward(frame) => manager.forward_incoming(agent.clone(), frame).await,
+  Inbound::Reply(reply) => socket.write(reply).await?,
+  Inbound::Consumed | Inbound::Shed => {}
+  Inbound::Eject => {
+    flush_and_close(Farewell::new(POLICY_VIOLATION)).await?;
+    break;
+  }
+}
+```
+
+A frame held by an upstream `LinkProfile` is judged when the link releases it, inside `due`. Check `driver.ejected()` after `due` and close the same way.
+
+A transport that skips `LinkDriver` asks the manager for each inbound data frame. The result is `#[must_use]` and a refused frame must not be forwarded:
+
+```rust,ignore
+use plaza_session::Verdict;
+
+match manager.record_inbound_activity(conn_id, frame.len()) {
+  Verdict::Admit => manager.forward_incoming(agent.clone(), frame).await,
+  Verdict::Shed => {}
+  Verdict::Close => {
+    flush_and_close(Farewell::new(POLICY_VIOLATION)).await?;
+    break;
+  }
+}
+```
+
+The full surface is in [module `gate`](API_REFERENCE.md#10-module-gate).
+
+## Budgeting What a Client Is Sent
+
+### Giving Every Connection a Budget
+
+```rust,ignore
+use plaza_session::OutboundBudget;
+
+SessionOptions::with_protocol(ProtocolVersion(PROTOCOL))
+  .budget_outbound(OutboundBudget::bytes_per_second(64.0 * 1024.0).and_frames_per_second(20.0))
+```
+
+`bytes_per_second` and `frames_per_second` each set one bound and leave the other unbounded. The `and_` forms add the second and then both have to hold. `burst(Duration)` sets how much unspent credit a connection may bank, one second of its rate by default. There is no default budget: a connection without one is always owed a frame.
+
+As with the rate, the builder sets a field on `Limits`:
+
+```rust,ignore
+options.limits.outbound_budget = Some(OutboundBudget::frames_per_second(10.0).burst(Duration::from_millis(500)));
+```
+
+### Changing One Connection's Budget
+
+```rust,ignore
+let manager = session.manager();
+manager.set_outbound_budget(conn_id, Some(OutboundBudget::frames_per_second(5.0)));
+let given = manager.set_agent_outbound_budget(&id, Some(OutboundBudget::bytes_per_second(10.0 * 1024.0)));
+manager.set_agent_outbound_budget(&id, None);   // unbounded again, debt included
+
+let current = manager.outbound_budget(conn_id);
+```
+
+A new budget starts with a full burst. This is where a client that declared what its link can carry gets its budget, after the server has clamped the declaration to something it will honour.
+
+### Skipping a Recipient in the Snapshot Pass
+
+The transport never withholds a frame. `broadcast` still queues everything it is handed and charges each recipient's credit for it. The budget answers one question, asked by a `SnapshotProvider` before it builds for a recipient:
+
+```rust,ignore
+async fn create_snapshot(
+  &self,
+  state: &ArenaState,
+  target: Option<&Agent<PlayerId>>,
+  _context: Option<SnapshotContext>,
+) -> Result<Option<RoomOp>, SnapshotError<PlayerId>> {
+  let viewer = target.and_then(|agent| agent.id());
+  if let Some(viewer) = viewer
+    && !self.manager.agent_owed(viewer)
+  {
+    return Ok(None);
+  }
+  Ok(Some(RoomOp::Snapshot(Box::new(state.view_for(viewer)))))
+}
+```
+
+`connection_owed(conn_id)` is the same question for one connection. An agent is owed a frame when any of its connections is. A connection that is gone is owed nothing.
+
+Credit runs negative. A frame bigger than what is left still goes and the connection is owed nothing until the debt refills, so 10 KiB a second at 2 KiB a frame comes out as five whole frames a second. Skipping a delta-stream recipient costs latency and never correctness, since the next frame it gets carries everything since its acknowledged baseline.
+
+### Seeing What Was Withheld
+
+```rust,ignore
+let theirs = manager.agent_outbound(&id).withheld;     // times this agent was asked for and not owed
+let total = manager.stats().outbound_withheld();       // the whole session
+```
+
+`withheld` climbs only when a snapshot pass asks, so it counts frames that were never built. The sent counts cannot show those. The full surface is in [module `budget`](API_REFERENCE.md#11-module-budget).
+
 ## Impairing a Link
 
 ### Setting a Profile
@@ -366,23 +553,23 @@ Two guarantees the conditioner makes:
 ### Closing One Connection
 
 ```rust,ignore
-let farewell = session.encode_message(SessionMessage::system(vec![Op::Kicked { why }]))?;
+let farewell = Farewell::new(KICKED).with_detail(why.as_bytes());
 for conn_id in session.manager().connections_of(&player) {
-  session.manager().close_connection(conn_id, Some(farewell.clone()));
+  session.manager().close_connection(conn_id, farewell.clone());
 }
 ```
 
-The connection task flushes what was queued, writes the farewell last and closes the socket. The departure then arrives on the presence stream as an ordinary `Left`, so game logic handles a kick the same way as a pulled cable.
+The connection task flushes what was queued, writes the farewell as a `Kind::Goodbye` frame and closes the socket with its code where the transport has one. The departure then arrives on the presence stream as an ordinary `Left`, so game logic handles a kick the same way as a pulled cable.
 
-The farewell is an op from your own protocol. Neither transport has close reasons of its own, so a reason like "removed by the host" has to come from the application.
+The code and the detail are yours. WebSocket leaves 4000 to 4999 to applications and the session never reads the detail, so encode it however your protocol does.
 
 `deregister` does **not** close the socket. It removes the connection from the registry and nothing else; the socket belongs to the connection task and only an order through `close_connection` reaches it.
 
 ### Kicking an Agent, Draining a Room
 
 ```rust,ignore
-let closed = session.manager().deregister_agent(&id, Some(farewell.clone()));
-let drained = session.manager().disconnect_all(Some(goodbye));
+let closed = session.manager().deregister_agent(&id, farewell.clone());
+let drained = session.manager().disconnect_all(Farewell::new(1001).with_detail("server shutting down".as_bytes()));
 ```
 
 Each connection gets the farewell and is then closed. `disconnect_all` is the same close as `deregister_agent`, applied to every live connection.
@@ -392,12 +579,163 @@ Choosing which connection to close is up to you: a duplicate login can refuse th
 ### Bounding a Session With a Deadline
 
 ```rust,ignore
-session.manager().set_deadline(conn_id, Some(Duration::from_secs(600)), Some(farewell));
-session.manager().set_deadline(conn_id, Some(Duration::from_secs(600)), None);  // renew
-session.manager().set_deadline(conn_id, None, None);                            // clear
+session.manager().set_deadline(conn_id, Some(Duration::from_secs(600)), farewell.clone());
+session.manager().set_deadline(conn_id, Some(Duration::from_secs(600)), farewell.clone());  // renew
+session.manager().set_deadline(conn_id, None, farewell);                                    // clear
 ```
 
 The connection task enforces it in its own loop and expiry goes through the same flush-then-farewell close. Setting again replaces it, which is how a renewal extends a session. What stamps, renews or revokes it is yours.
+
+### Choosing a Close Code
+
+```rust,ignore
+use plaza_session::admission::{MESSAGE_TOO_BIG, POLICY_VIOLATION};
+use plaza_wire::frame::Goodbye;
+
+const KICKED: u16 = 4001;
+
+Farewell::new(KICKED).with_detail("kicked by a moderator".as_bytes());
+Farewell::new(1001).with_detail("server shutting down".as_bytes());
+Farewell::credential_expected();   // Goodbye::CREDENTIAL_EXPECTED, 4401
+Farewell::credential_timeout();    // Goodbye::CREDENTIAL_TIMEOUT, 4408
+```
+
+`Farewell` is the one close vocabulary: `close_connection`, `set_deadline`, `deregister_agent`, `disconnect_all`, an `AgentFactory` refusal and an admitter refusal all take one. The `code` is a WebSocket close code whatever the transport. On TCP the `Goodbye` frame is all the client hears. Your own codes go in 4000 to 4999 and the session never picks one for you.
+
+The session sends four codes by itself:
+
+| code | constant | when |
+|---|---|---|
+| 1008 | `POLICY_VIOLATION` | a connection went over an inbound rate built with `disconnecting()` |
+| 1009 | `MESSAGE_TOO_BIG` | a credential frame was larger than `Limits::max_credential_bytes` |
+| 4401 | `Goodbye::CREDENTIAL_EXPECTED` | an `Ops` frame arrived before the credential |
+| 4408 | `Goodbye::CREDENTIAL_TIMEOUT` | no credential arrived within `Limits::credential_timeout` |
+
+The client libraries stop reconnecting on a 4xxx code by default, because a server that refused a credential once will refuse it again. Let the code say what class of close it is and the detail say what to do next. Neither should explain the reason in enough detail to serve as an oracle for someone probing your rules.
+
+## Admitting a Connection by Credential
+
+### Writing an Admitter
+
+A browser or mobile client cannot set a header on its WebSocket upgrade, so its identity arrives after the connection as a `Kind::Credential` frame. A `ConnectionAdmitter` reads it and decides:
+
+```rust,ignore
+use async_trait::async_trait;
+use plaza_session::{ConnectionAdmission, ConnectionAdmitter, Farewell, Peer, WireCodec};
+
+struct Doorman {
+  door: Arc<Door>,
+  manager: OnceLock<Arc<ConnectionManager<AgentKey>>>,
+}
+
+#[async_trait]
+impl ConnectionAdmitter<AgentKey> for Doorman {
+  async fn admit(&self, credential: &[u8], peer: &Peer) -> ConnectionAdmission<AgentKey> {
+    let Ok(account) = JsonCodec.decode::<Account>(credential) else {
+      return ConnectionAdmission::Refused(Farewell::new(4400).with_detail("unreadable credential".as_bytes()));
+    };
+    match self.door.admit(peer.addr.map(|a| a.ip()), account) {
+      Ok(key) => ConnectionAdmission::Admitted(Agent::new_human(key)),
+      Err(reason) => ConnectionAdmission::Refused(Farewell::new(reason.code()).with_detail(reason.as_str().as_bytes())),
+    }
+  }
+}
+```
+
+`credential` is the frame body exactly as it arrived. Plaza verifies nothing, so a token, a signed ticket or an account number is all the same to it. `Admitted` registers the connection as that agent and the join fires from there. `Refused` writes the goodbye and closes without anything having been registered or announced. `peer.addr` is the socket's address when the transport knows it, for per-address rules and audit.
+
+### Binding TCP With an Admitter
+
+```rust,ignore
+let doorman = Arc::new(Doorman::new(door.clone()));
+let session = TcpPlazaSession::<Op, AgentKey>::bind_with_admitter(
+  "0.0.0.0:9000",
+  doorman.clone(),
+  JsonCodec,
+  SessionOptions::with_protocol(ProtocolVersion(PROTOCOL)),
+).await?;
+doorman.attach(session.manager().clone());
+```
+
+`bind_with_admitter` replaces the `AgentFactory`: every accepted socket waits for its credential instead of registering at once. The admitter exists before the session it admits into, so one that needs the `ConnectionManager` takes it afterwards through a `OnceLock`, which is what `attach` does in `examples/door_policy`.
+
+### Admitting on a WebSocket Route
+
+```rust,ignore
+async fn ws_route(
+  req: HttpRequest,
+  stream: web::Payload,
+  session: web::Data<Arc<ActixWsPlazaSession<Op, AgentKey>>>,
+  doorman: web::Data<Arc<Doorman>>,
+) -> Result<HttpResponse, actix_web::Error> {
+  session.admit_connection(&req, stream, doorman.get_ref().clone())
+}
+```
+
+`admit_connection` completes the handshake and holds the socket on its own task until the admitter answers. Use `handle_connection` instead when the route can resolve identity before the upgrade, from a cookie or a query string.
+
+Anything the upgrade request carries, such as a room in the URL or a forwarded-for header behind a proxy, is the route's to capture. Build the admitter per request and close over it:
+
+```rust,ignore
+let room = req.match_info().get("room").map(str::to_owned);
+session.admit_connection(&req, stream, Arc::new(RoomDoor { room, directory: directory.clone() }))
+```
+
+### Presenting a Credential From the Client
+
+```rust,ignore
+use plaza_ws::pump::FramePump;
+
+let mut pump = FramePump::connect(&url, MsgPackCodec, PROTOCOL)?.credential(token);
+```
+
+The pump sends the credential straight after its `Hello` and before anything the application sends. Under a text codec the bytes must be text. A refusal arrives as `Arrival::Closed` with the goodbye's `code` and `detail`. `closed.refused()` is true for a 4xxx code.
+
+### Settling a Duplicate Login
+
+An admitter holding the manager can close the older session before it admits the newer one:
+
+```rust,ignore
+if let Some(manager) = self.manager.get() {
+  for old in evicted {
+    manager.deregister_agent(
+      &old,
+      Farewell::new(SIGNED_IN_ELSEWHERE).with_detail("signed in from somewhere else".as_bytes()),
+    );
+  }
+}
+ConnectionAdmission::Admitted(Agent::new_human(key))
+```
+
+This works because the older connection is registered and the newcomer is not yet. Refusing the newcomer instead is a `Refused` with a code of your own. `examples/door_policy` runs both policies alongside a ban, a per-address cap and a seat limit, all judged before anything registers.
+
+### Bounding the Wait for a Credential
+
+```rust,ignore
+let mut options = SessionOptions::with_protocol(ProtocolVersion(PROTOCOL));
+options.limits.credential_timeout = Duration::from_secs(2);   // default 5 s
+options.limits.pending_connections = Some(256);                 // default Some(1024); None for no cap
+options.limits.max_credential_bytes = 1024;                     // default 4096
+```
+
+These three have no one-call builders, so set them on `limits`. The timer starts after the handshake, so it only fires for a socket that never presents, which is closed with 4408. A credential over `max_credential_bytes` closes with 1009.
+
+Over `pending_connections`, TCP accepts the socket and closes it at once and the WebSocket route answers 503 before the upgrade. The client sees a failed connect rather than a refusal.
+
+Nothing crosses a pending socket. A `Hello` is kept and recorded once the connection is admitted, probes are neither answered nor forwarded, an unknown frame kind is skipped and an `Ops` frame closes the socket with 4401. The server sends nothing but a goodbye.
+
+### Counting What the Door Did
+
+```rust,ignore
+let stats = session.manager().stats();
+gauge("pending", stats.pending());       // waiting for a credential right now
+gauge("admitted", stats.admitted());
+gauge("refused", stats.refused());       // admitter and factory refusals alike
+gauge("timed_out", stats.timed_out());   // closed with 4408
+gauge("over_cap", stats.over_cap());     // turned away because pending_connections was full
+```
+
+The full surface, including the `Pending` state machine a custom transport can reuse, is in [module `admission`](API_REFERENCE.md#12-module-admission).
 
 ## Hosting a Browser Client
 
@@ -474,7 +812,8 @@ loop {
     inbound = socket.read_frame() => match driver.inbound(inbound?, Instant::now()) {
       Inbound::Reply(reply) => socket.write(reply).await?,
       Inbound::Forward(frame) => manager.forward_incoming(agent.clone(), frame).await,
-      Inbound::Consumed => {}
+      Inbound::Consumed | Inbound::Shed => {}
+      Inbound::Eject => { flush_and_close(Farewell::new(POLICY_VIOLATION)).await?; break; }
     },
     outbound = to_client_rx.recv() => {
       if let Some(frame) = driver.outbound(outbound?, Instant::now()) {
@@ -484,6 +823,7 @@ loop {
     _ = sleep_until(driver.deadline().unwrap_or_else(far_future)), if driver.deadline().is_some() => {
       for frame in driver.due(Instant::now()) { socket.write(frame).await?; }
       for frame in driver.take_forwarded() { manager.forward_incoming(agent.clone(), frame).await; }
+      if driver.ejected() { flush_and_close(Farewell::new(POLICY_VIOLATION)).await?; break; }
     }
     order = orders.recv() => match order? {
       ConnectionOrder::Close { farewell } => { flush_and_close(farewell).await?; break; }
@@ -496,11 +836,11 @@ manager.deregister(conn_id).await;
 
 The orders must be their own `select!` arm: the outbound arm is disabled the moment `deregister` drops the sender, which is exactly when a close must still work.
 
-Delegate the three `Session` methods to the inner `TransportSession` and after `broadcast` call `disconnect_overflowed` with what it returned.
+Delegate the three `Session` methods to the inner `TransportSession`. Its `send_message` already calls `disconnect_overflowed` after `broadcast`. If you call `ConnectionManager::broadcast` directly, pass what it returns to `disconnect_overflowed` yourself.
 
 What you still write is framing and enforcing `Limits::max_frame_bytes` with it.
 
-**Answering probes.** A `Kind::Ping` handed to `forward_incoming` is answered by nobody: the bridge drops it and warns once per connection and the client measuring its round trip waits forever. `LinkDriver` answers probes, so this only goes wrong if you bypass it and do not answer them yourself.
+**Answering probes.** A `Kind::Ping` handed to `forward_incoming` is answered by nobody: the bridge drops it and warns once per agent and the client measuring its round trip waits forever. `LinkDriver` answers probes, so this only goes wrong if you bypass it and do not answer them yourself.
 
 `examples/foreign_soil` is a working transport built this way, in a crate with no privileged access and neither shipped transport compiled in. Its connection loop is 65 lines, about 25 of them reading and writing a socket.
 
@@ -557,7 +897,7 @@ A malformed body of any kind is a per-message problem: it is logged and dropped,
 Counters live on `TransportStats` and the three drop counts stay separate because they mean different things. An outbound drop is usually benign for a stream of absolute state. An inbound drop is player input the client believes arrived. A presence drop is a correctness failure from a single occurrence: a lost join leaves the controller with a client it never heard of, a lost leave leaves it holding a seat forever.
 
 ```rust,ignore
-let stats = session.stats();
+let stats = session.manager().stats();
 gauge("inbound_dropped", stats.inbound_dropped());
 gauge("presence_dropped", stats.presence_dropped());
 ```

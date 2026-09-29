@@ -22,7 +22,9 @@ Open the page in **three tabs** and press quick match in each. Alternatively, pr
 
 That is a two-line difference in `seat_formed` and a completely different lifecycle around it: `handle_create_room_request` runs inside the match-forming path, `max_players` is the size of the match rather than a property of the room and nothing is pre-spawned at boot.
 
-The room lasts as long as the same group keeps playing. A settled match deals another after `INTERMISSION_TICKS` rather than sending three people who want to keep playing back through the queue. The stake settles once per match, which is what `settled` guards and what the rematch clears. When the players leave, the table empties and the reaper collects it. The room was created for this group and closes when they leave, not between hands.
+The room lasts as long as the same group keeps playing. A settled match deals another after `INTERMISSION_TICKS` (five seconds at the table's 20 Hz) rather than sending three people who want to keep playing back through the queue. Bots keep their seats and play on into it. The stake settles once per match, which is what `settled` guards and what the rematch clears. When the humans leave, the table's socket goes quiet and after `TABLE_IDLE_AFTER` (45 seconds) the reaper drains it and collects it. The room was created for this group and closes when they leave, not between hands.
+
+Every player off the top score pays the stake into a pot and the leaders split it, so a three-way tie moves nothing. A player who leaves a match in progress forfeits the stake into that pot and drops out of the standings. Each occupant's `Settled` carries their own balance and names a winner only when one player leads alone. Each deal is shuffled from a seed built from the table's name, the tick and the deal count, which the table logs at debug level so a deal can be reproduced.
 
 ### 2. Two codecs on one port
 
@@ -42,7 +44,7 @@ The figure usually quoted for named MessagePack is 67% of JSON against compact's
 
 Named is 76% of JSON where compact is 26%, a premium of +190% rather than +67%. Adopting named to keep a hand-written client simple gives up most of what MessagePack saves. This deployment used named until generated Dart types made compact safe. The tables now use compact.
 
-**Why the premium is this large.** A field name is paid per field per message, so the premium grows with the number of fields in a message rather than its size. `PlayerView` has fifteen fields and is sent once per recipient on every deal and every resolved trick; a notice has two or three behind a variant name both encodings pay for. So the widest and most frequent message pays proportionally most. [`curtain_fire`](../curtain_fire/) measured a per-message cost (the variant tag) and found that there the small messages were the expensive ones.
+**Why the premium is this large.** A field name is paid per field per message, so the premium grows with the number of fields in a message rather than its size. `PlayerView` has sixteen fields and is sent once per recipient on every deal and every resolved trick; a notice has two or three behind a variant name both encodings pay for. So the widest and most frequent message pays proportionally most. [`curtain_fire`](../curtain_fire/) measured a per-message cost (the variant tag) and found that there the small messages were the expensive ones.
 
 ### 4. Hidden information, through a lobby, to a client that cannot see the types
 

@@ -36,7 +36,7 @@ In the browser (wasm):
 ./serve.sh 9000          # or pick a port
 ```
 
-`serve.sh` does the whole ceremony: installs the `wasm32-unknown-unknown` target if it is missing, builds the release wasm, copies it next to the page, shrinks it with `wasm-opt` if you have binaryen and serves the directory (via `basic-http-server` if installed, else `python3 -m http.server`). Hold the left mouse button (or WASD / arrows) to move; right-click a bot to shoot. A frame counter sits bottom right, so a stutter can be told apart from a network effect.
+`serve.sh` does the whole ceremony: installs the `wasm32-unknown-unknown` target if it is missing, builds the release wasm, copies it next to the page, shrinks it with `wasm-opt` if you have binaryen and serves the directory (via `basic-http-server` if installed, else a small `python3` server that forces the `application/wasm` MIME type). Hold the left mouse button (or WASD / arrows) to move; right-click a bot to shoot. A frame counter sits bottom right, so a stutter can be told apart from a network effect.
 
 ## The controls and what each reveals
 
@@ -50,7 +50,7 @@ Every toggle routes around one mechanism, so turning it off shows what that mech
 | **server reconciliation** | drift: the prediction runs off (through walls, past dropped inputs) and is never corrected |
 | **entity interpolation** | teleporting: remote boxes jump between server snapshots instead of gliding |
 | **extrapolation (dead reckoning)** | raise packet loss: remotes freeze on their last snapshot instead of coasting along their velocity |
-| **second order (fit a curve)** | coast along a fitted curve instead of the last velocity. Drop the server rate below 10 Hz first, or it does nothing at all, see below |
+| **second order (fit a curve)** | coast along a fitted curve instead of the last velocity. Drop the server rate below 10 Hz first, since above that it does nothing at all (see below) |
 | **correction smoothing** | the reconciliation correction snaps in one frame instead of easing over a few |
 | **clock sync** | raise the latency slider: with it on the remotes recover; off, the free-running clock drifts and interpolation stays broken |
 | **smooth clock** | with it on, a latency change is absorbed by gliding the render clock's *playback rate* (watch the `clock playback` readout leave 1.00x and settle back); off, the clock corrects by nudging its *position*, a small snap each packet |
@@ -77,7 +77,7 @@ The macroquad frame loop is the simulation clock, so there is no client-side tic
 
 ### What building it found and what it added
 
-Writing a real consumer turned up three gaps, the same way `card_table` turned up the missing turn restart (see the improvement ledger for the reasoning):
+Writing a real consumer turned up three gaps, the same way `card_table` turned up the missing turn restart:
 
 - **`InterpolationClock`** (new in `client_utils`): the interpolation render target was bookkeeping every client hand-rolls, an estimate of server time, advanced by frame delta, minus a fixed delay. It is now one small type. The client's `clock` field is it.
 - **`ErrorSmoother`** (new in `client_utils`): reconciliation snaps the corrected position in one frame, which is correct per Gambetta but abrupt under high latency. `ErrorSmoother` eases only the *rendered* position toward the exact logical state and the smoothing toggle turns it on and off. It is a standalone primitive, not a method on `PredictedEntity`, because smoothing needs to blend states (which prediction does not) and any jumping entity can use it.

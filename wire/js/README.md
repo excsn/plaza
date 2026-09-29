@@ -39,7 +39,7 @@ It covers the frame contract: the kind byte ahead of every message, the skip-unk
 
 ## Hello
 
-Every plaza peer announces the protocol version it speaks once when a connection opens; nobody waits for or answers one. Call `announceHello(sock)` from `onopen` (with your `{ encode, decode }` codec as the second argument on a binary socket) and the client announces `window.PLAZA_PROTOCOL`, which `Host::protocol` stamps into a served page; anything not served by a plaza `Host` can set the global itself, or leave it unset, in which case 0 means "unknown" and nothing is announced, the same contract as `ProtocolVersion::UNKNOWN` in Rust.
+Every plaza peer announces the protocol version it speaks once when a connection opens; nobody waits for or answers one. Call `announceHello(sock)` from `onopen` (with your `{ encode, decode }` codec as the second argument on a binary socket) and the client announces `window.PLAZA_PROTOCOL`, which `Host::protocol` stamps into a served page; anything not served by a plaza `Host` can set the global itself or leave it unset, in which case 0 means "unknown" and nothing is announced, the same contract as `ProtocolVersion::UNKNOWN` in Rust.
 
 On receive, the server's `Hello` goes to your `onHello` callback if you passed one and otherwise to `staleCheck`, which reloads the page once when its stamped version disagrees with the server's, which happens when a tab stayed open across a redeploy. The reload is guarded per version value, so a mismatch that survives reloading degrades to a console error rather than a loop and the whole path is a no-op outside a browser.
 

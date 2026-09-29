@@ -1,6 +1,6 @@
 # poketo art
 
-Generated with [SpriteCook](https://spritecook.ai), `gpt-image-2` at `quality=low`, `resolution=1K`, `pixel=true`, `smart_crop=false`. Two credits each, ten in total.
+Generated with [SpriteCook](https://spritecook.ai), `gpt-image-2` at `quality=low`, `resolution=1K`, `pixel=true`, `smart_crop=false`. Two credits each, ten for the five sheets.
 
 Every sheet was corrected mechanically before being committed. The raw generations are 250ish pixels square with fractional cells and are not kept, since they were only an intermediate step.
 

@@ -4,7 +4,7 @@ A 3v3 grid skirmish in the listen-server shape (native window, wasm browser page
 
 ## The suspended action
 
-A march is the one op in this workspace that does not resolve inside the `process_input` that accepted it. The server computes the canonical path and walks it **one cell per step window** ([`STEP_MS`](src/protocol.rs)), holding the march as pending state between windows. Entering a watcher's lane opens the offer and every other order is refused while the march is pending. The IDEAS entry asked this example to find three operations: suspend, a scoped offer and resume.
+A march is the one op in this workspace that does not resolve inside the `process_input` that accepted it. The server computes the canonical path and walks it **one cell per step window** ([`STEP_MS`](src/protocol.rs)), holding the march as pending state between windows. Entering a watcher's lane opens the offer and every other order is refused while the march is pending. The three operations it needs are suspend, a scoped offer and resume.
 
 ## The decision window
 
@@ -22,12 +22,12 @@ Each side sees an enemy only while one of its living units has walking sight of 
 ./run-native.sh                          # host: window plus server; prints the join address
 ./run-native.sh --role client --connect ws://<host>:8304/ws
 ./run-native.sh --role headless
-./wasm-serve.sh                          # browser client on the same port
+./wasm-serve.sh                          # rebuild the browser client and serve it headless on 8096
 cargo run -p held_fire --bin scripted    # no window: the offers and the ledger as a gate
 ```
 
-On your activation (banner and clock at the bottom), click one of your fresh units, then a blue cell to march, a gold-ringed enemy to shoot, or **OVERWATCH**. When your watcher's lane is crossed, the offer fills the screen: FIRE or HOLD under a draining bar and doing nothing holds. A lone commander gets the bot; extra joiners see the whole board.
+On your activation (banner and clock at the bottom), click one of your fresh units, then a blue cell to march, a gold-ringed enemy to shoot or **OVERWATCH**. When your watcher's lane is crossed, the offer fills the screen: FIRE or HOLD under a draining bar and doing nothing holds. A lone commander gets the bot; extra joiners see the whole board.
 
 ## The panel
 
-Battles, rounds and activations; offers against fired, held and lapsed (masked while you fight, for the reason above); marches cut short; ambushes; chairs timed out. These are the numbers the IDEAS entry asked for: what the decision window costs and how often it is used at all.
+Battles, rounds and activations; offers against fired, held and lapsed (masked while you fight, for the reason above); marches cut short; ambushes; chairs timed out. They show what the decision window costs and how often it is used at all.

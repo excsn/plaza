@@ -20,7 +20,7 @@ plaza_lobby = "0.7"
 |---|---|
 | Building a room of your own game, which the crate cannot know how to do | `RoomFactory`, `InProcessRoomHandle` |
 | Creating, listing, joining and reaping rooms around it | `InMemoryLobbyManager` |
-| Client-facing message shapes for all of that | the `payloads` module |
+| Client-facing message shapes for all of that | the `op_payloads` module, re-exported at the crate root |
 | Gating a room behind a code or a password | `RoomSettings::password_hash` plus a verifier you supply |
 | Sending a connection to a room whose schedule it can actually meet | `rooms_playable_at`, `routing::best_for` |
 | Pairing players who would rather not choose a room | `MatchQueue` |
