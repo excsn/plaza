@@ -41,6 +41,7 @@ struct ClientApp {
 
   to_server_tx: mpsc::BoundedAsyncSender<SessionMessage<GameOp, PlayerId>>,
   from_server_rx: mpsc::BoundedAsyncReceiver<SessionMessage<GameOp, PlayerId>>,
+  sender: Agent<PlayerId>,
 
   last_input_send_tick: u64,
   client_tick_counter: u64,
@@ -80,6 +81,7 @@ impl ClientApp {
       remote_boxes: HashMap::new(),
       to_server_tx,
       from_server_rx,
+      sender: Agent::new_human(PlayerId::new_v4()),
       last_input_send_tick: 0,
       client_tick_counter: 0,
       client_current_time_ms: 0,
@@ -117,12 +119,9 @@ impl ClientApp {
 
     info!("[{}] Sending Join Request", self.client_name);
     let join_op = GameOp::CS_RequestJoin;
-    let temp_dummy_id_for_sending = PlayerId::new_v4();
-    let agent_for_sending = Agent::new_human(temp_dummy_id_for_sending);
-
     self
       .to_server_tx
-      .send(SessionMessage::new(agent_for_sending.clone(), vec![join_op]))
+      .send(SessionMessage::new(self.sender.clone(), vec![join_op]))
       .await?;
 
     loop {
@@ -158,7 +157,7 @@ impl ClientApp {
                               input_data: local_input,
                           });
                           info!("[{}] Sending to Server: Op Seq {}", self.client_name, self.next_input_seq);
-                          if self.to_server_tx.send(SessionMessage::new(agent_for_sending.clone(), vec![op_to_send])).await.is_err() {
+                          if self.to_server_tx.send(SessionMessage::new(self.sender.clone(), vec![op_to_send])).await.is_err() {
                               error!("[{}] Failed to send input to server. Server down?", self.client_name);
                               return Ok(());
                           }
@@ -219,6 +218,7 @@ impl ClientApp {
           initial_boxes.len()
         );
         self.my_player_id = Some(your_id);
+        self.sender = Agent::new_human(your_id);
         self.server_tick_on_join_ack = server_tick;
         self.client_current_time_ms = 0; // Reset client perception of time relative to server join tick.
 
@@ -419,4 +419,67 @@ pub async fn run_client(
 
   info!("[{}] Client task finished.", client_name);
   Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use uuid::Uuid;
+
+  /// Feeds server ops to `app` until `done` holds or 500ms pass, returning the op names seen.
+  async fn pump_until(app: &mut ClientApp, done: impl Fn(&ClientApp) -> bool) -> Vec<String> {
+    let mut received = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
+    while !done(app) {
+      let Ok(Ok(msg)) = tokio::time::timeout_at(deadline, app.from_server_rx.recv()).await else {
+        break;
+      };
+      for op in msg.ops {
+        received.push(format!("{op:?}").split(['(', ' ']).next().unwrap().to_string());
+        app.handle_server_op(op);
+      }
+    }
+    received
+  }
+
+  #[tokio::test]
+  async fn joining_client_learns_its_id_and_initial_state() {
+    let server = crate::server::start_server().await.unwrap();
+    let my_id = Uuid::new_v4();
+    let (to_server_tx, from_server_rx) = server.connect_client(Agent::new_human(my_id)).unwrap();
+    let mut app = ClientApp::new("test".into(), to_server_tx, from_server_rx).await;
+
+    let received = pump_until(&mut app, |a| a.my_player_id.is_some()).await;
+    server.shutdown().await.unwrap();
+
+    assert_eq!(app.my_player_id, Some(my_id), "ops received: {received:?}");
+    assert!(app.predicted_box.is_some());
+  }
+
+  #[tokio::test]
+  async fn joined_client_input_is_acked_by_the_server() {
+    let server = crate::server::start_server().await.unwrap();
+    let my_id = Uuid::new_v4();
+    let (to_server_tx, from_server_rx) = server.connect_client(Agent::new_human(my_id)).unwrap();
+    let mut app = ClientApp::new("test".into(), to_server_tx, from_server_rx).await;
+    pump_until(&mut app, |a| a.predicted_box.is_some()).await;
+    assert!(app.predicted_box.is_some(), "client never joined");
+
+    let seq: SequenceNumber = 7;
+    let input = SequencedClientInput {
+      sequence_number: seq,
+      input_data: MoveInput { dx: 1.0, dy: 0.0 },
+    };
+    app
+      .to_server_tx
+      .send(SessionMessage::new(app.sender.clone(), vec![GameOp::CS_PlayerInput(input)]))
+      .await
+      .unwrap();
+
+    let acked = |a: &ClientApp| a.predicted_box.as_ref().unwrap().last_server_acknowledged_input_seq == seq;
+    let received = pump_until(&mut app, acked).await;
+    server.shutdown().await.unwrap();
+
+    assert!(acked(&app), "sent as {:?}, ops received: {received:?}", app.sender.id());
+  }
 }

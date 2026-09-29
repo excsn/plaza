@@ -155,8 +155,6 @@ impl StateLogic<GameOp, PlayerId, ServerGameState> for ServerLogic {
         // We use our fixed server tick interval
         state.current_server_tick += 1;
 
-        // Replaces the original `% 1`, which was always true and never gated
-        // anything.
         if state.current_server_tick.is_multiple_of(SEND_EVERY) {
           let mut remote_snapshots = Vec::new();
           for (id, box_state) in state.boxes.iter() {
@@ -215,7 +213,15 @@ impl StateLogic<GameOp, PlayerId, ServerGameState> for ServerLogic {
               MessageTarget::AllExcept(player_id),
               vec![joined_notice],
             ));
-            // The new player gets the full state via snapshot from SnapshotProvider shortly.
+            ops_to_broadcast.push(TargetedOp::new(
+              Agent::system(),
+              MessageTarget::Agent(player_id),
+              vec![GameOp::SC_JoinAck {
+                your_id: player_id,
+                initial_boxes: state.boxes.iter().map(|(id, s)| (*id, *s)).collect(),
+                server_tick: state.current_server_tick,
+              }],
+            ));
           }
       }
       LogicInput::AgentLeft { agent_id } => {
@@ -377,8 +383,7 @@ impl SnapshotProvider<PlayerId, ServerGameState, GameOp> for DummySnapshotProvid
     _context: Option<SnapshotContext>,
   ) -> Result<Option<GameOp>, PlazaSnapshotError<PlayerId>> {
     info!("Creating snapshot for target: {:?}", target_agent.and_then(|a| a.id()));
-    // The payload itself doesn't need last_processed_input_seq if StateController adds it.
-    // The AuthoritativeStateUpdate op is responsible for player-specific ack.
+    // The per-player input ack travels in `SC_AuthoritativeState`, not in the snapshot.
     let payload = CspSnapshotPayload {
       boxes: state.boxes.iter().map(|(id, s)| (*id, *s)).collect(),
       server_tick: state.current_server_tick,
