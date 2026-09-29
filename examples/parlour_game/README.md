@@ -38,9 +38,9 @@ The figure usually quoted for named MessagePack is 67% of JSON against compact's
 
 | | messages | json | compact | named |
 |---|---|---|---|---|
-| notices | 38 | 2923 | 870 | 2327 |
+| notices | 40 | 2993 | 894 | 2377 |
 | snapshots | 18 | 4941 | 1170 | 3618 |
-| **total** | **56** | **7864** | **2040** | **5945** |
+| **total** | **58** | **7934** | **2064** | **5995** |
 
 Named is 76% of JSON where compact is 26%, a premium of +190% rather than +67%. Adopting named to keep a hand-written client simple gives up most of what MessagePack saves. This deployment used named until generated Dart types made compact safe. The tables now use compact.
 
