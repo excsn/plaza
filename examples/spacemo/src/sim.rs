@@ -29,9 +29,9 @@ pub const MAX_SHIPS: usize = 1024;
 
 /// Half-width of the volume ships are scattered and kept inside.
 ///
-/// Space is unbounded and the wire is not, which is the tension stage five is
-/// about. Until relative encoding exists, this is what keeps a position inside
-/// the bounds a quantiser can carry.
+/// Space is unbounded and the wire is not. A ship outside an observer's view
+/// radius crosses in absolute bounds; this keeps its position inside the
+/// bounds that quantiser can carry.
 pub const VOLUME: f32 = 400.0;
 
 const TICK: f32 = 1.0 / 60.0;
@@ -206,10 +206,10 @@ pub struct Space {
   streak: Vec<u8>,
   /// Seats hit this tick, cleared at the start of every step.
   ///
-  /// **An event, and the first thing here that is not a state.** Everything
-  /// else in this example survives a lost frame because the next one describes
-  /// the world completely; a hit does not appear in any later frame, so it is
-  /// the one thing whose delivery actually matters. On this transport that is
+  /// **An event rather than a state,** like [`Space::kills`]. Everything else
+  /// in this example survives a lost frame because the next one describes the
+  /// world completely; a hit does not appear in any later frame, so its
+  /// delivery actually matters. On this transport that is
   /// free, and it is worth knowing which part of the protocol would stop being
   /// free on a datagram one.
   pub hits: Vec<u16>,
@@ -324,8 +324,8 @@ impl Space {
 
   /// The step, with the lock behaviour named.
   ///
-  /// `sticky` off re-derives every lock from the cone each tick, which is the
-  /// older behaviour and the one the panel switch demonstrates.
+  /// `sticky` off re-derives every lock from the cone each tick, which is what
+  /// the panel switch demonstrates.
   pub fn step_with(&mut self, flying: &[Fly; MAX_PLAYERS], sticky: bool) {
     self.tick += 1;
     self.hits.clear();
@@ -379,9 +379,9 @@ impl Space {
         if d.length_squared() <= HIT_RADIUS * HIT_RADIUS {
           let damage = if bolt.chasing.is_some() { MISSILE_DAMAGE } else { 1 };
           struck.push((seat, bolt.from, damage));
-          // Freed here as well as on expiry. A shot that hits was leaking its
-          // slot, so the index space climbed for as long as anyone was fighting
-          // and eventually ran past the bits the wire gives an id.
+          // Freed here as well as on expiry. A shot that hit and kept its slot
+          // would climb the index space for as long as anyone was fighting and
+          // eventually run past the bits the wire gives an id.
           slots.free(bolt.key);
           return false;
         }
@@ -454,11 +454,6 @@ impl Space {
     self.spawned += 1;
   }
 
-  /// Fires a missile at whatever is nearest inside the cone ahead.
-  ///
-  /// Locking on the server rather than trusting a client-chosen target: it is
-  /// the one place here where a client could name something it has no business
-  /// naming, and the check costs a dot product.
   /// Ticks until this seat can launch again, out of [`Space::reload_ticks`].
   ///
   /// The other half of a silent trigger: a lock is no use if the launcher is
@@ -538,6 +533,11 @@ impl Space {
     best.map(|(index, _)| index as u16)
   }
 
+  /// Fires a missile at whatever this seat holds a lock on.
+  ///
+  /// Locking on the server rather than trusting a client-chosen target: it is
+  /// the one place here where a client could name something it has no business
+  /// naming. The check costs a dot product.
   fn launch(&mut self, seat: usize) {
     let ship = self.ships[seat];
     let nose = ship.facing();
@@ -679,9 +679,8 @@ pub fn quaternion(yaw: f32, pitch: f32) -> [f32; 4] {
   let (sy, cy) = (yaw * 0.5).sin_cos();
   // Negated, because a positive rotation about X takes +Z toward -Y while the
   // flight model treats positive pitch as nose up. The two conventions differ
-  // by exactly this sign, and nothing but the nose test would have caught it:
-  // positions were correct throughout, and every ship simply rendered pitched
-  // the wrong way.
+  // by exactly this sign. Only the nose test catches it: positions stay
+  // correct and every ship renders pitched the wrong way.
   let (sp, cp) = (-pitch * 0.5).sin_cos();
   // Yaw about Y, then pitch about X.
   [cy * sp, sy * cp, -sy * sp, cy * cp]
@@ -692,10 +691,10 @@ pub fn quaternion(yaw: f32, pitch: f32) -> [f32; 4] {
 /// Space has no walls to bounce off. Wrapping keeps players in the same volume
 /// without pretending there is something to hit.
 ///
-/// This began as a wire constraint and is now a **gameplay** one. With
-/// positions encoded relative to the observer the wire no longer cares where
-/// anything is, so the only remaining reason to bound the volume is that ships
-/// which fly apart for ever never meet again.
+/// A **gameplay** constraint as well as a wire one: ships which fly apart for
+/// ever never meet again. Most positions cross relative to the observer, but a
+/// locked ship outside the view crosses in absolute bounds sized to this
+/// volume.
 fn confine(ship: &mut Ship) {
   for axis in [0, 1, 2] {
     let value = match axis {
@@ -795,7 +794,7 @@ mod tests {
   #[test]
   fn pitch_never_reaches_straight_up() {
     // A yaw/pitch model tears at the poles, so the model refuses to arrive.
-    // Aim is absolute now, so this is asking for straight up outright rather
+    // Aim is absolute, so this is asking for straight up outright rather
     // than turning toward it, which is the harder version of the same test.
     let mut space = Space::new();
     space.spawn(0);
@@ -923,9 +922,8 @@ mod tests {
 
   #[test]
   fn a_shot_that_hits_frees_its_slot_as_well_as_one_that_expires() {
-    // It did not. Expiry freed the slot and a hit did not, so the index space
-    // climbed for as long as anyone was fighting, and an id is only twenty bits
-    // on the wire.
+    // A hit that kept its slot would climb the index space for as long as
+    // anyone was fighting. An id is only twenty bits on the wire.
     let mut space = Space::new();
     space.spawn(0);
     space.spawn(1);
@@ -1334,9 +1332,7 @@ mod tests {
 
   #[test]
   fn a_missile_whose_target_leaves_goes_out() {
-    // This asserted the opposite until now: that it kept flying, on the
-    // reasoning that a shot which quietly stops existing is one less event to
-    // deliver. It is also debris that still looks like a threat. A homing
+    // Flying on would leave debris that still looks like a threat. A homing
     // shot is the one thing on this wire whose path has to be sent every frame,
     // so flying on spends bandwidth on a shot with no target.
     let mut space = Space::new();
@@ -1494,10 +1490,10 @@ mod tests {
 
   #[test]
   fn a_shot_from_a_ship_at_full_throttle_fits_the_wire() {
-    // A bolt inherits, so the fastest thing in the volume is not a ship. The
-    // wire clamped at 128 against a real 210, and because a straight shot's
-    // path is extrapolated from its velocity, the client drew the whole flight
-    // slow while the server flew it fast.
+    // A bolt inherits, so the fastest thing in the volume is not a ship. A wire
+    // bound below the real 210 would clamp it. Because a straight shot's
+    // path is extrapolated from its velocity, the client would draw the whole
+    // flight slow while the server flew it fast.
     let mut space = Space::new();
     space.spawn(0);
     let mut all = [Fly::default(); MAX_PLAYERS];

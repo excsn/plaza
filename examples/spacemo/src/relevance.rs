@@ -1,10 +1,8 @@
-//! The three strategies, from the block this example led to.
+//! The three strategies, re-exported from `plaza_server_utils::field`.
 //!
-//! The `Field`, its `Strategy` and the `Query` instrumentation started here
-//! and moved to `plaza_server_utils::field` along with both findings: the flat
-//! disc costs 7.1x the bandwidth in an open volume and in gow_3d's counter-case
-//! the height filter examines 2.7x once entities stack. What stays here is the
-//! measurement that produced the README's numbers.
+//! The flat disc costs 7.1x the bandwidth in an open volume and in gow_3d's
+//! counter-case the height filter examines 2.7x once entities stack. The test
+//! here is the measurement that produced the README's numbers.
 
 pub use plaza_server_utils::field::{truth, Field, Query, Strategy};
 

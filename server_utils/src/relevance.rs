@@ -319,9 +319,8 @@ impl<T: Default> CellTable<T> {
 
   /// Resets every cell to `T::default()`, keeping the allocation.
   ///
-  /// For `T = Vec<_>` this drops the contents and keeps each cell's capacity
-  /// only if the caller clears rather than replaces; see
-  /// [`clear_each`](Self::clear_each).
+  /// For `T = Vec<_>` this also frees each cell's own capacity;
+  /// [`clear_each`](Self::clear_each) keeps it.
   pub fn reset(&mut self) {
     for slot in self.slots.iter_mut() {
       *slot = T::default();

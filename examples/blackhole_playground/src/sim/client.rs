@@ -30,12 +30,10 @@ pub struct Client {
   /// (particle mode).
   pellets: BTreeMap<PelletId, Pellet>,
   now_ms: u64,
-  /// Leftover time, so the local integration advances in the *same fixed step*
-  /// the server uses. Integrating with the raw frame delta instead is a slightly
-  /// different timestep and in a divergent system that alone pulls the two
-  /// simulations apart.
-  /// The same fixed step the server runs. Both sides need the same rule *and*
-  /// the same timestep to run the same simulation.
+  /// The same fixed step the server runs, with its leftover time. Integrating
+  /// with the raw frame delta instead is a slightly different timestep and in a
+  /// divergent system that alone pulls the two simulations apart. Both sides
+  /// need the same rule *and* the same timestep to run the same simulation.
   sim: FixedTimestep,
   /// Corrections applied, so the cost of staying converged is visible.
   pub corrections_applied: u64,

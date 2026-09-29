@@ -170,8 +170,8 @@ fn main() {
       graded.bits += u64::from(bits) * 2;
     }
 
-    // merged: the library's aggregation tree, at the angle its own docs call
-    // the best trade in the black hole's table.
+    // merged: the library's aggregation tree, at `theta = 0.5`, the value its
+    // docs give for a simulation consuming the summaries.
     let tree = AggregateTree::build_in(&crowd, (0.0, 0.0), 2048.0, 10);
     let mut summaries = Vec::new();
     tree.summarize(me.0, me.2, 0.5, &mut summaries);

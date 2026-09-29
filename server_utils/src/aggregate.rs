@@ -163,8 +163,7 @@ impl AggregateTree {
   /// and therefore returns every input exactly. That is the off switch: the same
   /// code path with aggregation disabled rather than a separate one.
   ///
-  /// `out` is cleared first and reused, so a per-frame walk allocates nothing
-  /// after the first call.
+  /// `out` is cleared first, so one buffer can be reused across frames.
   pub fn summarize(&self, x: f32, y: f32, theta: f32, out: &mut Vec<Summary>) {
     out.clear();
     if self.nodes.is_empty() {

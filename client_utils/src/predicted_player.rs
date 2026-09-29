@@ -115,9 +115,6 @@ impl<State: Clone + Debug, Input: Clone + Debug, Ctx: Default> PredictedPlayer<S
 
 impl<State: Clone + Debug, Input: Clone + Debug, Ctx> PredictedPlayer<State, Input, Ctx> {
 
-  /// Applies an input locally (prediction) and records it for replay. Returns the
-  /// sequence number to send alongside the input, so the server can acknowledge
-  /// it.
   /// Replaces the world the prediction runs against.
   ///
   /// Only needed by a *forced* entity, one the server moves by more than its own

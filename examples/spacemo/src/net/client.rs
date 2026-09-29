@@ -38,10 +38,10 @@ const BOLT_SILENCE: u64 = 6;
 /// teleporting on each one is far more visible than carrying a little error.
 ///
 /// Raised to the real elapsed time rather than multiplied by it, which is the
-/// form `plaza_client_utils::AdaptiveDecay` already uses. The linear version
-/// left between 0.00124 and 0.00218 of a correction after a second depending on
-/// the frame rate: too small to see, and the wrong shape for the same reason
-/// the prediction timestep was.
+/// form `plaza_client_utils::AdaptiveDecay` uses. A linear version leaves
+/// between 0.00124 and 0.00218 of a correction after a second depending on
+/// the frame rate: too small to see and the wrong shape for the same reason a
+/// per-frame prediction step is.
 const EASE_PER_TICK: f32 = 0.9;
 
 /// The most wall clock one rendered frame may spend catching up, in
@@ -63,7 +63,8 @@ pub enum Status {
 /// forward, because its path cannot be derived, so its life never runs down
 /// here. Nothing announces that one hit something or expired either; it just
 /// stops appearing in the frame. Without this, every missile that ever came
-/// into view stayed in the map for ever, drawn at the last place it was seen.
+/// into view would stay in the map for ever, drawn at the last place it was
+/// seen.
 ///
 /// Free-standing so it can be tested without a socket.
 pub fn forget_quiet_bolts(bolts: &mut HashMap<u32, Shot>, frame: u64) -> usize {
@@ -149,9 +150,8 @@ pub struct NetClient {
   pub frame: u64,
   pub stamp: u64,
   pub meter: RateMeter,
-  /// What this client *sends*. That was close to zero while input was a keyed
-  /// level that changed twice a turn, but a mouse now sets it every frame.
-  /// Every other measurement in this example is downstream.
+  /// What this client *sends*. A mouse sets the aim every frame, so this is not
+  /// close to zero. Every other measurement in this example is downstream.
   pub up: RateMeter,
   /// How many ships the last frame carried, which is the number the panel
   /// should show rather than the volume's population.
@@ -335,9 +335,6 @@ impl NetClient {
           self.bolts_carried = update.bolts.len();
           self.locked = update.locked;
           self.reload = update.reload;
-          // A bolt is replaced wholesale every frame rather than aged: it lives
-          // about a second, so there is no staleness worth carrying, and the
-          // set that arrived *is* the set that exists.
           // Merged rather than replaced. Under `stream_bolts` the set that
           // arrives is the set that exists and this is the same thing; with it
           // off, a frame carries only what is *new*, and everything else is
@@ -465,9 +462,9 @@ impl NetClient {
   /// **A homing shot has no other way to die on this client.** It is not
   /// carried forward, so its life never runs down here and nothing announces
   /// that one hit something or expired: it just stops appearing in the frame.
-  /// Without this every missile that ever came into view stayed in the map for
-  /// ever, drawn at the last place it was seen and a busy volume filled up
-  /// with frozen missiles.
+  /// Without this every missile that ever came into view would stay in the map
+  /// for ever, drawn at the last place it was seen; a busy volume would fill
+  /// up with frozen missiles.
   fn forget_quiet_bolts(&mut self, frame: u64) {
     self.stale_bolts += forget_quiet_bolts(&mut self.bolts, frame) as u64;
   }
@@ -476,7 +473,7 @@ impl NetClient {
   /// whatever the last correction was worth.
   pub fn predict(&mut self, dt_secs: f32) {
     // Elapsed as a difference of absolute clock readings, so nothing is lost to
-    // truncation the way accumulating a rounded frame time was.
+    // truncation the way accumulating a rounded frame time would lose it.
     let elapsed = match self.last_ms {
       Some(was) => self.now_ms.saturating_sub(was),
       None => 0,
@@ -614,7 +611,7 @@ mod tests {
   #[test]
   fn prediction_does_not_depend_on_the_display() {
     // `advance` moves a ship one *server tick*, so running it once per rendered
-    // frame made prediction a function of the monitor: 5.1 units at 30fps, 19.0
+    // frame makes prediction a function of the monitor: 5.1 units at 30fps, 19.0
     // at 60 and 67.7 at 120, over the same second of wall clock, against a
     // server that always produces 19.0.
     //
@@ -675,7 +672,7 @@ mod tests {
     // because its path cannot be derived, so its life never runs down on the
     // client; and nothing announces that one hit or expired, it simply stops
     // being in the frame. Without this every missile that ever came into view
-    // stayed for ever, drawn where it was last seen.
+    // would stay for ever, drawn where it was last seen.
     let mut bolts = HashMap::new();
     bolts.insert(1, shot(1, true, 0));
     bolts.insert(2, shot(2, false, 0));
@@ -730,15 +727,12 @@ mod tests {
     assert!(ships.contains_key(&0));
   }
 
-  /// A clock that loses its remainder makes every rate measured against it
-  /// read high. In an example that quotes bandwidth, that makes the quoted
-  /// numbers wrong.
   #[test]
   fn a_correction_bleeds_off_at_the_same_rate_on_any_display() {
-    // Not a visible bug, unlike the timestep and the clock: every frame rate
-    // left about two thousandths of a correction after a second either way.
-    // Fixed because the form was wrong for the same reason those were, and
-    // because the library block beside it already had it right.
+    // Not a visible difference, unlike the timestep and the clock: a linear
+    // ease leaves about two thousandths of a correction after a second at any
+    // frame rate. The ease is raised to elapsed time anyway, the form
+    // `plaza_client_utils::AdaptiveDecay` uses.
     let residual = |fps: usize| {
       let dt = 1.0 / fps as f32;
       let mut offset = 1.0f32;
@@ -757,6 +751,9 @@ mod tests {
     }
   }
 
+  /// A clock that loses its remainder makes every rate measured against it
+  /// read high. In an example that quotes bandwidth, that makes the quoted
+  /// numbers wrong.
   #[test]
   fn a_frame_clock_that_truncates_reports_a_rate_that_is_too_high() {
     fn rate(fps: usize, keep_remainder: bool) -> f64 {

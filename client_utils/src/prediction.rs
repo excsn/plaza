@@ -97,8 +97,7 @@ where
     if replayed_count > 0 {
       // Debug, not info: reconciliation replaying a few inputs is what this type
       // does every frame it is driven, so at info it is one line per frame per
-      // predicted player. The no-op branch below was already debug; this matches
-      // it.
+      // predicted player. The no-op branch below logs at debug too.
       debug!(
         "Reconciliation: Replayed {} unacknowledged inputs. Final predicted state: {:?}",
         replayed_count, self.current_predicted_state

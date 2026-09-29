@@ -215,7 +215,8 @@ pub fn draw_minimap(world: &World, cam: &Camera) {
 }
 
 /// The scoreboard. Score is pellets eaten and keeps climbing; mass is the
-/// physical stat, capped and knocked back by collisions, so both are shown.
+/// physical stat, log-damped in effect and knocked back by collisions, so both
+/// are shown.
 pub fn draw_scores(world: &World, cam: &Camera) {
   let mut ranked: Vec<(usize, u32, f32)> = world.scores().iter().enumerate().map(|(i, s)| (i, *s, world.holes()[i].mass)).collect();
   ranked.sort_by(|a, b| b.1.cmp(&a.1));

@@ -23,10 +23,9 @@ pub(crate) fn fnv1a(bytes: &[u8], mut hash: u32) -> u32 {
 /// Extracts the type definitions from Rust source, discarding everything else.
 ///
 /// This makes the version change when the wire shape changes rather than
-/// whenever the file changes. A server gets bug fixes and a bug fix in a file
-/// that also defines a message used to bump the version and tell every client
-/// to reload. So did comments, formatting and any helper function sharing the
-/// file.
+/// whenever the file changes. Hashing the whole file would bump the version and
+/// tell every client to reload on every bug fix, comment, reformat or helper
+/// function in a file that also defines a message.
 ///
 /// Kept: `struct`, `enum` and `union` definitions, with their attributes, so a
 /// `#[serde(rename)]`, an explicit discriminant, a new field, a new variant or
@@ -104,8 +103,8 @@ fn declares_type(line: &str) -> bool {
 /// Appends a line with every run of whitespace removed.
 ///
 /// Whitespace never reaches the wire, so `enum Op { Ping }` and a reformatted
-/// `enum Op {\n  Ping,\n}` have to hash the same. The trailing comma before a
-/// closing brace goes too, since rustfmt adds and removes it freely.
+/// `enum Op {\n  Ping,\n}` have to hash the same. The trailing comma rustfmt
+/// adds and removes freely is left for `strip_trailing_commas`.
 pub(crate) fn push_normalised(out: &mut String, line: &str) {
   for word in line.split_whitespace() {
     out.push_str(word);

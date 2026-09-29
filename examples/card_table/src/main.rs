@@ -1,7 +1,7 @@
 //! A turn-based, hidden-information game, which is what `flow_control` is built
 //! for.
 //!
-//! Every other example is real-time and open-information. This one covers:
+//! This example covers:
 //!
 //! - `Phased` holding the phase, so a change cannot reach the server without
 //!   reaching clients too

@@ -27,8 +27,8 @@ use plaza_client_utils::math::Vec3;
 pub enum Strategy {
   /// A grid on `(x, z)`, altitude ignored. What `SpatialGrid` does.
   Flat,
-  /// The same grid, with everything it returns filtered on `|dy|`. Exact and
-  /// one line to write.
+  /// The same grid, with everything it returns tested against the full
+  /// sphere. Exact and one line to write.
   FlatBand,
   /// Cells in all three axes.
   Volume,
@@ -132,7 +132,8 @@ impl Field {
   ///
   /// `truth` is the brute-force answer, supplied by the caller so the same
   /// sphere test scores every strategy.
-  /// Serving paths pass `&[]` and skip the scoring.
+  /// Serving paths pass `&[]`, which makes `false_positives` equal `returned`
+  /// and `missed` zero, so both are meaningless there.
   pub fn query(&self, at: Vec3, radius: f32, out: &mut Vec<u32>, truth: &[u32]) -> Query {
     out.clear();
     let reach = (radius / self.cell).ceil() as i32;

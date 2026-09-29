@@ -76,9 +76,9 @@ pub fn height_at(x: f32, z: f32) -> f32 {
   (raw * RELIEF - RELIEF * 0.35) * rim
 }
 
-/// The height a body stands at, which is the ground or the water surface.
 pub const WATER: f32 = -3.4;
 
+/// The height a body stands at, which is the ground or the water surface.
 pub fn ground_at(x: f32, z: f32) -> f32 {
   height_at(x, z).max(WATER)
 }
@@ -165,8 +165,7 @@ mod tests {
 
   #[test]
   fn it_is_not_a_plane() {
-    // The terrain was added because a flat world gave nothing to look at or
-    // fight on.
+    // A flat world gives nothing to look at or fight on.
     let mut low = f32::MAX;
     let mut high = f32::MIN;
     for xi in -60..60 {

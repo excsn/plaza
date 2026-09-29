@@ -246,7 +246,7 @@ impl<S: Socket + ?Sized> SendJson for S {
 /// Connects using whichever real transport this build has for its target.
 ///
 /// The choice is never ambiguous: [`native`] exists only off wasm and
-/// [`miniquad`] only on it, so a build that enables both features (the normal
+/// `miniquad` only on it, so a build that enables both features (the normal
 /// shape for an application shipping a desktop and a browser client from one
 /// crate) still has exactly one real backend per target. [`loopback`] is never
 /// chosen here because it connects to a peer rather than to a URL.

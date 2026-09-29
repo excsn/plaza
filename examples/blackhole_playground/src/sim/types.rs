@@ -23,9 +23,9 @@ pub const SIM_HZ: u32 = 60;
 ///
 /// `FixedTimestep` counts in whole milliseconds, so a 60Hz rate is a 16ms step
 /// and the loop really runs 62.5 times a second. Deriving the delta from the
-/// *step* rather than from the rate is what keeps the two in agreement: the
-/// previous `1.0 / SIM_HZ` integrated a sixtieth of a second per 16ms tick, so
-/// simulated time ran 4.2% fast against the wall clock everything else is
+/// *step* rather than from the rate is what keeps the two in agreement:
+/// `1.0 / SIM_HZ` would integrate a sixtieth of a second per 16ms tick, so
+/// simulated time would run 4.2% fast against the wall clock everything else is
 /// scheduled on.
 pub const SIM_STEP_MS: u64 = (1000 / SIM_HZ) as u64;
 pub const SIM_DT: f32 = SIM_STEP_MS as f32 / 1000.0;
@@ -121,8 +121,8 @@ impl BlackHole {
   ///
   /// `scale * ln(1 + mass / scale)` is near-linear while you are small and
   /// flattens as you get large, so a leader's pull keeps rising but ever more
-  /// slowly. This replaces a hard mass cap. It protects against a degenerate
-  /// field the same way, without growth suddenly stopping.
+  /// slowly. It protects against a degenerate field the way a hard mass cap
+  /// would, without growth suddenly stopping.
   ///
   /// Both the server and every client call this, because it is part of the shared
   /// rule; a client using raw mass would integrate a different world.

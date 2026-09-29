@@ -159,8 +159,8 @@ async fn frame_loop(options: role::Options) {
       client.walk(None);
       client.ease(get_frame_time());
       if client.decided() {
-        // Never dismissed automatically, so a shot can be taken of the one
-        // screen this example could not previously draw at all.
+        // Never dismissed automatically, so the result screen stays up long
+        // enough for a shot to be taken of it.
         if get_last_key_pressed().is_some() {
           client.dismiss();
         }

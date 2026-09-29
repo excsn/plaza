@@ -170,8 +170,8 @@ pub struct NetClient {
   /// local clock, and the check against the server. The invariants this
   /// example play-tested its way to (check routes not positions, only check
   /// journeys both ends started together, a click changes where the body is
-  /// going and never where it is, reconcile only at rest) live in the block's
-  /// docs now.
+  /// going and never where it is, reconcile only at rest) are documented on
+  /// `RoutePredictor`.
   pub route: RoutePredictor<Tile>,
   /// Where the whole journey ends, for redrawing the route after a surprise.
   goal: Option<Goal>,
@@ -540,9 +540,8 @@ impl NetClient {
   /// Something that happened to this client and to nobody else.
   ///
   /// No seat to check, because there is nobody else it could have been about.
-  /// That is the fix for a real defect: these arrived on the
-  /// shared event list carrying no seat at all, so every passing woodcutter's
-  /// level was announced as this player's own.
+  /// These carry no seat, so on the shared event list every passing
+  /// woodcutter's level would be announced as this player's own.
   fn on_yours(&mut self, yours: Yours) {
     let now = self.now_ms;
     match yours {

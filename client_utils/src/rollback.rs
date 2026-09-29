@@ -549,7 +549,7 @@ mod tests {
     RollbackSession::new(World { pos: [0, 0] }, vec![NEUTRAL, NEUTRAL], RollbackConfig { max_rollback_frames: 64 }, step)
   }
 
-  /// The predictor swap and the readouts nothing was calling.
+  /// The predictor swap and the readouts.
   ///
   /// A rollback session's cost is mostly how often it has to re-simulate,
   /// which depends on how good the guess was. The default repeats the last
@@ -598,7 +598,7 @@ mod tests {
     #[test]
     fn the_frame_counters_agree_with_what_was_driven() {
       // `current_frame`, `confirmed_frame` and `num_players` are what an
-      // application shows and branches on, and none of them had a test.
+      // application shows and branches on.
       let mut s = session();
       assert_eq!(s.num_players(), 2);
       assert_eq!(s.current_frame(), 0);

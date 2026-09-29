@@ -50,7 +50,7 @@ pub const MAX_BOMBS: u8 = 6;
 /// (or nobody) is left.
 pub const ROUND_END_MS: u64 = 2500;
 
-/// Share of destroyed soft walls that reveal a pickup.
+/// One in this many destroyed soft walls reveals a pickup.
 pub const POWERUP_IN: u32 = 3;
 
 /// The seed the tests and the offline harness build their board from.
@@ -113,7 +113,7 @@ impl Cell {
 ///
 /// `None` is a variant rather than an `Option<Dir>` because it is a real input:
 /// releasing the key is an intent the server must hear, and wrapping it costs a
-/// byte on a message sent every tick.
+/// byte on every movement message.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(into = "u8", try_from = "u8")]
 pub enum Dir {
@@ -403,9 +403,9 @@ impl Step {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PlayerState {
   pub id: PlayerId,
-  /// The cell this player **occupies**. During a step it is the cell being left
-  /// until the step completes, so a player is never in two cells at once and a
-  /// blast never has to decide which half of a walk it caught.
+  /// The committed cell. During a step it is the cell being left until the step
+  /// completes. The cell a rule judges this player in is [`Self::occupied`],
+  /// which switches at the halfway point.
   pub cell: Cell,
   pub step: Option<Step>,
   pub alive: bool,
@@ -487,10 +487,9 @@ impl PlayerState {
 ///
 /// `fires_at_ms` is on the **server clock**, declared rather than counted down,
 /// which is what lets a client draw an accurate fuse without a countdown of its
-/// own drifting against the server's. A chain reaction changes this number and
-/// the change is announced, because a chained bomb fires early and a client
-/// counting its own fuse would be wrong for exactly as long as the fuse had
-/// left.
+/// own drifting against the server's. A chain reaction fires a bomb before this
+/// time and the blast is announced, because a client counting its own fuse
+/// would be wrong for exactly as long as the fuse had left.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BombState {
   pub cell: Cell,
@@ -526,7 +525,8 @@ pub struct Controls {
   /// that is decided by who pressed first rather than by who is nearer the
   /// server.
   pub playout_delay_ms: u64,
-  /// Ticks either side of its named tick that an input is still accepted.
+  /// Ticks past its named tick that an input is still accepted.
+  /// `input_max_early_ticks` is the bound on the early side.
   pub input_max_late_ticks: u64,
   pub input_max_early_ticks: u64,
   pub input_playout: bool,
@@ -539,7 +539,7 @@ pub struct Controls {
   pub predict_bombs: bool,
   /// How often the server sends state.
   pub sync_hz: u32,
-  /// How far behind the server clock a client draws remote state.
+  /// How far behind the server clock a client draws fire.
   pub render_delay_ms: u64,
   pub players: usize,
   /// Fill empty seats with bots, so a single player still has a game.
@@ -554,16 +554,15 @@ impl Default for Controls {
       loss_pct: 0.0,
       datagram_link: true,
       playout_delay_ms: 100,
-      // Roughly the playout depth in 16 ms steps, plus slack for jitter.
+      // Slack past the playout depth for jitter: 4 ticks is 64 ms.
       input_max_late_ticks: 4,
       input_max_early_ticks: 10,
       input_playout: true,
       predict_local: true,
       predict_bombs: true,
       sync_hz: 20,
-      // one_way (40) + jitter (15) + one send interval (50), plus margin. The
-      // same budget the other playgrounds pay, and for the same reason:
-      // interpolation needs two samples bracketing the instant being drawn.
+      // one_way (40) + jitter (15) + one send interval (50), plus margin: the
+      // same budget the other playgrounds pay.
       render_delay_ms: 140,
       players: 4,
       bots: true,

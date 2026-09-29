@@ -74,14 +74,14 @@ where
   /// Attempts to get an extrapolated state for the `target_client_render_time_ms`.
   ///
   /// - `target_client_render_time_ms`: The client's current rendering time.
-  /// - `max_extrapolation_duration_ms`: The maximum duration into the "future" (relative
-  ///   to `server_timestamp` adjusted for receipt time) that extrapolation is allowed.
-  ///   If the required extrapolation exceeds this, `None` might be returned, or state clamped.
+  /// - `max_extrapolation_duration_ms`: The longest extrapolation allowed, measured from
+  ///   `client_receipt_time_ms`. A target past it is held at the cap and counted in
+  ///   [`over_extrapolations`](Self::over_extrapolations).
   /// - `convert_ms_to_time_delta`: A function to convert a millisecond duration (u64)
   ///   into the `TimeDelta` type required by `StateType::extrapolate_with_velocity`.
   ///
-  /// Returns `Some(extrapolated_state)` or `None` if extrapolation is not feasible
-  /// (e.g., target time too far in the past, or exceeds max duration).
+  /// Always returns `Some`. A target before `client_receipt_time_ms` gets the base
+  /// state unchanged.
   pub fn get_extrapolated_state<TimeDelta>(
     &self,
     target_client_render_time_ms: ClientTimeMs,
@@ -188,11 +188,11 @@ mod tests {
 
   #[test]
   fn crossing_the_extrapolation_limit_does_not_move_the_entity_backwards() {
-    // The limit used to return the *un-extrapolated* state, so an entity coasted
-    // `velocity * max_ms` forward and then, one millisecond later, was drawn back
-    // at the raw sample. That jumped the whole window backwards and jitter
-    // around the boundary made it flicker. With the duration capped it coasts
-    // to the limit and stops there.
+    // Returning the *un-extrapolated* state past the limit would draw an entity
+    // coasted `velocity * max_ms` forward back at the raw sample one millisecond
+    // later. That jumps the whole window backwards and jitter around the
+    // boundary makes it flicker. With the duration capped it coasts to the
+    // limit and stops there.
     let base = ExtrapolationBase::new(Pos(0.0), 100.0, 0u64, 0);
     let max_ms = 120;
     let at = |t: ClientTimeMs| base.get_extrapolated_state(t, max_ms, |ms| ms as f32 / 1000.0).unwrap();
@@ -299,10 +299,9 @@ mod tests {
       .get_extrapolated_state(target_render_time, max_extrap_ms, ms_to_duration)
       .unwrap();
 
-    // Capped at 200ms of travel, *not* rewound to the base state. This assertion
-    // used to demand the base state, which is the discontinuity: at 200ms the
-    // entity has moved a full second's worth of velocity and at 201ms it was
-    // drawn back where it started.
+    // Capped at 200ms of travel, *not* rewound to the base state. Rewinding is
+    // the discontinuity: at 200ms the entity has moved 200ms of velocity and at
+    // 201ms it would be drawn back where it started.
     let capped = base_state.position + base_velocity.speed * (max_extrap_ms as f32 / 1000.0);
     assert!(
       (extrapolated.position - capped).abs() < 1e-4,

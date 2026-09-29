@@ -135,12 +135,11 @@ pub struct Seen {
   pub facing: u8,
   /// How many times this body has been put somewhere it did not walk to.
   ///
-  /// The same counter `You` carries, added for the same reason after a second
-  /// bug: a
-  /// relocation and a step look identical on the wire, so a client with only
-  /// the new tile interpolates between them. A foe revives at its **home**
-  /// rather than where it fell, so without this it glides from its corpse
-  /// across the map to its den, playing a walk animation the whole way.
+  /// The same counter `You` carries, for the same reason: a relocation and a
+  /// step look identical on the wire, so a client with only the new tile
+  /// interpolates between them. A foe revives at its **home** rather than where
+  /// it fell, so without this it would glide from its corpse across the map to
+  /// its den, playing a walk animation the whole way.
   pub spawn: u32,
 }
 
@@ -207,10 +206,10 @@ pub enum Happened {
 /// pack and five totals, sent again whenever they change. This is what *just
 /// changed*, sent once and never repeated.
 ///
-/// These used to go on the shared event list, which caused two problems.
-/// Everybody within sight paid for every body's experience. Worse, `Earned`
-/// and `Levelled` carried no seat, so a client could not tell its own from
-/// anyone else's and announced every passing woodcutter's level as its own.
+/// These stay off the shared event list for two reasons. On it, everybody
+/// within sight would pay for every body's experience. Worse, `Earned` and
+/// `Levelled` carry no seat, so a client could not tell its own from anyone
+/// else's and would announce every passing woodcutter's level as its own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Yours {
   /// A gathering action produced something.

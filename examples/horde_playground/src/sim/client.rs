@@ -76,8 +76,7 @@ impl Burst {
 
 
 /// How much of the remaining gap to the server an enemy closes per correction.
-/// Continuous, so there is no ease duration to outlast the send interval, which
-/// is the failure the old `ErrorSmoother` path had at high rates.
+/// Continuous, so there is no ease duration to outlast the send interval.
 const CORRECT_BLEND: f32 = 0.35;
 
 /// Only the position is corrected. Target, kind and health are discrete facts the
@@ -106,8 +105,8 @@ struct EnemyCtx {
 /// the intent, sent only when it changes, not the position it produces.
 type EnemySim = HeldInputPredictor<Enemy, PlayerId, std::sync::Arc<EnemyCtx>>;
 
-/// The shared rule, in the shape a predictor wants. `step_enemy` itself is
-/// untouched and is still what the server calls.
+/// The shared rule, in the shape a predictor wants. `step_enemy` itself is what
+/// the server calls.
 fn advance_enemy(enemy: &mut Enemy, target: &PlayerId, dt: f32, ctx: &std::sync::Arc<EnemyCtx>) {
   if ctx.players.is_empty() {
     return;
@@ -130,15 +129,13 @@ struct RemoteEnemy {
 /// render delay the panel can declare, with both streams feeding samples at
 /// their maximum rate, plus slack for jitter.
 ///
-/// Derived from what it must cover. This was a constant 8,
-/// which at the default rates held roughly 200 ms of history: fine at the
-/// default 150 ms render delay, and quietly wrong the moment the slider went
-/// past what it covered. The view then clamped every render to the oldest
-/// snapshot it still had, so the marker rode a couple of hundred milliseconds
-/// behind "now" while the rest of the scene was faithfully at T, and the gap
-/// between them scaled with the slider. Found by playing, at 600 ms: the
-/// weapon appeared to fire from the player's past, and the shots were the
-/// correctly placed half of the picture.
+/// Derived from what it must cover. A constant 8 holds roughly 200 ms of
+/// history at the default rates, which is quietly wrong once the slider goes
+/// past it: the view then clamps every render to the oldest snapshot it still
+/// has, so the marker rides a couple of hundred milliseconds behind "now" while
+/// the rest of the scene is faithfully at T and the gap between them scales
+/// with the slider. At 600 ms the weapon appears to fire from the player's past
+/// and the shots are the correctly placed half of the picture.
 const PLAYER_VIEW_SNAPSHOTS: usize = ((crate::sim::types::RENDER_DELAY_MAX_MS as usize * 2 * crate::sim::types::SEND_RATE_MAX_HZ as usize) / 1000) + 8;
 /// Unused in practice: peers are interpolated and never extrapolated, so the
 /// view holds the newest snapshot rather than dead reckoning past it. Kept as the
@@ -248,7 +245,7 @@ pub struct Client {
   /// Three things read it: the ghost overlay (whose job
   /// is the future), the fallback before the timeline starts (when there is
   /// nothing else), and the per-player velocity derivation. The shared rules do
-  /// **not** read it any more: they read [`Client::drawn_players`], the same
+  /// **not** read it: they read [`Client::drawn_players`], the same
   /// authoritative state reconstructed at the render instant, because a rule
   /// evaluated at T reading a position from the newest packet is two timelines
   /// in one scene.
@@ -257,16 +254,15 @@ pub struct Client {
   ///
   /// Separate from `players` for the reason above: this is presentation, and it
   /// never reaches a rule. `RemoteView` is exactly the block for it, so a peer
-  /// gets interpolation with dead reckoning on starvation rather than the raw
-  /// newest sample, which is what made other players visibly teleport at low
-  /// send rates.
+  /// gets interpolation rather than the raw newest sample, which makes other
+  /// players visibly teleport at low send rates.
   player_views: Vec<RemoteView<Vec2, Vec2>>,
   /// Server time of each player's last sample, for deriving a velocity and for
   /// rejecting a sample that arrives out of order.
   player_sample_ms: Vec<u64>,
   /// Which players this client has ever been told about.
   ///
-  /// Necessary once the player stream is relevance-limited: a player who has
+  /// Necessary because the player stream is relevance-limited: a player who has
   /// never been sent still occupies a slot in every per-player array, holding
   /// the arena-centre seed, and drawing that is a **phantom peer** standing in
   /// the middle of the map. The seed is right for a camera with nothing to
@@ -294,9 +290,9 @@ pub struct Client {
   arrivals: ArrivalMonitor,
   /// The clock peers are drawn against.
   ///
-  /// It cannot be `now_ms - delay`, which is what the first version of this did.
-  /// `now_ms` is an estimate of server time *now*, and a sample is a link delay
-  /// old by the time it arrives, so that target sits *ahead* of the newest
+  /// It cannot be `now_ms - delay`. `now_ms` is an estimate of server time
+  /// *now* and a sample is a link delay old by the time it arrives, so that
+  /// target sits *ahead* of the newest
   /// sample and the view spends its whole life extrapolating and then clamping.
   /// On a host it is worse still, because pongs come back instantly while frames
   /// go through the impairment link, so the two disagree by the whole latency.
@@ -309,14 +305,14 @@ pub struct Client {
   /// the server, identical on every client, and never moved by the link.
   render_delay_ms: u64,
   /// Packets that have arrived but whose moment has not come, plus the
-  /// underrun and restart accounting that used to be hand-rolled here.
+  /// underrun and restart accounting.
   ///
   /// **Nothing is applied on arrival.** A packet describes the world at its own
   /// `server_time_ms`, and it is applied when the render clock reaches that
   /// instant, so a death, a spark, a coin claim, a spawn and a position all land
   /// at the time they actually happened rather than at the time the network got
-  /// round to delivering them. Without this the players were on the render
-  /// timeline and everything else was ahead of it, which means there is no single
+  /// round to delivering them. Without this the players would be on the render
+  /// timeline and everything else ahead of it, which means there is no single
   /// instant the world can be asked about, and a replay camera has nothing to
   /// drive.
   playout: PlayoutBuffer<Packet>,
@@ -393,7 +389,7 @@ pub struct Client {
   /// for nothing.
   pub notices: Vec<(String, f32)>,
   /// Health and shield samples waiting for their instant: the server time they
-  /// describe, and the vitals as sent, which is a **subset** of players now.
+  /// describe and the vitals as sent, which is a **subset** of players.
   /// Applied when the render clock reaches them, like every other packet, so a
   /// bar does not drop one render delay before the hit that caused it is
   /// visible.
@@ -419,9 +415,6 @@ pub struct Client {
   /// the refusal count measures its own impatience instead of any real
   /// disagreement about the balance.
   pending_buys: Vec<Upgrade>,
-  /// The newest sequence this client has actually *applied*. Only these are
-  /// acknowledged, because that is what the server needs to know: not what
-  /// arrived, but which state the client is in.
 
   /// Every player's health and respawn shield, from the last packet.
   pub player_health: Vec<u8>,
@@ -484,14 +477,12 @@ impl Client {
   /// instant once the timeline has started, and the local arrival clock during
   /// the join transient, when there is nothing on screen for it to disagree with.
   ///
-  /// This used to be a field with **two writers on two timelines**: the newest
-  /// player frame's timestamp on arrival, and the packet's timestamp at
-  /// play-out. The first is roughly `now - one_way`, the second is roughly the
-  /// render instant, and the value oscillated between them by about the render
-  /// delay, wobbling the pulse phase, the speed scale and the difficulty tier.
-  /// Deriving it from the render clock makes it the same T everything else in
-  /// the frame is already evaluated at, which is the one-instant principle
-  /// rather than a third clock.
+  /// Derived from the render clock, so it is the same T everything else in the
+  /// frame is evaluated at rather than a third clock. A field written on arrival
+  /// from the newest player frame (roughly `now - one_way`) and at play-out from
+  /// the packet (roughly the render instant) oscillates between the two by about
+  /// the render delay, wobbling the pulse phase, the speed scale and the
+  /// difficulty tier.
   fn frame_clock_ms(&self) -> u64 {
     self.render_clock.target().unwrap_or(self.now_ms)
   }
@@ -524,8 +515,8 @@ impl Client {
   ///
   /// Aimed at the **drawn** owner, not the newest one. A flight is pure
   /// presentation, so its target is the marker the player can see; aiming at
-  /// the newest authoritative position landed the animation ahead of the body
-  /// it belonged to.
+  /// the newest authoritative position lands the animation ahead of the body it
+  /// belongs to.
   pub fn flight_positions(&self) -> Vec<Vec2> {
     let drawn = self.drawn_players();
     self
@@ -550,10 +541,10 @@ impl Client {
   /// cannot be smoothed away.
   fn predict_claims(&mut self) {
     // Distances measured between the drawn players and the coins, which are on
-    // the same timeline. The newest player array was the obvious input and the
+    // the same timeline. The newest player array is the obvious input and the
     // wrong one: the coins stand at the render instant, so measuring them
-    // against players from the newest packet compared two different moments,
-    // and a pickup could trigger before the marker visibly touched the coin.
+    // against players from the newest packet compares two different moments
+    // and a pickup can trigger before the marker visibly touches the coin.
     let drawn = self.drawn_players();
     let me = drawn[self.id as usize];
     let others: Vec<Vec2> = drawn.iter().enumerate().filter(|(p, _)| *p != self.id as usize).map(|(_, v)| *v).collect();
@@ -597,9 +588,9 @@ impl Client {
       .copied();
     // Records the request and nothing else. What the client *believes* it owns is
     // derived in one place, on packet receipt, from the confirmed wallet plus
-    // whatever is pending. Optimistically claiming it here as well made the
-    // belief run ahead even with prediction switched off, which showed up as a
-    // wrong-rule window in the control configuration.
+    // whatever is pending. Optimistically claiming it here as well would make
+    // the belief run ahead even with prediction switched off, which shows up as
+    // a wrong-rule window in the control configuration.
     if let Some(u) = choice {
       self.pending_buys.push(u);
     }
@@ -650,13 +641,6 @@ impl Client {
     self.player_seen.get(p).copied().unwrap_or(false)
   }
 
-  /// How long ago this client last heard where a player is, at the instant on
-  /// screen. `None` if it has never heard.
-  ///
-  /// A marker drawn from a position nobody has confirmed in a while may be
-  /// wrong, so it fades out rather than staying at full strength. Even with a
-  /// far tier this happens: a player who disconnects stops arriving in either
-  /// tier.
   /// The squad this client was told it belongs to, as of the last frame.
   ///
   /// A squadmate never fades off the map, because the reason they are in the
@@ -666,6 +650,13 @@ impl Client {
     &self.squad
   }
 
+  /// How long ago this client last heard where a player is, at the instant on
+  /// screen. `None` if it has never heard.
+  ///
+  /// A marker drawn from a position nobody has confirmed in a while may be
+  /// wrong, so it fades out rather than staying at full strength. Even with a
+  /// far tier this happens: a player who disconnects stops arriving in either
+  /// tier.
   pub fn player_age_secs(&self, p: usize) -> Option<f32> {
     if !self.knows_player(p) {
       return None;
@@ -756,10 +747,9 @@ impl Client {
   /// speed scale at T. The server stepped these enemies against its own players
   /// and its own clock at the moment it produced the state on screen, so this
   /// is the reconstruction of what the rule actually consumed, where the newest
-  /// player array would be an input from a different timeline (the enemy-aim
-  /// entry in IMPROVEMENTS, now closed). It is authoritative-derived either
-  /// way; feeding a locally *predicted* position in here is the mistake that
-  /// once made the whole horde lunge whenever the local player moved.
+  /// player array would be an input from a different timeline. It is
+  /// authoritative-derived either way; feeding a locally *predicted* position in
+  /// here makes the whole horde lunge whenever the local player moves.
   fn enemy_ctx(&self) -> std::sync::Arc<EnemyCtx> {
     std::sync::Arc::new(EnemyCtx {
       players: self.drawn_players(),
@@ -794,19 +784,18 @@ impl Client {
       .collect()
   }
 
-  /// How many shots this client is holding, live or not yet due. A readout, and
-  /// the number that showed the old design dropping every shot at low rates.
+  /// How many shots this client is holding, live or not yet due. A readout.
   pub fn shots_held(&self) -> usize {
     self.shots.len()
   }
 
-  /// Where to *draw* each player: interpolated between samples, dead reckoned a
-  /// little way past the newest, and held after that.
+  /// Where to *draw* each player: interpolated between samples and held at the
+  /// newest after that.
   ///
   /// Rendered a send interval in the past, which is what lets two samples
   /// bracket the target and makes the motion continuous. The local player is
   /// drawn from here too, the same as everyone else: there is no predicted
-  /// position to substitute any more.
+  /// position to substitute.
   pub fn render_players(&self, at: RenderAt) -> Vec<Vec2> {
     let target = Some(at.0);
     self
@@ -884,8 +873,8 @@ impl Client {
     self.observe_arrival(recv_ms);
     self.arrivals.observe(frame.server_time_ms, recv_ms);
     // Health rides the timeline like everything else. Applying it on arrival
-    // put the bar one render delay ahead of the body it is drawn over, so a hit
-    // showed before the contact that caused it was visible.
+    // puts the bar one render delay ahead of the body it is drawn over, so a hit
+    // shows before the contact that caused it is visible.
     if !frame.vitals.is_empty() {
       self.health_queue.push((frame.server_time_ms, frame.vitals.clone()));
     }
@@ -934,8 +923,8 @@ impl Client {
 
     // A velocity is only meaningful over a real interval. Two samples a couple of
     // milliseconds apart divide a small position difference by a smaller time and
-    // produce a spike, which the view then dead reckons along: that is what made
-    // peers look worse than the teleporting they replaced.
+    // produce a spike, which a view dead reckoning along it would fling across
+    // the screen.
     if gap_ms >= MIN_VELOCITY_GAP_MS {
       let previous = self.players[p];
       let elapsed = gap_ms as f32 / 1000.0;
@@ -1052,8 +1041,8 @@ impl Client {
     // ten). These are not. `entered` carries the entity in full, `left` names it
     // outright, and a sample is an absolute position, so applying them is
     // idempotent and applying a superset is harmless. Discarding instead starves
-    // the client, and measurably: an earlier version of this did, and at 25% loss
-    // the mirror emptied out while every agreement check read perfect.
+    // the client, measurably: at 25% loss the mirror emptied out while every
+    // agreement check read perfect.
     // A gap in the sequence is a dropped frame: every frame is numbered, the link
     // is ordered, so a jump of more than one means the wire lost the ones in
     // between. This is the direct measure of whether frames are being dropped.
@@ -1061,8 +1050,7 @@ impl Client {
     // sequence, and tears itself down if this is a full baseline (which the
     // server only sends when it can no longer reach this mirror by deltas, so
     // merging into the old contents would keep the very drift it is repairing).
-    // Only the enemy set is torn down; players, coins and wallets are absolute in
-    // every packet already.
+    // Only the enemy set is torn down; coins are absolute in every packet.
     // The panel can turn generations off to demonstrate what they prevent. The
     // mirror rebuilds when it changes, because the key space itself changes.
     self.enemies.set_generations(controls.generational_ids);
@@ -1070,8 +1058,6 @@ impl Client {
     self.now_ms = recv_ms;
     let generational = controls.generational_ids;
 
-    // The entity stream still carries the players, so a client is never without
-    // them, and both streams feed the same buffer on the same server timeline.
     // Shots arrive as events and are flown locally, so this only folds in what
     // started and what ended early.
     self.shots.extend(packet.shots_fired.iter().copied());
@@ -1082,8 +1068,6 @@ impl Client {
       self.nova_at_ms = packet.nova_at_ms;
     }
     self.crowds.clone_from(&packet.crowds);
-    // This packet is being applied because its instant has come, so its health
-    // is due now; the guard only stops it undoing a newer player-stream sample.
 
     for &(pos, amount) in &packet.hits {
       self.popups.push(DamagePopup { pos, amount, age: 0.0 });
@@ -1153,10 +1137,10 @@ impl Client {
     // The believed balance is **the confirmed value plus what is outstanding**
     // rather than a number maintained independently.
     //
-    // The independent version was the first attempt and it drifted by 115 coins
-    // over a run, because it modelled income and not spending: every purchase the
-    // server approved decremented the authoritative balance and left the local
-    // one untouched. Deriving it instead makes prediction an *offset on confirmed
+    // An independently maintained number drifted by 115 coins over a run,
+    // because it modelled income and not spending: every purchase the server
+    // approved decremented the authoritative balance and left the local one
+    // untouched. Deriving it instead makes prediction an *offset on confirmed
     // state*, which is the same shape as replaying unacknowledged inputs over an
     // authoritative snapshot; it cannot drift because it keeps no running total
     // of its own. Anything the server does that the client did not model is
@@ -1236,9 +1220,8 @@ impl Client {
         // Counted on the *removal* rather than the announcement. Recovery deliberately
         // repeats an announcement until it is acknowledged, and the mirror
         // absorbs the repeats idempotently; a counter that read the wire
-        // instead of the state counted one nova's deaths two or three times,
-        // an RTT apart, and everything downstream of it (the inferred pulse
-        // ring) fired again with each repeat.
+        // instead of the state would count one nova's deaths two or three
+        // times, an RTT apart.
         if died {
           self.deaths_seen += 1;
         }
@@ -1353,17 +1336,11 @@ impl Client {
     self.now_ms += dt_ms;
     let dt = dt_ms as f32 / 1000.0;
 
-    // One observed send interval, which is the minimum for two samples to bracket
-    // the target, plus enough to cover how irregular arrivals actually are.
+    // The render delay the server declared. It has to cover one send interval,
+    // the minimum for two samples to bracket the target, plus how irregular
+    // arrivals are.
     //
-    // Observed rather than configured. The client never asks what rate the
-    // server was set to: it measures the gap between arrivals and the spread in
-    // their lateness, so the server is free to send at whatever rate it likes,
-    // change it live or have the number mean something different by the time it
-    // arrives. A client that trusts a configured rate is wrong while the rate is
-    // being changed.
-    //
-    // Only the *interpolated* stream constrains this. Enemies are simulated
+    // Only the *interpolated* stream constrains it. Enemies are simulated
     // forward from one sample, so however slowly they arrive they do not widen
     // the buffer; the peers need two samples to interpolate between, so they do.
     self.render_clock.set_delay(self.render_delay_ms);
@@ -1457,9 +1434,8 @@ impl Client {
       self.last_difficulty_tier = tier;
       self.notices.push((format!("difficulty up  (x{tier})  enemies faster, hits harder"), 0.0));
     }
-    // Expiry only. The server owns when a shot ends: it stops listing one that
-    // hit something, and the list is replaced wholesale by each packet as it is
-    // played out.
+    // Expiry only. The server owns when a shot ends early and says so in
+    // `shots_ended`.
     // Expiry is computed, never announced: both sides hold the fire time and the
     // lifetime is a constant, so a message saying so would be redundant.
     // Dropped once the *render* instant has passed it rather than once now has,
@@ -1471,9 +1447,10 @@ impl Client {
     applied
   }
 
-  /// Which packets have arrived. Twelve bytes back up the wire, and the whole
-  /// input to the server's recovery: it needs to know which of its deltas the
-  /// client is actually holding, and nothing else.
+  /// Which packets this client has applied, as a sequence number and a 64-bit
+  /// mask back up the wire. With the digest this is the whole input to the
+  /// server's recovery: it needs to know which of its deltas the client is
+  /// actually holding.
   pub fn acks(&self) -> &AckWindow {
     self.enemies.acks()
   }
@@ -1624,8 +1601,8 @@ mod tests {
 
   #[test]
   fn the_enemy_rule_reads_the_players_as_drawn_not_as_newest() {
-    // The enemy-aim finding: enemies stand at the render instant, so the
-    // context their rule reads has to be the players at that instant. Feeding
+    // Enemies stand at the render instant, so the context their rule reads has
+    // to be the players at that instant. Feeding
     // the newest array made an enemy chase a point up to a render delay ahead
     // of the marker it was visibly chasing.
     let client = client_with_a_moving_player(500);
@@ -1675,10 +1652,9 @@ mod tests {
 
   #[test]
   fn the_pulse_phase_is_read_at_the_render_instant() {
-    // The frame clock had two writers on two timelines, and the pulse phase
-    // wobbled between them. Now it is the same T everything else in the frame
-    // is evaluated at: here the newest sample's clock has the pulse off while
-    // the render instant has it on, and the render instant wins.
+    // The pulse phase is read at the same T everything else in the frame is
+    // evaluated at: here the newest sample's clock has the pulse off while the
+    // render instant has it on and the render instant wins.
     let mut client = Client::new(0, 2);
     client.set_render_delay(500);
     client.believed_upgrades.push(Upgrade::Repulsor);
@@ -1742,10 +1718,9 @@ mod tests {
   #[test]
   fn a_repeated_death_announcement_is_counted_once() {
     // Recovery deliberately repeats an announcement until it is acknowledged,
-    // and the mirror absorbs the repeats idempotently. The death counter did
-    // not: it read the wire instead of the state, so one nova's burst was
-    // counted again with every repeat, an RTT apart, and the pulse ring
-    // inferred from it visibly re-fired.
+    // and the mirror absorbs the repeats idempotently. A death counter that
+    // read the wire instead of the state would count one nova's burst again
+    // with every repeat, an RTT apart.
     use crate::sim::types::Spawn;
     let mut client = Client::new(0, 1);
     let controls = Controls::default();
@@ -1804,9 +1779,8 @@ mod tests {
 
   #[test]
   fn a_shot_is_flown_from_its_event_and_ends_when_told() {
-    // Shots are events now: an origin, a velocity and a time, evaluated at the
-    // render instant. Two things this has to get right, and the second is why
-    // the idea was reverted the first time it was tried.
+    // Shots are events: an origin, a velocity and a time, evaluated at the
+    // render instant. Two things this has to get right.
     let controls = Controls::default();
     let mut client = client_with_a_moving_player(500);
     let at = client.render_at().expect("timeline started").server_time_ms();
@@ -1826,8 +1800,8 @@ mod tests {
     assert_eq!(drawn.len(), 1);
     assert!((drawn[0].x - 50.0).abs() < 1.0, "half a second at 100 px/s from the origin: {drawn:?}");
 
-    // An early end, which is the thing a client cannot derive and the reason
-    // the first attempt at this flew shots through the enemies they killed.
+    // An early end, which is the thing a client cannot derive; without it shots
+    // fly through the enemies they killed.
     let mut ended = Packet { server_time_ms: at, seq: 2, ..Default::default() };
     ended.shots_ended.push(7);
     client.apply_packet(&ended, at, &controls);
@@ -1928,9 +1902,8 @@ mod tests {
 
   #[test]
   fn the_pulse_ring_is_a_pure_function_of_the_declared_timestamp() {
-    // The ring used to be inferred from a burst of deaths per tick, and the
-    // inference re-fired on every recovery repeat of the same announcements.
-    // Declared, there is nothing to trigger: the age is the frame clock minus
+    // Declared rather than inferred from a burst of deaths, so a recovery repeat
+    // of the same announcements has nothing to trigger: the age is the frame clock minus
     // the timestamp the packet carries, so a repeat is the same ring and the
     // fade needs no local timer to decay.
     let mut client = client_with_a_moving_player(500);
@@ -1951,10 +1924,9 @@ mod tests {
 
   #[test]
   fn the_marker_stays_on_the_timeline_at_the_deepest_render_delay() {
-    // The detached-marker bug, found by playing at 600 ms. The history buffer
-    // held ~200 ms, so past that the view clamped every render to the oldest
-    // snapshot it still had: the marker rode near now while the shots were
-    // faithfully at T, and the weapon appeared to fire from the player's past.
+    // A history buffer of ~200 ms clamps every render past that to the oldest
+    // snapshot it still has: at 600 ms the marker rides near now while the shots
+    // are faithfully at T and the weapon appears to fire from the player's past.
     let mut client = Client::new(0, 1);
     client.set_render_delay(crate::sim::types::RENDER_DELAY_MAX_MS);
     // Three seconds of 30 Hz samples of a player moving at a steady 0.19 px/ms.

@@ -1,6 +1,6 @@
 //! The skirmish, scripted: no window, no socket. One human commander plays
-//! the bot for a stretch using the same policy the bot does. The run fails if
-//! the offers never happened or the battles never concluded.
+//! the bot for a stretch using a policy like the bot's own. The run fails if
+//! the field was not played or no offer ever opened.
 
 use std::sync::Arc;
 use std::time::Duration;

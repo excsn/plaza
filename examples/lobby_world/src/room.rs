@@ -228,8 +228,6 @@ impl StateLogic<RoomOp, PlayerId, ArenaState> for ArenaLogic {
           return Ok(LogicOutput::none());
         };
 
-        // Both checks: the lobby's capacity check and this connect are not
-        // atomic, so the room may have filled in between.
         // Both gates: a consumed reservation, then a seat. The lobby's
         // capacity check and this connect are not atomic, so the room may
         // have filled in between; an unreserved or unseated arrival watches.
@@ -373,8 +371,8 @@ impl StateLogic<RoomOp, PlayerId, ArenaState> for ArenaLogic {
               ));
             }
 
-            // No `authorize` hook ahead of `StateLogic`, so the sender check
-            // lives in the rule.
+            // This arena installs no `OpGuard`, so the sender check lives in
+            // the rule.
             RoomOp::Reserve { player } => {
               if !source.is_system() {
                 return Err(StateLogicError::InvalidOperation(

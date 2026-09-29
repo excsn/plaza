@@ -81,7 +81,7 @@ impl Div<f32> for Vec2 {
     Self {
       x: self.x / rhs,
       y: self.y / rhs,
-    } // Panics if rhs is 0
+    } // Infinite or NaN if rhs is 0
   }
 }
 
@@ -232,9 +232,7 @@ impl Quat {
       let sin_theta_0 = theta_0.sin();
 
       // `cos(theta) - dot * sin(theta) / sin(theta_0)`, which reduces to the
-      // standard `sin((1 - t) * theta_0) / sin(theta_0)`. This read
-      // `(theta_0 - theta).cos()`, which equals `theta.cos()` only at `t == 0.5`,
-      // the one value the test covered; at `t == 1.0` slerp did not reach `end`.
+      // standard `sin((1 - t) * theta_0) / sin(theta_0)`.
       let s0 = theta.cos() - dot * sin_theta / sin_theta_0;
       let s1 = sin_theta / sin_theta_0;
 

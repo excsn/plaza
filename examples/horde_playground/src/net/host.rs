@@ -4,9 +4,8 @@
 //! The HTTP side of that (the port, the served directory, the version stamping
 //! that keeps a browser from running yesterday's bundle against today's server
 //! and leaving signals to the process) is [`plaza_session::host::Host`]. It is
-//! the same in every listen server and this repository used to have two copies
-//! of it. This module keeps the parts specific to this arena: which state,
-//! which logic and what tick rate.
+//! the same in every listen server. This module keeps the parts specific to
+//! this arena: which state, which logic and what tick rate.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;

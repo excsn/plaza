@@ -19,10 +19,9 @@
 //! rather than an offset. Applying them is idempotent and applying a superset
 //! is harmless.
 //!
-//! Discarding instead empties the mirror. An earlier version of the example
-//! this came from did that and at 25% packet loss the mirror emptied out while
-//! every agreement check still read perfect, because the checks only ran over
-//! what had been applied.
+//! Discarding instead empties the mirror. At 25% packet loss a mirror that
+//! discards empties out while every agreement check still reads perfect,
+//! because the checks only run over what has been applied.
 //!
 //! # What it counts and why each number is separate
 //!
@@ -348,7 +347,7 @@ mod tests {
     DeltaMirror::new()
   }
 
-  /// Switching the key scheme at runtime, which nothing was exercising.
+  /// Switching the key scheme at runtime.
   ///
   /// The failure it prevents is a mirror keyed two ways at once, where entries
   /// filed under the old scheme are unreachable under the new one and read as a

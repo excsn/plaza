@@ -234,6 +234,10 @@ impl Arena {
   }
 }
 
+/// Publishes the panel's impairment sliders to the transport that owns the
+/// link. The arena states what the link should be and stops there.
+pub use plaza_session::LinkSink;
+
 /// The stateless half plaza acts through.
 ///
 /// It carries two shared slots rather than owning that state: `controls` is
@@ -243,10 +247,6 @@ impl Arena {
 /// the whole game lived in one process. A headless server has neither a panel nor
 /// a screen, so its `view` is `None` and its `controls` is the fixed set it
 /// launched with.
-/// Publishes the panel's impairment sliders to the transport that owns the
-/// link. The arena states what the link should be and stops there.
-pub use plaza_session::LinkSink;
-
 pub struct ArenaLogic {
   controls: Arc<Mutex<Controls>>,
   view: Option<Arc<Mutex<HostView>>>,
@@ -281,8 +281,7 @@ impl ArenaLogic {
   /// Pushes the panel's link settings down to the transport when they change.
   fn publish_link(&self, controls: &Controls) {
     let Some(link) = &self.link else { return };
-    // One way, applied in each direction, which is what the slider has always
-    // meant here.
+    // The slider is a one-way value, applied in each direction.
     let one_way = DirectionProfile {
       delay: Duration::from_millis(controls.latency_ms),
       jitter: Duration::from_millis(controls.jitter_ms),
@@ -551,10 +550,9 @@ mod tests {
   /// The arena's only part in impairment is turning the panel's numbers into a
   /// link profile, once and only when they change.
   ///
-  /// Holding frames back is now the session's job. So is the guarantee the
-  /// deleted jitter test used to make here: that a jittered frame never
-  /// overtakes an earlier one. Both are asserted in `plaza_session`'s
-  /// conditioner, against the queue that actually does it.
+  /// Holding frames back is the session's job. So is the guarantee that a
+  /// jittered frame never overtakes an earlier one. Both are asserted in
+  /// `plaza_session`'s conditioner, against the queue that actually does it.
   #[test]
   fn the_sliders_are_published_to_the_link_rather_than_applied_here() {
     let controls = Controls { latency_ms: 40, jitter_ms: 300, loss_pct: 25.0, ..Controls::default() };

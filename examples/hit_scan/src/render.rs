@@ -1,8 +1,8 @@
 //! Drawing the arena.
 //!
-//! Three things are drawn that a shooter cannot normally see. They are the
-//! position the server rewound to, the sight line that decided a kill and the
-//! gap between somebody's drawn position and their real one.
+//! Two things are drawn that a shooter cannot normally see: the position the
+//! server rewound a target to and a tracer coloured by what the rewind did to
+//! the shot.
 
 use macroquad::prelude::*;
 

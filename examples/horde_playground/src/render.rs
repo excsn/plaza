@@ -365,7 +365,7 @@ fn draw_coins(world: &World, controls: &Controls, cam: &Camera) {
 /// Both exist because nothing else in the game says an upgrade happened. The
 /// wallet changing is the only signal the protocol carries and a number quietly
 /// going down while enemy behaviour quietly changes is indistinguishable from a
-/// bug, which is how it read before this.
+/// bug.
 pub fn draw_notices(world: &World, controls: &Controls, cam: &Camera) {
   // The coin banner only when coins exist; the notice stack always, so a
   // difficulty step-up announces itself even with coins off.
@@ -485,8 +485,8 @@ pub fn draw_client_world(client: &horde_playground::net::client::NetClient, cont
   //
   // Before the first packet lands there is no instant and nothing remote to draw,
   // which is the join transient: it lasts one render delay and everything falls
-  // back to the newest sample it has, so it degrades to the old behaviour rather
-  // than to a blank screen.
+  // back to the newest sample it has, so it degrades to drawing that rather than
+  // to a blank screen.
   let at = client.sim.render_at();
 
   // The ghost is ahead of the markers: packets held but not yet due. Gated on the
@@ -518,7 +518,7 @@ pub fn draw_client_world(client: &horde_playground::net::client::NetClient, cont
   let drawn = at.map(|at| client.sim.render_players(at)).unwrap_or_else(|| client.sim.players().to_vec());
   draw_nova(client.nova_flash_age(), &drawn, you, cam);
   if controls.coins {
-    // No special case for your own ring any more. Every player, including you,
+    // No special case for your own ring. Every player, including you,
     // is drawn at the same render instant, so a ring pinned to its owner cannot
     // lag the marker it belongs to.
     for (i, player) in drawn.iter().enumerate() {
@@ -563,7 +563,7 @@ pub fn draw_client_world(client: &horde_playground::net::client::NetClient, cont
 }
 
 /// The host's omniscient view: the client's believed slice drawn over the
-/// authoritative truth, exactly as the offline playground drew it.
+/// authoritative truth, as the offline playground draws it.
 #[cfg(all(feature = "server", feature = "client", feature = "websocket"))]
 pub fn draw_host_world(view: &horde_playground::net::arena::HostView, client: &horde_playground::net::client::NetClient, controls: &Controls, cam: &Camera) {
   let you = client.my_position();
@@ -571,7 +571,7 @@ pub fn draw_host_world(view: &horde_playground::net::arena::HostView, client: &h
   //
   // A host may draw it because it *is* the server. It is on by default because
   // every delay here is deliberate and each one is invisible on its own. A peer is drawn interpolated, a send interval or two in
-  // the past; your own player is drawn predicted, slightly ahead; an enemy is
+  // the past; your own player is drawn on that same timeline; an enemy is
   // drawn wherever the chosen strategy puts it. Without something to compare
   // against, a wrong client and a correct one look identical, which is how
   // several bugs here went unnoticed for days.
@@ -585,9 +585,9 @@ pub fn draw_host_world(view: &horde_playground::net::arena::HostView, client: &h
         draw_circle(x, y, 3.0, C_TRUTH);
       }
     }
-    // The same for the *players*, which was missing and should not have been:
-    // the only way to see how far a peer trails or how much your prediction is
-    // being corrected was to infer it from where their shots came out.
+    // The same for the *players*: without it the only way to see how far a
+    // peer or your own marker trails the truth is to infer it from where their
+    // shots come out.
     for (i, pos) in view.players.iter().enumerate() {
       if pos.dist(you) <= VIEW_RADIUS * 1.3 {
         let (x, y) = cam.at(*pos);
@@ -701,8 +701,8 @@ pub fn draw_client_minimap(client: &horde_playground::net::client::NetClient, co
     }
     // Faded by how stale the position is and dropped once nothing has confirmed
     // it for a while. A marker at full colour says the peer is there now.
-    // Drawing one from a sample nobody has refreshed in a minute made the map
-    // show teammates frozen in places they had long left. A squadmate is never
+    // Drawing one from a sample nobody has refreshed in a minute makes the map
+    // show teammates frozen in places they have long left. A squadmate is never
     // faded or dropped: the fade is for far-tier markers, which are stale
     // guesses about strangers, while a squadmate is in the frame because this
     // client asked for them, so their position is as fresh as that of anyone

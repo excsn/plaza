@@ -43,10 +43,8 @@ const REAP_EVERY: Duration = Duration::from_secs(15);
 /// The pre-spawned arenas are never reaped.
 const ROOM_IDLE_AFTER: Duration = Duration::from_secs(45);
 
-/// Only the match queue needs the lobby to advance time and it measures its
-/// patience in seconds.
-/// Longer than a placement takes to dial, shorter than the seat reservation it
-/// pairs with, which currently has no window of its own.
+/// Longer than a placement takes to dial and shorter than `RESERVATION_WINDOW`,
+/// the seat reservation it pairs with.
 pub(crate) const PLACEMENT_WINDOW: Duration = Duration::from_secs(30);
 
 /// Deliberately longer than `PLACEMENT_WINDOW`. The ticket is spent at the route
@@ -54,6 +52,8 @@ pub(crate) const PLACEMENT_WINDOW: Duration = Duration::from_secs(30);
 /// windows strand a client that dialled at the edge.
 pub(crate) const RESERVATION_WINDOW: Duration = Duration::from_secs(45);
 
+/// Only the match queue needs the lobby to advance time and it measures its
+/// patience in seconds.
 const LOBBY_TICK_HZ: u32 = 4;
 
 /// The only place a `PlayerId` is created.

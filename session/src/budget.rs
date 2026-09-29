@@ -3,8 +3,8 @@
 //! The outbound twin of [`gate`](crate::gate), pointing the other way and
 //! acting somewhere else. A client on a slow link is sent what a client on
 //! fibre is sent and the only thing between it and its link is its bounded
-//! outbound queue, so its failure is binary: keep up or lose frames, be
-//! disconnected or stall the controller, whichever
+//! outbound queue, so its failure is binary. It keeps up. Otherwise it loses
+//! frames or is disconnected, whichever
 //! [`Overflow`](crate::manager::Overflow) says. There is no middle where it is
 //! sent *fewer, complete* frames. This module is that middle.
 //!
@@ -26,8 +26,7 @@
 //! rate draws. A client declaring what its link can carry and the server
 //! clamping the declaration is the shape shipping engines use and both halves
 //! are the application's lines to write. There is no default: a connection
-//! with no budget is always owed a frame, as every connection was before this
-//! module existed.
+//! with no budget is always owed a frame.
 //!
 //! Credit is charged for **all** traffic, ops and events as well as snapshots,
 //! because the link carries all of it. A connection can therefore run into

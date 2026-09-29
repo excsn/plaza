@@ -49,8 +49,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let wren = Agent::new_human(1);
   let (_conn, inbox) = session.connect(wren.clone()).await?;
 
-  // Wren fires ~170ms after each signal, claiming the moment the signal's own
-  // stamp names. The second contest jumps the gun on purpose.
+  // Wren fires ~170ms after each signal, claiming the signal's own stamp plus
+  // 170ms. The second contest jumps the gun on purpose.
   let hand_session = session.clone();
   let hand = tokio::spawn(async move {
     let mut contests_seen = 0u32;

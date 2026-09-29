@@ -34,12 +34,11 @@ const BUCKET_MS: u64 = 500;
 /// `per_sec` and `mean` describe **recent** traffic, from a rolling window;
 /// `total` and `samples` are for the whole life of the meter.
 ///
-/// These were once lifetime averages, `total / elapsed`. A lifetime average
-/// chasing a steady state that has risen converges to it *asymptotically*: it
-/// climbs by less and less but keeps climbing for as long as the session runs.
-/// On screen that reads as bandwidth slowly increasing and never settling,
-/// which is a bug report that took three rounds of investigation to trace back
-/// to the meter rather than to the thing being metered. It also makes a live
+/// A lifetime average, `total / elapsed`, chasing a steady state that has risen
+/// converges to it *asymptotically*: it climbs by less and less but keeps
+/// climbing for as long as the session runs. On screen that reads as bandwidth
+/// slowly increasing and never settling, which looks like a fault in the thing
+/// being metered rather than in the meter. It also makes a live
 /// panel useless for tuning, since a slider you just moved is one second
 /// against twenty minutes of history and barely shifts the number.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -323,18 +322,18 @@ mod tests {
 
   #[test]
   fn the_readings_a_player_reported_are_reproduced_by_the_defect() {
-    // This replays what the old meter did and checks it against two readings
-    // taken from a running host, three minutes apart, with no setting touched
-    // between them: 127.6 KiB/s at tick 72394 and 143.9 KiB/s at tick 82039.
+    // This replays the defect and checks it against two readings taken from a
+    // running host, three minutes apart, with no setting touched between them:
+    // 127.6 KiB/s at tick 72394 and 143.9 KiB/s at tick 82039.
     //
-    // The old behaviour was two faults compounding. `per_sec` was the session
-    // mean rather than a rate, and `reset` (which a settings change triggers)
-    // zeroed the total while the caller went on supplying an absolute clock, so
-    // the denominator still counted the time before the reset.
+    // The defect is two faults compounding. `per_sec` is the session mean
+    // rather than a rate. A `reset` (which a settings change triggers) zeroes
+    // the total while the caller goes on supplying an absolute clock, so the
+    // denominator still counts the time before the reset.
     //
     // Nothing here is fitted to those readings. The rate is the one measured
-    // independently by `examples/players.rs` at these settings, and the reset
-    // time is when the player count was changed.
+    // independently by `examples/horde_playground/examples/players.rs` at these
+    // settings. The reset time is when the player count was changed.
     const TRUE_RATE: f64 = 265.0 * 1024.0; // bytes per second, measured
     const RESET_AT_MS: u64 = 628_000;
     let old_per_sec = |total: f64, absolute_ms: u64| total / (absolute_ms as f64 / 1000.0) / 1024.0;
@@ -350,7 +349,7 @@ mod tests {
       );
     }
 
-    // And the same world through the meter as it is now reads the real rate
+    // The same world through `RateMeter` reads the real rate
     // straight away, rather than approaching it over the following hour.
     let mut meter = RateMeter::new();
     let mut now = RESET_AT_MS;

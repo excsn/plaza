@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Build the browser client, then host it.
 #
-# One process serves the page, the wasm, *and* the WebSocket battlefield on one
-# port, so a joiner gets a single URL and there is a real server to connect to.
+# One process serves the page, the wasm, *and* the WebSocket town on one port,
+# so a joiner gets a single URL and there is a real server to connect to.
 #
 # The build is wasm-build.sh, called here rather than duplicated, so the two
 # scripts cannot drift into building differently.

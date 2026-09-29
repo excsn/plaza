@@ -111,8 +111,9 @@ pub fn positions_named(op: &FogOp) -> Vec<(f32, f32)> {
 
 /// How many places in this op the recipient could not see.
 ///
-/// A player's own scouts are exempt because `positions_named` reads only
-/// `enemy_units`, so a friendly position is never checked here.
+/// A player's own scouts are exempt because `positions_named` reads
+/// `enemy_units` and never the recipient's own units, so a friendly position
+/// is never checked here.
 pub fn leaks_in(state: &FogState, recipient: PlayerId, op: &FogOp) -> usize {
   positions_named(op)
     .into_iter()

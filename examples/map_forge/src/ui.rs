@@ -1,5 +1,5 @@
-//! The panel: the palette, the locks, the roster, the playtest switch and
-//! the collaboration counters.
+//! The panel: the palette, the locks, the playtest switch and the
+//! collaboration counters.
 
 use map_forge::net::client::{NetClient, Status};
 use map_forge::protocol::{ForgePhase, REGIONS, TILE_EMPTY, TILE_HARD, TILE_SOFT};

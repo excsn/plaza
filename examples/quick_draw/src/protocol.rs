@@ -124,7 +124,8 @@ pub struct Verdict {
   pub winner_subtick: Option<PlayerId>,
   /// Winner under plain arrival order, kept beside it for the comparison.
   pub winner_arrival: Option<PlayerId>,
-  /// Both shots named the same tick, the window arrival order decides today.
+  /// Both shots named the same tick, where tick resolution alone falls back
+  /// to arrival order.
   pub same_tick: bool,
   /// The two rules named different winners.
   pub disagreed: bool,

@@ -47,8 +47,8 @@ pub const PING_INTERVAL_MS: u64 = 1000;
 /// finish by itself (probes, pong bookkeeping) already has been.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Arrival {
-  /// The handshake finished, and this pump's `Hello` has gone out. Say
-  /// whatever your protocol says first.
+  /// The handshake finished and this pump's `Hello` has gone out, followed by
+  /// its credential if it has one. Say whatever your protocol says first.
   Opened,
   /// A batch of application ops, undecoded: the pump cannot know your `Op`
   /// type, and the decode is work worth timing where it happens.

@@ -213,10 +213,8 @@ fn draw_wire(ui: &mut egui::Ui, extras: &HostExtras) {
     ui.weak("the first number falls as the curtain thickens; the second does not move");
 
     ui.separator();
-    // `IMPROVEMENTS` makes the wire-encoding primitives depend on this
-    // measurement, which had not been taken before. Compact MessagePack makes
-    // struct fields positional but still writes every variant name out as a
-    // string.
+    // Compact MessagePack makes struct fields positional but still writes
+    // every variant name out as a string.
     warn_line(
       ui,
       format!("{:.1}% of these bytes is the names of variants", stats.variant_name_share() * 100.0),

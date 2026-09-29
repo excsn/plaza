@@ -320,8 +320,7 @@ impl NetClient {
   /// Health as it is being drawn, which trails what arrived.
   ///
   /// Presentation only. A health bar that snaps says a number changed; one that
-  /// runs down says something was hit, and this example had no way at all to
-  /// tell those apart.
+  /// runs down says something was hit.
   pub fn shown_health(&self, seat: u16) -> f32 {
     self.shown.iter().find(|(s, _)| *s == seat).map(|(_, h)| *h).unwrap_or(0.0)
   }

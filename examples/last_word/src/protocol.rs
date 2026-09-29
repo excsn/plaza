@@ -34,7 +34,7 @@ pub const TEMPO_CAP: u8 = 10;
 
 /// A responder's window; silence passes.
 pub const RESPOND_MS: u64 = 7000;
-/// The turn owner's clock while they hold priority.
+/// The turn owner's clock while they hold priority over an empty stack.
 pub const TURN_LIMIT_MS: u64 = 15_000;
 /// The bot pretends to think this long.
 pub const BOT_THINK_MS: u64 = 400;

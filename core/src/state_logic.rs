@@ -151,8 +151,8 @@ impl<Op, ID: AgentId> LogicOutput<Op, ID> {
   /// Merges neighbouring ops that share a target into one entry.
   ///
   /// The controller sends one envelope per `TargetedOp`, and logic naturally
-  /// pushes one per event, so a tick that hid a mole and spawned another sent
-  /// two frames to everyone: two encodes, two fan-outs and two copies of the
+  /// pushes one per event, so without this a tick that hid a mole and spawned
+  /// another would send two frames to everyone: two encodes, two fan-outs and two copies of the
   /// frame overhead, which is often larger than the ops inside. The controller
   /// calls this before sending.
   ///
@@ -297,8 +297,6 @@ mod tests {
 
   #[test]
   fn an_input_describes_itself_without_allocating_on_the_tick_path() {
-    // Both of these used to be built eagerly, before the `debug!` that consumed
-    // them, so every tick paid for a string the log level then discarded.
     let ops: LogicInput<u8, u64> = LogicInput::AgentOps {
       source: Agent::new_human(7),
       ops: vec![1, 2, 3],

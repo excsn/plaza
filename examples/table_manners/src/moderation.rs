@@ -1,10 +1,9 @@
 //! The host's tools, over the library's readers.
 //!
-//! The transport this example used to carry is gone. Last activity comes from
-//! `agent_idle_for`, attribution from `agent_inbound`, the close from
-//! `deregister_agent`, and the drain from `disconnect_all`. What remains is
-//! policy: the timeout numbers, which seat survives which parting, and the
-//! book of seats held and barred.
+//! Last activity comes from `agent_idle_for`, attribution from
+//! `agent_inbound`, the close from `deregister_agent` and the drain from
+//! `disconnect_all`. What remains is policy: the timeout numbers, which seat
+//! survives which parting and the book of seats held and barred.
 //!
 //! The parting reason lives *here*, not in a transport: the host initiated
 //! every non-drop parting, so it already knows why, and a departure with no
@@ -202,12 +201,9 @@ impl Host {
   /// Whether a guest has been refused often enough to be removed rather than
   /// merely trimmed.
   ///
-  /// **The host no longer measures the rate.** The session does, at the door,
-  /// and a guest over it is already costing itself its own frames and nobody
-  /// else theirs; what is left here is the escalation, which is policy and
-  /// belongs to the party. That division is what changed: this used to be a
-  /// window the host advanced by hand, and the first frame over it removed a
-  /// guest, because removal was the only verdict available.
+  /// The session measures the rate at the door: a guest over it is already
+  /// costing itself its own frames and nobody else theirs. What is left here
+  /// is the escalation, which is policy and belongs to the party.
   pub fn over_rate(&self, key: u64) -> bool {
     self.shed(key) > FLOOD_TOLERANCE
   }
@@ -227,8 +223,8 @@ impl Host {
 
   /// Frames this guest sent in the current window, for the panel.
   ///
-  /// Advances the window itself: what used to do that was `over_rate`, and the
-  /// rate is the session's business now.
+  /// Advances the window itself. The session enforces the rate as a token
+  /// bucket and keeps no window.
   pub fn ops_this_window(&self, key: u64) -> u64 {
     let volume = self.manager.agent_inbound(&key);
     let now = tokio::time::Instant::now();

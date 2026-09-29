@@ -2,9 +2,9 @@
 //!
 //! The same treatment cube_yard gives its cubes, on a different shape: there is
 //! no floor here, so the bounds are a cube rather than a slab and a ship
-//! carries a seat id because a frame is a *subset* from the first stage.
-//! In a volume the recipient never holds the whole world, so an index into a
-//! fixed array would not identify the ship.
+//! carries a seat id because a frame is a *subset*. In a volume the recipient
+//! never holds the whole world, so an index into a fixed array would not
+//! identify the ship.
 
 use plaza_wire::bits::{BitReader, BitWriter};
 
@@ -19,6 +19,7 @@ use crate::sim::VOLUME;
 /// these and the outer ring of its field went still. That is the reason for the
 /// margin and for [`crate::sim::confine`].
 const POS: (f32, f32) = (-(VOLUME + 10.0), VOLUME + 10.0);
+/// At 16 bits over 820 units a step is 12.5mm, on ships a few units across.
 const POS_BITS: u32 = 16;
 
 /// Asserted, for the same reason cube_yard's are: a body outside these pins to
@@ -30,19 +31,18 @@ const _: () = assert!(
   "an offset must reach as far as the widest view the dial allows"
 );
 
-/// At 16 bits over 820 units a step is 12.5mm, on ships a few units across.
 const ROT_BITS: u32 = 9;
 
 /// Comfortably past the fastest thing in the volume, which is **not** a ship.
 ///
 /// A bolt inherits the velocity of whatever fired it, so a shot from a ship at
-/// full throttle travels at `BOLT_SPEED + MAX_SPEED`, which is 210 against the
-/// 128 this used to allow. Clamping it is worse here than an ordinary pin to
-/// the edge, because a straight shot's path is *extrapolated from its
-/// velocity*: the client would draw the whole flight at 128 while the server
-/// flew it at 210, and hits would land where nothing was ever drawn.
+/// full throttle travels at `BOLT_SPEED + MAX_SPEED`, which is 210. Clamping
+/// it is worse here than an ordinary pin to the edge, because a straight
+/// shot's path is *extrapolated from its velocity*: the client would draw the
+/// whole flight at the bound while the server flew it at 210 and hits would
+/// land where nothing was ever drawn.
 ///
-/// Thirteen bits rather than twelve keeps the step where it was after widening.
+/// Thirteen bits over this range give a step of 1/16 of a unit a second.
 const VEL: (f32, f32) = (-256.0, 256.0);
 const VEL_BITS: u32 = 13;
 
@@ -128,7 +128,7 @@ pub fn unpack(bytes: &[u8]) -> Option<Vec<ShipState>> {
 
 /// Bounds on an **offset from the observer**, rather than on a position.
 ///
-/// This is the stage-five idea and it follows from relevance: a frame only ever
+/// This follows from relevance: a frame only ever
 /// carries what is inside the view radius, so the offset it has to encode is
 /// bounded by that radius no matter how large the world is. Absolute
 /// quantisation spends a fixed number of bits over the whole volume, so
@@ -157,7 +157,7 @@ pub const fn ship_bits_relative() -> usize {
 /// the observer's own ship, which the client is guaranteed to be sent.
 ///
 /// One bit per ship says which arm carried it. `REL` is sized to the view
-/// radius, and the radius is no longer the only way into a frame: a held lock
+/// radius. The radius is not the only way into a frame: a held lock
 /// keeps its ship in frame from anywhere in the volume, and an offset past the
 /// bound would clamp, landing the ship up to the width of the world away. Such
 /// a ship crosses absolutely instead, in the same bounds the absolute path
@@ -388,7 +388,7 @@ mod tests {
     }
   }
 
-  /// The stage-five measurement: what each scheme costs as the world grows.
+  /// What each scheme costs as the world grows.
   ///
   /// Absolute quantisation spends a fixed number of bits over the whole volume,
   /// so its error depends on *how big the world is*. A relative offset is
@@ -421,9 +421,9 @@ mod tests {
     let (_, small_abs, small_rel) = readings[0];
     let (_, big_abs, big_rel) = readings[readings.len() - 1];
     assert!(big_abs / small_abs > 100.0, "absolute error should track the world size");
-    // Asserted flat rather than merely slower-growing. The first version of
-    // this compared growth ratios and passed while relative was worse than
-    // absolute at every size, since a ratio does not show which curve is higher.
+    // Asserted flat rather than merely slower-growing. A comparison of growth
+    // ratios passes while relative is worse than absolute at every size, since
+    // a ratio does not show which curve is higher.
     assert_eq!(small_rel, big_rel, "relative error must not know how big the world is");
     assert!(
       big_rel < big_abs / 100.0,
@@ -549,8 +549,8 @@ mod tests {
     assert!(packed * 2 < full, "{packed} against {full} is not worth the reader");
   }
 
-  /// The clamp this example shipped was invisible to every round-trip test,
-  /// because a synthetic scene stays where it is put. Only the real simulation
+  /// A clamp is invisible to every round-trip test, because a synthetic scene
+  /// stays where it is put. Only the real simulation
   /// finds the positions the flight model actually reaches.
   #[test]
   fn a_real_flight_never_clamps() {

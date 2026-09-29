@@ -290,7 +290,7 @@ impl Iterator for Steps {
 
 impl ExactSizeIterator for Steps {}
 
-/// Something that should happen every `interval_ms`, driven by elapsed time.
+/// Something that should happen every interval, driven by elapsed time.
 ///
 /// The same accumulator as [`FixedTimestep`] with a different consumption rule,
 /// and separate because the two answer different questions. A fixed step asks
@@ -403,14 +403,14 @@ mod rate_tests {
 
   #[test]
   fn a_rate_that_does_not_divide_a_thousand_is_exact_anyway() {
-    // Pinned in nanoseconds, because this number once disagreed with the
+    // Pinned in nanoseconds, because this number has to agree with the
     // server's driver.
     assert_eq!(FixedTimestep::from_hz(60).step(), Duration::from_secs_f64(1.0 / 60.0));
     assert_eq!(FixedTimestep::from_hz(60).step().as_nanos(), 16_666_667);
     assert_eq!(FixedTimestep::from_hz(50).step(), Duration::from_millis(20));
 
     // A second of elapsed time is 59 whole steps with the 60th owed 20ns later,
-    // where the old integer-millisecond step produced 62 and ran 4.2% fast.
+    // where an integer-millisecond step would produce 62 and run 4.2% fast.
     // Fed in frame-sized pieces, since one `advance` is capped by the max frame
     // and would otherwise report the cap rather than the rate.
     let mut clock = FixedTimestep::from_hz(60);

@@ -17,8 +17,8 @@
 //!   harder (slower, steadier).
 //!
 //! The knobs are yours to set: pick them for your signal or wrap the filter in
-//! a policy that adapts them. `f32` matches the rest of the crate;
-//! latency and jitter magnitudes never need more.
+//! a policy that adapts them. `f32` is enough: latency and jitter
+//! magnitudes never need more.
 
 /// A one-dimensional Kalman filter over a scalar signal.
 #[derive(Debug, Clone)]
@@ -126,7 +126,7 @@ impl ScalarKalman {
 mod tests {
   use super::*;
 
-  /// Retuning a live filter, which nothing was calling.
+  /// Retuning a live filter.
   ///
   /// The gain depends on the ratio of the two knobs: `Q` says how much the
   /// truth is expected to move between measurements and `R` says how noisy a

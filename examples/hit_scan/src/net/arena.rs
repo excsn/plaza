@@ -42,8 +42,7 @@ pub type RttSource = Arc<dyn Fn(&PlayerKey) -> Option<u64> + Send + Sync>;
 ///
 /// A host is the server and a client in one process, so unlike a joiner it
 /// holds both the truth here and its own predicted state in its [`NetClient`].
-/// Drawing the two over each other shows the disagreement on screen as well as
-/// in the panel.
+/// The panel's render error figures compare the two.
 ///
 /// [`NetClient`]: crate::net::client::NetClient
 #[derive(Clone, Debug, Default)]

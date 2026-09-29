@@ -3,7 +3,7 @@
 //!
 //! # What this concluded
 //!
-//! None of them are worth it. Horde now takes an option this table does not
+//! None of them are worth it. Horde takes an option this table does not
 //! contain: it does not predict the local player at all. The client draws it
 //! from the played-out stream at the same instant as every other entity, so
 //! prediction and authority cannot disagree and there is nothing to correct.

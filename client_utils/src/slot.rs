@@ -46,9 +46,8 @@ impl SlotKey {
 
   /// Packs to the `u64` that goes on the wire and into a digest.
   ///
-  /// The index is shifted by 16 to leave the generation room, so an index past
-  /// `2^48` would collide. Nothing this is for comes close, and an entity array
-  /// that large has other problems first.
+  /// The index is shifted by 16 to leave the generation room. A `u32` index
+  /// shifted by 16 fits in 48 bits, so no two keys collide.
   pub const fn encode(self) -> u64 {
     ((self.index as u64) << 16) | self.generation as u64
   }

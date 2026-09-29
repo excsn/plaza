@@ -49,7 +49,7 @@ pub struct Tracked {
   /// allowance can be gamed. Measuring each claim against the time since the
   /// last one has to credit *something* when two arrive in the same
   /// millisecond, and whatever it credits is a rate a client can claim at
-  /// will: crediting one tick let a client sending twice a tick move at twice
+  /// will: crediting one tick lets a client sending twice a tick move at twice
   /// the speed. A budget cannot be gamed that way because it accrues from the
   /// clock alone, however often it is asked.
   pub budget: f32,

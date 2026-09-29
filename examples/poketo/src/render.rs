@@ -18,8 +18,8 @@ use poketo::terrain::{self, Prop, Terrain};
 /// Pixels one tile is drawn at.
 ///
 /// Equal to the source tile so the map draws one texel to one pixel. A
-/// non-integer ratio shimmers on pixel art at every fractional camera offset,
-/// which is what 28 against a 32-pixel tile was doing.
+/// non-integer ratio, such as 28 against a 32-pixel tile, shimmers on pixel
+/// art at every fractional camera offset.
 pub const TILE: f32 = 32.0;
 
 const SOURCE_TILE: f32 = 32.0;

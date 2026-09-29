@@ -86,8 +86,8 @@ async fn accept_loop<ID: AgentId, C: WireCodec>(
   }
 }
 
-/// The framing contract is `plaza_wire::framing`, published: an adapter no
-/// longer reverse-engineers the prefix out of the shipped TCP transport, and
+/// The framing contract is `plaza_wire::framing`, published: an adapter does
+/// not reverse-engineer the prefix out of the shipped TCP transport, and
 /// `Limits::max_frame_bytes` is enforced by the decoder it feeds.
 async fn write_frame(stream: &mut UnixStream, frame: &[u8]) -> std::io::Result<()> {
   let mut wire = Vec::new();

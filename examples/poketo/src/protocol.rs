@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 use crate::battle::{Battle, Choice, Creature};
 use crate::grid::{Facing, Trainer};
 
-/// The wire format's version, derived at build time from the files that define
-/// it, which is more than this one.
+/// The wire format's version, derived at build time from every type the ops
+/// reach, some of which are defined outside this file.
 pub const PROTOCOL: u32 = WIRE_PROTOCOL;
 
 include!(concat!(env!("OUT_DIR"), "/wire_protocol.rs"));

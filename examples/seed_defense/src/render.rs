@@ -30,8 +30,7 @@ impl Board {
   /// Packed rather than centred and the strip is placed against the board, not
   /// against the bottom of the window. Anchoring one element to the top and
   /// another to the bottom means trusting that the window is exactly as tall as
-  /// it says it is. The first version of this screen put the strip off the
-  /// bottom edge entirely.
+  /// it says it is.
   pub fn fit() -> Self {
     let margin = 16.0;
     let usable_w = (screen_width() - margin * 2.0).max(64.0);
@@ -229,8 +228,8 @@ impl Agreement {
   }
 
   /// Drawn on its own row of the reserved band, never against the board's
-  /// edge: the wave line lives on the row above and the two used to be written
-  /// over each other.
+  /// edge: the wave line lives on the row above and the two would otherwise be
+  /// written over each other.
   pub fn draw(&self, board: &Board) {
     let y = board.origin.y - 12.0;
     let fresh = self.since < 4.0;
@@ -263,7 +262,7 @@ impl Agreement {
 ///
 /// The panel holds the diagnostics: what crossed the wire, whether the machines
 /// agree and how to break them. Choosing a tower is part of the game, so it is
-/// drawn here. Putting it in a collapsing header made a player open a
+/// drawn here. In a collapsing header a player would have to open a
 /// diagnostics window to take their turn.
 pub struct BuildBar {
   cards: Vec<(TowerKind, Rect)>,
@@ -466,8 +465,7 @@ fn draw_inspector(x: f32, y: f32, kind: TowerKind, level: u8, owner: PlayerId, g
 ///
 /// One row, left aligned with the board, so it cannot collide with the
 /// agreement line beneath it. It carries no instructions: the build strip says
-/// what to click, and saying it twice was the overlap this layout was rebuilt
-/// to fix.
+/// what to click.
 pub fn draw_hud(board: &Board, wave: u32, in_ms: u64, lives: i32, gold: i32) {
   let y = board.origin.y - 34.0;
   let wave_text = if in_ms > 0 {

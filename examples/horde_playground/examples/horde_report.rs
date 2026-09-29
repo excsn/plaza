@@ -35,7 +35,7 @@ fn varint(v: u32) -> usize {
 
 /// Four ways to put a set of dense ids on the wire.
 fn encodings(ids: &[u32], space: usize) -> (usize, usize, usize, usize) {
-  // 1. What we send today: three bytes per id.
+  // 1. A flat three bytes per id.
   let explicit = ids.len() * 3;
   // 2. A flat presence bitmask over the whole id space.
   let bitmask = space.div_ceil(8);
@@ -99,8 +99,8 @@ fn main() {
     naive_rows.push((hz, naive));
   }
 
-  // The same runs measured the way this example used to measure them, against
-  // truth *now*. A client rendering behind is supposed to be behind, so the
+  // The same runs measured against truth *now*. A client rendering behind is
+  // supposed to be behind, so the
   // difference between the two tables is the render delay being charged as
   // error rather than anything the netcode did.
   println!("\n== 2b. the same runs, measured against the present (mean px) ==");
@@ -181,7 +181,7 @@ fn main() {
   }
 }
 
-/// Appended: what packet loss does to a delta-relevance stream, and whether
+/// What packet loss does to a delta-relevance stream and whether
 /// diffing against the acknowledged baseline repairs it.
 pub fn loss_recovery_section() {
   println!("\n== packet loss on a delta stream, with and without ack recovery ==");
@@ -213,7 +213,7 @@ pub fn loss_recovery_section() {
   }
 }
 
-/// Appended: what a crowd summary buys beyond the relevance radius, where
+/// What a crowd summary buys beyond the relevance radius, where
 /// culling alone leaves a client knowing nothing at all.
 pub fn crowd_lod_section() {
   println!("\n== knowing about the world outside your view radius ==");
@@ -239,7 +239,7 @@ pub fn crowd_lod_section() {
   }
 }
 
-/// Appended: what predicting a discrete, contested event costs.
+/// What predicting a discrete, contested event costs.
 pub fn coin_section() {
   println!("\n== predicting a contested pickup ==");
   println!("Nearest player inside the radius claims the coin. A client applies the same");

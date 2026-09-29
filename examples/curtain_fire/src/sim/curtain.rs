@@ -1,7 +1,7 @@
 //! The enemy curtain, computed from the tick.
 //!
 //! Nothing in this file is stored, stepped or sent. Every enemy bullet on the
-//! screen is computed from a wave announcement of about twenty bytes plus one
+//! screen is computed from a wave announcement of about a hundred bytes plus one
 //! small op for each emitter that has been shot down, and it is computed the
 //! same way on the server and on every client.
 //!
@@ -43,10 +43,9 @@ impl Pattern {
 
   /// Bullets released at once.
   ///
-  /// A ring that released one bullet per period would be a spiral. The first
-  /// draft did that and produced a field of forty bullets, far too sparse for a
-  /// curtain, so every byte comparison in the example was measuring the wrong
-  /// thing.
+  /// A ring that released one bullet per period would be a spiral and a field
+  /// of about forty bullets, far too sparse for a curtain, so every byte
+  /// comparison in the example would measure the wrong thing.
   pub const fn salvo(self) -> u64 {
     match self {
       Pattern::Spiral => 2,
@@ -121,7 +120,7 @@ pub fn emitter_at(wave: &Wave, emitter: &Emitter, tick: u64) -> Option<V2> {
 fn angle_of(wave: &Wave, emitter: &Emitter, salvo: u64, slot: u64) -> f32 {
   use std::f32::consts::{PI, TAU};
   // Derived from the seed and the arm rather than stored, so a wave stays a
-  // couple of hundred bytes however many bullets it turns into.
+  // hundred bytes or so however many bullets it turns into.
   let spin = ((wave.seed ^ (emitter.arm as u32 * 0x9E37)) % 1000) as f32 / 1000.0;
   let count = wave.pattern.salvo();
   match wave.pattern {

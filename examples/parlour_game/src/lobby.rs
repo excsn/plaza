@@ -42,7 +42,8 @@ const ASSIGNED_LINKS_MS: [u32; 4] = [0, 25, 70, 140];
 /// How long the queue waits for humans before filling the rest with bots.
 const PATIENCE: Duration = Duration::from_secs(12);
 
-/// What a seat at a spawned table is worth, and what the losers pay the winner.
+/// What a seat at a spawned table is worth, and what each player off the top
+/// score pays into the pot the leaders split.
 const STAKE: u64 = 10;
 
 /// Every table spawned by quick match carries this budget, so the slowest

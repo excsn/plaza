@@ -10,14 +10,13 @@
 //! not require a different actor, so `end_current_turn_and_advance` can return
 //! the same actor at a reversal.
 //!
-//! Two things did not fit. The trait was changed for both instead of this type
-//! working around them. First, it held two methods while every consumer called
-//! five: `begin`, `restart`, `add_actor` and `remove_actor` were inherent on
-//! `RoundRobinTurnManager` alone, so a conforming manager could be written that
-//! no application could seat or change the roster of. Second, nothing could
-//! report a pass boundary. Round-robin hides this because its actor changes
-//! there. Under a snake the actor is the same on both sides, so a caller
-//! inferring the boundary from the actor misses it. The advance now returns
+//! Two things needed the trait itself rather than a workaround in this type.
+//! Every consumer calls `begin`, `restart`, `add_actor` and `remove_actor`, so
+//! they are on the trait: a manager without them could not be seated or have
+//! its roster changed. And a caller needs to see a pass boundary. Round-robin
+//! hides this because its actor changes there. Under a snake the actor is the
+//! same on both sides, so a caller inferring the boundary from the actor misses
+//! it. The advance returns
 //! [`Advanced::PassClosed`](plaza::game_common::flow_control::Advanced) there.
 //!
 //! The remaining difference is deliberate. `remove_actor` at the end of the
@@ -52,8 +51,7 @@ pub struct SnakeTurnManager<Op, AppID: AgentId, TurnActorId: Clone + Debug> {
   /// Which way the cursor is travelling. Flips at each end of the roster.
   descending: bool,
   turn_number: u32,
-  /// Turns taken in the current pass, so a caller can tell a pass ended without
-  /// the trait having a way to say so.
+  /// Turns taken in the current pass.
   in_pass: u32,
   notice: fn(TurnChangedNoticePayload<TurnActorId>) -> Op,
   _phantom: PhantomData<fn() -> AppID>,
@@ -106,11 +104,6 @@ impl<Op, AppID: AgentId, TurnActorId: Clone + Debug + PartialEq> SnakeTurnManage
   }
 
   /// Turns taken in the current pass, counting from one.
-  ///
-  /// The trait returns only the next actor, so a caller cannot learn from it
-  /// that a pass just closed. A snake makes that worse than round-robin does:
-  /// the actor is the same on both sides of the boundary, so "did it change"
-  /// cannot stand in for "did the pass end" either.
   pub fn in_pass(&self) -> u32 {
     self.in_pass
   }
@@ -305,8 +298,7 @@ mod tests {
   #[test]
   fn a_pass_boundary_is_not_visible_from_the_returned_actor() {
     // The actor is unchanged across the boundary, so checking whether it
-    // changed misses the boundary. This is why the application counts picks
-    // instead of watching the manager.
+    // changed misses the boundary. The advance reports it instead.
     let mut turns = order(vec![1, 2, 3]);
     let mut ctx = Ctx::new();
     turns.begin(&mut ctx);
@@ -395,8 +387,7 @@ mod tests {
   #[test]
   fn it_is_usable_behind_the_trait_it_implements() {
     // A caller holding any manager can seat it, read it, advance it and change
-    // its roster. Before the trait was widened this test had to call a
-    // concrete `begin` first.
+    // its roster.
     let mut concrete = order(vec![1, 2]);
     let mut ctx = Ctx::new();
 

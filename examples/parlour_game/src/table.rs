@@ -275,7 +275,7 @@ fn resolve_trick(state: &mut TableState, ctx: &mut Ctx) {
 /// Ends the match and moves the stake.
 ///
 /// Settling is guarded by a flag rather than by the phase, because reaching
-/// `Finished` twice would pay the winner twice and there is no way to unpay.
+/// `Finished` twice would pay the pot out twice and there is no way to unpay.
 fn finish_match(state: &mut TableState, ctx: &mut Ctx) {
   state.phase.transition_with(
     TablePhase::Finished,

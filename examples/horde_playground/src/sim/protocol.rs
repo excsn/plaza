@@ -1,9 +1,9 @@
 //! What crosses a real wire, once there is one.
 //!
-//! Everything else in `sim` predates networking: the server took the local
-//! player's input as a *function argument* and the offline `World` shuttled
+//! Everything else in `sim` is the offline build: the server takes the local
+//! player's input as a *function argument* and the offline `World` shuttles
 //! `Packet`s and `ClientMsg`s through an in-memory delay queue. This is the same
-//! vocabulary as one flat `Op` a `plaza` [`Session`] carries either way.
+//! vocabulary as one flat `Op` a `plaza` [`Session`] carries.
 //!
 //! Two asymmetries are deliberate. They are the same ones the black hole
 //! example makes.
@@ -18,8 +18,8 @@
 //!
 //! Note that this rides *alongside* the entity stream's own sequence and
 //! acknowledgement, which are about which relevance deltas landed. [`Op::Input`]
-//! and [`Op::InputAck`] number the player's own movement for prediction; the two
-//! sequence spaces are unrelated and both are needed.
+//! and [`Op::InputAck`] number the player's own movement, which the client's
+//! input round-trip readout reads; the two sequence spaces are unrelated.
 //!
 //! [`Session`]: https://docs.rs/plaza
 
@@ -40,8 +40,9 @@ use crate::sim::types::{Packet, PlayerFrame, PlayerId, Upgrade};
 ///
 /// Two limits worth knowing. It cannot rescue a client older than the handshake
 /// itself, which is the bootstrapping floor every protocol version has. And it
-/// changes when those files change at all, including their comments, so it errs
-/// toward asking for a reload that was not strictly needed.
+/// changes whenever a type definition in those files changes, including types
+/// that never cross the wire, so it errs toward asking for a reload that was
+/// not strictly needed.
 pub const PROTOCOL: u32 = WIRE_PROTOCOL;
 
 // Written by `plaza_wire::build` from `build.rs`, as an already-parsed `u32`.
@@ -50,9 +51,8 @@ include!(concat!(env!("OUT_DIR"), "/wire_protocol.rs"));
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Op {
   // ---- client to server ----
-  /// Where this player wants to go this tick, sequence-numbered so the server
-  /// can say which inputs it has applied and the client can replay the rest.
   /// Where this player wants to go, and **which tick it is meant for**.
+  /// Sequence-numbered so the server can say which inputs it has taken.
   ///
   /// A tick rather than a timestamp, which keeps the authority with the server.
   /// A timestamp names a moment the server then has to judge plausible. Judging
@@ -87,7 +87,7 @@ pub enum Op {
   /// LOD without its whole entity set being torn down and rebuilt.
   Policy(ServerPolicy),
   /// One send interval's worth of the relevant world, exactly the [`Packet`] the
-  /// offline sim already produced. Boxed because it dwarfs every other variant,
+  /// offline sim produces. Boxed because it dwarfs every other variant,
   /// so every `Op` would otherwise carry its width.
   Frame(Box<Packet>),
   /// The player stream, sent far more often than [`Op::Frame`] and to everybody
@@ -110,9 +110,9 @@ pub enum Op {
   /// seated.
   ///
   /// Refusing at the door rather than seating and then silently dropping every
-  /// input, which is what used to happen: past the accepting window a player
-  /// simply could not move, with nothing on screen to say why. Carries both
-  /// numbers so the client can state the case rather than just decline.
+  /// input: past the accepting window a player simply cannot move, with nothing
+  /// on screen to say why. Carries both numbers so the client can state the case
+  /// rather than just decline.
   Refused { measured_ms: u32, allowed_ms: u32 },
   /// There is no seat: the arena is full, or the host shrank it out from under
   /// this player.
@@ -127,7 +127,7 @@ pub enum Op {
 /// Server settings a client cannot see but has to reason about.
 ///
 /// Sent rather than assumed. In the offline build both halves read one shared
-/// `Controls`, which quietly let the client know things a real one cannot: the
+/// `Controls`, which quietly lets the client know things a real one cannot: the
 /// send rate it should interpolate against, whether coins exist, whether handles
 /// carry a generation, how far the crowd LOD reaches. A joiner that guessed wrong
 /// would mis-time interpolation or key its mirror differently from the server.

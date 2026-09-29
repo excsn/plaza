@@ -137,7 +137,7 @@ fn arriving_in_a_populated_zone_costs_one_ordinary_frame() {
 /// What a town that walks itself costs the person walking through it.
 ///
 /// The other two benchmarks build a world by hand to ask a question about
-/// radius. This one asks what the example actually does now: `populate` seats
+/// radius. This one asks what the example actually does: `populate` seats
 /// the town's own wanderers across every zone, and a client standing in one of
 /// them is told about the ones sharing its map and about none of the rest.
 ///

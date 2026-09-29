@@ -7,15 +7,14 @@
 //! Only whoever ordered a close knows why, so the pending reason is what
 //! tells the two apart: a departure with no entry recorded here is a netdrop.
 //!
-//! [`ClosureLog`] is that record, extracted from two examples that each kept
-//! the same two tables by hand. It holds no sockets and sends nothing: the
+//! [`ClosureLog`] is that record. It holds no sockets and sends nothing: the
 //! application sends its farewell op and closes the connection itself, in that
 //! order, and tells the log what it did:
 //!
 //! ```ignore
 //! // Ordering a close: the goodbye is sent first, once.
 //! if state.closures.order(key, Parting::Kicked) {
-//!   session.deregister_agent(&key, Some(farewell_frame));
+//!   manager.deregister_agent(&key, farewell);
 //! }
 //!
 //! // An op arriving afterwards raced the close on the other stream.

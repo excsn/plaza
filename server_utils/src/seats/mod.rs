@@ -92,8 +92,7 @@ impl<Key: Eq + Hash + Clone> SeatTable<Key> {
     Self {
       occupied: HashMap::new(),
       // Popped from the back, so the first joiner takes the highest seat. Which
-      // end does not matter as long as it is consistent, and a test that names a
-      // specific seat depends on it.
+      // end does not matter as long as it is consistent.
       free: (0..capacity).collect(),
       capacity,
     }
@@ -273,7 +272,7 @@ pub enum Shuffle<Key> {
 ///   but a freed seat reaches the waitlist only in
 ///   [`resolve`](Self::resolve), called from your `TimeStep` arm. Making
 ///   seating decisions in two places, join handling and departure handling,
-///   is a bug the pong example had a comment warning about.
+///   is a bug.
 /// - **Ranks displace only across bands.** A waiter with a better (lower)
 ///   rank takes the worst-ranked human seat at `resolve`; equals never
 ///   displace each other and a held seat is never displaced, because it is
@@ -498,7 +497,7 @@ impl<Key: Eq + Hash + Clone> Roster<Key> {
 mod tests {
   use super::*;
 
-  /// The two accessors nothing was calling.
+  /// `SeatTable::occupants` and `Roster::is_locked`.
   mod reading_the_table {
     use super::*;
 

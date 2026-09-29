@@ -208,10 +208,8 @@ pub fn draw_panel(client: &NetClient, url: &str) {
 
 /// Everything the corner readout has no room for, on a key.
 ///
-/// Read-only, and deliberately so: every number a player might want to turn
-/// here is a `const` the server owns, so a settings page would be a row of
-/// controls that cannot change anything. Tuning them live means a wire op per
-/// knob and an observer to drive it, which is a different piece of work.
+/// Read-only. The knobs a client may ask the server to move are on `F1`, in
+/// `panels`.
 ///
 /// It does **not** pause anything. There is nothing to pause: the town keeps
 /// ticking for everyone else, and a client that stopped reading its socket

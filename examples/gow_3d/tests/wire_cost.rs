@@ -28,7 +28,7 @@ fn per_second(bytes: usize) -> f32 {
 }
 
 /// The frame one seat would be sent, encoded. The frame the server really
-/// builds, via `publish` and `frame_for`, rather than a reconstruction, which
+/// builds, via `publish_at` and `frame_for`, rather than a reconstruction, which
 /// would go stale as soon as a field changed.
 fn encoded(state: &mut GowState, seat: u16) -> usize {
   let now = state.zone.now_ms;
@@ -122,14 +122,11 @@ fn the_server_side_total_is_measured_rather_than_multiplied() {
 #[test]
 fn a_party_across_the_zone_costs_one_entry_each() {
   // Priced separately because no other example in the tree pays this cost.
-  // The members move out of view before the baseline is taken. The test used
-  // to walk four members out of view and into a party in one step, so the
-  // audience count never changed: four entries left the near channel and the
-  // same four arrived on the subscribed one. It measured a difference anyway,
-  // because MessagePack spelled `Because` as its variant name and "Subscribed"
-  // is six characters longer than "Near". That six was the README's
-  // per-member figure. Packed, the tag is two bits and the number went to
-  // zero, which exposed it.
+  // The members move out of view before the baseline is taken, so the
+  // difference is the subscribed entries alone. Moving them out of view and
+  // into a party in one step would leave the audience count unchanged: four
+  // entries would leave the near channel and the same four arrive on the
+  // subscribed one.
   let mut state = zone_of(MAX_CHARACTERS);
   for member in 1..=4u16 {
     state.zone.place(member, (400.0 + member as f32 * 10.0, 0.0, 400.0));

@@ -132,7 +132,7 @@ impl Timeline {
   /// This client's best estimate of server time now: the fitted clock, floored
   /// by the newest stamp carried forward at wall rate.
   ///
-  /// The fit answers with `now_ms` itself until two exchanges are in, so this
+  /// The fit answers with `now_ms` itself until the first exchange is in, so this
   /// is always usable. The floor can only raise the estimate and never raises
   /// it past the true server time, because the stamp trails real server time
   /// by the one-way delay it took to arrive.

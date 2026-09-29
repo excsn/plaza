@@ -313,7 +313,7 @@ pub type SessionClock = Arc<dyn Fn() -> u64 + Send + Sync>;
 /// What a session declares and what it can answer with.
 #[derive(Clone)]
 pub struct SessionOptions {
-  /// What this build speaks, from [`plaza_wire::build`].
+  /// What this build speaks, from `plaza_wire::build`.
   /// [`ProtocolVersion::UNKNOWN`] declares nothing and sends no `Hello`.
   pub protocol: ProtocolVersion,
   /// Read when answering a latency probe. Without one, a `Pong` carries no
@@ -532,8 +532,8 @@ impl Debug for SessionOptions {
 ///
 /// The payloads are `Bytes` because both transports hand over a buffer they
 /// already own: actix-ws yields a `Bytes`, and `LengthDelimitedCodec` a
-/// `BytesMut` that freezes into one. Copying them out into a `Vec` cost a
-/// memcpy of every inbound frame, per player per tick, to arrive at a buffer
+/// `BytesMut` that freezes into one. Copying them out into a `Vec` would cost
+/// a memcpy of every inbound frame, per player per tick, to arrive at a buffer
 /// nothing needed to own more than the original did.
 pub struct IncomingFrame<ID: AgentId> {
   /// Attached by the transport from the connection, never read off the wire.
@@ -546,9 +546,9 @@ pub struct IncomingFrame<ID: AgentId> {
 ///
 /// **Cloning shares rather than copies.** A broadcast to N clients hands the
 /// same buffer to each, so fan-out costs a refcount bump rather than N
-/// allocations and N memcpys. The copies used to happen inside `broadcast`'s
-/// read guard, so every one of them widened the window a register or
-/// deregister had to wait through.
+/// allocations and N memcpys. Copies would happen inside `broadcast`'s read
+/// guard, where every one of them widens the window a register or deregister
+/// has to wait through.
 ///
 /// A newtype rather than an alias so that guarantee is this crate's to state
 /// rather than a detail of whichever buffer type it happens to hold. A
@@ -752,8 +752,9 @@ struct ClientHandle<ID: AgentId> {
 ///
 /// The profile is 80 bytes, so it cannot be an atomic, and the question the
 /// frame path actually asks is one bit: is this passthrough. Reading the whole
-/// profile under a lock to answer that cost a `parking_lot` acquire per frame
-/// per direction on a path that is almost always passthrough in production.
+/// profile under a lock to answer that would cost a `parking_lot` acquire per
+/// frame per direction on a path that is almost always passthrough in
+/// production.
 ///
 /// The flag and the profile are not written atomically together, so a profile
 /// installed between one frame and the next may miss that frame. That is
@@ -1012,7 +1013,7 @@ impl<ID: AgentId> Registry<ID> {
       }
       // Deduped by looking back over the ids already passed, because the list is
       // the caller's and a repeated id would otherwise queue the frame twice,
-      // where a scan visited each connection once however often it was named.
+      // where a scan visits each connection once however often it is named.
       MessageTarget::Agents(ids) => {
         for (position, id) in ids.iter().enumerate() {
           if ids[..position].contains(id) {
@@ -1168,8 +1169,8 @@ impl<ID: AgentId> ConnectionManager<ID> {
   }
 
   /// What this manager refuses per connection. A transport adapter reads the
-  /// byte cap its own framing enforces, and [`SessionOptions::probe_slots`] for the
-  /// probe table.
+  /// byte cap its own framing enforces and the credential limits a pending
+  /// socket is held to.
   pub fn limits(&self) -> &Limits {
     &self.limits
   }
@@ -1938,7 +1939,7 @@ where
 {
   /// Creates the session and spawns its deserialize bridge.
   ///
-  /// `protocol` is what this build speaks, from [`plaza_wire::build`]. Pass
+  /// `protocol` is what this build speaks, from `plaza_wire::build`. Pass
   /// [`ProtocolVersion::UNKNOWN`] to declare nothing, which disables the check
   /// rather than failing it.
   pub fn with_protocol(transport: &'static str, codec: C, capacity: usize, protocol: ProtocolVersion) -> Arc<Self> {
@@ -1957,7 +1958,8 @@ where
 
   /// Creates the session with everything it needs to answer for itself: the
   /// version it declares, the clock it stamps a `Pong` with, and how deep its
-  /// queues are.  ///
+  /// queues are.
+  ///
   /// # Requires a tokio runtime
   ///
   /// This spawns the deserialize bridge, so calling it outside a runtime
@@ -2111,8 +2113,8 @@ async fn deserialize_bridge<Op, ID, C>(
       Some(frame::Kind::Ping) | Some(frame::Kind::Pong) => {
         // Once per agent, not per frame: a transport that forwards one forwards
         // all of them, and this is a defect in that transport rather than a
-        // property of the traffic. At `trace!` it was invisible, which is how
-        // an adapter ships answering no probes at all.
+        // property of the traffic. At `trace!` it would be invisible, which is
+        // how an adapter ships answering no probes at all.
         if from.id().is_none_or(|id| probe_warned.insert(id.clone())) {
           warn!(
             transport,
@@ -2216,8 +2218,8 @@ mod tests {
       MessageTarget::AllExcept(99),
       MessageTarget::AllExceptThese(vec![10, 30]),
       MessageTarget::AllExceptThese(vec![]),
-      // Past HASH_MEMBERSHIP_ABOVE, so the hashed arm of both list-bearing
-      // variants is exercised too.
+      // Long lists, one with repeated ids, so both list-bearing variants are
+      // exercised past a handful of entries.
       MessageTarget::Agents((0..40).chain([10, 10]).collect()),
       MessageTarget::AllExceptThese((0..40).collect()),
     ];
@@ -2256,8 +2258,8 @@ mod tests {
   #[test]
   fn fanning_a_frame_out_shares_one_buffer() {
     // `broadcast` hands the same encoded frame to every matching connection
-    // and a queue that owned its bytes turned that into an allocation and a
-    // memcpy each, inside the read guard. Asserting on
+    // and a queue that owned its bytes would turn that into an allocation and
+    // a memcpy each, inside the read guard. Asserting on
     // the pointer rather than the contents is deliberate, because a `Vec<u8>`
     // queue passes any equality check and fails this one.
     let frame: OutboundFrame = Frame::from(vec![7u8; 4096]);

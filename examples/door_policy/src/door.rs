@@ -26,7 +26,7 @@ use crate::types::{Account, AgentKey, DuplicateLogin, Refusal, PER_IP, SEATS, SI
 #[derive(Debug, Default)]
 pub struct Ledger {
   pub refusals: Mutex<HashMap<Refusal, u64>>,
-  /// Connections registered, which is now the same number as connections
+  /// Connections registered, which is the same number as connections
   /// admitted: nothing registers before the door has judged it.
   pub registered: AtomicU64,
   /// Goodbyes this door ordered for a connection already inside. Whether one

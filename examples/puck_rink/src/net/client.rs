@@ -1,11 +1,11 @@
 //! A client on the real wire, shared by the desktop window and the wasm page.
 //!
-//! The core is a [`RollbackSession`] running the same fixed-point `sim::step`
-//! the server runs. Every server frame echoes the inputs it applied, so the
-//! session confirms remote inputs against a single ordered input stream, rolls
-//! back when a guess is disproved and re-simulates to the present. The digest
-//! on every frame is checked against this client's own re-simulation of the
-//! same frame.
+//! The core is a [`RollbackSession`] running the same backend the server
+//! runs, the fixed-point `sim::step` by default. Every server frame echoes the
+//! inputs it applied, so the session confirms remote inputs against a single
+//! ordered input stream, rolls back when a guess is disproved and re-simulates
+//! to the present. The digest on every frame is checked against this client's
+//! own re-simulation of the same frame.
 //!
 //! The panel's comparison lives here too: **Interpolate** renders the puck
 //! from delayed server frames (the standard remote-entity treatment) and
@@ -47,7 +47,7 @@ pub enum Status {
 /// How the puck reaches the screen. Everything else is always the predicted
 /// present with corrections eased, so the screen holds one timeline and a
 /// bounce lands where the paddles are drawn; drawing the paddles from delayed
-/// frames made the puck bounce off paddles that had not been drawn there yet.
+/// frames would show the puck bouncing off paddles not yet drawn there.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
   /// The session's present: predicted inputs, rolled back on every disproof.

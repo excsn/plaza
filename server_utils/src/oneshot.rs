@@ -121,8 +121,7 @@ mod tests {
 
   #[test]
   fn a_custom_schedule_is_the_one_that_is_used() {
-    // A link that loses a lot wants a shorter retry and more attempts. Without
-    // this test only the default schedule was measured.
+    // A link that loses a lot wants a shorter retry and more attempts.
     let mut p: Pending<u8, &str> = Pending::with_schedule(10, 5);
     p.declare(1, "welcome", 0);
 
@@ -130,7 +129,7 @@ mod tests {
     assert_eq!(p.due(10, true).len(), 1, "and exactly on it");
 
     // Five attempts counts the caller's own first send, as `declare` does and
-    // as the default-schedule test above spells out, so `due` yields four.
+    // as the default-schedule test below spells out, so `due` yields four.
     let mut repeats = 1;
     let mut now = 10;
     for _ in 0..8 {

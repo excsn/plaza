@@ -2,7 +2,7 @@
 //!
 //! # Why the tag is not part of the encoded document
 //!
-//! A serde enum would express this too and it is what the envelope used to be.
+//! A serde enum would express this too.
 //! The *codec* then decides what the tag costs: under JSON a variant is a quoted
 //! string (`{"Ops":...}`, four bytes of structure), under MessagePack an array
 //! element, under protobuf a field number. A byte written ahead of the body
@@ -38,9 +38,10 @@
 
 /// What a frame carries.
 ///
-/// Add a variant here to add a message kind. Old peers will skip it (see the
-/// module docs), so an addition does not break them, though the protocol hash
-/// from [`crate::build`] will still change and ask them to reload.
+/// Add a variant here to add a message kind. Old peers skip it (see the
+/// module docs), so an addition does not break them. This file is outside the
+/// vocabulary [`crate::build`] hashes, so a new kind does not move a
+/// consumer's protocol version either.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 #[non_exhaustive]

@@ -5,8 +5,9 @@
 //! [`InMemoryLobbyManager`], and the manager handles room creation, listing,
 //! join authorization, and reaping finished rooms.
 //!
-//! Four smaller pieces sit around the manager. Each holds no timers and spawns
-//! nothing, so an application drives them from its own `StateLogic`:
+//! Four smaller pieces sit around the manager. None holds timers or spawns
+//! anything except `CachedTicketRegistry`, whose cache runs its own janitor
+//! thread, so an application drives them from its own `StateLogic`:
 //!
 //! - [`MatchQueue`] for games where a player is paired rather than choosing,
 //!   including filling the seats nobody came for.

@@ -12,7 +12,7 @@
 //! server-side routing and stream plumbing, they are not `Serialize` and no
 //! client ever sees one.
 //!
-//! Core re-exports all of it, so server code goes on writing `plaza::Agent`.
+//! Core re-exports all of it, so server code writes `plaza::Agent`.
 
 use std::fmt::{self, Debug};
 use std::hash::Hash;
@@ -85,8 +85,7 @@ impl<ID: AgentId> Agent<ID> {
   }
 }
 
-/// For logs and readouts. Allocates nothing, which is why it replaced the
-/// `label() -> String` this type used to carry.
+/// For logs and readouts. Allocates nothing.
 impl<ID: AgentId> fmt::Display for Agent<ID> {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     match self {
@@ -116,9 +115,8 @@ mod tests {
 
   #[test]
   fn agents_compare_and_hash_by_identity_alone() {
-    // While a name was part of the type, two agents with one id and two
-    // spellings of the same person were unequal and hashed apart, so a
-    // `HashSet<Agent>` could hold the same player twice.
+    // Equality and hashing see only the kind and the id, so a `HashSet<Agent>`
+    // holds each player once.
     let one = Agent::new_human(7u32);
     let same = Agent::new_human(7u32);
     assert_eq!(one, same);

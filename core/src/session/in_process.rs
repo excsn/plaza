@@ -38,9 +38,9 @@ struct ClientHandle<Op: Send + 'static, ID: AgentId> {
 /// client only ever sees what was addressed to it.
 ///
 /// ```ignore
-/// let session = InProcessSession::<Op, Id, Snapshot>::new();
+/// let session = InProcessSession::<Op, Id>::new();
 /// let (conn_id, mut inbox) = session.connect(alice.clone()).await?;  // snapshot arrives here
-/// session.client_send(alice, vec![Op::Increment]);
+/// session.client_send(alice, vec![Op::Increment]).await;
 /// ```
 pub struct InProcessSession<Op: Send + 'static, ID: AgentId> {
   next_conn_id: AtomicU64,
@@ -142,7 +142,7 @@ where
     self.clients.lock().values().map(|c| c.agent.clone()).collect()
   }
 
-  /// Hands out one of the three notification streams, or `None` if it has
+  /// Hands out one of the two notification streams, panicking if it has
   /// already been taken (they are single-consumer; see the `Session` docs).
   fn take<T: Send + 'static>(slot: &Mutex<Option<SessionReceiver<T>>>, name: &str) -> SessionReceiver<T> {
     slot.lock().take().unwrap_or_else(|| {

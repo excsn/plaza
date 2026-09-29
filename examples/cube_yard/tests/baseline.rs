@@ -30,8 +30,8 @@ fn settled(snap: bool) -> Yard {
   yard
 }
 
-/// Driving through the field, which is the only thing that makes it move now
-/// that the scene is a flat lattice rather than a collapsing heap.
+/// Driving through the field, which is the only thing that makes it move: the
+/// scene is a flat lattice rather than a collapsing heap.
 fn ploughing() -> [cube_yard::protocol::Drive; MAX_PLAYERS] {
   let mut driving = [cube_yard::protocol::Drive::default(); MAX_PLAYERS];
   driving[0] = cube_yard::protocol::Drive {
@@ -210,15 +210,16 @@ fn snapping_both_sides_costs_something_and_it_is_small() {
 // Where the smooth-motion case is measured and why it is not here.
 //
 // A spline is for a path that curves between samples. The nearest thing this
-// scene has is the hovering player, which flies a straight line at constant
-// speed, where a spline and a chord are the same expression: both measure
-// 0.647. `plaza_client_utils::hermite` measures the curved case on a circle
+// scene has is the hovering player, which flies a nearly straight line at a
+// nearly steady speed, where a spline and a chord nearly coincide.
+// `plaza_client_utils::hermite` measures the curved case on a circle
 // and gets 484x. This file measures the contact case below, where splines
 // lose.
 
 /// The whole yard at a low send rate, drawn three ways.
 ///
-/// The single-cube test above says a spline beats a straight line; this says
+/// `plaza_client_utils::hermite`'s single-cube test says a spline beats a
+/// straight line; this says
 /// what it is worth across a scene and what the cheapest option costs. That
 /// decides whether the second velocity is worth putting on the wire at all.
 #[test]

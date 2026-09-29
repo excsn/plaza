@@ -95,9 +95,10 @@ impl Field {
   ///
   /// Built from `plaza_client_utils::SetDigest`, an additive order-independent
   /// fold: two machines holding the same set in a different order still agree
-  /// and it is cheap to compute. Everything that can differ goes in, including
-  /// the gold and the tick, since a comparison against a client that has
-  /// fallen a tick behind would be meaningless.
+  /// and it is cheap to compute. Everything that can differ goes in: the
+  /// enemies, the towers, the gold, the lives, the spawn cursor and the
+  /// pending spawns. The tick is not in it: a digest is only compared at the
+  /// tick it was taken on.
   pub fn digest(&self) -> u64 {
     let mut d = plaza_client_utils::SetDigest::new();
     for enemy in &self.enemies {
@@ -316,7 +317,7 @@ fn fire_towers(field: &mut Field, now: u64, quirks: Quirks, events: &mut StepEve
 
 /// An enemy's speed per tick and the one place the float quirk lives.
 ///
-/// Two earlier versions of this quirk did **not** diverge.
+/// Two other versions of this quirk do **not** diverge.
 ///
 /// Making the *movement* use `f32` changes nothing: the result is truncated
 /// back to 1/256 of a tile every tick, which throws the float error away

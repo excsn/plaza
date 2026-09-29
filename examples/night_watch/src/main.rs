@@ -1,12 +1,12 @@
 //! A village with a wolf in it: the scripted run.
 //!
-//! What this example covers that the others do not:
+//! What this example covers:
 //!
 //! - `Phased` where the phase is the rule set: at night one role may act and
 //!   by day everyone may, so the same op is accepted or refused depending on
 //!   the phase.
-//! - `SequentialRoundManager::new(None, ..)`, the unbounded mode, driven for
-//!   the first time: the game ends when a side wins, never on a count.
+//! - `SequentialRoundManager::new(None, ..)`, the unbounded mode: the game
+//!   ends when a side wins, never on a count.
 //! - Collect-then-resolve: ballots are gathered all day and nothing happens
 //!   until dusk, when they resolve at once.
 //! - The epoch guarding a phase deadline: a day that closes early because

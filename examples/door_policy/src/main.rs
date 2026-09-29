@@ -1,4 +1,4 @@
-//! What it costs a server to say no, now that it can say it at the door.
+//! What it costs a server to say no at the door.
 //!
 //! `cargo run -p plaza_example_door_policy`
 

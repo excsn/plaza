@@ -10,10 +10,10 @@
 //! thirty people on each of twenty-four floors sharing one footprint, so a flat
 //! cell holds every floor at once and the filter throws away almost all of it.
 //!
-//! The floor count matters. The first version was eight floors against a
-//! thirty metre view, a building the volumetric grid cannot exclude anything
-//! from either, so both arms examined everyone and there was nothing to
-//! compare. The scene now asserts that it is taller than the view reaches.
+//! The floor count matters. Eight floors against a thirty metre view is a
+//! building the volumetric grid cannot exclude anything from either, so both
+//! arms would examine everyone and there would be nothing to compare. The
+//! scene asserts that it is taller than the view reaches.
 //!
 //! ```sh
 //! cargo test -p gow_3d --test tower -- --nocapture
@@ -112,8 +112,8 @@ fn volume(people: &[Person], from: (f32, f32, f32)) -> Work {
 fn a_height_filter_is_still_exact_in_a_tower_and_still_examines_everything() {
   const PER_FLOOR: usize = 30;
   // Taller than anyone can see. If the whole building fits inside the view
-  // radius the volume grid cannot exclude anything either; the first version
-  // of this scene was eight floors against a thirty metre view.
+  // radius, as eight floors against a thirty metre view does, the volume grid
+  // cannot exclude anything either.
   const FLOORS: usize = 24;
   let people = tower(PER_FLOOR, FLOORS, 14.0);
   assert!(
@@ -190,8 +190,7 @@ fn one_floor_of_the_same_crowd_costs_the_filter_nothing() {
 ///
 /// The scene above is a model of two strategies. This runs the real `Zone` with
 /// the grid the server queries every tick and reads the counters it keeps while
-/// doing it. It was written expecting to reproduce the 72% waste and it does
-/// not.
+/// doing it. It does not reproduce the model's 72% waste.
 #[cfg(feature = "server")]
 mod in_the_real_zone {
   use gow_3d::state::{spawn_at, GowState, MAX_CHARACTERS};

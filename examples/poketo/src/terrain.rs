@@ -7,9 +7,9 @@
 //! There is no map payload, no join baseline for it, no versioning of it, and a
 //! client holding a map that disagrees with the server's is not representable.
 //!
-//! Deliberately kept out of `grid.rs`, which `build.rs` hashes into the
-//! protocol version: nothing here is a wire type, so tuning the ground should
-//! not invalidate a connected client.
+//! Nothing here is a wire type, so `build.rs` hashes none of it into the
+//! protocol version and tuning the ground does not invalidate a connected
+//! client.
 
 use crate::grid::Tile;
 

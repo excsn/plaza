@@ -82,8 +82,7 @@ impl V2 {
   /// A unit vector from a whole number of degrees.
   ///
   /// Whole degrees because an aim crosses the wire on every shot and a whole
-  /// degree is under a quarter of a player's width at the far side of this
-  /// arena. Nobody can aim more finely than that, so more precision would only
+  /// degree is about half a player's width at the far side of this arena. Nobody can aim more finely than that, so more precision would only
   /// cost bytes.
   pub fn from_degrees(deg: i16) -> V2 {
     let r = (deg as f32).to_radians();
@@ -220,7 +219,7 @@ pub struct PlayerState {
   pub rocket_ready_at_ms: u64,
   pub kills: u32,
   pub deaths: u32,
-  /// Present when a seat is driven by the arena rather than by a connection.
+  /// True when a seat is driven by the arena rather than by a connection.
   pub bot: bool,
 }
 

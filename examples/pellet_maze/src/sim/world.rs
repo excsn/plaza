@@ -198,7 +198,7 @@ mod tests {
   #[test]
   fn a_turn_report_goes_only_to_the_player_it_names() {
     // Not secrecy machinery: a client discards every `TurnTaken` that is not
-    // its own, so broadcasting them put every player's exact junction on
+    // its own, so broadcasting them would put every player's exact junction on
     // everybody's wire for no reader at all.
     let c = quiet();
     let mut world = World::new(&c, MAZE_SEED);

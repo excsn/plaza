@@ -98,7 +98,7 @@ pub enum Op {
   // ---- server to client ----
   Welcome { player: PlayerId, policy: ServerPolicy, start: Box<Start> },
   Frame(Box<Frame>),
-  /// A whole wave of the curtain, once. Around two hundred bytes for what
+  /// A whole wave of the curtain, once. About a hundred bytes for what
   /// becomes hundreds of bullets over the next fifteen seconds.
   WaveUp(Box<Wave>),
   ArmDown(Downed),
@@ -121,9 +121,7 @@ pub mod wire_cost {
   /// The same ops with every variant renamed to a number.
   ///
   /// Used to measure **the share of a frame taken up by variant names**, which
-  /// nothing else in this repository measures. `IMPROVEMENTS` makes float
-  /// quantization, bit packing and numeric variant tags depend on it. The share
-  /// is largest in a shmup, because a stream of tiny messages is mostly tag.
+  /// nothing else in this repository measures. The share is largest in a shmup, because a stream of tiny messages is mostly tag.
   ///
   /// Borrowed rather than converted, so measuring costs no clones and measures
   /// exactly what is sent.
@@ -255,11 +253,9 @@ mod tests {
 
   #[test]
   fn compact_msgpack_still_spells_out_every_variant_name() {
-    // `IMPROVEMENTS` makes the wire-encoding primitives depend on this
-    // measurement. `MsgPackCodec`'s docs already say compact MessagePack keeps
-    // variant names, but not what share of a frame they take, which is what the
-    // backlog item is waiting on. A stream of tiny messages is mostly tag, so
-    // this is where the share is largest.
+    // `MsgPackCodec`'s docs say compact MessagePack keeps variant names, but
+    // not what share of a frame they take. A stream of tiny messages is mostly
+    // tag, so this is where the share is largest.
     let ops = vec![
       Op::InputAck { seq: 12 },
       Op::ArmDown(crate::sim::curtain::Downed { wave: 1, arm: 2, tick: 900 }),

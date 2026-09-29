@@ -42,9 +42,9 @@ const NEAR_PROP: i16 = 24;
 
 /// How far the ground is built for a camera at this distance.
 ///
-/// Fixed, it was a disc of countryside floating in the sky the moment anybody
-/// zoomed out, which is the sort of fault that makes a whole scene look wrong
-/// rather than one thing in it.
+/// A fixed radius would be a disc of countryside floating in the sky the moment
+/// anybody zoomed out, which is the sort of fault that makes a whole scene look
+/// wrong rather than one thing in it.
 pub fn sight_for(distance: f32) -> i16 {
   ((distance * 1.35) as i16 + 14).clamp(NEAREST_SIGHT, FURTHEST_SIGHT)
 }
@@ -795,9 +795,9 @@ mod tests {
 
   #[test]
   fn the_ground_always_reaches_further_than_the_camera_stands_back() {
-    // The fault this replaced: a fixed radius is a disc of countryside floating
-    // in the sky the moment anybody zooms out, and a scene with an edge in it
-    // looks wrong all over rather than in one place.
+    // A fixed radius is a disc of countryside floating in the sky the moment
+    // anybody zooms out. A scene with an edge in it looks wrong all over
+    // rather than in one place.
     for tenths in 70..=420 {
       let distance = tenths as f32 / 10.0;
       let sight = sight_for(distance);

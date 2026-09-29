@@ -1,8 +1,8 @@
-//! The timed run this example's README said its answer was waiting on.
+//! Times a flat grid with a height filter against a volumetric grid.
 //!
-//! `tests/interest.rs` counted work and got as far as a trade it could not
-//! settle: a volumetric grid does **3x fewer distance tests** for **2.5x more
-//! cell lookups** than a flat grid with a height filter. Counts cannot decide
+//! The counting test in `src/relevance.rs` reaches a trade it cannot settle: a
+//! volumetric grid does **3x fewer distance tests** for **2.5x more cell
+//! lookups** than a flat grid with a height filter. Counts cannot decide
 //! that, because the two operations do not cost the same, and how much they
 //! differ is a property of the machine rather than of the algorithm. So this
 //! times both on one scene and reports nanoseconds per query.

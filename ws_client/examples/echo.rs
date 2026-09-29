@@ -1,10 +1,10 @@
-//! Proof that a backend works, on a desktop or in a browser.
+//! Proof that the native backend works.
 //!
 //! ```sh
 //! # native, against any echo server
 //! cargo run -p plaza_ws --features native --example echo -- ws://127.0.0.1:9001
 //!
-//! # browser: see ws_client/static/, which builds this same file to wasm
+//! # browser: see examples/echo_web.rs, which ./serve.sh builds to wasm
 //! ```
 //!
 //! Sends one binary and one text message, prints what comes back, then closes,

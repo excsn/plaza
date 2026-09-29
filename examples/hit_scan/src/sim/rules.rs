@@ -166,9 +166,8 @@ mod tests {
   /// The one horizontal line that crosses the whole map with nothing on it.
   ///
   /// Named instead of written as a literal at each call site, because the
-  /// first draft of these tests used y 100, which runs straight through both
-  /// left pillars, so every one of them failed for a reason unrelated to the
-  /// code under test.
+  /// obvious y 100 runs straight through both upper pillars and a test using
+  /// it fails for a reason unrelated to the code under test.
   const OPEN_LANE_Y: f32 = 162.0;
 
   #[test]

@@ -156,7 +156,7 @@ type HostHandle = Option<std::sync::Arc<parking_lot::Mutex<horde_playground::net
 #[cfg(all(feature = "client", feature = "websocket", not(feature = "server")))]
 type HostHandle = ();
 
-/// The single-process playground: no sockets, every readout, exactly as it was.
+/// The single-process playground: no sockets, every readout.
 async fn offline() {
   let mut controls = Controls::default();
   let mut world = World::new(&controls, controls.player_count, SEED);
@@ -351,8 +351,8 @@ async fn networked(
       controls.lock().show_ghost = edited.show_ghost;
     }
     // Whatever is keeping you out of the game, said on screen rather than only in
-    // the panel. Being measured and being refused both used to look like nothing
-    // happening.
+    // the panel. Being measured and being refused would otherwise both look like
+    // nothing happening.
     let centred = |lines: &[(String, f32, Color)]| {
       let mut y = screen_height() * 0.5 - lines.len() as f32 * 16.0;
       for (text, size, color) in lines {
@@ -497,7 +497,7 @@ fn read_input() -> SimVec2 {
 /// the steering direction. Deliberately *relative* rather than "move toward where
 /// I touch": the drag delta lives in one coordinate space, so it cannot be skewed
 /// by the high-DPI mismatch between touch coordinates and the drawing buffer that
-/// made the absolute scheme steer by raw viewport position. Lifting resets it.
+/// makes an absolute scheme steer by raw viewport position. Lifting resets it.
 #[cfg(all(feature = "client", feature = "websocket"))]
 #[derive(Default)]
 struct TouchSteer {
@@ -523,8 +523,7 @@ impl TouchSteer {
   }
 }
 
-/// A frame-rate readout, bottom right.
-/// A frame-time readout, rather than an fps one.
+/// A frame-time readout, bottom right, rather than an fps one.
 ///
 /// Frame time maps onto what a player feels. Fps is a reciprocal that
 /// compresses the region worth seeing: 8ms to 16ms reads as a dramatic 120 to
@@ -535,11 +534,10 @@ impl TouchSteer {
 /// long frame and an average over a second hides it. The wire readout tracks a
 /// worst frame rather than a rate for the same reason.
 ///
-/// The mean smooths *frame time* and reciprocates at the end. The previous
-/// version averaged `1.0 / dt` directly, which is biased toward fast frames: a
-/// single 100ms stall contributes 10 to that average while the ten 8ms frames
-/// around it contribute 125 each, so the stall barely shows in the number meant
-/// to reveal it.
+/// The mean smooths *frame time* and reciprocates at the end. Averaging
+/// `1.0 / dt` directly is biased toward fast frames: a single 100ms stall
+/// contributes 10 to that average while the ten 8ms frames around it contribute
+/// 125 each, so the stall barely shows in the number meant to reveal it.
 #[derive(Default)]
 pub struct Perf {
   /// Smoothed frame time in seconds. Zero until the first frame.

@@ -20,8 +20,8 @@
 //! codec through `serialize_seq`, so every byte is encoded as its own integer:
 //! MessagePack spends two on anything above 127. In `wire/tests/packing.rs` that
 //! costs 15502 bytes to carry 10396, giving back half of the packing saving.
-//! Declare the field as *bytes* (`serde_bytes` or a newtype whose `Serialize`
-//! calls `serialize_bytes`) and the same payload travels in 10411.
+//! Declare the field as *bytes* (`serde_bytes` or `plaza_wire::Payload`, which
+//! needs feature `serde`) and the same payload travels in 10411.
 //!
 //! ```
 //! use plaza_wire::bits::{BitReader, BitWriter};

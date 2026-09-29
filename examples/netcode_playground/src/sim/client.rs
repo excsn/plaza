@@ -129,9 +129,10 @@ impl Client {
     // Size the interpolation delay from the server rate (need at least a step or
     // two of history) plus the measured spread in snapshot arrivals, or hold a
     // fixed delay. This is the buffering *policy*; plaza supplies the arrival
-    // statistics and the settable delay. The jitter term used to come from ping
-    // spread, which is a proxy: the buffer exists to cover the irregularity of
-    // the interpolated stream, so it is sized from that stream's own arrivals.
+    // statistics and the settable delay. The jitter term comes from snapshot
+    // arrivals rather than ping spread, which is only a proxy: the buffer
+    // exists to cover the irregularity of the interpolated stream, so it is
+    // sized from that stream's own arrivals.
     // Set it before syncing: the rate model scales its drift by this delay.
     let delay = if controls.adaptive_buffer {
       let base = BASE_DELAY_STEPS * controls.server_step_ms() as f32;

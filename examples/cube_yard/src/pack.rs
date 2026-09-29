@@ -1,8 +1,8 @@
 //! The yard, written by hand into bits.
 //!
 //! A derive cannot produce this. Serde knows a position is three `f32`; it
-//! does not know the yard is 64 units across and renders at a millimetre,
-//! which is the difference between 96 bits and 47. Every choice here is a
+//! does not know the yard is 310 units across and needs only a few
+//! millimetres, which is the difference between 96 bits and 47. Every choice here is a
 //! bound plus a precision and both are properties of *this* game that no codec
 //! could infer.
 //!
@@ -30,9 +30,9 @@ const Y: (f32, f32) = (-2.0, 60.0);
 const XZ_BITS: u32 = 16;
 const Y_BITS: u32 = 15;
 
-/// A cube is one unit across, so 1024 steps per unit puts the quantisation
-/// error at a thousandth of a cube: far under a pixel at any camera distance
-/// this example uses.
+/// Nine bits over each of the three smallest quaternion components moves a
+/// cube's corner by a few millimetres at most: far under a pixel at any camera
+/// distance this example uses.
 const ROT_BITS: u32 = 9;
 
 /// Fiedler's velocity bound. A cube moving faster than this is already a bug.

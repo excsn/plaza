@@ -36,9 +36,8 @@ pub trait RoomFactory: Send + Sync + 'static {
   /// trait.
   ///
   /// # Arguments
-  /// * `room_id`: The unique ID pre-assigned to this room by the `LobbyManager`.
+  /// * `room_id`: The unique ID pre-assigned to this room by the [`InMemoryLobbyManager`](crate::manager::InMemoryLobbyManager).
   /// * `room_settings`: The full settings for this room, including custom game settings.
-  /// * `lobby_integrations`: Potentially a way for the room to communicate back to the lobby or shared services. (e.g. an MPSC sender for room events)
   async fn spawn_room(
     &self,
     room_id: RoomId,

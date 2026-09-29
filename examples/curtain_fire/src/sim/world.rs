@@ -152,8 +152,7 @@ impl World {
   ///
   /// Per bullet-*tick* rather than per bullet, because the numerator is
   /// cumulative and a denominator sampled at one instant is not comparable to
-  /// it. Getting that wrong once made the ratio read as five orders of
-  /// magnitude.
+  /// it.
   ///
   /// `None` for a half that never existed, rather than a number divided by a
   /// nominal one: a run in which nobody fired has no streamed bullets to price
@@ -288,10 +287,8 @@ mod tests {
     world.run_playing(10_000, &controls);
 
     let (derived, streamed) = world.cost_per_bullet_tick();
-    // Asserted before the comparison, because the first version of this test
-    // ran with nobody firing: there were no player bullets at all, the
-    // denominator fell back to one, and it passed by pricing a half that did
-    // not exist.
+    // Asserted before the comparison: a run with nobody firing has no player
+    // bullets, so the comparison would price a half that does not exist.
     assert!(world.server.stats.curtain_bullet_ticks > 0, "there was a curtain");
     assert!(world.server.stats.player_bullet_ticks > 0, "and somebody actually fired");
     let derived = derived.expect("curtain priced");
@@ -301,9 +298,7 @@ mod tests {
 
   #[test]
   fn the_share_of_the_wire_that_is_variant_names_is_worth_knowing() {
-    // The number `IMPROVEMENTS` gates float quantization, bit packing and
-    // numeric variant tags on. Taken over real traffic rather than a synthetic
-    // message, because the share depends entirely on the mix.
+    // Taken over real traffic rather than a synthetic message, because the share depends entirely on the mix.
     let controls = base();
     let mut world = World::new(&controls, SEED);
     world.run_playing(8000, &controls);
@@ -315,7 +310,7 @@ mod tests {
 
   #[test]
   fn the_client_always_knows_first_and_the_rule_only_decides_if_it_may_act() {
-    // This example was planned around a different claim. A derivable curtain
+    // A derivable curtain
     // means the client computes the same field the server does and sees the
     // contact on the same tick. `ServerOnly` withholds permission to act, not
     // knowledge: the player keeps flying for a round trip after they already

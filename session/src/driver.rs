@@ -18,14 +18,17 @@
 //! yours, since those are the transport's own job.
 //!
 //! ```rust,ignore
-//! let mut driver = LinkDriver::new(&manager, conn_id, codec.clone());
+//! let Some(mut driver) = LinkDriver::new(&manager, conn_id, codec.clone()) else {
+//!   return;
+//! };
 //!
 //! loop {
 //!   tokio::select! {
 //!     inbound = socket.read_frame() => match driver.inbound(inbound?, Instant::now()) {
 //!       Inbound::Reply(frame) => socket.write(frame).await?,
 //!       Inbound::Forward(frame) => manager.forward_incoming(agent.clone(), frame).await,
-//!       Inbound::Consumed => {}
+//!       Inbound::Consumed | Inbound::Shed => {}
+//!       Inbound::Eject => break,
 //!     },
 //!     outbound = to_client_rx.recv() => {
 //!       if let Some(frame) = driver.outbound(outbound?, Instant::now()) {
@@ -35,6 +38,12 @@
 //!     _ = sleep_until(driver.deadline().unwrap_or_else(far_future)), if driver.deadline().is_some() => {
 //!       for frame in driver.due(Instant::now()) {
 //!         socket.write(frame).await?;
+//!       }
+//!       for frame in driver.take_forwarded() {
+//!         manager.forward_incoming(agent.clone(), frame).await;
+//!       }
+//!       if driver.ejected() {
+//!         break;
 //!       }
 //!     }
 //!   }

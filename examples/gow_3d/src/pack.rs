@@ -53,10 +53,9 @@ const REL_RANGE: f32 = crate::zone::CELL + REL_PAD * 2.0;
 
 /// Horizontal bits when a payload knows which cell it describes.
 ///
-/// **Five fewer than absolute rather than six.** The first attempt used 12 and
-/// padded the range by a whole cell each way, which tripled the range to 46
-/// units and made it cheaper but not finer: 12 bits over 46 is coarser than 18
-/// over 1024. The const assertion below caught it.
+/// **Five fewer than absolute rather than six.** 12 bits over a range padded a
+/// whole cell each way (46 units) is cheaper but not finer: it is coarser than
+/// 18 over 1024. The const assertion below checks that.
 pub const REL_BITS: u32 = 13;
 
 const _: () = assert!(
@@ -69,7 +68,7 @@ const _: () = assert!(
 /// minimum corner of the cell carrying it.
 ///
 /// A body can sit fractionally outside its own cell between the index being
-/// built and the payload being packed, so the range is padded by a whole cell
+/// built and the payload being packed, so the range is padded by half a cell
 /// each way rather than clamped to the cell exactly, for the same reason the
 /// wire bounds are wider than the map.
 pub fn write_in_cell(w: &mut BitWriter, seen: &Seen, corner: (f32, f32)) {
@@ -230,7 +229,7 @@ pub fn unpack_graded_into(
 /// That name is the cost of the scheme: a reader turns the index into a corner
 /// through the same [`CellSpace`](plaza_server_utils::relevance::CellSpace) the
 /// server used and cannot decode a body without it. It is charged once per
-/// cell against a saving of twelve bits per body, so whether it pays depends
+/// cell against a saving of ten bits per body, so whether it pays depends
 /// on how many bodies a cell holds.
 pub fn open_cell(w: &mut BitWriter, index: usize, count: usize) {
   w.varint(index as u64);
@@ -394,7 +393,7 @@ mod tests {
   fn a_body_that_drifts_out_of_its_own_cell_is_still_described() {
     // The same defect at cell scale: the index is built before
     // the payload is packed, so a body can be fractionally outside the cell
-    // that carries it. The range is padded a whole cell each way rather than
+    // that carries it. The range is padded half a cell each way rather than
     // clamped to the cell exactly.
     let corner = (0.0, 0.0);
     let outside = seen(3, (-REL_PAD * 0.9, 2.0, crate::zone::CELL + REL_PAD * 0.9));

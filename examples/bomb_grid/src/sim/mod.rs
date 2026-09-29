@@ -2,8 +2,8 @@
 //! predicts against it. No sockets, no window, no async.
 //!
 //! Everything measurable about this example is measurable here, which is why
-//! the tests live at this layer and the networked wrapper in `net/` adds no
-//! rules of its own.
+//! the tests of its claims live at this layer and the networked wrapper in
+//! `net/` adds no rules of its own.
 
 pub mod client;
 pub mod protocol;

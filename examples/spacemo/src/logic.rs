@@ -1,8 +1,7 @@
 //! The authoritative tick.
 //!
 //! Unlike cube_yard there is no broadcast. Every tick queries relevance once
-//! per client and sends each a different frame. That was the design from the
-//! first stage rather than a later optimisation, since in a volume no client
+//! per client and sends each a different frame, since in a volume no client
 //! can hold the whole world.
 
 use async_trait::async_trait;
@@ -502,9 +501,6 @@ mod tests {
           counted += 1;
         }
       }
-      // The first version of this scene lined the ships up across the nose, so
-      // nothing acquired a target, no missile ever launched and the comparison
-      // read 83x while measuring only the bolts.
       assert!(homing > 0, "the scene has to actually produce homing shots");
       rows.push((stream, carried as f32 / counted.max(1) as f32));
     }
@@ -617,7 +613,7 @@ mod tests {
       }
       state.space.ships[0].at = Vec3::ZERO;
       // Clear of the view and still inside the volume. A multiple of the radius
-      // wrapped at the boundary once the radius grew, putting the ship back
+      // wraps at the boundary once the radius is wide, putting the ship back
       // *inside* the view from the other side and quietly inverting the test.
       state.space.ships[1].at = Vec3::new(0.0, crate::sim::VOLUME * 0.95, 0.0);
 

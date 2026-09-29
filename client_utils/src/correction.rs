@@ -204,7 +204,7 @@ impl CorrectionMonitor {
 mod tests {
   use super::*;
 
-  /// The three tuning knobs and the peek, none of which anything was calling.
+  /// The three tuning knobs and the peek.
   /// Without these tests the defaults are the only configuration ever measured.
   mod the_knobs {
     use super::*;

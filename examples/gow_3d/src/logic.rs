@@ -1,14 +1,14 @@
 //! The tick, which is mostly a send.
 //!
-//! There is no simulation step here worth the name: nobody's position is
-//! computed, because the clients own those, and the only thing with a clock is
-//! a cast bar. What the tick actually does is answer, once per client, the
+//! There is little simulation here. Under the default client authority the
+//! clients own their positions, so the server moves only its bots and beasts.
+//! A player's only clock is a cast bar. What the tick actually does is answer, once per client, the
 //! question this example exists to ask: **who are you told about, and why**.
 //!
 //! One frame cannot be built and broadcast, because two characters standing in
 //! different corners of the zone have nothing in common. But the spatial
 //! channel does not have to be built per client either: the zone is packed
-//! once per occupied grid cell ([`Zone::publish`](crate::zone::Zone::publish)),
+//! once per occupied grid cell ([`Zone::publish_at`](crate::zone::Zone::publish_at)),
 //! and each client's frame is the payloads its view touches plus a small
 //! per-client remainder (`you`, the party's extras, the landings it can see).
 //! `examples/crowd_techniques.rs` priced that at 2.6x the per-client build on
@@ -264,8 +264,8 @@ fn step_once(state: &mut GowState, ctx: &mut Ctx) {
     // Addressed by **cell pair**, never by viewer. Viewers are bucketed into
     // the cell they stand in; every viewer in one cell has the same window and
     // reads every cell in it the same way, so the near/far split is a fixed
-    // offset mask rather than a distance measured per listener per cell. That
-    // per-listener loop was the thing doubling the tick under `Graded`.
+    // offset mask rather than a distance measured per listener per cell, which
+    // doubles the tick under `Graded`.
     let GowState { zone, viewers, audience, audience_far, .. } = &mut *state;
     viewers.clear_each();
     audience.clear_each();
@@ -280,11 +280,10 @@ fn step_once(state: &mut GowState, ctx: &mut Ctx) {
 
     let space = *zone.space();
     let side = space.side() as i32;
-    // Taken from the quantizer rather than derived again here. A second
-    // derivation of the window's half-width is exactly the drift this example
-    // keeps relearning: the first attempt used `(VIEW / CELL) as i32 + 1`,
-    // walked 9x9 against `cells_touching`'s 7x7, and the two deliveries
-    // stopped agreeing about who was in the world.
+    // Taken from the quantizer rather than derived again here, because a
+    // second derivation of the window's half-width drifts: `(VIEW / CELL) as
+    // i32 + 1` walks 9x9 against `cells_touching`'s 7x7 and the two deliveries
+    // stop agreeing about who is in the world.
     let reach = space.quantizer().cells_for_radius(crate::zone::VIEW) as i32;
     let graded = precision == Precision::Graded;
     for (from, watching) in viewers.occupied() {
@@ -307,7 +306,7 @@ fn step_once(state: &mut GowState, ctx: &mut Ctx) {
           if let Some(slot) = table.get_mut(target) {
             // A whole bucket at a time: the copy is unavoidable because
             // `MessageTarget::Agents` needs the list materialised, but it is
-            // now a memcpy rather than a hash and a square root per edge.
+            // a memcpy rather than a hash and a square root per edge.
             slot.extend_from_slice(watching);
           }
         }
@@ -339,8 +338,7 @@ fn step_once(state: &mut GowState, ctx: &mut Ctx) {
 
   // Assembled once per occupied *viewer-cell*, then handed out by refcount.
   // Every viewer standing in one cell is owed byte-identical bodies, so doing
-  // this per viewer was O(clients) work on O(cells) information, which is the
-  // shape every cost in this layer had.
+  // this per viewer would be O(clients) work on O(cells) information.
   state.assembled.clear_each();
   if delivery == Delivery::Joined {
     for (_, seat) in &players {
@@ -525,11 +523,11 @@ fn frame_from(
 
 /// What a player is told about themselves.
 ///
-/// Its own block rather than a lookup into the audience list, because that is
-/// the defect this fixes: a client drew its own body from its own position and
-/// read everything else out of the list of other people, so its cast bar, its
-/// mana and its cooldown were never read at all and every key press was
-/// silent. A player needs fields about themselves that nobody else is sent.
+/// Its own block rather than a lookup into the audience list: a client draws
+/// its own body from its own position and reads everything else out of the
+/// list of other people, so its cast bar, its mana and its cooldown arrive
+/// here or every key press is silent. A player needs fields about themselves
+/// that nobody else is sent.
 fn you_of(state: &GowState, seat: Seat, now: Ms) -> Option<You> {
   let character = state.zone.characters.get(&seat)?;
   Some(You {
@@ -744,8 +742,9 @@ mod tests {
     // The zone_scale defect, pinned. `GridQuantizer` clamps anything outside
     // its origin into the boundary cells, and a cell is published whole, so a
     // body five hundred units away arrives in the frame of anyone standing in
-    // the corner. The per-client build's exact distance test hid this and
-    // charged only query waste for it; publishing per cell puts it on the wire.
+    // the corner. A per-client build with an exact distance test would hide
+    // this and charge only query waste for it; publishing per cell puts it on
+    // the wire.
     let corner = -crate::terrain::EDGE + 1.0;
     let mut state = GowState::new();
     let viewer = seated(&mut state, 1);
@@ -829,8 +828,8 @@ mod tests {
 
   #[tokio::test]
   async fn a_refused_claim_answers_the_claimant_and_nobody_else() {
-    // The only op in this example that goes back to one client, and the reason
-    // it is not a correction: an honest client never sees one.
+    // Addressed to the claimant alone. It is not a correction: an honest client
+    // never sees one.
     let logic = GowLogic::new();
     let mut state = GowState::new();
     let seat = seated(&mut state, 1);
@@ -876,8 +875,8 @@ mod tests {
 
   #[tokio::test]
   async fn a_respawn_tells_the_client_it_was_moved() {
-    // The client owns its own position, so a respawn is the one time a
-    // position travels downward. Without the counter it stands where it died,
+    // Under client authority the client owns its own position, so a respawn
+    // has to send one downward. Without the counter it stands where it died,
     // sending claims the server refuses for the rest of the session.
     use crate::zone::DOWN_MS;
     let mut state = GowState::new();
@@ -901,8 +900,8 @@ mod tests {
 
   #[test]
   fn a_body_stays_in_the_frame_while_it_falls_and_then_goes() {
-    // A beast that vanished the instant it died read as a rendering fault
-    // rather than as a death, because nothing on screen ever fell over. The
+    // A beast that vanishes the instant it dies reads as a rendering fault
+    // rather than as a death, because nothing on screen falls over. The
     // window is long enough to play the fall and short enough that the two
     // relevance channels still come apart afterwards.
     use crate::zone::{CORPSE_MS, DOWN_MS};
@@ -947,8 +946,8 @@ mod tests {
 
   #[tokio::test]
   async fn a_zone_with_bots_seats_them_on_the_first_tick() {
-    // The complaint that started this: a player joined a tower with nobody in
-    // it, so every key was dead and the panel reported on an audience of zero.
+    // Without them a player joins a zone with nobody in it, every key is dead
+    // and the panel reports on an audience of zero.
     let logic = GowLogic::new().with_bots(24);
     let mut state = GowState::new();
     logic
@@ -969,7 +968,7 @@ mod tests {
 
   #[tokio::test]
   async fn a_bare_zone_stays_bare() {
-    // The measurements and every other test in here want an empty zone, so
+    // The measurements and most tests in here want an empty zone, so
     // seating content must be something a caller asks for.
     let logic = GowLogic::new();
     let mut state = GowState::new();

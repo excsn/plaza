@@ -4,7 +4,7 @@
 //!
 //! 1. The derived half against the streamed half, per bullet.
 //! 2. The share of outbound bytes that is the names of enum variants, which
-//!    `IMPROVEMENTS` makes the wire-encoding primitives depend on.
+//!    compact MessagePack still writes out as strings.
 //!
 //! Run with `cargo run -p curtain_fire --release --example curtain_report`.
 

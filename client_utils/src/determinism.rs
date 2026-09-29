@@ -9,8 +9,11 @@
 //! float, clock or wire involved. Sort the keys before drawing or key the draw
 //! on the entity ([`mix64`] of its id and the tick) so order does not matter.
 //!
-//! Everything here is integer arithmetic, dependency-free and identical on
-//! wasm and native. The values are pinned by tests, because the two builds
+//! The hashes and the stream are integer arithmetic. [`XorShift::unit`],
+//! [`ValueNoise::corner`] and [`ValueNoise::octave`] return `f32`, built only
+//! from integer-to-float conversion, `floor` and single IEEE operations.
+//! Everything is dependency-free and gives the same values on wasm and
+//! native. The values are pinned by tests, because the two builds
 //! must agree and a "cleanup" that changes a constant would silently
 //! regenerate every world derived from it.
 

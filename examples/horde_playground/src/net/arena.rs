@@ -1,12 +1,12 @@
 //! The authoritative arena, as `plaza` core wants it: one `StateType` that owns
 //! everything mutable, and one stateless `StateLogic` that acts on it.
 //!
-//! The horde server was already shaped for this. Its `advance_seats` is a tick
-//! function, it already produces per-recipient packets and it already consumes
-//! acknowledgements and purchase requests as separate upward messages. What this
-//! module adds is the part a function argument stood in for: seats that fill and
-//! empty as people arrive and inputs (movement, acks, buys) that arrive
-//! *between* ticks rather than with them.
+//! The horde server fits this shape. Its `advance_seats` is a tick function, it
+//! produces per-recipient packets and it consumes acknowledgements and purchase
+//! requests as separate upward messages. What this module adds is the part a
+//! function argument stands in for offline: seats that fill and empty as people
+//! arrive and inputs (movement, acks, buys) that arrive *between* ticks rather
+//! than with them.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -158,10 +158,11 @@ pub struct Arena {
   pub controls: Controls,
   /// Which player each connection is driving.
   seats: SeatTable<PlayerKey>,
-  /// The newest movement direction for each seat, applied on the next tick.
+  /// What each seat falls back to when no scheduled input is held: a bot. A
+  /// person's direction reaches the server through its input schedule.
   pending: Vec<Seat>,
-  /// The newest input sequence accepted per player, echoed back so a client can
-  /// replay only what the server has not applied.
+  /// The newest input sequence accepted per player, echoed back for the
+  /// client's input round-trip readout.
   input_acked: HashMap<PlayerKey, u64>,
 
   /// Connections being measured. They hold no seat while this runs, so a slow
@@ -288,9 +289,7 @@ impl Arena {
 
   /// Applies one client op.
   ///
-  /// Returns a reply for the ops that have one. Split out of the receive path so
-  /// the uplink can hold traffic: what a client sent and what the arena acts on
-  /// are now separated by the same delay the downstream has.
+  /// Returns a reply for the ops that have one.
   fn apply_client_op(&mut self, key: PlayerKey, op: Op) -> Option<TargetedOp<Op, PlayerKey>> {
     let seat = self.seat_of(&key)?;
     match op {
@@ -408,9 +407,6 @@ impl Arena {
   }
 }
 
-/// The stateless half plaza acts through. Carries the shared control slot the
-/// host's panel writes and the arena reads, and the optional view the arena
-/// publishes for a windowed host to draw.
 /// Where the arena gets a connection's measured latency from.
 ///
 /// The **transport** measures it, by timing its own WebSocket ping, so no
@@ -449,6 +445,9 @@ pub const MAX_RATE_BYTES: u32 = 256 * 1024;
 /// session's, which is the only place that sees all of them.
 pub use plaza_session::LinkSink;
 
+/// The stateless half plaza acts through. It carries the shared control slot
+/// the host's panel writes and the arena reads. It also carries the optional
+/// view the arena publishes for a windowed host to draw.
 pub struct ArenaLogic {
   controls: Arc<Mutex<Controls>>,
   view: Option<Arc<Mutex<HostView>>>,
@@ -557,9 +556,9 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
         let Some(key) = agent.id_cloned() else {
           return Ok(LogicOutput::none());
         };
-        // Measured before seated. A connection that cannot meet the input
-        // schedule used to be welcomed and then have every input silently
-        // rejected, which reads as a broken game rather than a refused one.
+        // Measured before seated. Welcoming a connection that cannot meet the
+        // input schedule leaves every input silently rejected, which reads as a
+        // broken game rather than a refused one.
         state.admitting.insert(key, Admission);
         Ok(LogicOutput::none())
       }
@@ -759,8 +758,7 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
               continue;
             }
             // Metered on both sides of the comparison. Counting the real cost
-            // here and not its counterfactual is what made the saving read
-            // negative once player state moved onto this stream.
+            // here and not its counterfactual makes the saving read negative.
             state.bytes.add(frame.bytes() as u64);
             state.naive_bytes.add(frame.naive_bytes() as u64);
             outbound.push(TargetedOp::new_system_to(*key, vec![Op::Players(frame)]));
@@ -782,8 +780,7 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
 
         // A machine-readable trace of the numbers the panel shows, once a
         // second, when `HORDE_TRACE=1` is set. Screenshots of a live readout
-        // are two points with no timeline, so they cannot show a trend; every
-        // explanation offered for them so far was fitted to two numbers. This
+        // are two points with no timeline, so they cannot show a trend. This
         // prints the raw series from the machine running the arena.
         if is_send_round && std::env::var_os("HORDE_TRACE").is_some() {
           let second = now / 1000;
@@ -810,8 +807,7 @@ impl StateLogic<Op, PlayerKey, Arena> for ArenaLogic {
   }
 }
 
-/// Unused, but `MessageTarget` has to be nameable for the logic above to compile
-/// against plaza's re-exports.
+/// Keeps the `MessageTarget` import used outside the tests, which name it.
 #[allow(dead_code)]
 fn _target_is_used(_: MessageTarget<PlayerKey>) {}
 
@@ -931,10 +927,9 @@ mod tests {
     Arc::new(move |_| Some((Duration::from_millis(one_way_ms * 2), samples)))
   }
 
-  /// Joins and completes admission, which is now two steps rather than one.
+  /// Joins and completes admission.
   ///
-  /// Every test below used to seat a player with a single `AgentJoined`. The
-  /// server waits for the transport to measure the connection now, so a test
+  /// The server waits for the transport to measure the connection, so a test
   /// that only joins gets one still being probed and no seat.
   fn admit(logic: &ArenaLogic, state: &mut Arena, agent: &Agent<PlayerKey>) {
     step(logic, state, LogicInput::AgentJoined { agent: agent.clone() });
@@ -1099,10 +1094,10 @@ mod tests {
 
   #[test]
   fn a_connection_that_cannot_meet_the_schedule_is_refused_at_the_door() {
-    // It used to be welcomed and then have every input silently rejected: an
-    // input named for `press + playout` lands past the accepting window once the
-    // one-way delay exceeds the budget, so the player could not move and nothing
-    // said why. Measured by the transport and refused instead.
+    // Welcomed, it would have every input silently rejected: an input named for
+    // `press + playout` lands past the accepting window once the one-way delay
+    // exceeds the budget, so the player cannot move and nothing says why.
+    // Measured by the transport and refused instead.
     let controls = small();
     let (cs, _view) = slots(controls);
     let mut state = Arena::new(controls);
@@ -1199,7 +1194,7 @@ mod tests {
   fn an_arena_that_cannot_measure_admits_nobody() {
     // Failing closed, deliberately. Without a transport measurement the arena
     // has no basis to say a connection can meet the schedule, and guessing that
-    // it can is how the silent exclusion happened in the first place.
+    // it can seats a player whose every input is then rejected.
     let controls = small();
     let (cs, _view) = slots(controls);
     let logic = ArenaLogic::new(cs, None);
@@ -1266,9 +1261,8 @@ mod tests {
 
     assert_eq!(state.sim.denied_purchases, 0);
     step(&logic, &mut state, LogicInput::AgentOps { source: Agent::new_human(1u64), ops: vec![Op::Buy(Upgrade::Repulsor)] });
-    // A tick, because an op is held on the impaired uplink and acted on when its
-    // delay expires rather than the instant it arrives. At zero latency that is
-    // the very next tick, so the path is the same either way.
+    // The session owns the impaired uplink, so an op that reaches the arena has
+    // already crossed it and is applied on arrival.
     step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
     assert_eq!(state.sim.denied_purchases, 1, "an empty wallet's purchase is refused by the server");
   }
@@ -1286,7 +1280,7 @@ mod tests {
     let logic = ArenaLogic::new(cs, None).with_latency(link(10, ADMIT_SAMPLES));
     let mut state = Arena::new(controls);
     // Warm the arena well past a full baseline's worth of frames with nobody in
-    // seat 0, so its `prev_vis` fills up before the client arrives.
+    // seat 0, so its relevance baseline fills up before the client arrives.
     for _ in 0..150u64 {
       step(&logic, &mut state, LogicInput::TimeStep { delta_time: Duration::from_millis(16) });
     }
@@ -1329,9 +1323,9 @@ mod tests {
     // many frames, so a small bound still catches it and an exact one only
     // tracked whatever the render delay happened to be.
     let synced = synced_on_frame.expect("the joiner never agreed with the server at all");
-    // Five rather than three since the simulation step became a true 16ms: the
-    // client applies at its render instant, so a 4% change in cadence moves the
-    // packet it first agrees on. The bug this guards against was a trickle over
+    // Five rather than three: the client applies at its render instant, so a
+    // small change in cadence moves the packet it first agrees on. The bug this
+    // guards against was a trickle over
     // hundreds of frames, and `digest_mismatches` below is what says the dump
     // was whole rather than converging.
     assert!(synced <= 5, "the joiner took {synced} frames to hold the whole world, which is a trickle rather than a dump");
@@ -1432,9 +1426,9 @@ mod tests {
   #[test]
   fn the_render_delay_is_the_servers_and_a_jittery_link_underruns_rather_than_hiding() {
     // Why T is fixed on the server's timeline. Latency and jitter say when bytes
-    // arrive; the render delay says which moment is on screen. When the first
-    // moved the second, a bad link quietly showed one player an older world than
-    // everybody else and nothing reported it.
+    // arrive; the render delay says which moment is on screen. Letting the first
+    // move the second quietly shows a player on a bad link an older world than
+    // everybody else and nothing reports it.
     //
     // With T fixed, a declared delay wide enough for the link carries it, and one
     // too narrow produces a countable event instead of silent degradation.
@@ -1547,8 +1541,8 @@ mod tests {
     assert!(checked > 100, "actually exercised the wire: {checked} frames");
   }
 
-  // The impairment link's ordering guarantee is now `LatencyLink`'s to keep, and
-  // is covered by `an_ordered_link_delays_but_never_reorders` in
+  // The impairment link's ordering guarantee is `LatencyLink`'s to keep and is
+  // covered by `an_ordered_link_delays_but_never_reorders` in
   // `plaza_client_utils::net_sim`.
 }
 
@@ -1559,8 +1553,8 @@ mod wire_size {
 
   /// What the codec is worth on this game's real traffic.
   ///
-  /// Every earlier figure in this project was measured on invented op types.
-  /// This one encodes the `Packet` the arena actually sends.
+  /// Encodes the `Packet` the arena actually sends rather than invented op
+  /// types.
   #[test]
   fn msgpack_against_json_on_a_real_frame() {
     let controls = Controls::default();
@@ -1619,7 +1613,7 @@ mod client_server_wire {
       Op::Input { seq: 7, dx: -0.5, dy: 0.5, tick: 3 },
       Op::Ack { newest: 9, mask: 0xff, digest: 1234 },
     ] {
-      // Exactly `Client::send_op`.
+      // Exactly `NetClient::send_op`.
       let mut out = Vec::new();
       frame::begin(frame::Kind::Ops, &mut out);
       MsgPackCodec.encode_into(&std::slice::from_ref(&op), &mut out).expect("client encode");
@@ -1686,7 +1680,7 @@ mod client_server_wire {
         frame::begin(frame::Kind::Ops, &mut out);
         MsgPackCodec.encode_into(&ops, &mut out).expect("server encode");
 
-        // Exactly `Client::on_frame`.
+        // Exactly `NetClient::on_ops`.
         let (tag, body) = frame::split(&out).expect("non-empty");
         assert_eq!(frame::Kind::from_byte(tag), Some(frame::Kind::Ops));
         let back: Vec<Op> = MsgPackCodec.decode(body).expect("client decode");

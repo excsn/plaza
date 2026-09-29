@@ -121,8 +121,8 @@ impl StateLogic<AppOp, UserId, AppState> for TypingLogic {
           match event {
             ScheduledAppEvent::UserTypingTimeout { user_id } => {
               if let Some(presence) = state.users_presence.get_mut(&user_id) {
-                // Only change to Idle if this specific timeout event is still the active one
-                // and they haven't typed again since it was scheduled.
+                // Typing again cancels the pending timeout, so a stored id means this
+                // event is the active one.
                 if presence.last_typing_timeout_event_id.is_some() {
                   if presence.status == TypingState::Typing {
                     presence.status = TypingState::Idle;

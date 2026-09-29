@@ -18,7 +18,8 @@
 // Node: const { onJsonFrame, jsonFrame, KIND_OPS } = require("./plaza_protocol.js");
 // works against any WebSocket with browser-shaped send/readyState (e.g. `ws`).
 //
-// See README.md beside this file for the full contract and versioning.
+// See wire/js/README.md in the plaza repository for the full contract and
+// versioning.
 "use strict";
 
 const PLAZA_PROTOCOL_JS_VERSION = "0.3.0";

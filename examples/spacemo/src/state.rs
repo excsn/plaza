@@ -65,9 +65,9 @@ pub struct SpaceState {
   /// panel.
   pub lock_added: usize,
   /// Whether a lock is held once taken, and therefore whether it is a
-  /// subscription at all. Off is the older behaviour: re-derived from the cone
-  /// every tick, so it changes as fast as the ships do and a client cannot
-  /// rely on it past the frame it arrived in.
+  /// subscription at all. Off re-derives it from the cone every tick, so it
+  /// changes as fast as the ships do and a client cannot rely on it past the
+  /// frame it arrived in.
   pub sticky_locks: bool,
   pub stream_bolts: bool,
   /// Which shots each client has already been told about, so a spawn is sent
@@ -218,9 +218,9 @@ mod tests {
 
   #[test]
   fn a_locked_ship_is_in_the_frame_even_past_the_view_radius() {
-    // The defect this channel exists for, and it was live: LOCK_RANGE is 320
-    // against a 260 view, so the server could tell a client it had locked a
-    // ship it had never been sent. A reticle over nothing.
+    // The defect this channel exists for: LOCK_RANGE is 320 against a 260
+    // view, so without it the server could tell a client it had locked a ship
+    // it had never been sent. A reticle over nothing.
     let mut state = SpaceState::new();
     state.space.spawn(0);
     state.space.spawn(1);
@@ -344,7 +344,7 @@ mod tests {
       state.space.spawn(1);
       state.space.ships[0].at = Vec3::new(0.0, 0.0, 0.0);
       // Clear of the view and still inside the volume. A multiple of the radius
-      // wrapped at the boundary once the radius grew, putting the ship back
+      // wraps at the boundary once the radius is wide, putting the ship back
       // *inside* the view from the other side and quietly inverting the test.
       state.space.ships[1].at = Vec3::new(0.0, crate::sim::VOLUME * 0.95, 0.0);
       state.reindex();

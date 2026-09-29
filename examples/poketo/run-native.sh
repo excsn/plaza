@@ -6,8 +6,9 @@
 # the deployable server.
 #
 # Arrows or WASD walk a tile at a time. Stepping onto the wrong tile starts a
-# battle, where 1 strikes and 2 guards. Those are the only controls, since a
-# turn-based battle has nothing to hold down.
+# battle, where 1 to 3 pick a move and 4 guards. Those are the only game
+# controls, since a turn-based battle has nothing to hold down. Esc toggles the
+# stats overlay, F1 the knobs panel and F2 saves a screenshot.
 #
 #
 # POKETO_FEATURES passes extra cargo features through, if you add any.

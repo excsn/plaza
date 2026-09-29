@@ -3,9 +3,7 @@
 //! Drives one real client against the real server over the simulated link at
 //! the shipped defaults, and prints what a player would experience: how far a
 //! peer's drawn marker jumps between frames in steady state, and how long the
-//! world takes to come back after a hidden-tab stall. Written against APIs
-//! that exist both before and after the block extraction, so the same file can
-//! run in a worktree at either revision and the outputs diffed.
+//! world takes to come back after a hidden-tab stall.
 //!
 //! Run with `cargo run -p horde_playground --release --example recovery_probe
 //! --no-default-features --features native,client`.

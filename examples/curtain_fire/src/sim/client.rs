@@ -60,8 +60,7 @@ pub struct ClientStats {
   pub deaths_felt: u64,
   /// Ticks spent flying a ship this client already knew was hit.
   ///
-  /// This shows what `ServerOnly` costs, which is not what this example was
-  /// planned around. With a derivable curtain the client computes the same
+  /// This shows what `ServerOnly` costs. With a derivable curtain the client computes the same
   /// field the server does and sees the contact on the same tick, so the rule
   /// only decides **who is allowed to act on it**. Under `ServerOnly` the player
   /// keeps flying for a round trip after they know they are dead, which is

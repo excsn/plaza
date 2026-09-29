@@ -1,4 +1,4 @@
-//! Standing the battle up behind a WebSocket and serving the browser client
+//! Standing the table up behind a WebSocket and serving the browser client
 //! from the same port.
 
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -35,7 +35,7 @@ async fn ws_route(
   session.handle_connection(&req, stream, agent)
 }
 
-/// Runs the battle until the process ends.
+/// Runs the table until the process ends.
 pub async fn serve(bind: &str, static_dir: Option<String>) -> std::io::Result<()> {
   init_logging();
 

@@ -113,8 +113,8 @@ impl World {
           // that delay is the price of not guessing.
           //
           // Capped so a peer that has gone quiet cannot grow the packet without
-          // bound, and floored because past the rollback horizon a resend is
-          // wasted bytes.
+          // bound and floored at `HISTORY` because nothing older is held to
+          // resend.
           let floor = current.saturating_sub(HISTORY as u64);
           for frame in told.missing_since(floor) {
             if inputs.len() >= REDUNDANCY {

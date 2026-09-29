@@ -160,7 +160,8 @@ impl NetClient {
   ///
   /// At or below zero the input names a tick the server has closed and is
   /// dropped, which plays as a player who cannot move while everything else
-  /// looks healthy. The floor in [`Self::aim_tick`] is what keeps it positive.
+  /// looks healthy. The floor in [`Self::server_time_ms`] is what keeps it
+  /// positive.
   pub fn input_aim_ticks(&self) -> i64 {
     self.last_input_tick as i64 - (self.pump.timeline().newest_stamp_ms() / SIM_STEP_MS) as i64
   }

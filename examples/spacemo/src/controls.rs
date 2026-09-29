@@ -19,10 +19,10 @@ pub struct Controls {
   /// Whether a lock is held once taken, which is what makes it a set worth
   /// subscribing to rather than a per-tick spatial answer.
   ///
-  /// Off is the older behaviour: the cone is re-read every tick, so the lock
-  /// changes as fast as the ships do and the locked ship is only in the frame
-  /// when the radius happened to reach it anyway. `LOCK_RANGE` is 320 against a
-  /// default 260 view, so that gap is not hypothetical.
+  /// Off re-reads the cone every tick, so the lock changes as fast as the ships
+  /// do and the locked ship is only in the frame when the radius happened to
+  /// reach it anyway. `LOCK_RANGE` is 320 against a default 260 view, so that
+  /// gap is not hypothetical.
   pub sticky_locks: bool,
   /// Whether positions are offsets from the observer rather than places.
   pub relative: bool,

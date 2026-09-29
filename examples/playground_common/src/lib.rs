@@ -18,11 +18,8 @@
 //! # What else lives here
 //!
 //! [`touch`], behind a feature. Every playground ships a browser build and is
-//! therefore reachable from a phone, but two of them had no pointer input at
-//! all, so one set of on-screen controls serves every example. Nothing else
-//! lives here now: `oneshot` moved to `plaza_server_utils::oneshot` and `fixed`
-//! to `plaza_client_utils::fixed` once it was clear they were library blocks
-//! that had been written here first.
+//! therefore reachable from a phone, so the examples that would otherwise need
+//! a keyboard share one set of on-screen controls. Nothing else lives here.
 //!
 //! The wasm constraint only rules out `plaza_session`. It does not make role
 //! parsing part of the published library. An application of any size will

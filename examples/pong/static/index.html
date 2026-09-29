@@ -78,9 +78,8 @@
                 console.log(`Point to ${body.player_id}: ${body.new_score}`);
                 break;
             case 'PhaseChange':
-                // Nothing is answered automatically any more. The server runs
-                // the phases on its own. A client replying here used to be the
-                // only way a countdown ended.
+                // Nothing is answered here: the server runs the phases on its
+                // own.
                 console.log(`phase: ${body}`);
                 break;
             }

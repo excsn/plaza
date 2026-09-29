@@ -77,8 +77,7 @@ pub fn ease_out_cubic(t: f32) -> f32 {
 ///
 /// Wrong for a reconciliation correction, which wants to start immediately and
 /// land softly. Right for something being drawn toward a target under a force
-/// that grows as it closes, which is why `horde_playground` uses it for a coin
-/// flying into a player.
+/// that grows as it closes.
 pub fn ease_in_cubic(t: f32) -> f32 {
   t * t * t
 }
@@ -529,7 +528,7 @@ mod adaptive_tests {
 
   #[test]
   fn an_error_that_is_kept_entirely_never_moves() {
-    // A caller that wants the old fixed-rate behaviour asks for it.
+    // A caller that wants a fixed rate asks for it.
     let flat = AdaptiveDecay::new(0.9, 0.9, 0.0, 1.0);
     let dt = 1.0 / 60.0;
     assert!((flat.retain(0.01, dt) - flat.retain(5.0, dt)).abs() < 1e-6);

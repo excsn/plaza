@@ -102,7 +102,7 @@ mod tests {
   }
 
   // The intermission between matches is the Finished phase. A bot that treated
-  // it as the end of the table left the rematch to the turn timeout.
+  // it as the end of the table would leave the rematch to the turn timeout.
   #[test]
   fn a_finished_match_is_a_wait_rather_than_a_stop() {
     assert_eq!(choose(&view(TablePhase::Finished, None), 1_000_000), None);

@@ -457,11 +457,11 @@ mod tests {
 
   #[tokio::test]
   async fn a_battle_its_owner_left_is_parked_and_can_be_claimed_back() {
-    // This asserted the opposite until now: that a battle ended when its owner
-    // dropped. That is right for anything that decays and wrong here, because
-    // nothing in a turn-based battle does. It is exactly as valid a minute
-    // later, so throwing it away discards the only state in this example worth
-    // resuming, and the player comes back to nothing.
+    // Ending a battle when its owner drops is right for anything that decays
+    // and wrong here, because nothing in a turn-based battle does. It is
+    // exactly as valid a minute later, so throwing it away would discard the
+    // only state in this example worth resuming and the player would come back
+    // to nothing.
     let mut state = PoketoState::new();
     let out = run(&mut state, LogicInput::AgentJoined {
       agent: Agent::new_human(7),
@@ -637,10 +637,9 @@ mod tests {
 
   #[tokio::test]
   async fn a_decided_battle_is_not_over_until_it_has_been_read() {
-    // Ending it the moment it is decided sends the result and the return
-    // together, so the client applies both in one batch and the result is never
-    // drawn for a single frame: the battle just vanishes, which is exactly what
-    // it looked like.
+    // Ending it the moment it is decided would send the result and the return
+    // together, so the client would apply both in one batch and never draw the
+    // result for a single frame: the battle would just vanish.
     let mut state = PoketoState::new();
     run(&mut state, LogicInput::AgentJoined {
       agent: Agent::new_human(7),

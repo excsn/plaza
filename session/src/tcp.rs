@@ -115,8 +115,9 @@ where
     Self::bind_with_options(addr, agent_factory, codec, SessionOptions::with_protocol(protocol)).await
   }
 
-  /// Binds with everything the session answers for itself: the version it
-  /// declares, and the clock it stamps a `Pong` with.
+  /// Binds with a session built from [`SessionOptions`]: the version it
+  /// declares, the clock it stamps a `Pong` with, its queues, limits, overflow
+  /// policy and probe schedule.
   pub async fn bind_with_options(
     addr: impl Into<String>,
     agent_factory: AgentFactory<ID>,

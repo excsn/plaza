@@ -180,7 +180,6 @@ where
     self
   }
 
-  /// Builds the controller and the sender used to command it.
   /// Writes counters into one the application already holds, instead of the
   /// fresh one built by default.
   ///
@@ -200,6 +199,7 @@ where
     Arc::clone(&self.stats)
   }
 
+  /// Builds the controller and the sender used to command it.
   pub fn build(
     self,
   ) -> (
@@ -342,7 +342,7 @@ static NEXT_CONTROLLER_ID: AtomicU64 = AtomicU64::new(1);
 /// shared application state.
 ///
 /// Runs as a single-task actor: it owns the state outright and mutates it only
-/// from its own loop, so no locking is needed anywhere in this crate.
+/// from its own loop, so application logic needs no locking.
 pub struct StateController<Op, ID, StateType, SL, Sess, SP, G = NoGuard>
 where
   ID: AgentId,
@@ -605,16 +605,16 @@ where
     };
 
     // Formatted inside the macro, so a disabled level costs nothing. This runs
-    // on every tick and every op batch; describing it eagerly allocated there.
+    // on every tick and every op batch.
     debug!(input = %input, "Processing logic input");
     // A `&'static str`, for the error arm below, after `input` has been moved.
     let kind = input.kind();
 
     match self.op_handler.process_input(&mut self.state_data, input).await {
       Ok(mut output) => {
-        // One envelope per run of same-sender, same-target ops rather than one
-        // per op: logic pushes an entry per event, and each entry was its own
-        // encode, its own fan-out, and its own frame on the wire.
+        // One envelope per run of same-target ops rather than one per op: logic
+        // pushes an entry per event and each entry would otherwise be its own
+        // encode, its own fan-out and its own frame on the wire.
         output.coalesce();
 
         for targeted_op in output.ops {

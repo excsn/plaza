@@ -21,8 +21,7 @@ pub struct UserPresence {
   pub last_typing_timeout_event_id: Option<ScheduledEventId>,
 }
 
-// Similar to AbilityCooldowns, AppState will own the scheduler
-// for simplicity in this example.
+// AppState owns the scheduler for simplicity in this example.
 #[derive(Clone)]
 pub struct AppState {
   pub users_presence: HashMap<UserId, UserPresence>,

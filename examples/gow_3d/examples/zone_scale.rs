@@ -4,8 +4,8 @@
 //! measures **what happens to the tick when the zone is large**, which decides
 //! whether the design works for an MMO.
 //!
-//! Two axes, kept apart because the first version of this file mixed them and
-//! produced what looked like a scaling wall but was a spawn artefact:
+//! Two axes, kept apart because mixing them produces what looks like a scaling
+//! wall but is a spawn artefact:
 //!
 //! 1. **Population at constant density.** More people, proportionally more
 //!    room, so how many are in view stays put. This is a zone growing.
@@ -20,8 +20,8 @@
 //! `spawn_at`.** That routes through `terrain::footing_near`, which searches
 //! twelve rings for standable ground and falls back to the origin when it finds
 //! none. The map is 232 units across and the spiral leaves it at 256
-//! characters, so every population past that piled up on one spot and the
-//! measurement read a crowd. Terrain belongs to the played example rather than
+//! characters, so through `spawn_at` every population past that would pile up
+//! on one spot and the measurement would read a crowd. Terrain belongs to the played example rather than
 //! to what is being measured; `ground_at` is noise and gives a height anywhere.
 //!
 //! Every character is a connected client, which is the worst case: a zone of

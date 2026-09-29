@@ -7,8 +7,8 @@
 //! two are unrelated.
 //!
 //! The example's main result is a 94x drop between stage one and stage four.
-//! With these as startup flags the only way to see it was to run the thing
-//! twice and compare two numbers from memory. Turning the dial shows 2917 KiB/s
+//! As startup flags, the only way to see it would be to run the thing twice
+//! and compare two numbers from memory. Turning the dial shows 2917 KiB/s
 //! drop to 31 while the yard keeps moving.
 //!
 //! A joining client never has one of these, because the `Arc` exists only in

@@ -70,8 +70,8 @@ impl OrderMirror {
     }
   }
 
-  /// The act list for the panel: the current actor, then the next
-  /// [`PROJECT`] derived after it.
+  /// The act list for the panel, [`PROJECT`] entries long: the current actor,
+  /// then the ones derived after it.
   pub fn projection(&self) -> Vec<UnitId> {
     let Some(regime) = self.regime else {
       return Vec::new();

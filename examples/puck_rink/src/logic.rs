@@ -44,9 +44,8 @@ pub fn bot_held(tick: u64, seat: usize, world: &sim::World, held: &mut PaddleInp
 }
 
 /// What a joining client is handed before its first frame, for a backend whose
-/// frames are not complete baselines. `None` is the fixed-point answer and the
-/// reason the rink shipped without a snapshot provider at all: its world goes
-/// out inside every frame.
+/// frames are not complete baselines. `None` is the fixed-point answer: its
+/// world goes out inside every frame.
 ///
 /// Wrap it in [`plaza::SnapshotFn`] to make it a provider.
 pub fn baseline(state: &RinkState, _target: Option<&Agent<PlayerId>>) -> Option<RinkOp> {

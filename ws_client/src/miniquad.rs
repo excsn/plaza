@@ -12,10 +12,10 @@
 //!
 //! The Rust side never allocates in JS and JS never calls back into wasm.
 //! Events are queued in JavaScript and drained on demand: ask what kind is at
-//! the front, ask how long it is, hand over a buffer, repeat. That is three
-//! crossings per event and it removes every reentrancy question, which matters
-//! because a callback into wasm during a frame could land in the middle of the
-//! borrow the frame loop is already holding.
+//! the front, ask how long it is, ask its close code, hand over a buffer,
+//! repeat. That is four crossings per event and it removes every reentrancy
+//! question, which matters because a callback into wasm during a frame could
+//! land in the middle of the borrow the frame loop is already holding.
 
 use crate::{CloseReason, Event, Socket, State, WsError};
 
@@ -44,8 +44,8 @@ unsafe extern "C" {
 /// The loader looks for `<plugin name>_crate_version` and, finding nothing,
 /// logs that the plugin "is present in JS bundle, but is not used in the rust
 /// code". Exporting it turns that into a real check: a page serving an older
-/// `plaza_ws.js` than the wasm was built against now says so, instead of failing
-/// somewhere later for no visible reason.
+/// `plaza_ws.js` than the wasm was built against logs a version mismatch,
+/// instead of failing somewhere later for no visible reason.
 #[unsafe(no_mangle)]
 pub extern "C" fn plaza_ws_crate_version() -> u32 {
   1

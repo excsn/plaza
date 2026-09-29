@@ -5,8 +5,8 @@
 //! cross the wire and this crate is the wire vocabulary: a client names them
 //! without the server's runtime and [`build`](crate::build)'s baked-in
 //! vocabulary version covers their shape without any consumer listing another
-//! crate's source files. Core re-exports them at their old paths, so
-//! `plaza::game_common::flow_control::phases::op_payloads::*` keeps working.
+//! crate's source files. Core re-exports them, so
+//! `plaza::game_common::flow_control::phases::op_payloads::*` names them too.
 
 use std::fmt::Debug;
 use std::time::Duration;

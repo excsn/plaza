@@ -264,18 +264,18 @@ pub const RING_RADIUS: Fx = Fx::ratio(23, 10);
 /// The laps a trial is.
 pub const LAPS: u16 = 2;
 
-/// Which game is being played and therefore which authority model.
+/// Which game is being played.
 ///
-/// The two modes share the track, the rules and the op log under different
-/// arrangements. See the README.
+/// The two modes share the track, the rules, the op log and the authority
+/// model. See the README.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(into = "u8", try_from = "u8")]
 pub enum Mode {
   /// Alone against the clock and against recordings. Nothing to arbitrate, so
   /// the client runs all of the driving and the server checks afterwards.
   Trial,
-  /// Everybody at once. There is contention, so inputs are addressed to a tick
-  /// and executed on it. Everyone pays the playout delay for that.
+  /// You against a CPU field on the same circuit. The opponents are a function
+  /// of the world, so the player's inputs alone reproduce the race.
   Race,
 }
 
@@ -307,11 +307,12 @@ impl TryFrom<u8> for Mode {
 
 /// What a pickup gives you.
 ///
-/// Two, each changing a *rule* rather than a number, which is the test
+/// Four, each changing a *rule* rather than a number, which is the test
 /// `pellet_maze` settled on for telling a pickup from a tuning value. Turbo
 /// hands you the boost you would otherwise have had to slow down to earn. Grip
 /// gives you the charge turn without the charge speed, which inverts the
-/// game's main trade for a few seconds.
+/// game's main trade for a few seconds. Shield shoves without being shoved.
+/// Slick buys pace with a turning circle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(into = "u8", try_from = "u8")]
 pub enum Power {

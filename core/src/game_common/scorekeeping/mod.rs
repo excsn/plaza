@@ -66,7 +66,7 @@ where
   /// Drops every player, for a new roster rather than a new round.
   fn clear_all_scores(&mut self);
 
-  /// Gets all scores, perhaps for display or snapshotting.
-  /// The return type can vary; a Vec of tuples is common for leaderboards.
+  /// Gets all scores as `(id, score)` pairs sorted for a leaderboard, perhaps
+  /// for display or snapshotting.
   fn get_all_scores_sorted(&self) -> Vec<(ID, ScoreType)>;
 }

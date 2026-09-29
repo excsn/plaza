@@ -2,7 +2,7 @@
 //!
 //! An arena that schedules inputs ahead can only carry a connection whose delay
 //! fits inside the schedule. One arena means one budget, so everybody past it is
-//! turned away, which is how admission started. Several arenas at several depths
+//! turned away. Several arenas at several depths
 //! turn it into a placement: a slow link gets the one built for it and only a
 //! link past *every* budget is actually refused.
 //!
@@ -51,8 +51,8 @@ impl Room {
 /// Every arena this example knows how to run, **in the order they are worth
 /// adding**.
 ///
-/// Not sorted by depth. The first is the arena that used to be the only one, so
-/// a default run is exactly what it was. The second to add is the *relaxed* one,
+/// Not sorted by depth. The first is the standard arena, which a default run
+/// uses alone. The second to add is the *relaxed* one,
 /// because it accepts links that would otherwise be refused outright. A sharper
 /// room only helps players who already had somewhere to play.
 const ALL: [Room; 3] = [

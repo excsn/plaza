@@ -149,12 +149,11 @@ impl World {
   /// had them **at the instant that client was drawing**. The headline accuracy
   /// number.
   ///
-  /// Against the render instant rather than the present. Every figure this
-  /// example published before was against the present, which charges a client
-  /// the whole of a render delay it is taking deliberately: the number then
-  /// grows with the buffer depth rather than with anything going wrong.
-  /// [`Self::naive_render_error`] keeps the old comparison so the difference can
-  /// be shown.
+  /// Against the render instant rather than the present. A comparison against
+  /// the present charges a client the whole of a render delay it is taking
+  /// deliberately: the number then grows with the buffer depth rather than with
+  /// anything going wrong. [`Self::naive_render_error`] is that comparison, kept
+  /// so the difference can be shown.
   pub fn mean_render_error(&self, controls: &Controls) -> f32 {
     self.render_error(controls).mean()
   }
@@ -305,8 +304,8 @@ impl World {
   /// Pickups this client predicted and the server awarded to somebody else.
   ///
   /// The price of predicting a discrete event. A mispredicted *position* is eased
-  /// away over a few frames by `ErrorSmoother`; there is no smooth way to
-  /// un-collect a coin, so this number is a count of visible snaps.
+  /// away over a few frames; there is no smooth way to un-collect a coin, so
+  /// this number is a count of visible snaps.
   pub fn denied_claims(&self) -> u64 {
     self.clients.iter().map(|c| c.denied_claims).sum()
   }
@@ -340,13 +339,6 @@ impl World {
     &self.server.wallets[player]
   }
 
-  /// Players whose *believed* upgrades differ from the truth: the window in which
-  /// a client is simulating enemies under the wrong rule.
-  ///
-  /// This is what makes coins a netcode question rather than a gameplay one. A
-  /// wrong balance is a wrong number; a wrong *upgrade* is a wrong input to the
-  /// behaviour rule every client runs locally, so a mispredicted purchase
-  /// silently corrupts the simulation until the sample stream corrects it.
   /// Recent announcements for this client, with the age of each in seconds.
   pub fn notices(&self, player: usize) -> &[(String, f32)] {
     &self.clients[player].notices
@@ -376,6 +368,13 @@ impl World {
     self.clients.iter().map(|c| c.wrong_rule_packets).sum()
   }
 
+  /// Players whose *believed* upgrades differ from the truth: the window in which
+  /// a client is simulating enemies under the wrong rule.
+  ///
+  /// This is what makes coins a netcode question rather than a gameplay one. A
+  /// wrong balance is a wrong number; a wrong *upgrade* is a wrong input to the
+  /// behaviour rule every client runs locally, so a mispredicted purchase
+  /// silently corrupts the simulation until the sample stream corrects it.
   pub fn upgrade_disagreements(&self) -> usize {
     (0..self.clients.len())
       .filter(|p| self.clients[*p].believed_upgrades != self.server.wallets[*p].upgrades)
@@ -463,8 +462,6 @@ impl World {
     self.server.slot_count()
   }
 
-  /// Packets after which a client's mirror disagreed with the server's digest.
-  /// Should be zero; anything else means a delta failed to land.
   /// How many times a client's baseline aged out and it needed the whole visible
   /// set resent. Recovery's price, and the readout that says whether the sent
   /// history is long enough for the link.
@@ -472,6 +469,8 @@ impl World {
     self.server.full_resends()
   }
 
+  /// Packets after which a client's mirror disagreed with the server's digest.
+  /// Should be zero; anything else means a delta failed to land.
   pub fn digest_mismatches(&self) -> u64 {
     self.clients.iter().map(|c| c.digest_mismatches()).sum()
   }
@@ -604,10 +603,10 @@ mod tests {
 
   #[test]
   fn a_client_is_only_sent_the_players_it_can_use() {
-    // The change that took 128 players from 3.9 MB/s to 0.6. Player state used
-    // to go to everybody, on both streams, which is `O(players^2)` and was 81%
-    // of all traffic at a large count while the three thousand enemies, which do
-    // get relevance, were 9%.
+    // Player state sent to everybody, on both streams, is `O(players^2)`: at a
+    // large count it was 81% of all traffic while the three thousand enemies,
+    // which do get relevance, were 9%. Limiting it took 128 players from
+    // 3.9 MB/s to 0.6.
     //
     // Measured on the **per-round** set, not on what a client has ever heard.
     // Cumulative knowledge grows to the whole roster and costs nothing: a
@@ -721,20 +720,20 @@ mod tests {
 
   #[test]
   fn a_pulsed_repulsor_does_not_ring_up_and_wall_the_player_off() {
-    // Regression for a rule bug that looked like a rendering artifact.
+    // Regression guard for a rule bug that looks like a rendering artifact.
     //
-    // The first repulsor was a permanent aura with a hard sign flip at a fixed
-    // radius: flee inside it, chase outside it, both at chase speed. That is a
-    // stable equilibrium, so every enemy converged on exactly that radius and
-    // stopped, leaving a motionless ring the player could never be reached
-    // through. It also made every accuracy readout look better than it was,
-    // because stationary entities are trivially easy to predict.
+    // A permanent aura with a hard sign flip at a fixed radius (flee inside it,
+    // chase outside it, both at chase speed) is a stable equilibrium: every
+    // enemy converges on exactly that radius and stops, leaving a motionless
+    // ring the player can never be reached through. It also makes every
+    // accuracy readout look better than it is, because stationary entities are
+    // trivially easy to predict.
     //
     // A weaker push would not fix it and would ring up at the same radius,
     // because the equilibrium comes from the sign flip rather than the
-    // magnitude. The fix makes the repulsion *intermittent*, so there is no
-    // radius at which net motion is zero. This checks the consequence rather
-    // than the mechanism: enemies can still reach you.
+    // magnitude. The repulsion is *intermittent*, so there is no radius at which
+    // net motion is zero. This checks the consequence rather than the
+    // mechanism: enemies can still reach you.
     let c = Controls {
       spread_players: false,
       ..Controls::default()
@@ -745,8 +744,8 @@ mod tests {
     let you = w.players()[0];
     let closest = w.truth().iter().map(|(_, pos)| pos.dist(you)).fold(f32::MAX, f32::min);
     // Inside the *largest* pulse is the meaningful bar. A stable ring at any
-    // radius keeps the nearest enemy pinned out there, which is what the old aura
-    // did at 190px; getting well inside the biggest pulse proves nothing has
+    // radius keeps the nearest enemy pinned out there (a permanent aura held it
+    // at 190px); getting well inside the biggest pulse proves nothing has
     // settled at a fixed distance.
     assert!(
       closest < crate::sim::types::REPULSOR_MAX_RADIUS,
@@ -773,25 +772,22 @@ mod tests {
 
   #[test]
   fn a_consistent_timeline_turns_predicting_a_pickup_into_replaying_it() {
-    // This test used to assert the opposite.
-    //
-    // Coins are claimed by whoever is nearest inside the radius. When the client
-    // applied each packet the moment it landed, it judged "am I nearest?" against
-    // a mixture: its own position fresh, everyone else's a latency out of date.
+    // Coins are claimed by whoever is nearest inside the radius. A client that
+    // applies each packet the moment it lands judges "am I nearest?" against a
+    // mixture: its own position fresh, everyone else's a latency out of date.
     // That is a genuine guess, and it was wrong often enough to measure, more
     // often the worse the link (15 taken back over thirty seconds at 250 ms).
     //
-    // Now that packets are played out when the render clock reaches the instant
-    // they describe, the client **replays the past** instead of guessing at the
+    // Packets are played out when the render clock reaches the instant they
+    // describe, so the client **replays the past** instead of guessing at the
     // present: it evaluates the same rule, on the same positions, at the same
-    // instant the server did. The same inputs through the same function give the
-    // same answer, so the client is no longer guessing. Measured at 250 ms, 166
-    // predictions and zero taken back.
+    // instant the server did. The same inputs through the same function give
+    // the same answer. Measured at 250 ms, 166 predictions and zero taken back.
     //
     // What it costs instead is *lateness*: the pickup is shown when the timeline
     // reaches it rather than the moment the player believes it happened. That is
-    // the trade the playout buffer makes everywhere. It is worth pinning because
-    // the same change that removed the snapping introduced the delay.
+    // the trade the playout buffer makes everywhere: the mechanism that removes
+    // the snapping introduces the delay.
     let together = Controls { spread_players: false, ..Controls::default() };
     // The delay has to cover the trip, or the client is rendering ahead of every
     // sample it holds and cannot replay anything. 250 ms of latency needs a
@@ -806,8 +802,7 @@ mod tests {
       "the test needs the client to actually be predicting: {}",
       far.clients[0].predicted_total
     );
-    // Rare rather than zero; the earlier "zero" was over-fitted to one configuration.
-    // Replaying the past makes a contested claim very nearly deterministic,
+    // Rare rather than zero. Replaying the past makes a contested claim very nearly deterministic,
     // because both sides run one rule over the same positions at the same
     // instant. What survives is the boundary: two players equidistant to within
     // float error still flip, and no amount of timeline agreement removes that.
@@ -923,7 +918,7 @@ mod tests {
     // shows it.
     //
     // Diffing against what the client *acknowledged* re-derives the difference
-    // instead. Two details matter and both were wrong at first: the
+    // instead. Two details matter: the
     // baseline must be the newest **contiguous** acknowledgement rather than the
     // newest bit set, and the sets must be keyed by index **and generation**, or
     // a retraction sent after the slot was recycled names the new occupant and
@@ -944,8 +939,8 @@ mod tests {
       "recovery should clear almost all of them: {recovered_phantoms} against {naive_phantoms}"
     );
 
-    // And the mirror-image failure, which the first working version traded the
-    // corpses for: a client can also be *short* of entities it should hold, and
+    // And the mirror-image failure: a client can also be *short* of entities it
+    // should hold, and
     // no other readout shows it. Phantoms alone can be driven to zero by a client
     // that keeps nothing, so both directions have to be pinned or the next change
     // is free to fix one by breaking the other.
@@ -965,10 +960,9 @@ mod tests {
 
   #[test]
   fn turning_coins_off_does_not_panic() {
-    // Regression: with coins off the server sends no wallets, so the client's
-    // wallet list is empty, and it used to index that list by player id and
-    // panic (the first networked joiner takes seat 3, so the index was 3 into a
-    // length of 0). The offline world reaches the same client path.
+    // Regression guard: with coins off the server sends no wallets, so the
+    // client's wallet list can be shorter than its player id and indexing it by
+    // that id panics. The offline world reaches the same client path.
     let c = Controls { coins: false, ..Controls::default() };
     let w = run(&c, 5);
     assert!(w.alive_enemies() > 0, "the game still runs with coins off");
@@ -1007,7 +1001,7 @@ mod tests {
   /// sampled every frame rather than at the end so a transient is not missed.
   /// Worst error in what client 0 believes about player 1.
   ///
-  /// **Clustered**, because the player stream is relevance-limited now: spread
+  /// **Clustered**, because the player stream is relevance-limited: spread
   /// across the arena the two are 1500 px apart, client 0 is never told about
   /// player 1 at all, and the measurement is of a seed rather than of staleness.
   /// That is the feature working and it makes the spread arena the wrong place
@@ -1019,7 +1013,7 @@ mod tests {
     // Warm up first. Before the first packet lands a client believes the origin,
     // and the distance from there to wherever a player actually started is
     // arena-sized: measuring through that reports the same number for every
-    // configuration, which is what the first version of this test did.
+    // configuration.
     let warmup = 2 * 60;
     for frame in 0..(secs * 60) {
       w.step(16, Vec2::new(1.0, 0.0), controls);
@@ -1100,9 +1094,8 @@ mod tests {
     // until the delay no longer covers it, and every peer, including your own
     // marker, is drawn off the timeline from then on.
     //
-    // That is not hypothetical. This test was written when the player rate was
-    // changed to 8 Hz, which pushed the interval to 125 ms and the requirement
-    // to 225 ms against a 150 ms delay.
+    // Dropping the player rate to 8 Hz, for one, pushes the interval to 125 ms
+    // and the requirement to 225 ms, past a 150 ms delay.
     let controls = Controls::default();
     let required = controls.latency_ms + controls.jitter_ms + 1000 / controls.player_sync_hz.max(1) as u64;
     assert!(
@@ -1134,24 +1127,17 @@ mod tests {
 
   #[test]
   fn a_bad_link_underruns_instead_of_quietly_getting_an_older_world() {
-    // This test asserted the opposite.
-    //
-    // It used to require that a steady link buy itself a *smaller* buffer, on the
-    // reasoning that every millisecond of render delay is a peer drawn further
-    // behind where they are. The buffer was sized from measured arrival jitter,
-    // so each client picked its own render instant.
-    //
-    // That conflated two unrelated things. Latency and jitter describe when bytes
-    // show up, a property of one link. The render delay describes which moment is
-    // on screen, a property of the world. Letting the first move the second means
-    // no two clients agree on what "now" is, the server cannot say what any of
-    // them has yet to play, and, worst, a player on a bad link is silently shown
-    // an older world than everybody else while every readout says fine.
+    // Latency and jitter describe when bytes show up, a property of one link.
+    // The render delay describes which moment is on screen, a property of the
+    // world. Sizing the delay from measured arrival jitter lets the first move
+    // the second: no two clients agree on what "now" is, the server cannot say
+    // what any of them has yet to play and a player on a bad link is silently
+    // shown an older world than everybody else while every readout says fine.
     //
     // Fixed on the server's clock, both links render the same instant. The
-    // difference is still there but now shows up: the link that cannot keep
-    // up reports underruns, packets that arrived after the moment they describe
-    // had already gone past.
+    // difference shows up instead as underruns on the link that cannot keep up:
+    // packets that arrived after the moment they describe had already gone
+    // past.
     // Measured on the timeline itself rather than on a position, because the two
     // answer different questions. How far behind the server clock the client is
     // *rendering* is the timeline, and it must be identical. How far the drawn

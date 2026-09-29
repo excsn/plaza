@@ -115,7 +115,7 @@ fn read_fly(aim: &mut Aim, last: &mut Vec2) -> Fly {
     aim.pitch = aim.pitch.clamp(-1.4, 1.4);
   }
 
-  // Up and down are the throttle now that the mouse owns the nose.
+  // Up and down are the throttle; the mouse owns the nose.
   let thrust = if is_key_down(KeyCode::Up) || is_key_down(KeyCode::W) {
     1
   } else if is_key_down(KeyCode::Down) || is_key_down(KeyCode::S) {
@@ -192,8 +192,7 @@ async fn frame_loop(options: role::Options) {
     // each frame runs the clock slow: 16.67ms counted as 16 loses 4% a second
     // at 60fps and 13.6% at 144, and every rate measured against it reads high
     // by the same amount. Truncating an absolute clock once is off by at most a
-    // millisecond, for ever, which is why horde_playground has always done it
-    // this way.
+    // millisecond, for ever.
     clock_ms = (get_time() * 1000.0) as u64;
 
     client.poll(clock_ms);

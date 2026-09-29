@@ -1,9 +1,10 @@
 //! What the server owns: one zone, and who is sitting in it.
 //!
 //! Thinner than the other examples' state on purpose. There is no predicted
-//! state to reconcile because the client's position is authoritative and no
-//! simulation to step because the only thing with a clock is a cast bar. What
-//! is left is a roster, a set of subscriptions and a timer per character.
+//! state to reconcile, because under the default authority the client's
+//! position is authoritative. The only simulation is the zone's own bots and
+//! beasts. What is left is a roster, a set of subscriptions, a timer per
+//! character and the buffers a tick reuses.
 
 use std::collections::HashMap;
 
@@ -27,7 +28,7 @@ pub const MAX_CHARACTERS: usize = 64;
 /// Where a character starts.
 ///
 /// A spiral rather than a ring, because a ring of a fixed angular step wraps:
-/// the first version stepped 0.9 radians and put seat 7 on top of seat 0. The
+/// a step of 0.9 radians puts seat 7 on top of seat 0. The
 /// golden angle never brings two seats to the same angle. The ground then decides
 /// the height and nudges the point onto footing, so nobody spawns in the sea
 /// or inside a cliff.
@@ -170,8 +171,8 @@ mod tests {
         closest = closest.min(crate::movement::distance(spawn_at(a), spawn_at(b)));
       }
     }
-    // Every seat, not the first handful: the ring this replaced looked fine
-    // for eight and put seat 7 on top of seat 0.
+    // Every seat, not the first handful: a ring of 0.9 radian steps looks fine
+    // for eight and puts seat 7 on top of seat 0.
     assert!(closest > 2.0, "closest pair is {closest}");
   }
 }

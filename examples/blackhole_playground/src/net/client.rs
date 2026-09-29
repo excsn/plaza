@@ -271,7 +271,7 @@ impl NetClient {
     // Predict the dash *movement* too, when the switch is on: the hole dashes in
     // whatever direction it is already steering, so a boosted base speed while
     // the mirror says you are dashing is all the prediction needs. Off, the
-    // dash is left to arrive as a correction, the older and simpler behaviour,
+    // dash is left to arrive as a correction, the simpler behaviour,
     // so the two can be compared live.
     let dash_now = self.now_ms < self.local_dash_until_ms;
     let dashing = self.predict_dash && dash_now;

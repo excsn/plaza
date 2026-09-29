@@ -1,7 +1,7 @@
 //! Does the arena's bandwidth actually climb over a long run?
 //!
-//! Every earlier attempt to answer this drove `Server` directly with bot seats.
-//! That is the wrong instrument: it skips the impairment link, the real
+//! Driving `Server` directly with bot seats is the wrong instrument: it skips
+//! the impairment link, the real
 //! acknowledgement round trip and the seat bookkeeping, which is most of what
 //! separates a measurement from what a host actually reports. This drives
 //! [`ArenaLogic`] itself, with a client on the other end of the packets, and
@@ -58,8 +58,7 @@ fn main() {
   let mut seat: Option<u8> = None;
 
   // One sample a second, kept in full, because a handful of readings cannot
-  // show a trend: every wrong explanation in this investigation came from
-  // reasoning about two or three numbers.
+  // show a trend.
   let mut now_series: Vec<f64> = Vec::new();
   let mut session_series: Vec<f64> = Vec::new();
   let mut alive_series: Vec<u64> = Vec::new();
@@ -70,7 +69,7 @@ fn main() {
 
     // Play the packets into the client and acknowledge, exactly as the real one
     // does. Without this the seat never acknowledges and every packet is a full
-    // dump, which is its own (already fixed) bug and would swamp this one.
+    // dump, which is its own failure mode and would swamp this measurement.
     let now = state.sim.now_ms();
     for targeted in &out.ops {
       for op in &targeted.ops {

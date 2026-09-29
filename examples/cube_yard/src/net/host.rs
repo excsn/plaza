@@ -1,4 +1,4 @@
-//! Standing the rink up behind a WebSocket and serving the browser client
+//! Standing the yard up behind a WebSocket and serving the browser client
 //! from the same port. The session's pong clock is the simulation clock, so a
 //! client's frame aim and its input addressing share the server's timeline.
 
@@ -35,7 +35,7 @@ async fn ws_route(
   session.handle_connection(&req, stream, agent)
 }
 
-/// Runs the rink until the process ends.
+/// Runs the yard until the process ends.
 pub async fn serve(
   bind: &str,
   static_dir: Option<String>,
@@ -54,8 +54,8 @@ pub async fn serve(
   );
 
   let logic = YardLogic::new().with_clock(sim_clock).with_controls(controls);
-  // No snapshot provider: the whole yard goes out inside every Frame, which is
-  // the cost stage one exists to measure.
+  // No snapshot provider: the yard travels inside the Frames themselves, which
+  // is the cost the stages exist to measure.
   let (commands, controller) = StateControllerBuilder::new(
     Arc::new(logic),
     session.clone(),

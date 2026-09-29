@@ -195,8 +195,8 @@ pub fn chase(at: [f32; 3], rot: [f32; 4]) -> Camera3D {
   let up = rot * vec3(0.0, 1.0, 0.0);
   Camera3D {
     // Measured in hull lengths rather than units, so the ship keeps the same
-    // share of the screen whatever size it is. Doubling `SHIP_HALF` against a
-    // fixed 22 left your own hull filling the middle of the view.
+    // share of the screen whatever size it is. A fixed distance would leave a
+    // larger hull filling the middle of the view.
     position: target + behind * (SHIP * 9.0) + up * (SHIP * 1.6),
     up,
     target: target + rot * vec3(0.0, 0.0, SHIP * 1.5),

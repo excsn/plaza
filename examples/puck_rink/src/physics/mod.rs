@@ -178,7 +178,7 @@ pub fn named(name: &str) -> Result<Physics, String> {
 }
 
 /// The value of `--physics` on a command line, defaulting to the reference
-/// backend so the rink runs as it always has unless asked otherwise.
+/// backend.
 pub fn from_args<I: IntoIterator<Item = String>>(args: I) -> Result<Physics, String> {
   let mut args = args.into_iter().skip_while(|a| a != "--physics");
   match args.nth(1) {

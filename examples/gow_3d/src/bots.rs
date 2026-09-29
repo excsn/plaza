@@ -19,11 +19,13 @@ use crate::zone::Zone;
 /// How many the zone seats when nothing says otherwise.
 pub const DEFAULT_BOTS: usize = 24;
 
-/// How long a bot keeps walking toward one place, before and after.
+/// How long a bot keeps walking toward one place: at least `THINK_MIN_MS`,
+/// plus up to `THINK_SPAN_MS` more.
 const THINK_MIN_MS: Ms = 1800;
 const THINK_SPAN_MS: Ms = 4200;
 
-/// How long a bot waits between casts, over the cooldown the zone enforces.
+/// How long a bot waits before trying another cast. The zone's own cooldown
+/// still decides whether it goes off.
 const PATIENCE_MS: Ms = 900;
 
 /// Reproducible, so a headless zone replays the same way twice. Small enough

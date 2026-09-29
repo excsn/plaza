@@ -493,7 +493,8 @@ mod tests {
   fn an_unset_tick_budget_is_one_tick_and_not_two() {
     // `Duration::from_secs_f64(1.0/60.0)` rounds up, and multiplying it back by
     // the rate lands fractionally over 1.0, which `ceil` reads as two ticks.
-    // That doubled the backlog on every preset that leaves `tick_budget` unset.
+    // That would double the backlog on every preset that leaves `tick_budget`
+    // unset.
     for tick_rate in [1u32, 4, 10, 20, 30, 60, 128] {
       let workload = Workload {
         tick_rate,

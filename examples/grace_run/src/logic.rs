@@ -101,7 +101,7 @@ fn refuse(ctx: &mut Ctx, player: PlayerId, why: Refusal) -> bool {
 }
 
 /// A first join takes a seat; a return inside the window reclaims one, loot
-/// and all, which is the half of the tracker no example had worn.
+/// and all, which is the half of the tracker no other example uses.
 fn arrive(state: &mut RunState, agent: &Agent<PlayerId>, ctx: &mut Ctx) -> bool {
   let Some(player) = agent.id_cloned() else {
     return false;

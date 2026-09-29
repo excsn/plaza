@@ -8,8 +8,9 @@
 //! the codec and `plaza` core re-exports the payloads, so server code rarely
 //! names this crate directly.
 //!
-//! [`JsonCodec`] is behind the default `json` feature. Turn it off
-//! (`default-features = false`) to take the trait and payloads by themselves.
+//! [`JsonCodec`] is behind the default `json` feature. The trait and the
+//! payloads are behind `serde`, which `json` turns on, so take them without
+//! JSON with `default-features = false, features = ["serde"]`.
 //!
 //! [`build`] is behind the non-default `build` feature and is meant for a
 //! `build.rs` rather than for the running program: it derives a wire format
@@ -71,8 +72,8 @@ pub trait WireCodec: Clone + Send + Sync + 'static {
   /// to even a few dozen bytes reallocates and copies four or five times before
   /// the encode is done.
   ///
-  /// The default implementation calls [`encode`](Self::encode) and copies, so an
-  /// existing codec keeps working. Override it: `serde_json::to_writer`,
+  /// The default implementation calls [`encode`](Self::encode) and copies, so a
+  /// codec that implements only `encode` still works. Override it: `serde_json::to_writer`,
   /// `rmp_serde::encode::write` and `bincode::serialize_into` all append to a
   /// `Vec` directly.
   fn encode_into<T: Serialize>(

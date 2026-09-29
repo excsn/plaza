@@ -1,6 +1,6 @@
 //! Everything needed to take a `StateLogic` to a listening server.
 //!
-//! Every listen-server example stood up the same stack by hand: a session
+//! Every listen server needs the same stack: a session
 //! speaking a named codec with the build's protocol version and a simulation
 //! clock for its pongs, a controller over the logic, a fixed-step driver, a
 //! WebSocket route numbering its connections, and a [`Host`] serving the

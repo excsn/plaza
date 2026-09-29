@@ -34,11 +34,11 @@ fn smooth_interval(held: u64, gap: u64) -> u64 {
 /// Two thresholds, because this chooses between **two different sources**: the
 /// buffer answers with a position a render delay in the past and the fallback
 /// answers with the newest one, so a decision that flips frame to frame swings
-/// every cube back and forth by whatever it travels in that delay. With a raw
-/// gap and a single threshold at the tick interval it flipped on a repeating
-/// three-frame cycle, which at 15 units a second is half a unit of shake. It
-/// was worst under `--encoding delta`, where sparse samples put the two
-/// answers furthest apart.
+/// every cube back and forth by whatever it travels in that delay. A raw gap
+/// and a single threshold at the tick interval flip on a repeating three-frame
+/// cycle, which at 15 units a second is half a unit of shake, worst under
+/// `--encoding delta`, where sparse samples put the two answers furthest
+/// apart.
 fn should_interpolate(interval_ms: u64, currently: bool) -> bool {
   if currently {
     // Held until the rate is clearly back at tick speed.
@@ -357,8 +357,6 @@ impl NetClient {
     }
   }
 
-  /// Where to draw a cube: its last known state plus whatever of its last
-  /// correction has not bled off yet.
   /// Where to draw a cube.
   ///
   /// Blended between two real samples when the send rate leaves gaps, which is
@@ -381,8 +379,8 @@ impl NetClient {
 
   /// Whether the send rate is low enough that interpolating is worth it.
   ///
-  /// At the tick rate a chord is 16ms and a straight line is invisible; the
-  /// spline only helps once the gaps are long enough for a cube to turn.
+  /// At the tick rate a gap is 16ms and blending across it is invisible; it
+  /// only helps once the gaps are long enough to see.
   pub fn interpolating(&self) -> bool {
     self.interpolating
   }
@@ -599,8 +597,8 @@ mod render_clock_tests {
   #[test]
   fn a_sixty_hertz_server_never_toggles_interpolation() {
     // 1000/60 is not an integer, so the gaps are 16, 17, 17. A threshold at the
-    // tick interval reading the raw gap flipped on that cycle, and each flip
-    // moved every cube by a render delay's worth of travel.
+    // tick interval reading the raw gap flips on that cycle and each flip
+    // moves every cube by a render delay's worth of travel.
     let gaps = tick_gaps(600);
     assert!(gaps.contains(&16) && gaps.contains(&17), "{gaps:?}");
 

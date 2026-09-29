@@ -241,8 +241,8 @@ mod tests {
 
   const WINDOW: InputWindow = InputWindow { max_late: 4, max_early: 30 };
 
-  /// The two diagnostics nothing was calling. They are the ones that tell a
-  /// lag switch apart from a bad connection.
+  /// `rejected_split` and `last_reject_margin`, the two diagnostics that tell
+  /// a lag switch apart from a bad connection.
   mod reading_the_rejections {
     use super::*;
 

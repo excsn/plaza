@@ -74,7 +74,8 @@ pub struct JoinRoomRequestPayload {
   /// Supplied by whoever owns the socket, because the lobby does not, and it
   /// must be a number the **server** measured rather than one the client sent:
   /// a client can understate its own latency and this decides entry.
-  /// `plaza_session` exposes it as `agent_rtt`.
+  /// `plaza_session` exposes the measured round trip as `agent_rtt`; one way is
+  /// half of it.
   pub measured_one_way_ms: Option<u32>,
   pub room_id: RoomId,
   pub password_attempt: Option<String>, // Client sends plaintext attempt

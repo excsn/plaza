@@ -199,8 +199,8 @@ fn start_turn(state: &mut WordState, ctx: &mut Ctx) {
   );
 }
 
-/// Every grant is a window: the counter the IDEAS entry asked to see beside
-/// casts and resolutions.
+/// Every grant is a window, counted on the panel beside casts and
+/// resolutions.
 fn grant_priority(state: &mut WordState, seat: u8, ctx: &mut Ctx) {
   state.priority = Some(seat);
   state.panel.windows += 1;
@@ -653,9 +653,7 @@ mod tests {
     run(&mut state, LogicInput::AgentLeft { agent_id: 1 }).await;
     assert_eq!(*state.phase.current(), DuelPhase::Waiting);
 
-    // Two bots duel to a verdict; the accounting identity holds throughout:
-    // a window opened for every cast and every resolution and every lone
-    // pass, and duels end.
+    // Both duelists leaving with nobody watching closes the hall.
     let mut state = WordState::new();
     for player in [1, 2] {
       run(&mut state, LogicInput::AgentJoined {

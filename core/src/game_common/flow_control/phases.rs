@@ -118,7 +118,7 @@ pub struct Epoch(u64);
 ///           // so the broadcast cannot be skipped.
 ///           state.phase.transition_to(GamePhase::Resolving, &mut ctx, GameOp::PhaseChanged);
 ///         }
-///         _ => return Err(StateLogicError::Rejected("not your turn".into())),
+///         _ => return Err(StateLogicError::PreconditionFailed("not your turn".into())),
 ///       }
 ///     }
 ///   }

@@ -13,7 +13,7 @@
 //! clients a snapshot from a [`SnapshotProvider`].
 //!
 //! ```ignore
-//! let session = InProcessSession::<MyOp, MyId, MySnapshot>::new();
+//! let session = InProcessSession::<MyOp, MyId>::new();
 //! let (tx, controller) = StateControllerBuilder::new(
 //!     Arc::new(MyLogic), session.clone(), Arc::new(MySnapshotter), MyState::default(),
 //!   ).build();

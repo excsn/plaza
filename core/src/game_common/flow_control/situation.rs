@@ -5,8 +5,7 @@
 //! turn clock, a bot's think timer, a response window's deadline: each is
 //! scheduled against a moment ("seat 3 owes the next action") that ends when
 //! anything moves the game on. The phase epoch cannot see that, because the
-//! phase did not change. Four examples wrote the same bare `key: u64` with the
-//! same compare-on-fire guard before this existed.
+//! phase did not change.
 //!
 //! The marker type parameter is what keeps two situations in one state from
 //! answering for each other: a `Mark<Ask>` does not compare against a

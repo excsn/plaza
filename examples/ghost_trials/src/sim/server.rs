@@ -238,7 +238,7 @@ mod tests {
 
   #[test]
   fn verifying_by_replay_costs_one_run_of_the_rules() {
-    // Replaying every submission costs a couple of thousand ticks of integer
+    // Replaying every submission costs about twelve hundred ticks of integer
     // maths, once, at the end of a run that took about thirty seconds to drive.
     let mut server = Server::new(1);
     let (log, time) = a_run(server.rules_version);

@@ -2,7 +2,7 @@
 //!
 //! Every other test here drives one side. This example exists for the half of
 //! multiplayer nothing else in the tree exercises, delivery,
-//! ordering and reconnection, and the failure its plan named is one no
+//! ordering and reconnection, and the failure it guards against is one no
 //! single-sided test can see: **an operation applied twice because a reconnect
 //! re-sent it.**
 //!
@@ -119,7 +119,7 @@ async fn walk_into_a_battle(logic: &PoketoLogic, state: &mut PoketoState, id: Pl
 
 #[tokio::test]
 async fn a_choice_resent_after_a_reconnect_does_not_play_twice() {
-  // The failure this example's plan named, and the one a single-sided test
+  // The failure this example exists to catch, and the one a single-sided test
   // cannot see: the client is correct to resend (it never heard an answer),
   // the server is correct to accept a choice, and what neither owns is
   // whether this choice is the same one.

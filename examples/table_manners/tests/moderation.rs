@@ -1,8 +1,7 @@
-//! Every claim in the entry, as a count.
+//! Every moderation claim, as a count.
 //!
-//! Same claims as before the library grew the primitives; the party no longer
-//! brings its own transport to make them true. Farewell delivery is asserted
-//! from the client's side throughout, which is where delivery is real.
+//! Farewell delivery is asserted from the client's side throughout, which is
+//! where delivery is real.
 
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -151,8 +150,7 @@ async fn a_flood_gets_the_flooder_removed_and_nobody_else() {
 
 #[tokio::test]
 async fn a_clumsy_burst_costs_its_own_frames_and_keeps_its_seat() {
-  // The verdict the party could not express while removal was the only one it
-  // had. A guest whose packets arrive in a clump is over the rate but is not a
+  // A guest whose packets arrive in a clump is over the rate but is not a
   // griefer, so it keeps its seat.
   let (session, host) = party(patient()).await;
   let addr = session.local_addr().to_string();

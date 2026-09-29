@@ -110,8 +110,8 @@ pub fn reachable(map: MapSize, units: &[Unit], mover: &Unit) -> Vec<Cell> {
   let mov = mover.class.stats().mov;
   let mut best: HashMap<Cell, u8> = HashMap::from([(mover.at, 0)]);
   // Max-heap over reversed cost: a tiny Dijkstra, because the biggest field
-  // is sixteen hundred cells and the fixed-point relaxation loop was
-  // quadratic in them.
+  // is sixteen hundred cells and a fixed-point relaxation loop is quadratic
+  // in them.
   let mut frontier: BinaryHeap<(std::cmp::Reverse<u8>, Cell)> = BinaryHeap::new();
   frontier.push((std::cmp::Reverse(0), mover.at));
 

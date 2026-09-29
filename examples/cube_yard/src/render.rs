@@ -134,7 +134,7 @@ fn quad_indices(cubes: usize) -> Vec<u16> {
   indices
 }
 
-/// The floor and the walls, which never move and so are not on the wire.
+/// The floor and its edge, which never move and so are not on the wire.
 pub fn draw_yard(half: f32) {
   draw_grid_ex(
     (half * 2.0) as u32,

@@ -1,13 +1,12 @@
 //! Deferred work that belongs to one occupancy of a phase.
 //!
-//! Extracted after being hand-written nine times across four examples. Every
-//! turn-based example schedules work against its phase (a turn timeout, a
-//! rematch, a day's deadline), stamps each event with [`Epoch`] and writes the
-//! same guard in its drain loop:
+//! Work scheduled against a phase (a turn timeout, a rematch, a day's
+//! deadline) stamps each event with [`Epoch`] and needs the same guard in its
+//! drain loop:
 //!
 //! ```ignore
 //! for due in state.timeouts.tick(state.tick) {
-//!   if !state.phase.is_current(due.epoch) { continue; }   // ninth copy
+//!   if !state.phase.is_current(due.epoch) { continue; }
 //!   ...
 //! }
 //! ```
@@ -20,8 +19,8 @@
 //! # When the token is captured
 //!
 //! The token must be taken *after* the transition, so it names the occupancy
-//! the work belongs to. That still applies here: schedule after you
-//! transition. What the type prevents is the other mistake: an event
+//! the work belongs to, so schedule after you transition. What the type
+//! prevents is the other mistake: an event
 //! constructed with one occupancy's token and drained against another's rule.
 //!
 //! # What stays with the application
@@ -44,8 +43,7 @@ use super::phases::{Epoch, Phased};
 ///
 /// Wraps [`TickEventScheduler`], pairing each event with the [`Epoch`] current
 /// at schedule time. [`due`](Self::due) yields only events whose occupancy
-/// still holds; the rest are dropped with a debug line, exactly as every
-/// hand-written drain did.
+/// still holds; the rest are dropped with a debug line.
 #[derive(Debug, Clone, Default)]
 pub struct PhasedScheduler<E: Clone + Debug + Send + 'static> {
   inner: TickEventScheduler<(Epoch, E)>,
@@ -135,7 +133,6 @@ mod tests {
 
   #[test]
   fn work_outlived_by_its_phase_is_dropped_not_fired() {
-    // Nine hand-written copies of this guard existed across four examples.
     let mut phase = Phased::new(Season::Spring);
     let mut chores: PhasedScheduler<Chore> = PhasedScheduler::new();
     chores.schedule_after(0, 5, &phase, Chore::Water);

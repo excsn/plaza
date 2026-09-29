@@ -54,11 +54,9 @@ impl<TurnActorId> Advanced<TurnActorId> {
 /// which order it plays in. The trait lists what an order of your own, such as
 /// initiative order, must provide.
 ///
-/// It held two methods until [`draft_board`] wrote the second implementation,
-/// while every consumer called five, so a conforming manager could be written
-/// that no application could seat, restart or change the roster of. Seating
-/// and roster changes are on the trait because a manager without them is not
-/// usable.
+/// Seating, restarting and roster changes are on the trait because a manager
+/// without them is not usable: no application could seat it, restart it or
+/// change its roster. [`draft_board`] implements a snake order against it.
 ///
 /// [`draft_board`]: https://github.com/excsn/plaza/tree/main/examples/draft_board
 pub trait TurnManager<Op, AppID: AgentId, TurnActorId> {
@@ -383,8 +381,7 @@ mod tests {
 
   #[test]
   fn the_wrap_is_reported_as_a_closed_pass() {
-    // Two examples were working this out by counting. Only the manager knows
-    // where its pass ends, because implementations differ in how a pass ends.
+    // Only the manager knows where its pass ends, because implementations differ in how a pass ends.
     let mut turns = manager(vec![1, 2, 3]);
     let mut ctx = Ctx::new();
     turns.begin(&mut ctx);

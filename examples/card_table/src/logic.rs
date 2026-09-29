@@ -87,8 +87,8 @@ fn seat_player(state: &mut TableState, agent: &Agent<PlayerId>, ctx: &mut Ctx) -
     return false;
   }
   // Admission is checked before anything else happens to the table: seating an
-  // extra player and then asking whether it was full re-dealt the round every
-  // time a fourth arrived.
+  // extra player and then asking whether it was full would re-deal the round
+  // every time a fourth arrived.
   if !matches!(state.seats.admit(player), Admission::Seated { .. }) {
     info!(%player, "table is full; connected as a spectator");
     return false;
@@ -389,9 +389,9 @@ mod tests {
 
   #[tokio::test]
   async fn a_mid_match_joiner_waits_out_the_round_instead_of_ending_the_match() {
-    // Filling a seat mid-match used to call begin_round, whose
-    // start_next_round error (a round was in progress) was misread as the round
-    // limit, finishing the match instantly.
+    // Filling a seat mid-match must not call begin_round: its
+    // start_next_round error (a round is in progress) would read as the round
+    // limit and finish the match instantly.
     let mut state = seat_everyone().await;
     let card = state.hands[&PlayerId(0)][0];
     TableLogic

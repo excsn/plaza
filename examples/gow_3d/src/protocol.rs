@@ -36,9 +36,9 @@ pub fn frame_to_ms(frame: u64) -> u64 {
 /// On the frame rather than assumed, because a client that guesses wrong
 /// either fights the server for its own position or stops moving entirely.
 ///
-/// One type rather than a wire copy and a server copy. The two started out
-/// separate with a `match` converting between them, which derives one fact
-/// twice, the pattern behind every drift bug in this tree.
+/// One type rather than a wire copy and a server copy. Two copies with a
+/// `match` converting between them derive one fact twice, the pattern behind
+/// every drift bug in this tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Authority {
   /// The server integrates held input and says where everyone is, including
@@ -153,7 +153,7 @@ pub enum Precision {
   /// an axis, which at that distance is still inside a pixel.
   ///
   /// The width cannot be chosen per viewer, because a cell is packed once and
-  /// shared: that is the same constraint that took the relevance tag off the
+  /// shared: that is the same constraint that keeps the relevance tag off the
   /// wire. So the zone publishes **both** widths and each viewer takes the one
   /// for its own distance to that cell. That doubles the cost of publishing,
   /// which was never the expensive part.
@@ -210,11 +210,11 @@ pub struct Seen {
 
 /// Everything the local player needs about themselves.
 ///
-/// Separate from the `Seen` entry for the same seat. This fixed a defect: a
-/// client drew its own body from its own position and took everything else
-/// from the audience list, so its own cast bar, health and cooldown were never
-/// read and pressing a key changed nothing on screen. A player is told things
-/// about themselves that nobody else is told, so this travels as its own block.
+/// Separate from the `Seen` entry for the same seat. A client draws its own
+/// body from its own position and never reads its own audience entry, so its
+/// cast bar, health and cooldown arrive here or a key press changes nothing on
+/// screen. A player is told things about themselves that nobody else is told,
+/// so this travels as its own block.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct You {
   pub seat: u16,
@@ -250,9 +250,8 @@ pub struct You {
 /// An ability going off, which is the one thing on this wire that is an
 /// **event** rather than state.
 ///
-/// The seat alone was enough while the only consumer was a coloured flash. An
-/// animation needs to know which ability and what it reached, and neither is
-/// derivable from a later frame: no frame mentions a landing again, and the
+/// An animation needs to know which ability and what it reached and neither
+/// is derivable from a later frame: no frame mentions a landing again and the
 /// victim's health has already moved by the time one arrives.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Landed {
@@ -292,12 +291,12 @@ pub struct Frame {
   /// Empty under [`Delivery::Cells`], where the payloads arrive as their own
   /// ops. Read it with [`Frame::seen`] either way.
   pub bodies: Packed,
-  /// The subscription channel: party members with no payload in `cells`,
-  /// packed per client. Out of view, or a corpse the world has let go of.
+  /// The subscription channel: party members with no payload in `bodies` or a
+  /// `Cell` op, packed per client. Out of view or a corpse the world has let go of.
   pub extras: Packed,
   /// Who this client is partied with, so [`Frame::seen`] can label a cell
   /// entry [`Because::BothOfThose`]. The only per-viewer relevance fact left
-  /// on the frame; the entries themselves no longer carry one.
+  /// on the frame; the entries themselves carry none.
   pub party: Vec<u16>,
   /// Casts that went off since the last frame.
   ///

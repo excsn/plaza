@@ -53,7 +53,6 @@ pub enum Op {
   /// Drop a bomb at whatever cell this player occupies on `tick`. The cell is
   /// not carried, because the server decides it.
   DropBomb { seq: u64, tick: u64 },
-  /// Round-trip probe; the reply echoes `origin_ms` verbatim.
 
   // ---- server to client ----
   /// Sent once on join: which player is yours, the settings a client cannot see
@@ -71,7 +70,8 @@ pub enum Op {
   /// One explosion cascade, resolved. See the module note on why this is
   /// announced rather than derived.
   Blast(Box<BlastEvent>),
-  /// The newest movement input this player's state accounts for.
+  /// The newest input sequence the server has received from this player. It
+  /// is acknowledged on arrival, before the input runs.
   InputAck { seq: u64 },
   /// The round is over. `winner` is `None` for a draw, which happens more often
   /// than it sounds: a shared blast kills everyone standing in it.
@@ -117,9 +117,8 @@ pub struct Frame {
 /// before it knows the second one exists.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct BlastEvent {
-  /// When this went off, on the server clock. The client draws it against the
-  /// same render instant as everything else, so the flash and the death land
-  /// together rather than a render delay apart.
+  /// When this went off, on the server clock. A client draws the fire until its
+  /// render instant passes this plus `BLAST_MS`.
   pub at_ms: u64,
   /// The bombs that went off, so a client can retire them without waiting for
   /// the next frame.
@@ -141,18 +140,16 @@ pub struct BlastEvent {
 
 /// Server settings a client cannot see but has to reason about.
 ///
-/// Sent rather than assumed. A joiner that guessed the send rate would mis-time
-/// interpolation; one that guessed the playout depth would name its input ticks
-/// wrong and have every one of them refused.
+/// Sent rather than assumed. A joiner that guessed the playout depth would name
+/// its input ticks wrong and have every one of them refused.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ServerPolicy {
   pub sync_hz: u32,
   /// How far ahead of the server's current tick a client should aim its inputs.
   /// A client cannot compute the accepting window without it.
   pub playout_delay_ms: u64,
-  /// How far behind the server clock every client draws remote state. A
-  /// property of the timeline rather than of any one link, so every client shows
-  /// the same instant.
+  /// The host's render delay. A client's own panel setting replaces it from its
+  /// first tick.
   pub render_delay_ms: u64,
   /// The accepting window, so a client can say on its own screen when its
   /// inputs are landing outside it.
@@ -162,8 +159,7 @@ pub struct ServerPolicy {
 }
 
 impl Op {
-  /// Whether this is something a client may send. Used by the arena to refuse
-  /// the rest without a match arm per variant.
+  /// Whether this is something a client may send.
   pub fn is_upstream(&self) -> bool {
     matches!(self, Op::Move { .. } | Op::DropBomb { .. })
   }

@@ -1,5 +1,5 @@
-//! Four editors build one bomb_grid board together. No example had called
-//! `plaza::app_common` before this one. Every collaborative surface uses its
+//! Four editors build one bomb_grid board together. It is the only example
+//! that calls `plaza::app_common`. Every collaborative surface uses its
 //! vocabularies verbatim: quadrant **locks** around every paint, the board as
 //! an **object** whose tiles are properties, the spawn roster as an **ordered
 //! collection** and live cursors as **presence**. A playtest then hands the

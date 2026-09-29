@@ -273,8 +273,8 @@ impl NetClient {
           self.send_policy.reset();
           self.last_result = None;
           // Any round start clears it: play has resumed, whatever the table
-          // said. Keying this to `match_round == 1` left the table up for the
-          // whole of the next match if the two ever arrived together.
+          // said. Keying this to `match_round == 1` would leave the table up
+          // for the whole of the next match if the two arrived together.
           self.last_standings = None;
         }
         Op::Frame(frame) => {

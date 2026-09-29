@@ -20,15 +20,13 @@
 //!
 //! The reason generalises and is the opposite of what was expected. A field
 //! name is paid per field per message, so the premium grows with a message's
-//! field count rather than its size. `PlayerView` has fifteen fields and is
+//! field count rather than its size. `PlayerView` has sixteen fields and is
 //! sent once per recipient per change; a notice has two or three behind a
 //! variant name both encodings pay for. The widest, most frequent message
 //! therefore pays most.
 //!
-//! This runs the other way from [`curtain_fire`]'s variant-name result, where a
+//! This runs the other way from `curtain_fire`'s variant-name result, where a
 //! fixed per-message tag made small messages the expensive ones.
-//!
-//! [`curtain_fire`]: https://docs.rs/plaza
 
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
@@ -99,8 +97,10 @@ impl MatchCost {
 
 /// Plays one match to its end, costing everything it puts on the wire.
 ///
-/// Deterministic: the deal is fixed and every play is the on-turn player's
-/// lowest card, so the number does not move between runs.
+/// Deterministic, so the number does not move between runs. The deal is
+/// shuffled from a seed of the table's name, the tick and the deal count, all
+/// of which are the same on every run. Every play is the on-turn player's
+/// lowest card.
 pub async fn measure_a_match(seats: u32) -> MatchCost {
   let mut cost = MatchCost::default();
   let mut state = TableState::new(
@@ -219,7 +219,7 @@ mod tests {
   /// A field name is paid per field per message, so the premium grows with how
   /// many fields a message has rather than how small it is. A notice is two or
   /// three short fields behind a variant name both encodings pay for; a
-  /// per-recipient view is fifteen. So the largest and most frequent message on
+  /// per-recipient view is sixteen. So the largest and most frequent message on
   /// this wire also pays proportionally most. In `curtain_fire` a fixed
   /// per-message tag made small messages the expensive ones instead.
   #[tokio::test]

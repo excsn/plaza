@@ -103,8 +103,8 @@ fn seat_drafter(state: &mut DraftState, agent: &Agent<PlayerId>, ctx: &mut Ctx) 
 /// The resets do nothing on a fresh board. A refilled board needs them: an
 /// abandoned draft leaves a round in progress, a finished one leaves the limit
 /// reached and `start_next_round` refuses both. Without the resets, a board
-/// that emptied and refilled sat in `Picking` with no actor and refused every
-/// take.
+/// that emptied and refilled would sit in `Picking` with no actor and refuse
+/// every take.
 fn start_draft(state: &mut DraftState, ctx: &mut Ctx) {
   state.scores.reset_all_scores();
   state.rounds.reset();
@@ -500,9 +500,9 @@ mod tests {
 
   #[tokio::test]
   async fn a_board_abandoned_mid_draft_opens_cleanly_when_it_refills() {
-    // Before `start_draft`, this sat in Picking with no actor and refused every
-    // take: the abandoned round was still in progress, so `start_next_round`
-    // errored and `open_draft` returned without seating anybody.
+    // The abandoned round is still in progress when the board refills, so
+    // without `start_draft`'s resets `start_next_round` errors and `open_draft`
+    // seats nobody.
     let mut state = open_board().await;
     let id = state.available.last().unwrap().id;
     take_for(&mut state, 1, id).await;
@@ -529,8 +529,8 @@ mod tests {
 
   #[tokio::test]
   async fn a_board_that_emptied_after_finishing_still_opens_when_it_refills() {
-    // The rack event fires into an empty board and is skipped, so a later
-    // refill found the round limit reached and stalled.
+    // The rack event fires into an empty board and is skipped, so the round
+    // limit is still reached when the board refills.
     let mut state = open_board().await;
     draft_it_out(&mut state).await;
     for player in 1..=SEATS as PlayerId {

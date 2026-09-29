@@ -47,8 +47,8 @@ pub struct BattleState {
   /// This battle's field, chosen at deploy from the muster's size.
   pub map: MapSize,
   /// Who commands a squad this battle, bots included. Assigned at deploy and
-  /// **stored**: deriving sides from an index broke the moment a leaver
-  /// shifted a survivor's index and silently changed their colours.
+  /// **stored**: sides derived from an index would silently change a
+  /// survivor's colours the moment a leaver shifted their index.
   pub armies: HashMap<PlayerId, Army>,
 
   pub units: Vec<Unit>,

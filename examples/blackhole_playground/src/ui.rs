@@ -283,7 +283,7 @@ fn pellet_error(view: &blackhole_playground::net::arena::HostView, client: &blac
 }
 
 /// How long, on average, before a given pellet is refreshed. The offline
-/// `World::refresh_interval_secs`, reworked to take the pellet count directly so
+/// `World::refresh_interval_secs`, taking the pellet count directly so
 /// a host can compute it from the truth it was handed.
 #[cfg(all(feature = "server", feature = "client", feature = "websocket"))]
 fn refresh_interval_secs(controls: &Controls, pellet_count: usize) -> f64 {

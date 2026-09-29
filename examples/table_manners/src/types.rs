@@ -19,8 +19,7 @@ pub const FLOOD_WINDOW_MS: u64 = 1000;
 ///
 /// The number the shed count buys: a guest whose packets arrived in a clump
 /// loses a handful of frames and stays, and one that keeps pushing after that
-/// has answered the question. Nothing like it was expressible while the only
-/// verdict was removal.
+/// has answered the question.
 pub const FLOOD_TOLERANCE: u64 = 20;
 
 /// Why a seat was vacated. The example depends on one distinction: a drop

@@ -25,20 +25,20 @@ pub const SIM_HZ: u32 = 60;
 ///
 /// `FixedTimestep` counts in whole milliseconds, so a 60Hz rate is a 16ms step
 /// and the loop really runs 62.5 times a second. Deriving the delta from the
-/// *step* rather than from the rate is what keeps the two in agreement: the
-/// previous `1.0 / SIM_HZ` integrated a sixtieth of a second per 16ms tick, so
-/// simulated time ran 4.2% fast against the wall clock everything else is
-/// scheduled on.
+/// *step* rather than from the rate is what keeps the two in agreement:
+/// `1.0 / SIM_HZ` would integrate a sixtieth of a second per 16ms tick, so
+/// simulated time would run 4.2% fast against the wall clock everything else
+/// is scheduled on.
 pub const SIM_STEP_MS: u64 = (1000 / SIM_HZ) as u64;
 pub const SIM_DT: f32 = SIM_STEP_MS as f32 / 1000.0;
 
 /// The deepest render delay the panel can ask for. One constant, because two
 /// things must agree on it: the slider's range, and how much player history a
-/// client keeps. When they were sized independently, the slider could ask for
-/// an instant the history no longer held, and the view silently clamped to the
-/// oldest snapshot it had: the marker detached from the timeline everything
-/// else was drawn on, and shots visibly left from "a point in the past", which
-/// was in fact the only correctly placed thing on screen.
+/// client keeps. Sized independently, the slider can ask for an instant the
+/// history no longer holds and the view silently clamps to the oldest snapshot
+/// it has: the marker detaches from the timeline everything else is drawn on
+/// and shots visibly leave from "a point in the past", which is in fact the
+/// only correctly placed thing on screen.
 pub const RENDER_DELAY_MAX_MS: u64 = 600;
 /// The fastest either stream can be asked to send, for the same reason: the
 /// history buffer must cover [`RENDER_DELAY_MAX_MS`] at this rate.
@@ -115,11 +115,9 @@ pub type PlayerId = u8;
 /// | 4 | 6 ms | 136 KiB/s |
 /// | 128 | 76 ms | 2.1 MiB/s |
 ///
-/// Almost all of that second row is now the enemies, which is the expected
-/// shape: per-player traffic used to go to everybody on both streams and was
-/// 81% of the total. Relevance applies to players as well as enemies now, so
-/// the `O(players^2)` term is gone. What is left grows because 128 viewers each see
-/// their own slice of a 3000-strong horde.
+/// Almost all of that second row is the enemies. Relevance applies to players
+/// as well as enemies, so there is no `O(players^2)` term: what is left grows
+/// because 128 viewers each see their own slice of a 3000-strong horde.
 ///
 /// Re-run it before moving this. The hard limit above it is the wire, where
 /// `PlayerId` is a `u8`.
@@ -380,15 +378,10 @@ impl Shot {
   }
 }
 
-/// **The shared movement rule for a player.** The server integrates a held
-/// direction every tick and a client predicting its own player runs exactly
-/// this, so the two cannot disagree.
-///
-/// It lived in two places for a while, the server's `step` and the client's
-/// local prediction. Every divergence bug in this example was in an entity
-/// whose rule was written out twice instead of shared. A player is *unforced*:
-/// nothing pushes it but its own input, so this rule is complete and a client
-/// running it is exact.
+/// **The movement rule for a player.** The server integrates a held direction
+/// every tick with it. No client runs it, because own movement is not
+/// predicted. A player is *unforced*: nothing pushes it but its own input, so
+/// this rule is complete.
 pub fn step_player(pos: &mut Vec2, dir: Vec2, dt: f32) {
   pos.x = (pos.x + dir.x * PLAYER_SPEED * dt).clamp(0.0, ARENA_W);
   pos.y = (pos.y + dir.y * PLAYER_SPEED * dt).clamp(0.0, ARENA_H);
@@ -406,13 +399,13 @@ pub fn step_enemy(enemy: &mut Enemy, target_pos: Vec2, repel_radius: Option<f32>
     // A repulsor *pulses*. Enemies inside the pulse are pushed out, weakly, and
     // only for as long as it lasts.
     //
-    // The first version was a permanent aura with a hard sign flip at a fixed
-    // radius, and it produced a perfect motionless ring of enemies at exactly
-    // that radius. The cause was an equilibrium in the rule rather than a
-    // netcode bug: step inward and you are pushed out, step outward and you are
-    // pulled in, so everything converges there and stops. It also made the
-    // player invulnerable and made every accuracy readout look better than it
-    // was, because stationary entities are trivially easy to predict.
+    // A permanent aura with a hard sign flip at a fixed radius produces a
+    // perfect motionless ring of enemies at exactly that radius. The cause is
+    // an equilibrium in the rule rather than a netcode bug: step inward and you
+    // are pushed out, step outward and you are pulled in, so everything
+    // converges there and stops. It also makes the player invulnerable and
+    // every accuracy readout look better than it is, because stationary
+    // entities are trivially easy to predict.
     //
     // Pulsing removes the equilibrium. Between pulses there is no outward force
     // at all, so nothing can settle at a radius. The push is weaker than the
@@ -504,7 +497,8 @@ pub const COIN_TTL_MS: u64 = 12_000;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(into = "u8", try_from = "u8")]
 pub enum Upgrade {
-  /// Enemies within [`REPULSOR_RADIUS`] flee the owner instead of chasing.
+  /// While a [`repulsor_pulse`] is active, enemies inside its radius are pushed
+  /// away from the owner instead of chasing.
   Repulsor,
   /// Coins drift toward the owner, widening the effective pickup radius.
   Magnet,
@@ -555,21 +549,21 @@ impl Upgrade {
 /// itself moving means interpolating afresh every frame rather than following a
 /// path computed once.
 ///
-/// Long enough to be watchable. The first version ran for 320 ms with a cubic
-/// ease-in and read as no motion at all: nineteen frames, of which the first ten
-/// covered 15% of the distance and the last nine covered the rest. Nobody
-/// could see the acceleration, so it looked like a teleport.
+/// Long enough to be watchable. 320 ms with a cubic ease-in reads as no motion
+/// at all: nineteen frames, of which the first ten cover 15% of the distance
+/// and the last nine cover the rest. Nobody can see the acceleration, so it
+/// looks like a teleport.
 pub const COIN_FLIGHT_MS: f32 = 900.0;
 
 /// Every player draws coins in a little, upgrade or not.
 ///
 /// The base reach is tuned against [`NOVA_RADIUS`], because that is what
 /// *produces* the coins: an area attack that kills out to 190px and a pickup rule
-/// that reaches 46 is a source four times wider than its sink. Measured before
-/// this existed, 35% of all coins expired where they fell and an average of 112
-/// sat on the ground at any moment, which made the magnet upgrade compulsory
-/// rather than optional. With the base pull in place, the magnet only has to
-/// widen a rule that already works.
+/// that reaches 46 is a source four times wider than its sink. Measured without
+/// it, 35% of all coins expired where they fell and an average of 112 sat on
+/// the ground at any moment, which made the magnet upgrade compulsory rather
+/// than optional. With the base pull, the magnet only has to widen a rule that
+/// already works.
 pub const COIN_ATTRACT_RADIUS: f32 = 200.0;
 /// Above [`PLAYER_SPEED`] on purpose. A pull slower than a player is one you
 /// outrun: the coin falls behind, leaves the radius and stops where it was
@@ -691,31 +685,30 @@ pub struct PlayerFrame {
   /// **Only the players this recipient needs**, which is what keeps the player
   /// stream from being the dominant cost of a large arena.
   ///
-  /// It used to be everybody, to everybody, on this stream *and* inside every
-  /// entity packet. That is `O(players^2)`, and measured at 128 players it was
-  /// 81% of all downstream traffic while the three thousand enemies, which do
-  /// get relevance, were 9%. The example had applied relevance to everything
-  /// except the player stream, which was the largest cost.
+  /// Everybody, to everybody, on this stream *and* inside every entity packet
+  /// is `O(players^2)`: measured at 128 players it was 81% of all downstream
+  /// traffic while the three thousand enemies, which do get relevance, were
+  /// 9%.
   ///
   /// A player is needed here if this recipient can see them, or if an enemy the
   /// recipient holds is chasing them: `step_enemy` aims at a player, so the
   /// client cannot run the rule for an enemy whose target it cannot place.
   pub players: Vec<(PlayerId, Vec2)>,
   /// Health and shield for the same set, paired with the id rather than
-  /// positional, because the set is a subset now.
+  /// positional, because the set is a subset.
   pub vitals: Vec<(PlayerId, u8, bool)>,
   /// Which of `players` are here because this recipient subscribed to them.
   ///
   /// The second channel of relevance, beside the spatial one. Without it a
-  /// squadmate is only ever a far-tier smudge refreshed on a slow clock, which
-  /// is why the minimap had to fade its peer markers: it could not tell a
-  /// teammate two rooms away from a stranger it saw once.
+  /// squadmate is only ever a far-tier smudge refreshed on a slow clock, faded
+  /// on the minimap like any stale marker: the map cannot tell a teammate two
+  /// rooms away from a stranger it saw once.
   #[serde(default)]
   pub squad: Vec<PlayerId>,
   /// Everyone else, at map resolution and a low rate: the **far tier**.
   ///
-  /// Sending nothing at all past the view radius is what made a teammate freeze
-  /// on the minimap and then jump when you walked over to them. But the near
+  /// Sending nothing at all past the view radius makes a teammate freeze on the
+  /// minimap and then jump when you walk over to them. But the near
   /// tier's precision is not what a distant peer needs either: they are two
   /// pixels on a map, and the error that matters is measured in map pixels
   /// rather than world units.
@@ -753,11 +746,10 @@ impl PlayerFrame {
 
   /// The same content with a UUID per player and raw `f32` positions.
   ///
-  /// The counterfactual has to cover this stream too. It did when player state
-  /// rode inside the entity packet, and when that moved here the comparison
-  /// silently lost its other half: the real cost still counted the player
-  /// stream while the baseline it was measured against no longer did, so the
-  /// saving read as *negative* at a large player count.
+  /// The counterfactual has to cover this stream too. Leaving it out counts the
+  /// player stream in the real cost but not in the baseline it is measured
+  /// against and the saving then reads as *negative* at a large player
+  /// count.
   pub fn naive_bytes(&self) -> usize {
     8 + self.players.len() * (NAIVE_ID_BYTES + NAIVE_POS_BYTES)
       + self.vitals.len() * (NAIVE_ID_BYTES + 2)
@@ -806,18 +798,14 @@ pub struct Packet {
   pub nova_at_ms: Option<u64>,
   /// Shots that **started** near this player since the last packet.
   ///
-  /// An event rather than a live set. The set was re-sent in full every packet for the
-  /// whole 1.4 s flight, which is one entry in roughly twenty packets per shot,
-  /// and it is sending the output of an equation both sides can solve: a shot is
-  /// an origin, a velocity and a time, and a client can evaluate that at any
+  /// An event rather than a live set. A live set is re-sent in full every packet
+  /// for the whole 1.4 s flight, which is one entry in roughly twenty packets per
+  /// shot. It also sends the output of an equation both sides can solve: a shot
+  /// is an origin, a velocity and a time, which a client can evaluate at any
   /// instant exactly.
   ///
-  /// This was tried once and reverted, for two stated reasons. The first was
-  /// real and is fixed by [`Packet::shots_ended`]: without it a shot flies on
-  /// through the enemy it killed. The second, that the client draws shots in the
-  /// past while its enemy mirror holds the present, stopped being true when the
-  /// whole scene moved to one render instant, which is why it was worth
-  /// revisiting.
+  /// Paired with [`Packet::shots_ended`], without which a shot flies on through
+  /// the enemy it killed.
   #[serde(default)]
   pub shots_fired: Vec<Shot>,
   /// Shots that ended **early**, because they hit something.
@@ -967,8 +955,7 @@ impl Packet {
 
   /// Where the bytes actually go: (samples, spawns, despawns, shots, per-player).
   /// Worth having, because it is easy to optimise a stream that turns out to be a
-  /// rounding error of the packet and because the reverse happened here: the
-  /// per-player slot was most of the cost at scale and nobody had looked.
+  /// rounding error of the packet.
   pub fn bytes_breakdown(&self) -> [usize; 5] {
     [
       self.samples.len() * SAMPLE_BYTES,
@@ -1008,10 +995,10 @@ impl Packet {
   ///
   /// Every field the real packet carries has to appear here, or the ratio is
   /// measuring which fields were modelled rather than what the encoding saves.
-  /// It used to cover only the entity lists, which was invisible while the
-  /// entities dominated and became a *negative* saving once they did not: at
-  /// 128 players the arena is nearly empty, and coins, wallets and hit markers
-  /// were being counted on one side of the comparison only.
+  /// Covering only the entity lists is invisible while the entities dominate
+  /// and becomes a *negative* saving once they do not: at 128 players the arena
+  /// is nearly empty and coins, wallets and hit markers would be counted on one
+  /// side of the comparison only.
   pub fn naive_bytes(&self) -> usize {
     let per = NAIVE_ID_BYTES + NAIVE_POS_BYTES;
     self.entered.len() * (per + 1)
@@ -1048,11 +1035,10 @@ pub struct Controls {
   pub jitter_ms: u64,
   /// Packets dropped on the way down.
   ///
-  /// Adding this slider exposed a flaw the rest of this example had been
-  /// carrying. A delta-relevance stream assumes
-  /// every packet arrives: the server diffs against what it *last sent*, so one
-  /// dropped packet leaves the client permanently missing whatever that packet
-  /// carried, and nothing in the stream ever mentions it again.
+  /// A naive delta-relevance stream assumes every packet arrives: the server
+  /// diffs against what it *last sent*, so one dropped packet leaves the client
+  /// permanently missing whatever that packet carried and nothing in the stream
+  /// ever mentions it again. [`Controls::ack_recovery`] is the repair.
   pub loss_pct: f32,
   /// What a lost packet costs, which is a property of the link rather than of
   /// this simulation.
@@ -1122,9 +1108,8 @@ pub struct Controls {
   /// *pressed* plus this delay puts everyone on the same footing, as long as the
   /// delay covers their latency.
   ///
-  /// It is not free: it is added to how long the world takes to react to you.
-  /// Prediction hides it for your own movement and cannot hide it for anything
-  /// the server adjudicates.
+  /// It is not free: it is added to how long the world takes to react to you,
+  /// your own movement included, since that is not predicted.
   pub playout_delay_ms: u64,
   /// How far behind the server's clock every client displays the world.
   ///
@@ -1135,10 +1120,11 @@ pub struct Controls {
   /// sample a client holds is already a trip old; short of that, T sits ahead of
   /// every sample and peers snap to the raw newest instead of interpolating.
   ///
-  /// It used to be sized from measured arrival jitter, which let the transport
-  /// decide which moment was on screen and hid a bad link by showing that player
-  /// an older world. Now a link too slow for the declared delay produces
-  /// [`Client::underruns`](crate::sim::client::Client::underruns) instead.
+  /// Declared rather than sized from measured arrival jitter, which would let
+  /// the transport decide which moment is on screen and hide a bad link by
+  /// showing that player an older world. A link too slow for the declared delay
+  /// produces [`Client::underruns`](crate::sim::client::Client::underruns)
+  /// instead.
   pub render_delay_ms: u64,
   /// How many ticks late an input may be named for and still be accepted.
   ///
@@ -1187,10 +1173,10 @@ pub struct Controls {
   /// keepalive), instead of one every tick.
   ///
   /// Off is the simple, loss-robust default: a fresh input every tick means a
-  /// dropped one is covered by the next, and the prediction stays in lock-step
-  /// with the server. On cuts the idle upstream chatter to near nothing, which is
-  /// safe here only because the local player has no server-side forces, so the
-  /// client predicts it exactly and a coalesced stream cannot drift the position.
+  /// dropped one is covered by the next. On cuts the idle upstream chatter to
+  /// near nothing, which is safe here only because the server holds the last
+  /// direction until a new one executes and the local player has no server-side
+  /// forces, so a coalesced stream cannot drift the position.
   pub coalesce_input: bool,
   /// Draw where everything is **going** to be, faintly, ahead of where it is.
   ///
@@ -1208,9 +1194,9 @@ pub struct Controls {
   pub allow_ghost: bool,
   /// Ship the server's exact visible key set on every frame so a client that
   /// detects a digest mismatch can print precisely which enemies it holds in
-  /// error (extra) or is short of (missing), and log every prediction correction,
-  /// instead of only counting them. Off by default: it adds real wire weight. Turn
-  /// it on from the panel to chase a mismatch or a jump down to specifics.
+  /// error (extra) or is short of (missing), instead of only counting them. Off
+  /// by default: it adds real wire weight. Turn it on from the panel to chase a
+  /// mismatch down to specifics.
   pub debug_digest: bool,
 }
 
@@ -1237,11 +1223,11 @@ impl Default for Controls {
       // of margin. A whole send interval is part of the budget because
       // interpolation needs two samples bracketing the target, so lowering
       // `player_sync_hz` without raising this draws every peer, and your own
-      // marker, off the timeline. It shipped at the exact fit (150) for a
-      // while, and played as slightly iffy movement: with zero margin, every
-      // jitter spike at the tail of the distribution puts the newest sample
-      // behind the target and the marker holds then jumps. The margin covers
-      // the tail. Checked by `the_shipped_defaults_cover_each_other`.
+      // marker, off the timeline. At the exact fit (150) it plays as slightly
+      // iffy movement: with zero margin, every jitter spike at the tail of the
+      // distribution puts the newest sample behind the target and the marker
+      // holds then jumps. The margin covers the tail. Checked by
+      // `the_shipped_defaults_cover_each_other`.
       render_delay_ms: 180,
       input_playout: true,
       // Roughly the playout depth in 16 ms steps, plus slack for jitter.

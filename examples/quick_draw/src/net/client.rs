@@ -41,7 +41,8 @@ pub struct NetClient {
   pub view: Option<DuelView>,
   pub log: VecDeque<String>,
   pub moments: Vec<Moment>,
-  /// Ticks the local clock estimate has been fed with, for the panel.
+  /// Server-clock stamps the local clock estimate has been fed with, for the
+  /// panel.
   pub stamps_seen: u64,
 
   events: Vec<Event>,

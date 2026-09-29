@@ -1,5 +1,5 @@
 //! Sliding-window acknowledgement: telling the other side exactly what arrived,
-//! in twelve bytes, however badly the link is behaving.
+//! in sixteen bytes, however badly the link is behaving.
 //!
 //! Any protocol where one side must know what the other received faces the same
 //! problem. Sending back the newest sequence number alone is cheap and says
@@ -11,7 +11,7 @@
 //!
 //! [`AckWindow`] is the standard third answer: one sequence number plus a bitmask
 //! of the 64 before it. It is fixed size, so a link losing half its packets
-//! costs the same twelve bytes as a perfect one. It is also precise enough that
+//! costs the same sixteen bytes as a perfect one. It is also precise enough that
 //! a sender can resend exactly the gaps.
 //!
 //! It is pure sequence arithmetic: it does not know what a packet is, does not
@@ -142,7 +142,7 @@ impl AckWindow {
     (floor..end).filter(move |seq| self.started && !self.contains(*seq))
   }
 
-  /// The newest sequence such that **everything** from `known` up to it arrived,
+  /// The newest sequence such that **everything** from `first` up to it arrived,
   /// with no gap anywhere in between.
   ///
   /// A delta-compressing protocol wants this rather than
@@ -292,7 +292,7 @@ mod tests {
   #[test]
   fn the_cost_does_not_grow_with_the_loss_rate() {
     // Unlike an explicit list, a link dropping most of its packets reports in
-    // the same twelve bytes as a perfect one.
+    // the same sixteen bytes as a perfect one.
     let mut clean = AckWindow::new();
     let mut awful = AckWindow::new();
     for seq in 0..64u64 {
@@ -379,7 +379,7 @@ mod tests {
 
   #[test]
   fn the_frontier_costs_at_most_a_window_regardless_of_the_gap() {
-    // `known` sitting exactly at the edge of the window is the worst case and
+    // `first` sitting exactly at the edge of the window is the worst case and
     // it is still bounded.
     let mut w = AckWindow::new();
     for seq in 0..=WINDOW {

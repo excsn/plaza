@@ -64,11 +64,10 @@ const TALL: f32 = 2.0;
 /// What macroquad's batcher accepts in one draw call.
 ///
 /// Past either of these it warns once and **draws the front of the buffer**, so
-/// the scene is quietly missing rather than broken. Counting bodies per batch
-/// is what let that happen: the count was right when a body was a single box
-/// and wrong the moment a body became a torso, two legs, two arms, a head and a
-/// wedge, which is eight boxes and 288 indices. Sixty-four of those is 18432
-/// against a limit of 5000.
+/// the scene is quietly missing rather than broken. A count of bodies per
+/// batch cannot bound that: a body is a torso, two legs, two arms, a head, a
+/// wedge and a cast mote, which is eight boxes and 288 indices. Sixty-four of
+/// those is 18432 against a limit of 5000.
 const MAX_VERTICES: usize = 10000;
 const MAX_INDICES: usize = 5000;
 
@@ -571,8 +570,8 @@ mod tests {
   #[test]
   fn a_body_count_would_not_have_been_enough() {
     // Why the batch is bounded by the buffer rather than by a count of things:
-    // the count was right when a body was one box and wrong the moment it was
-    // eight, and nothing failed loudly enough to notice.
+    // a count sized for one-box bodies is wrong for eight-box ones and nothing
+    // fails loudly enough to notice.
     let one_box_batch = 64;
     assert!(
       one_box_batch * BOXES_PER_BODY * INDICES_PER_BOX > MAX_INDICES,

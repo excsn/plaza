@@ -173,9 +173,8 @@ impl<
 mod tests {
   use super::*;
 
-  /// The two cleanup calls nothing was exercising. A rewind buffer that never
-  /// forgets leaks memory. These are what an application calls when an entity
-  /// dies or a round ends.
+  /// The two cleanup calls. A rewind buffer that never forgets leaks memory.
+  /// These are what an application calls when an entity dies or a round ends.
   mod forgetting {
     use super::*;
 

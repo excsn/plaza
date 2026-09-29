@@ -77,7 +77,7 @@ impl ArcadeState {
   }
 }
 
-/// The game, which no longer knows what a ban is: by the time a join reaches
+/// The game, which does not know what a ban is: by the time a join reaches
 /// it the door has judged the account, so a join is a seat.
 #[derive(Debug)]
 pub struct ArcadeLogic {

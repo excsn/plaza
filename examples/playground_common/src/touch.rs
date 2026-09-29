@@ -2,15 +2,15 @@
 //! without a keyboard.
 //!
 //! Every one of these examples ships a browser build, so each is reachable from
-//! a phone. Two of them were driven entirely by `WASD` and had no pointer input
-//! at all, so on a phone the game ran but nothing could move it.
+//! a phone. A game driven only by the keyboard runs there, but nothing can move
+//! it without these controls.
 //!
 //! # Why this uses touches rather than the mouse
 //!
 //! macroquad synthesises a left click from a touch by default, so a *tap
 //! target* needs nothing special: `is_mouse_button_pressed` already fires. That
-//! covers a menu and a build strip, which is why the examples that are driven
-//! by clicking were already fine.
+//! covers a menu and a build strip, so the examples that are driven by clicking
+//! need nothing from this module.
 //!
 //! It does not cover a **held** control or two controls at once. The simulated
 //! mouse is a single pointer, so "steer left while charging" is not expressible

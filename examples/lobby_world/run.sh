@@ -2,9 +2,9 @@
 # Stands the lobby and its three arenas up on http://127.0.0.1:8090.
 #
 # One script rather than the three the playgrounds carry, because there is no
-# wasm step: the browser client here is plain HTML embedded with `include_str!`
-# and served by the same actix app as the sockets, so there is nothing to build
-# separately and nothing to serve it with.
+# wasm step: the browser client here is plain HTML in `static/`, served by the
+# same actix app as the sockets, so there is nothing to build separately and
+# nothing to serve it with.
 #
 # The advantage over `cargo run -p plaza_example_lobby_world` is that this
 # works from any directory. The examples are their own workspace, so that

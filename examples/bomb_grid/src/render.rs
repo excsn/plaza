@@ -116,7 +116,7 @@ pub fn draw_bombs(board: &Board, bombs: &[BombState], server_now_ms: u64, phanto
       draw_circle(centre.x, centre.y, radius, body);
       draw_circle_lines(centre.x, centre.y, radius, 2.0, player_color(bomb.owner));
     }
-    // The fuse, as an arc of remaining time.
+    // The fuse, as a line whose length is the remaining time.
     let lit = Color::new(1.0, 0.75, 0.25, 1.0);
     draw_line(centre.x, centre.y - radius, centre.x + radius * 0.6 * left, centre.y - radius - h * 0.12, 2.0, lit);
   }

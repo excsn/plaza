@@ -53,7 +53,7 @@ impl Fx {
 
   /// The only conversion to a float. There is no conversion back.
   ///
-  /// Nothing in `sim` may call this: a value that goes through `f32` and comes
+  /// Simulation code must not call this: a value that goes through `f32` and comes
   /// back has been through an implementation the wire format cannot pin down.
   pub fn to_f32(self) -> f32 {
     self.0 as f32 / ONE as f32

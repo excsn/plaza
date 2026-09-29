@@ -35,7 +35,7 @@ where
 
 impl<ID: AgentId, ScoreType> Scorekeeper<ID, ScoreType> for HashMapScorekeeper<ID, ScoreType>
 where
-    ID: Eq + Hash + Ord + Clone,// HashMap key requirement
+    ID: Eq + Hash + Ord + Clone,// Eq + Hash for the HashMap key, Ord to break score ties
   ScoreType:
     Clone + Debug + Default + Send + Sync + 'static + std::ops::AddAssign + std::ops::SubAssign + PartialOrd + Copy,
 {
@@ -104,8 +104,7 @@ mod tests {
 
   #[test]
   fn resetting_keeps_a_player_on_the_board_and_forgetting_takes_them_off() {
-    // Resetting a score and removing a player are separate calls; before
-    // `forget_player` only the reset existed.
+    // Resetting a score and removing a player are separate calls.
     let mut scores = board();
     let player = Uuid::new_v4();
     scores.set_score(&player, 40);

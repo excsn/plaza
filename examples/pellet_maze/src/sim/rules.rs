@@ -211,7 +211,7 @@ mod tests {
     let maze = corridor_with_branch();
     let mut player = runner(Cell::new(1, 1), Dir::Right);
     let mut queue = TurnQueue::new();
-    // Thirty ticks is 480 ms, which at 150 ms a cell is three whole cells and
+    // Thirty ticks is 480 ms, which at 145 ms a cell is three whole cells and
     // a bit: the committed cell is three along, with a fourth step in flight.
     for _ in 0..30 {
       advance_player(&mut player, &mut queue, &maze, 0, 200, SIM_STEP_MS);

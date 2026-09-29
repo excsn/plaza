@@ -1,14 +1,15 @@
 //! Frames the session answers for itself.
 //!
-//! A [`frame::Kind`] other than `Ops` is an instruction to the session, so it
-//! is handled on the connection task and never reaches the application. Both
-//! transports call in here, which is why a latency probe behaves the same over
-//! a WebSocket and over TCP.
+//! A [`Kind`](plaza_wire::frame::Kind) other than `Ops` is an instruction to
+//! the session and never reaches the application. Probes are answered here on
+//! the connection task; a `Hello` is forwarded and recorded by the deserialize
+//! bridge. Both transports call in here, which is why a latency probe behaves
+//! the same over a WebSocket and over TCP.
 //!
 //! # Two round trips
 //!
 //! The WebSocket transport times its own ping frame underneath everything
-//! plaza does, and that stays as it was. The probe here is a `Kind::Ping`
+//! plaza does. The probe here is a `Kind::Ping`
 //! frame riding the full path: encoded, queued, impaired, decoded. Comparing
 //! the two says what plaza and the configured link cost this connection, and
 //! on TCP, which has no ping frame of its own, this is the only round trip
@@ -23,8 +24,8 @@
 //! Several must be outstanding at once. A probe is answered a round trip after
 //! it leaves and another goes out every 125ms in the fast phase, so on any link
 //! slower than that the reply lands after its successor was sent. Tracking one
-//! at a time discarded every such sample, so a link slower than 125ms was never
-//! measured.
+//! at a time would discard every such sample, so a link slower than 125ms
+//! would never be measured.
 
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -425,8 +426,8 @@ mod tests {
 
   #[tokio::test]
   async fn a_pong_slower_than_the_probe_interval_is_still_matched() {
-    // The single-slot bug: with a 200ms link and a 125ms schedule, every reply
-    // arrives after its successor went out, so nothing was ever recorded.
+    // With a 200ms link and a 125ms schedule every reply arrives after its
+    // successor went out, so a single probe slot would record nothing.
     let manager = manager();
     let (tx, _rx) = plaza::session::session_channel(4);
     let conn_id = manager.register(Agent::new_human(7u32), tx).await;

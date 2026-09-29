@@ -26,10 +26,9 @@ pub const fn max_view() -> f32 {
 
 /// Where the dial starts.
 ///
-/// At 90 units a second an 80-unit radius is crossed in under a second, so
-/// ships appeared and vanished faster than they could be aimed at. Relevance
-/// was working; the number was chosen for the measurement rather than for the
-/// game.
+/// Wide enough to aim at what is in view: at 90 units a second an 80-unit
+/// radius is crossed in under a second, so ships would appear and vanish
+/// faster than they could be aimed at.
 pub const fn default_view() -> f32 {
   260.0
 }

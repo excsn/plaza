@@ -29,9 +29,9 @@ pub async fn serve(bind: &str, controls: Arc<Mutex<Controls>>, view: Option<Arc<
   SimHost::new(bind, Duration::from_millis(SIM_STEP_MS))
     .serve_dir(static_dir)
     .cache_bust(WASM_FILE)
-    // `run_fixed` even though this arena simulates nothing, because if its tick
-    // ever does anything, `run`'s measured delta would make that a function of
-    // the host's scheduler.
+    // Fixed steps (`SimHost::new` rather than `SimHost::measured`) even though
+    // this arena simulates nothing, because if its tick ever does anything, a
+    // measured delta would make that a function of the host's scheduler.
     .run(plaza_wire::MsgPackCodec, PROTOCOL, Arena::new(initial), |wiring| {
       let dropped = {
         let session = wiring.session.clone();

@@ -33,8 +33,6 @@ use crate::manager::{ConnectionManager, ConnectionOrder, OutboundFrame, PendingS
 
 const TRANSPORT: &str = "actix_ws";
 
-/// Maximum size of a reassembled (continuation) WebSocket frame.
-
 /// A Plaza `Session` served over actix-web WebSockets.
 ///
 /// Construct one, share it with both your `StateController` and your actix
@@ -127,7 +125,8 @@ where
   /// Impairment belongs to the link, so it applies to whatever crosses the
   /// connection rather than to the ops an application decided to route through
   /// a queue of its own. Latency probes and the version handshake are delayed
-  /// too but are never dropped.
+  /// too. A full link buffer never refuses them, but a datagram profile loses
+  /// them like any other frame.
   pub fn set_agent_link_profile(&self, id: &ID, profile: LinkProfile) {
     self.inner.manager().set_agent_link_profile(id, profile);
   }
@@ -166,9 +165,7 @@ where
 
   /// Encodes one message with this session's codec, kind byte included.
   ///
-  /// For frames that bypass the targeting path: a farewell handed to
-  /// [`ConnectionManager::close_connection`], or a refusal written before a
-  /// socket is registered.
+  /// For frames that bypass the targeting path.
   pub fn encode_message(&self, msg: SessionMessage<Op, ID>) -> Result<OutboundFrame, crate::error::SessionLayerError> {
     self.inner.encode_message(msg)
   }
@@ -181,8 +178,7 @@ where
   /// recompiled is indistinguishable from one whose shapes changed. Compare
   /// against your own build's version and decide what your game does about it.
   ///
-  /// `None` means the peer declared nothing, which is every client built before
-  /// the handshake existed. It is not a mismatch.
+  /// `None` means the peer declared nothing. It is not a mismatch.
   pub fn protocol(&self, id: &ID) -> Option<ProtocolVersion> {
     self.inner.manager().protocol(id)
   }
@@ -205,8 +201,10 @@ where
     Self::with_options(codec, SessionOptions::with_protocol(protocol))
   }
 
-  /// Creates a session with everything it answers for itself: the version it
-  /// declares, and the clock it stamps a `Pong` with.  ///
+  /// Creates a session from [`SessionOptions`]: the version it declares, the
+  /// clock it stamps a `Pong` with, its queues, limits, overflow policy and
+  /// probe schedule.
+  ///
   /// # Requires a tokio runtime
   ///
   /// This spawns the deserialize bridge, so calling it outside a runtime

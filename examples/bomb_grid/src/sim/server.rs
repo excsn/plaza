@@ -291,7 +291,7 @@ impl Server {
   /// Advances the world by `dt_ms`, in **whole ticks**.
   ///
   /// The elapsed time is accumulated and spent in fixed [`SIM_STEP_MS`] steps
-  /// and never applied raw. This is required for correctness: a tick driver
+  /// and never applied raw. This is required for correctness: `TickDriver::run`
   /// hands over the *measured* elapsed time, so a 62 Hz driver delivers 16, 17,
   /// 16, 16, 17 and so on. Advancing the world by that directly makes the
   /// simulation's rate a property of the host's scheduler.
@@ -617,8 +617,8 @@ impl Server {
   /// near a wall now and then and run from fire.
   ///
   /// They exist so a single joiner has a game rather than to play well. They
-  /// must not stand still in fire, because a bot that never dies makes every
-  /// round a draw by timeout and the round machinery would never be exercised.
+  /// must not stand still in fire, because a round ends only when one player or
+  /// nobody is left, so bots that never die keep it from ever ending.
   fn drive_bots(&mut self, controls: &Controls) {
     if !controls.bots {
       return;
@@ -902,7 +902,7 @@ mod tests {
 
   #[test]
   fn an_irregular_tick_driver_produces_the_same_world_as_a_regular_one() {
-    // `TickDriver` hands over the *measured* elapsed time rather than the
+    // `TickDriver::run` hands over the *measured* elapsed time rather than the
     // nominal interval, so a 62 Hz driver delivers 16, 17, 16, 16, 17 and so
     // on. Advancing the world by that directly would make the simulation's rate
     // a property of the host's scheduler and nothing can predict that: a client

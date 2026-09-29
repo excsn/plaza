@@ -2,7 +2,6 @@
 //!
 //! ```sh
 //! cd ws_client && ./serve.sh          # then open http://localhost:8090
-//! cargo run -p plaza_ws --features native --example echo_server -- 9001
 //! ```
 //!
 //! It must be a macroquad app, because miniquad's `mq_js_bundle.js` is what is
@@ -39,7 +38,7 @@ fn window_conf() -> Conf {
 #[cfg(target_arch = "wasm32")]
 #[macroquad::main(window_conf)]
 async fn main() {
-  // Same host, so a page served next to the echo server needs no editing.
+  // `PLAZA_WS_ECHO` at build time names the echo server; the default is where ./serve.sh starts it.
   let url = format!(
     "{}//{}",
     if web_is_secure() { "wss:" } else { "ws:" },

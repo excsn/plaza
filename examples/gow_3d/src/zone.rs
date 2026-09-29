@@ -144,11 +144,11 @@ impl Character {
 /// are dense from zero and a slot lookup is an offset. That matters because of
 /// where the lookup sits: a frame is built per client and reads every character
 /// in that client's audience, so the count is clients times audience, which at
-/// four thousand of each is a hundred and eighty thousand lookups a tick.
+/// four thousand clients with forty-five each in view is a hundred and eighty
+/// thousand lookups a tick.
 ///
-/// The surface is `HashMap`'s on purpose, down to taking `&Seat`, so the
-/// seventy-odd call sites that read it did not have to change to say the same
-/// thing a different way.
+/// The surface is `HashMap`'s on purpose, down to taking `&Seat`, so call
+/// sites read it exactly as they would read a map.
 #[derive(Debug, Default, Clone)]
 pub struct Bodies {
   slots: Vec<Option<Character>>,
@@ -286,9 +286,10 @@ impl Zone {
   /// direction.
   ///
   /// [`GridQuantizer`] clamps anything outside its origin into the boundary
-  /// cells, and [`publish`](Self::publish) ships whole cells, so an index
-  /// smaller than the world does not merely waste query effort the way a
-  /// per-client distance test did: it puts bodies nobody can see on the wire.
+  /// cells and [`publish_at`](Self::publish_at) ships whole cells, so an
+  /// index smaller than the world does not merely waste query effort the way
+  /// a per-client distance test would: it puts bodies nobody can see on the
+  /// wire.
   /// Anything spreading a population past [`terrain::EDGE`] must say so here.
   pub fn spanning(extent: f32) -> Self {
     let quantizer = GridQuantizer::new((-extent, -extent), CELL);
@@ -545,7 +546,8 @@ impl Zone {
     Some(target)
   }
 
-  /// What the beasts do, which is the only simulation the server runs.
+  /// What the beasts do, which is the only simulation the server runs under
+  /// client authority apart from its own bots.
   fn hunt(&mut self, dt_ms: Ms) {
     let now = self.now_ms;
     let step = BEAST_SPEED * (dt_ms as f32 / 1000.0);
@@ -613,9 +615,9 @@ impl Zone {
     self.stale = false;
     self.grid.clear();
     let now = self.now_ms;
-    // A body still going over is still in the world. Excluding it here is what
-    // made a beast disappear the instant it died: it left the index, so it
-    // left every audience, so no client was ever told it had fallen.
+    // A body still going over is still in the world. Excluding it here would
+    // make a beast disappear the instant it died: it would leave the index and
+    // so every audience, so no client would be told it had fallen.
     for character in self
       .characters
       .values()
@@ -944,7 +946,7 @@ mod tests {
   #[test]
   fn a_swing_through_empty_air_is_still_an_event() {
     // Otherwise a press that misses is indistinguishable from a press that did
-    // nothing, which is the whole complaint the feedback work started from.
+    // nothing.
     let mut zone = Zone::new();
     zone.admit(1, (0.0, 0.0, 0.0));
     zone.begin_cast(1, 0, 0);

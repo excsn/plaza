@@ -18,8 +18,7 @@
 //! [`Overflow`](crate::manager::Overflow) and the AFK rule use. Plaza decides
 //! where the gate runs, what it counts and what each verdict does. The game
 //! decides how fast is too fast and whether exceeding it ends the connection.
-//! There is no default rate: a session configured with none admits everything,
-//! as it did before this module existed.
+//! There is no default rate: a session configured with none admits everything.
 
 /// What exceeding the rate means.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

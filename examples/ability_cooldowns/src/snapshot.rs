@@ -5,7 +5,7 @@ use plaza::{
   snapshot::{SnapshotContext, SnapshotError, SnapshotProvider},
 };
 
-/// Sends the whole game state; small enough here that a tailored view isn't worth it.
+/// Sends every recipient the whole `GameView`; small enough here that a tailored view isn't worth it.
 #[derive(Debug, Default)]
 pub struct CooldownSnapshotter;
 

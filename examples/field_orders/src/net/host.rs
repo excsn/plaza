@@ -4,8 +4,8 @@
 //! The HTTP side (the port, the served directory, the cache busting that keeps
 //! a browser from running yesterday's bundle against today's server) is
 //! [`plaza_session::host::Host`]. What is left here is this battle's own:
-//! which state, which logic, which codec, and the bot that takes the second
-//! seat when nobody else does.
+//! which state, which logic, which codec and the bot that evens an odd
+//! muster.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -34,7 +34,7 @@ const TICK: Duration = Duration::from_millis(20);
 /// scale it up (`MapSize::side_ticks`).
 const SIDE_TICKS: u64 = 3000;
 
-/// Fifteen seconds of muster once the first commander stands ready.
+/// Fifteen seconds of muster once the host starts the countdown.
 const MUSTER_TICKS: u64 = 750;
 
 /// The browser client artifact, the one asset that must never be served stale.

@@ -25,9 +25,10 @@ pub struct World {
   down: Vec<LatencyLink<Op>>,
   up: LatencyLink<(usize, Op)>,
   rng: Rng,
-  /// Per client, whichever of the two directions is being impaired. One-sided
-  /// impairment tests anything that claims to be fair: if a number moves when
-  /// only one player's sending is delayed, some rule is reading arrival order.
+  /// When set, seat 0's downstream is left clean, so that player has only its
+  /// sending delayed. One-sided impairment tests anything that claims to be
+  /// fair: if a number moves when only one player's sending is delayed, some
+  /// rule is reading arrival order.
   pub one_way_only: bool,
 }
 
@@ -311,7 +312,7 @@ mod tests {
 
   #[test]
   fn the_honest_render_error_is_smaller_than_the_one_this_repository_quotes() {
-    // `mean_render_error` compares a drawn position against server truth now,
+    // `mean_render_error_naive` compares a drawn position against server truth now,
     // so it counts a deliberate render delay as error. The drawn-instant figure
     // compares against truth at the instant being drawn. The gap between the
     // two is roughly the delay times the speed.

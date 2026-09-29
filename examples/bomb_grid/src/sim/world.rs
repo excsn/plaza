@@ -5,9 +5,8 @@
 //! socket and a measurement can be repeated exactly rather than played.
 //!
 //! The impairment is [`plaza_client_utils::net_sim::LatencyLink`], which is
-//! ordered by default and is the same one the networked host puts on its real
-//! outbound path. Two copies of a delay queue would eventually drift apart;
-//! this repository has already hit that once.
+//! ordered by default, as the link conditioner the networked host gets from
+//! `plaza_session` is.
 
 use plaza_client_utils::net_sim::{LatencyLink, Rng};
 
@@ -156,9 +155,9 @@ mod tests {
     }
   }
 
-  /// Walks a player back and forth, which is the input pattern that produces
-  /// the most cell boundaries per second and therefore the most chances to
-  /// disagree.
+  /// Walks a player right, down, left and up in turn, a quarter second each, so
+  /// the two sides have a steady run of turns and cell boundaries to disagree
+  /// about.
   fn patrol(world: &mut World, seat: usize, secs: u64, controls: &Controls) {
     let dirs = [Dir::Right, Dir::Down, Dir::Left, Dir::Up];
     for i in 0..(secs * 4) {

@@ -41,8 +41,9 @@
 //! [`issue_with`](TicketStore::issue_with); no implementation here cares what
 //! the string is.
 //!
-//! Plaza has no authentication scheme for this to fit into, so the crate
-//! provides the bookkeeping and leaves the secret to the application.
+//! Plaza verifies no credential itself: a room checks one in a
+//! `plaza_session` `ConnectionAdmitter`. So this crate provides the
+//! bookkeeping and leaves the secret to the application.
 //!
 //! # Ticket and reservation expiry
 //!

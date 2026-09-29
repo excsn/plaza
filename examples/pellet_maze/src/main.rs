@@ -1,5 +1,5 @@
-//! Frame loop: walk the lattice, drop bombs, and watch what happens when the
-//! server disagrees about which cell you are in.
+//! Frame loop: run the maze and watch what happens when the server disagrees
+//! about which junction you turned at.
 
 mod render;
 mod ui;

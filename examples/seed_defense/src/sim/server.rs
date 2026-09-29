@@ -526,8 +526,7 @@ mod tests {
 
   #[test]
   fn a_second_run_is_announced_exactly_as_the_first_was() {
-    // `Over` is once per run, not once per session, which is the assertion the
-    // single-run version of this test used to make.
+    // `Over` is once per run, not once per session.
     let c = controls();
     let mut server = Server::new(1, 7);
     run_until_lost(&mut server, &c);

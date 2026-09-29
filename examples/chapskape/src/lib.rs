@@ -17,10 +17,10 @@
 //! - A queued action covers the round trip: the walk to the tree always takes
 //!   longer than the network does.
 //! - The world is mostly **still**, which needs different relevance from a
-//!   moving world. There are two thousand props against a few dozen walkers
-//!   and the props change twice a minute.
+//!   moving world. There are four thousand props against about two hundred
+//!   walkers and the props change twice a minute.
 //! - An audience can be set by a **game rule**. A dropped item belongs to
-//!   whoever dropped it for a minute and to everybody afterwards, which is
+//!   whoever dropped it for half a minute and to everybody afterwards, which is
 //!   neither a distance nor a subscription.
 //! - A pack is a stream for exactly one client. Dropping an item turns private
 //!   state into world state.

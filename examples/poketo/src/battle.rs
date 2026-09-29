@@ -30,8 +30,7 @@ use serde::{Deserialize, Serialize};
 /// What a side can do with a turn.
 ///
 /// An index into the acting creature's own move table. Keeping it an enum
-/// rather than a `u8` makes an out-of-range move unrepresentable on the wire,
-/// and leaves [`Battle::offer`] exactly the shape it had.
+/// rather than a `u8` makes an out-of-range move unrepresentable on the wire.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Choice {
   First,

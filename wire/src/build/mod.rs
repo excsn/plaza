@@ -21,7 +21,7 @@
 //!
 //! ```toml
 //! [build-dependencies]
-//! plaza_wire = { version = "0.1", default-features = false, features = ["build"] }
+//! plaza_wire = { version = "0.7", default-features = false, features = ["build"] }
 //! ```
 //!
 //! ```no_run
@@ -47,8 +47,8 @@
 //! every protocol version has.
 //!
 //! It also hashes the **type definitions** in those files rather than the
-//! whole files, because a server gets bug fixes. Hashing whole files meant
-//! every fix bumped the version and told every client to reload, whether or
+//! whole files, because a server gets bug fixes. Hashing whole files would
+//! bump the version on every fix and tell every client to reload, whether or
 //! not a message had changed shape. Comments, formatting,
 //! `use`, `impl` and `fn` are all discarded; a field, a variant, an explicit
 //! discriminant, a `#[serde]` attribute or a reordering all move it.
@@ -317,8 +317,8 @@ mod tests {
 
   #[test]
   fn a_bug_fix_does_not_move_the_version() {
-    // A server ships fixes; hashing whole files told every client to reload on
-    // each one.
+    // A server ships fixes; hashing whole files would tell every client to
+    // reload on each one.
     let before = version_of_sources([&b"enum Op { Ping }\nfn apply(x: u8) -> u8 { x + 1 }\n"[..]]);
     let after = version_of_sources([&b"enum Op { Ping }\nfn apply(x: u8) -> u8 { x.saturating_add(1) }\n"[..]]);
     assert_eq!(before, after, "a fix to a function sharing the file");

@@ -3,11 +3,11 @@
 //! Two halves that behave nothing alike, which is most of what this example is
 //! for.
 //!
-//! **The moving half** is a few dozen actors, every one of which is somewhere
-//! different from last tick. That is the ordinary relevance problem, and every
-//! example in this tree already solves it.
+//! **The moving half** is about two hundred actors, every one of which is
+//! somewhere different from last tick. That is the ordinary relevance problem
+//! and every example in this tree already solves it.
 //!
-//! **The still half** is a couple of thousand props, of which perhaps one
+//! **The still half** is four thousand props, of which perhaps one
 //! changes a tick. Their positions are derived rather than stored, so the
 //! world's contents cost nothing to hold and nothing to join; what is stored is
 //! the small set that is currently out, and what it is stored as is the tick it
@@ -196,7 +196,7 @@ pub struct Zone {
   pub actors: HashMap<Seat, Actor>,
   /// Props that are out, by id, against the tick they come back on.
   ///
-  /// The whole of the still world's mutable state: a couple of thousand props
+  /// The whole of the still world's mutable state: four thousand props
   /// exist and this holds only the handful currently missing.
   pub depleted: HashMap<u32, u64>,
   pub fires: HashMap<u32, (Tile, u64)>,
@@ -540,10 +540,10 @@ impl Zone {
   /// A body that has served its time comes back whole, at its home rather than
   /// where it fell.
   ///
-  /// The relocation is announced by `spawns` on the frame rather than by an
-  /// event. An event is said once and a client that misses that tick eases the
-  /// body across the map for ever; a counter is state, so the next frame
-  /// carries the answer however many were dropped.
+  /// The relocation is announced by the `spawn` counter on the frame rather
+  /// than by an event. An event is said once and a client that misses that
+  /// tick eases the body across the map for ever; a counter is state, so the
+  /// next frame carries the answer however many were dropped.
   fn revive(&mut self) {
     let now = self.tick;
     let green = world::the_green();

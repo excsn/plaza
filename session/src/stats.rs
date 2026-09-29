@@ -2,12 +2,12 @@
 //!
 //! Every fan-out here uses `try_send` rather than `send`, deliberately: a wedged
 //! client must not stall the controller and a connection task must not block on
-//! a controller that has not started. The drop is announced only with `warn!`,
-//! which a human reads afterwards and the server cannot read at all, so a
-//! server that wants to shed load deliberately has nothing to act on.
+//! a controller that has not started. A drop is also logged with `warn!`,
+//! which a human reads afterwards and the server cannot read at all.
 //!
-//! This module counts the same events so the application can see them. The
-//! policy is unchanged.
+//! This module counts the same events so the application can see them and a
+//! server that wants to shed load deliberately has something to act on.
+//! Counting changes nothing about the policy.
 //!
 //! It has the same shape as `plaza::stats::ControllerStats` but is a separate
 //! type. The two have different owners and making `plaza_session` depend on
@@ -23,9 +23,11 @@ use std::sync::Arc;
 /// These numbers matter most when the system is busy; a reading that had to
 /// queue behind the traffic it describes would be unavailable exactly then.
 ///
-/// Every field counts a **drop**, except the two that count what got through.
-/// A rate is only meaningful against a denominator and a drop count alone
-/// cannot tell "nothing is being dropped" from "nothing is being sent".
+/// The drop and refusal counts sit beside counts of what got through
+/// ([`inbound`](Self::inbound), [`outbound`](Self::outbound),
+/// [`admitted`](Self::admitted)). A rate is only meaningful against a
+/// denominator and a drop count alone cannot tell "nothing is being dropped"
+/// from "nothing is being sent".
 #[derive(Debug, Default)]
 pub struct TransportStats {
   inbound: AtomicU64,
@@ -97,12 +99,6 @@ impl TransportStats {
     self.outbound_dropped.load(Ordering::Relaxed)
   }
 
-  /// Join and leave notifications dropped.
-  ///
-  /// Worth its own counter rather than being folded in: presence is ordered and
-  /// stateful, so a lost join leaves the controller with a client it has never
-  /// heard of, and a lost leave leaves it holding a seat forever. This is the
-  /// one of the three where a single drop is a correctness problem.
   /// Times a budgeted connection was asked for and not owed a frame. What the
   /// budget cost in frames not built, by the snapshot passes that asked.
   pub fn outbound_withheld(&self) -> u64 {
@@ -113,6 +109,12 @@ impl TransportStats {
     self.outbound_withheld.fetch_add(1, Ordering::Relaxed);
   }
 
+  /// Join and leave notifications dropped.
+  ///
+  /// Worth its own counter rather than being folded in: presence is ordered and
+  /// stateful, so a lost join leaves the controller with a client it has never
+  /// heard of and a lost leave leaves it holding a seat forever. This is the
+  /// one of the three where a single drop is a correctness problem.
   pub fn presence_dropped(&self) -> u64 {
     self.presence_dropped.load(Ordering::Relaxed)
   }

@@ -1,8 +1,8 @@
 //! Pack each wanted occupied cell once, then deal every pane its cells.
 //!
-//! The middle layer is keyed by place, never by watcher: the buckets, the
-//! payloads and the pane mask are three `CellTable`s over one `CellSpace`,
-//! and a cell nobody watches is never packed at all.
+//! The middle layer is keyed by place, never by watcher: the buckets and the
+//! payloads are `CellTable`s over one `CellSpace` and the pane mask is one
+//! flag per cell of that space. A cell nobody watches is never packed at all.
 
 use plaza_server_utils::relevance::{CellSpace, CellTable};
 

@@ -2,8 +2,7 @@
 //! that talks to one.
 //!
 //! Both are optional. `--no-default-features --features native,client` builds
-//! the offline playground with no networking compiled in at all, which is the
-//! teaching demo this example started as.
+//! the offline teaching playground with no networking compiled in at all.
 
 #[cfg(feature = "server")]
 pub mod arena;

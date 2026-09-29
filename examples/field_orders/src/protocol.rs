@@ -36,7 +36,7 @@ pub const MAX_COMMANDERS: usize = 32;
 /// Units in each commander's squad: knight, soldier, archer, healer.
 pub const SQUAD: usize = 4;
 
-/// Ticks the muster stays open once enough commanders stand ready.
+/// Ticks the muster stays open once the host starts the countdown.
 pub const MUSTER_TICKS: u64 = 60;
 
 /// Ticks a command phase lasts before the unacted units simply do not act,
@@ -228,7 +228,7 @@ pub struct Unit {
 /// is a transition, so the epoch moves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BattlePhase {
-  /// Commanders gathering; a countdown runs once enough are present.
+  /// Commanders gathering; a countdown runs once the host starts it.
   Mustering,
   /// One army acts; the other and the spectators watch.
   Command(Army),

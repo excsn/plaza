@@ -19,23 +19,19 @@ pub trait RoundManager<Op, AppID: AgentId> {
 
   /// Attempts to start the next round.
   /// Returns `Ok(())` or `Err(ReasonString)` (e.g., if max rounds reached).
-  /// This method is expected to enqueue a `RoundStartedNoticeOp` (via op_payloads)
+  /// This method is expected to enqueue a `RoundStartedNoticePayload` (via op_payloads)
   /// into the context's operation queue.
   fn start_next_round(&mut self, context: &mut dyn FsmContext<Op, AppID>) -> Result<(), String>;
 
   /// Puts the count back to zero for a fresh match, keeping the configuration.
-  ///
-  /// Without it, both card examples replaced the whole manager to play again
-  /// and restated the notice constructors and the round limit at the call
-  /// site.
   fn reset(&mut self);
 
   /// Ends the current round explicitly.
-  /// This method is expected to enqueue a `RoundEndedNoticeOp` (via op_payloads).
+  /// This method is expected to enqueue a `RoundEndedNoticePayload` (via op_payloads).
   fn end_current_round(
     &mut self,
     context: &mut dyn FsmContext<Op, AppID>,
-    reason: String, /*, round_winner_data: Option<AppSpecificWinnerData> */
+    reason: String,
   );
 }
 

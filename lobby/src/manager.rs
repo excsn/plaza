@@ -179,8 +179,11 @@ where
 
   /// The handle for one room, if it exists.
   ///
-  /// The way to reach a specific room: send it a `ControllerCommand`, read its
-  /// metadata, or update its player count as clients connect and disconnect.
+  /// Only the [`RoomHandle`] methods are available through it. Sending a
+  /// `ControllerCommand` or calling
+  /// [`update_player_count_in_metadata`](crate::room::InProcessRoomHandle::update_player_count_in_metadata)
+  /// needs the `CommandSender` or the concrete `InProcessRoomHandle` from the
+  /// factory, kept in a map of your own.
   pub fn room(&self, room_id: &RoomId) -> Option<RoomArc<F>> {
     self.rooms.lock().get(room_id).map(Arc::clone)
   }

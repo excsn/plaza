@@ -119,9 +119,8 @@ pub fn draw_hud(client: &NetClient, yaw: f32) {
   party_frame(client, yaw);
 }
 
-/// Health, mana and whether you are down. Read from the frame's `you` block: a
-/// client never appears in its own audience list, so before that block existed
-/// none of this was readable and key presses seemed to do nothing.
+/// Health, mana and whether you are down, read from the frame's `you` block
+/// because `others` never holds the client's own seat.
 fn player_frame(client: &NetClient) {
   let Some(you) = client.you else { return };
   let (x, y) = (24.0, 24.0);
@@ -210,8 +209,7 @@ fn target_frame(client: &NetClient) {
   }
 }
 
-/// Your own cast bar, which the latency argument is about and which the old
-/// client could not draw at all.
+/// Your own cast bar, which the latency argument is about.
 fn cast_bar(client: &NetClient) {
   let Some((index, share)) = client.my_cast() else {
     return;
@@ -354,11 +352,9 @@ pub fn draw_panel(client: &mut NetClient, url: &str, dials: &Dials) {
       ui.label(format!("claims refused {}", client.refused));
       ui.separator();
 
-      // The comparison this example was planned around, in one session rather
-      // than two builds. Switch the dial and watch both rows move: under
-      // client authority the gap is a send interval's travel, under server
-      // authority it is a round trip's and the local character stops
-      // answering the key immediately.
+      // The authority comparison, in one session rather than two builds.
+      // Switch the dial and watch both rows move. Under server authority the
+      // local character also stops answering the key immediately.
       ui.label(format!("authority     {}", match client.authority {
         Authority::Server => "server decides",
         Authority::Client => "client decides",

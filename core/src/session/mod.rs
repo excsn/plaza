@@ -60,7 +60,7 @@ pub enum PresenceEvent<ID: AgentId> {
 ///
 /// `PartialEq` compares structurally, so `Agents([1, 2])` and `Agents([2, 1])`
 /// are unequal despite naming one set. The only cost is a missed coalescing
-/// opportunity in [`LogicOutput::coalesce`]; delivery is still correct.
+/// opportunity in [`LogicOutput::coalesce`](crate::state_logic::LogicOutput::coalesce); delivery is still correct.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MessageTarget<ID: AgentId> {
   /// Every connected agent.
@@ -118,7 +118,7 @@ impl<Op, ID: AgentId> TargetedOp<Op, ID> {
 /// **Server-side only, and deliberately not `Serialize`.** The wire carries
 /// `[kind byte][encoded ops]` and nothing else: `from` is the server's own
 /// bookkeeping, attached by the transport on the way in and never sent on the
-/// way out. Every shipped client already ignored it, because an application
+/// way out. No shipped client reads it, because an application
 /// that needs to say who did something puts that in the op, at the width it
 /// actually needs, which is a seat index rather than a 64-bit identity.
 ///
@@ -168,7 +168,7 @@ pub trait Session<Op: Send + 'static, ID: AgentId>: Send + Sync + 'static {
   ///
   /// # One consumer
   ///
-  /// These three streams deliver each item to exactly one receiver, so a session
+  /// These two streams deliver each item to exactly one receiver, so a session
   /// feeds exactly one controller, the one that owns the state. Calling this
   /// twice splits the stream between the
   /// two receivers rather than duplicating it; for a second observer (metrics, a

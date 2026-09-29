@@ -71,9 +71,8 @@ pub struct Stats {
   ///
   /// The denominator for a byte comparison, and it has to be cumulative to
   /// match a cumulative numerator. Dividing total bytes by the *instantaneous*
-  /// count is the mistake that made this comparison read as a hundred-thousand
-  /// to one: at the sampling instant the streamed half happened to hold no
-  /// bullets at all, so it was total bytes over one.
+  /// count reads as a hundred-thousand to one whenever the streamed half holds
+  /// no bullets at the sampling instant, since that is total bytes over one.
   pub curtain_bullet_ticks: u64,
   pub player_bullet_ticks: u64,
 }

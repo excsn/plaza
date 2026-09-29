@@ -203,8 +203,8 @@ async fn offline() {
 #[cfg(all(feature = "client", feature = "websocket"))]
 async fn wait_for_arena() {
   // A host has just spawned its own server; give the listener a moment before
-  // dialling it, rather than making the first connection fail and rely on a
-  // reconnect that does not exist yet.
+  // dialling it, rather than making the first connection fail: this client
+  // does not reconnect.
   for _ in 0..30 {
     next_frame().await;
   }
@@ -494,13 +494,12 @@ fn read_input() -> SimVec2 {
   SimVec2::new(dx, dy)
 }
 
-/// A frame-rate readout, bottom right.
+/// A frame-time readout, bottom right, rather than an fps one.
 ///
 /// These examples push entity counts and per-frame work hard enough that a
 /// stall could be the network or the machine. Without a frame counter the two
 /// look the same. Smoothed, because raw per-frame values are unreadable. It
 /// turns red when a frame is slow enough to feel.
-/// A frame-time readout, rather than an fps one.
 ///
 /// Frame time maps onto what a player feels. Fps is a reciprocal that
 /// compresses the range that matters: 8ms to 16ms reads as a dramatic 120 to
@@ -511,10 +510,10 @@ fn read_input() -> SimVec2 {
 /// long frame and an average over a second hides it. The wire readout tracks a
 /// worst frame instead of a rate for the same reason.
 ///
-/// The mean smooths *frame time* and takes the reciprocal at the end. The
-/// previous version averaged `1.0 / dt` directly, which is biased toward fast
-/// frames: a single 100ms stall contributes 10 to that average while the ten
-/// 8ms frames around it contribute 125 each, so the stall barely shows.
+/// The mean smooths *frame time* and takes the reciprocal at the end.
+/// Averaging `1.0 / dt` directly is biased toward fast frames: a single 100ms
+/// stall contributes 10 to that average while the ten 8ms frames around it
+/// contribute 125 each, so the stall barely shows.
 #[derive(Default)]
 pub struct Perf {
   /// Smoothed frame time in seconds. Zero until the first frame.

@@ -50,8 +50,8 @@ fn squads_of(player_count: usize) -> Subscriptions<PlayerId> {
   }
   squads
 }
-/// One far-tier update every this many player frames. At the default 8 Hz
-/// player rate that is one every two seconds, which is a marker gliding on a
+/// One far-tier update every this many player frames. At the default 10 Hz
+/// player rate that is one every 1.6 seconds, which is a marker gliding on a
 /// map rather than a position anybody aims with.
 ///
 /// Halving it was measured and rejected: the worst placement error stayed at
@@ -207,9 +207,9 @@ pub struct Server {
   /// Refusals to report to each client on the next packet.
   denials_since_send: Vec<Vec<Upgrade>>,
 
-  /// Each player's health as a float so fractional per-step contact damage
-  /// accumulates; it goes out quantized to a byte. Zero means a death is being
-  /// resolved this step.
+  /// Each player's health as a float, because a hit's damage scales with the
+  /// difficulty ramp; it goes out quantized to a byte. Zero means a death is
+  /// being resolved this step.
   player_health: Vec<f32>,
   /// When each player can next take damage: pushed forward briefly by every hit
   /// and longer by a respawn. Gameplay immunity, not sent on the wire.
@@ -366,8 +366,8 @@ impl Server {
 
   /// Advances by `dt_ms`. `local_input` steers player 0; the rest drift.
   ///
-  /// The offline shape, kept so the headless tests and the single-process
-  /// playground are unchanged by networking.
+  /// The offline shape, used by the headless tests and the single-process
+  /// playground.
   pub fn advance(&mut self, dt_ms: u64, local_input: Vec2, controls: &Controls) -> Vec<(PlayerId, Packet)> {
     let mut seats = vec![Seat::Bot; self.players.len()];
     if !seats.is_empty() {
@@ -935,10 +935,10 @@ impl Server {
   /// Derived from the clock rather than counted alongside it. A separate counter
   /// has to be kept in step with `clock_ms` through every path that touches
   /// either, and rebuilding the world is such a path: it preserves the clock so
-  /// a client's packet-age estimate does not jump, and it reset the counter to
-  /// zero. The clock then said thirty seconds and the tick said nought, so every
-  /// input a client aimed was hundreds of ticks past the accepting window and was
-  /// refused, permanently. The player simply stopped responding after a reset.
+  /// a client's packet-age estimate does not jump. A counter reset to zero there
+  /// leaves the clock at thirty seconds and the tick at nought, so every input a
+  /// client aims is hundreds of ticks past the accepting window and refused,
+  /// permanently and the player stops responding.
   pub fn tick(&self) -> u64 {
     self.clock_ms / (SIM_DT * 1000.0) as u64
   }
@@ -957,11 +957,11 @@ impl Server {
 
   /// Takes this tick's player frames, one per recipient, if the stream was due.
   ///
-  /// Per recipient rather than one broadcast. Everyone used to get the same frame
-  /// listing every player, on the reasoning that players are few. That holds at
-  /// four and fails at scale: it is `O(players^2)`, and measured at 128 it was
-  /// the largest single line in the whole bandwidth budget. Each recipient now
-  /// gets the players it can see or is being hunted on behalf of.
+  /// Per recipient rather than one broadcast. One frame listing every player for
+  /// everybody holds up at four players and fails at scale: it is
+  /// `O(players^2)` and measured at 128 it was the largest single line in the
+  /// whole bandwidth budget. Each recipient gets the players it can see or is
+  /// being hunted on behalf of.
   pub fn take_player_frames(&mut self) -> Option<Vec<(PlayerId, PlayerFrame)>> {
     self.pending_players.take()
   }
@@ -1231,10 +1231,9 @@ impl Server {
         // refilled slot must not have its new occupant retracted in place of the
         // corpse the client is actually holding.
         //
-        // Deaths need no separate out-of-band announcement now. Diffing in a key
+        // Deaths need no separate out-of-band announcement: diffing in a key
         // space that carries the generation means a slot that died and was
-        // refilled reads as despawn-then-spawn on its own, which is what the
-        // explicit death list used to be for back when the diff was index-only.
+        // refilled reads as despawn-then-spawn on its own.
         let reason = if self.pool.is_live(slot) { LeaveReason::OutOfRange } else { LeaveReason::Died };
         packet.left.push((slot.into(), reason));
       }
@@ -1362,12 +1361,12 @@ fn scatter(i: u32) -> Vec2 {
 
 /// Where player `p` of `count` starts.
 ///
-/// Both layouts are **sized from the count**, which the fixed 2x2 and the single
-/// row they replaced were not: past four players the grid's third row sat at
-/// `1.25 * ARENA_H`, outside the world, and the cluster's row grew longer than a
-/// view radius so the players it exists to gather could not see each other. At
-/// four both formulations agree exactly, so the arena everything here was
-/// measured in is unchanged.
+/// Both layouts are **sized from the count**. A fixed 2x2 grid puts a fifth
+/// player's row at `1.25 * ARENA_H`, outside the world. A single row grows
+/// longer than a view radius, so the players it exists to gather cannot see
+/// each other. At four players the spread layout is exactly the fixed 2x2 grid and
+/// the cluster exactly the 40 px row, which is the arena the README's
+/// measurements were taken in.
 fn player_start(p: usize, count: usize, spread: bool) -> Vec2 {
   if spread {
     // Cells of a grid just big enough for the count, each player at its centre.
@@ -1381,7 +1380,7 @@ fn player_start(p: usize, count: usize, spread: bool) -> Vec2 {
     // spread it further than anybody can see: if the members are out of each
     // other's view the players are not clustered and the setting stops meaning
     // anything. A row of four at the usual spacing spans well inside a view, so
-    // the small counts keep the exact layout they always had.
+    // the small counts keep the plain 40 px row.
     const ROW: usize = 4;
     const SPACING: f32 = 40.0;
     let cols = ROW.max((count as f32).sqrt().ceil() as usize);
@@ -1459,9 +1458,8 @@ mod tests {
 
   #[test]
   fn what_the_second_channel_costs_against_the_far_tier() {
-    // The trade this example did not have a way to state: a far tier is still
-    // a broadcast and costs every player on every frame it is due. A
-    // subscription costs the handful you chose.
+    // The trade: a far tier is still a broadcast and costs every player on
+    // every frame it is due. A subscription costs the handful you chose.
     println!("\n  one client's player frame, standing alone:\n");
     println!("{:>10} {:>14} {:>14} {:>12}", "players", "far tier B", "squad only B", "ratio");
     let mut costs = Vec::new();
@@ -1507,10 +1505,9 @@ mod tests {
 
   #[test]
   fn every_player_starts_inside_the_arena_however_many_there_are() {
-    // The layout used to be a fixed 2x2 grid and a single row, both of which
-    // were fine at four and wrong at anything else: the grid's third row sat at
-    // 1.25 * ARENA_H, outside the world, so a fifth player spawned in the void
-    // with the horde unable to reach it.
+    // A fixed 2x2 grid and a single row are fine at four and wrong at anything
+    // else: the grid's third row sits at 1.25 * ARENA_H, outside the world, so a
+    // fifth player spawns in the void with the horde unable to reach it.
     for count in [1usize, 2, 4, 5, 7, 16, 64, crate::sim::types::MAX_PLAYERS] {
       for spread in [true, false] {
         for p in 0..count {
@@ -1545,8 +1542,8 @@ mod tests {
   #[test]
   fn a_clustered_lobby_stays_inside_one_view_however_big_it_is() {
     // The point of clustering is that the players can see each other and the
-    // horde converges on one place. A single row of 128 spanned 5000 px, which
-    // is not a cluster, and the setting silently stopped meaning anything.
+    // horde converges on one place. A single row of 128 spans 5000 px, which is
+    // not a cluster and the setting silently stops meaning anything.
     let count = crate::sim::types::MAX_PLAYERS;
     let first = player_start(0, count, false);
     for p in 1..count {
@@ -1703,13 +1700,13 @@ mod tests {
 
   #[test]
   fn a_rebuilt_world_keeps_accepting_the_inputs_a_client_is_already_aiming() {
-    // Regression, and it made the player simply stop responding.
+    // Regression guard: without it the player simply stops responding.
     //
     // Changing the enemy count rebuilds the world, and the rebuild deliberately
-    // preserves the clock so a client's packet-age estimate does not jump. When
-    // the tick was a separate counter it was *not* preserved: the clock said
-    // thirty seconds and the tick said nought, so every input a client aimed was
-    // hundreds of ticks beyond the accepting window and was refused for good.
+    // preserves the clock so a client's packet-age estimate does not jump. A tick
+    // kept as a separate counter would not be preserved: the clock would say
+    // thirty seconds and the tick nought, so every input a client aimed would be
+    // hundreds of ticks beyond the accepting window and refused for good.
     let controls = Controls::default();
     let mut warm = Server::new(50, 4, false);
     idle(&mut warm, 30_000, &controls);

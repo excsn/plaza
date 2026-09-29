@@ -228,7 +228,7 @@ impl World {
     self.server.eliminations
   }
 
-  /// Pellets eaten per player: the score, which keeps climbing after mass caps.
+  /// Pellets eaten per player: the score, which only goes up even as mass drains.
   pub fn scores(&self) -> &[u32] {
     &self.server.scores
   }
@@ -500,7 +500,7 @@ mod tests {
     let w = run(&Controls::default(), 6);
     assert!(w.swallow_count() > 0, "pellets are being swallowed");
     for h in w.holes() {
-      // Mass has no ceiling now; what has to stay bounded is its *effect*, which
+      // Mass has no ceiling; what has to stay bounded is its *effect*, which
       // is the log-damped value the field actually uses. It can reach zero, which
       // is elimination, so the floor is zero rather than a minimum mass.
       assert!(h.mass.is_finite() && h.mass >= 0.0, "mass stayed finite and non-negative: {}", h.mass);

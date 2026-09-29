@@ -1,9 +1,8 @@
 //! Everything that crosses the wire.
 //!
 //! The same shape as cube_yard's, except that a frame carries **only what the
-//! recipient can see**, so every packet is per-link from the first stage rather
-//! than an optimisation added later. Sending the whole world is not worth
-//! measuring in a volume, because most of it is out of view.
+//! recipient can see**, so every packet is per-link. Sending the whole world
+//! is not worth measuring in a volume, because most of it is out of view.
 
 use serde::{Deserialize, Serialize};
 
@@ -46,8 +45,8 @@ pub struct ShipState {
 /// a level for the same reason.
 ///
 /// The cost is that this changes every frame the mouse moves, where a keyed
-/// turn rate changed only on press and release, so upstream traffic is no
-/// longer close to zero.
+/// turn rate would change only on press and release, so upstream traffic is
+/// not close to zero.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Fly {
   /// Throttle, -1 to 1.
@@ -99,13 +98,13 @@ pub struct FrameUpdate {
   pub bolts: Vec<BoltState>,
   /// Seats struck this tick, of the ones this client can see.
   ///
-  /// The only **event** on this wire. Every other field describes a state, so a
-  /// lost frame costs freshness and nothing else; a hit appears once and never
-  /// again, which makes it the one thing whose delivery matters.
+  /// An **event**, like `kills`. Every other field describes a state, so a lost
+  /// frame costs freshness and nothing else; a hit appears once and never
+  /// again, which makes its delivery matter.
   pub hits: Vec<u16>,
   /// Kills this tick, of the ones this client can see or is part of.
   ///
-  /// The second event on this wire. It has to reach the people it names: you
+  /// The other event on this wire. It has to reach the people it names: you
   /// are told you were killed even if the killer was never in your view,
   /// because being told only that something out there got you is worse than
   /// being told who.

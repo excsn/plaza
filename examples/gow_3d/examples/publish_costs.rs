@@ -9,10 +9,10 @@
 //!
 //! **Every arm is timed over the whole per-client path**: deciding which cells
 //! a view touches, finding their payloads, assembling them and encoding what
-//! goes out. An earlier revision of this file hoisted the window walk out of
-//! the timed region and priced the flat index on *bucketing*, which is 18µs of
-//! a 2822µs tick; the walk and the payload lookups are where the time goes, so
-//! an arm has to be charged for them.
+//! goes out. Hoisting the window walk out of the timed region would price the
+//! flat index on *bucketing*, which is 18µs of a 2822µs tick; the walk and the
+//! payload lookups are where the time goes, so an arm has to be charged for
+//! them.
 //!
 //! **These are stage costs, so every ratio here is an upper bound on what the
 //! same change does to a tick.** A real tick also advances the simulation and
@@ -23,17 +23,16 @@
 //! clients is shared work neither mode can avoid. Treat a ratio here as a best
 //! case and confirm it end to end.
 //!
-//! **Every packing arm reads back what it wrote.** The byte arm used to
-//! hand-roll its own writers and so priced a format that could not be decoded:
-//! it quantised over exactly one cell with no padding for a body clamped into a
-//! border cell and never wrote down *which* cell, because the loop happened to
-//! have the corner in hand. It promised 10-12% and the wire delivered 0-9%.
+//! **Every packing arm reads back what it wrote.** A hand-rolled writer can
+//! price a format that cannot be decoded: one that quantised over exactly one
+//! cell with no padding for a body clamped into a border cell and never wrote
+//! down *which* cell promised 10-12% where the wire delivered 0-9%.
 //!
-//! - `per viewer`: what shipped when this file was written, and the baseline
-//!   every ratio below is against. A hashed lookup per touched cell, a byte
-//!   string per cell in the frame, the whole frame assembled and encoded per
-//!   client. **It is no longer what ships.** The arms are kept as evidence for
-//!   choices already made, not as a description of the current code.
+//! - `per viewer`: the baseline every ratio below is against. A hashed lookup
+//!   per touched cell, a byte string per cell in the frame, the whole frame
+//!   assembled and encoded per client. **The zone does not use it.** The arms
+//!   are kept as evidence for choices already made, not as a description of
+//!   the current code.
 //! - `joined`: the touched payloads concatenated into one byte string before
 //!   encoding. Each is self-delimiting (its own count opens it), so a reader
 //!   loops until the buffer runs out. Kills 48 of 49 envelope framings.
@@ -52,18 +51,17 @@
 //! **Bytes**, with a pixel column, because bytes are the worst number in the
 //! crowding table: 3337 per client per tick at 30Hz is ~98 KiB/s each. **A
 //! cell payload knows which cell it is**, so a position inside it can be
-//! written relative to the cell rather than to the world: 15 units of range
-//! instead of 1024, which buys back six bits an axis at the same step. That is
-//! a saving only the published-per-cell shape can have.
+//! written relative to the cell rather than to the world: a padded cell's 31
+//! units of range instead of 1024, which buys back five bits an axis at a finer
+//! step. That is a saving only the published-per-cell shape can have.
 //!
-//! **What ships now is none of these arms.** The zone re-keyed this whole layer
-//! by the viewer's *cell* rather than the viewer: `Packed` is refcounted, the
-//! body blob is assembled once per occupied viewer-cell and addressing walks
-//! cell pairs against a fixed offset mask. Every arm here is per-viewer, so
-//! every ratio is measured against a shape that no longer exists and the
-//! current cost of a tick lives in `zone_scale`, which runs the real path.
-//! This file shows why the changes were made; it does not measure their
-//! result.
+//! **The zone uses none of these arms.** It keys this whole layer by the
+//! viewer's *cell* rather than the viewer: `Packed` is refcounted, the body
+//! blob is assembled once per occupied viewer-cell and addressing walks cell
+//! pairs against a fixed offset mask. Every arm here is per-viewer, so every
+//! ratio is measured against a shape the zone does not use and the current
+//! cost of a tick lives in `zone_scale`, which runs the real path. This file
+//! shows why the zone is shaped as it is; it does not measure the result.
 //!
 //! Run with `cargo run -p gow_3d --release --example publish_costs`.
 
@@ -200,8 +198,9 @@ impl Geometry {
 /// The graded candidate: cell-relative, with the width chosen per cell and a
 /// tag saying which was used, because a reader cannot guess it.
 ///
-/// Written out properly rather than modelled, since modelling it is what went
-/// wrong the first time. `pack` ships one width; this is the unbuilt second.
+/// Written out in full and read back rather than modelled, because a model
+/// can price a format that does not decode. `pack::open_graded` and
+/// `pack::write_in_cell_at` are the shipped form of the same layout.
 const GRADED_COARSE_BITS: u32 = pack::REL_BITS - 3;
 const REL_RANGE: f32 = CELL * 2.0;
 
@@ -337,8 +336,8 @@ fn main() {
       Tally::default(),
     );
     // The fan-out's own recipient index, flat for the same reason the payload
-    // store is: an earlier revision gave the flat index to every arm except
-    // this one and then read its crossover off the handicapped result.
+    // store is, so this arm is not handicapped against the others when its
+    // crossover is read.
     let mut audience_flat: Vec<Vec<u16>> = vec![Vec::new(); geom.side * geom.side];
     let mut publish_ns = 0u128;
 
@@ -407,9 +406,9 @@ fn main() {
         let mut frame = bare(seat as u16);
         if let Some(me) = spot {
           geom.window_into(me.0, me.2, &mut window);
-          // What shipped before `Joined`: a byte string per touched cell, each
-          // paying its own envelope framing. Modelled here rather than on the
-          // frame, which now carries one.
+          // A byte string per touched cell, each paying its own envelope
+          // framing. Modelled here rather than on the frame, which carries one
+          // joined string.
           frame.bodies = Packed::new(
             window
               .iter()
@@ -576,11 +575,8 @@ fn main() {
       // since this asks what a body costs rather than what a tick costs.
       //
       // **Written with the shipped packer and read back with the shipped
-      // reader.** An earlier revision of this arm hand-rolled both and so
-      // measured a format that could not be decoded at all: it quantised over
-      // exactly one cell with no padding for a body clamped into a border
-      // cell and it never wrote down *which* cell, because it happened to have
-      // the corner in hand. It promised 10-12% and the wire delivered 0-9%.
+      // reader**, so the format priced is one that decodes. The module note
+      // says what a hand-rolled pair gets wrong.
       if let Some(me) = seats_at[0] {
         geom.window_into(me.0, me.2, &mut window);
         for (cx, cz) in &window {

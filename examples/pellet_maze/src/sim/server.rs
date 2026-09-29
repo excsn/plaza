@@ -5,8 +5,7 @@
 //! **Time is spent in whole ticks** ([`Server::advance`]). A tick driver hands
 //! over the *measured* elapsed time and advancing a simulation by that ties
 //! its rate to the host's scheduler, which no client can reproduce.
-//! `bomb_grid` found this at a cost of two snaps per hundred frames; this
-//! example stepped in whole ticks from the first commit.
+//! `bomb_grid` measured that at two snaps per hundred frames.
 //!
 //! **A turn is scheduled by tick and executed by place.** The schedule
 //! ([`plaza_server_utils::InputSchedule`]) decides *when a turn request becomes
@@ -1100,8 +1099,8 @@ mod tests {
   fn the_role_rotates_for_a_given_seat_while_its_identity_does_not() {
     // The **role** rotates, or a player only ever plays one side. The **id**
     // does not, because a client is told which id is theirs once, at join:
-    // rotating ids would silently hand them somebody else's player and the seat
-    // that was always index zero was always the runner regardless.
+    // rotating ids would silently hand them somebody else's player and seat
+    // zero would be the runner every round regardless.
     let c = Controls { players: 3, ..controls() };
     let mut server = Server::new(3, MAZE_SEED);
     let first = server.runner_seat();

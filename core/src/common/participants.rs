@@ -40,7 +40,7 @@ impl<ID: AgentId, Data: ParticipantAppSpecificData> ParticipantTracker<ID, Data>
 
   /// Adds a participant to the tracker.
   /// Returns `true` if the participant was newly added, `false` if they already existed (no update occurs).
-  /// To update existing participant data, use `get_participant_mut` or a specific update method.
+  /// To update existing participant data, use `get_participant_mut` or `get_participant_app_data_mut`.
   pub fn add_participant(&mut self, agent: Agent<ID>, initial_app_data: Data) -> bool {
     if let Some(id) = agent.id_cloned() {
       if self.participants.contains_key(&id) {

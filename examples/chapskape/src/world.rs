@@ -395,7 +395,7 @@ pub fn footing_near(hint: Tile) -> Tile {
   Tile::new(SIZE / 2, SIZE / 2)
 }
 
-/// Where everybody arrives, and where the dead come back.
+/// Where every person arrives and where a fallen person comes back.
 pub fn the_green() -> Tile {
   footing_near(Tile::new(SIZE / 2, SIZE / 2))
 }

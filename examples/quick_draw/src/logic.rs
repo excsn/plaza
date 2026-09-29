@@ -228,8 +228,9 @@ fn start_contest(state: &mut DuelState, ctx: &mut Ctx) {
 ///
 /// The claim is `tick * TICK_US + offset` and the floor works like the tick
 /// floor in `InputSchedule`, one resolution finer: the claim is clamped into
-/// `[arrival - one_way - slack, arrival]`, so a claim the link could not have
-/// carried is bounded and a dishonest one gains at most the slack.
+/// `[arrival - one_way - slack, arrival]`, never earlier than the signal, so a
+/// claim the link could not have carried is bounded and a dishonest one gains
+/// at most the slack.
 fn fire(state: &mut DuelState, player: PlayerId, tick: u64, offset_us: u32, logic: &DuelLogic, ctx: &mut Ctx) -> bool {
   if !state.is_duelist(player) || state.entry_of(player).is_some() {
     return false;
@@ -616,8 +617,9 @@ mod tests {
 
   #[tokio::test]
   async fn the_declared_order_beats_arrival_order_and_scores() {
-    // Both shots land on the same server tick, where arrival order decides
-    // today: A's arrives first claiming 175ms, B's second claiming 165ms.
+    // Both shots land on the same server tick, where tick resolution alone
+    // falls back to arrival order: A's arrives first claiming 175ms, B's
+    // second claiming 165ms.
     // Arrival names A and the declared stamps name B. The verdict records
     // both and B scores.
     let mut state = camp().await;

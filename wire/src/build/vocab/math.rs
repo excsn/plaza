@@ -2,8 +2,8 @@
 //!
 //! These exist so payloads like
 //! [`RemoteEntitySnapshot`](crate::game_common::reconciliation::op_payloads::RemoteEntitySnapshot)
-//! have a concrete default, and so a wire protocol has stable shapes to
-//! serialize. They are intentionally plain data with no operator algebra.
+//! have ready-made types to plug in and so a wire protocol has stable shapes
+//! to serialize. They are intentionally plain data with no operator algebra.
 //!
 //! Applications with real math needs should use their own types (glam,
 //! nalgebra, …): every payload that mentions these is generic over the vector

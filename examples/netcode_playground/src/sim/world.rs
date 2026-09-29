@@ -298,12 +298,10 @@ mod tests {
     };
     let first = mean_remote_error(&Controls { second_order: false, ..slow }, 900, 0xC0FFEE);
     let second = mean_remote_error(&Controls { second_order: true, ..slow }, 900, 0xC0FFEE);
-    // 2%, and it used to measure 7%. The difference was not the curve, which is
-    // unchanged at 17.79 px: it was the *tangent* improving from 19.12 to 18.15
-    // when `ExtrapolationBase` stopped rewinding to the raw sample past its cap
-    // and started holding at the cap instead. Most of this technique's apparent
-    // advantage was an artifact of a discontinuity in what it was compared
-    // against.
+    // About 2%: 17.79 px for the curve against 18.15 px for the tangent. The
+    // tangent is that close because `ExtrapolationBase` holds at its cap. A
+    // base that rewinds to the raw sample past the cap measures 19.12 px. That
+    // discontinuity makes the curve look 7% better than it is.
     assert!(second < first * 0.99, "at 5 Hz the curve should still beat the tangent: {second:.2}px against {first:.2}px");
 
     // At a normal rate it does nothing, so the toggle is not a general

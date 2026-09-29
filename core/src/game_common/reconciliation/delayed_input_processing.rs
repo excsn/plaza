@@ -68,15 +68,15 @@ impl<ID: AgentId, InputData: Clone + Debug, ServerTime: Copy + Debug + PartialOr
     tracing::trace!(agent_id = ?client_queue.front().map(|bi| &bi.client_input.input_data), seq = client_queue.back().unwrap().client_input.sequence_number, "Buffered client input");
   }
 
-  /// Retrieves and removes all inputs from all clients that were received *before*
-  /// (`current_server_time` - `processing_delay`).
+  /// Retrieves and removes all inputs from all clients that were received at or
+  /// before (`current_server_time` - `processing_delay`).
   ///
   /// The returned inputs are typically then sorted (e.g., by client sequence number
   /// if multiple from the same client, or by server received time across clients)
   /// and processed by `StateLogic`.
   ///
   /// - `current_server_time`: The current authoritative server time.
-  /// - `processing_delay`: The fixed delay. Inputs older than (`current_server_time` - `processing_delay`)
+  /// - `processing_delay`: The fixed delay. Inputs received at or before (`current_server_time` - `processing_delay`)
   ///   will be processed.
   ///
   /// Returns a `Vec<(ID, SequencedClientInput<InputData>)>` containing the client ID

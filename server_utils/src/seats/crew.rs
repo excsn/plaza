@@ -34,7 +34,8 @@ impl<Key: Eq + Hash + Clone> Crew<Key> {
   /// order.
   ///
   /// `key_of` names bot `index` (`0..count`) and owns uniqueness: give each
-  /// fill its own namespace, or the second fill resumes the first's seats.
+  /// fill its own namespace. Otherwise the second fill reports the first's
+  /// seats again instead of taking new ones.
   /// Stops at the first admission that is not a seat, because a full roster
   /// stays full for every later bot too.
   pub fn fill(

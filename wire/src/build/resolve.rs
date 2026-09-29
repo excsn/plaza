@@ -1,33 +1,4 @@
-//! [`Wire`]: the version derived by resolving types instead of listing files.
-//!
-//! The file-list [`emit`](super::emit) reads text and cannot follow a type into
-//! another file, so a payload defined elsewhere silently does not count and a
-//! forgotten file gives a wrong version. This resolver removes that limit: tag
-//! each op enum with a doc line and everything else is derived.
-//!
-//! ```text
-//! /// plaza-wire: root
-//! #[derive(Clone, Debug, Serialize, Deserialize)]
-//! pub enum TableOp { ... }
-//! ```
-//!
-//! ```no_run
-//! // build.rs
-//! fn main() {
-//!   plaza_wire::build::Wire::detect()
-//!     .dart("../../flutter/my_client/lib/wire_protocol.dart")
-//!     .emit();
-//! }
-//! ```
-//!
-//! The scanner parses every file under `src/`, starts from the tagged roots
-//! and walks field types transitively, generic arguments included. The version
-//! hashes exactly the reachable definitions, so an unrelated type sharing a
-//! file no longer moves it. Plaza's own vocabulary (the notice payloads, the
-//! netcode payloads, `Agent`) is covered by [`VOCAB_VERSION`](super::VOCAB_VERSION),
-//! baked into this crate, so you never list it. A referenced type the
-//! resolver cannot place **fails the build naming the reference**, where the
-//! file-list mechanism failed silently.
+//! The type resolver behind [`Wire`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -99,10 +70,39 @@ pub(crate) fn bundle_hint(name: &str) -> Option<&'static str> {
   }
 }
 
-/// Derives the wire version by resolving types from tagged roots.
+/// Derives the wire version by resolving types instead of listing files.
 ///
-/// See the [module docs](self) for the tags and the walk. `emit()` publishes
-/// the version exactly as [`super::emit`] does, plus the optional Dart const.
+/// The file-list [`emit`](super::emit) reads text and cannot follow a type into
+/// another file, so a payload defined elsewhere silently does not count and a
+/// forgotten file gives a wrong version. This resolver removes that limit: tag
+/// each op enum with a doc line and everything else is derived.
+///
+/// ```text
+/// /// plaza-wire: root
+/// #[derive(Clone, Debug, Serialize, Deserialize)]
+/// pub enum TableOp { ... }
+/// ```
+///
+/// ```no_run
+/// // build.rs
+/// fn main() {
+///   plaza_wire::build::Wire::detect()
+///     .dart("../../flutter/my_client/lib/wire_protocol.dart")
+///     .emit();
+/// }
+/// ```
+///
+/// The scanner parses every file under `src/`, starts from the tagged roots
+/// and walks field types transitively, generic arguments included. The version
+/// hashes exactly the reachable definitions, so an unrelated type sharing a
+/// file does not move it. Plaza's own vocabulary (the notice payloads, the
+/// netcode payloads, `Agent`) is covered by [`VOCAB_VERSION`](super::VOCAB_VERSION),
+/// baked into this crate, so you never list it. A referenced type the
+/// resolver cannot place **fails the build naming the reference**, where the
+/// file list fails silently.
+///
+/// `emit()` publishes the version exactly as [`super::emit`] does, plus the
+/// optional Dart const.
 pub struct Wire {
   roots: Option<Vec<String>>,
   scan_dirs: Vec<PathBuf>,
@@ -190,7 +190,8 @@ impl Wire {
 
   /// Resolves, hashes and publishes: `$OUT_DIR/wire_protocol.rs`,
   /// `cargo:rustc-env=WIRE_PROTOCOL`, rerun directives for the scanned
-  /// directories and the Dart const if [`dart`](Self::dart) was given.
+  /// directories, the Dart const if [`dart`](Self::dart) was given and the
+  /// Dart types if [`dart_types`](Self::dart_types) was.
   pub fn emit(self) {
     for dir in &self.scan_dirs {
       println!("cargo:rerun-if-changed={}", dir.display());

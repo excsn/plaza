@@ -14,22 +14,21 @@ use plaza_client_utils::fixed::{Fx, P};
 
 use crate::sim::types::*;
 
+/// How fast a racer turns this tick when no timed power-up sets the rate.
+///
+/// Grip and slick hand their own rate to the same `step_at_rate`, so every
+/// turn is applied at the same point in the tick. Stepping with no steering
+/// and turning afterwards would move a gripping racer on last tick's heading
+/// and an ordinary one on this tick's, which is half a degree every tick.
+fn turn_rate(charge: bool) -> u16 {
+  if charge { TURN_RATE + CHARGE_TURN_BONUS } else { TURN_RATE }
+}
+
 /// Advances one racer by one tick under one input.
 ///
 /// Deliberately has no access to a clock, a random number or any other racer.
 /// A function that could reach any of those would make a replay depend on
 /// something the log does not carry, since a ghost is only its log.
-/// How fast a racer turns this tick.
-///
-/// One function so the grip power-up cannot end up applying its turn at a
-/// different point in the tick from the ordinary one, which is what the first
-/// version did: it stepped with no steering and turned afterwards, so a
-/// gripping racer moved on last tick's heading and an ordinary one on this
-/// tick's. That was half a degree every tick.
-fn turn_rate(charge: bool) -> u16 {
-  if charge { TURN_RATE + CHARGE_TURN_BONUS } else { TURN_RATE }
-}
-
 pub fn step(racer: &mut Racer, input: Input, track: &Track) {
   step_at_rate(racer, input, track, turn_rate(input.charge), TOP_SPEED);
 }
@@ -215,7 +214,7 @@ pub struct Skill {
   pub deadband: u16,
   /// How often it stops paying attention, out of a hundred.
   pub lapse_pct: u32,
-  /// How long each lapse lasts and how long it charges for.
+  /// How many ticks of each charge cycle it holds the charge for.
   pub charge_ticks: u32,
 }
 
@@ -264,7 +263,8 @@ fn noise(chunk: u32, seat: usize) -> u32 {
   ((x ^ (x >> 31)) & 0xFFFF_FFFF) as u32
 }
 
-/// How long a lapse or a charge holds for.
+/// How long a lapse holds for, in ticks. A bot's charge cycle is twelve of
+/// these.
 const CHUNK: u32 = 14;
 
 /// What a CPU racer holds this tick.
@@ -349,7 +349,7 @@ pub fn step_world(world: &mut World, inputs: &[Input], track: &Track) {
   }
 }
 
-/// One racer, one tick, with the grip timer folded in.
+/// One racer, one tick, with the grip and slick timers folded in.
 fn step_with(racer: &mut Racer, input: Input, track: &Track, tick: u32) {
   // The two timed handling power-ups are opposites. Both are expressed as a
   // turn rate and a top speed handed to the same step rather than as branches

@@ -257,7 +257,7 @@ impl Client {
     self.add_ghost(ghost);
   }
 
-  /// The ghost this client is closest to beating, for the split readout.
+  /// The fastest ghost, for the split readout.
   pub fn rival(&self) -> Option<&GhostRun> {
     self.ghosts.first()
   }

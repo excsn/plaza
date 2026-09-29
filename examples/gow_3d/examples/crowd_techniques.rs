@@ -1,21 +1,20 @@
 //! The four things an MMO does about a crowd, priced on this zone.
 //!
-//! `zone_scale` found that the cost is in building rather than bytes: at 4096
-//! connected clients the tick is 91% *building per-client views* and 8%
-//! encoding them. So the techniques worth trying are the ones that build less;
+//! With a view built per client, `zone_scale` found that the cost is in
+//! building rather than bytes: at 4096 connected clients the tick was 91%
+//! *building per-client views* and 8% encoding them. So the techniques worth trying are the ones that build less;
 //! the byte techniques only address about a twelfth of the problem.
 //!
 //! Four arms, all against the same moving zone. The zone's own bots do the
 //! moving, so the measurement sees the traffic a real zone makes. A still zone
 //! would favour anything keyed on change:
 //!
-//! - `per-client`: what shipped before this measurement. One audience query
-//!   and one packed frame each.
+//! - `per-client`: one audience query and one packed frame each.
 //! - `cells`: pack each occupied grid cell **once** and hand every client the
 //!   blobs for the cells its view touches. Build stops tracking the client
 //!   count and starts tracking the occupied-cell count. Relevance becomes
-//!   cell-granular, which is a superset of the disc, so it costs bytes. This
-//!   arm won and is what ships now, as `Zone::publish` plus `frame_for`.
+//!   cell-granular, which is a superset of the disc, so it costs bytes. The
+//!   zone uses this shape, as `Zone::publish_at` plus `frame_for`.
 //! - `rest`: send a character only when it has moved or is new to that viewer.
 //!   Lossless, but it needs a memory per viewer.
 //! - `graded rate`: refresh a distant character every k ticks and let the client

@@ -24,9 +24,8 @@ fi
 #    actix server and neither compiles to wasm. `web` is the browser client
 #    alone.
 #
-#    The solver is behind the `server` feature, so the browser client never
-#    compiles a rapier it would not run: unlike puck_rink, nothing here
-#    re-simulates and the client only draws what arrives.
+#    The server's state and tick logic are behind the `server` feature, so the
+#    browser client never compiles them.
 #
 #    POKETO_FEATURES adds to that set, if you add any features worth passing.
 features="web${POKETO_FEATURES:+,$POKETO_FEATURES}"

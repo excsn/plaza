@@ -1,11 +1,11 @@
 //! What a client is holding after a long fight, against what the server has.
 //!
-//! Every other test here drives one side. The bug that got through them was on
-//! the seam: the server was correct, the client was correct about everything it
-//! was told, and the thing neither of them owned was **what to do about silence**.
-//! Missiles are streamed while they exist and simply stop being sent when they
-//! end, so a client that never treated absence as an ending accumulated every
-//! one it had ever seen, drawn where it was last seen, for ever.
+//! Every other test here drives one side. This one covers the seam: the server
+//! can be correct and the client correct about everything it is told while
+//! neither owns **what to do about silence**. Missiles are streamed while they
+//! exist and simply stop being sent when they end, so a client that does not
+//! treat absence as an ending accumulates every one it has ever seen, drawn
+//! where it was last seen, for ever.
 //!
 //! Nothing short of running both sides for a while and looking at what the
 //! client is left holding can see that. It is not a decode error or a
@@ -229,10 +229,10 @@ async fn a_client_lands_where_the_server_is_under_every_dial() {
 /// Every kill a client is part of has to reach it, however far away the other
 /// half was.
 ///
-/// The only **event** on this wire, and the only thing whose delivery matters:
-/// a state is described again next frame and an event is not. The filter that
-/// decides who hears one is hand-written and reads visible-or-about-you, which
-/// is a rule with two halves and no test until now. Losing the second half
+/// An **event**, like a hit, so its delivery matters: a state is described
+/// again next frame and an event is not. The filter that decides who hears one
+/// is hand-written and reads visible-or-about-you, which is a rule with two
+/// halves. Losing the second half
 /// would look like being killed by nothing, which is a worse bug than the
 /// bandwidth it saves.
 #[tokio::test]
@@ -309,8 +309,7 @@ async fn every_kill_a_client_is_part_of_reaches_it() {
 
 #[tokio::test]
 async fn a_client_stops_hearing_about_a_ship_that_leaves_and_lets_go_of_it() {
-  // The same shape one entity along, and the half that already worked: ships
-  // are dropped on silence too, which is where the rule for shots came from.
+  // The same shape one entity along: ships are dropped on silence too.
   let logic = SpaceLogic::new();
   let mut state = SpaceState::new();
   for id in 0..2u32 {
@@ -352,8 +351,8 @@ async fn a_client_stops_hearing_about_a_ship_that_leaves_and_lets_go_of_it() {
 
   // Long enough for the client's own rule to fire. Asserted on the client
   // letting go rather than on the server going quiet, because a server that
-  // stops sending and a client that never drops is exactly the shape the
-  // missiles had.
+  // stops sending and a client that never drops is the missile leak this file
+  // guards against.
   for _ in 0..40 {
     tick(&mut state, &mut client, &mut now_ms).await;
   }

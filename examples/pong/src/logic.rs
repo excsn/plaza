@@ -54,7 +54,7 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
             }
             PongOp::ReadyToPlay => {
               // Skips the rest of whatever is counting down. The server advances
-              // the phases on its own now, so this only shortens the wait.
+              // the phases on its own, so this only shortens the wait.
               if current_state.countdown > 0 {
                 info!(player_id = %player_id, phase = ?current_state.phase, "Player is ready; skipping the countdown");
                 current_state.countdown = 1;
@@ -67,10 +67,10 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
         }
       }
       LogicInput::TimeStep { delta_time } => {
-        // The tick's own interval. This used to be wall-clock since the last
-        // input of any kind, so a client sending paddle ops between ticks left
-        // almost no elapsed time for the tick to integrate and the ball
-        // crawled. A bot playing at 40Hz stopped it completely.
+        // The tick's own interval, not wall-clock since the last input of any
+        // kind. Paddle ops arriving between ticks would leave almost no elapsed
+        // time for the tick to integrate, so the ball would crawl and a bot
+        // playing at 40Hz would stop it completely.
         let dt_secs = delta_time.as_secs_f32();
         if current_state.phase == GamePhase::Playing {
           current_state.ball.x += current_state.ball.vx * dt_secs;
@@ -165,9 +165,8 @@ impl StateLogic<PongOp, PlayerId, PongGameState> for PongLogic {
         // come from `resolve` as shuffles.
         apply_shuffles(current_state, &mut ops_to_broadcast);
 
-        // Every timed phase counts down here and nothing waits on a client op.
-        // A browser that never answered used to leave the game stopped for
-        // everyone and the score screen was the end of the session.
+        // Every timed phase counts down here and nothing waits on a client op,
+        // so a browser that never answers cannot stop the game for everyone.
         if current_state.countdown > 0 {
           current_state.countdown -= 1;
           if current_state.countdown == 0 {
@@ -256,8 +255,8 @@ fn enter(
 /// Clears the board for a fresh match.
 ///
 /// The scores are cleared here, when a game starts and not when the last one
-/// ended. A game that finished 5-3 and then sat on the score screen was still
-/// holding both numbers when the next one began.
+/// ended, so the score screen keeps the final result and the next game always
+/// begins at zero.
 fn new_game(state: &mut PongGameState, out: &mut Vec<TargetedOp<PongOp, PlayerId>>) {
   state.scores.clear();
   for seat in [state.player1_id(), state.player2_id()].into_iter().flatten() {

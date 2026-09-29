@@ -6,11 +6,11 @@
 //! [`SnakeTurnManager`](plaza_example_draft_board::snake) is the second. Its
 //! module records what fit and what did not.
 //!
-//! Both trait methods handle a reversing order, including the case where the
-//! next actor is the same one that just played. The rest of the lifecycle did
-//! not fit. `begin`, `restart`, `add_actor` and `remove_actor` live on the
-//! concrete round-robin type and not on the trait, so this manager had to
-//! declare its own and nothing checks that the two agree.
+//! The advance handles a reversing order, including the case where the next
+//! actor is the same one that just played. It reports the pass boundary
+//! there. `begin`, `restart`, `add_actor` and `remove_actor` are trait
+//! methods, so the draft drives this manager through the same calls a
+//! round-robin one takes.
 //!
 //! This binary is the scripted run. To draft by hand, `cargo run -p
 //! plaza_example_draft_board --bin serve` and open three browser tabs.

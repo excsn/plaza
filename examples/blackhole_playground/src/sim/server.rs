@@ -63,9 +63,9 @@ pub struct Server {
   /// than inferred from a total that pellets are simultaneously inflating.
   pub mass_drained: f32,
   /// Pellets eaten per player. Deliberately separate from mass: mass is the
-  /// physical stat, capped and reduced by collisions, while the score is what you
-  /// achieved and only goes up. Without the split a player at the mass ceiling
-  /// has nothing left to play for.
+  /// physical stat, log-damped in effect and reduced by collisions, while the
+  /// score is what you achieved and only goes up. Without the split a player
+  /// whose pull has flattened out has nothing left to play for.
   pub scores: Vec<u32>,
 }
 
@@ -113,7 +113,6 @@ impl Server {
     self.clock_ms
   }
 
-  /// Advances by `dt_ms`; `local_input` steers player 0, the rest drift.
   /// Whether a player's dash is off cooldown, for a readout.
   pub fn dash_ready(&self, player: usize) -> bool {
     self.clock_ms >= self.dash_ready_ms[player]

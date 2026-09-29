@@ -57,8 +57,7 @@
 //! the newest bit set. Receiving packet N+1 after losing N does not put a
 //! subscriber in the state N+1 implies, because whatever N announced and N+1
 //! had no reason to repeat is gone. That walk is [`AckWindow::contiguous_base`]
-//! rather than something re-derived here: it was re-derived here once and got
-//! it wrong, which is how the primitive came to exist.
+//! rather than something re-derived here.
 //!
 //! [`AckWindow::contiguous_base`]: plaza_client_utils::ack::AckWindow::contiguous_base
 
@@ -159,9 +158,7 @@ pub struct DeltaBaseline {
   unacked: usize,
   /// The newest acknowledgement window seen, as `(newest, mask)`, kept so
   /// `unacked` can be recomputed when a plan adds to the history instead of
-  /// being stamped to the whole history length: the readout used to flap
-  /// between the true in-flight count and `history` depending on whether a
-  /// plan or an ack ran last.
+  /// being stamped to the whole history length.
   last_ack_window: Option<(u64, u64)>,
   flow: Option<FlowControl>,
 }
@@ -412,8 +409,10 @@ impl DeltaBaseline {
   /// `digest` is the subscriber's own [`SetDigest`] over the keys it is actually
   /// holding. When it disagrees with the digest of the state we believe it
   /// reached, the mirror has drifted and further differences cannot repair it,
-  /// so the next plan is a full rebuild. If the application does not compute a
-  /// digest, pass the digest of an empty set and the check is skipped.
+  /// so the next plan is a full rebuild. The check always runs once the
+  /// frontier reaches `newest`, so a placeholder digest (such as the digest of
+  /// an empty set) forces a rebuild whenever the acknowledged state is not
+  /// empty.
   pub fn observe_ack(&mut self, newest: u64, mask: u64, digest: u64) {
     if self.policy != RecoveryPolicy::AckRecovery {
       return;
@@ -421,8 +420,7 @@ impl DeltaBaseline {
     let window = AckWindow::from_encoded(newest, mask);
     // The contiguous frontier rather than the newest set bit: see the module
     // docs. Correctness depends on stopping at the first gap, which `AckWindow`
-    // does rather than something re-derived here. It was re-derived here once
-    // and got it wrong, which is how the primitive came to exist.
+    // does rather than something re-derived here.
     //
     // The first sequence not yet accounted for: one past the settled baseline, or
     // the oldest state still in history when nothing has been acknowledged yet.
@@ -537,8 +535,7 @@ impl DeltaBaseline {
 mod tests {
   use super::*;
 
-  /// The two accessors nothing was exercising and a side effect of one of
-  /// them.
+  /// `set_policy` and `unacked`, including the rebuild `set_policy` causes.
   mod what_nothing_was_calling {
     use super::*;
 
