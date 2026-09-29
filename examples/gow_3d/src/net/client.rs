@@ -238,10 +238,18 @@ pub struct NetClient {
   ///
   /// The measurement the whole comparison comes down to. Under client
   /// authority it is the travel since the claim the server is echoing was
-  /// sent. Under server authority it is how far the server moved the character
-  /// between its last two frames.
+  /// sent. Under server authority it is the ground distance from where the held
+  /// keys have walked `steered` to where the server has the character.
   pub gap: f32,
   pub worst_gap: f32,
+  /// Where the held keys would have walked the character, under server
+  /// authority. Measured against, never drawn.
+  steered: (f32, f32, f32),
+  steered_ms: Option<u64>,
+  keys: (f32, i8),
+  /// The server's position on the previous received frame, to tell when it
+  /// has stopped.
+  server_was: Option<(f32, f32, f32)>,
   now_ms: u64,
   last_sent_ms: u64,
   last_sent_at: Option<(f32, f32, f32)>,
@@ -288,6 +296,10 @@ impl NetClient {
       authority: Authority::Client,
       gap: 0.0,
       worst_gap: 0.0,
+      steered: (0.0, 0.0, 0.0),
+      steered_ms: None,
+      keys: (0.0, 0),
+      server_was: None,
       now_ms: 0,
       last_sent_ms: 0,
       last_sent_at: None,
@@ -327,6 +339,9 @@ impl NetClient {
 
   pub fn poll(&mut self, now_ms: u64) {
     self.now_ms = now_ms;
+    if self.authority == Authority::Server {
+      self.steer();
+    }
     let mut events = std::mem::take(&mut self.events);
     self.pump.drain(now_ms, &mut events);
     let mut arrivals = std::mem::take(&mut self.arrivals);
@@ -394,6 +409,7 @@ impl NetClient {
         self.spawn_seen = you.spawn;
         self.at = you.at;
         self.teleport = Some(you.at);
+        self.steered = you.at;
         // Or the send filter decides nothing changed and the server never
         // hears where we actually are.
         self.last_sent_at = None;
@@ -406,6 +422,11 @@ impl NetClient {
     let cells = std::mem::take(&mut self.cells);
     let bodies = frame.seen_with(&cells);
     self.landed = frame.landed;
+    if frame.authority != self.authority {
+      self.steered = self.at;
+      self.steered_ms = None;
+      self.server_was = None;
+    }
     self.authority = frame.authority;
     self.delivery = frame.delivery;
     self.precision = frame.precision;
@@ -431,13 +452,25 @@ impl NetClient {
       if !self.seeded {
         // Taken once, to learn where the zone put us.
         self.at = you.at;
+        self.steered = you.at;
         self.seeded = true;
       } else if self.authority == Authority::Server {
         // The server owns it, so this is the answer rather than an echo. No
         // prediction and no reconciliation: the character is drawn where the
         // server last said, so the round trip is visible, which is what the
         // comparison is meant to show.
-        self.gap = crate::movement::distance(self.at, you.at);
+        //
+        // `steered` is taken back only once the keys are idle and the server
+        // has stopped too. Without it every stop leaves a tick's rounding in
+        // it for good.
+        let stopped = self
+          .server_was
+          .is_some_and(|was| crate::movement::ground_distance(was, you.at) < 1e-5);
+        if self.keys.1 == 0 && stopped {
+          self.steered = you.at;
+        }
+        self.server_was = Some(you.at);
+        self.gap = crate::movement::ground_distance(self.steered, you.at);
         self.at = you.at;
       } else {
         // Under client authority it *is* an echo of what we already said, so
@@ -503,6 +536,8 @@ impl NetClient {
   /// Sent at the same rate a position is, and only on a change, so the two
   /// arms of the comparison are not separated by their send policy.
   pub fn intend(&mut self, yaw: f32, forward: i8) {
+    self.steer();
+    self.keys = (yaw, forward);
     if self.now_ms.saturating_sub(self.last_sent_ms) < SEND_EVERY_MS {
       return;
     }
@@ -512,6 +547,21 @@ impl NetClient {
     self.last_sent_ms = self.now_ms;
     self.last_intent = Some((yaw.to_bits(), forward));
     self.pump.send_op(&GowOp::Intent { yaw, forward });
+  }
+
+  /// Walks `steered` up to now by the keys last held, as the server's drive
+  /// would with no delay.
+  fn steer(&mut self) {
+    let elapsed_ms = self.steered_ms.map_or(0, |at| self.now_ms.saturating_sub(at));
+    self.steered_ms = Some(self.now_ms);
+    let (yaw, forward) = self.keys;
+    if forward == 0 {
+      return;
+    }
+    let travel = crate::movement::RUN_SPEED * elapsed_ms as f32 / 1000.0 * forward as f32;
+    let edge = crate::terrain::EDGE - 2.0;
+    self.steered.0 = (self.steered.0 + yaw.sin() * travel).clamp(-edge, edge);
+    self.steered.2 = (self.steered.2 + yaw.cos() * travel).clamp(-edge, edge);
   }
 
   /// Clears the worst-case reading, for comparing one mode against the other

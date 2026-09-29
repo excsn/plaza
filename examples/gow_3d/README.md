@@ -71,10 +71,24 @@ The example was planned around comparing the two modes, so both are live in one 
 ```
        authority        gap now      worst gap     refusals
           client          0.00u          0.00u            0
-          server          0.23u          0.23u            0
+          server          0.00u          0.00u            0
 ```
 
-That is measured with **no simulated network delay**, so it is the lower bound for any connection. Under client authority the gap is zero because the server takes the client's position. Under server authority it is already one tick of travel, because nothing moves locally until the answer arrives. A real connection adds its delay on top of that.
+That is measured with **no simulated network delay**. Under client authority the gap is zero because the server takes the client's position. Under server authority it is also about zero: the server applies an intent for the whole tick it arrives in, so with no delay it is not behind the keys by more than a tick's rounding.
+
+Under server authority the gap is the ground distance from where the held keys would have walked the character to where the server's latest frame has it. Nothing moves locally until the answer arrives, so it grows with the round trip at about run speed times the round trip. Measured with the same one-way delay on both legs:
+
+`cargo test -p gow_3d --test gap_candidates -- --nocapture`
+
+```
+      scenario  delay        truth          gap        error
+      straight    0ms    0.02/0.05    0.02/0.05    0.00/0.00
+      straight   50ms    0.56/0.63    0.56/0.63    0.00/0.00
+      straight  100ms    1.32/1.44    1.32/1.44    0.00/0.00
+      straight  200ms    2.62/2.84    2.62/2.84    0.00/0.00
+```
+
+Each column is mean/max in units. Truth is the distance from where the keys would have taken the character with no delay to where the server has it. The test also runs a 90 degree turn, a stop and a stop-and-go. It holds the gap within 0.15u of truth in all of them. The largest error, 0.12u, is a tick's rounding left after a stop: the gap drops it once the keys are idle and the server has stopped. Truth keeps it.
 
 Neither mode produced a refusal on an honest walk. Under server authority that is because no position is ever claimed. A claim sent anyway is refused and **not counted**, because a packet that crossed a mode change is not evidence of cheating. Counting it would make the number jump every time the dial moves, which is when somebody is looking at it.
 

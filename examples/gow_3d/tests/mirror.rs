@@ -407,10 +407,9 @@ async fn what_each_authority_mode_costs() {
   let (_, client_worst, client_refusals, client_at) = rows[0];
   let (_, server_worst, server_refusals, server_at) = rows[1];
 
-  println!("\n  no network delay is simulated here at all, and the two still");
-  println!("  differ: server authority starts a tick behind because nothing");
-  println!("  local moves until the answer arrives. Latency adds to both, but");
-  println!("  only one of them is starting from zero.\n");
+  println!("\n  no network delay is simulated here, so both read about zero.");
+  println!("  Under server authority the gap grows with the round trip; see");
+  println!("  tests/gap_candidates.rs for it under delay.\n");
 
   // Both modes actually moved the character, or the comparison is between two
   // things standing still.
@@ -428,19 +427,11 @@ async fn what_each_authority_mode_costs() {
   // is the floor, not a measurement of some particular connection.
   assert_eq!(client_worst, 0.0, "the client's own position cannot disagree with itself");
 
-  // One tick of travel, before a single millisecond of network delay exists.
-  // That is the cost of asking rather than telling, and everything a real
-  // connection adds is on top of it.
-  let one_tick = gow_3d::movement::RUN_SPEED * 33.0 / 1000.0;
+  // The server applies an intent for the whole tick it arrives in, so with no
+  // delay it is not behind the keys by more than a tick's rounding.
   assert!(
-    server_worst >= one_tick * 0.9,
-    "server authority is at least a tick behind: {server_worst} against {one_tick}"
-  );
-  // Loose upward, because a driven step also climbs whatever the ground does
-  // under it, and that rise is part of the distance.
-  assert!(
-    server_worst < one_tick * 3.0,
-    "and not more than a step's worth of it: {server_worst}"
+    server_worst < 0.15,
+    "server authority with no delay is not behind the keys: {server_worst}"
   );
 }
 
