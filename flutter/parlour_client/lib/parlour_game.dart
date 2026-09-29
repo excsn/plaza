@@ -242,7 +242,7 @@ class ParlourGame extends FlameGame with PlazaGame {
 
       case TableOpSettled(:final winner, coins: final purse):
         coins = purse;
-        _note('match over, #$winner takes the stake');
+        _note(winner == null ? 'match over, the leaders split the stake' : 'match over, #$winner takes the stake');
         return Hold.seconds(pacing.settled);
 
       case TableOpRejected(:final reason):

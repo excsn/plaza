@@ -485,7 +485,9 @@ function handleTableOp(op) {
       return;
 
     case 'Settled':
-      log(`match over: #${body.winner} takes the stake, now holding ${body.coins}`, 'good');
+      log(body.winner == null
+        ? `match over: the leaders split the stake, now holding ${body.coins}`
+        : `match over: #${body.winner} takes the stake, now holding ${body.coins}`, 'good');
       coins = body.coins;
       $('coins').textContent = coins;
       return;

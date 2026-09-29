@@ -170,11 +170,22 @@ fn play_requested(state: &mut TableState, player: PlayerId, card: Card, ctx: &mu
 /// continues rather than stalling on someone who left.
 fn unseat(state: &mut TableState, player: &PlayerId) {
   let held_the_turn = state.turns.current_turn_actor() == Some(*player);
+  let seated = state.seats.seat_of(player).is_some();
   state.occupants.remove_participant(player);
   state.seats.depart(player);
   state.hands.remove(player);
   state.turns.remove_actor(player);
   info!(player, table = %state.name, "Left the table.");
+
+  // Leaving a match in progress forfeits it: the stake goes into the pot now,
+  // while the wallet still exists and the score leaves the standings so the
+  // absent cannot be paid at settlement.
+  if seated && !state.settled && *state.phase.current() != TablePhase::Seating {
+    let paid = state.wallets.debit(*player, state.settings.stake);
+    state.forfeits += paid;
+    state.scores.forget_player(player);
+    info!(player, paid, "Forfeited the match.");
+  }
 
   // The leaver's pending timeout names them, so the identity check will drop
   // it. Without a clock of its own the successor's turn never times out and a
@@ -279,25 +290,42 @@ fn finish_match(state: &mut TableState, ctx: &mut Ctx) {
   }
   state.settled = true;
 
+  // Everyone on the top score is a leader. The pot is what the others paid
+  // plus what leavers forfeited and it is split among the leaders, the
+  // remainder going one coin at a time down the standings.
   let standings = state.scores.get_all_scores_sorted();
-  let winner = standings.first().map(|(player, _)| *player);
+  let top = standings.first().map(|(_, score)| *score);
+  let leaders: Vec<PlayerId> = standings
+    .iter()
+    .filter(|(_, score)| Some(*score) == top)
+    .map(|(player, _)| *player)
+    .collect();
   let stake = state.settings.stake;
 
-  let mut pot = 0;
+  let mut pot = std::mem::take(&mut state.forfeits);
   for player in state.players() {
-    if Some(player) != winner {
+    if !leaders.contains(&player) {
       pot += state.wallets.debit(player, stake);
     }
   }
-  let coins = match winner {
-    Some(player) => state.wallets.credit(player, pot),
-    None => 0,
-  };
+  if !leaders.is_empty() {
+    let share = pot / leaders.len() as u64;
+    let mut remainder = pot % leaders.len() as u64;
+    for leader in &leaders {
+      let extra = u64::from(remainder > 0);
+      remainder -= extra;
+      state.wallets.credit(*leader, share + extra);
+    }
+  }
+  let winner = if leaders.len() == 1 { Some(leaders[0]) } else { None };
 
-  ctx
-    .ops_q()
-    .push(TargetedOp::new_system_all(vec![TableOp::Settled { winner, coins }]));
-  info!(?standings, ?winner, pot, "Match over, stake settled.");
+  for player in state.occupants.all_agent_ids() {
+    let coins = state.wallets.balance(player);
+    ctx
+      .ops_q()
+      .push(TargetedOp::new_system_to(player, vec![TableOp::Settled { winner, coins }]));
+  }
+  info!(?standings, ?leaders, pot, "Match over, stake settled.");
 
   // Scheduled after the transition, so it belongs to the intermission rather
   // than the match that just ended.
@@ -379,6 +407,7 @@ mod tests {
   use std::sync::atomic::AtomicU32;
   use std::sync::Arc;
 
+  use plaza::session::MessageTarget;
   use plaza::snapshot::SnapshotProvider;
 
   use super::*;
@@ -589,16 +618,26 @@ mod tests {
     assert_eq!(*state.phase.current(), TablePhase::Finished);
     assert!(state.settled);
 
-    let winner = state.scores.get_all_scores_sorted()[0].0;
+    // A shuffled deal can end in a three-way tie, which moves nothing; a
+    // decisive match pays the one leader from the others.
+    let standings = state.scores.get_all_scores_sorted();
+    let leaders = standings.iter().filter(|(_, s)| *s == standings[0].1).count();
     let opening = crate::wallets::OPENING_BALANCE;
-    assert!(
-      state.wallets.balance(winner) > opening,
-      "the winner is no better off than when they sat down"
-    );
-    assert!(
-      (1..=SEATS as PlayerId).any(|id| state.wallets.balance(id) < opening),
-      "nobody paid the stake"
-    );
+    if leaders == 1 {
+      assert!(
+        state.wallets.balance(standings[0].0) > opening,
+        "the winner is no better off than when they sat down"
+      );
+      assert!(
+        (1..=SEATS as PlayerId).any(|id| state.wallets.balance(id) < opening),
+        "nobody paid the stake"
+      );
+    } else {
+      assert!(
+        (1..=SEATS as PlayerId).all(|id| state.wallets.balance(id) == opening),
+        "a tie moved coins"
+      );
+    }
 
     let total: u64 = (1..=SEATS as PlayerId).map(|id| state.wallets.balance(id)).sum();
     let opening = opening * SEATS as u64;
@@ -723,6 +762,95 @@ mod tests {
 
   /// The turn timeout is armed against one occupancy of `Playing`. When the
   /// phase moves on, the pending event is stale and nothing cancelled it.
+  #[tokio::test]
+  async fn tied_leaders_split_the_pot_and_nobody_is_named_winner() {
+    let mut state = table();
+    seat_all(&mut state).await;
+    let opening = crate::wallets::OPENING_BALANCE;
+    for id in 1..=SEATS as PlayerId {
+      state.scores.set_score(&id, 1);
+    }
+
+    let mut ctx = Ctx::new();
+    finish_match(&mut state, &mut ctx);
+
+    for id in 1..=SEATS as PlayerId {
+      assert_eq!(state.wallets.balance(id), opening, "a three-way tie moved coins");
+    }
+    let settled: Vec<_> = ctx
+      .ops_q()
+      .iter()
+      .flat_map(|t| t.ops.iter())
+      .filter_map(|op| match op {
+        TableOp::Settled { winner, .. } => Some(*winner),
+        _ => None,
+      })
+      .collect();
+    assert_eq!(settled.len(), SEATS as usize, "one Settled per occupant");
+    assert!(settled.iter().all(Option::is_none), "a tie named a winner");
+  }
+
+  #[tokio::test]
+  async fn two_tied_leaders_share_what_the_loser_paid() {
+    let mut state = table();
+    seat_all(&mut state).await;
+    let opening = crate::wallets::OPENING_BALANCE;
+    state.scores.set_score(&1, 2);
+    state.scores.set_score(&2, 2);
+    state.scores.set_score(&3, 0);
+
+    finish_match(&mut state, &mut Ctx::new());
+
+    assert_eq!(state.wallets.balance(3), opening - 10);
+    assert_eq!(state.wallets.balance(1), opening + 5);
+    assert_eq!(state.wallets.balance(2), opening + 5);
+  }
+
+  #[tokio::test]
+  async fn a_leaver_forfeits_the_stake_and_leaves_the_standings() {
+    let mut state = table();
+    seat_all(&mut state).await;
+    let opening = crate::wallets::OPENING_BALANCE;
+    state.scores.set_score(&1, 2);
+
+    run(&mut state, LogicInput::AgentLeft { agent_id: 1 }).await;
+
+    assert_eq!(state.wallets.balance(1), opening - 10, "leaving mid-match cost nothing");
+    assert_eq!(state.forfeits, 10);
+    assert!(state.scores.get_score(&1).is_none(), "the leaver is still in the standings");
+
+    state.scores.set_score(&2, 1);
+    finish_match(&mut state, &mut Ctx::new());
+
+    assert_eq!(state.wallets.balance(1), opening - 10, "the leaver was paid after leaving");
+    assert_eq!(state.wallets.balance(2), opening + 20, "the forfeit did not reach the pot");
+    assert_eq!(state.wallets.balance(3), opening - 10);
+  }
+
+  #[tokio::test]
+  async fn settled_tells_each_player_their_own_balance() {
+    let mut state = table();
+    seat_all(&mut state).await;
+    let opening = crate::wallets::OPENING_BALANCE;
+    state.scores.set_score(&1, 3);
+
+    let mut ctx = Ctx::new();
+    finish_match(&mut state, &mut ctx);
+
+    let mut told = 0;
+    for targeted in ctx.ops_q().iter() {
+      let MessageTarget::Agent(player) = targeted.target else { continue };
+      for op in &targeted.ops {
+        let TableOp::Settled { winner, coins } = op else { continue };
+        told += 1;
+        assert_eq!(*winner, Some(1));
+        let expected = if player == 1 { opening + 20 } else { opening - 10 };
+        assert_eq!(*coins, expected, "player {player} was told someone else's balance");
+      }
+    }
+    assert_eq!(told, SEATS as usize);
+  }
+
   #[tokio::test]
   async fn a_timeout_from_a_finished_round_does_not_fire() {
     let mut state = table();

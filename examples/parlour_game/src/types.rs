@@ -227,7 +227,8 @@ pub enum TableOp {
   /// Nobody played in time and the table chose for them.
   PlayedForYou { player: PlayerId, card: Card },
   TrickWon { player: PlayerId, card: Card },
-  /// The match is over and the stake has moved.
+  /// The match is over and the stake has moved. `winner` is `None` when the
+  /// leaders tied and split the pot; `coins` is the recipient's own balance.
   Settled { winner: Option<PlayerId>, coins: u64 },
   Rejected { reason: String },
   /// The table is closing and this connection is about to be; the reason rides
@@ -303,6 +304,9 @@ pub struct TableState {
   pub settled: bool,
   /// Deals so far, folded into each deal's seed so no two at one table repeat.
   pub deals: u64,
+  /// Stakes already paid by players who left during the match, added to the
+  /// pot at settlement.
+  pub forfeits: u64,
 
   pub wallets: Arc<WalletRegistry>,
   /// Read by the lobby to refresh `RoomMetadata::current_players`.
@@ -347,6 +351,7 @@ impl TableState {
       timeouts: PhasedScheduler::new(),
       settled: false,
       deals: 0,
+      forfeits: 0,
       wallets,
       seats_taken,
     }
