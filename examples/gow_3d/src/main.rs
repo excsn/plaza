@@ -155,9 +155,8 @@ async fn frame_loop(options: role::Options, bots: usize) {
         body = Body::new(client.at);
         seeded = true;
       }
-      // The one position the server sends to the client rather than the other
-      // way round. A respawn puts the character on fresh footing and a client
-      // that kept walking from where it died would have every claim refused.
+      // A respawn or a refusal puts the character on fresh footing. A client
+      // that kept walking from where it was would have every claim refused.
       if let Some(at) = client.take_teleport() {
         body = Body::new(at);
       }

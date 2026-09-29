@@ -201,7 +201,8 @@ pub struct NetClient {
   /// The last spawn counter this client acted on, so a relocation is applied
   /// exactly once however many frames repeat it.
   spawn_seen: u32,
-  /// Where the server put us, waiting to be taken by the frame loop.
+  /// Where the server put us after a respawn or a refusal, waiting to be taken
+  /// by the frame loop.
   teleport: Option<(f32, f32, f32)>,
   pub tick: u64,
   pub meter: Meter,
@@ -236,9 +237,9 @@ pub struct NetClient {
   /// client's, right now.
   ///
   /// The measurement the whole comparison comes down to. Under client
-  /// authority it is the send interval's worth of travel and nothing else.
-  /// Under server authority it is a round trip of it, because the local
-  /// character has moved and the answer has not come back yet.
+  /// authority it is the travel since the claim the server is echoing was
+  /// sent. Under server authority it is how far the server moved the character
+  /// between its last two frames.
   pub gap: f32,
   pub worst_gap: f32,
   now_ms: u64,
@@ -371,6 +372,7 @@ impl NetClient {
           // smooth correction would only ever be smoothing a cheat.
           self.refused += 1;
           self.at = at;
+          self.teleport = Some(at);
           self.last_sent_at = None;
         }
         GowOp::Moved { .. }
@@ -598,9 +600,9 @@ impl NetClient {
 
   /// Somewhere the server put this client, to be taken once.
   ///
-  /// A respawn moves a character the client otherwise owns, so this is the one
-  /// place a position comes *down* the wire and is applied rather than
-  /// compared. Everything else about the local player's position is a report.
+  /// A respawn or a refused claim moves a character the client otherwise owns,
+  /// so the frame loop rebuilds its body from this rather than walking on from
+  /// where it was.
   pub fn take_teleport(&mut self) -> Option<(f32, f32, f32)> {
     self.teleport.take()
   }
@@ -612,8 +614,8 @@ impl NetClient {
 
   /// What the local player is casting, if anything, as a share run so far.
   ///
-  /// Read from `you` rather than from the audience list, which is why that
-  /// block exists: a client never appears in its own list.
+  /// Read from `you` rather than from `others`, which never holds the client's
+  /// own seat.
   pub fn my_cast(&self) -> Option<(u8, f32)> {
     let you = self.you?;
     let index = you.casting?;
@@ -648,5 +650,53 @@ impl NetClient {
 
   pub fn because_of(&self, seat: Seat) -> Option<Because> {
     self.others.get(&seat).map(|o| o.seen.because)
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::movement::{distance, Body};
+  use plaza_wire::frame;
+  use plaza_ws::scripted::ScriptedSocket;
+
+  fn deliver(socket: &ScriptedSocket, ops: &[GowOp]) {
+    let mut bytes = Vec::new();
+    frame::begin(frame::Kind::Ops, &mut bytes);
+    WIRE.encode_into(&ops.to_vec(), &mut bytes).unwrap();
+    socket.feed_message(bytes);
+  }
+
+  /// The client-authority arm of the frame loop in `main.rs`, one frame of it.
+  fn frame(client: &mut NetClient, body: &mut Body, wish: (f32, f32)) {
+    if let Some(at) = client.take_teleport() {
+      *body = Body::new(at);
+    }
+    body.step(wish, false, 1.0 / 60.0, |_, _| 0.0);
+    client.at = body.at;
+    client.moved_to(body.at, 0.0);
+  }
+
+  #[test]
+  fn a_refusal_moves_the_body_the_frame_loop_walks() {
+    let socket = ScriptedSocket::new();
+    let mut client = NetClient::from_socket(Box::new(socket.clone()));
+    client.poll(0);
+    let mut body = Body::new((0.0, 0.0, 0.0));
+    for _ in 0..10 {
+      frame(&mut client, &mut body, (0.0, 1.0));
+    }
+
+    let held = (0.0, 0.0, 2.0);
+    deliver(&socket, &[GowOp::Refused { at: held }]);
+    client.poll(40);
+    frame(&mut client, &mut body, (0.0, 0.0));
+
+    assert_eq!(client.refused, 1);
+    assert!(
+      distance(client.at, held) < 1e-4,
+      "snapped to {held:?}, walked on from {:?}",
+      client.at
+    );
   }
 }
