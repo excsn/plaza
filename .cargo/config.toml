@@ -1,0 +1,4 @@
+# miniquad and plaza_ws leave their JavaScript-provided functions undefined at link
+# time; rustc 1.98 stopped importing undefined symbols on wasm32 by default.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "link-arg=--import-undefined"]
