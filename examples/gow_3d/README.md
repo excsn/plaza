@@ -78,7 +78,7 @@ That is measured with **no simulated network delay**. Under client authority the
 
 Under server authority the gap is the ground distance from where the held keys would have walked the character to where the server's latest frame has it. Nothing moves locally until the answer arrives, so it grows with the round trip at about run speed times the round trip. Measured with the same one-way delay on both legs:
 
-`cargo test -p gow_3d --test gap_candidates -- --nocapture`
+`cargo test -p gow_3d --test server_authority_gap -- --nocapture`
 
 ```
       scenario  delay        truth          gap        error

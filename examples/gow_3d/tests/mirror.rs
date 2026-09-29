@@ -409,7 +409,7 @@ async fn what_each_authority_mode_costs() {
 
   println!("\n  no network delay is simulated here, so both read about zero.");
   println!("  Under server authority the gap grows with the round trip; see");
-  println!("  tests/gap_candidates.rs for it under delay.\n");
+  println!("  tests/server_authority_gap.rs for it under delay.\n");
 
   // Both modes actually moved the character, or the comparison is between two
   // things standing still.

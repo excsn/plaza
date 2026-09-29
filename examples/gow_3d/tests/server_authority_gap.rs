@@ -6,7 +6,7 @@
 //! it.
 //!
 //! ```sh
-//! cargo test -p gow_3d --test gap_candidates -- --nocapture
+//! cargo test -p gow_3d --test server_authority_gap -- --nocapture
 //! ```
 
 #![cfg(all(feature = "server", feature = "client", feature = "websocket"))]
