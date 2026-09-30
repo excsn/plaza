@@ -213,10 +213,17 @@ function drawFloor() {
       `<div class="note" style="margin:0">item ${item.id}</div>` +
       `<div class="note" style="margin:0">${mine ? 'claimed' : left + ' ticks left'}</div>` +
       `<div class="bar"><i style="width:${Math.round(100 * left / windowTicks)}%"></i></div>`;
-    if (!mine && !item.gone) el.onclick = () => grab(item.id);
+    if (!mine && !item.gone) el.dataset.item = item.id;
     host.append(el);
   }
 }
+
+// On the container and on press, because drawFloor replaces every item several
+// times a second and a click needs the press and the release on one element.
+$('floor').addEventListener('pointerdown', (e) => {
+  const el = e.target.closest('[data-item]');
+  if (el) grab(Number(el.dataset.item));
+});
 
 function drawStandings(rows) {
   const body = $('standings');
