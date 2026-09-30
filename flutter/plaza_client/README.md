@@ -39,7 +39,7 @@ client.events.listen((e) {
   switch (e) {
     case Connected(:final resumed): if (resumed) askForSnapshot();
     case Outdated(:final ours, :final theirs): showUpdatePrompt(ours, theirs);
-    case Disconnected(): case GaveUp(): case SkippedFrame(): break;
+    case Disconnected(): case GaveUp(): case SkippedFrame(): case MalformedFrame(): break;
   }
 });
 

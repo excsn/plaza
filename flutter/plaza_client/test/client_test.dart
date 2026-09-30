@@ -218,7 +218,7 @@ void main() {
       await client.stop();
     });
 
-    test('an ops frame that is not a list is dropped and the connection stays', () async {
+    test('an ops frame that is not a list is dropped, counted and the connection stays', () async {
       final server = FakeServer();
       final client = makeClient(server);
       final events = <PlazaEvent>[];
@@ -230,6 +230,8 @@ void main() {
       await pump();
 
       expect(ops, isEmpty);
+      expect(events.whereType<MalformedFrame>().single.kind, Kind.ops);
+      expect(events.whereType<SkippedFrame>(), isEmpty);
       expect(events.whereType<Disconnected>(), isEmpty);
       expect(client.status, PlazaStatus.open);
       server.latest.deliver(opsFrame(['Reroll']));

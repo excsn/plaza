@@ -24,7 +24,7 @@ Nothing here throws for a network condition. Every failure a running connection 
 | Retries exhausted | [`GaveUp`](#class-gaveup) and the status goes to `closed` |
 | The two ends declared different wire versions | [`Outdated`](#class-outdated) and **the connection stays open** |
 | A frame arrived with a kind byte this build does not know | [`SkippedFrame`](#class-skippedframe) and the frame is dropped |
-| An ops frame decoded to something other than a list | The frame is dropped. No event and the connection stays open. |
+| An ops frame decoded to something other than a list | [`MalformedFrame`](#class-malformedframe), the frame is dropped and the connection stays open |
 | Sending while the socket is not open | [`sendOps`](#method-sendops) returns false. No queue, no throw. |
 
 A codec handed a body it cannot read still throws (`FormatException` or [`MsgPackError`](../plaza_wire/API_REFERENCE.md#class-msgpackerror)); that is a disagreement about the format rather than a network condition and it surfaces where the frame is decoded.
@@ -257,6 +257,17 @@ class SkippedFrame extends PlazaEvent {
 ```
 
 A frame arrived whose kind this build does not know. Skipped rather than fatal and surfaced only so a diagnostic panel can count them: a number that climbs means the server is ahead of this client.
+
+### Class `MalformedFrame`
+
+```dart
+class MalformedFrame extends PlazaEvent {
+  const MalformedFrame(this.kind);
+  final Kind kind;
+}
+```
+
+A frame of a known [`Kind`](../plaza_wire/API_REFERENCE.md#enum-kind) arrived with a body that kind cannot carry: an ops frame whose body is not a list. Dropped and the connection kept. Unlike [`SkippedFrame`](#class-skippedframe) this is not version skew: a number that climbs means a peer is encoding frames wrongly.
 
 ## 5. The transport seam
 

@@ -168,6 +168,21 @@ void main() {
     game.onRemove();
   });
 
+  test('an ops frame that is not a list is counted apart from a skipped one', () async {
+    final server = _Server();
+    final game = _TestGame(server);
+    await game.onLoad();
+    await pump();
+
+    server.latest.deliver(buildFrame(Kind.ops, const JsonCodec().encode({'Grab': 1})) as String);
+    await pump();
+
+    expect(game.seen, isEmpty);
+    expect(game.plazaStats.framesMalformed, 1);
+    expect(game.plazaStats.framesSkipped, 0);
+    game.onRemove();
+  });
+
   test('removing the game closes the connection', () async {
     final server = _Server();
     final game = _TestGame(server);

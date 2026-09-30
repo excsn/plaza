@@ -74,6 +74,8 @@ class PlazaDebugHud extends StatelessWidget {
             // count shows it is happening.
             if (stats.framesSkipped > 0)
               _row('frames skipped', '${stats.framesSkipped}', const Color(0xFFD9A441)),
+            if (stats.framesMalformed > 0)
+              _row('frames malformed', '${stats.framesMalformed}', const Color(0xFFD9A441)),
             if (client?.serverProtocol != null)
               _row('protocol', '${client!.protocol.value} / ${client!.serverProtocol!.value}'),
             if (outdated != null)

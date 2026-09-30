@@ -144,6 +144,7 @@ class LobbyGame extends FlameGame with PlazaGame {
       case GaveUp():
         status = 'could not reach the lobby';
       case SkippedFrame():
+      case MalformedFrame():
         break;
     }
   }

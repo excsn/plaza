@@ -84,6 +84,9 @@ Future<void> main(List<String> args) async {
       // newer server can add frame kinds without breaking this client.
       case SkippedFrame(kindByte: final kind):
         stdout.writeln('· skipped a frame of kind $kind');
+
+      case MalformedFrame(kind: final kind):
+        stdout.writeln('· dropped a malformed ${kind.name} frame');
     }
   });
 

@@ -5,7 +5,8 @@ import 'package:plaza_client/plaza_client.dart';
 ///
 /// Like the playgrounds' readouts, each number here was added because a fault
 /// could not be seen without it. `framesSkipped` climbing means the
-/// server is ahead of this build; `reconnects` climbing on a still-connected
+/// server is ahead of this build; `framesMalformed` climbing means a peer is
+/// encoding frames wrongly; `reconnects` climbing on a still-connected
 /// session means the link is flapping rather than down, which looks identical
 /// from inside the game and is a different problem.
 class PlazaStats extends ChangeNotifier {
@@ -14,6 +15,7 @@ class PlazaStats extends ChangeNotifier {
   int opsOut = 0;
   int reconnects = 0;
   int framesSkipped = 0;
+  int framesMalformed = 0;
   int resumes = 0;
 
   /// Set when the two ends were built from different wire definitions. An app
@@ -33,6 +35,7 @@ class PlazaStats extends ChangeNotifier {
     opsOut = 0;
     reconnects = 0;
     framesSkipped = 0;
+    framesMalformed = 0;
     resumes = 0;
     outdated = null;
     gaveUp = null;
@@ -58,6 +61,8 @@ class PlazaStats extends ChangeNotifier {
         gaveUp = event;
       case SkippedFrame():
         framesSkipped++;
+      case MalformedFrame():
+        framesMalformed++;
     }
     notifyListeners();
   }

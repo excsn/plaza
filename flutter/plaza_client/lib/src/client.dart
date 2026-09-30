@@ -69,6 +69,15 @@ class SkippedFrame extends PlazaEvent {
   final int kindByte;
 }
 
+/// A frame of a known kind arrived with a body that kind cannot carry.
+///
+/// Dropped and the connection kept. Unlike [SkippedFrame] this is not version
+/// skew: a number that climbs means a peer is encoding frames wrongly.
+class MalformedFrame extends PlazaEvent {
+  const MalformedFrame(this.kind);
+  final Kind kind;
+}
+
 /// A plaza connection: the handshake, the ops, and getting back after a drop.
 ///
 /// Does not define ops. The Rust side defines the vocabulary and this carries
@@ -330,11 +339,12 @@ class PlazaClient {
         break;
       case Kind.ops:
         final decoded = codec.decode(frame.body);
-        // Any other body is dropped and the connection kept.
-        if (decoded is List) {
-          for (final op in decoded) {
-            _ops.add(op);
-          }
+        if (decoded is! List) {
+          _events.add(const MalformedFrame(Kind.ops));
+          return;
+        }
+        for (final op in decoded) {
+          _ops.add(op);
         }
     }
   }

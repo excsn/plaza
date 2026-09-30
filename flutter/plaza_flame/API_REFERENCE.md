@@ -129,7 +129,7 @@ The resume hook is why this is a mixin rather than per-app wiring: Flame routes 
 ```dart
 class PlazaStats extends ChangeNotifier {
   PlazaStatus status;
-  int opsIn, opsOut, reconnects, framesSkipped, resumes;
+  int opsIn, opsOut, reconnects, framesSkipped, framesMalformed, resumes;
   Outdated? outdated;
   GaveUp? gaveUp;
   String? lastDisconnectReason;
@@ -152,6 +152,7 @@ Each field was added because a fault could not be seen without it.
 | `reconnects` | Counts each `Connected(resumed: true)` that follows a drop, not an app resume. Climbing on a still-connected session means the link is **flapping rather than down**, which looks identical from inside a game and is a different problem. |
 | `resumes` | Counts each `Connected(afterResume: true)`, one per app resume, whether or not the socket survived it. |
 | `framesSkipped` | Climbing means the server is ahead of this build and sending frame kinds it has never heard of. That is additive change working as intended; this counter shows it is happening. |
+| `framesMalformed` | Counts each [`MalformedFrame`](../plaza_client/API_REFERENCE.md#class-malformedframe). Climbing means a peer is encoding frames wrongly. Unlike `framesSkipped` this is a bug, not version skew. |
 | `lastDisconnectReason` | For a log line. Do not match on it. |
 
 #### Property `outdated`
@@ -232,6 +233,6 @@ Rebuilds on `stats`, so nothing has to drive it.
 
 #### What it shows
 
-`link` and `ops in / out` always. `reconnects`, `resumes`, `frames skipped`, `gave up` and `last drop` only once non-zero or set, so a healthy session is a two-line panel. `OUTDATED` shows both versions when they disagree.
+`link` and `ops in / out` always. `reconnects`, `resumes`, `frames skipped`, `frames malformed`, `gave up` and `last drop` only once non-zero or set, so a healthy session is a two-line panel. `OUTDATED` shows both versions when they disagree.
 
 The border and the `link` value are colour-coded: green for open, amber for connecting or reconnecting, red for closed or idle.
