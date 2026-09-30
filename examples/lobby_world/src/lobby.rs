@@ -4,7 +4,7 @@
 //! the server measured and that only exists on a socket the transport pings.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,6 +20,7 @@ use plaza_lobby::{Formed, LobbyError, MapTicketRegistry, MatchQueue, RoomId, Tic
 use plaza_session::ActixWsPlazaSession;
 use tracing::{info, warn};
 
+use crate::bots;
 use crate::factory::{ArenaFactory, RoomRegistry};
 use crate::types::{LinkQuality, LobbyOp, PlayerId, RoomCard};
 use crate::wallets::WalletRegistry;
@@ -34,10 +35,6 @@ const ASSIGNED_LINKS_MS: [u32; 4] = [0, 25, 70, 140];
 /// rest of the seats with bots.
 const MATCH_SIZE: usize = 2;
 const PATIENCE: Duration = Duration::from_secs(12);
-
-/// Bot ids start here, well clear of the humans' counter, so a bot is
-/// recognisable in a log without consulting anything.
-const FIRST_BOT_ID: PlayerId = 1_000_000;
 
 /// Per-player only; shared services live in the logic, already behind an `Arc`.
 #[derive(Debug, Clone)]
@@ -70,7 +67,6 @@ pub struct LobbyLogic {
   /// For `agent_rtt`. The controller holds the same `Arc`.
   pub session: Arc<LobbySession>,
   next_link: AtomicUsize,
-  next_bot: AtomicU64,
 }
 
 impl LobbyLogic {
@@ -88,7 +84,6 @@ impl LobbyLogic {
       tickets,
       session,
       next_link: AtomicUsize::new(0),
-      next_bot: AtomicU64::new(FIRST_BOT_ID),
     }
   }
 
@@ -251,13 +246,16 @@ impl LobbyLogic {
     };
 
     for _ in 0..formed.bots {
-      let bot = self.next_bot.fetch_add(1, Ordering::Relaxed);
+      let bot = bots::next_id();
       self.hold_seat(&room.room_id, "quick match bot", bot).await;
       self
         .command_arena(&room.room_id, "quick match bot", ControllerCommand::HandleAgentJoined {
           agent: Agent::new_bot(bot),
         })
         .await;
+      if let Some(commands) = self.registry.commands(&room.room_id) {
+        tokio::spawn(bots::play(commands, bot));
+      }
     }
 
     let mut out = Vec::new();

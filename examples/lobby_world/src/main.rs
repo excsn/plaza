@@ -3,6 +3,7 @@
 //! Open http://127.0.0.1:8090 in several tabs; each is assigned a different
 //! link, so the room lists differ.
 
+mod bots;
 mod factory;
 mod lobby;
 mod room;

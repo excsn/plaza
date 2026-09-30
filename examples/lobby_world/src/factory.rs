@@ -18,6 +18,7 @@ use plaza_session::ActixWsPlazaSession;
 use plaza_wire::frame::ProtocolVersion;
 use tracing::info;
 
+use crate::bots;
 use crate::room::{ArenaLogic, ArenaSnapshotter, ArenaState};
 use crate::types::{ArenaSettings, PlayerId, RoomOp, PROTOCOL};
 use crate::wallets::WalletRegistry;
@@ -140,8 +141,7 @@ impl RoomFactory for ArenaFactory {
 
     let task = tokio::spawn(controller.run());
     tokio::spawn(TickDriver::from_hz(ARENA_TICK_HZ).run(commands.clone()));
-
-
+    tokio::spawn(bots::fill_the_arena(commands.clone()));
 
     let endpoint = format!("ws://{}/ws/room/{}", self.authority, room_id);
     info!(room = %room_id, arena = %name, endpoint = %endpoint, "Arena spawned.");

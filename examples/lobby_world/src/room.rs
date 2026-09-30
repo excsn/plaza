@@ -25,18 +25,11 @@ const POT_STEP: u64 = 5;
 /// Capped, or an idle arena turns server uptime into a payout.
 const POT_CAP: u64 = 50;
 
-/// How long a bot waits between claims. Slow enough that a human who is paying
-/// attention beats it, so a filled seat is an opponent rather than something
-/// that takes every pot.
-const BOT_CLAIM_EVERY: Duration = Duration::from_secs(3);
-
 /// Per-arena only. The wallet lives in the shared registry: it outlives this room.
 #[derive(Debug, Clone)]
 pub struct Occupancy {
   pub claims_here: u32,
   pub bot: bool,
-  /// When this bot may next claim. Meaningless for humans, who claim by asking.
-  pub next_claim: Duration,
 }
 
 /// `Default` exists only to satisfy `RoomFactory::GameStateType`; the factory
@@ -55,8 +48,6 @@ pub struct ArenaState {
   /// the connection like the reservation is.
   pub links: HashMap<PlayerId, u32>,
   pub since_refresh: Duration,
-  /// Arena time, the axis bot cooldowns are measured on.
-  pub elapsed: Duration,
   pub wallets: Arc<WalletRegistry>,
   /// Read by the lobby to refresh `RoomMetadata::current_players`.
   pub seats_taken: Arc<AtomicU32>,
@@ -80,7 +71,6 @@ impl ArenaState {
       reserved: SeatReservations::with_expiry(RESERVATION_WINDOW),
       links: HashMap::new(),
       since_refresh: Duration::ZERO,
-      elapsed: Duration::ZERO,
       wallets,
       seats_taken,
     }
@@ -131,21 +121,6 @@ impl ArenaState {
       .filter(|(_, info)| info.app_data.bot)
       .map(|(id, _)| *id)
       .collect()
-  }
-
-  /// Seated bots whose cooldown has passed, longest-waiting first so a tie does
-  /// not always fall to the same one.
-  fn bots_ready_to_claim(&self) -> Vec<PlayerId> {
-    let mut ready: Vec<(PlayerId, Duration)> = self
-      .occupants
-      .iter()
-      .filter(|(id, info)| {
-        info.app_data.bot && self.seats.seat_of(id).is_some() && info.app_data.next_claim <= self.elapsed
-      })
-      .map(|(id, info)| (*id, info.app_data.next_claim))
-      .collect();
-    ready.sort_by_key(|(id, next)| (*next, *id));
-    ready.into_iter().map(|(id, _)| id).collect()
   }
 
   fn publish_seat_count(&self) {
@@ -242,7 +217,6 @@ impl StateLogic<RoomOp, PlayerId, ArenaState> for ArenaLogic {
         state.occupants.add_participant(agent, Occupancy {
           claims_here: 0,
           bot,
-          next_claim: state.elapsed + BOT_CLAIM_EVERY,
         });
         state.publish_seat_count();
 
@@ -262,9 +236,6 @@ impl StateLogic<RoomOp, PlayerId, ArenaState> for ArenaLogic {
       }
 
       LogicInput::TimeStep { delta_time } => {
-        state.elapsed += delta_time;
-        let mut out = Vec::new();
-
         // Seated players are already out of reach of this: `consume` removed
         // them. What lapses is only ever a placement nobody dialled.
         for player in state.reserved.tick(delta_time) {
@@ -279,32 +250,6 @@ impl StateLogic<RoomOp, PlayerId, ArenaState> for ArenaLogic {
             state.seats.depart(&id);
           }
           state.publish_seat_count();
-        }
-
-        for id in state.bots_ready_to_claim() {
-          if state.pot == 0 {
-            break;
-          }
-          let amount = std::mem::take(&mut state.pot);
-          let coins = state.wallets.credit(id, amount);
-          if let Some(occupancy) = state.occupants.get_participant_app_data_mut(&id) {
-            occupancy.claims_here += 1;
-            occupancy.next_claim = state.elapsed + BOT_CLAIM_EVERY;
-          }
-          out.push(TargetedOp::new(
-            Agent::new_bot(id),
-            MessageTarget::All,
-            vec![RoomOp::Claimed {
-              player: id,
-              amount,
-              coins,
-            }],
-          ));
-        }
-
-        if !out.is_empty() {
-          let everyone = state.everyone();
-          return Ok(LogicOutput::ops(out).and_snapshot(SnapshotRequest::to(everyone)));
         }
 
         state.since_refresh += delta_time;
@@ -712,19 +657,38 @@ mod tests {
     assert!(view.occupants[0].bot);
   }
 
+  /// Bots decide in `bots`, from their own view; the arena never claims for one.
   #[tokio::test]
-  async fn a_bot_claims_once_its_cooldown_passes() {
+  async fn the_arena_never_claims_for_a_bot() {
     let mut state = arena();
     reserve(&mut state, 1).await;
     join(&mut state, 1).await;
     seat_bot(&mut state, 1_000_000).await;
 
-    let early = tick(&mut state, 1000).await;
-    assert!(claimers(&early).is_empty(), "still on cooldown");
+    for _ in 0..20 {
+      let out = tick(&mut state, 500).await;
+      assert!(claimers(&out).is_empty());
+    }
+    assert_eq!(state.wallets.balance(1_000_000), 0);
+  }
 
-    let out = tick(&mut state, 2500).await;
-    assert_eq!(claimers(&out), vec![1_000_000], "the bot claimed");
-    assert!(state.wallets.balance(1_000_000) > 0);
+  #[tokio::test]
+  async fn a_bot_claims_through_the_same_rule_as_a_person() {
+    let mut state = arena();
+    reserve(&mut state, 1).await;
+    join(&mut state, 1).await;
+    seat_bot(&mut state, 1_000_000).await;
+    let pot = state.pot;
+
+    let out = ArenaLogic::default()
+      .process_input(&mut state, LogicInput::AgentOps {
+        source: Agent::new_bot(1_000_000),
+        ops: vec![RoomOp::Claim],
+      })
+      .await
+      .unwrap();
+    assert_eq!(claimers(&out), vec![1_000_000]);
+    assert_eq!(state.wallets.balance(1_000_000), pot);
     assert_eq!(state.pot, 0);
   }
 

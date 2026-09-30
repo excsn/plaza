@@ -21,7 +21,7 @@ cargo run -p plaza_example_lobby_world     # http://127.0.0.1:8090
 cargo test -p plaza_example_lobby_world    # tests for the rules described below
 ```
 
-Open the page in **four tabs**. Each connection is assigned a different simulated link, in rotation, so the tabs disagree about which arenas they can play.
+Open the page in **four tabs**. Each connection is assigned a different simulated link, in rotation, so the tabs disagree about which arenas they can play. One tab works too: sit in an arena alone for ten seconds and a bot takes a seat to compete for the pot.
 
 ## The three arenas
 
@@ -80,6 +80,14 @@ A reservation is cancelled by the lobby or lapses after `RESERVATION_WINDOW` (45
 Every tab is assigned a different simulated delay, so the same arena serves links of 0, 25, 70 and 140 ms one way. The arena ticks at 20 Hz and a 140 ms link is not sent twenty snapshots a second: the lobby declares the admitted link to the arena beside the reservation (`RoomOp::Link`), `snapshot_budget` turns it into an `OutboundBudget` on that seat's connection when it joins and `ArenaSnapshotter` asks `agent_owed` before building a viewer's snapshot, answering `Ok(None)` when the budget has no credit. A 25 ms link keeps the tick rate, 70 ms gets ten a second and 140 ms gets four. The transport withholds nothing: ops and events still go, they are charged to the same credit and the next snapshot the viewer does get is the whole view, so the skip costs latency and never correctness.
 
 This arena publishes on change rather than every tick: a snapshot goes out when the pot refreshes or somebody claims, which four browser tabs measured at about one arena frame every five seconds. That is under every budget in the table, so the skip is wired here and never fires. It binds in an arena that snapshots at its tick rate, which is horde at player count.
+
+### 6. Bots
+
+A person alone in an arena has nobody to race for the pot, so `bots.rs` seats bots. Every arena the factory spawns gets a filler task. Once a human holds a seat and `WAIT` (10 seconds) passes with no change in the seat count, the filler reserves a seat and joins a bot into it. The wait then starts over, so seats fill one at a time. Another arrival restarts the wait too. People who open several tabs therefore get each other first. The filler never takes a seat the lobby has reserved for someone still dialling in, never seats a bot for a spectator and stops when the arena is full. Quick match also seats bots in the seats its queue could not fill. Those play the same way.
+
+A bot plays from `RoomView`, the snapshot a browser receives. It claims with the same `RoomOp::Claim` a browser sends. The arena never claims on a bot's behalf and has no bot code beyond clearing them once the last seated human leaves. When a bot first sees a pot it waits a reaction time between 0.9 and 2.1 seconds before claiming, drawn afresh for each pot so the timing cannot be learned. A person watching the pot clicks well inside that and wins; a person who looks away loses it to a bot.
+
+Both decisions are pure functions over the view (`Filler::step` and `Reflex::step`) with unit tests that need no controller. Bot ids start at 1,000,000 from one counter shared by the filler and quick match, so two bots in one arena never collide.
 
 ## What it shows about plaza
 
