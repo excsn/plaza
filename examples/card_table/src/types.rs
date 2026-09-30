@@ -5,6 +5,7 @@ use plaza::game_common::flow_control::rounds::op_payloads::{RoundEndedNoticePayl
 use plaza::game_common::flow_control::turns::op_payloads::TurnChangedNoticePayload;
 use plaza::game_common::flow_control::{Phased, RoundRobinTurnManager, SequentialRoundManager};
 use plaza::game_common::scorekeeping::local::HashMapScorekeeper;
+use plaza_client_utils::determinism::{mix64, XorShift};
 use plaza_server_utils::{Roster, SeatState};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -19,8 +20,8 @@ include!(concat!(env!("OUT_DIR"), "/wire_protocol.rs"));
 
 /// How many players must be seated before the table starts.
 pub const TABLE_SIZE: usize = 3;
-/// Deals are fixed rather than shuffled, so a run is reproducible and the
-/// example needs no `rand` dependency.
+/// The deck is `TABLE_SIZE * HAND_SIZE` cards numbered from 2, shuffled per
+/// deal from a seed the table logs.
 pub const HAND_SIZE: usize = 3;
 pub const ROUNDS: u32 = 3;
 
@@ -145,6 +146,11 @@ pub struct TableState {
   /// timeout short enough to reach in a few seconds and a person choosing a
   /// card in a browser wants one long enough to choose in.
   pub turn_timeout_ticks: u64,
+  /// Mixed with the deal count into each deal's seed. The browser table takes
+  /// it from the clock and the scripted run fixes it.
+  pub seed: u64,
+  /// Deals so far, so no two deals at one table repeat.
+  pub deals: u64,
 }
 
 impl TableState {
@@ -161,6 +167,8 @@ impl TableState {
       tick: 0,
       timeouts: PhasedScheduler::new(),
       turn_timeout_ticks: TURN_TIMEOUT_TICKS,
+      seed: 0,
+      deals: 0,
     }
   }
 
@@ -170,18 +178,23 @@ impl TableState {
     self
   }
 
-  /// Deals `HAND_SIZE` cards to each seated player from a fixed deck.
+  /// Sets the seed every deal at this table is derived from.
+  pub fn with_seed(mut self, seed: u64) -> Self {
+    self.seed = seed;
+    self
+  }
+
+  /// Deals `HAND_SIZE` cards to each seated player from a shuffled deck and
+  /// returns the deal's seed, which reproduces it given the same seats.
   ///
-  /// Deterministic: seat order decides who gets what, so the run reads the same
-  /// every time.
-  pub fn deal(&mut self) {
+  /// Hands are kept by rank, which is the order the view sends them in.
+  pub fn deal(&mut self) -> u64 {
     self.hands.clear();
     self.table.clear();
-    for (seat, player) in self.players().iter().enumerate() {
-      let base = (seat * HAND_SIZE) as u8;
-      let hand = (0..HAND_SIZE).map(|i| Card(base + i as u8 + 2)).collect();
-      self.hands.insert(*player, hand);
-    }
+    self.deals += 1;
+    let seed = deal_seed(self.seed, self.deals);
+    self.hands = shuffled_hands(seed, &self.players());
+    seed
   }
 
   /// The seated players in seat order, the order the deal runs in.
@@ -252,4 +265,78 @@ pub struct PlayerView {
   pub opponents: Vec<(PlayerId, usize)>,
   pub table: Vec<(PlayerId, Card)>,
   pub scores: Vec<(PlayerId, u32)>,
+}
+
+/// One deal's seed: the table's seed with the deal count mixed in.
+pub fn deal_seed(table_seed: u64, deal: u64) -> u64 {
+  mix64(table_seed ^ mix64(deal.rotate_left(32)))
+}
+
+/// The hands `seed` deals to `players` in seat order, each sorted by rank.
+pub fn shuffled_hands(seed: u64, players: &[PlayerId]) -> HashMap<PlayerId, Vec<Card>> {
+  let mut rng = XorShift::new(seed);
+  let mut deck: Vec<Card> = (0..players.len() * HAND_SIZE).map(|i| Card(i as u8 + 2)).collect();
+  for i in (1..deck.len()).rev() {
+    deck.swap(i, rng.below(i as u32 + 1) as usize);
+  }
+  players
+    .iter()
+    .enumerate()
+    .map(|(seat, player)| {
+      let mut hand = deck[seat * HAND_SIZE..(seat + 1) * HAND_SIZE].to_vec();
+      hand.sort();
+      (*player, hand)
+    })
+    .collect()
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn seated(seed: u64) -> TableState {
+    let mut state = TableState::new().with_seed(seed);
+    for player in 1..=TABLE_SIZE as u32 {
+      state.seats.admit(PlayerId(player));
+    }
+    state
+  }
+
+  #[test]
+  fn a_deal_hands_out_the_whole_deck_once_by_rank() {
+    let mut state = seated(7);
+    state.deal();
+
+    let mut all: Vec<Card> = state.hands.values().flatten().copied().collect();
+    all.sort();
+    let deck: Vec<Card> = (0..TABLE_SIZE * HAND_SIZE).map(|i| Card(i as u8 + 2)).collect();
+    assert_eq!(all, deck);
+    for hand in state.hands.values() {
+      assert_eq!(hand.len(), HAND_SIZE);
+      assert!(hand.windows(2).all(|w| w[0] < w[1]), "a hand arrives by rank");
+    }
+  }
+
+  #[test]
+  fn deals_at_one_table_differ_and_a_seed_reproduces_one() {
+    let mut state = seated(7);
+    let first_seed = state.deal();
+    let first = state.hands.clone();
+    let second_seed = state.deal();
+    assert_ne!(first_seed, second_seed);
+    assert_ne!(first, state.hands, "the second deal repeated the first");
+
+    let mut again = seated(7);
+    again.deal();
+    assert_eq!(again.hands, first, "the same seed and deal count is the same deal");
+  }
+
+  #[test]
+  fn two_tables_with_different_seeds_deal_differently() {
+    let mut one = seated(7);
+    let mut two = seated(8);
+    one.deal();
+    two.deal();
+    assert_ne!(one.hands, two.hands);
+  }
 }

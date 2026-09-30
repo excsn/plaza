@@ -62,12 +62,17 @@ async fn main() -> std::io::Result<()> {
 
   info!("Plaza Card Table - Starting");
 
+  let seed = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .map_or(0, |since| since.as_nanos() as u64);
+  info!(seed, "table seeded");
+
   let session: Arc<TableSession> = ActixWsPlazaSession::with_protocol(JsonCodec, ProtocolVersion(PROTOCOL));
   let (controller_tx, controller) = StateControllerBuilder::new(
     Arc::new(TableLogic),
     session.clone(),
     Arc::new(TableSnapshotter),
-    TableState::new().with_turn_timeout(TURN_TIMEOUT),
+    TableState::new().with_turn_timeout(TURN_TIMEOUT).with_seed(seed),
   )
   .command_buffer(64)
   .build();

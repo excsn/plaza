@@ -155,7 +155,8 @@ fn begin_round(state: &mut TableState, ctx: &mut Ctx) {
   }
 
   state.phase.transition_to(TablePhase::Dealing, ctx, CardOp::PhaseChanged);
-  state.deal();
+  let seed = state.deal();
+  debug!(seed, deal = state.deals, "dealt");
 
   if let Err(reason) = state.rounds.start_next_round(ctx) {
     // The round limit is reached, which ends the match.

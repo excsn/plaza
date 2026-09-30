@@ -11,11 +11,11 @@ cargo run -p plaza_example_card_table --bin serve        # the browser version
 
 ## The scripted run
 
-Three players over `InProcessSession`, fixed cards, one scenario per round: everyone plays in time, then a player stalls and the table plays for them, then a player disconnects mid-match and the turn order closes over the gap. It is deterministic, so the log shows the plaza wiring and not the rules.
+Three players over `InProcessSession`, a fixed seed, one scenario per round: everyone plays in time, then a player stalls and the table plays for them, then a player disconnects mid-match and the turn order closes over the gap. It is deterministic, so the log shows the plaza wiring and not the rules.
 
 ## The browser version
 
-`--bin serve` hosts on http://127.0.0.1:8081. The table deals once three seats are filled, so open **three tabs** or open one and wait: a bot takes an open seat after ten seconds and another ten after that. Click a card on your turn; stall and the turn timeout plays your best card for you.
+`--bin serve` hosts on http://127.0.0.1:8081. It seeds the table from the clock and logs the seed, so every session deals differently and a logged deal can be replayed. The table deals once three seats are filled, so open **three tabs** or open one and wait: a bot takes an open seat after ten seconds and another ten after that. Click a card on your turn; stall and the turn timeout plays your best card for you.
 
 The bots play from `player_view`, the same payload a browser is sent. A bot reading `TableState` would hold every hand at the table, which the example says a client cannot do.
 
@@ -24,6 +24,8 @@ The turn timeout is a field on the state rather than a constant, because the two
 **After a match ends, the table deals again.** The standings stay up for `INTERMISSION_TICKS`, then the table zeroes the scores and deals again, so nobody reloads to play a second match. It is scheduled through the same `PhasedScheduler` as the turn timeout, which pairs it with the phase's epoch, so it drops itself if an arriving player fills the table and deals first. It keeps the roster instead of clearing it, which is the difference between `reset_all_scores` and `clear_all_scores`. It does not deal unless all three seats are still filled and leaves that to the arrival that fills the table.
 
 Your tab holds three ranks and three face-down backs per opponent. The backs are there because [`TableSnapshotter`](src/snapshot.rs) never put those ranks in your frame.
+
+**Every deal is a shuffle.** The deck is the nine cards 2 to 10, shuffled per deal by `XorShift` from `plaza_client_utils::determinism`, so the example needs no `rand`. A deal's seed is the table's seed with the deal count mixed in, which is why two deals at one table differ and the scripted run, seeded with a constant, deals the same hands every time. The scripted run reads each player's cards from `shuffled_hands` rather than naming them.
 
 ## Ops between snapshots
 

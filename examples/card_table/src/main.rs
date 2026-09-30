@@ -13,16 +13,16 @@
 //!   *count* of everyone else's
 //!
 //! The rules are deliberately trivial (highest card played wins the round) and
-//! the deal is fixed rather than shuffled, so the run is reproducible and the
+//! the deal is shuffled from a fixed seed, so the run is reproducible and the
 //! log shows the plaza wiring.
 //!
-//! This binary is the scripted run: three players, fixed cards and one
+//! This binary is the scripted run: three players, a fixed seed and one
 //! scenario per round. To play it yourself, `cargo run -p
 //! plaza_example_card_table --bin serve` and open three browser tabs.
 
 use plaza_example_card_table::logic::TableLogic;
 use plaza_example_card_table::snapshot::TableSnapshotter;
-use plaza_example_card_table::types::{Card, CardOp, PlayerId, TableState};
+use plaza_example_card_table::types::{deal_seed, shuffled_hands, Card, CardOp, PlayerId, TableState};
 
 use plaza::{
   agent::Agent,
@@ -40,6 +40,8 @@ use tracing_subscriber::EnvFilter;
 type TableSession = InProcessSession<CardOp, PlayerId>;
 
 const TICK: Duration = Duration::from_millis(20);
+/// Fixed so the scripted run deals the same shuffled hands every time.
+const SEED: u64 = 0x5EED;
 
 /// Logs what one player receives, so the hidden-information split is visible in
 /// the output: each player's snapshot shows a different hand.
@@ -88,7 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Arc::new(TableLogic),
     session.clone(),
     Arc::new(TableSnapshotter),
-    TableState::new(),
+    TableState::new().with_seed(SEED),
   )
   .command_buffer(64)
   .build();
@@ -116,11 +118,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let carol_task = spawn_player_listener("Carol", carol_inbox);
   settle().await;
 
+  // Every round deals afresh to all three, Carol included until she leaves
+  // after the third deal.
+  let seats = [PlayerId(1), PlayerId(2), PlayerId(3)];
+  let lowest = |deal: u64, who: &Agent<PlayerId>| -> Card { shuffled_hands(deal_seed(SEED, deal), &seats)[who.id().expect("a player")][0] };
+
   // Round 1: everyone plays promptly, in turn order.
   info!("--- round 1: all three play in time");
-  play(&session, &alice, Card(2)).await;
-  play(&session, &bob, Card(5)).await;
-  play(&session, &carol, Card(8)).await;
+  play(&session, &alice, lowest(1, &alice)).await;
+  play(&session, &bob, lowest(1, &bob)).await;
+  play(&session, &carol, lowest(1, &carol)).await;
   settle().await;
 
   // Round 2: Alice and Bob play, Carol sits on her turn. Her timeout fires and
@@ -128,8 +135,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   // this round are now stale, because resolving it moved the phase. Nothing
   // cancels them; their epoch no longer matches.
   info!("--- round 2: Carol stalls, so the table plays for her");
-  play(&session, &alice, Card(3)).await;
-  play(&session, &bob, Card(6)).await;
+  play(&session, &alice, lowest(2, &alice)).await;
+  play(&session, &bob, lowest(2, &bob)).await;
   tokio::time::sleep(TICK * 16).await;
 
   // Round 3: Carol drops out. `remove_actor` closes the gap in the turn order,
@@ -137,8 +144,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   info!("--- round 3: Carol disconnects, the remaining two play it out");
   session.disconnect(&PlayerId(3), carol_conn).await;
   settle().await;
-  play(&session, &alice, Card(4)).await;
-  play(&session, &bob, Card(7)).await;
+  play(&session, &alice, lowest(3, &alice)).await;
+  play(&session, &bob, lowest(3, &bob)).await;
   settle().await;
 
   info!("--- shutting down");
