@@ -108,7 +108,8 @@ fn seat_drafter(state: &mut DraftState, agent: &Agent<PlayerId>, ctx: &mut Ctx) 
 fn start_draft(state: &mut DraftState, ctx: &mut Ctx) {
   state.scores.reset_all_scores();
   state.rounds.reset();
-  state.available = DraftState::rack();
+  let seed = state.rack_next();
+  debug!(seed, draft = state.drafts, "racked");
   for roster in state.rosters.values_mut() {
     roster.clear();
   }
@@ -179,6 +180,7 @@ fn take(state: &mut DraftState, player: PlayerId, id: u8, ctx: &mut Ctx) -> bool
 
 /// Books a prospect to a drafter and advances the order.
 fn record(state: &mut DraftState, player: PlayerId, prospect: Prospect, on_their_behalf: bool, ctx: &mut Ctx) {
+  state.picks += 1;
   state.rosters.entry(player).or_default().push(prospect);
   state.scores.increment_score(&player, prospect.value);
   ctx.ops_q().push(TargetedOp::new_system_all(vec![DraftOp::Taken {
@@ -260,7 +262,10 @@ fn arm_clock(state: &mut DraftState) {
   };
   state
     .timeouts
-    .schedule_after(state.tick, state.pick_timeout_ticks, &state.phase, BoardEvent::AutoPick { player });
+    .schedule_after(state.tick, state.pick_timeout_ticks, &state.phase, BoardEvent::AutoPick {
+      player,
+      picks: state.picks,
+    });
 }
 
 /// Fires whatever came due and skips events that no longer apply.
@@ -269,13 +274,13 @@ fn run_due_events(state: &mut DraftState, ctx: &mut Ctx) -> bool {
 
   for due in state.timeouts.due(state.tick, &state.phase) {
     match due {
-      BoardEvent::AutoPick { player } => {
-        // The scheduler already dropped anything from a closed draft. The
-        // game checks identity here and not a generation count, because the
-        // same drafter holds two turns in a row at a reversal and a counter
-        // would call the second one stale.
-        if state.turns.current_turn_actor() != Some(player) {
-          debug!(player, "clock dropped: they already picked");
+      BoardEvent::AutoPick { player, picks } => {
+        // The scheduler already dropped anything from a closed draft. Picks
+        // are counted rather than turn changes, because the same drafter holds
+        // two turns in a row at a reversal and the turn does not change there.
+        // A drafter's earlier clock is stale once any pick has been made.
+        if state.turns.current_turn_actor() != Some(player) || state.picks != picks {
+          debug!(player, "clock dropped: it belonged to an earlier turn");
           continue;
         }
         let Some(prospect) = state.best_available() else {
@@ -335,6 +340,29 @@ mod tests {
       ops: vec![DraftOp::Take(id)],
     })
     .await;
+  }
+
+  #[tokio::test]
+  async fn a_clock_from_an_earlier_turn_does_not_pick_for_the_same_drafter() {
+    let mut state = open_board().await;
+    // Pass one at tick 0: 1, 2 and 3 pick at once, which leaves a clock for 2
+    // due at the pick timeout. 3 then picks again at the reversal, 100 ticks on.
+    for player in 1..=SEATS as PlayerId {
+      let id = state.available[0].id;
+      take_for(&mut state, player, id).await;
+    }
+    for _ in 0..100 {
+      tick(&mut state).await;
+    }
+    let id = state.available[0].id;
+    take_for(&mut state, 3, id).await;
+    assert_eq!(state.turns.current_turn_actor(), Some(2));
+
+    // 2's turn began at tick 100, so nothing may pick for them until 100 more.
+    for _ in 0..(state.pick_timeout_ticks - 50) {
+      tick(&mut state).await;
+    }
+    assert_eq!(state.rosters[&2].len(), 1, "a clock from 2's first turn picked on their second");
   }
 
   /// Whoever is on the clock takes whatever is cheapest, until the draft ends.

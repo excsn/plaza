@@ -29,9 +29,9 @@ The rest of the example is a small fixture around that finding.
 
 **A public board.** A draft has nothing to hide, so [`BoardSnapshotter`](src/snapshot.rs) builds one view and the controller sends it to everyone. `card_table` does the opposite: it pays one build and one encode per recipient to keep each hand secret. Both use the same trait. Which one you want depends on your game.
 
-**A pick clock on the same `Epoch`-guarded scheduler.** Sit on the clock and the board takes the best remaining prospect for you. The stale-token check here is an identity check: a drafter holds two turns in a row at a reversal, so a generation counter would call the second one stale.
+**A pick clock on the same `Epoch`-guarded scheduler.** Sit on the clock and the board takes the best remaining prospect for you. A clock fires only if the drafter it names is still on the clock and no pick has been made since it started. Counting turn changes would not work: a drafter holds two turns in a row at a reversal and the turn does not change there. Identity alone is not enough either: a drafter's clock from one pass would fire during their next turn, possibly moments after it began.
 
-**A finished draft racks the board and drafts again.** The standings stay up for `INTERMISSION_TICKS`, then scores zero and a fresh pool is dealt. `restart` puts the order back at the first seat travelling forwards, since a new draft starts over and does not continue the old snake.
+**A finished draft racks the board and drafts again.** The standings stay up for `INTERMISSION_TICKS`, then scores zero and a fresh pool is dealt. Every pool is racked from a seed: eleven prospects worth 10 to 120 each, drawn by `XorShift` from `plaza_client_utils::determinism` and shown most valuable first. The seed is the board's own with the draft count mixed in, so two drafts differ. The browser board seeds from the clock and logs it. The scripted run uses a constant and reads its picks from the same rack. `restart` puts the order back at the first seat travelling forwards, since a new draft starts over and does not continue the old snake.
 
 ## The lab
 

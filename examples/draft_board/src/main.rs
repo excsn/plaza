@@ -17,7 +17,7 @@
 
 use plaza_example_draft_board::logic::DraftLogic;
 use plaza_example_draft_board::snapshot::BoardSnapshotter;
-use plaza_example_draft_board::types::{DraftOp, DraftState, PlayerId};
+use plaza_example_draft_board::types::{draft_seed, DraftOp, DraftState, PlayerId, PICK_TIMEOUT_TICKS};
 
 use plaza::{
   agent::Agent,
@@ -35,6 +35,8 @@ use tracing_subscriber::EnvFilter;
 type BoardSession = InProcessSession<DraftOp, PlayerId>;
 
 const TICK: Duration = Duration::from_millis(20);
+/// Fixed so the scripted run racks the same board every time.
+const SEED: u64 = 0x5EED;
 
 /// Logs what one drafter receives. The board is public, so all three see the
 /// same thing, unlike in `card_table`.
@@ -83,7 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Arc::new(DraftLogic),
     session.clone(),
     Arc::new(BoardSnapshotter),
-    DraftState::new(),
+    DraftState::new().with_seed(SEED),
   )
   .command_buffer(64)
   .build();
@@ -111,28 +113,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let cy_task = spawn_drafter_listener("Cy", cy_inbox);
   settle().await;
 
+  // Everyone takes the best prospect left, read from the seeded rack.
+  let rack = DraftState::rack(draft_seed(SEED, 1));
+  let nth = |n: usize| rack[n].id;
+
   // Pass one runs down the order. The pool is racked most valuable first, so
   // picking third costs value. The snake makes it back in the next pass.
   info!("--- pass 1: Ada, Bo, Cy");
-  take(&session, &ada, 0).await;
-  take(&session, &bo, 1).await;
-  take(&session, &cy, 2).await;
+  take(&session, &ada, nth(0)).await;
+  take(&session, &bo, nth(1)).await;
+  take(&session, &cy, nth(2)).await;
   settle().await;
 
   // Cy just picked last and now picks first. Round-robin would hand the turn
   // back to Ada.
   info!("--- pass 2 reverses: Cy picks again, then Bo, then Ada");
-  take(&session, &cy, 3).await;
-  take(&session, &bo, 4).await;
-  take(&session, &ada, 5).await;
+  take(&session, &cy, nth(3)).await;
+  take(&session, &bo, nth(4)).await;
+  take(&session, &ada, nth(5)).await;
   settle().await;
 
   // Pass three reverses again, and Ada sits on the clock rather than picking,
   // so the board takes the best remaining prospect for her.
   info!("--- pass 3 reverses back: Ada stalls and the board picks for her");
-  tokio::time::sleep(TICK * 40).await;
-  take(&session, &bo, 7).await;
-  take(&session, &cy, 8).await;
+  tokio::time::sleep(TICK * (PICK_TIMEOUT_TICKS as u32 + 10)).await;
+  take(&session, &bo, nth(7)).await;
+  take(&session, &cy, nth(8)).await;
   settle().await;
 
   info!("--- shutting down");

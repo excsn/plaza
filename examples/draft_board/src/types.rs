@@ -11,6 +11,7 @@ use plaza::game_common::flow_control::turns::op_payloads::TurnChangedNoticePaylo
 use plaza::game_common::flow_control::{Phased, PhasedScheduler, RoundManager, SequentialRoundManager, TurnManager};
 use plaza::game_common::scorekeeping::local::HashMapScorekeeper;
 use plaza::game_common::scorekeeping::Scorekeeper;
+use plaza_client_utils::determinism::{mix64, XorShift};
 use serde::{Deserialize, Serialize};
 
 use crate::snake::SnakeTurnManager;
@@ -139,8 +140,9 @@ pub enum Refusal {
 /// ended.
 #[derive(Clone, Debug)]
 pub enum BoardEvent {
-  /// Take the best remaining prospect for whoever is out of time.
-  AutoPick { player: PlayerId },
+  /// Take the best remaining prospect for whoever is out of time, if no pick
+  /// has been made since the clock started.
+  AutoPick { player: PlayerId, picks: u64 },
   /// Rack the board and draft again.
   Rack,
 }
@@ -166,6 +168,13 @@ pub struct DraftState {
   /// short enough to reach on purpose and a person wants one long enough to
   /// think in.
   pub pick_timeout_ticks: u64,
+  /// Mixed with the draft count into each rack's seed. The browser board takes
+  /// it from the clock and the scripted run fixes it.
+  pub seed: u64,
+  /// Drafts so far, so no two racks at one board repeat.
+  pub drafts: u64,
+  /// Picks made at this board, so a clock can tell it outlived its turn.
+  pub picks: u64,
 }
 
 impl Default for DraftState {
@@ -181,13 +190,16 @@ impl DraftState {
       turns: SnakeTurnManager::new(Vec::new(), DraftOp::TurnChanged),
       rounds: SequentialRoundManager::new(Some(ROUNDS), DraftOp::RoundStarted, DraftOp::RoundEnded),
       scores: HashMapScorekeeper::new(),
-      available: Self::rack(),
+      available: Vec::new(),
       rosters: HashMap::new(),
       seats: Vec::new(),
       agents: HashMap::new(),
       tick: 0,
       timeouts: PhasedScheduler::new(),
       pick_timeout_ticks: PICK_TIMEOUT_TICKS,
+      seed: 0,
+      drafts: 0,
+      picks: 0,
     }
   }
 
@@ -197,18 +209,32 @@ impl DraftState {
     self
   }
 
-  /// A fresh board, most valuable first.
-  ///
-  /// Deterministic, so the scripted run reads the same every time and the
-  /// snake's compensation is visible: picking last in a descending pool costs
-  /// value and picking first in the next pass makes it back.
-  pub fn rack() -> Vec<Prospect> {
-    (0..POOL)
+  /// Sets the seed every rack at this board is derived from.
+  pub fn with_seed(mut self, seed: u64) -> Self {
+    self.seed = seed;
+    self
+  }
+
+  /// Racks the next draft's board and returns its seed, which reproduces it.
+  pub fn rack_next(&mut self) -> u64 {
+    self.drafts += 1;
+    let seed = draft_seed(self.seed, self.drafts);
+    self.available = Self::rack(seed);
+    seed
+  }
+
+  /// The board `seed` racks: ids `0..POOL` worth 10 to 120 each, most valuable
+  /// first, so picking last in a pass costs value and the snake makes it back.
+  pub fn rack(seed: u64) -> Vec<Prospect> {
+    let mut rng = XorShift::new(seed);
+    let mut pool: Vec<Prospect> = (0..POOL)
       .map(|i| Prospect {
         id: i as u8,
-        value: (POOL - i) as u32 * 10,
+        value: 10 * (1 + rng.below(12)),
       })
-      .collect()
+      .collect();
+    pool.sort_by(|a, b| b.value.cmp(&a.value).then(a.id.cmp(&b.id)));
+    pool
   }
 
   pub fn take(&mut self, id: u8) -> Option<Prospect> {
@@ -244,5 +270,35 @@ impl DraftState {
 
   fn on_the_clock(&self) -> Option<PlayerId> {
     self.turns.current_turn_actor()
+  }
+}
+
+/// One rack's seed: the board's seed with the draft count mixed in.
+pub fn draft_seed(board_seed: u64, draft: u64) -> u64 {
+  mix64(board_seed ^ mix64(draft.rotate_left(32)))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn a_rack_holds_every_id_once_most_valuable_first() {
+    let pool = DraftState::rack(7);
+    let mut ids: Vec<u8> = pool.iter().map(|p| p.id).collect();
+    ids.sort();
+    assert_eq!(ids, (0..POOL as u8).collect::<Vec<_>>());
+    assert!(pool.windows(2).all(|w| w[0].value >= w[1].value), "racked most valuable first");
+  }
+
+  #[test]
+  fn drafts_at_one_board_differ_and_a_seed_reproduces_one() {
+    assert_ne!(DraftState::rack(draft_seed(7, 1)), DraftState::rack(draft_seed(7, 2)));
+    assert_eq!(DraftState::rack(draft_seed(7, 1)), DraftState::rack(draft_seed(7, 1)));
+  }
+
+  #[test]
+  fn two_boards_with_different_seeds_rack_differently() {
+    assert_ne!(DraftState::rack(draft_seed(7, 1)), DraftState::rack(draft_seed(8, 1)));
   }
 }

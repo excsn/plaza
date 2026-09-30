@@ -62,12 +62,17 @@ async fn main() -> std::io::Result<()> {
 
   info!("Plaza Draft Board - Starting");
 
+  let seed = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .map_or(0, |since| since.as_nanos() as u64);
+  info!(seed, "board seeded");
+
   let session: Arc<BoardSession> = ActixWsPlazaSession::with_protocol(JsonCodec, ProtocolVersion(PROTOCOL));
   let (controller_tx, controller) = StateControllerBuilder::new(
     Arc::new(DraftLogic),
     session.clone(),
     Arc::new(BoardSnapshotter),
-    DraftState::new().with_pick_timeout(PICK_TIMEOUT),
+    DraftState::new().with_pick_timeout(PICK_TIMEOUT).with_seed(seed),
   )
   .command_buffer(64)
   .build();
