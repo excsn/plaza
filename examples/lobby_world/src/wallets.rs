@@ -28,8 +28,9 @@ impl WalletRegistry {
     *entry
   }
 
-  /// For leaving the lobby. Arenas must not call this: the registry exists so a
-  /// balance survives leaving a room.
+  /// For leaving the world: a person leaving the lobby or a bot leaving its
+  /// arena. An arena must not call this for a person, since the registry exists
+  /// so a person's balance survives leaving a room.
   pub fn forget(&self, player: PlayerId) {
     self.balances.lock().remove(&player);
   }

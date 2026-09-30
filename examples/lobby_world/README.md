@@ -42,6 +42,7 @@ A budget comes from the arena's own simulation rather than from lobby policy: an
 | **one-way, judged** | `rtt / 2 + extra`. The number admission is actually decided on |
 | **best fit / fits (#n)** | this arena's position in `rooms_playable_at`, tightest schedule first |
 | **too slow for you** | the arena is listed but greyed. Refusal and an empty catalogue are different answers, so both are shown |
+| **full** | every seat is held by a person. Seats held by bots are counted as free, since a bot gives its seat to a person who joins |
 | **wallet** | the shared registry's number, not the arena's. It stays the same when you leave and join another arena |
 | **claims here** | per-arena and resets on arrival, unlike the wallet |
 
@@ -63,7 +64,7 @@ A refusal is `LobbyError::UnsuitableConnection`, which carries **both** numbers 
 
 ### 3. A wallet that follows the player
 
-A wallet cannot live on `Agent`, which holds identity only. It cannot live in an arena's state either, because moving to another arena destroys that. So it lives in a `WalletRegistry` the lobby and every arena share, keyed by the id the lobby issued. The registry keeps a balance when its player leaves a room and clears it only when the player leaves the world.
+A wallet cannot live on `Agent`, which holds identity only. It cannot live in an arena's state either, because moving to another arena destroys that. So it lives in a `WalletRegistry` the lobby and every arena share, keyed by the id the lobby issued. The registry keeps a balance when its player leaves a room and clears it only when the player leaves the world. A bot never travels and its id is never reused, so leaving its arena is leaving the world and the arena clears its wallet then.
 
 This follows from the `Agent` slimming and is why the registry is about forty lines in the example instead of a feature of the crate. Whether a balance outlives a room, a session or a process is for the application to decide. The implementation here is just a `Mutex` around a map.
 
@@ -85,7 +86,9 @@ This arena publishes on change rather than every tick: a snapshot goes out when 
 
 A person alone in an arena has nobody to race for the pot, so `bots.rs` seats bots. Every arena the factory spawns gets a filler task. Once a human holds a seat and `WAIT` (10 seconds) passes with no change in the seat count, the filler reserves a seat and joins a bot into it. The wait then starts over, so seats fill one at a time. Another arrival restarts the wait too. People who open several tabs therefore get each other first. The filler never takes a seat the lobby has reserved for someone still dialling in, never seats a bot for a spectator and stops when the arena is full. Quick match also seats bots in the seats its queue could not fill. Those play the same way.
 
-A bot plays from `RoomView`, the snapshot a browser receives. It claims with the same `RoomOp::Claim` a browser sends. The arena never claims on a bot's behalf and has no bot code beyond clearing them once the last seated human leaves. When a bot first sees a pot it waits a reaction time between 0.9 and 2.1 seconds before claiming, drawn afresh for each pot so the timing cannot be learned. A person watching the pot clicks well inside that and wins; a person who looks away loses it to a bot.
+A bot plays from `RoomView`, the snapshot a browser receives. It claims with the same `RoomOp::Claim` a browser sends. The arena never claims on a bot's behalf. Its only bot code clears them once the last seated human leaves and moves one out for an arriving person. When a bot first sees a pot it waits a reaction time between 0.9 and 2.1 seconds before claiming, drawn afresh for each pot so the timing cannot be learned. A person watching the pot clicks well inside that and wins; a person who looks away loses it to a bot.
+
+**A bot gives its seat to a person.** The catalogue counts bot seats as free, so an arena full of bots is still offered with its Join button live and shows how many bots it holds. When a person joins, the lobby first sends the arena the system-only `RoomOp::MakeRoom` and waits for it to land. If the arena has no seat free, counting seats the lobby is still holding, one seated bot leaves. The capacity check in `handle_join_room_request` then sees the freed seat.
 
 Both decisions are pure functions over the view (`Filler::step` and `Reflex::step`) with unit tests that need no controller. Bot ids start at 1,000,000 from one counter shared by the filler and quick match, so two bots in one arena never collide.
 

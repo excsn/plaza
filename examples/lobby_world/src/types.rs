@@ -83,6 +83,8 @@ pub struct RoomCard {
   pub name: String,
   pub current_players: u32,
   pub max_players: u32,
+  /// Seats held by bots. A person joining a full arena takes one over.
+  pub bots: u32,
   pub budget_ms: Option<u32>,
   pub playable: bool,
   /// Position in `rooms_playable_at`, or `None` if this link cannot carry it.
@@ -173,6 +175,9 @@ pub enum RoomOp {
   /// System-only. Cancelling on a closing socket instead would lose the seat:
   /// a room hop closes the old connection after the new seat is reserved.
   Withdraw { player: PlayerId },
+
+  /// System-only. A person is joining a full arena, so a seated bot leaves it.
+  MakeRoom,
 
   /// System-only. The link the lobby admitted this player on, so the arena can
   /// budget what it sends them; see `room::snapshot_budget`.

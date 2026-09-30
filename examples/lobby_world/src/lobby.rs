@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use plaza::agent::Agent;
-use plaza::controller::ControllerCommand;
+use plaza::controller::{query_with, ControllerCommand};
 use plaza::session::TargetedOp;
 use plaza::snapshot::{SnapshotContext, SnapshotError, SnapshotProvider};
 use plaza::state_logic::{LogicInput, LogicOutput, StateLogic, StateLogicError};
@@ -124,7 +124,12 @@ impl LobbyLogic {
   fn catalogue(&self, link: LinkQuality) -> Vec<RoomCard> {
     self.refresh_seat_counts();
 
-    let playable = self.manager.rooms_playable_at(link.one_way_ms);
+    // A bot gives its seat to a person, so its seats count as free here.
+    let open_to_a_person = self.manager.list_rooms(None).into_iter().map(|mut m| {
+      m.current_players = m.current_players.saturating_sub(self.bots_in(&m.room_id));
+      m
+    });
+    let playable = plaza_lobby::routing::playable_at(link.one_way_ms, open_to_a_person);
     let rank_of: HashMap<RoomId, u32> = playable
       .iter()
       .enumerate()
@@ -140,6 +145,7 @@ impl LobbyLogic {
         name: m.name,
         current_players: m.current_players,
         max_players: m.max_players,
+        bots: self.bots_in(&m.room_id),
         budget_ms: m.max_one_way_ms,
         playable: rank_of.contains_key(&m.room_id),
         fit_rank: rank_of.get(&m.room_id).copied(),
@@ -149,6 +155,13 @@ impl LobbyLogic {
     // Tightest first, matching `routing::playable_at`.
     cards.sort_by_key(|c| (c.budget_ms.unwrap_or(u32::MAX), c.name.clone()));
     cards
+  }
+
+  fn bots_in(&self, room_id: &RoomId) -> u32 {
+    self
+      .registry
+      .get(room_id)
+      .map_or(0, |entry| entry.bots_seated.load(Ordering::Relaxed))
   }
 
   /// Through the seam: the lobby's handle names no game type and the arena
@@ -182,6 +195,15 @@ impl LobbyLogic {
         ops: vec![op],
       })
       .await;
+  }
+
+  /// Asks a full arena to move a bot out, then waits until it has, so the
+  /// capacity check that follows reads the freed seat.
+  async fn make_room_for_a_person(&self, room_id: &RoomId) {
+    self.tell_arena(room_id, "make room for a person", crate::types::RoomOp::MakeRoom).await;
+    if let Some(commands) = self.registry.commands(room_id) {
+      let _ = query_with(&commands, |_| ()).await;
+    }
   }
 
   async fn command_arena(
@@ -418,6 +440,7 @@ impl StateLogic<LobbyOp, PlayerId, LobbyState> for LobbyLogic {
             }
 
             LobbyOp::Join { room_id } => {
+              self.make_room_for_a_person(&room_id).await;
               self.refresh_seat_counts();
               let extra = state.links.get(&player).map(|l| l.assigned_extra_ms).unwrap_or(0);
               let link = self.link_for(player, extra);

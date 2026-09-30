@@ -186,7 +186,7 @@ function handleLobbyOp(op) {
     log('welcome, you are player #' + me);
   } else if (op.Catalogue) {
     showLink(op.Catalogue.link);
-    drawRooms(op.Catalogue.rooms);
+    drawRooms(op.Catalogue.rooms, op.Catalogue.link);
   } else if (op.Queued) {
     queuedAt = Date.now();
     patienceMs = op.Queued.patience_ms;
@@ -236,11 +236,12 @@ function showLink(link) {
   $('oneway').textContent = link.one_way_ms + ' ms';
 }
 
-function drawRooms(rooms) {
+function drawRooms(rooms, link) {
   const host = $('rooms');
   host.innerHTML = '';
   rooms.forEach(r => {
-    const full = r.current_players >= r.max_players;
+    // A bot gives its seat to a person, so an arena full of bots still takes one.
+    const full = r.current_players >= r.max_players && !r.bots;
     const el = document.createElement('div');
     el.className = 'arena' + (r.playable ? '' : ' no');
 
@@ -254,14 +255,17 @@ function drawRooms(rooms) {
       badge.className = 'badge fit';
       badge.textContent = r.fit_rank === 0 ? 'best fit' : 'fits (#' + (r.fit_rank + 1) + ')';
     } else {
+      // Unplayable is either reason; the budget is named first, since it holds
+      // even once a seat frees.
+      const tooSlow = r.budget_ms != null && link.one_way_ms > r.budget_ms;
       badge.className = 'badge unfit';
-      badge.textContent = 'too slow for you';
+      badge.textContent = tooSlow ? 'too slow for you' : 'full';
     }
     top.append(name, badge);
 
     const seats = document.createElement('div');
     seats.className = 'row';
-    seats.innerHTML = `<span class="k">seats</span><span class="num">${r.current_players} / ${r.max_players}${full ? ' (full)' : ''}</span>`;
+    seats.innerHTML = `<span class="k">seats</span><span class="num">${r.current_players} / ${r.max_players}${r.bots ? ` (${r.bots} bot${r.bots > 1 ? 's' : ''})` : ''}${full ? ' (full)' : ''}</span>`;
 
     const budget = document.createElement('div');
     budget.className = 'row';

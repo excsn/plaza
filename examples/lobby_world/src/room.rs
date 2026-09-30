@@ -51,6 +51,9 @@ pub struct ArenaState {
   pub wallets: Arc<WalletRegistry>,
   /// Read by the lobby to refresh `RoomMetadata::current_players`.
   pub seats_taken: Arc<AtomicU32>,
+  /// Read by the lobby, which offers a full arena to a person while a bot
+  /// holds one of its seats.
+  pub bots_seated: Arc<AtomicU32>,
 }
 
 impl ArenaState {
@@ -73,6 +76,7 @@ impl ArenaState {
       since_refresh: Duration::ZERO,
       wallets,
       seats_taken,
+      bots_seated: Arc::new(AtomicU32::new(0)),
     }
   }
 
@@ -114,6 +118,28 @@ impl ArenaState {
       .count() as u32
   }
 
+  /// A seated bot to leave for an arriving person, when the arena has no seat
+  /// free for them, counting seats the lobby is still holding.
+  fn bot_to_make_room(&self) -> Option<PlayerId> {
+    if self.seated_players() + (self.reserved.count() as u32) < self.max_players {
+      return None;
+    }
+    self
+      .occupants
+      .iter()
+      .find(|(id, info)| info.app_data.bot && self.seats.seat_of(id).is_some())
+      .map(|(id, _)| *id)
+  }
+
+  /// Takes a bot out of the arena and its wallet out of the registry. A bot
+  /// lives in one arena and its id is never reused, so the balance has nowhere
+  /// to follow it.
+  fn remove_bot(&mut self, id: PlayerId) {
+    self.occupants.remove_participant(&id);
+    self.seats.depart(&id);
+    self.wallets.forget(id);
+  }
+
   fn bot_ids(&self) -> Vec<PlayerId> {
     self
       .occupants
@@ -125,6 +151,7 @@ impl ArenaState {
 
   fn publish_seat_count(&self) {
     self.seats_taken.store(self.seated_players(), Ordering::Relaxed);
+    self.bots_seated.store(self.seated_players() - self.seated_humans(), Ordering::Relaxed);
   }
 
   fn everyone(&self) -> Vec<Agent<PlayerId>> {
@@ -226,8 +253,12 @@ impl StateLogic<RoomOp, PlayerId, ArenaState> for ArenaLogic {
 
       LogicInput::AgentLeft { agent_id } => {
         state.links.remove(&agent_id);
-        state.occupants.remove_participant(&agent_id);
-        state.seats.depart(&agent_id);
+        if state.occupants.get_participant_app_data(&agent_id).is_some_and(|o| o.bot) {
+          state.remove_bot(agent_id);
+        } else {
+          state.occupants.remove_participant(&agent_id);
+          state.seats.depart(&agent_id);
+        }
         // The reservation deliberately survives: a room hop closes the old
         // socket after the new seat is reserved. Only `Withdraw` cancels.
         state.publish_seat_count();
@@ -246,8 +277,7 @@ impl StateLogic<RoomOp, PlayerId, ArenaState> for ArenaLogic {
         // an arena left alone would otherwise keep them for ever.
         if state.bots() > 0 && state.seated_humans() == 0 {
           for id in state.bot_ids() {
-            state.occupants.remove_participant(&id);
-            state.seats.depart(&id);
+            state.remove_bot(id);
           }
           state.publish_seat_count();
         }
@@ -269,6 +299,7 @@ impl StateLogic<RoomOp, PlayerId, ArenaState> for ArenaLogic {
 
       LogicInput::AgentOps { source, ops } => {
         let mut out = Vec::new();
+        let mut seats_changed = false;
         for op in ops {
           match op {
             RoomOp::Claim => {
@@ -345,6 +376,20 @@ impl StateLogic<RoomOp, PlayerId, ArenaState> for ArenaLogic {
               state.reserved.withdraw(&player);
             }
 
+            RoomOp::MakeRoom => {
+              if !source.is_system() {
+                return Err(StateLogicError::InvalidOperation(
+                  "Only the lobby may move a bot for a person.".into(),
+                ));
+              }
+              if let Some(bot) = state.bot_to_make_room() {
+                info!(bot, arena = %state.arena, "A bot gave its seat to an arriving person.");
+                state.remove_bot(bot);
+                state.publish_seat_count();
+                seats_changed = true;
+              }
+            }
+
             // Server-to-client variants.
             other => {
               if !source.is_system() {
@@ -356,7 +401,7 @@ impl StateLogic<RoomOp, PlayerId, ArenaState> for ArenaLogic {
           }
         }
 
-        let snapshot_everyone = !out.is_empty();
+        let snapshot_everyone = !out.is_empty() || seats_changed;
         let mut output = LogicOutput::ops(out);
         if snapshot_everyone {
           output = output.and_snapshot(SnapshotRequest::to(state.everyone()));
@@ -647,6 +692,57 @@ mod tests {
       .unwrap()
   }
 
+  async fn make_room(state: &mut ArenaState, source: Agent<PlayerId>) -> Result<LogicOutput<RoomOp, PlayerId>, StateLogicError> {
+    ArenaLogic::default()
+      .process_input(state, LogicInput::AgentOps {
+        source,
+        ops: vec![RoomOp::MakeRoom],
+      })
+      .await
+  }
+
+  #[tokio::test]
+  async fn a_bot_gives_its_seat_to_a_person_arriving_at_a_full_arena() {
+    let mut state = arena();
+    reserve(&mut state, 1).await;
+    join(&mut state, 1).await;
+    seat_bot(&mut state, 1_000_000).await;
+    assert_eq!(state.seated_players(), 2, "full");
+    assert_eq!(state.bots_seated.load(Ordering::Relaxed), 1, "the lobby can see a bot holds a seat");
+
+    make_room(&mut state, Agent::system()).await.unwrap();
+    assert_eq!(state.seated_players(), 1);
+    assert_eq!(state.bots(), 0, "the bot left the arena, not just its seat");
+    assert_eq!(state.seats_taken.load(Ordering::Relaxed), 1, "the lobby sees the free seat");
+    assert_eq!(state.bots_seated.load(Ordering::Relaxed), 0);
+  }
+
+  #[tokio::test]
+  async fn making_room_moves_no_person_and_ignores_a_free_seat() {
+    let mut state = arena();
+    for id in [1, 2] {
+      reserve(&mut state, id).await;
+      join(&mut state, id).await;
+    }
+    make_room(&mut state, Agent::system()).await.unwrap();
+    assert_eq!(state.seated_players(), 2, "a full arena of people stays full");
+
+    let mut state = arena();
+    seat_bot(&mut state, 1_000_000).await;
+    make_room(&mut state, Agent::system()).await.unwrap();
+    assert_eq!(state.bots(), 1, "a seat is already free, so the bot stays");
+  }
+
+  #[tokio::test]
+  async fn only_the_lobby_makes_room() {
+    let mut state = arena();
+    reserve(&mut state, 1).await;
+    join(&mut state, 1).await;
+    seat_bot(&mut state, 1_000_000).await;
+    assert!(make_room(&mut state, Agent::new_human(1)).await.is_err());
+    assert_eq!(state.bots(), 1);
+  }
+
   #[tokio::test]
   async fn a_bot_takes_a_seat_and_is_marked_as_one() {
     let mut state = arena();
@@ -690,6 +786,65 @@ mod tests {
     assert_eq!(claimers(&out), vec![1_000_000]);
     assert_eq!(state.wallets.balance(1_000_000), pot);
     assert_eq!(state.pot, 0);
+  }
+
+  /// A person and a bot that has claimed once, the bot's wallet in the registry.
+  async fn a_bot_with_a_wallet() -> ArenaState {
+    let mut state = arena();
+    reserve(&mut state, 1).await;
+    join(&mut state, 1).await;
+    seat_bot(&mut state, 1_000_000).await;
+    ArenaLogic::default()
+      .process_input(&mut state, LogicInput::AgentOps {
+        source: Agent::new_bot(1_000_000),
+        ops: vec![RoomOp::Claim],
+      })
+      .await
+      .unwrap();
+    assert_eq!(state.wallets.tracked(), 1);
+    state
+  }
+
+  #[tokio::test]
+  async fn a_bot_cleared_with_the_last_person_takes_its_wallet() {
+    let mut state = a_bot_with_a_wallet().await;
+    ArenaLogic::default()
+      .process_input(&mut state, LogicInput::AgentLeft { agent_id: 1 })
+      .await
+      .unwrap();
+    tick(&mut state, 100).await;
+    assert_eq!(state.wallets.tracked(), 0);
+  }
+
+  #[tokio::test]
+  async fn a_bot_that_makes_room_takes_its_wallet() {
+    let mut state = a_bot_with_a_wallet().await;
+    make_room(&mut state, Agent::system()).await.unwrap();
+    assert_eq!(state.bots(), 0);
+    assert_eq!(state.wallets.tracked(), 0);
+  }
+
+  #[tokio::test]
+  async fn a_bot_that_leaves_takes_its_wallet() {
+    let mut state = a_bot_with_a_wallet().await;
+    ArenaLogic::default()
+      .process_input(&mut state, LogicInput::AgentLeft { agent_id: 1_000_000 })
+      .await
+      .unwrap();
+    assert_eq!(state.wallets.tracked(), 0);
+  }
+
+  #[tokio::test]
+  async fn a_person_who_leaves_an_arena_keeps_their_wallet() {
+    let mut state = arena();
+    reserve(&mut state, 1).await;
+    join(&mut state, 1).await;
+    claim(&mut state, 1).await;
+    ArenaLogic::default()
+      .process_input(&mut state, LogicInput::AgentLeft { agent_id: 1 })
+      .await
+      .unwrap();
+    assert_eq!(state.wallets.tracked(), 1);
   }
 
   /// A bot has nobody to play against once the humans go and an arena left

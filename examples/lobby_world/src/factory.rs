@@ -45,6 +45,7 @@ pub struct ArenaEntry {
   /// An atomic rather than a controller query: the lobby reads this on every
   /// room listing.
   pub seats: Arc<AtomicU32>,
+  pub bots_seated: Arc<AtomicU32>,
 }
 
 /// Sockets by room id. Separate from the lobby's map, which holds seats and metadata.
@@ -125,6 +126,7 @@ impl RoomFactory for ArenaFactory {
       self.wallets.clone(),
       seats.clone(),
     );
+    let bots_seated = state.bots_seated.clone();
 
     let (commands, controller) = StateControllerBuilder::new(
       Arc::new(ArenaLogic {
@@ -171,6 +173,7 @@ impl RoomFactory for ArenaFactory {
     self.registry.insert(room_id, ArenaEntry {
       session,
       seats,
+      bots_seated,
       commands,
       room: Arc::clone(&room),
     });
