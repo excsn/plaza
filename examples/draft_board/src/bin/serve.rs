@@ -1,7 +1,8 @@
 //! The draft over real WebSockets, so you can watch the reversal in a browser.
 //!
-//! Open http://127.0.0.1:8093 in three tabs: the board opens once three seats
-//! are filled. The order runs down the board and then back up it, which a
+//! Open http://127.0.0.1:8093 in three tabs. With fewer, a bot takes an open
+//! seat after ten seconds and another ten after that. The board opens
+//! once three seats are filled. The order runs down the board and then back up it, which a
 //! round-robin manager cannot do.
 //!
 //! Sit on the clock and the board takes the best remaining prospect for you,
@@ -78,6 +79,9 @@ async fn main() -> std::io::Result<()> {
   });
 
   tokio::spawn(TickDriver::new(TICK).run(controller_tx.clone()));
+  // Seats fill with bots only after someone has waited: three tabs should get
+  // each other rather than a board of bots.
+  tokio::spawn(plaza_example_draft_board::bots::fill_the_board(controller_tx.clone(), vec![901, 902]));
 
   let server_addr = "127.0.0.1:8093";
   info!("Serving http://{} (WebSocket at /ws). Three tabs opens the board.", server_addr);

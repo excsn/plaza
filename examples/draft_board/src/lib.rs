@@ -3,6 +3,7 @@
 //!
 //! See [`snake`] for what it found. The rest of the crate is a fixture around it.
 
+pub mod bots;
 pub mod logic;
 pub mod snake;
 pub mod snapshot;

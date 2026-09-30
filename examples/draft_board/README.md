@@ -4,7 +4,7 @@ A snake draft, written to test whether `TurnManager` fits a second turn order or
 
 ```sh
 cargo run -p plaza_example_draft_board                    # the scripted run
-cargo run -p plaza_example_draft_board --bin serve        # the browser version, three tabs
+cargo run -p plaza_example_draft_board --bin serve        # the browser version
 ```
 
 ## Background
@@ -35,6 +35,6 @@ The rest of the example is a small fixture around that finding.
 
 ## The lab
 
-Open three tabs at http://127.0.0.1:8093. The order strip at the top is drawn in the direction the order is currently running. The arrows flip at the end of every pass and whoever picked last picks again immediately. Stall on the clock to see the board pick for you and let the draft finish to see it rack.
+Open three tabs at http://127.0.0.1:8093. With fewer, a bot takes an open seat after ten seconds and another ten after that. The bots pick from `BoardView`, the same payload a browser is sent. Each takes the most valuable prospect left. The order strip at the top is drawn in the direction the order is currently running. The arrows flip at the end of every pass and whoever picked last picks again immediately. Stall on the clock to see the board pick for you and let the draft finish to see it rack.
 
 The scripted run shows the same thing in a log and stalls on purpose in the third pass.

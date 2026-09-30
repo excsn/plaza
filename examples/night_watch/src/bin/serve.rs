@@ -1,9 +1,11 @@
 //! The village over real WebSockets, so you can see the secrecy in a browser.
 //!
-//! Open http://127.0.0.1:8094 in **five** tabs: the deal happens when the fifth
-//! seat fills. One tab knows it is the wolf and the others know only their own
-//! role, because every snapshot is built per recipient. Get killed and your
-//! tab shows every role.
+//! Open http://127.0.0.1:8094: the deal happens when the fifth seat fills.
+//! Once a seat has been open for ten seconds a bot takes it, one at a time, so
+//! one tab is enough and several tabs get each other before the bots. One
+//! player knows it is the wolf and the others know only their own role,
+//! because every snapshot is built per recipient. Get killed and your tab
+//! shows every role.
 //!
 //! Nights and days are long enough here to think in; the scripted run in
 //! `main.rs` keeps the short defaults so its deadlines fire on purpose.
@@ -22,7 +24,7 @@ use tracing_subscriber::EnvFilter;
 use plaza_example_night_watch::guard::VillageGuard;
 use plaza_example_night_watch::logic::VillageLogic;
 use plaza_example_night_watch::snapshot::VillageSnapshotter;
-use plaza_example_night_watch::types::{PlayerId, VillageOp, VillageState, PROTOCOL};
+use plaza_example_night_watch::types::{PlayerId, VillageOp, VillageState, PROTOCOL, SEATS};
 use plaza_session::codec::JsonCodec;
 use plaza_wire::frame::ProtocolVersion;
 
@@ -77,9 +79,13 @@ async fn main() -> std::io::Result<()> {
     }
   });
   tokio::spawn(TickDriver::new(TICK).run(controller_tx.clone()));
+  tokio::spawn(plaza_example_night_watch::bots::fill_the_village(
+    controller_tx.clone(),
+    (901..).take(SEATS - 1).collect(),
+  ));
 
   let server_addr = "127.0.0.1:8094";
-  info!("Serving http://{} (WebSocket at /ws). Five tabs deals the village.", server_addr);
+  info!("Serving http://{} (WebSocket at /ws). Bots fill seats left open for 10s.", server_addr);
 
   let session = web::Data::new(session);
   Host::new(server_addr)

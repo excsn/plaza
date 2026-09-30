@@ -305,6 +305,18 @@ impl StateLogic<AuctionOp, PlayerId, Floor> for AuctionLogic {
   }
 }
 
+/// The `Frame` payload `viewer` is sent.
+pub fn frame_for(session: &FloorSession, state: &Floor, viewer: Option<&PlayerId>) -> FloorView {
+  let (floor_ticks, rtt) = match viewer {
+    Some(id) => {
+      let rtt = rtt_ms(session, *id);
+      (((rtt / 2) as u64 * TICK_HZ as u64) / 1000, rtt)
+    }
+    None => (0, 0),
+  };
+  state.view_for(viewer, floor_ticks, rtt)
+}
+
 pub struct FloorSnapshotter {
   session: Arc<FloorSession>,
 }
@@ -323,17 +335,11 @@ impl SnapshotProvider<PlayerId, Floor, AuctionOp> for FloorSnapshotter {
     target: Option<&Agent<PlayerId>>,
     _context: Option<SnapshotContext>,
   ) -> Result<Option<AuctionOp>, SnapshotError<PlayerId>> {
-    let viewer = target.and_then(|a| a.id());
-    let (floor_ticks, rtt) = match viewer {
-      Some(id) => {
-        let rtt = rtt_ms(&self.session, *id);
-        (((rtt / 2) as u64 * TICK_HZ as u64) / 1000, rtt)
-      }
-      None => (0, 0),
-    };
-    Ok(Some(AuctionOp::Frame(Box::new(
-      state.view_for(viewer, floor_ticks, rtt),
-    ))))
+    Ok(Some(AuctionOp::Frame(Box::new(frame_for(
+      &self.session,
+      state,
+      target.and_then(|a| a.id()),
+    )))))
   }
 }
 

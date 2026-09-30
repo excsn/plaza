@@ -16,7 +16,7 @@
 //!   dead, who see every role.
 //!
 //! To play it yourself, `cargo run -p plaza_example_night_watch --bin serve`
-//! and open five browser tabs.
+//! and open a browser tab. Bots take the seats nobody fills.
 
 use plaza_example_night_watch::guard::VillageGuard;
 use plaza_example_night_watch::logic::VillageLogic;

@@ -13,7 +13,7 @@ The `req` field on `Grab` is redundant, which is worth knowing before you copy t
 cargo test -p plaza_example_auction_floor       # every claim below, as a test
 ```
 
-Open two tabs and fight over the same item.
+Open two tabs and fight over the same item. With one tab nothing is ever contested, so bots join after ten seconds (see [Bots](#bots)).
 
 ## How a contest is decided
 
@@ -32,6 +32,14 @@ Naming a low tick is how you win, so the obvious attack is to always name the ea
 The floor is `dropped_at + (measured_rtt / 2)` in ticks, from `ActixWsPlazaSession::agent_link_rtt`, the round trip of a probe frame that is encoded, queued and impaired like any op. `agent_rtt`, the WebSocket's own ping, is the fallback until a frame-path sample exists. A player on a 200 ms link cannot claim the first two ticks, but they also did not see the item until then, so the bound costs them nothing. A claim under the floor comes back as `TooEarly` carrying both numbers.
 
 This is the same approach as `lobby_world`'s latency admission: the server bases these bounds on what it measured itself rather than on what the client reports.
+
+## Bots
+
+Once a person has been bidding with fewer than three bidders on the floor for ten seconds, a bot joins. After another ten seconds a second one joins. They take ids 901 and 902. Several people opening several tabs get each other first.
+
+A bot bids from `frame_for`, the same `Frame` payload a browser is sent, never from the server's `Floor`. It grabs every item after a reaction of 300 to 440 ms: each bot has its own pace and the reaction varies per item. It names a tick by the page's rule, the current tick but never under `your_floor`, so its claims go through the same floor check and the same arbitration as a person's. A bot has no link, so its `your_floor` is zero, which is also what the server checks it against.
+
+A person who clicks within about 300 ms of a drop beats both bots. A slower click loses to whichever bot reacted first. The **your claims** panel shows both named ticks. The decision lives in `bots::choose`, a pure function with its own tests.
 
 ## What you are looking at
 
@@ -60,4 +68,4 @@ Plaza has nothing that enforces the correlation. Every rejectable op gets a `req
 
 ## Verified
 
-`cargo test` covers arbitration, the window bounds, duplicate claims, expiry and the deterministic tie-break. The socket-level flow was also driven against a running server: two bidders contesting one item where the loser asked first, the loser being told both named ticks, the winner's margin, the public record carrying no `req`, three concurrent claims from one client getting three separate correctly-correlated replies, a sub-floor claim refused as `TooEarly` and a second claim on one item refused as `Duplicate`.
+`cargo test` covers arbitration, the window bounds, duplicate claims, expiry and the deterministic tie-break. It also covers the bot decision: no claim before the bot's reaction, the named tick, the floor, one claim per item, nothing after the window and reactions that stay human-scale and inside the window. The socket-level flow was also driven against a running server: two bidders contesting one item where the loser asked first, the loser being told both named ticks, the winner's margin, the public record carrying no `req`, three concurrent claims from one client getting three separate correctly-correlated replies, a sub-floor claim refused as `TooEarly` and a second claim on one item refused as `Duplicate`.

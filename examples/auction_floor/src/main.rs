@@ -3,7 +3,10 @@
 //! The example is about the reply. Several items sit on the floor at once, so a
 //! client has several claims outstanding and "your last one was refused" is
 //! not enough. Every reply carries the `req` the client sent. See README.md.
+//!
+//! One tab never contests anything, so [`bots`] join a lone bidder after a wait.
 
+mod bots;
 mod logic;
 mod types;
 
@@ -61,7 +64,8 @@ async fn main() -> std::io::Result<()> {
       error!("Controller exited with error: {e}");
     }
   });
-  tokio::spawn(TickDriver::from_hz(TICK_HZ).run(commands));
+  tokio::spawn(TickDriver::from_hz(TICK_HZ).run(commands.clone()));
+  tokio::spawn(bots::fill_the_floor(commands, session.clone(), vec![901, 902]));
 
   let services = web::Data::new(Services {
     session,

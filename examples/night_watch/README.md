@@ -4,7 +4,7 @@ A village with a wolf in it, written to exercise two parts of `flow_control` tha
 
 ```sh
 cargo run -p plaza_example_night_watch                    # the scripted run
-cargo run -p plaza_example_night_watch --bin serve        # the browser version, five tabs
+cargo run -p plaza_example_night_watch --bin serve        # the browser version, one tab and bots
 ```
 
 Social deduction without chat is a thin game, because most of the genre's interest is in the talking. This example is a lab for the phase machine and the secrecy. A vote-only village is not much fun to play.
@@ -27,8 +27,14 @@ Every snapshot is per recipient. Only you see `your_role`, the wolf's night choi
 
 `VillageGuard` in [guard.rs](src/guard.rs) checks whether a player may act at all: seated, alive, right phase, right role. It is one `OpGuard` the controller runs ahead of `StateLogic`, so every op the handlers see has already passed those checks. A refusal answers the sender with its reason (`Refused(NotYourRole)` and similar) and never reaches the rules. The guard checks only the sender's standing. Whether the wolf may hunt tonight is the guard's job. Whether the named victim is dead, absent or yourself is checked in [logic.rs](src/logic.rs). This example first wrote the same check inside `StateLogic` because there was nowhere else to put it. The `OpGuard` hook was extracted from that code.
 
+## Bots
+
+The village deals at five. Once at least one person is connected and a seat has been open for ten seconds, [bots.rs](src/bots.rs) seats a bot, then waits another ten seconds before the next, so people who open several tabs get each other first. Seats only fill while the village is waiting or showing a reveal, since they lock during a game.
+
+A bot plays from `village_view`, the same per-recipient payload a browser receives. It never reads `VillageState`, which would tell it who the wolf is. `choose` is the whole policy. A wolf bot hunts a living player at night. By day every living bot votes once and all of them name the same suspect picked by seat order and round, because a split vote exiles nobody and that hands the wolf the game. The suspect itself votes for the next in line. A bot waits a second and a half before acting so you can watch, well inside the night and day clocks. `bots_alone_play_a_game_to_the_end_without_a_deadline` runs five bots through a whole game with no ticks, so no deadline acts for them.
+
 ## The lab
 
-Open five tabs at http://127.0.0.1:8094. One tab learns it is the wolf. The others learn only their own role and nothing in any tab's traffic says more, which you can check in the network panel. Get killed and your tab switches to showing every role. Let a day time out to see abstainers counted or vote fast to see dusk fall early. When a side wins, the reveal stays up, then the village deals again with the wolf one seat along.
+Open http://127.0.0.1:8094 in one tab and bots fill the rest of the village. Open up to five tabs to play against each other instead. One player learns it is the wolf. The others learn only their own role and nothing in any tab's traffic says more, which you can check in the network panel. Get killed and your tab switches to showing every role. Let a day time out to see abstainers counted or vote fast to see dusk fall early. When a side wins, the reveal stays up, then the village deals again with the wolf one seat along.
 
 The scripted run covers the same sequence: a refused hunt, a dawn, an early dusk, an overslept wolf, parity, the reveal and the second deal.
