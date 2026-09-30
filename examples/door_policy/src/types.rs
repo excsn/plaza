@@ -15,8 +15,12 @@ pub const SEATS: usize = 3;
 pub const PER_IP: usize = 4;
 /// What a credit buys. Short, so expiry happens while you watch.
 pub const CREDIT_SECS: u64 = 6;
-/// Credits an account starts with.
+/// The arcade's tick, which its clock counts in.
+pub const TICK: Duration = Duration::from_millis(50);
+/// Credits an account starts with, which is also the most it refills to.
 pub const STARTING_CREDITS: u32 = 3;
+/// One credit comes back this often while an account is below its start.
+pub const REFILL_SECS: u64 = 30;
 /// How long a socket may sit without presenting anything. Short, so the
 /// panel can show it; the library's default is five seconds.
 pub const CREDENTIAL_WAIT: Duration = Duration::from_millis(500);
@@ -105,6 +109,9 @@ pub enum ArcadeOp {
   // Server to client.
   /// You are in, until this many seconds from now.
   Admitted { account: Account, seconds: u64, credits: u32 },
+  /// A coin was refused because the account has spent every credit. The
+  /// wallet outlives the connection and refills one credit every `REFILL_SECS`.
+  NoCredit { account: Account },
   /// The state of the room, for anyone inside.
   Snapshot(Box<Room>),
 }
@@ -112,12 +119,12 @@ pub enum ArcadeOp {
 /// Encodes ops the way both ends put them on the wire: a kind byte, then one
 /// JSON document.
 pub fn encode_ops(ops: &[ArcadeOp]) -> Vec<u8> {
-  plaza_wire::frame::encode_ops(&plaza_session::codec::JsonCodec, ops).expect("ops encode")
+  plaza_wire::frame::encode_ops(&plaza_wire::JsonCodec, ops).expect("ops encode")
 }
 
 /// Reads ops from a frame, for the client side.
 pub fn decode_ops(frame: &[u8]) -> Vec<ArcadeOp> {
-  plaza_wire::frame::decode_ops(&plaza_session::codec::JsonCodec, frame).unwrap_or_default()
+  plaza_wire::frame::decode_ops(&plaza_wire::JsonCodec, frame).unwrap_or_default()
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]

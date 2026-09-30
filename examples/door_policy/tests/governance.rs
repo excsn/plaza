@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use plaza_example_door_policy::client::Knock;
-use plaza_example_door_policy::types::{ArcadeOp, DuplicateLogin, Refusal, CREDENTIAL_WAIT, CREDIT_SECS, SEATS};
+use plaza_example_door_policy::types::{ArcadeOp, DuplicateLogin, Refusal, CREDENTIAL_WAIT, CREDIT_SECS, CREDIT_SPENT, SEATS, STARTING_CREDITS};
 use plaza_example_door_policy::{arcade, arcade_with};
 
 async fn settle() {
@@ -139,6 +139,105 @@ async fn a_credit_buys_a_deadline() {
 
   tokio::time::sleep(Duration::from_secs(CREDIT_SECS + 1)).await;
   assert_eq!(player.closure().as_deref(), Some("your credit ran out"), "the session outlived its credit");
+  player.leave();
+}
+
+/// The room's clock for this account, from the latest snapshot it was sent.
+fn seconds_left(player: &Knock, account: u32) -> Option<u64> {
+  player.heard.lock().iter().rev().find_map(|op| match op {
+    ArcadeOp::Snapshot(room) => room.seats.iter().find(|s| s.account == account).map(|s| s.seconds_left),
+    _ => None,
+  })
+}
+
+#[tokio::test]
+async fn a_coin_adds_to_the_time_left_rather_than_restarting_it() {
+  let (session, _door) = arcade(DuplicateLogin::RefuseNewest).await;
+  let addr = session.local_addr().to_string();
+  let player = Knock::arrive(&addr, Some(12)).await.expect("connect");
+  settle().await;
+  player.say(&[ArcadeOp::InsertCoin, ArcadeOp::InsertCoin]).await.expect("send");
+  settle().await;
+  assert_eq!(seconds_left(&player, 12), Some(3 * CREDIT_SECS), "two coins on top of the free credit");
+
+  tokio::time::sleep(Duration::from_secs(CREDIT_SECS + 1)).await;
+  assert!(player.closure().is_none(), "the coins restarted the clock instead of adding to it");
+  player.leave();
+}
+
+#[tokio::test]
+async fn a_coin_with_no_credit_left_is_answered() {
+  let (session, _door) = arcade(DuplicateLogin::RefuseNewest).await;
+  let addr = session.local_addr().to_string();
+  let player = Knock::arrive(&addr, Some(14)).await.expect("connect");
+  settle().await;
+  // Arrival spent one of the three, so the third coin has nothing to spend.
+  player
+    .say(&[ArcadeOp::InsertCoin, ArcadeOp::InsertCoin, ArcadeOp::InsertCoin])
+    .await
+    .expect("send");
+  settle().await;
+  let refused = player
+    .heard
+    .lock()
+    .iter()
+    .filter(|op| matches!(op, ArcadeOp::NoCredit { account: 14 }))
+    .count();
+  assert_eq!(refused, 1, "the coin past the last credit went unanswered");
+  player.leave();
+}
+
+/// The credits the room last showed for this account.
+fn credits(player: &Knock, account: u32) -> Option<u32> {
+  player.heard.lock().iter().rev().find_map(|op| match op {
+    ArcadeOp::Snapshot(room) => room.seats.iter().find(|s| s.account == account).map(|s| s.credits),
+    _ => None,
+  })
+}
+
+#[tokio::test]
+async fn arriving_spends_a_credit() {
+  let (session, _door) = arcade(DuplicateLogin::RefuseNewest).await;
+  let addr = session.local_addr().to_string();
+  let player = Knock::arrive(&addr, Some(15)).await.expect("connect");
+  settle().await;
+  assert_eq!(credits(&player, 15), Some(STARTING_CREDITS - 1));
+  player.leave();
+}
+
+#[tokio::test]
+async fn an_account_with_no_credit_is_closed_on_arrival() {
+  let (session, _door) = arcade(DuplicateLogin::RefuseNewest).await;
+  let addr = session.local_addr().to_string();
+  let first = Knock::arrive(&addr, Some(16)).await.expect("connect");
+  settle().await;
+  first.say(&[ArcadeOp::InsertCoin, ArcadeOp::InsertCoin]).await.expect("send");
+  settle().await;
+  assert_eq!(credits(&first, 16), Some(0));
+  first.leave();
+  settle().await;
+
+  let again = Knock::arrive(&addr, Some(16)).await.expect("connect");
+  settle().await;
+  let goodbye = again.goodbye().expect("a spent account played for free");
+  assert_eq!(goodbye.code, CREDIT_SPENT);
+  assert_eq!(goodbye.detail.as_deref(), Some(&b"no credit left"[..]));
+  assert!(!again.was_admitted(), "a seat was given before the wallet was read");
+  again.leave();
+}
+
+#[tokio::test]
+async fn the_rooms_clock_counts_down() {
+  let (session, _door) = arcade(DuplicateLogin::RefuseNewest).await;
+  let addr = session.local_addr().to_string();
+  let player = Knock::arrive(&addr, Some(13)).await.expect("connect");
+  settle().await;
+  let early = seconds_left(&player, 13).expect("a snapshot");
+  tokio::time::sleep(Duration::from_secs(3)).await;
+  player.say(&[ArcadeOp::Push]).await.expect("send");
+  settle().await;
+  let later = seconds_left(&player, 13).expect("a snapshot");
+  assert!(later + 2 <= early, "{early}s then {later}s after three seconds");
   player.leave();
 }
 

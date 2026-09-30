@@ -3,15 +3,54 @@ name = "plaza_example_door_policy"
 version = "0.1.0"
 edition = { workspace = true }
 publish = false
+default-run = "plaza_example_door_policy"
+
+[features]
+default = ["server"]
+# The arcade, its door and both transports it is served over. Native only.
+server = [
+  "dep:plaza",
+  "dep:plaza_session",
+  "dep:async-trait",
+  "dep:parking_lot",
+  "dep:tokio",
+  "dep:tracing",
+  "dep:tracing-subscriber",
+  "dep:actix-web",
+]
+# The browser page, which knocks through plaza_ws. Built for wasm32 alone.
+web = ["dep:macroquad", "plaza_ws/miniquad"]
 
 [dependencies]
-plaza = { workspace = true }
-plaza_session = { workspace = true, features = ["json", "tcp"] }
 plaza_wire = { workspace = true, features = ["json"] }
-
-async-trait = "0.1"
-parking_lot = "^0.12"
+plaza_ws = { workspace = true, features = ["pump"] }
 serde = { version = "1.0", features = ["derive"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "net", "io-util"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+plaza = { workspace = true, optional = true }
+plaza_session = { workspace = true, features = ["json", "tcp", "actix_ws", "actix_host"], optional = true }
+async-trait = { version = "0.1", optional = true }
+parking_lot = { version = "^0.12", optional = true }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "net", "io-util"], optional = true }
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"], optional = true }
+actix-web = { version = "^4", optional = true }
+
+macroquad = { version = "=0.4.15", optional = true }
+
+[dev-dependencies]
+plaza_ws = { workspace = true, features = ["native", "scripted"] }
+
+[[bin]]
+name = "plaza_example_door_policy"
+path = "src/main.rs"
+required-features = ["server"]
+
+[[bin]]
+name = "serve"
+path = "src/bin/serve.rs"
+required-features = ["server"]
+
+[[bin]]
+name = "door_page"
+path = "src/bin/door_page.rs"
+required-features = ["web"]

@@ -16,7 +16,7 @@ async fn main() {
   tracing_subscriber::fmt().with_max_level(Level::WARN).init();
   println!("# door_policy\n");
   println!(
-    "Seats {SEATS}, a credit buys {CREDIT_SECS}s, a socket may present nothing for {}ms.\n",
+    "Seats {SEATS}, a credit buys {CREDIT_SECS}s and arriving spends one, a socket may present nothing for {}ms.\n",
     CREDENTIAL_WAIT.as_millis()
   );
   scenario_refusals().await;
