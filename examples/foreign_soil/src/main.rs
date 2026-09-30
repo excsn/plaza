@@ -235,7 +235,7 @@ async fn main() {
     "| impairment applied | {} | free: the same `Conditioner` the shipped adapters use, delay and jitter and loss and all four ordering rules |",
     delayed_arrived && observed >= Duration::from_millis(100)
   );
-  println!("\nThe connection loop is 68 lines, of which about 25 are reading and writing a socket.");
+  println!("\nThe connection loop is 68 lines, 15 of them reading or writing the socket.");
   println!("\nA 120ms downstream profile produced {}ms.", observed.as_millis());
 
   assert!(round_trip, "the registry, bridge and outbound queue are the part that is genuinely free");

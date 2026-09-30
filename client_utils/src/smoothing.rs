@@ -147,13 +147,10 @@ impl<State: Clone> ErrorSmoother<State> {
   /// Sheds a fixed fraction of the remaining gap per 60Hz frame instead of
   /// finishing within a duration.
   ///
-  /// Pick this when corrections can arrive faster than an ease would finish.
-  /// A duration-based ease restarts before it completes, and past a correction
-  /// rate equal to its duration it degrades sharply: measured against a
-  /// two-unit correction, worst visual error goes 2.67 at one correction every
-  /// 0.5s to 15.00 at one every frame, where the same case at `retain = 0.85`
-  /// gives 11.33. Below that crossover the duration is the better choice and
-  /// this is not worth the swap.
+  /// Its worst error grows with the correction rate as a duration ease's does.
+  /// Measured against a two-unit correction, `retain = 0.85` gives 1.71 at one
+  /// correction every 0.5s and 11.33 at one every frame, where `new(0.1)`
+  /// gives 1.67 and 10.00.
   ///
   /// `retain` is the fraction *kept*, so smaller closes faster; 0.85 to 0.95 is
   /// the useful range. Framerate-independent, like [`AdaptiveDecay`], which is
@@ -325,9 +322,8 @@ mod tests {
 
   #[test]
   fn a_rate_ease_survives_corrections_faster_than_it_finishes() {
-    // The case a duration cannot serve: a correction every frame. The duration
-    // ease restarts before it has gone anywhere; the rate closes a fixed
-    // fraction of whatever gap is left, however often it is disturbed.
+    // A correction every frame: the rate closes a fixed fraction of whatever
+    // gap is left, however often it is disturbed.
     let mut s: ErrorSmoother<P> = ErrorSmoother::at_rate(0.85);
     let mut drawn = 0.0f32;
     let logical = P(10.0);

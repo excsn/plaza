@@ -22,7 +22,7 @@ A Unix socket rather than TCP is deliberate: no TLS, no HTTP upgrade, no address
 | answering and originating probes | yes | `LinkDriver`, which owns the schedule and the correlation |
 | impairment, all four ordering rules | yes | `LinkDriver`, holding the same `Conditioner` the shipped adapters do |
 
-The connection loop is **68 lines**, of which about 25 are reading and writing a socket. Before the extraction this example's loop was 113 lines and did not implement jitter, loss, monotone release, the retransmit penalty or the queue cap; a complete one would have been about 160.
+The connection loop is **68 lines**. 15 of them read or write the socket and the rest register the connection and call `LinkDriver`. Before the extraction this example's loop was 93 lines beside a 31-line probe table and did not implement jitter, loss, monotone release, the retransmit penalty or the queue cap; a complete one would have been about 160.
 
 ## What this example found
 

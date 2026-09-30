@@ -842,7 +842,7 @@ What you still write is framing and enforcing `Limits::max_frame_bytes` with it.
 
 **Answering probes.** A `Kind::Ping` handed to `forward_incoming` is answered by nobody: the bridge drops it and warns once per agent and the client measuring its round trip waits forever. `LinkDriver` answers probes, so this only goes wrong if you bypass it and do not answer them yourself.
 
-`examples/foreign_soil` is a working transport built this way, in a crate with no privileged access and neither shipped transport compiled in. Its connection loop is 65 lines, about 25 of them reading and writing a socket.
+`examples/foreign_soil` is a working transport built this way, in a crate with no privileged access and neither shipped transport compiled in. Its connection loop is 68 lines. 15 of them read or write the socket and the rest register the connection and call `LinkDriver`.
 
 ### Assembling the Pieces Yourself
 

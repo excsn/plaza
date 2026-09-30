@@ -535,7 +535,7 @@ smoother.advance(dt_secs);
 draw(&smoother.sample(&logical, lerp_pos));
 ```
 
-Keep the duration **shorter than your send interval**. Otherwise corrections arrive faster than the ease finishes and the smoother itself becomes the dominant error. Past that point, shed a fraction per frame instead:
+Keep the duration **shorter than your send interval**. Otherwise corrections arrive faster than the ease finishes and the smoother itself becomes the dominant error. The other mode sheds a fraction per frame rather than finishing within a duration. It degrades the same way and measured slightly behind a 0.1s ease at every correction rate:
 
 ```rust,ignore
 let mut smoother = ErrorSmoother::at_rate(0.85);
@@ -992,7 +992,7 @@ No type can enforce these. Breaking them causes bugs that the rest of this crate
 
 **Ease continuously rather than past a threshold.** Correcting only once the error crosses a threshold and then closing the whole gap produces a metronomic sawtooth: a small jump forward roughly every four hundred milliseconds, at every latency including zero, which a player feels as a rhythmic tug.
 
-**The ease-versus-rate crossover.** Worst error 2.67 at one correction every 0.5 s, 15.00 at one every frame, against 11.33 for `at_rate(0.85)`. Below that crossover the duration wins.
+**Ease versus rate.** For a two-unit correction, worst error with `new(0.1)` is 1.67 at one correction every 0.5 s and 10.00 at one every frame, against 1.71 and 11.33 for `at_rate(0.85)`.
 
 **Running the rule beats interpolating.** Over 3000 enemies in `horde_playground`, by 43 px of mean error at 1 Hz and it still leads at 30 Hz, because an interpolated entity is always a send interval in the past.
 

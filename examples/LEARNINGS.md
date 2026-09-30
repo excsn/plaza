@@ -211,7 +211,7 @@ Chapter 20 recorded that a fixed-duration ease has a correction rate above which
 
 The mistake surfaced only because a second model, written for comparison, returned `inf`: `offset += drawn - logical` where `drawn = logical + offset` doubles the offset every step. Investigating that obviously broken column exposed the problem with the first.
 
-With the harness rebuilt so a correction is an actual jump in the logical state, the chapter's claim held and gained a crossover: below a correction rate equal to the ease duration, duration-based is fine and slightly better on the mean; above it, worst error goes 2.67 to 15.00 while a rate-based ease goes 2.73 to 11.33. So the guidance was right, the API claim beside it was wrong (`new` takes a duration, not a fraction) and the first harness could have settled neither.
+With the harness rebuilt so a correction is an actual jump in the logical state, the chapter's claim held: past a correction rate equal to the ease duration, worst error grows with the rate. A 0.1s linear ease measures 1.67 at one two-unit correction every 0.5s, 3.33 every 0.05s and 10.00 every frame. A rate-based ease at `retain = 0.85` degrades the same way, 1.71, 4.41 and 11.33, so it is behind the duration at every rate and there is no crossover. The API claim beside the guidance was wrong (`new` takes a duration, not a fraction) and the first harness could have settled neither.
 
 Two habits. Check a measurement that confirms what you expected as carefully as one that does not, because nothing reports "modelled the wrong scenario". And write a second, independent implementation of the same idea even when you only need one, because disagreement between them is the only cheap signal that either is wrong.
 
