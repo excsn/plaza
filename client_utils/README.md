@@ -10,7 +10,7 @@ The server half lives in [`plaza`](../core/) under `game_common::reconciliation`
 
 ```toml
 [dependencies]
-plaza_client_utils = "0.6"
+plaza_client_utils = "0"
 ```
 
 **No workspace dependencies.** This crate pulls in `thiserror` and `tracing`, plus an optional `serde` that only the `fixed` feature enables. It stays that small deliberately, so wasm builds and game-engine plugins do not drag in a server's async runtime. It is pure logic: no transport, no wire format and no engine coupling. You feed it what you receive and read back what to render.

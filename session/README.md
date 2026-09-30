@@ -10,8 +10,8 @@ How to use it: [README.USAGE.md](README.USAGE.md). Full surface: [API_REFERENCE.
 
 ```toml
 [dependencies]
-plaza = "0.7"
-plaza_session = { version = "0.7", default-features = false, features = ["actix_ws", "json"] }
+plaza = "0"
+plaza_session = { version = "0", default-features = false, features = ["actix_ws", "json"] }
 ```
 
 | Feature | Default | Gives you |

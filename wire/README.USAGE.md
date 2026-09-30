@@ -337,7 +337,7 @@ A serde type unreachable from every root gets a warning naming it and both tags,
 
 ```toml
 [build-dependencies]
-plaza_wire = { version = "0.7", default-features = false, features = ["build"] }
+plaza_wire = { version = "0", default-features = false, features = ["build"] }
 ```
 
 ```rust,ignore

@@ -854,7 +854,7 @@ In `horde_playground` despawn ids were 1.2% of the traffic and position samples 
 For a wire that carries inputs rather than state, where nothing is ever corrected and `f32` cannot be relied on to match between a wasm build and a native one. Module `fixed` needs the `fixed` feature, which also pulls in `serde`:
 
 ```toml
-plaza_client_utils = { version = "0.6", features = ["fixed"] }
+plaza_client_utils = { version = "0", features = ["fixed"] }
 ```
 
 ```rust,ignore
@@ -957,7 +957,7 @@ if digest(&local_world) != frame.digest {
 Module `net_sim` needs the `net-sim` feature:
 
 ```toml
-plaza_client_utils = { version = "0.6", features = ["net-sim"] }
+plaza_client_utils = { version = "0", features = ["net-sim"] }
 ```
 
 ```rust,ignore

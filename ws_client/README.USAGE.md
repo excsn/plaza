@@ -147,7 +147,7 @@ let mut socket: Box<dyn Socket> = plaza_ws::connect_boxed(&url)?;
 ### Desktop
 
 ```toml
-plaza_ws = { version = "0.6", features = ["native"] }
+plaza_ws = { version = "0", features = ["native"] }
 ```
 
 One thread owns the socket and talks to the frame loop over channels, because `tungstenite` is blocking, a frame loop cannot block and an async runtime would drag tokio into a program whose job is to render at 60 fps. It uses a non-blocking stream rather than a blocking read, since `tungstenite::WebSocket` has no split and a thread parked in `read()` would hold the socket for as long as the peer stayed quiet.
@@ -155,7 +155,7 @@ One thread owns the socket and talks to the frame loop over channels, because `t
 ### Browser Under Macroquad
 
 ```toml
-plaza_ws = { version = "0.6", features = ["miniquad"] }
+plaza_ws = { version = "0", features = ["miniquad"] }
 ```
 
 The plugin's functions and miniquad's are provided by JavaScript when the page loads, so the module leaves them undefined at link time. From rustc 1.98, `wasm32-unknown-unknown` no longer turns undefined symbols into imports and the link fails with `undefined symbol: init_webgl` or `plaza_ws_connect`. Put the flag in the app's `.cargo/config.toml`:
@@ -250,7 +250,7 @@ It parses the built wasm's import section and fails if the plugin does not satis
 
 ```toml
 [dev-dependencies]
-plaza_ws = { version = "0.6", features = ["scripted"] }
+plaza_ws = { version = "0", features = ["scripted"] }
 ```
 
 ```rust,ignore

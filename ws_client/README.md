@@ -10,7 +10,7 @@ How to use it: [README.USAGE.md](README.USAGE.md). Full surface: [API_REFERENCE.
 
 ```toml
 [dependencies]
-plaza_ws = { version = "0.6", features = ["native", "loopback"] }
+plaza_ws = { version = "0", features = ["native", "loopback"] }
 ```
 
 ## What it gives you

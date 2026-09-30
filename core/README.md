@@ -10,7 +10,7 @@ How to use it: [README.USAGE.md](README.USAGE.md). Full surface: [API_REFERENCE.
 
 ```toml
 [dependencies]
-plaza = "0.7"
+plaza = "0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }

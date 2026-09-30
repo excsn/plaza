@@ -10,8 +10,8 @@ How to use it: [README.USAGE.md](README.USAGE.md). Full surface: [API_REFERENCE.
 
 ```toml
 [dependencies]
-plaza = "0.7"
-plaza_lobby = "0.7"
+plaza = "0"
+plaza_lobby = "0"
 ```
 
 ## What it gives you
