@@ -16,7 +16,7 @@
 use std::collections::BTreeMap;
 use std::hash::Hash;
 
-use super::{Admission, Roster};
+use super::{Admission, Departure, Roster};
 
 /// The seats a fleet of bots holds, and the bookkeeping the roster cannot do
 /// for them because nothing else remembers which keys are bots.
@@ -83,7 +83,9 @@ impl<Key: Eq + Hash + Clone> Crew<Key> {
     let Some(key) = self.seats.remove(&seat) else {
       return false;
     };
-    roster.depart(&key);
+    if let Departure::Held { .. } = roster.depart(&key) {
+      roster.expire(&key);
+    }
     true
   }
 
@@ -169,6 +171,15 @@ mod tests {
     roster.depart(&7);
     let shuffles = roster.resolve();
     assert!(shuffles.is_empty(), "nobody was waiting: {shuffles:?}");
+  }
+
+  #[test]
+  fn a_vacated_seat_on_a_holding_roster_is_open_again() {
+    let mut roster: Roster<u32> = Roster::new(1).holding_seats();
+    let mut crew = Crew::new();
+    let taken = crew.fill(&mut roster, 1, 1, bot_key);
+    assert!(crew.vacate(&mut roster, taken[0]));
+    assert!(matches!(roster.admit(7), Admission::Seated { .. }), "a bot has no reconnect to hold a seat for");
   }
 
   #[test]
