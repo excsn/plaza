@@ -7,7 +7,7 @@ How to build a shared-state application on `plaza`: writing the rules, standing 
 *   [Core Concepts](#core-concepts)
 *   [Quick Start](#quick-start)
     *   [A Complete Program](#a-complete-program)
-    *   [The Four Type Parameters](#the-four-type-parameters)
+    *   [The Three Type Parameters](#the-three-type-parameters)
 *   [Writing the Rules](#writing-the-rules)
     *   [Handling Ops](#handling-ops)
     *   [Reacting to Joins and Departures](#reacting-to-joins-and-departures)
@@ -157,7 +157,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-### The Four Type Parameters
+### The Three Type Parameters
 
 Nearly every type here is generic over the same few.
 

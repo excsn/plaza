@@ -1,6 +1,6 @@
 # API Reference: `plaza_client_utils`
 
-`plaza_client_utils` is the **client half** of real-time networking. The server half (input sequence tracking, delayed input buffers, lag-compensation rewind) lives in `plaza::game_common::reconciliation`
+`plaza_client_utils` is the **client half** of real-time networking. The server half lives in `plaza::game_common::reconciliation` (input sequence tracking, delayed input buffers) and `plaza_server_utils::history` (lag-compensation rewind).
 
 ## Contents
 
@@ -547,7 +547,7 @@ These give the same number from the same inputs on both ends and in every build.
 
 ## 20. Module `math`
 
-Small vector and quaternion types, so this crate is usable without a math library. They implement `Interpolatable` and `Extrapolatable`.
+Small vector and quaternion types, so this crate is usable without a math library. All three implement `Interpolatable`, as does `f32`; `Vec3` and `Quat` also implement `Extrapolatable`.
 
 *   **`Vec2`**: `new`, `ZERO`, `ONE`, `length`, `length_squared`, `dot`, `normalize`, plus `Add`/`Sub`/`Mul`.
 *   **`Vec3`**: the same surface in three dimensions.

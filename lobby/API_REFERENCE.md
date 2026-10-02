@@ -49,11 +49,11 @@ pub trait RoomFactory: Send + Sync + 'static {
     &self,
     room_id: RoomId,
     room_settings: &RoomSettings<Self::CustomGameSettings>,
-  ) -> Result<InProcessRoomHandle<Self::GameOp, Self::GameID, Self::GameStateType, Self::CustomGameSettings>, LobbyError>;
+  ) -> Result<Arc<dyn RoomHandle<Self::GameID, Self::CustomGameSettings>>, LobbyError>;
 }
 ```
 
-Implement this once per game type. Inside `spawn_room` you build a `StateController` as usual, `tokio::spawn` its `run()` and wrap the pieces in an `InProcessRoomHandle`.
+Implement this once per game type. Inside `spawn_room` you build a `StateController` as usual, `tokio::spawn` its `run()`, wrap the pieces in an `InProcessRoomHandle` and return it as `Arc<dyn RoomHandle>`.
 
 ### Trait `RoomHandle<GameAgentID: AgentId, CustomRoomSettings>`
 
@@ -100,7 +100,7 @@ A room running as a task in this process.
 #### Reaching a room
 
 *   **`room(&self, room_id: &RoomId) -> Option<Arc<dyn RoomHandle<..>>>`**: the handle of one room, for reading its metadata, endpoint and whether it has finished through [`RoomHandle`](#trait-roomhandlegameagentid-agentid-customroomsettings). Sending a `ControllerCommand` or updating a player count needs the concrete `InProcessRoomHandle` or the `CommandSender`, which the application keeps itself.
-*   **`rooms(&self) -> Vec<Arc<InProcessRoomHandle<..>>>`**
+*   **`rooms(&self) -> Vec<Arc<dyn RoomHandle<..>>>`**: every live room, as `room` returns one.
 
 ## 3. Payloads
 

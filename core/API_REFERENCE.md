@@ -63,11 +63,10 @@
 ### Trait `AgentId`
 
 ```rust,ignore
-pub trait AgentId: Clone + Debug + Eq + Hash + Send + Sync
-  + Serialize + for<'de> Deserialize<'de> + 'static {}
+pub trait AgentId: Clone + Debug + Eq + Hash + Send + Sync + 'static {}
 ```
 
-Blanket-implemented for every type meeting the bounds; `Uuid` and `u64` qualify as-is.
+Blanket-implemented for every type meeting the bounds; `Uuid` and `u64` qualify as-is. There is no serde bound: a payload that carries an id declares it itself.
 
 ### Enum `Agent<ID: AgentId>`
 
@@ -230,7 +229,7 @@ A named function coerces cleanly; a closure usually needs its argument types wri
 *   `SubmitSystemOps { source_description, ops }`
 *   `ProcessTimeStep { delta_time }`
 *   `HandleAgentJoined { agent }` / `HandleAgentLeft { agent_id }`: the push-style alternative to the session's own notifications; the lobby uses the latter.
-*   `QueryCurrentState { response_tx: oneshot::ExclusiveSender<StateType> }`: the single-sender oneshot, since the sender is moved into the command and never cloned.
+*   `QueryCurrentState { read: StateReader<StateType> }`: a projection run on the controller's task; `query_with` builds it and the reply channel.
 *   `SendSnapshots { recipients: Vec<Agent<ID>>, context: Option<SnapshotContext> }`: re-sends state, building a snapshot per recipient, with every provider call started before any is awaited. Recipients are explicit because the roster lives in your state rather than in the controller. Always per-recipient: a uniform pass is asked for from logic output, via `SnapshotRequest::uniform`.
 *   `Shutdown`
 
@@ -323,7 +322,7 @@ Loopback transport for tests, demos and local play. Each client gets its own inb
 *   `ConnectionId = u64`
 *   `SessionReceiver<T>` / `SessionSender<T>`: bounded async MPSC handles. The concrete channel is `fibre`'s, which is part of plaza's contract; build pairs with `session_channel` rather than naming the crate.
 *   **`session_channel<T: Send>(capacity) -> (SessionSender<T>, SessionReceiver<T>)`**: the constructor behind every `Session` stream, so a transport outside this workspace produces the exact type the trait returns without a fibre dependency of its own. Panics if `capacity` is zero.
-*   `ClientInbox<Op, ID>`: the receiving end of a simulated client.
+*   `ClientInbox<Op, ID>`: the receiving end of a simulated client, at `plaza::session::in_process::ClientInbox`; it is not re-exported from `plaza::session`.
 
 ### Session Constants
 
@@ -421,14 +420,11 @@ Serde-friendly PODs for op payloads: `Vec2`, `Vec3`, `Quat` (with `Quat::IDENTIT
 
 ### `game_common::reconciliation`
 
-The server half of client-side prediction; the client half is `plaza_client_utils`.
+The server half of client-side prediction; the client half is `plaza_client_utils`. The lag-compensation rewind buffer (`HistoricalStateBuffer`, `TimedState`) is in `plaza_server_utils::history` and `Interpolatable` is in `plaza_client_utils`.
 
 *   **Struct `ClientInputTracker<ID>`**: last processed input sequence per client. `record_processed_input`, `get_last_processed_input_seq`, `on_client_disconnect`, `clear_all`.
 *   **Struct `ServerInputBuffer<ID, InputData, ServerTime>`**: buffers inputs a fixed delay before processing, for fairness across latencies. `add_input`, `drain_delayed_inputs(now, delay)`, `clear_inputs_for_client`, `clear_all`.
 *   **Struct `BufferedInput<InputData, ServerTime>`**: `client_input`, `server_received_time`.
-*   **Struct `HistoricalStateBuffer<EntityId, Snapshot, ServerTime>`**: rewind buffer for lag compensation. `record_state`, `get_state_at_or_before`, `remove_entity_history`, `clear_all_history`. Queries outside the retained range clamp to the nearest snapshot.
-*   **Trait `Interpolatable<TimePoint>`**: `interpolate(other, t, time_a, time_b)`.
-*   **Struct `TimedState<ServerTime, State>`**: `time`, `state`.
 *   **Payloads**: `SequencedClientInput`, `AuthoritativeStateUpdate`, `TimestampedClientAction`, `RemoteEntitySnapshot`. Re-exports `Vec2`/`Vec3`/`Quat`.
 
 ### `game_common::flow_control`
@@ -451,7 +447,7 @@ All three types are `Clone` and hold no timers, channels or boxed closures, so a
 *   **Struct `Epoch`**: an opaque token for one occupancy of a phase, `Copy`. Capture it when scheduling deferred work, compare it on resume to learn whether the phase moved underneath. A stale token only tells you the phase moved; what to do about it is up to the application.
 *   **Struct `PhasedScheduler<E>`**: a tick scheduler whose every event belongs to one phase occupancy. `schedule_after(now, delay, &phased, event)` captures the epoch itself; `due(now, &phased)` yields only events whose occupancy still holds and drops the rest with a debug line. Extracted after the pairing was hand-written nine times across four examples, every copy the same `if !phase.is_current(epoch) continue`. Checks beyond the epoch stay with the application: whether the timed-out player is still on turn is the game's check. Under a snake order it is an identity check that a generation counter would get wrong. `any_pending(predicate)`, `is_empty`.
 *   **Struct `Situation<T = ()>`** with **`Mark<T = ()>`**: the sub-phase staleness check `Epoch` cannot make. A turn clock, a bot's think timer or a response window is scheduled against one *decision* ("seat 3 owes the next action") and anything that moves the game on ends it without changing the phase. `advance()` when the situation moves, `mark()` when scheduling, `holds(mark)` when the event fires. The marker type keeps two situations in one state from answering for each other, exactly as `Epoch`'s private field does; a single-situation state uses the `()` default. Extracted after four examples wrote the same bare `key: u64` with the same compare-on-fire guard.
-*   **Payloads**: `TurnChangedNoticePayload`, `EndTurnRequestPayload`, `RoundStartedNoticePayload`, `RoundEndedNoticePayload`, `PhaseChangedNoticePayload`, `RequestPhaseTransitionPayload`, `CountdownTickNoticePayload`.
+*   **Payloads**: each lives in its module's `op_payloads`. `flow_control::turns::op_payloads` has `TurnChangedNoticePayload` and `EndTurnRequestPayload`; `flow_control::rounds::op_payloads` has `RoundStartedNoticePayload` and `RoundEndedNoticePayload`; `flow_control::phases::op_payloads` has `PhaseChangedNoticePayload`, `RequestPhaseTransitionPayload` and `CountdownTickNoticePayload`. All are defined in `plaza_wire::flow_payloads`.
 
 ### `game_common::scorekeeping`
 
