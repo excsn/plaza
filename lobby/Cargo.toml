@@ -1,6 +1,6 @@
 [package]
 name = "plaza_lobby"
-version = "0.7.1"
+version = "0.7.2"
 edition = { workspace = true }
 keywords = ["gamedev", "networking", "multiplayer", "lobby", "matchmaking"]
 categories = ["game-development", "network-programming"]
