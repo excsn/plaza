@@ -37,6 +37,8 @@ struct CounterState {
   value: i64,
   ticks: u64,
   members: Vec<UserId>,
+  /// Op batches whose sender had not joined yet.
+  strays: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -58,7 +60,12 @@ impl StateLogic<CounterOp, UserId, CounterState> for CounterLogic {
     let mut out = Vec::new();
 
     match input {
-      LogicInput::AgentOps { ops, .. } => {
+      LogicInput::AgentOps { source, ops } => {
+        if let Some(id) = source.id_cloned()
+          && !state.members.contains(&id)
+        {
+          state.strays += 1;
+        }
         for op in ops {
           if let CounterOp::Increment(by) = op {
             state.value += by;
@@ -196,6 +203,41 @@ async fn joining_agent_receives_a_snapshot() {
   assert_eq!(snap.members, vec![1u64], "snapshot reflects the join");
 
   assert_eq!(query_state(&tx).await.members, vec![1u64]);
+}
+
+/// Polls the controller until `pred` holds, failing rather than hanging.
+async fn state_when<F>(tx: &CommandSender<CounterOp, UserId, CounterState>, pred: F) -> CounterState
+where
+  F: Fn(&CounterState) -> bool,
+{
+  tokio::time::timeout(Duration::from_secs(5), async {
+    loop {
+      let state = query_state(tx).await;
+      if pred(&state) {
+        return state;
+      }
+      tokio::task::yield_now().await;
+    }
+  })
+  .await
+  .expect("state never satisfied the predicate")
+}
+
+/// A client may send the moment `connect` returns and its op must land after
+/// its join. The two travel on different channels, so this is the select
+/// loop's bias towards presence under test.
+#[tokio::test]
+async fn an_op_sent_right_after_connect_lands_after_the_join() {
+  for _ in 0..200 {
+    let (session, tx) = start();
+    let agent = Agent::new_human(1u64);
+    let (_conn_id, _inbox) = session.connect(agent.clone()).await.unwrap();
+    session.client_send(agent, vec![CounterOp::Increment(1)]).await;
+
+    let state = state_when(&tx, |s| s.value == 1).await;
+    assert_eq!(state.strays, 0, "op reached the rules before its sender's join");
+    tx.send(ControllerCommand::Shutdown).await.unwrap();
+  }
 }
 
 #[tokio::test]

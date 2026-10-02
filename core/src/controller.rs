@@ -440,6 +440,25 @@ where
 
     loop {
       tokio::select! {
+        // Presence first: a session announces a join before it accepts that
+        // connection's ops, so this is what keeps an op behind its sender's
+        // join. Commands next, so a tick or a shutdown is not starved by a
+        // flood of ops.
+        biased;
+
+        // Arrivals and departures, in the order the session saw them.
+        Ok(presence) = session_presence_rx.recv() => {
+          match presence {
+            PresenceEvent::Joined { agent, conn_id } => {
+              debug!(agent = %agent, conn_id, "Agent joined session");
+              self.handle_agent_joined_event(&agent).await;
+            }
+            PresenceEvent::Left { agent_id, conn_id } => {
+              debug!(?agent_id, conn_id, "Agent left session");
+              self.handle_agent_left_event(&agent_id).await;
+            }
+          }
+        }
 
         Ok(command) = self.command_rx.recv() => {
           debug!(?command, "Received command");
@@ -465,20 +484,6 @@ where
             self.drain_pending_commands().await;
             info!("StateController stopped.");
             return Ok(self.state_data);
-          }
-        }
-
-        // Arrivals and departures, in the order the session saw them.
-        Ok(presence) = session_presence_rx.recv() => {
-          match presence {
-            PresenceEvent::Joined { agent, conn_id } => {
-              debug!(agent = %agent, conn_id, "Agent joined session");
-              self.handle_agent_joined_event(&agent).await;
-            }
-            PresenceEvent::Left { agent_id, conn_id } => {
-              debug!(?agent_id, conn_id, "Agent left session");
-              self.handle_agent_left_event(&agent_id).await;
-            }
           }
         }
 

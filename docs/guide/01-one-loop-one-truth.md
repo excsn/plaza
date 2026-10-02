@@ -4,7 +4,7 @@ This chapter covers where your game's state lives and what is allowed to change 
 
 ## The controller loop
 
-Plaza's core is a single loop: the `StateController` owns your state struct and mutates it from its own task, one input at a time. Ops from players, ticks from the clock and joins and leaves from the transport all go into the same queue and are applied in sequence. Because only one task ever touches the state, your game logic needs no locking (no `Arc<Mutex<World>>`) and no reasoning about interleaving. If two bids race, your rules handle them in the order they arrive and neither is ever half-applied.
+Plaza's core is a single loop: the `StateController` owns your state struct and mutates it from its own task, one input at a time. Ops from players, ticks from the clock and joins and leaves from the transport arrive on separate channels and are applied one at a time, with presence taken ahead of the rest, so an op sent the moment a client connects lands after that client's join. Because only one task ever touches the state, your game logic needs no locking (no `Arc<Mutex<World>>`) and no reasoning about interleaving. If two bids race, your rules handle them in the order they arrive and neither is ever half-applied.
 
 This is the actor model without the ceremony. Nothing in `plaza` spawns a task except `TickDriver` and the `controller.run()` you spawn yourself.
 
