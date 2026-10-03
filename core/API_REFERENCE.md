@@ -20,7 +20,9 @@
   - [Type Alias `CommandSender<Op, ID, StateType>`](#type-alias-commandsenderop-id-statetype)
   - [Function `query_with`](#function-query_with)
   - [Function `query_state`](#function-query_state)
+  - [Function `submit_system_ops`](#function-submit_system_ops)
   - [Struct `StateReader<StateType>`](#struct-statereaderstatetype)
+  - [Struct `Applied`](#struct-applied)
   - [Controller Constants](#controller-constants)
 - [4. Sessions (Transport)](#4-sessions-transport)
   - [Trait `Session`](#trait-session)
@@ -227,6 +229,7 @@ A named function coerces cleanly; a closure usually needs its argument types wri
 
 *   `SubmitAgentOps { agent, ops }`
 *   `SubmitSystemOps { source_description, ops }`
+*   `SubmitSystemOpsAcked { source_description, ops, applied: Applied }`: the same, with a callback the controller runs once the logic has processed the ops; `submit_system_ops` builds it and the reply channel.
 *   `ProcessTimeStep { delta_time }`
 *   `HandleAgentJoined { agent }` / `HandleAgentLeft { agent_id }`: the push-style alternative to the session's own notifications; the lobby uses the latter.
 *   `QueryCurrentState { read: StateReader<StateType> }`: a projection run on the controller's task; `query_with` builds it and the reply channel.
@@ -260,9 +263,25 @@ pub async fn query_state<Op, ID, StateType>(
 
 The whole-state case of `query_with` and the **only** place `StateType: Clone` is required. On a large world it copies all of it on the controller's task while the tick waits; prefer `query_with` when a field or a count is what you want.
 
+### Function `submit_system_ops`
+
+```rust,ignore
+pub async fn submit_system_ops<Op, ID, StateType>(
+  tx: &CommandSender<Op, ID, StateType>,
+  source_description: impl Into<String>,
+  ops: Vec<Op>,
+) -> Result<(), QueryError>
+```
+
+Submits system ops and returns once the logic has processed them. A plain `SubmitSystemOps` send returns when the command is queued, which is not enough for a caller whose next step depends on those ops having applied, such as a lobby issuing a ticket for a seat it just reserved. Returns `QueryError::ControllerGone` when the controller ends before applying them.
+
 ### Struct `StateReader<StateType>`
 
 What `QueryCurrentState` carries: a boxed `FnOnce(&StateType) + Send`, with `StateReader::new` to build one. Reach for it only when constructing the command by hand; `query_with` builds both it and the reply channel.
+
+### Struct `Applied`
+
+What `SubmitSystemOpsAcked` carries: a boxed `FnOnce() + Send`, with `Applied::new` to build one. Reach for it only when constructing the command by hand; `submit_system_ops` builds both it and the reply channel.
 
 ### Controller Constants
 

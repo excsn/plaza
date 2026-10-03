@@ -4,7 +4,7 @@ use crate::RoomId;
 use async_trait::async_trait;
 use parking_lot::Mutex;
 use plaza::agent::{Agent, AgentId};
-use plaza::controller::{CommandSender, ControllerCommand};
+use plaza::controller::{submit_system_ops, CommandSender, ControllerCommand};
 use plaza::error::PlazaError;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -128,8 +128,9 @@ where
 
   /// Teaches the handle how this room spells a reservation and its
   /// withdrawal, so [`RoomHandle::reserve_seat`] and
-  /// [`RoomHandle::withdraw_seat`] submit them as system ops. Without this the
-  /// handle answers both with [`LobbyError::NotImplemented`].
+  /// [`RoomHandle::withdraw_seat`] submit them as system ops and return once
+  /// the controller has applied them. Without this the handle answers both
+  /// with [`LobbyError::NotImplemented`].
   pub fn with_reservations(
     mut self,
     reserve: impl Fn(GameID) -> GameOp + Send + Sync + 'static,
@@ -151,13 +152,7 @@ where
   }
 
   async fn submit_system_op(&self, why: &str, op: GameOp) -> Result<(), LobbyError> {
-    let command = ControllerCommand::SubmitSystemOps {
-      source_description: why.to_string(),
-      ops: vec![op],
-    };
-    self
-      .command_tx
-      .send(command)
+    submit_system_ops(&self.command_tx, why, vec![op])
       .await
       .map_err(|_| LobbyError::InternalOrchestrationError(format!("room {} controller has ended", self.room_id)))
   }

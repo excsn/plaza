@@ -49,7 +49,8 @@ pub mod tick_driver;
 
 pub use agent::{Agent, AgentId};
 pub use controller::{
-  query_state, query_with, CommandSender, ControllerCommand, StateController, StateControllerBuilder, StateReader,
+  query_state, query_with, submit_system_ops, Applied, CommandSender, ControllerCommand, StateController,
+  StateControllerBuilder, StateReader,
 };
 pub use error::PlazaError;
 pub use op_guard::{GuardFn, NoGuard, OpClearance, OpGuard};

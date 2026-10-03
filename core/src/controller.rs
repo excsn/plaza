@@ -30,6 +30,15 @@ pub enum ControllerCommand<Op, ID: AgentId, StateType> {
     source_description: String,
     ops: Vec<Op>,
   },
+  /// `SubmitSystemOps` with a receipt: `applied` fires once the logic has
+  /// processed the ops, so the sender knows the state they produced is in place
+  /// before it does anything that depends on it. [`submit_system_ops`] builds
+  /// it and the reply channel.
+  SubmitSystemOpsAcked {
+    source_description: String,
+    ops: Vec<Op>,
+    applied: Applied,
+  },
   ProcessTimeStep {
     delta_time: std::time::Duration,
   },
@@ -288,6 +297,60 @@ impl<StateType> Debug for StateReader<StateType> {
   }
 }
 
+/// What [`ControllerCommand::SubmitSystemOpsAcked`] carries: a callback the
+/// controller runs once the ops have been through the logic.
+pub struct Applied(Box<dyn FnOnce() + Send>);
+
+impl Applied {
+  /// Wraps the callback. Prefer [`submit_system_ops`], which builds the reply
+  /// channel too; reach for this only when constructing the command by hand.
+  pub fn new(applied: impl FnOnce() + Send + 'static) -> Self {
+    Self(Box::new(applied))
+  }
+
+  fn fire(self) {
+    (self.0)()
+  }
+}
+
+impl Debug for Applied {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.write_str("Applied")
+  }
+}
+
+/// Submits system ops and returns once the logic has processed them.
+///
+/// A plain `SubmitSystemOps` send returns when the command is queued, so a
+/// caller that then does something whose outcome depends on those ops, such as
+/// handing a client a ticket for a seat the ops reserved, can race the
+/// controller. This returns after the ops have been applied:
+///
+/// ```ignore
+/// submit_system_ops(&tx, "lobby reservation", vec![GameOp::Reserve(player)]).await?;
+/// ```
+pub async fn submit_system_ops<Op, ID, StateType>(
+  tx: &CommandSender<Op, ID, StateType>,
+  source_description: impl Into<String>,
+  ops: Vec<Op>,
+) -> Result<(), QueryError>
+where
+  Op: Send + 'static,
+  ID: AgentId,
+  StateType: Send + 'static,
+{
+  let (applied_tx, mut applied_rx) = oneshot::exclusive();
+  let command = ControllerCommand::SubmitSystemOpsAcked {
+    source_description: source_description.into(),
+    ops,
+    applied: Applied::new(move || {
+      let _ = applied_tx.send(());
+    }),
+  };
+  tx.send(command).await.map_err(|_| QueryError::ControllerGone)?;
+  applied_rx.recv().await.map_err(|_| QueryError::ControllerGone)
+}
+
 /// Asks a running controller to compute something from its current state.
 ///
 /// The closure runs on the controller's task, so it must not block or await.
@@ -470,7 +533,7 @@ where
           let tick = matches!(command, ControllerCommand::ProcessTimeStep { .. });
           let ops = match &command {
             ControllerCommand::SubmitAgentOps { ops, .. } => ops.len(),
-            ControllerCommand::SubmitSystemOps { ops, .. } => ops.len(),
+            ControllerCommand::SubmitSystemOps { ops, .. } | ControllerCommand::SubmitSystemOpsAcked { ops, .. } => ops.len(),
             _ => 0,
           };
           let keep_running = self.handle_command(command).await;
@@ -514,6 +577,19 @@ where
           ops,
         };
         self.handle_logic_input(input).await;
+      }
+      ControllerCommand::SubmitSystemOpsAcked {
+        source_description,
+        ops,
+        applied,
+      } => {
+        info!(source = %source_description, "Processing system ops");
+        let input = LogicInput::AgentOps {
+          source: Agent::system(),
+          ops,
+        };
+        self.handle_logic_input(input).await;
+        applied.fire();
       }
       ControllerCommand::ProcessTimeStep { delta_time } => {
         self.handle_logic_input(LogicInput::TimeStep { delta_time }).await;

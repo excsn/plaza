@@ -32,6 +32,7 @@ How to build a shared-state application on `plaza`: writing the rules, standing 
     *   [A Guard as a Function](#a-guard-as-a-function)
     *   [A Guard With State](#a-guard-with-state)
 *   [Asking a Running Controller a Question](#asking-a-running-controller-a-question)
+*   [Submitting System Ops and Waiting for Them](#submitting-system-ops-and-waiting-for-them)
 *   [Shutting Down](#shutting-down)
 *   [Choosing a Transport](#choosing-a-transport)
 *   [Optional Modules](#optional-modules)
@@ -469,6 +470,15 @@ To read one field, use `query_with`. The closure runs on the controller's task w
 
 ```rust,ignore
 let seated = query_with(&tx, |state| state.seated_players().len()).await?;
+```
+
+## Submitting System Ops and Waiting for Them
+
+A `SubmitSystemOps` send returns when the command is queued. When the next step depends on those ops having applied, `submit_system_ops` returns once the logic has processed them.
+
+```rust,ignore
+submit_system_ops(&tx, "lobby reservation", vec![GameOp::Reserve(player)]).await?;
+issue_ticket(player);   // the hold is in place before the player can connect
 ```
 
 ## Shutting Down

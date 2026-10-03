@@ -36,6 +36,8 @@ enum GameOp {
 struct GameState {
   ticks: u64,
   reserved: Vec<PlayerId>,
+  seated: Vec<PlayerId>,
+  spectators: Vec<PlayerId>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -58,6 +60,17 @@ impl StateLogic<GameOp, PlayerId, GameState> for GameLogic {
   ) -> Result<LogicOutput<GameOp, PlayerId>, StateLogicError> {
     match input {
       LogicInput::TimeStep { .. } => state.ticks += 1,
+      LogicInput::AgentJoined { agent } => {
+        let Some(player) = agent.id().copied() else {
+          return Ok(LogicOutput::none());
+        };
+        if state.reserved.contains(&player) {
+          state.reserved.retain(|held| *held != player);
+          state.seated.push(player);
+        } else {
+          state.spectators.push(player);
+        }
+      }
       LogicInput::AgentOps { source, ops } if source.is_system() => {
         for op in ops {
           match op {
@@ -102,11 +115,17 @@ struct TestRoomFactory {
   /// them. Putting those methods on `RoomHandle` would name `GameOp` and
   /// `GameStateType` on a trait designed to name neither.
   spawned: Mutex<HashMap<RoomId, Arc<InProcessRoomHandle<GameOp, PlayerId, GameState, GameSettings>>>>,
+  /// Each room's session, so a test can connect a client the way a socket would.
+  sessions: Mutex<HashMap<RoomId, Arc<InProcessSession<GameOp, PlayerId>>>>,
 }
 
 impl TestRoomFactory {
   fn concrete(&self, room_id: &RoomId) -> Arc<InProcessRoomHandle<GameOp, PlayerId, GameState, GameSettings>> {
     Arc::clone(self.spawned.lock().get(room_id).expect("the factory spawned it"))
+  }
+
+  fn session(&self, room_id: &RoomId) -> Arc<InProcessSession<GameOp, PlayerId>> {
+    Arc::clone(self.sessions.lock().get(room_id).expect("the factory spawned it"))
   }
 }
 
@@ -127,6 +146,7 @@ impl RoomFactory for TestRoomFactory {
     }
 
     let session = InProcessSession::<GameOp, PlayerId>::new();
+    self.sessions.lock().insert(room_id, Arc::clone(&session));
     let (command_tx, controller) = StateControllerBuilder::new(
       Arc::new(GameLogic),
       session,
@@ -580,6 +600,36 @@ async fn a_reservation_through_the_seam_lands_in_the_room_as_a_system_op() {
 
   room.withdraw_seat(&player).await.expect("and withdrawals");
   assert!(held_by(&factory, &created.room_id).await.is_empty());
+}
+
+/// `reserve_seat` returns once the room has applied the hold, so a player who
+/// connects the instant the ticket is issued still finds it. Before that, the
+/// join on the presence channel could overtake the reserve op still queued on
+/// the command channel and the player was seated as a spectator about once in
+/// a hundred placements.
+#[tokio::test]
+async fn a_player_who_connects_the_moment_reserve_seat_returns_is_seated() {
+  let (manager, factory) = manager_with_factory();
+  for trial in 0..200 {
+    let created = manager
+      .handle_create_room_request(&Uuid::new_v4(), settings(4, None))
+      .await
+      .expect("room");
+    let room = manager.room(&created.room_id).expect("listed");
+    let (player, agent) = player();
+
+    room.reserve_seat(&player).await.expect("the room takes reservations");
+    let (_conn_id, _inbox) = factory.session(&created.room_id).connect(agent).await.expect("connect");
+
+    let commands = factory.concrete(&created.room_id).command_tx.clone();
+    let (seated, spectators) = plaza::controller::query_with(&commands, |state: &GameState| {
+      (state.seated.clone(), state.spectators.clone())
+    })
+    .await
+    .expect("the room is running");
+    assert_eq!(seated, vec![player], "trial {trial}: the join found no hold");
+    assert!(spectators.is_empty(), "trial {trial}");
+  }
 }
 
 #[tokio::test]

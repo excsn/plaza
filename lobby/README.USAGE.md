@@ -277,7 +277,7 @@ let room: Arc<dyn RoomHandle<PlayerId, MySettings>> = Arc::new(
 );
 ```
 
-`reserve_seat` and `withdraw_seat` then submit those ops to the room's controller as system ops.
+`reserve_seat` and `withdraw_seat` then submit those ops to the room's controller as system ops and return once the controller has applied them, so a ticket handed out after `reserve_seat` returns always finds its hold in place, however quickly the player connects.
 
 ### Holding and Releasing a Seat From the Lobby
 
