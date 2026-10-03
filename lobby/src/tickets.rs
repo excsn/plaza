@@ -257,6 +257,9 @@ mod cached {
   /// A [`TicketStore`] over `fibre_cache`, expiring on a TTL its janitor
   /// enforces.
   ///
+  /// Reads judge expiry on a clock the janitor refreshes once per tick, 1 s by
+  /// default, so a ticket can still redeem for up to one tick past its window.
+  ///
   /// No capacity is set, so nothing is ever evicted for pressure and a ticket
   /// leaves only by being spent, revoked, or reaching its TTL. The shards
   /// replace [`MapTicketRegistry`]'s single mutex, which the lobby and every
@@ -284,10 +287,11 @@ mod cached {
       }
     }
 
-    /// Forces the expiry pass the janitor would otherwise run on its own
+    /// Runs the expiry pass the janitor would otherwise run on its own
     /// schedule.
     ///
-    /// Deterministic, so a test does not have to sleep past the window.
+    /// It removes what the janitor's clock already counts as expired and does
+    /// not shorten the one-tick bound on reads.
     pub fn run_maintenance(&self) {
       self.held.run_maintenance();
     }
@@ -544,7 +548,9 @@ mod tests {
       let tickets = CachedTicketRegistry::with_expiry(Duration::from_millis(20));
       let room = Uuid::new_v4();
       let token = tickets.issue(7u32, room);
-      std::thread::sleep(Duration::from_millis(60));
+      // Past the window and one janitor tick, since reads judge expiry on
+      // the janitor's clock.
+      std::thread::sleep(Duration::from_millis(1300));
       tickets.run_maintenance();
       assert!(tickets.redeem(&token, &room).is_none());
       assert_eq!(tickets.outstanding(), 0);

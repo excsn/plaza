@@ -211,8 +211,8 @@ A `TicketStore` over a `HashMap` behind a mutex, adding no dependency the crate 
 
 A `TicketStore` over `fibre_cache`, whose janitor sweeps on its own schedule and whose shards replace the single mutex the lobby and every room route otherwise share. Off by default, so nothing downstream pays for it unless it enables the feature.
 
-*   **`with_expiry(window)`**: a TTL, with no capacity set, so nothing is ever evicted for pressure and a ticket leaves only by being spent, revoked or timing out.
-*   **`run_maintenance()`**: forces the expiry pass deterministically, so a test does not have to sleep past the window.
+*   **`with_expiry(window)`**: a TTL, with no capacity set, so nothing is ever evicted for pressure and a ticket leaves only by being spent, revoked or timing out. Reads judge expiry on a clock the janitor refreshes once per tick, 1 s by default, so a ticket can still redeem for up to one tick past its window.
+*   **`run_maintenance()`**: runs the expiry pass on demand. It removes what the janitor's clock already counts as expired and does not shorten the one-tick bound on reads.
 
 ### Writing a third
 
