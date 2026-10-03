@@ -19,7 +19,7 @@ default = []
 cache = ["dep:fibre_cache"]
 
 [dependencies]
-plaza = { version = "0.7.1", path = "../core" }
+plaza = { version = "0.7.3", path = "../core" }
 
 async-trait = { workspace = true }
 fibre = { workspace = true }
