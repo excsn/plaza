@@ -602,6 +602,34 @@ async fn a_reservation_through_the_seam_lands_in_the_room_as_a_system_op() {
   assert!(held_by(&factory, &created.room_id).await.is_empty());
 }
 
+/// Places a player, optionally withdraws the hold again, connects them the
+/// instant the seam call returns and reads back where the room put them.
+async fn place_and_connect(
+  manager: &InMemoryLobbyManager<TestRoomFactory>,
+  factory: &TestRoomFactory,
+  withdraw: bool,
+) -> (PlayerId, GameState) {
+  let created = manager
+    .handle_create_room_request(&Uuid::new_v4(), settings(4, None))
+    .await
+    .expect("room");
+  let room = manager.room(&created.room_id).expect("listed");
+  let (player, agent) = player();
+
+  let commands = factory.concrete(&created.room_id).command_tx.clone();
+  room.reserve_seat(&player).await.expect("the room takes reservations");
+  if withdraw {
+    assert_eq!(held_by(factory, &created.room_id).await, vec![player]);
+    room.withdraw_seat(&player).await.expect("and withdrawals");
+  }
+  let (_conn_id, _inbox) = factory.session(&created.room_id).connect(agent).await.expect("connect");
+
+  let state = plaza::controller::query_with(&commands, |state: &GameState| state.clone())
+    .await
+    .expect("the room is running");
+  (player, state)
+}
+
 /// `reserve_seat` returns once the room has applied the hold, so a player who
 /// connects the instant the ticket is issued still finds it. Before that, the
 /// join on the presence channel could overtake the reserve op still queued on
@@ -611,24 +639,32 @@ async fn a_reservation_through_the_seam_lands_in_the_room_as_a_system_op() {
 async fn a_player_who_connects_the_moment_reserve_seat_returns_is_seated() {
   let (manager, factory) = manager_with_factory();
   for trial in 0..200 {
-    let created = manager
-      .handle_create_room_request(&Uuid::new_v4(), settings(4, None))
-      .await
-      .expect("room");
-    let room = manager.room(&created.room_id).expect("listed");
-    let (player, agent) = player();
+    let (player, state) = place_and_connect(&manager, &factory, false).await;
+    assert_eq!(state.seated, vec![player], "trial {trial}: the join found no hold");
+    assert!(state.spectators.is_empty(), "trial {trial}");
+  }
+}
 
-    room.reserve_seat(&player).await.expect("the room takes reservations");
-    let (_conn_id, _inbox) = factory.session(&created.room_id).connect(agent).await.expect("connect");
+/// The same placement with the controller on worker threads, which is the
+/// scheduling the field report came from.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_player_who_connects_the_moment_reserve_seat_returns_is_seated_across_threads() {
+  let (manager, factory) = manager_with_factory();
+  for trial in 0..300 {
+    let (player, state) = place_and_connect(&manager, &factory, false).await;
+    assert_eq!(state.seated, vec![player], "trial {trial}: the join found no hold");
+    assert!(state.spectators.is_empty(), "trial {trial}");
+  }
+}
 
-    let commands = factory.concrete(&created.room_id).command_tx.clone();
-    let (seated, spectators) = plaza::controller::query_with(&commands, |state: &GameState| {
-      (state.seated.clone(), state.spectators.clone())
-    })
-    .await
-    .expect("the room is running");
-    assert_eq!(seated, vec![player], "trial {trial}: the join found no hold");
-    assert!(spectators.is_empty(), "trial {trial}");
+#[tokio::test]
+async fn a_player_who_connects_the_moment_withdraw_seat_returns_is_a_spectator() {
+  let (manager, factory) = manager_with_factory();
+  for trial in 0..200 {
+    let (player, state) = place_and_connect(&manager, &factory, true).await;
+    assert_eq!(state.spectators, vec![player], "trial {trial}: the join still found the hold");
+    assert!(state.seated.is_empty(), "trial {trial}");
+    assert!(state.reserved.is_empty(), "trial {trial}");
   }
 }
 

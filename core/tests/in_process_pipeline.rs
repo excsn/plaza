@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use plaza::agent::Agent;
-use plaza::controller::{ControllerCommand, StateControllerBuilder};
+use plaza::controller::{submit_system_ops, Applied, ControllerCommand, QueryError, StateControllerBuilder};
 use plaza::error::SnapshotError;
 use plaza::controller::CommandSender;
 use plaza::session::in_process::ClientInbox;
@@ -740,4 +740,126 @@ async fn a_controller_runs_without_snapshots_over_a_state_that_is_not_clone() {
   // The join was handled before the op that just landed, so an empty inbox here
   // means `NoSnapshots` answered for it rather than that nothing has run yet.
   assert!(inbox.try_recv().is_err(), "a snapshot-less controller sent a join snapshot");
+}
+
+/// Counts system batches after applying them, so a test can tell whether a
+/// submission returned before or after its ops ran. An increment by `stall`
+/// never returns, which is how a test leaves a command half-processed.
+#[derive(Debug)]
+struct CountingLogic {
+  applied: Arc<AtomicU64>,
+  stall: Option<i64>,
+}
+
+#[async_trait]
+impl StateLogic<CounterOp, UserId, CounterState> for CountingLogic {
+  async fn process_input(
+    &self,
+    state: &mut CounterState,
+    input: LogicInput<CounterOp, UserId>,
+  ) -> Result<LogicOutput<CounterOp, UserId>, StateLogicError> {
+    if let LogicInput::AgentOps { source, ops } = input
+      && source.is_system()
+    {
+      for op in ops {
+        if let CounterOp::Increment(by) = op {
+          if Some(by) == self.stall {
+            std::future::pending::<()>().await;
+          }
+          state.value += by;
+        }
+      }
+      self.applied.fetch_add(1, Ordering::SeqCst);
+    }
+    Ok(Vec::new().into())
+  }
+}
+
+fn start_counting(
+  stall: Option<i64>,
+) -> (
+  CommandSender<CounterOp, UserId, CounterState>,
+  tokio::task::JoinHandle<Result<CounterState, plaza::error::PlazaError<UserId>>>,
+  Arc<AtomicU64>,
+) {
+  let applied = Arc::new(AtomicU64::new(0));
+  let (tx, controller) = StateControllerBuilder::new(
+    Arc::new(CountingLogic {
+      applied: Arc::clone(&applied),
+      stall,
+    }),
+    InProcessSession::<CounterOp, UserId>::new(),
+    Arc::new(CounterSnapshotter),
+    CounterState::default(),
+  )
+  .build();
+  (tx, tokio::spawn(controller.run()), applied)
+}
+
+#[tokio::test]
+async fn submit_system_ops_returns_once_the_logic_has_applied_them() {
+  let (tx, _handle, applied) = start_counting(None);
+
+  submit_system_ops(&tx, "test", vec![CounterOp::Increment(5)])
+    .await
+    .expect("controller alive");
+
+  assert_eq!(applied.load(Ordering::SeqCst), 1, "returned before the logic ran");
+  assert_eq!(query_state(&tx).await.value, 5);
+}
+
+#[tokio::test]
+async fn the_ack_fires_after_the_logic_not_before() {
+  let (tx, _handle, applied) = start_counting(None);
+  let seen_at_fire = Arc::new(AtomicU64::new(u64::MAX));
+
+  let seen = Arc::clone(&seen_at_fire);
+  let counted = Arc::clone(&applied);
+  tx.send(ControllerCommand::SubmitSystemOpsAcked {
+    source_description: "test".into(),
+    ops: vec![CounterOp::Increment(1)],
+    applied: Applied::new(move || seen.store(counted.load(Ordering::SeqCst), Ordering::SeqCst)),
+  })
+  .await
+  .expect("controller alive");
+
+  assert_eq!(query_state(&tx).await.value, 1);
+  assert_eq!(seen_at_fire.load(Ordering::SeqCst), 1, "the callback ran before the logic or never ran");
+}
+
+#[tokio::test]
+async fn submit_system_ops_reports_a_controller_that_has_stopped() {
+  let (tx, handle, _applied) = start_counting(None);
+  tx.send(ControllerCommand::Shutdown).await.expect("controller alive");
+  handle.await.expect("no panic").expect("run should succeed");
+
+  let outcome = submit_system_ops(&tx, "test", vec![CounterOp::Increment(1)]).await;
+  assert!(matches!(outcome, Err(QueryError::ControllerGone)), "{outcome:?}");
+}
+
+#[tokio::test]
+async fn submit_system_ops_reports_a_controller_that_dies_with_the_ops_queued() {
+  let (tx, handle, applied) = start_counting(Some(-1));
+
+  let stalled = tokio::spawn({
+    let tx = tx.clone();
+    async move { submit_system_ops(&tx, "test", vec![CounterOp::Increment(-1)]).await }
+  });
+  let queued = tokio::spawn({
+    let tx = tx.clone();
+    async move { submit_system_ops(&tx, "test", vec![CounterOp::Increment(1)]).await }
+  });
+  for _ in 0..10 {
+    tokio::task::yield_now().await;
+  }
+  handle.abort();
+
+  for (name, task) in [("stalled", stalled), ("queued", queued)] {
+    let outcome = tokio::time::timeout(Duration::from_secs(5), task)
+      .await
+      .unwrap_or_else(|_| panic!("{name}: a dropped ack must resolve the caller"))
+      .expect("no panic");
+    assert!(matches!(outcome, Err(QueryError::ControllerGone)), "{outcome:?}");
+  }
+  assert_eq!(applied.load(Ordering::SeqCst), 0);
 }

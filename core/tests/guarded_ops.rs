@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use plaza::agent::Agent;
-use plaza::controller::{CommandSender, ControllerCommand, StateControllerBuilder};
+use plaza::controller::{submit_system_ops, CommandSender, ControllerCommand, StateControllerBuilder};
 use plaza::op_guard::{GuardFn, OpClearance};
 use plaza::session::in_process::ClientInbox;
 use plaza::session::{InProcessSession, SessionMessage, TargetedOp};
@@ -149,6 +149,18 @@ async fn system_submissions_bypass_the_guard() {
   })
   .await
   .expect("controller alive");
+
+  assert_eq!(balance(&tx).await, 0, "saturating_sub applied it; the guard never saw it");
+  assert_eq!(stats.ops_refused(), 0);
+}
+
+#[tokio::test]
+async fn acked_system_submissions_bypass_the_guard() {
+  let (_session, tx, _logic, stats) = start();
+
+  submit_system_ops(&tx, "test", vec![VaultOp::Withdraw(10)])
+    .await
+    .expect("controller alive");
 
   assert_eq!(balance(&tx).await, 0, "saturating_sub applied it; the guard never saw it");
   assert_eq!(stats.ops_refused(), 0);

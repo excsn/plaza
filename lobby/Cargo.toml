@@ -32,3 +32,5 @@ parking_lot = "0.12"
 thiserror = { workspace = true }
 
 [dev-dependencies]
+plaza_session = { version = "0.8.1", path = "../session", default-features = false, features = ["tcp", "json"] }
+tokio = { workspace = true }

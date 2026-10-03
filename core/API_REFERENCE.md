@@ -223,7 +223,7 @@ A named function coerces cleanly; a closure usually needs its argument types wri
 
 ### Struct `StateController<Op, ID, StateType, SL, Sess, SP, G = NoGuard>`
 
-*   **`async run(self) -> Result<StateType, PlazaError<ID>>`** Runs until `Shutdown` or its channels close, then returns the final state for the caller to persist. Commands already queued when `Shutdown` arrives are processed first; only what is already buffered is drained, so a producer that keeps sending cannot keep the controller alive.
+*   **`async run(self) -> Result<StateType, PlazaError<ID>>`** Runs until `Shutdown` or its channels close, then returns the final state for the caller to persist. Commands already queued when `Shutdown` arrives are processed first; only what is already buffered is drained, so a producer that keeps sending cannot keep the controller alive. A controller dropped or aborted with commands still queued drops them unprocessed, so a `query_with` or `submit_system_ops` waiting on one of them returns `QueryError::ControllerGone` rather than waiting for ever.
 
 ### Enum `ControllerCommand<Op, ID: AgentId, StateType>`
 

@@ -401,6 +401,33 @@ where
 
 static NEXT_CONTROLLER_ID: AtomicU64 = AtomicU64::new(1);
 
+/// The controller's command receiver, emptied when the controller is dropped.
+///
+/// The channel keeps a buffered command alive until every sender is gone, so a
+/// `query_with` or `submit_system_ops` whose command never ran would otherwise
+/// wait on its reply for as long as its caller holds a `CommandSender`.
+struct CommandQueue<T: Send>(mpsc::BoundedAsyncReceiver<T>);
+
+impl<T: Send> std::ops::Deref for CommandQueue<T> {
+  type Target = mpsc::BoundedAsyncReceiver<T>;
+
+  fn deref(&self) -> &Self::Target {
+    &self.0
+  }
+}
+
+impl<T: Send> std::ops::DerefMut for CommandQueue<T> {
+  fn deref_mut(&mut self) -> &mut Self::Target {
+    &mut self.0
+  }
+}
+
+impl<T: Send> Drop for CommandQueue<T> {
+  fn drop(&mut self) {
+    while self.0.try_recv().is_ok() {}
+  }
+}
+
 /// Orchestrates `StateLogic`, `Session`, and `SnapshotProvider` to manage
 /// shared application state.
 ///
@@ -421,7 +448,7 @@ where
   session: Arc<Sess>,
   snapshot_provider: Arc<SP>,
   op_guard: Arc<G>,
-  command_rx: mpsc::BoundedAsyncReceiver<ControllerCommand<Op, ID, StateType>>,
+  command_rx: CommandQueue<ControllerCommand<Op, ID, StateType>>,
   /// Context for the snapshot a joining agent receives.
   join_context: Option<SnapshotContext>,
   // Taken at construction, not in `run`: a client connecting between `build()`
@@ -469,7 +496,7 @@ where
       session,
       snapshot_provider,
       op_guard,
-      command_rx,
+      command_rx: CommandQueue(command_rx),
       join_context,
       session_presence_rx: Some(session_presence_rx),
       session_incoming_rx: Some(session_incoming_rx),
