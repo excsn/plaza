@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use bytes::Bytes;
 use futures_util::SinkExt;
 use plaza::agent::Agent;
 use plaza::session::{MessageTarget, Session, SessionMessage};
@@ -200,7 +201,7 @@ async fn inbound_absorption_drained(inbound: usize, decoded: usize, drain: bool)
 
   let frame_bytes = ops_frame();
   for _ in 0..BURST {
-    if client.send(frame_bytes.clone().into()).await.is_err() {
+    if client.send(Bytes::from(frame_bytes.clone())).await.is_err() {
       break;
     }
   }
@@ -335,7 +336,7 @@ async fn inbound_formula(peak_players: usize, ops_per_player_per_tick: u32) -> (
     let frame_bytes = ops_frame();
     for _ in 0..ops_per_player_per_tick {
       for client in clients.iter_mut() {
-        let _ = client.send(frame_bytes.clone().into()).await;
+        let _ = client.send(Bytes::from(frame_bytes.clone())).await;
       }
     }
     tokio::time::sleep(SETTLE).await;

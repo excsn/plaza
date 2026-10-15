@@ -6,6 +6,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use plaza::agent::Agent;
 use plaza::session::{MessageTarget, PresenceEvent, Session, SessionMessage};
@@ -96,7 +97,7 @@ async fn tcp_client_op_reaches_controller_and_broadcast_reaches_client() {
 
   // Client -> server: a kind tag, then the encoded ops.
   let op_frame = plaza_wire::frame::encode_ops(&codec, &[TestOp::Hello("hi".into())]).unwrap();
-  client.send(op_frame.into()).await.expect("client send");
+  client.send(Bytes::from(op_frame)).await.expect("client send");
 
   let received = with_timeout(incoming.recv()).await.expect("incoming message");
   assert_eq!(received.from.id(), Some(&player_id));
@@ -142,7 +143,7 @@ async fn answer_probes(
     match plaza_wire::frame::Kind::from_byte(tag) {
       Some(plaza_wire::frame::Kind::Ping) => {
         let reply = plaza_wire::frame::answer_ping(&JsonCodec, body, Some(777)).expect("answerable");
-        client.send(reply.into()).await.expect("pong");
+        client.send(Bytes::from(reply)).await.expect("pong");
       }
       _ => others.push(frame.to_vec()),
     }
@@ -172,7 +173,7 @@ async fn answer_until_measured(
         let (tag, body) = plaza_wire::frame::split(&frame).expect("non-empty");
         if plaza_wire::frame::Kind::from_byte(tag) == Some(plaza_wire::frame::Kind::Ping) {
           let reply = plaza_wire::frame::answer_ping(&JsonCodec, body, Some(777)).expect("answerable");
-          client.send(reply.into()).await.expect("pong");
+          client.send(Bytes::from(reply)).await.expect("pong");
         }
       }
     }
@@ -332,17 +333,17 @@ async fn a_hello_is_dispatched_as_a_version_and_an_unknown_kind_is_skipped() {
   let mut hello = Vec::new();
   plaza_wire::frame::begin(plaza_wire::frame::Kind::Hello, &mut hello);
   codec.encode_into(&ProtocolVersion(42), &mut hello).unwrap();
-  client.send(hello.into()).await.expect("send hello");
+  client.send(Bytes::from(hello)).await.expect("send hello");
 
   // A kind this build has never heard of: skipped, connection survives.
   let unknown = vec![200u8, b'{', b'}'];
-  client.send(unknown.into()).await.expect("send unknown");
+  client.send(Bytes::from(unknown)).await.expect("send unknown");
 
   // Ops still arrive after both, which is what "skipped, not fatal" means.
   let mut ops = Vec::new();
   plaza_wire::frame::begin(plaza_wire::frame::Kind::Ops, &mut ops);
   codec.encode_into(&vec![TestOp::Hello("hi".into())], &mut ops).unwrap();
-  client.send(ops.into()).await.expect("send ops");
+  client.send(Bytes::from(ops)).await.expect("send ops");
 
   let received = with_timeout(incoming.recv()).await.expect("incoming");
   assert_eq!(
@@ -390,12 +391,12 @@ async fn a_disagreeing_client_is_reported_and_left_connected() {
   let mut hello = Vec::new();
   plaza_wire::frame::begin(plaza_wire::frame::Kind::Hello, &mut hello);
   codec.encode_into(&ProtocolVersion(7), &mut hello).unwrap();
-  client.send(hello.into()).await.expect("send hello");
+  client.send(Bytes::from(hello)).await.expect("send hello");
 
   let mut ops = Vec::new();
   plaza_wire::frame::begin(plaza_wire::frame::Kind::Ops, &mut ops);
   codec.encode_into(&vec![TestOp::Hello("still here".into())], &mut ops).unwrap();
-  client.send(ops.into()).await.expect("send ops");
+  client.send(Bytes::from(ops)).await.expect("send ops");
 
   let received = with_timeout(incoming.recv()).await.expect("incoming");
   assert_eq!(
@@ -713,7 +714,7 @@ async fn activity_counts_data_and_never_probes() {
     .encode_into(&vec![TestOp::Hello("still here".into())], &mut op_frame)
     .unwrap();
   let sent = op_frame.len();
-  client.send(op_frame.into()).await.expect("send");
+  client.send(Bytes::from(op_frame)).await.expect("send");
 
   let volume = with_patience(async {
     loop {
@@ -869,7 +870,7 @@ async fn ops_before_the_credential_close_the_socket() {
   let mut ops = Vec::new();
   plaza_wire::frame::begin(Kind::Ops, &mut ops);
   JsonCodec.encode_into(&vec![TestOp::Hello("early".into())], &mut ops).unwrap();
-  client.send(ops.into()).await.unwrap();
+  client.send(Bytes::from(ops)).await.unwrap();
 
   assert_eq!(next_goodbye(&mut client).await.expect("a goodbye").code, Goodbye::CREDENTIAL_EXPECTED);
   assert!(with_timeout(client.next()).await.is_none());

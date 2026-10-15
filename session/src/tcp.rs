@@ -8,6 +8,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use plaza::agent::{Agent, AgentId};
 use plaza::error::PlazaError;
@@ -227,7 +228,7 @@ async fn accept_loop<ID: AgentId, C: WireCodec>(
           let goodbye = farewell.encode(&codec);
           tokio::spawn(async move {
             let _ = wire.send(goodbye.into_bytes()).await;
-            let _ = wire.close().await;
+            let _ = SinkExt::<Bytes>::close(&mut wire).await;
           });
         }
       },
@@ -329,12 +330,12 @@ async fn admitted_connection_task<ID: AgentId, C: WireCodec>(
       Farewell::credential_timeout()
     }
     PendingEnd::Gone => {
-      let _ = wire.close().await;
+      let _ = SinkExt::<Bytes>::close(&mut wire).await;
       return;
     }
   };
   let _ = wire.send(farewell.encode(&codec).into_bytes()).await;
-  let _ = wire.close().await;
+  let _ = SinkExt::<Bytes>::close(&mut wire).await;
 }
 
 /// Pumps one registered connection: socket -> manager and manager -> socket.
@@ -375,7 +376,7 @@ async fn run_connection<ID: AgentId, C: WireCodec>(
     ($farewell:expr) => {{
       let farewell: Farewell = $farewell;
       let _ = framed.send(farewell.encode(&codec).into_bytes()).await;
-      let _ = framed.close().await;
+      let _ = SinkExt::<Bytes>::close(&mut framed).await;
     }};
   }
 
@@ -456,7 +457,7 @@ async fn run_connection<ID: AgentId, C: WireCodec>(
         match deadline_farewell.take() {
           Some(farewell) => goodbye!(farewell),
           None => {
-            let _ = framed.close().await;
+            let _ = SinkExt::<Bytes>::close(&mut framed).await;
           }
         }
         break;

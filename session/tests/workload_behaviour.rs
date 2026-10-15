@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use plaza::agent::Agent;
 use plaza::session::{MessageTarget, Session, SessionMessage};
@@ -63,7 +64,7 @@ fn ops_frame(payload: usize) -> Vec<u8> {
 async fn push_until_stalled(client: &mut Framed<TcpStream, LengthDelimitedCodec>, frame: Vec<u8>, count: usize) {
   let _ = tokio::time::timeout(Duration::from_secs(2), async {
     for _ in 0..count {
-      if client.send(frame.clone().into()).await.is_err() {
+      if client.send(Bytes::from(frame.clone())).await.is_err() {
         return;
       }
     }
@@ -173,7 +174,7 @@ async fn probing_can_be_turned_off_and_is_on_otherwise() {
           continue;
         }
         let Some(reply) = frame::answer_ping(&JsonCodec, body, None) else { continue };
-        if client.send(reply.into()).await.is_err() {
+        if client.send(Bytes::from(reply)).await.is_err() {
           return;
         }
       }
